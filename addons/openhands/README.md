@@ -73,6 +73,20 @@ addons/openhands/
 - 验证结果记录
 - 最终决策
 
+### 2.1 Docker Web 端验证
+[verification/docker-web-verification.md](./verification/docker-web-verification.md) - Docker 安装和 Web 端验证指南
+
+包含内容：
+- Docker 安装步骤（Docker Run 和 Docker Compose）
+- Web 端访问和使用
+- 3 个验证阶段
+  - Phase 1: 基础功能验证
+  - Phase 2: 语义层验证
+  - Phase 3: Git 集成验证
+- 日志分析和监控
+- 故障排查
+- 验证记录
+
 ### 3. 集成方案
 [integration/integration-plan.md](./integration/integration-plan.md) - 集成方案（待创建）
 
@@ -93,8 +107,8 @@ addons/openhands/
 pip install openhands
 
 # 方法 2: 使用 Docker
-docker pull allhandsai/openhands:latest
-docker run -d -p 3000:3000 allhandsai/openhands:latest
+docker pull docker.all-hands.dev/all-hands-ai/runtime:latest
+docker run -d -p 3000:3000 docker.all-hands.dev/all-hands-ai/runtime:latest
 
 # 方法 3: 从源码安装
 git clone https://github.com/All-Hands-AI/OpenHands.git

@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  openhands:
+    image: docker.all-hands.dev/all-hands-ai/runtime:latest
+    container_name: openhands
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./demo-workspace:/workspace
+    environment:
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MODEL=${MODEL}
+      - MAX_ITERATIONS=${MAX_ITERATIONS}
+      - SECURITY_ANALYZER=${SECURITY_ANALYZER}
+    restart: unless-stopped
+    networks:
+      - openhands-network
+
+networks:
+  openhands-network:
+    driver: bridge
