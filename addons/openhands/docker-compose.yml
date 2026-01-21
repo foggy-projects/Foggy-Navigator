@@ -15,8 +15,8 @@ services:
       - LLM_BASE_URL=${OPENAI_API_BASE_URL}
 
       # --- 沙盒与权限配置 ---
-      - SANDBOX_USER_ID=${CURRENT_UID:-1000}
       - WORKSPACE_BASE=${PWD}/workspace
+      - FILE_STORE_PATH=/.openhands
       # 允许 Agent 执行 Git 操作
       - GIT_CREDENTIALS_HELPER=store
 
@@ -28,7 +28,7 @@ services:
       # 核心：允许 OpenHands 在宿主机上创建、销毁沙盒容器
       - /var/run/docker.sock:/var/run/docker.sock
       # 持久化 OpenHands 的内部状态（对话记录等）
-      - openhands-state:/.openhands-state
+      - openhands-state:/.openhands
       # 映射你的语义层项目目录
       - ./demo-workspace:/opt/workspace
     restart: unless-stopped

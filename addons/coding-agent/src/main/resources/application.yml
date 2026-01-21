@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: coding-agent
+
+server:
+  port: 8080
+
+# Foggy Navigator 配置
+foggy:
+  coding-agent:
+    # OpenHands 配置
+    openhands:
+      image: ghcr.io/all-hands-ai/openhands:main
+      workspace-base: /workspace
+      container-timeout: 1800  # 容器超时时间（秒）
+      max-concurrent: 10       # 最大并发容器数
+
+      # LLM 配置
+      api-key: ${OPENAI_API_KEY}
+      model-name: gpt-4
+      api-base-url: ${OPENAI_API_BASE_URL:}
+
+    # 验证服务配置
+    validation:
+      url: http://validation-service:8081
+      enabled: true
+      realtime: true  # 实时验证
+
+    # Git 配置
+    git:
+      default-branch: main
+      auto-commit: true
+      auto-pr: true
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.foggy.navigator: DEBUG
+    com.github.dockerjava: WARN
