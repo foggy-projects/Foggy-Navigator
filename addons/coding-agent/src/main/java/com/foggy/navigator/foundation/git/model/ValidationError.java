@@ -7,7 +7,7 @@ import lombok.NoArgsConstructor;
 
 /**
  * 验证错误
- * TODO: 等待验证服务提供详细的错误结构
+ * 对应验证服务接口的错误格式
  */
 @Data
 @Builder
@@ -16,12 +16,14 @@ import lombok.NoArgsConstructor;
 public class ValidationError {
 
     /**
-     * 文件路径
+     * 文件名
+     * 例如: ProductModel.tm
      */
     private String file;
 
     /**
-     * 错误类型
+     * 类型
+     * 例如: TM, QM
      */
     private String type;
 
@@ -31,7 +33,13 @@ public class ValidationError {
     private String message;
 
     /**
-     * 行号 (可选)
+     * 错误代码
+     * 例如: FIELD_NOT_FOUND, MODEL_NOT_FOUND, SYNTAX_ERROR
      */
-    private Integer line;
+    private String code;
+
+    /**
+     * 修复建议
+     */
+    private String suggestion;
 }

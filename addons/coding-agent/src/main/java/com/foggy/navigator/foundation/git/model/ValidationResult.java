@@ -5,12 +5,12 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
  * 验证结果
- * TODO: 等待验证服务提供详细的输出规范
+ * 对应验证服务接口响应
  */
 @Data
 @Builder
@@ -24,20 +24,41 @@ public class ValidationResult {
     private boolean success;
 
     /**
-     * 验证消息
+     * 命名空间
      */
-    private String message;
+    private String namespace;
 
     /**
-     * 验证时间
+     * 总文件数
      */
-    private LocalDateTime validatedAt;
+    private Integer totalFiles;
+
+    /**
+     * 有效文件数
+     */
+    private Integer validFiles;
+
+    /**
+     * 无效文件数
+     */
+    private Integer invalidFiles;
 
     /**
      * 错误列表
-     * TODO: 根据验证服务的实际输出定义详细的错误结构
      */
-    private List<ValidationError> errors;
+    @Builder.Default
+    private List<ValidationError> errors = new ArrayList<>();
+
+    /**
+     * 警告列表
+     */
+    @Builder.Default
+    private List<ValidationError> warnings = new ArrayList<>();
+
+    /**
+     * 验证耗时（毫秒）
+     */
+    private Long durationMs;
 
     /**
      * 创建跳过验证的结果
@@ -45,8 +66,9 @@ public class ValidationResult {
     public static ValidationResult skipped() {
         return ValidationResult.builder()
                 .success(true)
-                .message("验证已跳过")
-                .validatedAt(LocalDateTime.now())
+                .totalFiles(0)
+                .validFiles(0)
+                .invalidFiles(0)
                 .build();
     }
 
@@ -54,10 +76,16 @@ public class ValidationResult {
      * 创建错误结果
      */
     public static ValidationResult error(String message) {
+        ValidationError error = ValidationError.builder()
+                .message(message)
+                .build();
+
         return ValidationResult.builder()
                 .success(false)
-                .message(message)
-                .validatedAt(LocalDateTime.now())
+                .totalFiles(0)
+                .validFiles(0)
+                .invalidFiles(0)
+                .errors(List.of(error))
                 .build();
     }
 }

@@ -33,7 +33,13 @@ public class OpenHandsContainerManager {
     private String workspaceBase;
 
     public OpenHandsContainerManager() {
-        this.dockerClient = DockerClientBuilder.getInstance().build();
+        this.dockerClient = DockerClientBuilder.getInstance()
+                .withDockerHttpClient(
+                        new com.github.dockerjava.httpclient5.ApacheDockerHttpClient.Builder()
+                                .dockerHost(com.github.dockerjava.core.DefaultDockerClientConfig.createDefaultConfigBuilder().build().getDockerHost())
+                                .build()
+                )
+                .build();
     }
 
     /**

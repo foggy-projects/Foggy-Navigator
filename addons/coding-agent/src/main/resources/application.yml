@@ -22,7 +22,7 @@ foggy:
 
     # 验证服务配置
     validation:
-      url: http://validation-service:8081
+      url: http://localhost:7108  # 验证服务地址（可配置）
       enabled: true
       realtime: true  # 实时验证
 

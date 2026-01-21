@@ -7,7 +7,7 @@ import lombok.NoArgsConstructor;
 
 /**
  * 验证请求
- * TODO: 等待验证服务提供详细的输入规范
+ * 对应验证服务接口: POST /api/semantic-layer/validate
  */
 @Data
 @Builder
@@ -16,13 +16,36 @@ import lombok.NoArgsConstructor;
 public class ValidationRequest {
 
     /**
-     * 语义层文件目录路径
+     * 文件夹路径（会递归扫描所有 .tm/.qm 文件）
+     * 必填
      */
-    private String workspacePath;
+    private String path;
 
     /**
-     * 数据源配置 (可选)
-     * TODO: 根据验证服务的实际需求定义
+     * 命名空间（隔离不同环境）
+     * 格式建议: {projectId}-{branchName}
+     * 可选，默认: openhands
      */
-    private Object datasource;
+    private String namespace;
+
+    /**
+     * 是否监听文件变化
+     * 可选，默认: false
+     */
+    @Builder.Default
+    private Boolean watch = false;
+
+    /**
+     * 是否清除已存在的同名 Bundle
+     * 可选，默认: true
+     */
+    @Builder.Default
+    private Boolean clearExisting = true;
+
+    /**
+     * 是否返回堆栈跟踪
+     * 可选，默认: false
+     */
+    @Builder.Default
+    private Boolean includeStackTrace = false;
 }
