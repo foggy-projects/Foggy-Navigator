@@ -6,20 +6,17 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.2.0</version>
-        <relativePath/>
+        <groupId>com.foggy.navigator</groupId>
+        <artifactId>foggy-navigator-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <groupId>com.foggy.navigator</groupId>
     <artifactId>coding-agent</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
     <name>Coding Agent</name>
     <description>控制 OpenHands 进行语义层编辑的 Agent 模块</description>
 
     <properties>
-        <java.version>17</java.version>
         <langchain4j.version>0.35.0</langchain4j.version>
         <docker-java.version>3.3.4</docker-java.version>
     </properties>
