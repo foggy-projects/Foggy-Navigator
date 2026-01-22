@@ -246,4 +246,67 @@ public class OpenHandsContainerManager {
 
         return env;
     }
+
+    /**
+     * 启动容器
+     *
+     * @param containerId 容器ID
+     * @return 是否启动成功
+     */
+    public boolean startContainer(String containerId) {
+        if (useMock) {
+            log.info("模拟模式：启动 OpenHands 容器: containerId={}", containerId);
+            return true;
+        }
+
+        try {
+            log.info("启动 OpenHands 容器: containerId={}", containerId);
+            dockerClient.startContainerCmd(containerId).exec();
+            log.info("OpenHands 容器已启动: containerId={}", containerId);
+            return true;
+        } catch (Exception e) {
+            log.error("启动容器失败: containerId={}", containerId, e);
+            return false;
+        }
+    }
+
+    /**
+     * 检查容器是否存在
+     *
+     * @param containerId 容器ID
+     * @return 是否存在
+     */
+    public boolean containerExists(String containerId) {
+        if (useMock) {
+            return true;
+        }
+
+        try {
+            dockerClient.inspectContainerCmd(containerId).exec();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 检查容器是否正在运行
+     *
+     * @param containerId 容器ID
+     * @return 是否正在运行
+     */
+    public boolean isContainerRunning(String containerId) {
+        if (useMock) {
+            return true;
+        }
+
+        try {
+            InspectContainerResponse response = dockerClient
+                    .inspectContainerCmd(containerId)
+                    .exec();
+            return response.getState().getRunning();
+        } catch (Exception e) {
+            return false;
+        }
+    }
 }
