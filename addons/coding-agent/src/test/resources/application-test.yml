@@ -30,4 +30,3 @@ logging:
     root: INFO
     com.foggy.navigator: DEBUG
     com.github.dockerjava: WARN
-    org.testcontainers: INFO

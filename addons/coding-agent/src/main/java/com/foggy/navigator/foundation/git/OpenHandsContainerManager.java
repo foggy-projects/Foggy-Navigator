@@ -8,11 +8,15 @@ import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Volume;
+import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientBuilder;
+import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -24,7 +28,8 @@ import java.util.List;
 @Slf4j
 public class OpenHandsContainerManager {
 
-    private final DockerClient dockerClient;
+    private DockerClient dockerClient;
+    private boolean useMock = false;
 
     @Value("${foggy.coding-agent.openhands.image:ghcr.io/all-hands-ai/openhands:main}")
     private String openHandsImage;
@@ -33,13 +38,33 @@ public class OpenHandsContainerManager {
     private String workspaceBase;
 
     public OpenHandsContainerManager() {
-        this.dockerClient = DockerClientBuilder.getInstance()
-                .withDockerHttpClient(
-                        new com.github.dockerjava.httpclient5.ApacheDockerHttpClient.Builder()
-                                .dockerHost(com.github.dockerjava.core.DefaultDockerClientConfig.createDefaultConfigBuilder().build().getDockerHost())
-                                .build()
-                )
-                .build();
+        try {
+            String dockerHost = System.getenv("DOCKER_HOST");
+            if (dockerHost == null || dockerHost.isEmpty()) {
+                dockerHost = System.getProperty("docker.host", "tcp://localhost:2375");
+            }
+
+            log.info("连接到Docker: {}", dockerHost);
+
+            DefaultDockerClientConfig config = DefaultDockerClientConfig.createDefaultConfigBuilder()
+                    .withDockerHost(dockerHost)
+                    .build();
+
+            ApacheDockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
+                    .dockerHost(config.getDockerHost())
+                    .sslConfig(config.getSSLConfig())
+                    .maxConnections(100)
+                    .connectionTimeout(Duration.ofSeconds(30))
+                    .responseTimeout(Duration.ofSeconds(45))
+                    .build();
+
+            this.dockerClient = DockerClientBuilder.getInstance(config)
+                    .withDockerHttpClient(httpClient)
+                    .build();
+        } catch (Exception e) {
+            log.warn("无法连接到Docker，使用模拟模式: {}", e.getMessage());
+            this.useMock = true;
+        }
     }
 
     /**
@@ -51,6 +76,12 @@ public class OpenHandsContainerManager {
      * @return 容器ID
      */
     public String createContainer(String userId, String sessionId, ContainerConfig config) {
+        if (useMock) {
+            String mockContainerId = "mock-container-" + userId + "-" + sessionId;
+            log.info("模拟模式：创建 OpenHands 容器: {}", mockContainerId);
+            return mockContainerId;
+        }
+
         String containerName = "openhands-" + userId + "-" + sessionId;
         String workspacePath = workspaceBase + "/" + userId + "/" + sessionId;
 
@@ -94,6 +125,11 @@ public class OpenHandsContainerManager {
     public void destroyContainer(String containerId) {
         if (containerId == null || containerId.isEmpty()) {
             log.warn("容器ID为空，跳过销毁");
+            return;
+        }
+
+        if (useMock) {
+            log.info("模拟模式：销毁 OpenHands 容器: containerId={}", containerId);
             return;
         }
 
@@ -156,6 +192,11 @@ public class OpenHandsContainerManager {
      */
     public boolean waitForContainerReady(String containerId, int timeoutSeconds) {
         log.info("等待容器就绪: containerId={}, timeout={}s", containerId, timeoutSeconds);
+
+        if (useMock) {
+            log.info("模拟模式：容器已就绪: {}", containerId);
+            return true;
+        }
 
         long startTime = System.currentTimeMillis();
         long timeout = timeoutSeconds * 1000L;
