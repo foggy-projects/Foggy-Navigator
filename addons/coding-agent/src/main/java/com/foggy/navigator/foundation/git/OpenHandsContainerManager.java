@@ -136,9 +136,9 @@ public class OpenHandsContainerManager {
         try {
             log.info("销毁 OpenHands 容器: containerId={}", containerId);
 
-            // 停止容器
+            // 停止容器（使用较短的超时时间）
             dockerClient.stopContainerCmd(containerId)
-                    .withTimeout(30)
+                    .withTimeout(10)
                     .exec();
 
             // 删除容器
