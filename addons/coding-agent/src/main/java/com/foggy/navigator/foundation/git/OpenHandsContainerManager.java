@@ -13,7 +13,10 @@ import com.github.dockerjava.core.DockerClientBuilder;
 import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
+
+
 
 import java.net.URI;
 import java.time.Duration;
@@ -25,8 +28,9 @@ import java.util.List;
  * 负责动态创建和销毁 OpenHands 容器
  */
 @Service
+//@Profile("!test")
 @Slf4j
-public class OpenHandsContainerManager {
+public class OpenHandsContainerManager implements ContainerManagerInterface {
 
     private DockerClient dockerClient;
     private boolean useMock = false;
@@ -37,33 +41,47 @@ public class OpenHandsContainerManager {
     @Value("${foggy.coding-agent.openhands.workspace-base:/workspace}")
     private String workspaceBase;
 
+    @Value("${foggy.coding-agent.test-mode:false}")
+    private boolean testMode;
+
     public OpenHandsContainerManager() {
-        try {
-            String dockerHost = System.getenv("DOCKER_HOST");
-            if (dockerHost == null || dockerHost.isEmpty()) {
-                dockerHost = System.getProperty("docker.host", "tcp://localhost:2375");
+        // 初始化时先尝试根据配置决定是否使用模拟模式
+        this.useMock = testMode;
+        
+        // 如果不是测试模式，则尝试连接Docker
+        if (!testMode) {
+            try {
+                String dockerHost = System.getenv("DOCKER_HOST");
+                if (dockerHost == null || dockerHost.isEmpty()) {
+                    dockerHost = System.getProperty("docker.host", "tcp://localhost:2375");
+                }
+
+                log.info("连接到Docker: {}", dockerHost);
+
+                DefaultDockerClientConfig config = DefaultDockerClientConfig.createDefaultConfigBuilder()
+                        .withDockerHost(dockerHost)
+                        .build();
+
+                ApacheDockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
+                        .dockerHost(config.getDockerHost())
+                        .sslConfig(config.getSSLConfig())
+                        .maxConnections(100)
+                        .connectionTimeout(Duration.ofSeconds(30))
+                        .responseTimeout(Duration.ofSeconds(45))
+                        .build();
+
+                this.dockerClient = DockerClientBuilder.getInstance(config)
+                        .withDockerHttpClient(httpClient)
+                        .build();
+                
+                // 成功连接后不使用模拟模式
+                this.useMock = false;
+            } catch (Exception e) {
+                log.warn("无法连接到Docker，使用模拟模式: {}", e.getMessage());
+                this.useMock = true;
             }
-
-            log.info("连接到Docker: {}", dockerHost);
-
-            DefaultDockerClientConfig config = DefaultDockerClientConfig.createDefaultConfigBuilder()
-                    .withDockerHost(dockerHost)
-                    .build();
-
-            ApacheDockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
-                    .dockerHost(config.getDockerHost())
-                    .sslConfig(config.getSSLConfig())
-                    .maxConnections(100)
-                    .connectionTimeout(Duration.ofSeconds(30))
-                    .responseTimeout(Duration.ofSeconds(45))
-                    .build();
-
-            this.dockerClient = DockerClientBuilder.getInstance(config)
-                    .withDockerHttpClient(httpClient)
-                    .build();
-        } catch (Exception e) {
-            log.warn("无法连接到Docker，使用模拟模式: {}", e.getMessage());
-            this.useMock = true;
+        } else {
+            log.info("测试模式：使用模拟模式");
         }
     }
 

@@ -2,6 +2,7 @@ package com.foggy.navigator.api.service;
 
 import com.foggy.navigator.api.model.CreateEnvironmentRequest;
 import com.foggy.navigator.api.model.Environment;
+import com.foggy.navigator.foundation.git.ContainerManagerInterface;
 import com.foggy.navigator.foundation.git.OpenHandsContainerManager;
 import com.foggy.navigator.foundation.git.ValidationServiceClient;
 import com.foggy.navigator.foundation.git.model.ContainerConfig;
@@ -9,6 +10,7 @@ import com.foggy.navigator.foundation.git.util.NamespaceGenerator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -24,7 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class EnvironmentService {
 
     @Autowired
-    private OpenHandsContainerManager containerManager;
+    @Lazy
+    private ContainerManagerInterface containerManager;
 
     @Autowired
     private ValidationServiceClient validationClient;

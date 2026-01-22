@@ -7,6 +7,7 @@ server:
 
 foggy:
   coding-agent:
+    test-mode: true
     openhands:
       image: ghcr.io/all-hands-ai/openhands:main
       workspace-base: /tmp/test-workspace
