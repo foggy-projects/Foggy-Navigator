@@ -2,22 +2,24 @@ package com.foggy.navigator.api.service;
 
 import com.foggy.navigator.api.model.CreateEnvironmentRequest;
 import com.foggy.navigator.api.model.Environment;
-import com.foggy.navigator.foundation.git.OpenHandsContainerManager;
+import com.foggy.navigator.config.TestBeanConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * EnvironmentService 单元测试
- * 模拟 Docker 容器管理器进行测试
+ * EnvironmentService 集成测试
+ * 真实的 Docker 容器管理器测试
  */
 @SpringBootTest
 @ActiveProfiles("test")
+@Import(TestBeanConfiguration.class)
 class EnvironmentServiceIntegrationTest {
 
     @Autowired

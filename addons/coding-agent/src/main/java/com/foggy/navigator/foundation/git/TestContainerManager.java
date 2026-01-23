@@ -2,11 +2,17 @@ package com.foggy.navigator.foundation.git;
 
 import com.foggy.navigator.foundation.git.model.ContainerConfig;
 import com.foggy.navigator.foundation.git.model.ContainerStatus;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
+/**
+ * 测试容器管理器 - 仅在模拟模式下使用
+ * 启用条件: foggy.coding-agent.test-mode=true AND foggy.coding-agent.mock-docker=true
+ */
 @Profile("test")
 @Component
+@ConditionalOnProperty(name = "foggy.coding-agent.mock-docker", havingValue = "true", matchIfMissing = false)
 public class TestContainerManager implements ContainerManagerInterface {
     
     @Override
