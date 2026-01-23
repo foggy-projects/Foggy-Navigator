@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库服务
+  mysql:
+    image: mysql:8.0
+    container_name: foggy-navigator-mysql
+    restart: unless-stopped
+    ports:
+      - "13309:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: foggy@root123
+      MYSQL_DATABASE: coding_agent
+      MYSQL_USER: foggy
+      MYSQL_PASSWORD: foggy@123
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+      - ./mysql/conf:/etc/mysql/conf.d
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_connections=1000
+    networks:
+      - foggy-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # GitLab 服务
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: foggy-navigator-gitlab
+    restart: unless-stopped
+    hostname: gitlab.foggy.local
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2222:22"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.foggy.local'
+        gitlab_rails['time_zone'] = 'Asia/Shanghai'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+
+        # 邮件配置（可选）
+        # gitlab_rails['smtp_enable'] = true
+        # gitlab_rails['smtp_address'] = "smtp.gmail.com"
+        # gitlab_rails['smtp_port'] = 587
+
+        # 性能优化
+        puma['worker_processes'] = 2
+        sidekiq['max_concurrency'] = 10
+
+        # 禁用不需要的服务以节省资源
+        prometheus_monitoring['enable'] = false
+        grafana['enable'] = false
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+    networks:
+      - foggy-network
+    healthcheck:
+      test: ["CMD", "gitlab-ctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    shm_size: '256m'
+
+  # phpMyAdmin（可选，用于管理 MySQL）
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: foggy-navigator-phpmyadmin
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: foggy@root123
+      UPLOAD_LIMIT: 100M
+    depends_on:
+      - mysql
+    networks:
+      - foggy-network
+
+volumes:
+  mysql_data:
+    driver: local
+  gitlab_config:
+    driver: local
+  gitlab_logs:
+    driver: local
+  gitlab_data:
+    driver: local
+
+networks:
+  foggy-network:
+    driver: bridge

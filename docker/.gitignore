@@ -1,0 +1,15 @@
+# Docker 数据和日志
+*.log
+*.pid
+
+# 环境配置
+.env
+
+# 备份文件
+*.sql.gz
+*.tar.gz
+backup/
+
+# IDE
+.idea/
+.vscode/

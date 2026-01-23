@@ -4,8 +4,8 @@ spring:
 
   datasource:
     url: jdbc:mysql://localhost:3306/foggy_navigator?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
-    username: root
-    password: root
+    username: foggy
+    password: foggy_test_123
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
