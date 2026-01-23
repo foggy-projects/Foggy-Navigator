@@ -203,10 +203,18 @@ class ConversationRecoveryServiceTest {
     void testRecoverAllConversations() {
         when(conversationRepository.findAll())
                 .thenReturn(List.of(stoppedConversation, errorConversation, readyConversation));
-        when(containerManager.containerExists("container-stopped")).thenReturn(true);
-        when(containerManager.isContainerRunning("container-stopped")).thenReturn(false);
+
+        // Mock findByConversationId for recoverConversation calls
+        when(conversationRepository.findByConversationId("conv-stopped"))
+                .thenReturn(Optional.of(stoppedConversation));
+        when(conversationRepository.findByConversationId("conv-error"))
+                .thenReturn(Optional.of(errorConversation));
+
+        // Mock container operations for stopped conversation
         when(containerManager.startContainer("container-stopped")).thenReturn(true);
         when(containerManager.waitForContainerReady("container-stopped", 60)).thenReturn(true);
+
+        // Mock container operations for error conversation
         when(containerManager.containerExists("container-error")).thenReturn(true);
         when(containerManager.isContainerRunning("container-error")).thenReturn(true);
 

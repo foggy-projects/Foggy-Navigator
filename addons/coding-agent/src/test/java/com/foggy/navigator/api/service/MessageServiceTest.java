@@ -89,7 +89,7 @@ class MessageServiceTest {
     }
 
     @Test
-    void testGetMessages_WithMessages() {
+    void testGetMessages_WithMessages() throws InterruptedException {
         String conversationId = "conv-123";
 
         SendMessageRequest request1 = SendMessageRequest.builder()
@@ -101,6 +101,8 @@ class MessageServiceTest {
                 .build();
 
         messageService.sendMessage(conversationId, request1);
+        // 添加短暂延迟确保时间戳不同
+        Thread.sleep(5);
         messageService.sendMessage(conversationId, request2);
 
         List<Message> messages = messageService.getMessages(conversationId, 10);
@@ -112,7 +114,7 @@ class MessageServiceTest {
     }
 
     @Test
-    void testGetMessages_WithLimit() {
+    void testGetMessages_WithLimit() throws InterruptedException {
         String conversationId = "conv-limit-test";
 
         for (int i = 1; i <= 5; i++) {
@@ -120,6 +122,8 @@ class MessageServiceTest {
                     .content("Message " + i)
                     .build();
             messageService.sendMessage(conversationId, request);
+            // 添加短暂延迟确保时间戳不同
+            Thread.sleep(5);
         }
 
         List<Message> messages = messageService.getMessages(conversationId, 3);

@@ -69,7 +69,14 @@ public class MessageService {
         }
 
         return messages.stream()
-                .sorted((a, b) -> b.getTimestamp().compareTo(a.getTimestamp()))
+                .sorted((a, b) -> {
+                    int timeCompare = b.getTimestamp().compareTo(a.getTimestamp());
+                    if (timeCompare != 0) {
+                        return timeCompare;
+                    }
+                    // 如果时间戳相同，使用 messageId 作为次要排序键，确保排序稳定
+                    return b.getMessageId().compareTo(a.getMessageId());
+                })
                 .limit(limit)
                 .collect(Collectors.toList());
     }
