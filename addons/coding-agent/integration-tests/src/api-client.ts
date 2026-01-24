@@ -45,21 +45,21 @@ export class CodingAgentClient {
   async createConversation(
     request: CreateConversationRequest
   ): Promise<Conversation> {
-    const response = await this.client.post<ApiResponse<Conversation>>(
+    const response = await this.client.post<Conversation>(
       '/api/v1/conversations',
       request
     );
-    return response.data.data!;
+    return response.data;
   }
 
   /**
    * 获取 Conversation 详情
    */
   async getConversation(conversationId: string): Promise<Conversation> {
-    const response = await this.client.get<ApiResponse<Conversation>>(
+    const response = await this.client.get<Conversation>(
       `/api/v1/conversations/${conversationId}`
     );
-    return response.data.data!;
+    return response.data;
   }
 
   /**
@@ -72,10 +72,11 @@ export class CodingAgentClient {
     page?: number;
     size?: number;
   }): Promise<Conversation[]> {
-    const response = await this.client.get<
-      ApiResponse<{ conversations: Conversation[] }>
-    >('/api/v1/conversations', { params });
-    return response.data.data?.conversations || [];
+    const response = await this.client.get<Conversation[]>(
+      '/api/v1/conversations',
+      { params }
+    );
+    return response.data;
   }
 
   /**
@@ -99,11 +100,11 @@ export class CodingAgentClient {
     conversationId: string,
     request: SendMessageRequest
   ): Promise<Message> {
-    const response = await this.client.post<ApiResponse<Message>>(
+    const response = await this.client.post<Message>(
       `/api/v1/conversations/${conversationId}/messages`,
       request
     );
-    return response.data.data!;
+    return response.data;
   }
 
   /**
@@ -113,11 +114,11 @@ export class CodingAgentClient {
     conversationId: string,
     limit?: number
   ): Promise<Message[]> {
-    const response = await this.client.get<ApiResponse<Message[]>>(
+    const response = await this.client.get<Message[]>(
       `/api/v1/conversations/${conversationId}/messages`,
       { params: { limit } }
     );
-    return response.data.data || [];
+    return response.data;
   }
 
   /**
@@ -133,11 +134,11 @@ export class CodingAgentClient {
       limit?: number;
     }
   ): Promise<Event[]> {
-    const response = await this.client.get<ApiResponse<{ events: Event[] }>>(
+    const response = await this.client.get<Event[]>(
       `/api/v1/conversations/${conversationId}/events`,
       { params }
     );
-    return response.data.data?.events || [];
+    return response.data;
   }
 
   /**

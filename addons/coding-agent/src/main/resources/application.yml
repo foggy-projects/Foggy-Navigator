@@ -67,3 +67,14 @@ logging:
     root: INFO
     com.foggy.navigator: DEBUG
     com.github.dockerjava: WARN
+  file:
+    name: logs/coding-agent.log
+    path: logs
+  pattern:
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 30
+      total-size-cap: 1GB

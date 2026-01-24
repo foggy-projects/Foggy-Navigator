@@ -23,7 +23,7 @@ public class ConversationEntity {
     @Column(nullable = false, unique = true, length = 64)
     private String conversationId;
 
-    @Column(nullable = false, length = 64)
+    @Column(length = 64)
     private String sandboxId;
 
     @Column(nullable = false, length = 64)
