@@ -10,6 +10,8 @@ PROJECT_DIR="/d/foggy-projects/Foggy-Navigator/addons/coding-agent"
 LOG_DIR="${PROJECT_DIR}/logs"
 PID_FILE="${PROJECT_DIR}/app.pid"
 PORT=8112
+JAVA_HOME="/c/Program Files/Java/jdk-17.0.1"
+JAVA="${JAVA_HOME}/bin/java.exe"
 
 echo -e "${YELLOW}========================================${NC}"
 echo -e "${YELLOW}Starting Coding Agent Application${NC}"
@@ -36,9 +38,10 @@ fi
 
 # 启动应用（使用docker配置）
 echo -e "${YELLOW}Starting Spring Boot application with docker profile...${NC}"
+echo -e "${YELLOW}Using Java: $JAVA${NC}"
 cd "$PROJECT_DIR"
 
-java -jar target/coding-agent-*.jar \
+"$JAVA" -jar target/coding-agent-*.jar \
     --spring.profiles.active=docker \
     --server.port=$PORT \
     > "$LOG_DIR/app.log" 2>&1 &
@@ -52,13 +55,13 @@ echo ""
 
 # 等待应用启动
 echo -e "${YELLOW}Waiting for application to start...${NC}"
-for i in {1..30}; do
+for i in {1..60}; do
     if curl -s http://localhost:$PORT/actuator/health > /dev/null 2>&1; then
         echo -e "${GREEN}Application is ready!${NC}"
         sleep 2
         break
     fi
-    echo "Attempt $i/30..."
+    echo "Attempt $i/60..."
     sleep 1
 done
 
@@ -66,6 +69,7 @@ done
 if ! curl -s http://localhost:$PORT/actuator/health > /dev/null 2>&1; then
     echo -e "${RED}Application failed to start${NC}"
     echo -e "${RED}Check logs at: $LOG_DIR/app.log${NC}"
+    cat "$LOG_DIR/app.log" | tail -50
     exit 1
 fi
 
