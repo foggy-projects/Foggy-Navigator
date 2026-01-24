@@ -19,7 +19,7 @@ cd ../
 mvn spring-boot:run
 ```
 
-等待服务启动，访问 http://localhost:8080/actuator/health 确认服务就绪。
+等待服务启动，访问 http://localhost:8112/actuator/health 确认服务就绪。
 
 ### 3. 运行测试
 
@@ -45,8 +45,8 @@ npm run test:coverage
 可以通过环境变量配置测试：
 
 ```bash
-# API 基础 URL（默认：http://localhost:8080）
-API_BASE_URL=http://localhost:8080
+# API 基础 URL（默认：http://localhost:8112）
+API_BASE_URL=http://localhost:8112
 
 # 跳过 Docker 相关测试
 SKIP_DOCKER_TESTS=true
@@ -147,7 +147,7 @@ autoCleanup: false  // 改为 false
 
 **A**: 确保后端服务正在运行：
 ```bash
-curl http://localhost:8080/actuator/health
+curl http://localhost:8112/actuator/health
 ```
 
 ### Q: 测试失败：Docker 错误

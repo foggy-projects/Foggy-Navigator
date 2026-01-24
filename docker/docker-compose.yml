@@ -1,4 +1,4 @@
-version: '3.8'
+name: foggy-navigator
 
 services:
   # MySQL 数据库服务
@@ -93,14 +93,19 @@ services:
 
 volumes:
   mysql_data:
+    name: foggy-navigator-mysql-data
     driver: local
   gitlab_config:
+    name: foggy-navigator-gitlab-config
     driver: local
   gitlab_logs:
+    name: foggy-navigator-gitlab-logs
     driver: local
   gitlab_data:
+    name: foggy-navigator-gitlab-data
     driver: local
 
 networks:
   foggy-network:
+    name: foggy-navigator-network
     driver: bridge

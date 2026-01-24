@@ -3,7 +3,7 @@
  */
 export const TEST_CONFIG = {
   // API 基础 URL
-  baseURL: process.env.API_BASE_URL || 'http://localhost:8080',
+  baseURL: process.env.API_BASE_URL || 'http://localhost:8112',
 
   // 超时配置
   timeout: 30000,

@@ -18,7 +18,17 @@ spring:
         format_sql: true
 
 server:
-  port: 8080
+  port: 8112
+
+# Actuator 配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
 
 # Foggy Navigator 配置
 foggy:
