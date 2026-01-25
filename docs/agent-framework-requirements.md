@@ -218,15 +218,18 @@ public interface SkillManager {
 }
 ```
 
-### 3.4 工具注册表
+### 3.4 工具注册表（支持MCP与用户隔离）
 
 ```java
 package com.foggy.navigator.agent.tool;
 
 /**
  * 工具注册表
+ * 支持HTTP工具和MCP工具，实现用户级别的凭证隔离
  */
 public interface ToolRegistry {
+
+    // ===== 系统级工具注册 =====
 
     /**
      * 注册HTTP工具
@@ -235,23 +238,163 @@ public interface ToolRegistry {
     void registerHttpTool(HttpToolConfig toolConfig);
 
     /**
-     * 获取Agent的所有工具
+     * 注册MCP工具
+     * @param toolConfig MCP工具配置（不含用户凭证）
+     */
+    void registerMcpTool(McpToolConfig toolConfig);
+
+    // ===== 用户凭证管理 =====
+
+    /**
+     * 绑定用户凭证到工具
+     * @param userId 用户ID
+     * @param toolName 工具名称
+     * @param credential 用户凭证（token等敏感信息）
+     */
+    void bindUserCredential(String userId, String toolName, UserToolCredential credential);
+
+    /**
+     * 解绑用户凭证
+     * @param userId 用户ID
+     * @param toolName 工具名称
+     */
+    void unbindUserCredential(String userId, String toolName);
+
+    /**
+     * 获取用户凭证
+     * @param userId 用户ID
+     * @param toolName 工具名称
+     * @return 用户凭证，不存在返回null
+     */
+    UserToolCredential getUserCredential(String userId, String toolName);
+
+    // ===== 工具查询 =====
+
+    /**
+     * 获取Agent的所有工具（系统级）
      * @param agentId Agent ID
      * @return 工具列表
      */
     List<ToolDefinition> getToolsByAgent(String agentId);
 
     /**
-     * 调用工具
-     * @param toolName 工具名称
-     * @param parameters 参数
+     * 获取用户可用的工具（已绑定凭证的工具）
+     * @param agentId Agent ID
+     * @param userId 用户ID
+     * @return 用户可用的工具列表
+     */
+    List<ToolDefinition> getAvailableTools(String agentId, String userId);
+
+    // ===== 工具执行（带用户上下文） =====
+
+    /**
+     * 执行工具（带用户上下文）
+     * @param request 执行请求（包含userId用于凭证查找）
      * @return 工具执行结果
      */
-    ToolExecutionResult executeTool(String toolName, Map<String, Object> parameters);
+    ToolExecutionResult executeTool(ToolExecutionRequest request);
+}
+
+/**
+ * 工具执行请求
+ */
+@Data
+public class ToolExecutionRequest {
+    private String toolName;                // 工具名称
+    private String userId;                  // 用户ID（关键：用于凭证隔离）
+    private String tenantId;                // 租户ID（多租户场景）
+    private String sessionId;               // 会话ID
+    private String agentId;                 // Agent ID
+    private Map<String, Object> parameters; // 调用参数
 }
 ```
 
-### 3.5 会话管理器
+### 3.5 凭证存储接口
+
+> **设计原则**：采用业界主流的"共享Agent + 用户级凭证隔离"模式
+> - Agent实例多用户共享，节省资源
+> - 凭证按用户独立存储，运行时动态注入
+> - 参考：[AWS Bedrock Agent多租户隔离](https://aws.amazon.com/blogs/machine-learning/implementing-tenant-isolation-using-agents-for-amazon-bedrock-in-a-multi-tenant-environment/)、[LangGraph认证机制](https://langchain-ai.github.io/langgraphjs/concepts/auth/)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    共享Agent实例                                 │
+│              (导师Agent / 编程Agent / ...)                       │
+├─────────────────────────────────────────────────────────────────┤
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
+│   │  用户A会话   │  │  用户B会话   │  │  用户C会话   │            │
+│   │  ctx.userId │  │  ctx.userId │  │  ctx.userId │            │
+│   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘            │
+│          │                │                │                    │
+├──────────▼────────────────▼────────────────▼────────────────────┤
+│                    工具执行层（凭证注入点）                        │
+│   userId → CredentialStore.find() → 注入到工具调用               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+```java
+package com.foggy.navigator.agent.tool;
+
+/**
+ * 凭证存储接口
+ * 负责用户工具凭证的存储、查询、加密管理
+ */
+public interface CredentialStore {
+
+    /**
+     * 保存用户凭证
+     * @param credential 凭证对象（accessToken会被加密存储）
+     */
+    void save(UserToolCredential credential);
+
+    /**
+     * 查找用户凭证
+     * @param userId 用户ID
+     * @param toolName 工具名称
+     * @return 凭证对象（accessToken已解密），不存在返回null
+     */
+    UserToolCredential find(String userId, String toolName);
+
+    /**
+     * 查找用户的所有凭证
+     * @param userId 用户ID
+     * @return 凭证列表
+     */
+    List<UserToolCredential> findByUser(String userId);
+
+    /**
+     * 删除凭证
+     * @param userId 用户ID
+     * @param toolName 工具名称
+     */
+    void delete(String userId, String toolName);
+
+    /**
+     * 检查凭证是否存在且有效
+     * @param userId 用户ID
+     * @param toolName 工具名称
+     * @return 是否有效（存在且未过期）
+     */
+    boolean isValid(String userId, String toolName);
+
+    /**
+     * 刷新凭证（使用refreshToken获取新accessToken）
+     * @param userId 用户ID
+     * @param toolName 工具名称
+     * @return 刷新后的凭证，失败返回null
+     */
+    UserToolCredential refresh(String userId, String toolName);
+}
+```
+
+**MVP实现**：使用`ConcurrentHashMap`内存存储，key为`userId:toolName`
+
+**生产实现**：
+- 存储：数据库（JPA Entity）
+- 加密：AES-256加密accessToken/refreshToken
+- 缓存：Redis缓存热点凭证
+
+### 3.6 会话管理器
 
 ```java
 package com.foggy.navigator.agent.session;
@@ -306,7 +449,7 @@ public interface SessionManager {
 }
 ```
 
-### 3.6 会话路由器
+### 3.7 会话路由器
 
 ```java
 package com.foggy.navigator.agent.router;
@@ -340,7 +483,7 @@ public interface SessionRouter {
 }
 ```
 
-### 3.7 配置服务（业务层提供）
+### 3.8 配置服务（业务层提供）
 
 ```java
 package com.foggy.navigator.config;
@@ -431,6 +574,44 @@ public class HttpToolConfig {
     private String method;              // HTTP方法: GET/POST
     private String url;                 // 请求URL
     private Map<String, String> headers; // 请求头
+}
+
+/**
+ * MCP工具配置（系统级，不含用户凭证）
+ */
+@Data
+public class McpToolConfig {
+    private String name;                    // 工具名称
+    private String description;             // 工具描述
+    private String mcpServerUrl;            // MCP服务器地址
+    private String protocol;                // 协议: stdio / sse / streamable-http
+    private List<String> capabilities;      // 工具能力列表
+    private JsonSchema inputSchema;         // 输入参数Schema
+    private JsonSchema outputSchema;        // 输出Schema
+    private boolean requiresAuth;           // 是否需要用户授权
+}
+
+/**
+ * 用户工具凭证（私有，加密存储）
+ *
+ * 设计原则（业界最佳实践）：
+ * - 共享Agent + 用户级凭证隔离
+ * - 凭证不存储在Agent配置中，独立管理
+ * - 运行时通过userId动态注入凭证
+ */
+@Data
+public class UserToolCredential {
+    private String id;                      // 凭证ID
+    private String userId;                  // 用户ID（关键隔离字段）
+    private String tenantId;                // 租户ID（多租户场景，可选）
+    private String toolName;                // 工具名称
+    private String accessToken;             // 访问Token（加密存储）
+    private String refreshToken;            // 刷新Token（可选）
+    private Map<String, String> customHeaders; // 自定义请求头
+    private Map<String, Object> metadata;   // 其他元数据
+    private LocalDateTime expiresAt;        // 过期时间
+    private LocalDateTime createdAt;        // 创建时间
+    private LocalDateTime updatedAt;        // 更新时间
 }
 
 @Data
@@ -532,7 +713,8 @@ import lombok.Data;
 public class Session {
 
     private String id;                  // 会话ID
-    private String userId;              // 用户ID
+    private String userId;              // 用户ID（关键：用于凭证隔离）
+    private String tenantId;            // 租户ID（多租户场景，可选）
     private String agentId;             // 当前Agent ID
     private String parentSessionId;     // 父会话ID（分派时使用）
 
@@ -1033,9 +1215,508 @@ public class LLMResponse {
 
 ---
 
-## 9. MVP实现范围
+## 9. Agent交互协议（AIP）
 
-### 9.1 Phase 1: 核心框架（优先级最高）
+> 参考业界标准: [A2A](https://a2a-protocol.org/latest/)、[AG-UI](https://github.com/ag-ui-protocol/ag-ui)、[A2UI](https://a2aprotocol.ai/blog/a2ui-guide)
+
+### 9.1 协议概述
+
+Agent交互协议（Agent Interaction Protocol, AIP）定义了Agent与前端UI之间的通信规范，是一个抽象协议，包含多种子协议。
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Agent交互协议栈                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   业界参考                        本框架实现                      │
+│   ─────────                      ──────────                     │
+│   A2A (Agent间)      ←──→       DelegationProtocol             │
+│   MCP (工具访问)     ←──→       ToolRegistry + MCP适配          │
+│   AG-UI (传输层)     ←──→       SSE消息流                       │
+│   A2UI (UI描述)      ←──→       SurfaceProtocol                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 9.2 消息基础结构
+
+```java
+package com.foggy.navigator.agent.protocol;
+
+/**
+ * Agent消息（统一消息格式）
+ */
+@Data
+public class AgentMessage {
+
+    // ===== 消息头 =====
+    private String messageId;           // 消息ID
+    private String sessionId;           // 会话ID
+    private String agentId;             // 发送Agent
+    private long timestamp;             // 时间戳
+    private String version;             // 协议版本: "1.0"
+
+    // ===== 消息类型 =====
+    private MessageType type;           // 消息类型
+
+    // ===== 消息载荷（多态，根据type解析） =====
+    private Object payload;
+}
+
+/**
+ * 消息类型枚举
+ */
+public enum MessageType {
+
+    // ===== 文本流 =====
+    TEXT_CHUNK,             // 流式文本片段
+    TEXT_COMPLETE,          // 文本完成
+
+    // ===== 工具调用 =====
+    TOOL_CALL_START,        // 工具调用开始
+    TOOL_CALL_RESULT,       // 工具调用结果
+    TOOL_CALL_ERROR,        // 工具调用错误
+
+    // ===== UI渲染（参考A2UI） =====
+    SURFACE_UPDATE,         // UI结构更新
+    DATA_MODEL_UPDATE,      // 数据模型更新
+
+    // ===== 路由跳转 =====
+    ROUTE_REQUEST,          // 路由请求
+    ROUTE_CONFIRM,          // 路由确认
+
+    // ===== 用户交互 =====
+    USER_ACTION_REQUEST,    // 请求用户操作
+    CONFIRMATION_REQUEST,   // 请求用户确认
+    FORM_REQUEST,           // 请求表单填写
+
+    // ===== 状态同步 =====
+    STATE_SYNC,             // 状态同步
+    THINKING,               // 思考中状态
+    ERROR,                  // 错误
+
+    // ===== 生命周期 =====
+    SESSION_START,          // 会话开始
+    SESSION_END,            // 会话结束
+    HEARTBEAT               // 心跳
+}
+```
+
+### 9.3 路由子协议（Route Protocol）
+
+```java
+package com.foggy.navigator.agent.protocol.route;
+
+/**
+ * 路由协议载荷
+ */
+@Data
+public class RoutePayload {
+
+    private RouteAction action;         // 路由动作
+    private RouteMode mode;             // 路由模式
+    private RouteTarget target;         // 目标信息
+    private ContextTransfer context;    // 上下文传递
+    private UiHint uiHint;              // UI提示配置
+    private CallbackConfig callback;    // 回调配置
+}
+
+/**
+ * 路由动作
+ */
+public enum RouteAction {
+    DELEGATE,      // 分派给其他Agent
+    RETURN,        // 返回父会话
+    SWITCH,        // 切换会话（不创建新会话）
+    SPAWN,         // 创建并行会话
+    CLOSE          // 关闭当前会话
+}
+
+/**
+ * 路由模式（前端如何处理跳转）
+ */
+public enum RouteMode {
+    REDIRECT,           // 页面跳转
+    REPLACE,            // 替换当前会话（同窗口）
+    NEW_TAB,            // 新标签页
+    MODAL,              // 模态框
+    SPLIT_VIEW,         // 分屏视图
+    BACKGROUND          // 后台执行（不切换UI）
+}
+
+/**
+ * 路由目标
+ */
+@Data
+public class RouteTarget {
+    private String agentId;             // 目标Agent ID
+    private String agentName;           // Agent显示名称
+    private String sessionId;           // 目标会话ID
+    private String url;                 // 跳转URL（可选）
+    private Map<String, String> params; // URL参数
+}
+
+/**
+ * 上下文传递配置
+ */
+@Data
+public class ContextTransfer {
+    private List<String> messageIds;        // 传递的消息ID列表
+    private Map<String, Object> variables;  // 传递的变量
+    private String summary;                 // 会话摘要
+    private boolean preserveHistory;        // 是否保留历史
+}
+
+/**
+ * UI提示配置
+ */
+@Data
+public class UiHint {
+    private boolean requireConfirmation;    // 是否需要用户确认
+    private String confirmationMessage;     // 确认提示文本
+    private String loadingMessage;          // 加载提示
+    private String icon;                    // 图标标识
+    private String theme;                   // 主题: info / warning / danger
+}
+
+/**
+ * 回调配置
+ */
+@Data
+public class CallbackConfig {
+    private boolean notifyOnComplete;       // 完成时通知父会话
+    private boolean autoReturn;             // 完成后自动返回
+    private String webhookUrl;              // 回调Webhook（可选）
+}
+```
+
+### 9.4 UI渲染子协议（Surface Protocol，参考A2UI）
+
+```java
+package com.foggy.navigator.agent.protocol.surface;
+
+/**
+ * UI结构更新载荷
+ * 采用扁平化组件列表 + ID引用（参考A2UI的adjacency list模型）
+ */
+@Data
+public class SurfaceUpdatePayload {
+
+    private String surfaceId;               // 渲染区域ID
+    private String rootComponentId;         // 根组件ID
+    private List<UiComponent> components;   // 组件列表（扁平化）
+}
+
+/**
+ * UI组件定义
+ * 安全设计：仅支持预定义的组件类型（白名单机制）
+ */
+@Data
+public class UiComponent {
+
+    private String id;                      // 组件ID
+    private ComponentType type;             // 组件类型（枚举，白名单）
+    private String parentId;                // 父组件ID
+    private Map<String, Object> props;      // 组件属性
+    private List<String> childIds;          // 子组件ID列表
+
+    // 数据绑定
+    private String dataBinding;             // 绑定的数据模型路径
+
+    // 交互事件
+    private Map<String, ActionConfig> actions; // 事件名 → 动作配置
+}
+
+/**
+ * 预定义组件类型（白名单，安全）
+ */
+public enum ComponentType {
+    // 布局组件
+    CONTAINER, ROW, COLUMN, CARD, MODAL, TABS, ACCORDION,
+
+    // 展示组件
+    TEXT, MARKDOWN, IMAGE, ICON, BADGE, PROGRESS, DIVIDER,
+
+    // 交互组件
+    BUTTON, LINK, INPUT, TEXTAREA, SELECT, CHECKBOX, RADIO, SWITCH, FORM,
+
+    // 数据组件
+    TABLE, LIST, TREE, CHART, CODE_BLOCK, JSON_VIEWER,
+
+    // Agent专用组件
+    THINKING_INDICATOR,     // 思考中指示器
+    TOOL_RESULT,            // 工具调用结果
+    AGENT_CARD,             // Agent信息卡片
+    MESSAGE_BUBBLE,         // 消息气泡
+    SUGGESTION_CHIPS        // 建议选项
+}
+
+/**
+ * 组件动作配置
+ */
+@Data
+public class ActionConfig {
+    private String actionType;              // 动作类型: route / submit / custom
+    private Map<String, Object> params;     // 动作参数
+}
+```
+
+### 9.5 用户交互子协议（UserAction Protocol）
+
+```java
+package com.foggy.navigator.agent.protocol.action;
+
+/**
+ * 用户操作请求载荷
+ */
+@Data
+public class UserActionRequestPayload {
+
+    private String actionId;                // 操作ID（用于响应匹配）
+    private ActionType actionType;          // 操作类型
+
+    // 根据actionType使用对应配置
+    private ConfirmationConfig confirmation;
+    private FormConfig form;
+    private SelectionConfig selection;
+
+    // 超时配置
+    private Integer timeoutSeconds;         // 超时秒数
+    private String timeoutAction;           // 超时后默认动作
+}
+
+public enum ActionType {
+    CONFIRM,            // 确认/取消
+    FORM_SUBMIT,        // 表单提交
+    SINGLE_SELECT,      // 单选
+    MULTI_SELECT,       // 多选
+    FILE_UPLOAD,        // 文件上传
+    CUSTOM              // 自定义
+}
+
+@Data
+public class ConfirmationConfig {
+    private String title;
+    private String message;
+    private String confirmText;             // 确认按钮文本
+    private String cancelText;              // 取消按钮文本
+    private String severity;                // info / warning / danger
+}
+
+@Data
+public class FormConfig {
+    private String title;
+    private List<FormField> fields;
+    private String submitText;
+    private String cancelText;
+}
+
+@Data
+public class FormField {
+    private String name;                    // 字段名
+    private String label;                   // 显示标签
+    private String type;                    // 字段类型: text / number / select / ...
+    private Object defaultValue;            // 默认值
+    private boolean required;               // 是否必填
+    private List<Option> options;           // 选项（select类型）
+}
+
+@Data
+public class SelectionConfig {
+    private String title;
+    private String message;
+    private List<Option> options;
+    private boolean allowMultiple;          // 是否允许多选
+}
+
+@Data
+public class Option {
+    private String value;
+    private String label;
+    private String description;
+    private String icon;
+}
+```
+
+### 9.6 状态同步子协议（State Protocol）
+
+```java
+package com.foggy.navigator.agent.protocol.state;
+
+/**
+ * 状态同步载荷
+ */
+@Data
+public class StateSyncPayload {
+
+    private String stateId;                 // 状态ID
+    private SyncMode mode;                  // 同步模式
+    private Map<String, Object> data;       // 状态数据（FULL模式）
+    private String jsonPatch;               // JSON Patch（PATCH模式，RFC 6902）
+}
+
+public enum SyncMode {
+    FULL,       // 全量替换
+    PATCH,      // 增量更新
+    DELETE      // 删除状态
+}
+```
+
+### 9.7 消息示例
+
+#### 路由跳转消息
+
+```json
+{
+  "messageId": "msg-001",
+  "sessionId": "sess-123",
+  "agentId": "tutor-agent",
+  "timestamp": 1737820800000,
+  "version": "1.0",
+  "type": "ROUTE_REQUEST",
+  "payload": {
+    "action": "DELEGATE",
+    "mode": "MODAL",
+    "target": {
+      "agentId": "coding-agent",
+      "agentName": "编程助手",
+      "sessionId": "sess-456"
+    },
+    "context": {
+      "summary": "用户想要创建一个Python项目",
+      "variables": { "projectType": "python" }
+    },
+    "uiHint": {
+      "requireConfirmation": true,
+      "confirmationMessage": "是否切换到编程助手？",
+      "icon": "code"
+    },
+    "callback": {
+      "notifyOnComplete": true,
+      "autoReturn": true
+    }
+  }
+}
+```
+
+#### UI渲染消息
+
+```json
+{
+  "messageId": "msg-002",
+  "sessionId": "sess-123",
+  "agentId": "tutor-agent",
+  "timestamp": 1737820801000,
+  "version": "1.0",
+  "type": "SURFACE_UPDATE",
+  "payload": {
+    "surfaceId": "main",
+    "rootComponentId": "card-1",
+    "components": [
+      {
+        "id": "card-1",
+        "type": "CARD",
+        "props": { "title": "配置进度" },
+        "childIds": ["progress-1", "btn-1"]
+      },
+      {
+        "id": "progress-1",
+        "type": "PROGRESS",
+        "parentId": "card-1",
+        "props": { "value": 60, "label": "数据源配置" }
+      },
+      {
+        "id": "btn-1",
+        "type": "BUTTON",
+        "parentId": "card-1",
+        "props": { "text": "继续配置", "variant": "primary" },
+        "actions": {
+          "click": { "actionType": "route", "params": { "target": "datasource-agent" } }
+        }
+      }
+    ]
+  }
+}
+```
+
+#### 用户确认请求
+
+```json
+{
+  "messageId": "msg-003",
+  "sessionId": "sess-123",
+  "agentId": "coding-agent",
+  "timestamp": 1737820802000,
+  "version": "1.0",
+  "type": "CONFIRMATION_REQUEST",
+  "payload": {
+    "actionId": "confirm-delete-001",
+    "actionType": "CONFIRM",
+    "confirmation": {
+      "title": "确认删除",
+      "message": "确定要删除文件 main.py 吗？",
+      "confirmText": "删除",
+      "cancelText": "取消",
+      "severity": "danger"
+    },
+    "timeoutSeconds": 30,
+    "timeoutAction": "CANCEL"
+  }
+}
+```
+
+### 9.8 前端处理参考
+
+```typescript
+// TypeScript类型定义
+interface AgentMessage<T = unknown> {
+  messageId: string;
+  sessionId: string;
+  agentId: string;
+  timestamp: number;
+  version: string;
+  type: MessageType;
+  payload: T;
+}
+
+type MessageType =
+  | 'TEXT_CHUNK' | 'TEXT_COMPLETE'
+  | 'TOOL_CALL_START' | 'TOOL_CALL_RESULT' | 'TOOL_CALL_ERROR'
+  | 'SURFACE_UPDATE' | 'DATA_MODEL_UPDATE'
+  | 'ROUTE_REQUEST' | 'ROUTE_CONFIRM'
+  | 'USER_ACTION_REQUEST' | 'CONFIRMATION_REQUEST' | 'FORM_REQUEST'
+  | 'STATE_SYNC' | 'THINKING' | 'ERROR'
+  | 'SESSION_START' | 'SESSION_END' | 'HEARTBEAT';
+
+// 消息处理器注册
+const handlers = new Map<MessageType, (msg: AgentMessage) => void>([
+  ['TEXT_CHUNK', handleTextChunk],
+  ['SURFACE_UPDATE', handleSurfaceUpdate],
+  ['ROUTE_REQUEST', handleRouteRequest],
+  ['CONFIRMATION_REQUEST', handleConfirmation],
+  // ...
+]);
+
+// SSE消息处理
+function processMessage(msg: AgentMessage) {
+  const handler = handlers.get(msg.type);
+  handler?.(msg);
+}
+
+// 用户动作响应
+async function respondToAction(actionId: string, result: any) {
+  await fetch(`/api/sessions/${sessionId}/actions/${actionId}`, {
+    method: 'POST',
+    body: JSON.stringify(result)
+  });
+}
+```
+
+---
+
+## 10. MVP实现范围
+
+### 10.1 Phase 1: 核心框架（优先级最高）
 
 **必须实现**：
 - [x] AgentConfigLoader - YAML配置加载
@@ -1050,7 +1731,7 @@ public class LLMResponse {
 - 消息存储：使用内存List，无需数据库
 - Agent发现：简单的Map查找，无需复杂索引
 
-### 9.2 Phase 2: Skill系统
+### 10.2 Phase 2: Skill系统
 
 **必须实现**：
 - [x] SkillParser - markdown解析
@@ -1062,7 +1743,7 @@ public class LLMResponse {
 - 复杂的意图识别（Phase 3）
 - Skill版本管理（Phase 3）
 
-### 9.3 Phase 3: 分派与路由
+### 10.3 Phase 3: 分派与路由
 
 **必须实现**：
 - [x] SessionRouter - 会话跳转
@@ -1075,20 +1756,50 @@ public class LLMResponse {
 
 ---
 
-## 10. 实现建议
+## 11. 实现建议
 
-### 10.1 技术选型
+### 11.1 技术选型
 
 | 组件 | 推荐方案 | 说明 |
 |------|---------|------|
-| 配置解析 | SnakeYAML | 轻量级YAML解析 |
-| LLM集成 | LangChain4j | 已有技术栈 |
+| 配置解析 | SnakeYAML + Jackson | YAML/JSON双格式支持 |
+| LLM集成 | LangChain4j | 仅使用LLM调用能力，自研Agent编排层 |
 | markdown解析 | Commonmark | 标准markdown解析库 |
-| HTTP客户端 | RestTemplate | Spring自带 |
+| HTTP客户端 | WebClient | Spring WebFlux响应式客户端 |
+| MCP客户端 | 自研适配层 | 基于MCP SDK封装 |
 | 会话存储（MVP） | ConcurrentHashMap | 内存存储 |
 | 会话存储（生产） | Redis | 后续迁移 |
 
-### 10.2 模块划分
+#### LangChain4j使用策略
+
+**采用混合架构**：利用LangChain4j的LLM调用能力，但自研Agent编排层。
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    自研Agent编排层                               │
+│  (AgentRegistry / SkillManager / SessionRouter / Protocol)      │
+├─────────────────────────────────────────────────────────────────┤
+│                    LLM抽象适配层                                 │
+│  (LlmAdapter接口，支持多实现切换)                                │
+├─────────────────────────────────────────────────────────────────┤
+│    LangChain4j        │    Spring AI     │    直接API调用        │
+│    (主要实现)          │    (备选)        │    (特殊场景)         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**使用LangChain4j的能力**：
+- ChatLanguageModel / StreamingChatLanguageModel
+- 多模型提供商支持（OpenAI、Anthropic、Ollama等）
+- 流式响应处理
+
+**自研的能力**（不依赖LangChain4j）：
+- Agent配置与注册
+- Skill管理与匹配
+- 会话管理与路由
+- 工具注册（支持MCP）
+- 交互协议（AIP）
+
+### 11.2 模块划分
 
 ```
 agent-framework-core/
@@ -1102,7 +1813,7 @@ agent-framework-core/
 └── common/                # 公共模型与工具
 ```
 
-### 10.3 测试策略
+### 11.3 测试策略
 
 | 测试类型 | 覆盖范围 |
 |---------|---------|
@@ -1112,21 +1823,22 @@ agent-framework-core/
 
 ---
 
-## 11. 接口清单总结
+## 12. 接口清单总结
 
-### 11.1 核心接口（必须实现）
+### 12.1 核心接口（必须实现）
 
 | 接口 | 优先级 | 说明 |
 |------|--------|------|
 | AgentConfigLoader | P0 | 配置加载 |
 | AgentRegistry | P0 | Agent注册 |
 | SessionManager | P0 | 会话管理 |
-| ToolRegistry | P0 | 工具管理 |
+| ToolRegistry | P0 | 工具管理（HTTP + MCP） |
+| CredentialStore | P0 | 用户凭证存储（用户隔离） |
 | LLMInvoker | P0 | LLM调用 |
 | SkillManager | P1 | Skill管理 |
 | SessionRouter | P1 | 会话路由 |
 
-### 11.2 业务接口（业务层提供）
+### 12.2 业务接口（业务层提供）
 
 | 接口 | 提供方 | 说明 |
 |------|--------|------|
@@ -1134,9 +1846,9 @@ agent-framework-core/
 
 ---
 
-## 12. 配置示例
+## 13. 配置示例
 
-### 12.1 最小配置示例（JSON格式）
+### 13.1 最小配置示例（JSON格式）
 
 ```json
 {
@@ -1172,15 +1884,15 @@ agent:
     systemPrompt: "你是一个演示Agent"
 ```
 
-### 12.2 完整配置示例
+### 13.2 完整配置示例
 
 参见导师Agent的配置文件（tutor-agent.json / tutor-agent.yml）
 
 ---
 
-## 13. 后续扩展方向
+## 14. 后续扩展方向
 
-### 13.1 Phase 4+
+### 14.1 Phase 4+
 
 - [ ] 持久化存储（MySQL）
 - [ ] 缓存层（Redis）
@@ -1192,7 +1904,7 @@ agent:
 
 ---
 
-## 14. FAQ
+## 15. FAQ
 
 ### Q1: 为什么使用markdown定义Skill？
 
@@ -1226,6 +1938,15 @@ agent:
 
 ---
 
-**文档版本**: 1.0.0
+**文档版本**: 1.2.0
 **创建日期**: 2026-01-25
+**更新日期**: 2026-01-25
 **作者**: Foggy Navigator Agent Framework Team
+
+### 版本历史
+
+| 版本 | 日期 | 变更内容 |
+|------|------|---------|
+| 1.0.0 | 2026-01-25 | 初始版本 |
+| 1.1.0 | 2026-01-25 | 新增MCP工具支持与用户隔离设计；新增Agent交互协议（AIP）；明确LangChain4j使用策略 |
+| 1.2.0 | 2026-01-25 | 完善凭证管理设计：共享Agent+用户级凭证隔离；新增CredentialStore接口；补充多租户支持 |
