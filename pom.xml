@@ -26,6 +26,7 @@
     </properties>
 
     <modules>
+        <module>addons/agent-framework</module>
         <module>addons/coding-agent</module>
     </modules>
 </project>
