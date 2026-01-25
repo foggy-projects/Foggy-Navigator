@@ -97,6 +97,10 @@ public class EventService {
         return result;
     }
 
+    public List<Event> getEventsByKind(String conversationId, Event.EventKind kind) {
+        return getEvents(conversationId, kind, null, null, null, 100);
+    }
+
     public String getLatestEventId(String conversationId) {
         String latestEventId = latestEventIds.get(conversationId);
         if (latestEventId == null) {

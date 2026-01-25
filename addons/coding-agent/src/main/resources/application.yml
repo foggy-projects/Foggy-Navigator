@@ -50,12 +50,29 @@ foggy:
       url: http://localhost:7108  # 验证服务地址（可配置）
       enabled: true
       realtime: true  # 实时验证
+      timeout: 30000  # 验证超时时间（毫秒）
+      auto-trigger-on-create: true  # 创建会话后自动触发验证
+      auto-trigger-on-message: false  # 发送消息后自动触发验证
 
     # Git 配置
     git:
       default-branch: main
       auto-commit: true
       auto-pr: true
+
+    # 会话清理配置
+    cleanup:
+      enabled: true  # 是否启用自动清理
+      interval: 300000  # 空闲会话清理间隔（毫秒，默认 5 分钟）
+      idle-timeout: 3600000  # 空闲会话超时时间（毫秒，默认 1 小时）
+      max-age: 86400000  # 会话最大存活时间（毫秒，默认 1 天）
+      max-age-check-interval: 3600000  # 过期会话检查间隔（毫秒，默认 1 小时）
+      orphan-interval: 600000  # 孤儿容器检查间隔（毫秒，默认 10 分钟）
+
+    # 健康检查配置
+    health:
+      check-interval: 60000  # 健康检查间隔（毫秒，默认 1 分钟）
+      enabled: true
 
     # 会话恢复配置
     recovery:

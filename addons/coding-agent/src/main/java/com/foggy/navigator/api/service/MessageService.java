@@ -7,6 +7,7 @@ import com.foggy.navigator.api.model.entity.MessageEntity;
 import com.foggy.navigator.api.repository.MessageRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +32,12 @@ public class MessageService {
     @Autowired
     private MessageRepository messageRepository;
 
+    @Autowired
+    private ValidationService validationService;
+
+    @Value("${foggy.coding-agent.validation.auto-trigger-on-message:false}")
+    private boolean autoTriggerValidationOnMessage;
+
     @Transactional
     public Message sendMessage(String conversationId, SendMessageRequest request) {
         log.info("发送消息: conversationId={}, content={}", conversationId, request.getContent());
@@ -54,6 +61,16 @@ public class MessageService {
                 .data(Map.of("messageId", messageId, "content", request.getContent()))
                 .build();
         eventPublisher.publishEvent(messageEvent);
+
+        // 自动触发验证
+        if (autoTriggerValidationOnMessage) {
+            try {
+                validationService.triggerValidation(conversationId);
+            } catch (Exception e) {
+                log.error("自动触发验证失败: conversationId={}, error={}", conversationId, e.getMessage());
+                // 验证失败不应导致消息发送失败，只记录错误
+            }
+        }
 
         log.info("消息已发送: messageId={}", messageId);
         return message;

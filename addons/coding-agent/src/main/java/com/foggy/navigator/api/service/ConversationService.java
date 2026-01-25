@@ -36,8 +36,14 @@ public class ConversationService {
     @Autowired
     private ConversationRepository conversationRepository;
 
+    @Autowired
+    private ValidationService validationService;
+
     @Value("${foggy.coding-agent.openhands.workspace-base:/workspace}")
     private String workspaceBase;
+
+    @Value("${foggy.coding-agent.validation.auto-trigger-on-create:true}")
+    private boolean autoTriggerValidationOnCreate;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -109,6 +115,16 @@ public class ConversationService {
                     .data(Map.of("status", "READY"))
                     .build();
             eventPublisher.publishEvent(readyEvent);
+
+            // 自动触发验证
+            if (autoTriggerValidationOnCreate) {
+                try {
+                    validationService.triggerValidation(conversationId);
+                } catch (Exception e) {
+                    log.error("自动触发验证失败: conversationId={}, error={}", conversationId, e.getMessage());
+                    // 验证失败不应导致 Conversation 创建失败，只记录错误
+                }
+            }
 
             log.info("对话创建成功: conversationId={}, containerId={}", conversationId, containerId);
             return conversation;

@@ -171,4 +171,74 @@ public class ConversationRecoveryService {
 
         log.info("清理完成");
     }
+
+    /**
+     * 删除会话（支持强制删除）
+     */
+    @Transactional
+    public void deleteConversation(String conversationId, boolean forceDelete) {
+        log.info("删除会话: conversationId={}, forceDelete={}", conversationId, forceDelete);
+
+        try {
+            conversationService.deleteConversation(conversationId);
+        } catch (Exception e) {
+            if (forceDelete) {
+                log.warn("正常删除失败，强制删除会话: conversationId={}", conversationId, e);
+                conversationRepository.deleteByConversationId(conversationId);
+            } else {
+                throw e;
+            }
+        }
+    }
+
+    /**
+     * 删除过期会话
+     */
+    @Transactional
+    public int deleteExpiredConversations(LocalDateTime cutoffTime) {
+        log.info("删除过期会话: cutoffTime={}", cutoffTime);
+
+        List<ConversationEntity> expiredEntities = conversationRepository.findByCreatedAtBefore(cutoffTime);
+        int deletedCount = 0;
+
+        for (ConversationEntity entity : expiredEntities) {
+            try {
+                log.info("删除过期会话: conversationId={}, createdAt={}",
+                        entity.getConversationId(), entity.getCreatedAt());
+                deleteConversation(entity.getConversationId(), true);
+                deletedCount++;
+            } catch (Exception e) {
+                log.error("删除过期会话失败: conversationId={}", entity.getConversationId(), e);
+            }
+        }
+
+        log.info("删除过期会话完成: 删除了 {} 个会话", deletedCount);
+        return deletedCount;
+    }
+
+    /**
+     * 获取清理统计信息
+     */
+    public CleanupStatistics getCleanupStatistics() {
+        long totalCount = conversationRepository.count();
+        long stoppedCount = conversationRepository.findByStatus(ConversationEntity.ConversationStatus.STOPPED).size();
+        long errorCount = conversationRepository.findByStatus(ConversationEntity.ConversationStatus.ERROR).size();
+        long readyCount = conversationRepository.findByStatus(ConversationEntity.ConversationStatus.READY).size();
+
+        return CleanupStatistics.builder()
+                .totalCount(totalCount)
+                .stoppedCount(stoppedCount)
+                .errorCount(errorCount)
+                .readyCount(readyCount)
+                .build();
+    }
+
+    @lombok.Builder
+    @lombok.Data
+    public static class CleanupStatistics {
+        private long totalCount;
+        private long stoppedCount;
+        private long errorCount;
+        private long readyCount;
+    }
 }

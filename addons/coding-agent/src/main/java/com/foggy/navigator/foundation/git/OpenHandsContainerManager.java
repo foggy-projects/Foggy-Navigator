@@ -6,6 +6,7 @@ import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.model.Bind;
+import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Volume;
 import com.github.dockerjava.core.DefaultDockerClientConfig;
@@ -21,7 +22,9 @@ import org.springframework.stereotype.Service;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * OpenHands 容器管理服务
@@ -325,6 +328,42 @@ public class OpenHandsContainerManager implements ContainerManagerInterface {
             return response.getState().getRunning();
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    /**
+     * 列出所有 OpenHands 容器
+     *
+     * @return 容器ID集合
+     */
+    public Set<String> listAllContainers() {
+        Set<String> containerIds = new HashSet<>();
+
+        if (useMock) {
+            log.debug("模拟模式：返回空容器列表");
+            return containerIds;
+        }
+
+        try {
+            List<Container> containers = dockerClient.listContainersCmd()
+                    .withShowAll(true)
+                    .exec();
+
+            for (Container container : containers) {
+                // 只返回 OpenHands 容器
+                for (String name : container.getNames()) {
+                    if (name.contains("openhands")) {
+                        containerIds.add(container.getId());
+                        break;
+                    }
+                }
+            }
+
+            log.debug("找到 {} 个 OpenHands 容器", containerIds.size());
+            return containerIds;
+        } catch (Exception e) {
+            log.error("列出容器失败", e);
+            return containerIds;
         }
     }
 }

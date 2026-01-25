@@ -19,9 +19,10 @@ public class OpenhandsEventListener {
     @Autowired
     private EventService eventService;
 
-    @Async
+    @Async("eventPublisherExecutor")
     @EventListener
     public void onEvent(Event event) {
+        long startTime = System.currentTimeMillis();
         log.debug("收到事件: conversationId={}, kind={}", event.getConversationId(), event.getKind());
 
         try {
@@ -30,8 +31,15 @@ public class OpenhandsEventListener {
 
             // 推送事件到 SSE 流
             sseEventEmitter.sendEvent(event.getConversationId(), event);
+
+            long duration = System.currentTimeMillis() - startTime;
+            if (duration > 100) {
+                log.warn("事件处理耗时较长: conversationId={}, kind={}, duration={}ms",
+                        event.getConversationId(), event.getKind(), duration);
+            }
         } catch (Exception e) {
-            log.error("处理事件失败: conversationId={}, kind={}", event.getConversationId(), event.getKind(), e);
+            log.error("处理事件失败: conversationId={}, kind={}, error={}",
+                    event.getConversationId(), event.getKind(), e.getMessage(), e);
         }
     }
 }
