@@ -2,6 +2,8 @@
 
 > 基于配置化的导师Agent实现方案
 
+**依赖框架**: [Agent Framework 使用指南](./agent-framework-guide.md)
+
 ## 1. 模块概述
 
 ### 1.1 定位

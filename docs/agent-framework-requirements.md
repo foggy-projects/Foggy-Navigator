@@ -2,6 +2,10 @@
 
 > 支持配置化Agent的通用框架设计
 
+**相关文档**:
+- [Agent Framework 使用指南](./agent-framework-guide.md) - 开发者集成文档
+- [导师Agent设计文档](./tutor-agent-design.md) - 导师Agent实现参考
+
 ## 1. 框架概述
 
 ### 1.1 定位
