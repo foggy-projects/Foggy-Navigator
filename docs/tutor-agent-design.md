@@ -39,7 +39,8 @@ tutor-agent/
 │       │       └── ConfigProgress.java
 │       └── resources/
 │           ├── agent-config/
-│           │   └── tutor-agent.yml                # Agent配置
+│           │   ├── tutor-agent.json               # Agent配置（主格式）
+│           │   └── tutor-agent.yml                # Agent配置（导出格式）
 │           └── skills/tutor/
 │               ├── check-system-status.md         # 检查状态Skill
 │               ├── guide-datasource-config.md     # 引导配置数据源
@@ -53,7 +54,140 @@ tutor-agent/
 
 ## 3. Agent配置文件
 
-### 3.1 tutor-agent.yml
+### 3.1 tutor-agent.json（主配置格式）
+
+```json
+{
+  "agent": {
+    "id": "tutor-agent",
+    "name": "导师Agent",
+    "type": "system",
+    "description": "引导用户完成系统初始化配置，检查配置状态，分派任务给专业Agent",
+    "capabilities": [
+      "system-guidance",
+      "configuration-check",
+      "agent-orchestration"
+    ],
+    "skills": {
+      "directory": "classpath:skills/tutor",
+      "enabled": [
+        "check-system-status",
+        "guide-datasource-config",
+        "guide-semantic-layer",
+        "suggest-next-step"
+      ]
+    },
+    "tools": [
+      {
+        "name": "checkDatasourceStatus",
+        "description": "检查数据源配置状态",
+        "http": {
+          "method": "GET",
+          "url": "http://localhost:8080/api/tutor/config/datasource/status"
+        }
+      },
+      {
+        "name": "checkSemanticLayerStatus",
+        "description": "检查语义层配置状态",
+        "http": {
+          "method": "GET",
+          "url": "http://localhost:8080/api/tutor/config/semantic-layer/status"
+        }
+      },
+      {
+        "name": "getConfigProgress",
+        "description": "获取系统整体配置进度",
+        "http": {
+          "method": "GET",
+          "url": "http://localhost:8080/api/tutor/config/progress"
+        }
+      },
+      {
+        "name": "findPendingTasks",
+        "description": "查找用户未完成的配置任务",
+        "http": {
+          "method": "GET",
+          "url": "http://localhost:8080/api/tutor/sessions/pending?userId={userId}"
+        }
+      }
+    ],
+    "model": {
+      "provider": "openai",
+      "model": "gpt-4",
+      "temperature": 0.7,
+      "systemPrompt": "你是Foggy Navigator的导师Agent，负责引导用户完成系统配置。\n\n你的职责：\n1. 检查系统配置状态（使用checkDatasourceStatus、checkSemanticLayerStatus等工具）\n2. 根据配置状态，提供清晰的下一步指导\n3. 当用户需要执行具体配置任务时，分派给专业Agent处理\n4. 检查是否有未完成的任务，提醒用户继续\n\n沟通风格：\n- 友好、耐心、专业\n- 使用清晰的步骤说明\n- 避免技术术语，使用用户易懂的语言"
+    },
+    "delegation": {
+      "rules": [
+        {
+          "name": "delegate-datasource-config",
+          "trigger": {
+            "intents": ["configure-datasource", "add-datasource"],
+            "keywords": ["配置数据源", "连接数据库", "添加数据库"]
+          },
+          "target": "datasource-agent",
+          "preconditions": [],
+          "contextMapping": [
+            {
+              "key": "dbType",
+              "source": "userInput"
+            },
+            {
+              "key": "connectionInfo",
+              "source": "userInput"
+            }
+          ]
+        },
+        {
+          "name": "delegate-semantic-layer-generation",
+          "trigger": {
+            "intents": ["generate-semantic-layer", "create-models"],
+            "keywords": ["生成语义层", "创建模型", "分析数据库"]
+          },
+          "target": "semantic-layer-agent",
+          "preconditions": [
+            {
+              "datasource_configured": true
+            }
+          ],
+          "contextMapping": [
+            {
+              "key": "datasourceId",
+              "source": "systemConfig.datasourceId"
+            }
+          ]
+        },
+        {
+          "name": "delegate-semantic-layer-edit",
+          "trigger": {
+            "intents": ["edit-semantic-layer", "modify-models"],
+            "keywords": ["编辑", "修改语义层"]
+          },
+          "target": "coding-agent",
+          "preconditions": [
+            {
+              "semantic_layer_exists": true
+            }
+          ],
+          "contextMapping": [
+            {
+              "key": "gitRepoUrl",
+              "source": "systemConfig.semanticLayerRepo"
+            }
+          ]
+        }
+      ]
+    },
+    "sessionResume": {
+      "enabled": true,
+      "checkOnStartup": true,
+      "reminderTemplate": "您好！检测到您有未完成的配置任务：**{taskName}**\n\n任务状态：{taskStatus}\n上次操作时间：{lastActivityTime}\n\n是否继续之前的配置？"
+    }
+  }
+}
+```
+
+### 3.2 tutor-agent.yml（对应YAML格式，用于导出）
 
 ```yaml
 # 导师Agent配置

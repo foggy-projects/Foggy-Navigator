@@ -590,7 +590,7 @@ public void performanceTest_AgentResponseTime() {
 | 数据库 | MySQL 8.0+ | 关系型数据 |
 | 缓存 | Redis（可选） | 会话缓存 |
 | Git | GitLab/GitHub | 语义层版本管理 |
-| 配置解析 | SnakeYAML | YAML解析 |
+| 配置解析 | Jackson (JSON) + SnakeYAML | JSON主格式 + YAML导入导出 |
 | markdown解析 | Commonmark | Skill文件解析 |
 | 测试框架 | JUnit 5 + Mockito | 单元测试 |
 | 集成测试 | Spring Boot Test | 集成测试 |
@@ -728,7 +728,21 @@ public void performanceTest_AgentResponseTime() {
 
 ## 附录: 关键设计决策
 
-### A1. 为什么使用配置化Agent？
+### A1. 为什么使用JSON作为主配置格式？
+
+**原因**:
+1. **前端友好**: Web管理界面可直接使用JSON，无需格式转换
+2. **数据库支持**: MySQL/PostgreSQL原生支持JSON字段类型
+3. **API标准**: REST接口的标准数据格式
+4. **全链路一致**: 前端表单 → API → 数据库 → 前端渲染，全程JSON
+5. **辅助YAML**: 支持YAML导入导出，兼顾版本控制需求
+
+**技术选择**:
+- **主格式**: JSON（数据库存储、API交互、前端编辑）
+- **辅助格式**: YAML（导入导出、版本控制、手写配置）
+- **转换工具**: 提供JSON ↔ YAML双向转换
+
+### A2. 为什么使用配置化Agent？
 
 **原因**:
 1. 降低开发成本：新增Agent无需编写代码
@@ -736,7 +750,7 @@ public void performanceTest_AgentResponseTime() {
 3. 易于测试：配置驱动易于编写测试用例
 4. 降低维护成本：配置比代码更易理解和维护
 
-### A2. 为什么使用markdown定义Skill？
+### A3. 为什么使用markdown定义Skill？
 
 **原因**:
 1. 人类可读：易于理解和维护

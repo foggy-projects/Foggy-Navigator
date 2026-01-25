@@ -10,7 +10,7 @@
 
 ### 1.2 核心目标
 
-- **配置化**: Agent通过YAML配置文件定义，而非硬编码
+- **配置化**: Agent通过JSON配置定义（支持YAML导入导出），而非硬编码
 - **可扩展**: 支持自定义Skill、Tool、分派规则
 - **标准化**: 统一的数据模型、接口规范、通信协议
 - **高性能**: 支持并发会话、流式响应
@@ -80,23 +80,34 @@ package com.foggy.navigator.agent.core;
 
 /**
  * Agent配置加载器
+ * 主要格式：JSON（用于数据库存储、API交互、前端编辑）
+ * 辅助格式：YAML（用于导入导出、版本控制）
  */
 public interface AgentConfigLoader {
 
     /**
-     * 从指定路径加载Agent配置
-     * @param path 配置文件路径（支持 classpath: 和 file: 前缀）
+     * 从JSON字符串加载Agent配置（主要方法）
+     * @param json JSON格式的配置内容
+     * @return Agent配置对���
+     * @throws AgentConfigException 配置解析失败
+     */
+    AgentConfig loadFromJson(String json) throws AgentConfigException;
+
+    /**
+     * 从YAML字符串加载Agent配置（辅助方法，用于导入）
+     * @param yaml YAML格式的配置内容
+     * @return Agent配置对象
+     * @throws AgentConfigException 配置解析失败
+     */
+    AgentConfig loadFromYaml(String yaml) throws AgentConfigException;
+
+    /**
+     * 从指定路径加载Agent配置（自动检测格式）
+     * @param path 配置文件路径（.json 或 .yml/.yaml）
      * @return Agent配置对象
      * @throws AgentConfigException 配置加载失败
      */
     AgentConfig load(String path) throws AgentConfigException;
-
-    /**
-     * 从字符串加载Agent配置
-     * @param yaml YAML格式的配置内容
-     * @return Agent配置对象
-     */
-    AgentConfig loadFromString(String yaml);
 
     /**
      * 验证配置的有效性
@@ -1125,18 +1136,35 @@ agent-framework-core/
 
 ## 12. 配置示例
 
-### 12.1 最小配置示例
+### 12.1 最小配置示例（JSON格式）
 
+```json
+{
+  "agent": {
+    "id": "demo-agent",
+    "name": "演示Agent",
+    "type": "system",
+    "description": "最简单的Agent示例",
+    "capabilities": ["demo"],
+    "model": {
+      "provider": "openai",
+      "model": "gpt-4",
+      "temperature": 0.7,
+      "systemPrompt": "你是一个演示Agent"
+    }
+  }
+}
+```
+
+**对应YAML格式（用于导出）**:
 ```yaml
 agent:
   id: demo-agent
   name: 演示Agent
   type: system
   description: 最简单的Agent示例
-
   capabilities:
     - demo
-
   model:
     provider: openai
     model: gpt-4
@@ -1146,7 +1174,7 @@ agent:
 
 ### 12.2 完整配置示例
 
-参见导师Agent的配置文件（tutor-agent.yml）
+参见导师Agent的配置文件（tutor-agent.json / tutor-agent.yml）
 
 ---
 
