@@ -15,6 +15,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -36,8 +37,17 @@ class ConversationServiceTest {
     @Mock
     private ConversationRepository conversationRepository;
 
+    @Mock
+    private ValidationService validationService;
+
     @InjectMocks
     private ConversationService conversationService;
+
+    @BeforeEach
+    void setUp() {
+        // 设置 autoTriggerValidationOnCreate 为 true
+        ReflectionTestUtils.setField(conversationService, "autoTriggerValidationOnCreate", true);
+    }
 
     @Test
     void testCreateConversation_Success() {
@@ -306,5 +316,37 @@ class ConversationServiceTest {
         when(conversationRepository.existsByConversationId(conversationId)).thenReturn(true);
 
         assertTrue(conversationService.exists(conversationId));
+    }
+
+    @Test
+    void testCreateConversation_WithValidationTrigger() {
+        CreateConversationRequest request = CreateConversationRequest.builder()
+                .userId("user-123")
+                .projectId("project-A")
+                .gitRepoUrl("https://github.com/org/semantic-layer.git")
+                .branchName("main")
+                .build();
+
+        String mockContainerId = "container-xyz";
+        when(containerManager.createContainer(anyString(), anyString(), any(ContainerConfig.class)))
+                .thenReturn(mockContainerId);
+        when(containerManager.waitForContainerReady(eq(mockContainerId), anyInt()))
+                .thenReturn(true);
+        when(conversationRepository.findByConversationId(anyString()))
+                .thenReturn(Optional.of(ConversationEntity.builder()
+                        .conversationId("test-id")
+                        .userId("user-123")
+                        .projectId("project-A")
+                        .sandboxId(mockContainerId)
+                        .status(ConversationEntity.ConversationStatus.READY)
+                        .build()));
+
+        Conversation conversation = conversationService.createConversation(request);
+
+        assertNotNull(conversation);
+        assertEquals(Conversation.ConversationStatus.READY, conversation.getStatus());
+
+        // 验证触发了验证服务
+        verify(validationService).triggerValidation(eq(conversation.getConversationId()));
     }
 }

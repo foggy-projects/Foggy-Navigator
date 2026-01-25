@@ -31,6 +31,9 @@ class MessageServiceTest {
     @Mock
     private MessageRepository messageRepository;
 
+    @Mock
+    private ValidationService validationService;
+
     @InjectMocks
     private MessageService messageService;
 
@@ -206,5 +209,45 @@ class MessageServiceTest {
         assertEquals(conversationId, savedEntity.getConversationId());
         assertEquals("Test message", savedEntity.getContent());
         assertEquals(message.getTimestamp(), savedEntity.getTimestamp());
+    }
+
+    @Test
+    void testSendMessage_WithValidationTrigger() {
+        String conversationId = "conv-123";
+        SendMessageRequest request = SendMessageRequest.builder()
+                .content("Test message with validation")
+                .build();
+
+        Message message = messageService.sendMessage(conversationId, request);
+
+        assertNotNull(message);
+        assertEquals(conversationId, message.getConversationId());
+        assertEquals("Test message with validation", message.getContent());
+
+        // 验证事件发布了
+        verify(eventPublisher).publishEvent(any(Event.class));
+
+        // 验证没有自动触发验证（因为默认禁用）
+        verify(validationService, never()).triggerValidation(anyString());
+    }
+
+    @Test
+    void testSendMessage_EventPublishContainsContent() {
+        String conversationId = "conv-123";
+        String messageContent = "Test message content";
+        SendMessageRequest request = SendMessageRequest.builder()
+                .content(messageContent)
+                .build();
+
+        ArgumentCaptor<Event> eventCaptor = ArgumentCaptor.forClass(Event.class);
+
+        messageService.sendMessage(conversationId, request);
+
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+
+        Event publishedEvent = eventCaptor.getValue();
+        assertEquals(conversationId, publishedEvent.getConversationId());
+        assertEquals(Event.EventKind.MESSAGE_SENT, publishedEvent.getKind());
+        assertEquals(messageContent, publishedEvent.getData().get("content"));
     }
 }

@@ -291,4 +291,96 @@ class EventServiceTest {
         assertTrue(savedEntity.getData().contains("content"));
         assertTrue(savedEntity.getData().contains("userId"));
     }
+
+    @Test
+    void testGetEventsByKind_Success() {
+        String conversationId = "conv-123";
+
+        Event event1 = Event.builder()
+                .id("event-1")
+                .conversationId(conversationId)
+                .kind(Event.EventKind.VALIDATION_TRIGGERED)
+                .timestamp(LocalDateTime.now().minusMinutes(2))
+                .build();
+
+        Event event2 = Event.builder()
+                .id("event-2")
+                .conversationId(conversationId)
+                .kind(Event.EventKind.MESSAGE_SENT)
+                .timestamp(LocalDateTime.now().minusMinutes(1))
+                .build();
+
+        Event event3 = Event.builder()
+                .id("event-3")
+                .conversationId(conversationId)
+                .kind(Event.EventKind.VALIDATION_TRIGGERED)
+                .timestamp(LocalDateTime.now())
+                .build();
+
+        eventService.saveEvent(event1);
+        eventService.saveEvent(event2);
+        eventService.saveEvent(event3);
+
+        List<Event> validationEvents = eventService.getEventsByKind(conversationId, Event.EventKind.VALIDATION_TRIGGERED);
+
+        assertNotNull(validationEvents);
+        assertEquals(2, validationEvents.size());
+        assertTrue(validationEvents.stream().allMatch(e -> e.getKind() == Event.EventKind.VALIDATION_TRIGGERED));
+    }
+
+    @Test
+    void testGetEventsByKind_Empty() {
+        String conversationId = "conv-123";
+
+        Event event1 = Event.builder()
+                .id("event-1")
+                .conversationId(conversationId)
+                .kind(Event.EventKind.MESSAGE_SENT)
+                .timestamp(LocalDateTime.now())
+                .build();
+
+        eventService.saveEvent(event1);
+
+        List<Event> validationEvents = eventService.getEventsByKind(conversationId, Event.EventKind.VALIDATION_RESULT);
+
+        assertNotNull(validationEvents);
+        assertTrue(validationEvents.isEmpty());
+    }
+
+    @Test
+    void testGetEventsSince_WithEvents() {
+        String conversationId = "conv-123";
+
+        Event event1 = Event.builder()
+                .id("event-1")
+                .conversationId(conversationId)
+                .kind(Event.EventKind.MESSAGE_SENT)
+                .timestamp(LocalDateTime.now().minusMinutes(3))
+                .build();
+
+        Event event2 = Event.builder()
+                .id("event-2")
+                .conversationId(conversationId)
+                .kind(Event.EventKind.CONVERSATION_STATUS)
+                .timestamp(LocalDateTime.now().minusMinutes(2))
+                .build();
+
+        Event event3 = Event.builder()
+                .id("event-3")
+                .conversationId(conversationId)
+                .kind(Event.EventKind.MESSAGE_SENT)
+                .timestamp(LocalDateTime.now().minusMinutes(1))
+                .build();
+
+        eventService.saveEvent(event1);
+        eventService.saveEvent(event2);
+        eventService.saveEvent(event3);
+
+        List<Event> eventsSince = eventService.getEventsSince(conversationId, "event-1");
+
+        assertNotNull(eventsSince);
+        assertEquals(2, eventsSince.size());
+        assertEquals("event-2", eventsSince.get(0).getId());
+        assertEquals("event-3", eventsSince.get(1).getId());
+    }
 }
