@@ -91,14 +91,19 @@ metadata-query-module/
 │           └── MetadataQueryController.java # REST API
 └── src/main/resources/
     └── semantic-models/
-        ├── datasource_configs.tm
-        ├── datasource_configs.qm
-        ├── semantic_layer_configs.tm
-        ├── semantic_layer_configs.qm
-        ├── sessions.tm
-        ├── sessions.qm
-        ├── messages.tm
-        └── messages.qm
+        ├── models/                         # TM表模型目录
+        │   ├── DatasourceConfigsModel.tm
+        │   ├── SemanticLayerConfigsModel.tm
+        │   ├── SessionsModel.tm
+        │   └── MessagesModel.tm
+        └── queries/                        # QM查询模型目录
+            ├── datasource-latest.qm
+            ├── datasource-list.qm
+            ├── semantic-layer-latest.qm
+            ├── semantic-layer-list.qm
+            ├── config-progress.qm
+            ├── sessions-active.qm
+            └── messages-by-session.qm
 ```
 
 **优势**：
@@ -116,14 +121,20 @@ metadata-query-module/
 
 ### 3.1 表模型（TM）示例
 
-#### datasource_configs.tm
+#### models/DatasourceConfigsModel.tm
+
+**命名规范**：
+- **文件名**：`{ModelName}.tm`（驼峰命名）
+- **模型name**：`{TableName}Model`（如 `DatasourceConfigsModel`）
+- **目录**：`semantic-models/models/`
 
 ```json
 {
-  "name": "datasource_configs",
+  "name": "DatasourceConfigsModel",
   "displayName": "数据源配置",
   "description": "系统数据源配置表",
   "type": "mysql",
+  "tableName": "datasource_configs",
   "columns": [
     {
       "name": "id",
@@ -189,14 +200,19 @@ metadata-query-module/
 
 ### 3.2 查询模型（QM）示例
 
-#### datasource_configs_list.qm
+#### queries/datasource-list.qm
+
+**命名规范**：
+- **文件名**：`{query-id}.qm`（kebab-case，与queryId一致）
+- **queryId**：`datasource-list`（与文件名一致）
+- **目录**：`semantic-models/queries/`
 
 ```json
 {
-  "name": "datasource_configs_list",
+  "queryId": "datasource-list",
   "displayName": "数据源配置列表",
   "description": "查询所有数据源配置",
-  "tableModel": "datasource_configs",
+  "tableModel": "DatasourceConfigsModel",
   "fields": [
     {
       "name": "id",
@@ -255,14 +271,14 @@ metadata-query-module/
 }
 ```
 
-#### datasource_configs_latest.qm
+#### queries/datasource-latest.qm
 
 ```json
 {
-  "name": "datasource_configs_latest",
+  "queryId": "datasource-latest",
   "displayName": "最新数据源配置",
   "description": "查询最新的数据源配置（按创建时间倒序，返回第一条）",
-  "tableModel": "datasource_configs",
+  "tableModel": "DatasourceConfigsModel",
   "fields": [
     "id",
     "db_type",

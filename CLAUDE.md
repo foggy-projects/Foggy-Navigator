@@ -25,3 +25,4 @@ Foggy-Navigator/
 2. **单体设计**: Entity间不使用 `@ManyToOne/@OneToMany/@ManyToMany`，使用外键字段(如 `String userId`)，在Service层组合查询
 3. **精简代码**: 使用Lombok(`@Data`)，代码自解释，减少注释
 4. **CLAUDE.md** 保持精简，复杂的信息可以放到外部文件，保留引用
+5. **Form/DTO设计**: 接口参数使用Form/DTO而非Entity，遵循二层结构设计，详见 `/form-design` 技能

@@ -85,6 +85,11 @@ package com.foggy.navigator.config;
 /**
  * 配置管理接口（写入侧）
  * 提供配置项的增删改能力，查询功能由 metadata-query-module 提供
+ *
+ * 设计原则：
+ * - 使用 Form/DTO 而非 Entity 作为参数
+ * - 支持部分更新（只传需要修改的字段）
+ * - 分层结构：基本信息 + 类型特定信息
  */
 public interface ConfigurationManager {
 
@@ -92,17 +97,17 @@ public interface ConfigurationManager {
 
     /**
      * 保存数据源配置
-     * @param config 数据源配置
+     * @param form 数据源配置表单
      * @return 保存后的配置ID
      */
-    String saveDatasourceConfig(DatasourceConfig config);
+    String saveDatasourceConfig(DatasourceConfigForm form);
 
     /**
      * 更新数据源配置
      * @param configId 配置ID
-     * @param config 更新的配置信息
+     * @param form 数据源配置表单（仅更新非null字段）
      */
-    void updateDatasourceConfig(String configId, DatasourceConfig config);
+    void updateDatasourceConfig(String configId, DatasourceConfigForm form);
 
     /**
      * 更新数据源配置状态
@@ -128,17 +133,17 @@ public interface ConfigurationManager {
 
     /**
      * 保存语义层配置
-     * @param config 语义层配置
+     * @param form 语义层配置表单
      * @return 保存后的配置ID
      */
-    String saveSemanticLayerConfig(SemanticLayerConfig config);
+    String saveSemanticLayerConfig(SemanticLayerConfigForm form);
 
     /**
      * 更新语义层配置
      * @param configId 配置ID
-     * @param config 更新的配置信息
+     * @param form 语义层配置表单（仅更新非null字段）
      */
-    void updateSemanticLayerConfig(String configId, SemanticLayerConfig config);
+    void updateSemanticLayerConfig(String configId, SemanticLayerConfigForm form);
 
     /**
      * 更新语义层配置状态
@@ -193,21 +198,24 @@ public enum ConfigItemStatus {
 }
 ```
 
-### 4.2 DatasourceConfig（数据源配置）
+### 4.2 DatasourceConfigForm（数据源配置表单）
+
+采用**二层结构**设计，支持多种数据源类型的扩展：
 
 ```java
-package com.foggy.navigator.config;
+package com.foggy.navigator.config.form;
 
 import lombok.Data;
-import java.time.LocalDateTime;
 
 /**
- * 数据源配置
+ * 数据源配置表单（二层结构）
+ * 第一层：通用信息
+ * 第二层：类型特定信息
  */
 @Data
-public class DatasourceConfig {
+public class DatasourceConfigForm {
     /**
-     * 配置ID
+     * 数据源ID（新建时可为空，更新时必填）
      */
     private String id;
 
@@ -216,6 +224,60 @@ public class DatasourceConfig {
      */
     private String tenantId;
 
+    /**
+     * 数据源基本信息
+     */
+    private DatasourceBasicInfo basicInfo;
+
+    /**
+     * JDBC类数据源信息（MySQL, PostgreSQL, Oracle, SQL Server等）
+     */
+    private JdbcDatasourceInfo jdbcInfo;
+
+    /**
+     * MongoDB数据源信息（可选）
+     */
+    private MongoDatasourceInfo mongoInfo;
+
+    /**
+     * Redis数据源信息（可选，Phase 2）
+     */
+    private RedisDatasourceInfo redisInfo;
+
+    // 注：根据 basicInfo.type 决定使用哪个具体配置
+}
+
+/**
+ * 数据源基本信息
+ */
+@Data
+class DatasourceBasicInfo {
+    /**
+     * 数据源名称
+     */
+    private String name;
+
+    /**
+     * 数据源类型：JDBC, MONGO, REDIS, ELASTICSEARCH等
+     */
+    private DatasourceType type;
+
+    /**
+     * 配置描述
+     */
+    private String description;
+
+    /**
+     * 配置状态（可选，默认为NOT_STARTED）
+     */
+    private ConfigItemStatus status;
+}
+
+/**
+ * JDBC数据源信息
+ */
+@Data
+class JdbcDatasourceInfo {
     /**
      * 数据库类型：MySQL, PostgreSQL, Oracle, SQL Server
      */
@@ -234,6 +296,47 @@ public class DatasourceConfig {
     /**
      * 数据库名称
      */
+    private String databaseName;
+
+    /**
+     * 用户名
+     */
+    private String username;
+
+    /**
+     * 密码（明文，后端加密存储）
+     */
+    private String password;
+
+    /**
+     * JDBC URL（可选，如果提供则优先使用）
+     */
+    private String jdbcUrl;
+
+    /**
+     * 额外参数（如 useSSL=false&serverTimezone=UTC）
+     */
+    private String extraParams;
+}
+
+/**
+ * MongoDB数据源信息
+ */
+@Data
+class MongoDatasourceInfo {
+    /**
+     * 主机地址（支持多个，逗号分隔）
+     */
+    private String hosts;
+
+    /**
+     * 端口号
+     */
+    private Integer port;
+
+    /**
+     * 数据库名称
+     */
     private String database;
 
     /**
@@ -242,52 +345,49 @@ public class DatasourceConfig {
     private String username;
 
     /**
-     * 密码（加密存储）
+     * 密码
      */
     private String password;
 
     /**
-     * 配置状态
+     * 认证数据库
      */
-    private ConfigItemStatus status;
+    private String authDatabase;
 
     /**
-     * 连接测试结果
+     * 连接字符串（可选）
      */
-    private Boolean connectionValid;
+    private String connectionString;
+}
 
-    /**
-     * 创建时间
-     */
-    private LocalDateTime createdAt;
-
-    /**
-     * 更新时间
-     */
-    private LocalDateTime updatedAt;
-
-    /**
-     * 配置描述
-     */
-    private String description;
+/**
+ * 数据源类型枚举
+ */
+enum DatasourceType {
+    JDBC,          // JDBC类数据源
+    MONGO,         // MongoDB
+    REDIS,         // Redis
+    ELASTICSEARCH  // Elasticsearch (Phase 2)
 }
 ```
 
-### 4.3 SemanticLayerConfig（语义层配置）
+### 4.3 SemanticLayerConfigForm（语义层配置表单）
+
+支持**私有GitLab/GitHub仓库**，提供多种认证方式：
 
 ```java
-package com.foggy.navigator.config;
+package com.foggy.navigator.config.form;
 
 import lombok.Data;
-import java.time.LocalDateTime;
 
 /**
- * 语义层配置
+ * 语义层配置表单
+ * 支持私有Git仓库（GitLab、GitHub、Gitee等）
  */
 @Data
-public class SemanticLayerConfig {
+public class SemanticLayerConfigForm {
     /**
-     * 配置ID
+     * 配置ID（新建时可为空）
      */
     private String id;
 
@@ -302,49 +402,119 @@ public class SemanticLayerConfig {
     private String datasourceId;
 
     /**
-     * Git仓库URL
+     * Git仓库配置
      */
-    private String gitRepoUrl;
+    private GitRepoConfig gitConfig;
 
     /**
-     * Git分支
+     * 语义层路径配置
      */
-    private String gitBranch;
-
-    /**
-     * 语义层文件路径（相对于Git仓库根目录）
-     */
-    private String semanticLayerPath;
-
-    /**
-     * 模型数量
-     */
-    private Integer modelCount;
-
-    /**
-     * 配置状态
-     */
-    private ConfigItemStatus status;
-
-    /**
-     * 最后验证时间
-     */
-    private LocalDateTime lastValidatedAt;
-
-    /**
-     * 创建时间
-     */
-    private LocalDateTime createdAt;
-
-    /**
-     * 更新时间
-     */
-    private LocalDateTime updatedAt;
+    private SemanticLayerPathConfig pathConfig;
 
     /**
      * 配置描述
      */
     private String description;
+}
+
+/**
+ * Git仓库配置
+ * 支持私有仓库（GitLab、GitHub、Gitee等）
+ */
+@Data
+class GitRepoConfig {
+    /**
+     * Git仓库URL
+     * 示例：
+     * - 公开：https://github.com/org/repo.git
+     * - 私有GitLab：https://gitlab.company.com/team/project.git
+     * - 私有GitHub：https://github.com/private-org/private-repo.git
+     */
+    private String repoUrl;
+
+    /**
+     * Git分支（默认：main）
+     */
+    private String branch;
+
+    /**
+     * Git认证方式
+     */
+    private GitAuthType authType;
+
+    /**
+     * 访问令牌（AccessToken/PAT）
+     * - GitHub: Personal Access Token
+     * - GitLab: Project Access Token / Personal Access Token
+     * - Gitee: 私人令牌
+     * 后端加密存储
+     */
+    private String accessToken;
+
+    /**
+     * 用户名（BASIC认证时使用）
+     */
+    private String username;
+
+    /**
+     * 密码（BASIC认证时使用，后端加密存储）
+     */
+    private String password;
+
+    /**
+     * SSH私钥（SSH认证时使用，后端加密存储）
+     */
+    private String sshPrivateKey;
+
+    /**
+     * SSH公钥密码（可选）
+     */
+    private String sshPassphrase;
+}
+
+/**
+ * Git认证方式
+ */
+enum GitAuthType {
+    NONE,           // 公开仓库，无需认证
+    ACCESS_TOKEN,   // 访问令牌（推荐，适用于GitHub/GitLab/Gitee）
+    BASIC,          // 用户名密码（不推荐，部分平台已废弃）
+    SSH             // SSH密钥（适用于企业内部GitLab）
+}
+
+/**
+ * 语义层路径配置
+ */
+@Data
+class SemanticLayerPathConfig {
+    /**
+     * 语义层根目录（相对于Git仓库根目录）
+     * 示例：semantic-models, models, datasets
+     * 默认：semantic-models
+     */
+    private String rootPath;
+
+    /**
+     * TM模型目录（相对于rootPath）
+     * 默认：models
+     */
+    private String modelsPath;
+
+    /**
+     * QM查询目录（相对于rootPath）
+     * 默认：queries
+     */
+    private String queriesPath;
+
+    /**
+     * 是否自动同步（定时从Git拉取最新）
+     */
+    private Boolean autoSync;
+
+    /**
+     * 同步间隔（分钟，仅当autoSync=true时有效）
+     */
+    private Integer syncInterval;
 }
 ```
 
