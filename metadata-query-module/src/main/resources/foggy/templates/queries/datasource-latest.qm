@@ -1,0 +1,49 @@
+/**
+ * 最新数据源配置查询模型
+ * @description 查询最新创建的数据源配置，按创建时间倒序，返回第一条
+ */
+
+const datasource = loadTableModel('DatasourceConfigsModel');
+
+export const queryModel = {
+    name: 'datasource-latest',
+    caption: '最新数据源配置',
+    description: '查询最新的数据源配置记录',
+    model: datasource,
+
+    columnGroups: [
+        {
+            caption: '基础信息',
+            items: [
+                { ref: datasource.id },
+                { ref: datasource.tenantId },
+                { ref: datasource.dbType },
+                { ref: datasource.status },
+                { ref: datasource.connectionValid }
+            ]
+        },
+        {
+            caption: '连接信息',
+            items: [
+                { ref: datasource.host },
+                { ref: datasource.port },
+                { ref: datasource.databaseName },
+                { ref: datasource.username }
+            ]
+        },
+        {
+            caption: '其他信息',
+            items: [
+                { ref: datasource.description },
+                { ref: datasource.createdAt },
+                { ref: datasource.updatedAt }
+            ]
+        }
+    ],
+
+    orders: [
+        { name: 'createdAt', order: 'desc' }
+    ],
+
+    limit: 1
+};

@@ -29,5 +29,6 @@
         <module>agent-framework</module>
         <module>tutor-agent</module>
         <module>addons/coding-agent</module>
+        <module>metadata-query-module</module>
     </modules>
 </project>

@@ -1,0 +1,53 @@
+/**
+ * 语义层配置列表查询模型
+ * @description 查询所有语义层配置，支持按租户、数据源、状态筛选
+ */
+
+const semanticLayer = loadTableModel('SemanticLayerConfigsModel');
+
+export const queryModel = {
+    name: 'semantic-layer-list',
+    caption: '语义层配置列表',
+    description: '查询所有语义层配置，支持多条件筛选和分页',
+    model: semanticLayer,
+
+    columnGroups: [
+        {
+            caption: '基础信息',
+            items: [
+                { ref: semanticLayer.id },
+                { ref: semanticLayer.tenantId },
+                { ref: semanticLayer.datasourceId },
+                { ref: semanticLayer.status },
+                { ref: semanticLayer.modelCount }
+            ]
+        },
+        {
+            caption: 'Git仓库信息',
+            items: [
+                { ref: semanticLayer.gitRepoUrl },
+                { ref: semanticLayer.gitBranch },
+                { ref: semanticLayer.semanticLayerPath }
+            ]
+        },
+        {
+            caption: '维度信息',
+            items: [
+                { ref: semanticLayer.datasource }
+            ]
+        },
+        {
+            caption: '其他信息',
+            items: [
+                { ref: semanticLayer.description },
+                { ref: semanticLayer.lastValidatedAt },
+                { ref: semanticLayer.createdAt },
+                { ref: semanticLayer.updatedAt }
+            ]
+        }
+    ],
+
+    orders: [
+        { name: 'createdAt', order: 'desc' }
+    ]
+};

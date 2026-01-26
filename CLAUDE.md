@@ -26,3 +26,4 @@ Foggy-Navigator/
 3. **精简代码**: 使用Lombok(`@Data`)，代码自解释，减少注释
 4. **CLAUDE.md** 保持精简，复杂的信息可以放到外部文件，保留引用
 5. **Form/DTO设计**: 接口参数使用Form/DTO而非Entity，遵循二层结构设计，详见 `/form-design` 技能
+6. **统一返回对象**: Controller返回使用 `RX<T>`（位于 `com.foggyframework.core.ex.RX`），成功用 `RX.ok(data)`，失败用 `RX.failA/B/C(msg)`

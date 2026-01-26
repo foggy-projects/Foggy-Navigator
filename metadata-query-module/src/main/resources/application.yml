@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: metadata-query-module
+
+  datasource:
+    url: jdbc:mysql://localhost:13309/foggy_navigator?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+server:
+  port: 8082
+
+# Foggy 框架配置
+foggy:
+  dataset:
+    show-sql: true               # 打印 SQL（开发环境）
+    sql-format: false            # SQL 格式化
+    sql-log-level: DEBUG         # 日志级别
+    show-sql-parameters: true    # 显示参数值
+    show-execution-time: true    # 显示执行时间
+
+# 日志配置
+logging:
+  level:
+    com.foggy.navigator.metadata: DEBUG
+    com.foggysource: DEBUG

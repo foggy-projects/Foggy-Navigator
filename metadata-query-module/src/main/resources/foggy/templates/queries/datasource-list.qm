@@ -1,0 +1,47 @@
+/**
+ * 数据源配置列表查询模型
+ * @description 查询所有数据源配置，支持按租户、状态、数据库类型筛选
+ */
+
+const datasource = loadTableModel('DatasourceConfigsModel');
+
+export const queryModel = {
+    name: 'datasource-list',
+    caption: '数据源配置列表',
+    description: '查询所有数据源配置，支持多条件筛选和分页',
+    model: datasource,
+
+    columnGroups: [
+        {
+            caption: '基础信息',
+            items: [
+                { ref: datasource.id },
+                { ref: datasource.tenantId },
+                { ref: datasource.dbType },
+                { ref: datasource.status },
+                { ref: datasource.connectionValid }
+            ]
+        },
+        {
+            caption: '连接信息',
+            items: [
+                { ref: datasource.host },
+                { ref: datasource.port },
+                { ref: datasource.databaseName },
+                { ref: datasource.username }
+            ]
+        },
+        {
+            caption: '其他信息',
+            items: [
+                { ref: datasource.description },
+                { ref: datasource.createdAt },
+                { ref: datasource.updatedAt }
+            ]
+        }
+    ],
+
+    orders: [
+        { name: 'createdAt', order: 'desc' }
+    ]
+};
