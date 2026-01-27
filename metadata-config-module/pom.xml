@@ -34,6 +34,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- User Auth Module -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>user-auth-module</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Spring Boot Web -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

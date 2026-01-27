@@ -30,6 +30,13 @@ jwt:
   secret: foggy-navigator-jwt-secret-key-change-in-production
   expiration: 86400  # 24小时（秒）
 
+# ROOT 账号配置
+system:
+  root:
+    username: root
+    password: root123
+    email: root@foggy.local
+
 # 日志配置
 logging:
   level:

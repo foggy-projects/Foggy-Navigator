@@ -1,5 +1,8 @@
 package com.foggy.navigator.metadata.config.controller;
 
+import com.foggy.navigator.common.annotation.RequireAuth;
+import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.enums.ConfigItemStatus;
 import com.foggy.navigator.common.form.DatasourceConfigForm;
 import com.foggy.navigator.common.form.SemanticLayerConfigForm;
@@ -17,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/config")
 @RequiredArgsConstructor
+@RequireAuth  // 整个 Controller 需要认证
 public class ConfigurationController {
 
     private final ConfigurationManager configManager;
@@ -28,8 +32,16 @@ public class ConfigurationController {
      */
     @PostMapping("/datasource")
     public RX<String> saveDatasourceConfig(@RequestBody DatasourceConfigForm form) {
-        log.info("Save datasource config: name={}",
-            form.getBasicInfo() != null ? form.getBasicInfo().getName() : "unknown");
+        CurrentUser user = UserContext.getCurrentUser();
+        log.info("Save datasource config: name={}, operator={}",
+            form.getBasicInfo() != null ? form.getBasicInfo().getName() : "unknown",
+            user.getUsername());
+
+        // 自动填充租户ID（如果未指定且非超级管理员）
+        if (form.getTenantId() == null && !user.isSuperAdmin()) {
+            form.setTenantId(user.getTenantId());
+        }
+
         String id = configManager.saveDatasourceConfig(form);
         return RX.ok(id);
     }

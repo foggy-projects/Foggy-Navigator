@@ -5,6 +5,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
 /**
  * 配置管理服务启动类
@@ -14,7 +16,15 @@ import org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfigurat
     MongoAutoConfiguration.class,
     MongoDataAutoConfiguration.class
 })
+@ComponentScan(basePackages = {
+    "com.foggy.navigator.metadata.config",
+    "com.foggy.navigator.auth"  // 扫描认证模块
+})
 @EntityScan(basePackages = "com.foggy.navigator.common.entity")
+@EnableJpaRepositories(basePackages = {
+    "com.foggy.navigator.metadata.config.repository",
+    "com.foggy.navigator.auth.repository"  // 扫描认证模块的 Repository
+})
 public class MetadataConfigApplication {
 
     public static void main(String[] args) {
