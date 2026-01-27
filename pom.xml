@@ -26,9 +26,14 @@
     </properties>
 
     <modules>
+        <!-- 公共模块（最先编译） -->
+        <module>navigator-common</module>
+        <module>navigator-spi</module>
+        <!-- 业务模块 -->
         <module>agent-framework</module>
         <module>tutor-agent</module>
         <module>addons/coding-agent</module>
+        <module>metadata-config-module</module>
         <module>metadata-query-module</module>
     </modules>
 </project>
