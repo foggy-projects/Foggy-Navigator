@@ -35,5 +35,6 @@
         <module>addons/coding-agent</module>
         <module>metadata-config-module</module>
         <module>metadata-query-module</module>
+        <module>user-auth-module</module>
     </modules>
 </project>
