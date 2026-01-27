@@ -3,6 +3,7 @@ package com.foggy.navigator.metadata.config.service;
 import com.foggy.navigator.common.entity.DatasourceConfigEntity;
 import com.foggy.navigator.common.entity.SemanticLayerConfigEntity;
 import com.foggy.navigator.common.enums.ConfigItemStatus;
+import com.foggy.navigator.common.event.DatasourceConfigEvent;
 import com.foggy.navigator.common.form.*;
 import com.foggy.navigator.metadata.config.repository.DatasourceConfigRepository;
 import com.foggy.navigator.metadata.config.repository.SemanticLayerConfigRepository;
@@ -10,6 +11,7 @@ import com.foggy.navigator.spi.config.ConfigurationManager;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,6 +27,7 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
 
     private final DatasourceConfigRepository datasourceRepo;
     private final SemanticLayerConfigRepository semanticLayerRepo;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ===== 数据源配置 =====
 
@@ -73,6 +76,8 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
 
         datasourceRepo.save(entity);
         log.info("Datasource config saved: id={}", entity.getId());
+
+        eventPublisher.publishEvent(DatasourceConfigEvent.created(this, entity));
         return entity.getId();
     }
 
@@ -119,16 +124,26 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
 
         datasourceRepo.save(entity);
         log.info("Datasource config updated: id={}", configId);
+
+        eventPublisher.publishEvent(DatasourceConfigEvent.updated(this, entity));
     }
 
     @Override
     @Transactional
     public void updateDatasourceStatus(String configId, ConfigItemStatus status) {
         log.info("Updating datasource status: id={}, status={}", configId, status);
+
+        DatasourceConfigEntity entity = datasourceRepo.findById(configId)
+            .orElseThrow(() -> RX.throwB("Datasource config not found: " + configId));
+        ConfigItemStatus previousStatus = entity.getStatus();
+
         int updated = datasourceRepo.updateStatus(configId, status);
         if (updated == 0) {
             throw RX.throwB("Datasource config not found: " + configId);
         }
+
+        entity.setStatus(status);
+        eventPublisher.publishEvent(DatasourceConfigEvent.statusChanged(this, entity, previousStatus, status));
     }
 
     @Override
@@ -145,11 +160,18 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
     @Transactional
     public void deleteDatasourceConfig(String configId) {
         log.info("Deleting datasource config: id={}", configId);
+
+        DatasourceConfigEntity entity = datasourceRepo.findById(configId).orElse(null);
+
         // 先删除关联的语义层配置
         semanticLayerRepo.deleteByDatasourceId(configId);
         // 再删除数据源配置
         datasourceRepo.deleteById(configId);
         log.info("Datasource config deleted: id={}", configId);
+
+        if (entity != null) {
+            eventPublisher.publishEvent(DatasourceConfigEvent.deleted(this, entity));
+        }
     }
 
     // ===== 语义层配置 =====
