@@ -31,10 +31,12 @@
         <module>navigator-spi</module>
         <!-- 业务模块 -->
         <module>agent-framework</module>
-        <module>tutor-agent</module>
-        <module>addons/coding-agent</module>
+        <module>user-auth-module</module>
         <module>metadata-config-module</module>
         <module>metadata-query-module</module>
-        <module>user-auth-module</module>
+        <module>tutor-agent</module>
+        <module>addons/coding-agent</module>
+        <!-- 启动器模块（最后编译，依赖其他所有模块） -->
+        <module>launcher</module>
     </modules>
 </project>

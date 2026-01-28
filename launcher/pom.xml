@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.foggy.navigator</groupId>
+        <artifactId>foggy-navigator-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>launcher</artifactId>
+    <name>Application Launcher</name>
+    <description>应用启动器 - 负责打包和启动所有模块</description>
+
+    <dependencies>
+        <!-- Coding Agent - 主应用模块 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>coding-agent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- 其他可选模块可以在这里添加 -->
+        <!--
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>tutor-agent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        -->
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Spring Boot Maven Plugin - 仅在此模块使用 -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.foggy.navigator.CodingAgentApplication</mainClass>
+                    <fork>true</fork>
+                    <addResources>true</addResources>
+                    <useTestClasspath>false</useTestClasspath>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

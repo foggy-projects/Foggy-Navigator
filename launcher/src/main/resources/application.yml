@@ -1,0 +1,109 @@
+spring:
+  application:
+    name: coding-agent
+
+  datasource:
+    url: jdbc:mysql://localhost:13309/coding_agent?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: foggy
+    password: foggy@123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+server:
+  port: 8112
+
+# JWT 配置
+jwt:
+  secret: foggy-navigator-jwt-secret-key-change-in-production
+  expiration: 86400
+
+# ROOT 账号配置
+system:
+  root:
+    username: root
+    password: root123
+    email: root@foggy.local
+
+# Actuator 配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,beans
+  endpoint:
+    health:
+      show-details: always
+
+# Foggy Navigator 配置
+foggy:
+  coding-agent:
+    # OpenHands 配置
+    openhands:
+      image: ghcr.io/all-hands-ai/openhands:main
+      workspace-base: /workspace
+      container-timeout: 1800  # 容器超时时间（秒）
+      max-concurrent: 10       # 最大并发容器数
+
+      # LLM 配置
+      api-key: ${OPENAI_API_KEY:sk-test-key}
+      model-name: gpt-4
+      api-base-url: ${OPENAI_API_BASE_URL:}
+
+    # 验证服务配置
+    validation:
+      url: http://localhost:7108  # 验证服务地址（可配置）
+      enabled: true
+      realtime: true  # 实时验证
+      timeout: 30000  # 验证超时时间（毫秒）
+      auto-trigger-on-create: true  # 创建会话后自动触发验证
+      auto-trigger-on-message: false  # 发送消息后自动触发验证
+
+    # Git 配置
+    git:
+      default-branch: main
+      auto-commit: true
+      auto-pr: true
+
+    # 会话清理配置
+    cleanup:
+      enabled: true  # 是否启用自动清理
+      interval: 300000  # 空闲会话清理间隔（毫秒，默认 5 分钟）
+      idle-timeout: 3600000  # 空闲会话超时时间（毫秒，默认 1 小时）
+      max-age: 86400000  # 会话最大存活时间（毫秒，默认 1 天）
+      max-age-check-interval: 3600000  # 过期会话检查间隔（毫秒，默认 1 小时）
+      orphan-interval: 600000  # 孤儿容器检查间隔（毫秒，默认 10 分钟）
+
+    # 健康检查配置
+    health:
+      check-interval: 60000  # 健康检查间隔（毫秒，默认 1 分钟）
+      enabled: true
+
+    # 会话恢复配置
+    recovery:
+      auto-recover-on-startup: false  # 应用启动时自动恢复会话
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.foggy.navigator: DEBUG
+    com.github.dockerjava: WARN
+  file:
+    name: logs/coding-agent.log
+    path: logs
+  pattern:
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 30
+      total-size-cap: 1GB
