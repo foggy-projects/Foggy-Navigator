@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Configuration;
     "com.foggy.navigator.auth.util",
     "com.foggy.navigator.auth.service",
     "com.foggy.navigator.auth.repository",
+    "com.foggy.navigator.auth.controller",
     "com.foggy.navigator.auth.interceptor",
     "com.foggy.navigator.auth.aspect",
     "com.foggy.navigator.auth.config"

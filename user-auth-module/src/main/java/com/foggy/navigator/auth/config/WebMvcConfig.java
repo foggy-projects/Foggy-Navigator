@@ -3,6 +3,7 @@ package com.foggy.navigator.auth.config;
 import com.foggy.navigator.auth.interceptor.AuthInterceptor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -24,5 +25,16 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/api/v1/auth/register",
                         "/api/v1/health/**"
                 );
+    }
+
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/**")
+                .allowedOriginPatterns("*")
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
+                .allowedHeaders("*")
+                .allowCredentials(true)
+                .exposedHeaders("Authorization", "Content-Type")
+                .maxAge(3600);
     }
 }

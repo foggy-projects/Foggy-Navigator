@@ -1,0 +1,461 @@
+#
+# Coding Agent 启动、测试和清理脚本 (Windows PowerShell)
+#
+# 用法:
+#   .\start-and-test.ps1 start     - 启动后端服务（使用 Maven）
+#   .\start-and-test.ps1 stop      - 停止所有服务
+#   .\start-and-test.ps1 status    - 查看服务状态
+#   .\start-and-test.ps1 test      - 启动服务并运行测试
+#   .\start-and-test.ps1 clean     - 清理日志和临时文件
+#   .\start-and-test.ps1 restart   - 重启服务
+#   .\start-and-test.ps1 frontend  - 启动前端开发服务器
+#
+
+param(
+    [Parameter(Position=0)]
+    [ValidateSet("start", "stop", "status", "test", "clean", "restart", "frontend")]
+    [string]$Command = "help"
+)
+
+# 配置
+$BACKEND_PORT = 8112
+$FRONTEND_PORT = 5173
+$LOG_DIR = "logs"
+$BACKEND_LOG = Join-Path $LOG_DIR "backend.log"
+$FRONTEND_LOG = Join-Path $LOG_DIR "frontend.log"
+$PID_FILE = Join-Path $LOG_DIR "pids.txt"
+$CREDENTIALS_FILE = Join-Path $LOG_DIR "credentials.txt"
+
+# 颜色输出函数
+function Write-Info {
+    param([string]$Message)
+    Write-Host "[INFO] $Message" -ForegroundColor Cyan
+}
+
+function Write-Success {
+    param([string]$Message)
+    Write-Host "[SUCCESS] $Message" -ForegroundColor Green
+}
+
+function Write-Warn {
+    param([string]$Message)
+    Write-Host "[WARN] $Message" -ForegroundColor Yellow
+}
+
+function Write-Error-Custom {
+    param([string]$Message)
+    Write-Host "[ERROR] $Message" -ForegroundColor Red
+}
+
+# 检查端口是否被占用
+function Test-Port {
+    param([int]$Port)
+
+    $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    return $null -ne $connections
+}
+
+# 通过端口查找进程 ID
+function Get-ProcessByPort {
+    param([int]$Port)
+
+    $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if ($connections) {
+        return $connections[0].OwningProcess
+    }
+    return $null
+}
+
+# 创建日志目录
+if (-not (Test-Path $LOG_DIR)) {
+    New-Item -ItemType Directory -Path $LOG_DIR -Force | Out-Null
+}
+
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Yellow
+Write-Host "Coding Agent 管理脚本 (Windows)" -ForegroundColor Yellow
+Write-Host "========================================" -ForegroundColor Yellow
+Write-Host ""
+
+# 启动后端服务
+function Start-Backend {
+    Write-Info "正在启动 Coding Agent 后端服务..."
+
+    # 检查端口
+    if (Test-Port -Port $BACKEND_PORT) {
+        Write-Warn "端口 $BACKEND_PORT 已被占用，尝试停止旧进程..."
+        Stop-Backend
+        Start-Sleep -Seconds 2
+    }
+
+    # 使用 Maven 启动
+    Write-Info "使用 Maven 启动 Spring Boot 应用..."
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = "cmd.exe"
+    $startInfo.Arguments = "/c mvn spring-boot:run -Dspring-boot.run.profiles=docker > `"$BACKEND_LOG`" 2>&1"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $false
+    $startInfo.WorkingDirectory = (Get-Location).Path
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    $process.Start() | Out-Null
+
+    $pid = $process.Id
+    Add-Content -Path $PID_FILE -Value "backend:$pid"
+
+    Write-Info "后端服务启动中 (PID: $pid)，日志: $BACKEND_LOG"
+    Write-Info "等待服务就绪（约 20-30 秒）..."
+
+    # 等待服务启动
+    $maxWait = 60
+    $waited = 0
+    $started = $false
+
+    while ($waited -lt $maxWait) {
+        if (Test-Path $BACKEND_LOG) {
+            $content = Get-Content $BACKEND_LOG -Raw -ErrorAction SilentlyContinue
+
+            if ($content -match "Started CodingAgentApplication") {
+                Write-Success "后端服务启动成功！"
+                $started = $true
+
+                # 提取并保存密码
+                if ($content -match "security password:\s+(\S+)") {
+                    $password = $Matches[1]
+                    Write-Success "生成的登录密码: $password"
+                    Set-Content -Path $CREDENTIALS_FILE -Value "BACKEND_PASSWORD=$password"
+                    Write-Host "用户名: user"
+                    Write-Host "密码: $password"
+                }
+                break
+            }
+
+            if ($content -match "BUILD FAILURE|Exception") {
+                Write-Error-Custom "后端服务启动失败！"
+                Get-Content $BACKEND_LOG -Tail 50
+                return $false
+            }
+        }
+
+        Start-Sleep -Seconds 2
+        $waited += 2
+        Write-Host "." -NoNewline
+    }
+
+    Write-Host ""
+
+    if (-not $started) {
+        Write-Error-Custom "后端服务启动超时（超过 $maxWait 秒）"
+        Write-Error-Custom "请查看日志: $BACKEND_LOG"
+        if (Test-Path $BACKEND_LOG) {
+            Get-Content $BACKEND_LOG -Tail 30
+        }
+        return $false
+    }
+
+    return $true
+}
+
+# 启动前端开发服务器
+function Start-Frontend {
+    Write-Info "正在启动前端开发服务器..."
+
+    if (Test-Port -Port $FRONTEND_PORT) {
+        Write-Warn "端口 $FRONTEND_PORT 已被占用，尝试停止旧进程..."
+        Stop-Frontend
+        Start-Sleep -Seconds 2
+    }
+
+    Push-Location frontend
+
+    # 检查并安装依赖
+    if (-not (Test-Path "node_modules")) {
+        Write-Info "安装前端依赖..."
+        npm install
+    }
+
+    # 启动开发服务器
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = "cmd.exe"
+    $startInfo.Arguments = "/c npm run dev > `"..\$FRONTEND_LOG`" 2>&1"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $false
+    $startInfo.WorkingDirectory = (Get-Location).Path
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    $process.Start() | Out-Null
+
+    $pid = $process.Id
+    Pop-Location
+    Add-Content -Path $PID_FILE -Value "frontend:$pid"
+
+    Write-Info "前端服务启动中 (PID: $pid)，日志: $FRONTEND_LOG"
+    Start-Sleep -Seconds 3
+    Write-Success "前端开发服务器启动成功！"
+    Write-Info "访问地址: http://localhost:$FRONTEND_PORT"
+}
+
+# 停止后端服务
+function Stop-Backend {
+    Write-Info "正在停止后端服务..."
+
+    # 从 PID 文件读取
+    if (Test-Path $PID_FILE) {
+        $lines = Get-Content $PID_FILE -ErrorAction SilentlyContinue
+        foreach ($line in $lines) {
+            if ($line -match "^backend:(\d+)") {
+                $pid = [int]$Matches[1]
+                $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                if ($process) {
+                    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                    Write-Success "后端服务已停止 (PID: $pid)"
+                }
+            }
+        }
+        # 清除记录
+        $newContent = $lines | Where-Object { $_ -notmatch "^backend:" }
+        if ($newContent) {
+            Set-Content -Path $PID_FILE -Value $newContent
+        } else {
+            Remove-Item $PID_FILE -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # 通过端口查找并停止
+    if (Test-Port -Port $BACKEND_PORT) {
+        Write-Warn "通过端口停止后端进程..."
+        $pid = Get-ProcessByPort -Port $BACKEND_PORT
+        if ($pid) {
+            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            Write-Success "已停止进程 PID: $pid"
+        }
+    }
+}
+
+# 停止前端服务
+function Stop-Frontend {
+    Write-Info "正在停止前端服务..."
+
+    # 从 PID 文件读取
+    if (Test-Path $PID_FILE) {
+        $lines = Get-Content $PID_FILE -ErrorAction SilentlyContinue
+        foreach ($line in $lines) {
+            if ($line -match "^frontend:(\d+)") {
+                $pid = [int]$Matches[1]
+                $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                if ($process) {
+                    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                    Write-Success "前端服务已停止 (PID: $pid)"
+                }
+            }
+        }
+        # 清除记录
+        $newContent = $lines | Where-Object { $_ -notmatch "^frontend:" }
+        if ($newContent) {
+            Set-Content -Path $PID_FILE -Value $newContent
+        } else {
+            Remove-Item $PID_FILE -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # 通过端口查找并停止
+    if (Test-Port -Port $FRONTEND_PORT) {
+        Write-Warn "通过端口停止前端进程..."
+        $pid = Get-ProcessByPort -Port $FRONTEND_PORT
+        if ($pid) {
+            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            Write-Success "已停止进程 PID: $pid"
+        }
+    }
+}
+
+# 停止所有服务
+function Stop-All {
+    Write-Info "正在停止所有服务..."
+    Stop-Backend
+    Stop-Frontend
+
+    # 停止 playwright 会话
+    if (Get-Command playwright-cli -ErrorAction SilentlyContinue) {
+        Write-Info "正在停止 playwright 会话..."
+        playwright-cli session-stop-all 2>$null
+    }
+
+    Write-Success "所有服务已停止"
+}
+
+# 查看服务状态
+function Show-Status {
+    Write-Host ""
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    Write-Host "  Coding Agent 服务状态"
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    Write-Host ""
+
+    # 后端状态
+    Write-Host -NoNewline "后端服务 (端口 $BACKEND_PORT): "
+    if (Test-Port -Port $BACKEND_PORT) {
+        Write-Host "运行中" -ForegroundColor Green
+        if (Test-Path $CREDENTIALS_FILE) {
+            $content = Get-Content $CREDENTIALS_FILE -Raw
+            if ($content -match "BACKEND_PASSWORD=(.+)") {
+                $password = $Matches[1].Trim()
+                Write-Host "  URL: http://localhost:$BACKEND_PORT"
+                Write-Host "  用户名: user"
+                Write-Host "  密码: $password"
+            }
+        }
+    } else {
+        Write-Host "未运行" -ForegroundColor Red
+    }
+
+    Write-Host ""
+
+    # 前端状态
+    Write-Host -NoNewline "前端服务 (端口 $FRONTEND_PORT): "
+    if (Test-Port -Port $FRONTEND_PORT) {
+        Write-Host "运行中" -ForegroundColor Green
+        Write-Host "  URL: http://localhost:$FRONTEND_PORT"
+    } else {
+        Write-Host "未运行 (使用后端静态资源)" -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+
+    # PID 文件信息
+    if (Test-Path $PID_FILE) {
+        $lines = Get-Content $PID_FILE -ErrorAction SilentlyContinue
+        if ($lines) {
+            Write-Host "进程信息:"
+            foreach ($line in $lines) {
+                if ($line -match "^(.+):(\d+)") {
+                    $service = $Matches[1]
+                    $pid = [int]$Matches[2]
+                    $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                    if ($process) {
+                        Write-Host "  ${service}: " -NoNewline
+                        Write-Host "运行中" -ForegroundColor Green -NoNewline
+                        Write-Host " (PID: $pid)"
+                    } else {
+                        Write-Host "  ${service}: " -NoNewline
+                        Write-Host "已停止" -ForegroundColor Red -NoNewline
+                        Write-Host " (PID: $pid)"
+                    }
+                }
+            }
+            Write-Host ""
+        }
+    }
+
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# 运行测试
+function Run-Test {
+    Write-Info "正在准备自动化测试环境..."
+
+    # 确保服务运行
+    if (-not (Test-Port -Port $BACKEND_PORT)) {
+        Write-Info "后端服务未运行，正在启动..."
+        $result = Start-Backend
+        if (-not $result) {
+            return
+        }
+    }
+
+    # 加载凭据
+    if (Test-Path $CREDENTIALS_FILE) {
+        $content = Get-Content $CREDENTIALS_FILE -Raw
+        if ($content -match "BACKEND_PASSWORD=(.+)") {
+            $password = $Matches[1].Trim()
+        } else {
+            Write-Error-Custom "无法从凭据文件中读取密码"
+            return
+        }
+    } else {
+        Write-Error-Custom "未找到凭据文件，无法执行测试"
+        return
+    }
+
+    Write-Host ""
+    Write-Success "测试环境已就绪！"
+    Write-Info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    Write-Info "使用以下凭据登录:"
+    Write-Info "  URL: http://localhost:$BACKEND_PORT"
+    Write-Info "  用户名: user"
+    Write-Info "  密码: $password"
+    Write-Info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    Write-Host ""
+    Write-Info "提示: 使用 playwright-cli 进行测试"
+    Write-Info "示例: playwright-cli open http://localhost:$BACKEND_PORT"
+    Write-Host ""
+    Write-Info "或使用技能: /test-coding-agent"
+}
+
+# 清理日志和临时文件
+function Clean-All {
+    Write-Info "正在清理日志和临时文件..."
+    Remove-Item -Path $LOG_DIR -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "frontend\node_modules\.vite" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path ".playwright-cli" -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Success "清理完成"
+}
+
+# 显示帮助
+function Show-Help {
+    Write-Host ""
+    Write-Host "用法: .\start-and-test.ps1 {start|stop|status|test|clean|restart|frontend}"
+    Write-Host ""
+    Write-Host "命令:"
+    Write-Host "  start     - 启动后端服务（使用 Maven + docker profile）"
+    Write-Host "  stop      - 停止所有服务（后端、前端、playwright）"
+    Write-Host "  status    - 查看服务状态和登录凭据"
+    Write-Host "  test      - 准备测试环境（启动服务并显示凭据）"
+    Write-Host "  clean     - 清理日志和临时文件"
+    Write-Host "  restart   - 重启后端服务"
+    Write-Host "  frontend  - 启动前端开发服务器（可选）"
+    Write-Host ""
+    Write-Host "示例:"
+    Write-Host "  .\start-and-test.ps1 start          # 启动服务"
+    Write-Host "  .\start-and-test.ps1 status         # 查看状态"
+    Write-Host "  .\start-and-test.ps1 test           # 准备测试"
+    Write-Host "  .\start-and-test.ps1 stop           # 停止所有"
+    Write-Host ""
+}
+
+# 主命令处理
+switch ($Command) {
+    "start" {
+        Start-Backend
+        Show-Status
+    }
+    "stop" {
+        Stop-All
+    }
+    "status" {
+        Show-Status
+    }
+    "test" {
+        Run-Test
+    }
+    "clean" {
+        Stop-All
+        Clean-All
+    }
+    "restart" {
+        Stop-All
+        Start-Sleep -Seconds 2
+        Start-Backend
+        Show-Status
+    }
+    "frontend" {
+        Start-Frontend
+        Show-Status
+    }
+    default {
+        Show-Help
+    }
+}

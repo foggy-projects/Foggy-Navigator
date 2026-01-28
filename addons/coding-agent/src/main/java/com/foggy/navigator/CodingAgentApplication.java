@@ -1,5 +1,6 @@
 package com.foggy.navigator;
 
+import com.foggy.navigator.auth.config.AuthAutoConfiguration;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -8,17 +9,28 @@ import org.springframework.boot.autoconfigure.http.client.HttpClientAutoConfigur
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
 /**
  * Coding Agent 应用启动类
  */
 @SpringBootApplication(exclude = {
-        HttpClientAutoConfiguration.class
+        HttpClientAutoConfiguration.class,
+        org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration.class,
+        org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration.class,
+        org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration.class
 })
+@Import(AuthAutoConfiguration.class)
 @ComponentScan(basePackages = {
-        "com.foggy.navigator",
-        "com.foggy.navigator.auth"
+        "com.foggy.navigator.api",
+        "com.foggy.navigator.foundation",
+        "com.foggy.navigator.auth.controller",
+        "com.foggy.navigator.auth.service",
+        "com.foggy.navigator.auth.util",
+        "com.foggy.navigator.auth.interceptor",
+        "com.foggy.navigator.auth.aspect",
+        "com.foggy.navigator.auth.config"
 })
 @EntityScan(basePackages = {
         "com.foggy.navigator.api.model",

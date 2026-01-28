@@ -210,4 +210,35 @@ public class EventService {
             return Map.of();
         }
     }
+
+    /**
+     * 获取所有最近的事件（全局查询）
+     *
+     * @param limit 限制数量
+     * @return 事件列表
+     */
+    public List<Event> getAllRecentEvents(int limit) {
+        log.debug("查询所有最近事件: limit={}", limit);
+
+        try {
+            return eventRepository.findTopNByConversationIdOrderByTimestampAsc(null)
+                    .stream()
+                    .limit(limit)
+                    .map(entity -> {
+                        Event event = Event.builder()
+                                .id(entity.getEventId())
+                                .conversationId(entity.getConversationId())
+                                .kind(mapEventKind(entity.getKind()))
+                                .timestamp(entity.getTimestamp())
+                                .build();
+                        event.setData(convertDataToMap(entity.getData()));
+                        return event;
+                    })
+                    .sorted((a, b) -> b.getTimestamp().compareTo(a.getTimestamp()))
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            log.error("查询所有最近事件失败", e);
+            return new ArrayList<>();
+        }
+    }
 }

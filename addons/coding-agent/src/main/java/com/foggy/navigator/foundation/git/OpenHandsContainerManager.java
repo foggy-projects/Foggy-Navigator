@@ -366,4 +366,54 @@ public class OpenHandsContainerManager implements ContainerManagerInterface {
             return containerIds;
         }
     }
+
+    /**
+     * 获取所有容器的详细信息
+     *
+     * @return 容器列表
+     */
+    public List<Container> listAllContainersWithDetails() {
+        List<Container> result = new ArrayList<>();
+
+        if (useMock) {
+            log.debug("模拟模式：返回空容器列表");
+            return result;
+        }
+
+        try {
+            List<Container> containers = dockerClient.listContainersCmd()
+                    .withShowAll(true)
+                    .exec();
+
+            for (Container container : containers) {
+                // 只返回 OpenHands 容器
+                for (String name : container.getNames()) {
+                    if (name.contains("openhands")) {
+                        result.add(container);
+                        break;
+                    }
+                }
+            }
+
+            log.debug("找到 {} 个 OpenHands 容器", result.size());
+            return result;
+        } catch (Exception e) {
+            log.error("列出容器详情失败", e);
+            return result;
+        }
+    }
+
+    /**
+     * 获取 DockerClient（供 Service 层使用）
+     */
+    public DockerClient getDockerClient() {
+        return dockerClient;
+    }
+
+    /**
+     * 是否使用模拟模式
+     */
+    public boolean isUseMock() {
+        return useMock;
+    }
 }

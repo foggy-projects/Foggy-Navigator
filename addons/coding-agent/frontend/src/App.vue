@@ -1,5 +1,9 @@
 <template>
-  <el-container class="app-container">
+  <!-- 登录页面：全屏显示 -->
+  <router-view v-if="isLoginPage" />
+
+  <!-- 主应用：带侧边栏和头部 -->
+  <el-container v-else class="app-container">
     <el-aside width="200px">
       <el-menu
         :default-active="$route.path"
@@ -30,6 +34,20 @@
       <el-header>
         <div class="header-content">
           <h3>{{ $route.meta.title || 'Coding Agent 管理控制台' }}</h3>
+          <div class="user-info">
+            <el-dropdown @command="handleCommand">
+              <span class="user-dropdown">
+                <el-icon><User /></el-icon>
+                {{ userInfo?.username || '用户' }}
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
         </div>
       </el-header>
 
@@ -41,6 +59,34 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { User, ArrowDown } from '@element-plus/icons-vue'
+import { getUserInfo, clearAuth } from '@/utils/auth'
+
+const router = useRouter()
+const route = useRoute()
+
+const userInfo = getUserInfo()
+
+// 判断是否是登录页面
+const isLoginPage = computed(() => route.path === '/login')
+
+// 处理下拉菜单命令
+const handleCommand = async (command: string) => {
+  if (command === 'logout') {
+    await ElMessageBox.confirm('确认退出登录？', '提示', {
+      type: 'warning',
+      confirmButtonText: '确认',
+      cancelButtonText: '取消'
+    })
+
+    clearAuth()
+    ElMessage.success('已退出登录')
+    router.push('/login')
+  }
+}
 </script>
 
 <style>
@@ -77,10 +123,36 @@ body {
   padding: 0 20px;
 }
 
+.header-content {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .header-content h3 {
   margin: 0;
   font-size: 20px;
   color: #303133;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+}
+
+.user-dropdown {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+}
+
+.user-dropdown:hover {
+  background-color: #f5f7fa;
 }
 
 .el-main {
