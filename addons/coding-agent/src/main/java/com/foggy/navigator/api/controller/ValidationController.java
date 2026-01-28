@@ -1,6 +1,7 @@
 package com.foggy.navigator.api.controller;
 
 import com.foggy.navigator.api.service.ValidationService;
+import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.foundation.git.model.OpenHandsEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,6 +13,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/conversations/{conversationId}/validation")
+@RequireAuth
 @Slf4j
 public class ValidationController {
 

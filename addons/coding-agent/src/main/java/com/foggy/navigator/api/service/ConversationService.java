@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,6 +38,7 @@ public class ConversationService {
     private ConversationRepository conversationRepository;
 
     @Autowired
+    @Lazy
     private ValidationService validationService;
 
     @Value("${foggy.coding-agent.openhands.workspace-base:/workspace}")

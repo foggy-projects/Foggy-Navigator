@@ -3,6 +3,7 @@ package com.foggy.navigator.api.controller;
 import com.foggy.navigator.api.model.Event;
 import com.foggy.navigator.api.service.EventService;
 import com.foggy.navigator.api.sse.SseEventEmitter;
+import com.foggy.navigator.common.annotation.RequireAuth;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -16,6 +17,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/conversations/{conversationId}/events")
+@RequireAuth
 @Slf4j
 public class EventController {
 

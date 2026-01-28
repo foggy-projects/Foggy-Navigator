@@ -6,9 +6,11 @@ import com.foggy.navigator.api.model.Environment;
 import com.foggy.navigator.api.service.EnvironmentService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDateTime;
@@ -20,8 +22,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * EnvironmentController 单元测试
+ * 使用独立配置，不加载主应用类
  */
-@WebMvcTest(EnvironmentController.class)
+@WebMvcTest
+@ContextConfiguration(classes = EnvironmentController.class)
+@AutoConfigureMockMvc(addFilters = false)
 class EnvironmentControllerTest {
 
     @Autowired

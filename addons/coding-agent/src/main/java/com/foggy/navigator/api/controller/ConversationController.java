@@ -4,6 +4,7 @@ import com.foggy.navigator.api.model.Conversation;
 import com.foggy.navigator.api.model.Conversation.ConversationStatus;
 import com.foggy.navigator.api.model.CreateConversationRequest;
 import com.foggy.navigator.api.service.ConversationService;
+import com.foggy.navigator.common.annotation.RequireAuth;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -13,6 +14,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/conversations")
+@RequireAuth
 @Slf4j
 public class ConversationController {
 

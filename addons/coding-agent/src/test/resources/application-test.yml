@@ -21,6 +21,18 @@ spring:
 server:
   port: 0  # 随机端口
 
+# JWT 配置
+jwt:
+  secret: test-jwt-secret-key-for-testing
+  expiration: 86400
+
+# ROOT 账号配置
+system:
+  root:
+    username: root
+    password: root123
+    email: root@test.local
+
 foggy:
   coding-agent:
     test-mode: true
