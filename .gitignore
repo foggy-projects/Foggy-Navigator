@@ -104,6 +104,11 @@ build/
 .env.test.local
 .env.production.local
 
+# Configuration files with sensitive data
+**/application-docker.yml
+**/src/main/resources/application-docker.yml
+**/src/test/resources/application-docker.yml
+
 # Database
 *.db
 *.sqlite
