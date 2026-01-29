@@ -97,7 +97,7 @@ logging:
     com.foggy.navigator: DEBUG
     com.github.dockerjava: WARN
   file:
-    name: logs/coding-agent.log
+    name: logs/backend.log
     path: logs
   pattern:
     file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
