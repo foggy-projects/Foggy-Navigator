@@ -74,8 +74,13 @@ public class ValidationService {
                     "timestamp", System.currentTimeMillis()
             );
 
+            // 获取最新消息内容，发送到 OpenHands
+            String messageContent = messages.isEmpty() ? "" : messages.get(0).getContent();
+
             OpenHandsClient client = getClientForConversation(conversationId);
-            client.post("/app-conversations/" + conversationId + "/validate", context, Void.class);
+            // 使用 OpenHands 的消息 API: POST /api/conversations/{id}/message
+            Map<String, Object> messageRequest = Map.of("message", messageContent);
+            client.postRaw("/api/conversations/" + conversationId + "/message", messageRequest, Object.class);
 
             // 使用 ApplicationEventPublisher 发布事件
             Event event = Event.builder()

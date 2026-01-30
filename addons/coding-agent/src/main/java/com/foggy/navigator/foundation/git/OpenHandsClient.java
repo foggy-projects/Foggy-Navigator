@@ -55,6 +55,27 @@ public class OpenHandsClient {
         }
     }
 
+    /**
+     * 发送 POST 请求，使用原始路径（不添加 /api/v1 前缀）
+     */
+    public <T> T postRaw(String path, Object request, Class<T> responseType) {
+        try {
+            String url = openHandsApiUrl + path;
+            log.debug("POST Raw: {}", url);
+            HttpEntity<Object> entity = new HttpEntity<>(request, createHeaders());
+            ResponseEntity<T> response = restTemplate.postForEntity(url, entity, responseType);
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                return response.getBody();
+            } else {
+                throw new RuntimeException("OpenHands API 调用失败: " + response.getStatusCode());
+            }
+        } catch (Exception e) {
+            log.error("OpenHands API 调用异常: path={}", path, e);
+            throw new RuntimeException("OpenHands API 调用异常", e);
+        }
+    }
+
     public <T> T get(String path, Class<T> responseType) {
         try {
             HttpEntity<Void> entity = new HttpEntity<>(createHeaders());

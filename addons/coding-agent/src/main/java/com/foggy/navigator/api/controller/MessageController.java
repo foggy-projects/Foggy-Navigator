@@ -3,7 +3,6 @@ package com.foggy.navigator.api.controller;
 import com.foggy.navigator.api.model.Message;
 import com.foggy.navigator.api.model.SendMessageRequest;
 import com.foggy.navigator.api.service.MessageService;
-import com.foggy.navigator.common.annotation.RequireAuth;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -13,7 +12,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/conversations/{conversationId}/messages")
-@RequireAuth
 @Slf4j
 public class MessageController {
 

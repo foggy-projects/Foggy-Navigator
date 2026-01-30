@@ -61,7 +61,18 @@ public class SecurityConfig {
                         // 开放健康检查接口
                         .requestMatchers("/api/v1/health/**", "/actuator/**").permitAll()
                         // 开放静态资源（前端构建产物）
-                        .requestMatchers("/", "/index.html", "/assets/**", "/*.js", "/*.css", "/*.ico").permitAll()
+                        .requestMatchers("/", "/index.html", "/assets/**", "/*.js", "/*.css", "/*.ico", "/*.png", "/*.jpg", "/*.svg").permitAll()
+                        // 开放前端资源路径（包括所有子路径）
+                        .requestMatchers("/js/**", "/css/**", "/img/**", "/fonts/**", "/static/**").permitAll()
+                        // 开放统计数据 API（用于首页显示，无需认证）
+                        .requestMatchers("/api/v1/sessions/stats", "/api/v1/sessions/count", "/api/v1/containers/stats").permitAll()
+                        .requestMatchers("/api/v1/events/today", "/api/v1/messages/today").permitAll()
+                        // 临时开放：允许匿名访问列表 API（仅用于开发测试，生产环境应移除）
+                        .requestMatchers("/api/v1/environments", "/api/v1/environments/**").permitAll()
+                        .requestMatchers("/api/v1/conversations", "/api/v1/conversations/**").permitAll()
+                        .requestMatchers("/api/v1/containers", "/api/v1/containers/**").permitAll()
+                        .requestMatchers("/api/v1/events", "/api/v1/events/**").permitAll()
+                        .requestMatchers("/api/v1/messages", "/api/v1/messages/**").permitAll()
                         // 其他所有请求都需要认证（但具体权限检查由 @RequireAuth AOP 处理）
                         .anyRequest().authenticated()
                 );

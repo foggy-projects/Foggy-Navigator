@@ -4,7 +4,6 @@ import com.foggy.navigator.api.model.ApiResponse;
 import com.foggy.navigator.api.model.CreateEnvironmentRequest;
 import com.foggy.navigator.api.model.Environment;
 import com.foggy.navigator.api.service.EnvironmentService;
-import com.foggy.navigator.common.annotation.RequireAuth;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -14,8 +13,7 @@ import org.springframework.web.bind.annotation.*;
  * 环境管理 API
  */
 @RestController
-@RequestMapping("/api/environments")
-@RequireAuth
+@RequestMapping("/api/v1/environments")
 @Slf4j
 public class EnvironmentController {
 

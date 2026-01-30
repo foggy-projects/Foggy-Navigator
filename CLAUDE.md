@@ -19,6 +19,69 @@ Foggy-Navigator/
 - **API**: REST接口 + SSE实时流
 - **测试**: JUnit单元测试(H2) + Vitest集成测试(Docker MySQL)
 
+## 项目启动
+
+### 快速启动（推荐）
+
+```powershell
+# 根目录执行启动脚本（自动构建+启动）
+powershell -ExecutionPolicy Bypass -File start-launcher.ps1
+```
+
+启动脚本会自动：
+1. 杀掉旧的 Java 进程
+2. 执行 `mvn clean package -DskipTests`
+3. 启动服务（端口 8112）
+4. 健康检查
+
+### 手动启动
+
+```bash
+# 1. 构建项目
+mvn clean package -pl launcher -am -DskipTests
+
+# 2. 启动服务
+"C:\Program Files\Java\jdk-17.0.1\bin\java.exe" -jar launcher/target/launcher-1.0.0-SNAPSHOT.jar --spring.profiles.active=docker
+```
+
+### 验证
+
+```bash
+# 健康检查
+curl http://localhost:8112/actuator/health
+
+# 登录测试
+curl -X POST http://localhost:8112/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"root","password":"root123"}'
+```
+
+## 重要配置
+
+### 环境配置文件
+
+- `application.yml` - 主配置
+- `application-docker.yml` - Docker环境配置（包含LLM API配置，**已加入.gitignore**）
+- 模板文件：`application-docker.yml.example`
+
+### LLM 配置
+
+编辑 `launcher/src/main/resources/application-docker.yml`（本地不会提交）：
+
+```yaml
+foggy:
+  coding-agent:
+    openhands:
+      api-key: your-api-key
+      model-name: glm-4.7
+      api-base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+```
+
+### 日志文件
+
+- 输出日志：`logs/backend.log`
+- 错误日志：`logs/backend-error.log`
+
 ## JPA 使用规则
 
 1. **自动建表**: 使用 `@Entity` 定义实体，JPA自动创建表结构，不维护任何建表SQL

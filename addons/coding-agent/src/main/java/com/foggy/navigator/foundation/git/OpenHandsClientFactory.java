@@ -15,8 +15,8 @@ public class OpenHandsClientFactory {
 
     private final RestTemplate restTemplate;
 
-    @Value("${foggy.coding-agent.openhands.api-url:http://localhost:3000}")
-    private String defaultOpenHandsApiUrl;
+    @Autowired
+    private OpenHandsContainerManager containerManager;
 
     @Value("${foggy.coding-agent.openhands.api-key:}")
     private String defaultOpenHandsApiKey;
@@ -29,8 +29,13 @@ public class OpenHandsClientFactory {
 
     public OpenHandsClient getClient(String containerId) {
         return clients.computeIfAbsent(containerId, id -> {
-            log.info("创建 OpenHandsClient 实例: containerId={}", id);
-            return new OpenHandsClient(restTemplate, defaultOpenHandsApiUrl, defaultOpenHandsApiKey);
+            // 从容器管理器获取动态分配的 API URL
+            String apiUrl = containerManager.getContainerApiUrl(id);
+            if (apiUrl == null) {
+                throw new RuntimeException("容器不存在或端口未分配: " + id);
+            }
+            log.info("创建 OpenHandsClient 实例: containerId={}, apiUrl={}", id, apiUrl);
+            return new OpenHandsClient(restTemplate, apiUrl, defaultOpenHandsApiKey);
         });
     }
 

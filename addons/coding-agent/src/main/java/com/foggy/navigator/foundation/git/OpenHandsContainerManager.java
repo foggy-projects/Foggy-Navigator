@@ -7,7 +7,9 @@ import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
+import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.HostConfig;
+import com.github.dockerjava.api.model.Ports;
 import com.github.dockerjava.api.model.Volume;
 import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientBuilder;
@@ -24,7 +26,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * OpenHands 容器管理服务
@@ -38,8 +43,20 @@ public class OpenHandsContainerManager implements ContainerManagerInterface {
     private DockerClient dockerClient;
     private boolean useMock = false;
 
+    // 容器ID -> 端口映射
+    private static final Map<String, Integer> containerPortMap = new ConcurrentHashMap<>();
+
+    // 已使用的端口集合
+    private static final Set<Integer> usedPorts = ConcurrentHashMap.newKeySet();
+
     @Value("${foggy.coding-agent.openhands.image:ghcr.io/all-hands-ai/openhands:main}")
     private String openHandsImage;
+
+    @Value("${foggy.coding-agent.openhands.port-range-start:30100}")
+    private int portRangeStart;
+
+    @Value("${foggy.coding-agent.openhands.port-range-end:36000}")
+    private int portRangeEnd;
 
     @Value("${foggy.coding-agent.openhands.workspace-base:/workspace}")
     private String workspaceBase;
@@ -106,19 +123,31 @@ public class OpenHandsContainerManager implements ContainerManagerInterface {
         String containerName = "openhands-" + userId + "-" + sessionId;
         String workspacePath = workspaceBase + "/" + userId + "/" + sessionId;
 
-        log.info("创建 OpenHands 容器: name={}, workspace={}", containerName, workspacePath);
+        // 分配端口
+        int hostPort = allocatePort();
+        if (hostPort == -1) {
+            throw new RuntimeException("无法分配端口，端口范围已满: " + portRangeStart + "-" + portRangeEnd);
+        }
+        log.info("创建 OpenHands 容器: name={}, workspace={}, port={}", containerName, workspacePath, hostPort);
 
         try {
             // 构建环境变量
             List<String> env = buildEnvironmentVariables(config, workspacePath);
 
+            // 配置端口映射: 容器内 3000 -> 主机 hostPort
+            ExposedPort containerPort = ExposedPort.tcp(3000);
+            Ports portBindings = new Ports();
+            portBindings.bind(containerPort, Ports.Binding.bindPort(hostPort));
+
             // 创建容器
             CreateContainerResponse container = dockerClient.createContainerCmd(openHandsImage)
                     .withName(containerName)
                     .withEnv(env)
+                    .withExposedPorts(containerPort)
                     .withHostConfig(
                             HostConfig.newHostConfig()
                                     .withPrivileged(true)
+                                    .withPortBindings(portBindings)
                                     .withBinds(
                                             new Bind("/var/run/docker.sock", new Volume("/var/run/docker.sock")),
                                             new Bind(workspaceBase, new Volume("/opt/workspace"))
@@ -129,7 +158,10 @@ public class OpenHandsContainerManager implements ContainerManagerInterface {
             // 启动容器
             dockerClient.startContainerCmd(container.getId()).exec();
 
-            log.info("OpenHands 容器已创建并启动: containerId={}", container.getId());
+            // 记录端口映射
+            containerPortMap.put(container.getId(), hostPort);
+
+            log.info("OpenHands 容器已创建并启动: containerId={}, port={}", container.getId(), hostPort);
             return container.getId();
 
         } catch (Exception e) {
@@ -167,12 +199,67 @@ public class OpenHandsContainerManager implements ContainerManagerInterface {
                     .withForce(true)
                     .exec();
 
+            // 释放端口
+            releasePort(containerId);
+
             log.info("OpenHands 容器已销毁: containerId={}", containerId);
 
         } catch (Exception e) {
             log.error("销毁容器失败: containerId={}", containerId, e);
             // 不抛出异常，避免影响主流程
         }
+    }
+
+    /**
+     * 分配一个可用端口
+     *
+     * @return 可用端口，如果没有可用端口则返回 -1
+     */
+    private synchronized int allocatePort() {
+        for (int port = portRangeStart; port <= portRangeEnd; port++) {
+            if (!usedPorts.contains(port)) {
+                usedPorts.add(port);
+                return port;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 释放容器占用的端口
+     *
+     * @param containerId 容器ID
+     */
+    private void releasePort(String containerId) {
+        Integer port = containerPortMap.remove(containerId);
+        if (port != null) {
+            usedPorts.remove(port);
+            log.info("释放端口: containerId={}, port={}", containerId, port);
+        }
+    }
+
+    /**
+     * 获取容器映射的主机端口
+     *
+     * @param containerId 容器ID
+     * @return 主机端口，如果未找到则返回 -1
+     */
+    public int getContainerPort(String containerId) {
+        return containerPortMap.getOrDefault(containerId, -1);
+    }
+
+    /**
+     * 获取容器的 API URL
+     *
+     * @param containerId 容器ID
+     * @return API URL，如果容器不存在则返回 null
+     */
+    public String getContainerApiUrl(String containerId) {
+        int port = getContainerPort(containerId);
+        if (port == -1) {
+            return null;
+        }
+        return "http://localhost:" + port;
     }
 
     /**
@@ -264,6 +351,14 @@ public class OpenHandsContainerManager implements ContainerManagerInterface {
 
         // Git 配置
         env.add("GIT_CREDENTIALS_HELPER=store");
+
+        // Sandbox 配置 - 修复容器间健康检查连接问题
+        // 使用 host.docker.internal 替代 localhost，使 OpenHands 容器能正确访问 agent-server 容器
+        env.add("SANDBOX_LOCAL_RUNTIME_URL=http://host.docker.internal");
+        env.add("SANDBOX_USER_ID=0");
+        env.add("USE_HOST_NETWORK=false");
+        // 配置 sandbox 服务使用 host.docker.internal 作为 URL 模式
+        env.add("OH_SANDBOX={\"kind\": \"DockerSandboxServiceInjector\", \"container_url_pattern\": \"http://host.docker.internal:{port}\"}");
 
         return env;
     }
