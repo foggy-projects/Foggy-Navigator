@@ -123,6 +123,26 @@ public class OpenHandsClient {
         return post("/app-conversations", req, AppConversationStartTask.class);
     }
 
+    public AppConversationStartTask getStartTask(String taskId) {
+        log.debug("查询 OH V1 启动任务: taskId={}", taskId);
+        List result = get("/app-conversations/start-tasks?ids=" + taskId, List.class);
+        if (result != null && !result.isEmpty()) {
+            Object first = result.get(0);
+            if (first instanceof Map) {
+                Map<String, Object> map = (Map<String, Object>) first;
+                return AppConversationStartTask.builder()
+                        .id((String) map.get("id"))
+                        .appConversationId((String) map.get("app_conversation_id"))
+                        .sandboxId((String) map.get("sandbox_id"))
+                        .agentServerUrl((String) map.get("agent_server_url"))
+                        .status((String) map.get("status"))
+                        .detail((String) map.get("detail"))
+                        .build();
+            }
+        }
+        return null;
+    }
+
     public AppConversationInfo getConversationInfo(String ohConversationId) {
         log.info("获取 OH V1 会话信息: ohConversationId={}", ohConversationId);
         // V1 API: GET /api/v1/app-conversations?ids=[id]

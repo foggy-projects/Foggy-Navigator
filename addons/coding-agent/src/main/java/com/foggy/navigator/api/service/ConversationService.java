@@ -8,7 +8,6 @@ import com.foggy.navigator.api.model.entity.ConversationEntity;
 import com.foggy.navigator.api.repository.ConversationRepository;
 import com.foggy.navigator.foundation.git.OpenHandsClient;
 import com.foggy.navigator.foundation.git.OpenHandsClientFactory;
-import com.foggy.navigator.foundation.git.model.v1.AppConversationInfo;
 import com.foggy.navigator.foundation.git.model.v1.AppConversationStartRequest;
 import com.foggy.navigator.foundation.git.model.v1.AppConversationStartTask;
 import lombok.extern.slf4j.Slf4j;
@@ -85,23 +84,24 @@ public class ConversationService {
         try {
             OpenHandsClient client = clientFactory.getClientForUser(request.getUserId());
 
+            // OH V1: Don't pass selectedRepository/selectedBranch to avoid git auth issues.
+            // The agent will clone the repo as part of its task message.
             AppConversationStartRequest ohReq = AppConversationStartRequest.builder()
-                    .selectedRepository(request.getGitRepoUrl())
-                    .selectedBranch(request.getBranchName())
-                    .initialMessage(request.getInitialMessage())
                     .llmModel(configuredModel)
-                    .agentType("DEFAULT")
+                    .agentType("default")
                     .build();
 
             AppConversationStartTask task = client.startConversation(ohReq);
-            conversation.setOhConversationId(task.getConversationId());
-            conversation.setSandboxId(task.getSandboxId());
+            log.info("OH V1 启动任务已创建: taskId={}, status={}", task.getId(), task.getStatus());
 
-            boolean ready = pollForReady(client, task.getConversationId(), 120);
-            if (!ready) {
+            // Poll start task until READY, then extract appConversationId
+            AppConversationStartTask readyTask = pollStartTaskForReady(client, task.getId(), 120);
+            if (readyTask == null) {
                 throw new RuntimeException("OH 会话启动超时");
             }
 
+            conversation.setOhConversationId(readyTask.getAppConversationId());
+            conversation.setSandboxId(readyTask.getSandboxId());
             conversation.setStatus(Conversation.ConversationStatus.READY);
             conversation.setUpdatedAt(LocalDateTime.now());
 
@@ -122,7 +122,7 @@ public class ConversationService {
                 }
             }
 
-            log.info("对话创建成功: conversationId={}, ohConversationId={}", conversationId, task.getConversationId());
+            log.info("对话创建成功: conversationId={}, ohConversationId={}", conversationId, readyTask.getAppConversationId());
             return conversation;
 
         } catch (Exception e) {
@@ -142,38 +142,41 @@ public class ConversationService {
         }
     }
 
-    private boolean pollForReady(OpenHandsClient client, String ohConversationId, int timeoutSeconds) {
+    private AppConversationStartTask pollStartTaskForReady(OpenHandsClient client, String taskId, int timeoutSeconds) {
         long startTime = System.currentTimeMillis();
         long timeout = timeoutSeconds * 1000L;
 
         while (System.currentTimeMillis() - startTime < timeout) {
             try {
-                AppConversationInfo info = client.getConversationInfo(ohConversationId);
-                if (info != null) {
-                    String status = info.getSandboxStatus();
-                    if ("READY".equalsIgnoreCase(status) || "running".equalsIgnoreCase(status)) {
-                        return true;
+                AppConversationStartTask task = client.getStartTask(taskId);
+                if (task != null) {
+                    String status = task.getStatus();
+                    log.debug("OH V1 启动任务状态: taskId={}, status={}, appConversationId={}",
+                            taskId, status, task.getAppConversationId());
+
+                    if ("READY".equalsIgnoreCase(status) || "COMPLETED".equalsIgnoreCase(status)) {
+                        return task;
                     }
-                    if ("ERROR".equalsIgnoreCase(status)) {
-                        log.error("OH 会话进入 ERROR 状态: ohConversationId={}", ohConversationId);
-                        return false;
+                    if ("ERROR".equalsIgnoreCase(status) || "FAILED".equalsIgnoreCase(status)) {
+                        log.error("OH V1 启动任务失败: taskId={}, detail={}", taskId, task.getDetail());
+                        return null;
                     }
                 }
                 Thread.sleep(2000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return false;
+                return null;
             } catch (Exception e) {
-                log.debug("轮询 OH 会话状态异常 (可能尚未就绪): {}", e.getMessage());
+                log.debug("轮询 OH V1 启动任务异常 (可能尚未就绪): {}", e.getMessage());
                 try { Thread.sleep(2000); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
-                    return false;
+                    return null;
                 }
             }
         }
 
-        log.error("OH 会话启动超时: ohConversationId={}", ohConversationId);
-        return false;
+        log.error("OH V1 启动任务超时: taskId={}", taskId);
+        return null;
     }
 
     public Conversation getConversation(String conversationId) {

@@ -27,6 +27,17 @@ export const TEST_CONFIG = {
   testRepo: {
     gitRepoUrl: 'https://github.com/test/semantic-layer.git',
     branchName: 'main'
+  },
+
+  // E2E OpenHands 测试配置
+  e2e: {
+    gitRepoUrl: process.env.E2E_GIT_REPO_URL || 'http://gitlib.foggysource.com/test/coding-test',
+    branchName: process.env.E2E_BRANCH_NAME || 'main',
+    pollTimeoutMs: 120_000,
+    testTimeoutMs: 300_000,
+    // GitLab 验证配置
+    gitlabUrl: process.env.GITLAB_URL || 'http://gitlib.foggysource.com',
+    gitlabProject: process.env.GITLAB_PROJECT || 'test/coding-test'
   }
 } as const;
 

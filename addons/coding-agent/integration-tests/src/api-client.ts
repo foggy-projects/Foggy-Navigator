@@ -59,13 +59,17 @@ export class CodingAgentClient {
 
   /**
    * 创建 Conversation
+   * @param request 创建请求
+   * @param timeout 超时时间(ms)，默认180s，因为后端需要启动Docker容器+等待OH就绪+轮询启动任务
    */
   async createConversation(
-    request: CreateConversationRequest
+    request: CreateConversationRequest,
+    timeout: number = 180_000
   ): Promise<Conversation> {
     const response = await this.client.post<Conversation>(
       '/api/v1/conversations',
-      request
+      request,
+      { timeout }
     );
     return response.data;
   }

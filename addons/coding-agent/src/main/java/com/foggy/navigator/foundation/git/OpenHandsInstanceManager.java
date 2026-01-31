@@ -61,6 +61,15 @@ public class OpenHandsInstanceManager {
     @Value("${foggy.coding-agent.openhands.api-base-url:}")
     private String apiBaseUrl;
 
+    @Value("${foggy.coding-agent.openhands.oh-secret-key:openhands-dev-secret-key-1234567890}")
+    private String ohSecretKey;
+
+    @Value("${foggy.coding-agent.openhands.agent-server-image:ghcr.io/openhands/agent-server}")
+    private String agentServerImage;
+
+    @Value("${foggy.coding-agent.openhands.agent-server-tag:31536c8-python}")
+    private String agentServerTag;
+
     @Value("${foggy.coding-agent.test-mode:false}")
     private boolean testMode;
 
@@ -247,6 +256,16 @@ public class OpenHandsInstanceManager {
 
             dockerClient.startContainerCmd(container.getId()).exec();
 
+            // Wait for OH server to become HTTP-ready
+            String baseUrl = "http://localhost:" + hostPort;
+            log.info("等待 OpenHands 实例就绪: userId={}, port={}", userId, hostPort);
+            boolean ready = waitForHttpReady(baseUrl, 60);
+            if (!ready) {
+                log.warn("OpenHands 实例未在超时内就绪，继续创建实例: userId={}", userId);
+            } else {
+                log.info("OpenHands 实例已就绪: userId={}, port={}", userId, hostPort);
+            }
+
             UserInstance instance = UserInstance.builder()
                     .userId(userId)
                     .containerId(container.getId())
@@ -288,6 +307,18 @@ public class OpenHandsInstanceManager {
         env.add("USE_HOST_NETWORK=false");
         env.add("OH_SANDBOX={\"kind\": \"DockerSandboxServiceInjector\", \"container_url_pattern\": \"http://host.docker.internal:{port}\"}");
 
+        // V1-required environment variables
+        if (ohSecretKey != null && !ohSecretKey.isEmpty()) {
+            env.add("OH_SECRET_KEY=" + ohSecretKey);
+        }
+        env.add("DISABLE_MCP=true");
+        if (agentServerImage != null && !agentServerImage.isEmpty()) {
+            env.add("AGENT_SERVER_IMAGE_REPOSITORY=" + agentServerImage);
+        }
+        if (agentServerTag != null && !agentServerTag.isEmpty()) {
+            env.add("AGENT_SERVER_IMAGE_TAG=" + agentServerTag);
+        }
+
         return env;
     }
 
@@ -327,6 +358,22 @@ public class OpenHandsInstanceManager {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private boolean waitForHttpReady(String baseUrl, int timeoutSeconds) {
+        long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
+        while (System.currentTimeMillis() < deadline) {
+            if (isHttpReady(baseUrl)) {
+                return true;
+            }
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
     }
 
     private boolean isHttpReady(String baseUrl) {

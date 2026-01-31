@@ -60,6 +60,11 @@ foggy:
       model-name: gpt-4
       api-base-url: ${OPENAI_API_BASE_URL:}
 
+      # V1 Agent Server 配置
+      agent-server-image: ghcr.io/openhands/agent-server
+      agent-server-tag: 31536c8-python
+      oh-secret-key: ${OH_SECRET_KEY:openhands-dev-secret-key-1234567890}
+
     # 验证服务配置
     validation:
       url: http://localhost:7108  # 验证服务地址（可配置）

@@ -12,14 +12,20 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class AppConversationStartTask {
 
-    @JsonProperty("conversation_id")
-    private String conversationId;
+    /** Task ID returned by POST /app-conversations */
+    private String id;
+
+    /** Actual conversation ID, populated when status reaches READY */
+    @JsonProperty("app_conversation_id")
+    private String appConversationId;
 
     @JsonProperty("sandbox_id")
     private String sandboxId;
 
+    @JsonProperty("agent_server_url")
+    private String agentServerUrl;
+
     private String status;
 
-    @JsonProperty("error_message")
-    private String errorMessage;
+    private String detail;
 }

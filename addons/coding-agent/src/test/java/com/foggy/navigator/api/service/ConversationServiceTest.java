@@ -7,7 +7,6 @@ import com.foggy.navigator.api.model.entity.ConversationEntity;
 import com.foggy.navigator.api.repository.ConversationRepository;
 import com.foggy.navigator.foundation.git.OpenHandsClient;
 import com.foggy.navigator.foundation.git.OpenHandsClientFactory;
-import com.foggy.navigator.foundation.git.model.v1.AppConversationInfo;
 import com.foggy.navigator.foundation.git.model.v1.AppConversationStartRequest;
 import com.foggy.navigator.foundation.git.model.v1.AppConversationStartTask;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,21 +62,23 @@ class ConversationServiceTest {
                 .branchName("main")
                 .build();
 
-        AppConversationStartTask task = AppConversationStartTask.builder()
-                .conversationId("oh-conv-123")
-                .sandboxId("sandbox-xyz")
+        // V1 flow: startConversation returns a task with id
+        AppConversationStartTask startTask = AppConversationStartTask.builder()
+                .id("task-001")
                 .status("WORKING")
                 .build();
 
-        AppConversationInfo readyInfo = AppConversationInfo.builder()
-                .id("oh-conv-123")
+        // V1 flow: getStartTask returns task with appConversationId when READY
+        AppConversationStartTask readyTask = AppConversationStartTask.builder()
+                .id("task-001")
+                .appConversationId("oh-conv-123")
                 .sandboxId("sandbox-xyz")
-                .sandboxStatus("READY")
+                .status("READY")
                 .build();
 
         when(clientFactory.getClientForUser("user-123")).thenReturn(openHandsClient);
-        when(openHandsClient.startConversation(any(AppConversationStartRequest.class))).thenReturn(task);
-        when(openHandsClient.getConversationInfo("oh-conv-123")).thenReturn(readyInfo);
+        when(openHandsClient.startConversation(any(AppConversationStartRequest.class))).thenReturn(startTask);
+        when(openHandsClient.getStartTask("task-001")).thenReturn(readyTask);
         when(conversationRepository.findByConversationId(anyString()))
                 .thenReturn(Optional.of(ConversationEntity.builder()
                         .conversationId("test-id")
@@ -100,12 +101,13 @@ class ConversationServiceTest {
 
         verify(clientFactory).getClientForUser("user-123");
         verify(openHandsClient).startConversation(any(AppConversationStartRequest.class));
+        verify(openHandsClient).getStartTask("task-001");
         verify(eventPublisher, times(2)).publishEvent(any(Event.class));
         verify(conversationRepository, times(2)).save(any(ConversationEntity.class));
     }
 
     @Test
-    void testCreateConversation_Timeout() {
+    void testCreateConversation_Error() {
         CreateConversationRequest request = CreateConversationRequest.builder()
                 .userId("user-123")
                 .projectId("project-A")
@@ -113,21 +115,22 @@ class ConversationServiceTest {
                 .branchName("main")
                 .build();
 
-        AppConversationStartTask task = AppConversationStartTask.builder()
-                .conversationId("oh-conv-123")
-                .sandboxId("sandbox-xyz")
+        // V1 flow: startConversation returns a task
+        AppConversationStartTask startTask = AppConversationStartTask.builder()
+                .id("task-001")
                 .status("WORKING")
                 .build();
 
-        AppConversationInfo workingInfo = AppConversationInfo.builder()
-                .id("oh-conv-123")
-                .sandboxId("sandbox-xyz")
-                .sandboxStatus("WORKING")
+        // V1 flow: getStartTask returns ERROR status
+        AppConversationStartTask errorTask = AppConversationStartTask.builder()
+                .id("task-001")
+                .status("ERROR")
+                .detail("Failed to start sandbox")
                 .build();
 
         when(clientFactory.getClientForUser("user-123")).thenReturn(openHandsClient);
-        when(openHandsClient.startConversation(any(AppConversationStartRequest.class))).thenReturn(task);
-        when(openHandsClient.getConversationInfo("oh-conv-123")).thenReturn(workingInfo);
+        when(openHandsClient.startConversation(any(AppConversationStartRequest.class))).thenReturn(startTask);
+        when(openHandsClient.getStartTask("task-001")).thenReturn(errorTask);
         when(conversationRepository.findByConversationId(anyString()))
                 .thenReturn(Optional.of(ConversationEntity.builder()
                         .conversationId("test-id")
@@ -136,13 +139,10 @@ class ConversationServiceTest {
                         .status(ConversationEntity.ConversationStatus.STARTING)
                         .build()));
 
-        // Use very short timeout for test by temporarily changing poll timeout
-        // The pollForReady will loop until timeout
-        RuntimeException exception = assertThrows(RuntimeException.class, () -> {
-            conversationService.createConversation(request);
-        });
+        Conversation conversation = conversationService.createConversation(request);
 
-        assertTrue(exception.getMessage().contains("创建对话失败"));
+        // Conversation should end up in ERROR state
+        assertEquals(Conversation.ConversationStatus.ERROR, conversation.getStatus());
     }
 
     @Test
