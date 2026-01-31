@@ -16,7 +16,7 @@ public class OpenHandsClientFactory {
     private final RestTemplate restTemplate;
 
     @Autowired
-    private OpenHandsContainerManager containerManager;
+    private OpenHandsInstanceManager instanceManager;
 
     @Value("${foggy.coding-agent.openhands.api-key:}")
     private String defaultOpenHandsApiKey;
@@ -27,28 +27,16 @@ public class OpenHandsClientFactory {
         this.restTemplate = restTemplate;
     }
 
-    public OpenHandsClient getClient(String containerId) {
-        return clients.computeIfAbsent(containerId, id -> {
-            // 从容器管理器获取动态分配的 API URL
-            String apiUrl = containerManager.getContainerApiUrl(id);
-            if (apiUrl == null) {
-                throw new RuntimeException("容器不存在或端口未分配: " + id);
-            }
-            log.info("创建 OpenHandsClient 实例: containerId={}, apiUrl={}", id, apiUrl);
-            return new OpenHandsClient(restTemplate, apiUrl, defaultOpenHandsApiKey);
+    public OpenHandsClient getClientForUser(String userId) {
+        return clients.computeIfAbsent(userId, id -> {
+            OpenHandsInstanceManager.UserInstance instance = instanceManager.ensureUserInstance(id);
+            log.info("创建 OpenHandsClient 实例: userId={}, baseUrl={}", id, instance.getBaseUrl());
+            return new OpenHandsClient(restTemplate, instance.getBaseUrl(), defaultOpenHandsApiKey);
         });
     }
 
-    public OpenHandsClient getClient(String containerId, String apiUrl, String apiKey) {
-        String key = containerId + ":" + apiUrl;
-        return clients.computeIfAbsent(key, id -> {
-            log.info("创建 OpenHandsClient 实例: containerId={}, apiUrl={}", containerId, apiUrl);
-            return new OpenHandsClient(restTemplate, apiUrl, apiKey);
-        });
-    }
-
-    public void removeClient(String containerId) {
-        log.info("移除 OpenHandsClient 实例: containerId={}", containerId);
-        clients.remove(containerId);
+    public void removeClient(String userId) {
+        log.info("移除 OpenHandsClient 实例: userId={}", userId);
+        clients.remove(userId);
     }
 }

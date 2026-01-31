@@ -1,57 +1,88 @@
 # Foundation Git 模块
 
-> OpenHands 容器管理和验证服务集成
+> OpenHands Per-User 实例管理和验证服务集成
 
 ## 模块概述
 
 本模块提供语义层编辑所需的基础设施：
-- **OpenHands 容器管理**：动态创建和销毁 OpenHands 容器
+- **OpenHands Per-User 实例管理**：每个用户一个持久的 OpenHands V1 容器实例，在实例内管理多个会话
 - **验证服务集成**：调用独立部署的 Validation Service 进行实时验证
 
 ## 目录结构
 
 ```
 foundation/git/
-├── OpenHandsContainerManager.java    # OpenHands 容器管理
-├── ValidationServiceClient.java      # 验证服务客户端
+├── OpenHandsInstanceManager.java    # Per-user OpenHands 实例管理
+├── OpenHandsClient.java             # OpenHands V1 REST API 客户端
+├── OpenHandsClientFactory.java      # 按 userId 获取客户端的工厂
+├── ValidationServiceClient.java     # 验证服务客户端
 ├── config/
-│   └── GitModuleConfig.java          # 模块配置
-└── model/
-    ├── ContainerConfig.java          # 容器配置
-    ├── ContainerStatus.java          # 容器状态
-    ├── ValidationRequest.java        # 验证请求
-    ├── ValidationResult.java         # 验证结果
-    ├── ValidationError.java          # 验证错误
-    ├── DatasourceConfig.java         # 数据源配置
-    └── GitCredentials.java           # Git 凭证
+│   └── GitModuleConfig.java         # 模块配置
+├── model/
+│   ├── v1/                          # OpenHands V1 API DTOs
+│   │   ├── AppConversationStartRequest.java
+│   │   ├── AppConversationStartTask.java
+│   │   ├── AppConversationInfo.java
+│   │   └── SendMessagePayload.java
+│   ├── ValidationRequest.java       # 验证请求
+│   ├── ValidationResult.java        # 验证结果
+│   ├── ValidationError.java         # 验证错误
+│   ├── DatasourceConfig.java        # 数据源配置
+│   └── GitCredentials.java          # Git 凭证
+└── util/
+    └── NamespaceGenerator.java      # 命名空间生成工具
 ```
 
 ## 核心功能
 
-### 1. OpenHands 容器管理
+### 1. Per-User OpenHands 实例管理
 
 ```java
 @Autowired
-private OpenHandsContainerManager containerManager;
+private OpenHandsInstanceManager instanceManager;
 
-// 创建容器
-String containerId = containerManager.createContainer(
-    userId,
-    sessionId,
-    ContainerConfig.builder()
-        .apiKey(apiKey)
-        .modelName("gpt-4")
+// 确保用户实例运行中 (若不存在则创建)
+UserInstance instance = instanceManager.ensureUserInstance(userId);
+
+// 获取用户实例 base URL
+String baseUrl = instanceManager.getBaseUrl(userId);
+
+// 检查用户实例是否就绪
+boolean ready = instanceManager.isReady(userId);
+
+// 关闭用户实例
+instanceManager.shutdownUserInstance(userId);
+```
+
+### 2. OpenHands V1 API 客户端
+
+```java
+@Autowired
+private OpenHandsClientFactory clientFactory;
+
+// 获取用户的 OpenHands 客户端
+OpenHandsClient client = clientFactory.getClientForUser(userId);
+
+// 创建 OH 会话
+AppConversationStartTask task = client.startConversation(
+    AppConversationStartRequest.builder()
+        .selectedRepository(gitRepoUrl)
+        .selectedBranch(branch)
+        .llmModel("gpt-4")
+        .agentType("DEFAULT")
         .build()
 );
 
-// 等待容器就绪
-boolean ready = containerManager.waitForContainerReady(containerId, 60);
+// 查询会话状态
+AppConversationInfo info = client.getConversationInfo(ohConversationId);
 
-// 销毁容器
-containerManager.destroyContainer(containerId);
+// Sandbox 管理
+client.deleteSandbox(sandboxId);
+client.pauseSandbox(sandboxId);
+client.resumeSandbox(sandboxId);
 ```
 
-### 2. 验证服务集成
+### 3. 验证服务集成
 
 ```java
 @Autowired
@@ -59,13 +90,6 @@ private ValidationServiceClient validationClient;
 
 // 验证语义层文件
 ValidationResult result = validationClient.validate(workspacePath);
-
-if (!result.isSuccess()) {
-    // 处理验证错误
-    for (ValidationError error : result.getErrors()) {
-        log.error("验证失败: {}", error.getMessage());
-    }
-}
 ```
 
 ## 配置说明
@@ -78,8 +102,9 @@ foggy:
     openhands:
       image: ghcr.io/all-hands-ai/openhands:main
       workspace-base: /workspace
-      container-timeout: 1800
-      max-concurrent: 10
+      port-range-start: 30100
+      port-range-end: 36000
+      instance-health-check-interval: 30000
       api-key: ${OPENAI_API_KEY}
       model-name: gpt-4
 
@@ -89,65 +114,24 @@ foggy:
       realtime: true
 ```
 
-### 环境变量
-
-```bash
-# OpenAI API Key
-export OPENAI_API_KEY=sk-xxx
-
-# OpenAI API Base URL (可选)
-export OPENAI_API_BASE_URL=https://api.openai.com/v1
-```
-
-## 依赖
-
-```xml
-<!-- Docker Java Client -->
-<dependency>
-    <groupId>com.github.docker-java</groupId>
-    <artifactId>docker-java</artifactId>
-    <version>3.3.4</version>
-</dependency>
-
-<!-- Spring Boot Web -->
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-web</artifactId>
-</dependency>
-```
-
 ## 架构设计
 
-### 多对一架构
+### Per-User 实例架构
 
 ```
-┌──────────────┐
-│ OpenHands-1  │──┐
-└──────────────┘  │
-                  │    ┌──────────────────┐
-┌──────────────┐  ├───>│  Validation      │
-│ OpenHands-2  │──┤    │  Service (共享)  │
-└──────────────┘  │    └──────────────────┘
-                  │
-┌──────────────┐  │
-│ OpenHands-N  │──┘
-└──────────────┘
+User A ──> OpenHands Instance (port 30100)
+            ├── Conversation 1 (sandbox-1)
+            ├── Conversation 2 (sandbox-2)
+            └── Conversation N (sandbox-N)
+
+User B ──> OpenHands Instance (port 30101)
+            ├── Conversation 1 (sandbox-3)
+            └── Conversation 2 (sandbox-4)
+
+Shared ──> Validation Service
 ```
 
-- 多个 OpenHands 容器（按需创建）
-- 单个 Validation Service（共享）
-- 通过工作空间路径隔离
-
-## TODO
-
-- [ ] 完善验证服务的输入输出格式（等待验证服务规范）
-- [ ] 添加 OpenHands API 客户端（调用 OpenHands REST API）
-- [ ] 实现 System Prompt 构建器（注入 TM/QM 技能）
-- [ ] 添加容器生命周期监控
-- [ ] 实现容器池管理（可选优化）
-
-## 参考文档
-
-- [编程 Agent 集成设计](../../docs/02-modules/coding-agent-integration.md)
-- [语义层验证服务设计](../../docs/02-modules/semantic-layer-validation.md)
-- [完整工作流设计](../../docs/02-modules/semantic-layer-workflow.md)
+- 每个用户一个 OpenHands V1 容器 (按需创建)
+- 同一用户的多个会话复用同一容器
+- V1 API 管理会话生命周期 (sandbox)
+- 单个 Validation Service (共享)

@@ -1,5 +1,5 @@
 import { beforeAll, afterAll } from 'vitest';
-import { createClient } from '../src/api-client.js';
+import { createClient, CodingAgentClient } from '../src/api-client.js';
 import { TEST_CONFIG } from '../src/config.js';
 
 /**
@@ -7,6 +7,7 @@ import { TEST_CONFIG } from '../src/config.js';
  */
 
 let isServiceReady = false;
+let sharedClient: CodingAgentClient | null = null;
 
 beforeAll(async () => {
   console.log('=== Integration Tests Setup ===');
@@ -28,6 +29,15 @@ beforeAll(async () => {
     process.exit(1);
   }
 
+  // 登录获取 JWT token
+  try {
+    await client.login(TEST_CONFIG.auth.username, TEST_CONFIG.auth.password);
+    sharedClient = client;
+  } catch (error) {
+    console.error('✗ Login failed');
+    process.exit(1);
+  }
+
   console.log('=== Setup Complete ===\n');
 }, 30000);
 
@@ -36,4 +46,4 @@ afterAll(async () => {
   console.log('All tests completed');
 });
 
-export { isServiceReady };
+export { isServiceReady, sharedClient };

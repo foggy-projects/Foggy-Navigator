@@ -13,6 +13,8 @@ public interface ConversationRepository extends JpaRepository<ConversationEntity
 
     Optional<ConversationEntity> findByConversationId(String conversationId);
 
+    Optional<ConversationEntity> findByOhConversationId(String ohConversationId);
+
     boolean existsByConversationId(String conversationId);
 
     boolean existsBySandboxId(String sandboxId);

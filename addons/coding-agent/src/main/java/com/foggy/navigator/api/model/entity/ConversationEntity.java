@@ -26,6 +26,9 @@ public class ConversationEntity {
     @Column(length = 64)
     private String sandboxId;
 
+    @Column(length = 128)
+    private String ohConversationId;
+
     @Column(nullable = false, length = 64)
     private String userId;
 
@@ -53,9 +56,12 @@ public class ConversationEntity {
 
     public enum ConversationStatus {
         STARTING,
+        WAITING_FOR_SANDBOX,
+        PREPARING_REPOSITORY,
         READY,
         RUNNING,
         IDLE,
+        PAUSED,
         ERROR,
         STOPPED
     }

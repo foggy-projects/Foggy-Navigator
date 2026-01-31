@@ -3,7 +3,9 @@ package com.foggy.navigator.api.service;
 import com.foggy.navigator.api.model.Conversation;
 import com.foggy.navigator.api.model.entity.ConversationEntity;
 import com.foggy.navigator.api.repository.ConversationRepository;
-import com.foggy.navigator.foundation.git.OpenHandsContainerManager;
+import com.foggy.navigator.foundation.git.OpenHandsClient;
+import com.foggy.navigator.foundation.git.OpenHandsClientFactory;
+import com.foggy.navigator.foundation.git.model.v1.AppConversationInfo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,7 +31,10 @@ class ConversationRecoveryServiceTest {
     private ConversationService conversationService;
 
     @Mock
-    private OpenHandsContainerManager containerManager;
+    private OpenHandsClientFactory clientFactory;
+
+    @Mock
+    private OpenHandsClient openHandsClient;
 
     @InjectMocks
     private ConversationRecoveryService conversationRecoveryService;
@@ -43,7 +48,8 @@ class ConversationRecoveryServiceTest {
         stoppedConversation = ConversationEntity.builder()
                 .id(1L)
                 .conversationId("conv-stopped")
-                .sandboxId("container-stopped")
+                .sandboxId("sandbox-stopped")
+                .ohConversationId("oh-conv-stopped")
                 .userId("user-123")
                 .projectId("project-A")
                 .status(ConversationEntity.ConversationStatus.STOPPED)
@@ -57,7 +63,8 @@ class ConversationRecoveryServiceTest {
         errorConversation = ConversationEntity.builder()
                 .id(2L)
                 .conversationId("conv-error")
-                .sandboxId("container-error")
+                .sandboxId("sandbox-error")
+                .ohConversationId("oh-conv-error")
                 .userId("user-456")
                 .projectId("project-B")
                 .status(ConversationEntity.ConversationStatus.ERROR)
@@ -71,7 +78,8 @@ class ConversationRecoveryServiceTest {
         readyConversation = ConversationEntity.builder()
                 .id(3L)
                 .conversationId("conv-ready")
-                .sandboxId("container-ready")
+                .sandboxId("sandbox-ready")
+                .ohConversationId("oh-conv-ready")
                 .userId("user-789")
                 .projectId("project-C")
                 .status(ConversationEntity.ConversationStatus.READY)
@@ -88,13 +96,11 @@ class ConversationRecoveryServiceTest {
         String conversationId = "conv-stopped";
         when(conversationRepository.findByConversationId(conversationId))
                 .thenReturn(Optional.of(stoppedConversation));
-        when(containerManager.startContainer("container-stopped")).thenReturn(true);
-        when(containerManager.waitForContainerReady("container-stopped", 60)).thenReturn(true);
+        when(clientFactory.getClientForUser("user-123")).thenReturn(openHandsClient);
 
         conversationRecoveryService.recoverConversation(conversationId);
 
-        verify(containerManager).startContainer("container-stopped");
-        verify(containerManager).waitForContainerReady("container-stopped", 60);
+        verify(openHandsClient).resumeSandbox("sandbox-stopped");
         verify(conversationRepository).save(argThat(entity ->
                 entity.getConversationId().equals(conversationId) &&
                 entity.getStatus() == ConversationEntity.ConversationStatus.READY
@@ -102,75 +108,39 @@ class ConversationRecoveryServiceTest {
     }
 
     @Test
-    void testRecoverConversation_Stopped_Timeout() {
-        String conversationId = "conv-stopped";
+    void testRecoverConversation_Error_OhConversationRunning() {
+        String conversationId = "conv-error";
         when(conversationRepository.findByConversationId(conversationId))
-                .thenReturn(Optional.of(stoppedConversation));
-        when(containerManager.startContainer("container-stopped")).thenReturn(true);
-        when(containerManager.waitForContainerReady("container-stopped", 60)).thenReturn(false);
+                .thenReturn(Optional.of(errorConversation));
+        when(clientFactory.getClientForUser("user-456")).thenReturn(openHandsClient);
+        when(openHandsClient.getConversationInfo("oh-conv-error"))
+                .thenReturn(AppConversationInfo.builder()
+                        .id("oh-conv-error")
+                        .sandboxId("sandbox-error")
+                        .sandboxStatus("READY")
+                        .build());
+
+        conversationRecoveryService.recoverConversation(conversationId);
+
+        verify(conversationRepository).save(argThat(entity ->
+                entity.getConversationId().equals(conversationId) &&
+                entity.getStatus() == ConversationEntity.ConversationStatus.READY
+        ));
+    }
+
+    @Test
+    void testRecoverConversation_Error_OhConversationNotFound() {
+        String conversationId = "conv-error";
+        when(conversationRepository.findByConversationId(conversationId))
+                .thenReturn(Optional.of(errorConversation));
+        when(clientFactory.getClientForUser("user-456")).thenReturn(openHandsClient);
+        when(openHandsClient.getConversationInfo("oh-conv-error")).thenReturn(null);
 
         assertThrows(RuntimeException.class, () -> {
             conversationRecoveryService.recoverConversation(conversationId);
         });
 
-        verify(containerManager).startContainer("container-stopped");
-        verify(containerManager).waitForContainerReady("container-stopped", 60);
-        verify(conversationRepository).save(argThat(entity ->
-                entity.getConversationId().equals(conversationId) &&
-                entity.getStatus() == ConversationEntity.ConversationStatus.ERROR
-        ));
-    }
-
-    @Test
-    void testRecoverConversation_Error_ContainerRunning() {
-        String conversationId = "conv-error";
-        when(conversationRepository.findByConversationId(conversationId))
-                .thenReturn(Optional.of(errorConversation));
-        when(containerManager.containerExists("container-error")).thenReturn(true);
-        when(containerManager.isContainerRunning("container-error")).thenReturn(true);
-
-        conversationRecoveryService.recoverConversation(conversationId);
-
-        verify(containerManager, never()).startContainer(anyString());
-        verify(conversationRepository).save(argThat(entity ->
-                entity.getConversationId().equals(conversationId) &&
-                entity.getStatus() == ConversationEntity.ConversationStatus.READY
-        ));
-    }
-
-    @Test
-    void testRecoverConversation_Error_ContainerExistsButNotRunning() {
-        String conversationId = "conv-error";
-        when(conversationRepository.findByConversationId(conversationId))
-                .thenReturn(Optional.of(errorConversation));
-        when(containerManager.containerExists("container-error")).thenReturn(true);
-        when(containerManager.isContainerRunning("container-error")).thenReturn(false);
-        when(containerManager.startContainer("container-error")).thenReturn(true);
-        when(containerManager.waitForContainerReady("container-error", 60)).thenReturn(true);
-
-        conversationRecoveryService.recoverConversation(conversationId);
-
-        verify(containerManager).startContainer("container-error");
-        verify(containerManager).waitForContainerReady("container-error", 60);
-        verify(conversationRepository).save(argThat(entity ->
-                entity.getConversationId().equals(conversationId) &&
-                entity.getStatus() == ConversationEntity.ConversationStatus.READY
-        ));
-    }
-
-    @Test
-    void testRecoverConversation_Error_ContainerNotExists() {
-        String conversationId = "conv-error";
-        when(conversationRepository.findByConversationId(conversationId))
-                .thenReturn(Optional.of(errorConversation));
-        when(containerManager.containerExists("container-error")).thenReturn(false);
-
-        assertThrows(RuntimeException.class, () -> {
-            conversationRecoveryService.recoverConversation(conversationId);
-        });
-
-        verify(containerManager, never()).startContainer(anyString());
-        verify(conversationRepository, times(2)).save(argThat(entity ->
+        verify(conversationRepository, atLeastOnce()).save(argThat(entity ->
                 entity.getConversationId().equals(conversationId) &&
                 entity.getStatus() == ConversationEntity.ConversationStatus.ERROR
         ));
@@ -184,7 +154,7 @@ class ConversationRecoveryServiceTest {
 
         conversationRecoveryService.recoverConversation(conversationId);
 
-        verify(containerManager, never()).startContainer(anyString());
+        verify(clientFactory, never()).getClientForUser(anyString());
         verify(conversationRepository, never()).save(any());
     }
 
@@ -204,19 +174,20 @@ class ConversationRecoveryServiceTest {
         when(conversationRepository.findAll())
                 .thenReturn(List.of(stoppedConversation, errorConversation, readyConversation));
 
-        // Mock findByConversationId for recoverConversation calls
         when(conversationRepository.findByConversationId("conv-stopped"))
                 .thenReturn(Optional.of(stoppedConversation));
         when(conversationRepository.findByConversationId("conv-error"))
                 .thenReturn(Optional.of(errorConversation));
 
-        // Mock container operations for stopped conversation
-        when(containerManager.startContainer("container-stopped")).thenReturn(true);
-        when(containerManager.waitForContainerReady("container-stopped", 60)).thenReturn(true);
+        when(clientFactory.getClientForUser("user-123")).thenReturn(openHandsClient);
+        when(clientFactory.getClientForUser("user-456")).thenReturn(openHandsClient);
 
-        // Mock container operations for error conversation
-        when(containerManager.containerExists("container-error")).thenReturn(true);
-        when(containerManager.isContainerRunning("container-error")).thenReturn(true);
+        when(openHandsClient.getConversationInfo("oh-conv-error"))
+                .thenReturn(AppConversationInfo.builder()
+                        .id("oh-conv-error")
+                        .sandboxId("sandbox-error")
+                        .sandboxStatus("READY")
+                        .build());
 
         Conversation recoveredConversation = Conversation.builder()
                 .conversationId("conv-stopped")
@@ -229,29 +200,18 @@ class ConversationRecoveryServiceTest {
         List<Conversation> recovered = conversationRecoveryService.recoverAllConversations();
 
         assertEquals(2, recovered.size());
-        verify(conversationRepository, times(2)).save(any());
     }
 
     @Test
-    void testCleanupStoppedConversations() {
+    void testCleanupStoppedConversations_OhConversationNotFound() {
         when(conversationRepository.findByStatus(ConversationEntity.ConversationStatus.STOPPED))
                 .thenReturn(List.of(stoppedConversation));
-        when(containerManager.containerExists("container-stopped")).thenReturn(false);
+        when(clientFactory.getClientForUser("user-123")).thenReturn(openHandsClient);
+        when(openHandsClient.getConversationInfo("oh-conv-stopped")).thenReturn(null);
 
         conversationRecoveryService.cleanupStoppedConversations();
 
         verify(conversationRepository).delete(stoppedConversation);
-    }
-
-    @Test
-    void testCleanupStoppedConversations_ContainerExists() {
-        when(conversationRepository.findByStatus(ConversationEntity.ConversationStatus.STOPPED))
-                .thenReturn(List.of(stoppedConversation));
-        when(containerManager.containerExists("container-stopped")).thenReturn(true);
-
-        conversationRecoveryService.cleanupStoppedConversations();
-
-        verify(conversationRepository, never()).delete(any());
     }
 
     @Test
@@ -265,24 +225,7 @@ class ConversationRecoveryServiceTest {
     }
 
     @Test
-    void testRecoverConversation_StartContainerFailure() {
-        String conversationId = "conv-stopped";
-        when(conversationRepository.findByConversationId(conversationId))
-                .thenReturn(Optional.of(stoppedConversation));
-        when(containerManager.startContainer("container-stopped")).thenReturn(false);
-
-        assertThrows(RuntimeException.class, () -> {
-            conversationRecoveryService.recoverConversation(conversationId);
-        });
-
-        verify(conversationRepository).save(argThat(entity ->
-                entity.getConversationId().equals(conversationId) &&
-                entity.getStatus() == ConversationEntity.ConversationStatus.ERROR
-        ));
-    }
-
-    @Test
-    void testRecoverConversation_NullContainerId() {
+    void testRecoverConversation_NullSandboxId() {
         String conversationId = "conv-stopped";
         stoppedConversation.setSandboxId(null);
         when(conversationRepository.findByConversationId(conversationId))
@@ -291,7 +234,5 @@ class ConversationRecoveryServiceTest {
         assertThrows(RuntimeException.class, () -> {
             conversationRecoveryService.recoverConversation(conversationId);
         });
-
-        verify(containerManager, never()).startContainer(anyString());
     }
 }

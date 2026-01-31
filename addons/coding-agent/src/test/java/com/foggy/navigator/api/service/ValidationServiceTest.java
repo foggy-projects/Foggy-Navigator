@@ -28,7 +28,7 @@ import static org.mockito.Mockito.*;
 class ValidationServiceTest {
 
     @Mock
-    private OpenHandsClientFactory openHandsClientFactory;
+    private OpenHandsClientFactory clientFactory;
 
     @Mock
     private OpenHandsClient openHandsClient;
@@ -57,21 +57,23 @@ class ValidationServiceTest {
     @Test
     void testTriggerValidation_Success() {
         String conversationId = "conv-123";
-        String sandboxId = "sandbox-xyz";
+        String userId = "user-123";
 
         Conversation conversation = Conversation.builder()
                 .conversationId(conversationId)
-                .sandboxId(sandboxId)
+                .sandboxId("sandbox-xyz")
+                .ohConversationId("oh-conv-123")
+                .userId(userId)
                 .status(Conversation.ConversationStatus.READY)
                 .build();
 
         when(conversationService.getConversation(conversationId)).thenReturn(conversation);
-        when(openHandsClientFactory.getClient(sandboxId)).thenReturn(openHandsClient);
+        when(clientFactory.getClientForUser(userId)).thenReturn(openHandsClient);
         when(messageService.getMessages(conversationId, 10)).thenReturn(List.of());
 
         validationService.triggerValidation(conversationId);
 
-        verify(openHandsClient).post(eq("/app-conversations/" + conversationId + "/validate"), anyMap(), eq(Void.class));
+        verify(openHandsClient).postRaw(eq("/api/conversations/oh-conv-123/message"), anyMap(), eq(Object.class));
 
         ArgumentCaptor<Event> eventCaptor = ArgumentCaptor.forClass(Event.class);
         verify(eventPublisher).publishEvent(eventCaptor.capture());
@@ -90,7 +92,7 @@ class ValidationServiceTest {
 
         validationService.triggerValidation(conversationId);
 
-        verify(openHandsClient, never()).post(anyString(), any(), any());
+        verify(openHandsClient, never()).postRaw(anyString(), any(), any());
 
         ArgumentCaptor<Event> eventCaptor = ArgumentCaptor.forClass(Event.class);
         verify(eventPublisher).publishEvent(eventCaptor.capture());
@@ -106,6 +108,7 @@ class ValidationServiceTest {
 
         Conversation conversation = Conversation.builder()
                 .conversationId(conversationId)
+                .userId("user-123")
                 .status(Conversation.ConversationStatus.STARTING)
                 .build();
 
@@ -113,7 +116,7 @@ class ValidationServiceTest {
 
         validationService.triggerValidation(conversationId);
 
-        verify(openHandsClient, never()).post(anyString(), any(), any());
+        verify(openHandsClient, never()).postRaw(anyString(), any(), any());
         verify(eventPublisher, never()).publishEvent(any());
     }
 
@@ -125,25 +128,27 @@ class ValidationServiceTest {
         validationService.triggerValidation(conversationId);
 
         verify(conversationService, never()).getConversation(anyString());
-        verify(openHandsClient, never()).post(anyString(), any(), any());
+        verify(openHandsClient, never()).postRaw(anyString(), any(), any());
     }
 
     @Test
     void testTriggerValidation_Failure() {
         String conversationId = "conv-123";
-        String sandboxId = "sandbox-xyz";
+        String userId = "user-123";
 
         Conversation conversation = Conversation.builder()
                 .conversationId(conversationId)
-                .sandboxId(sandboxId)
+                .sandboxId("sandbox-xyz")
+                .ohConversationId("oh-conv-123")
+                .userId(userId)
                 .status(Conversation.ConversationStatus.READY)
                 .build();
 
         when(conversationService.getConversation(conversationId)).thenReturn(conversation);
-        when(openHandsClientFactory.getClient(sandboxId)).thenReturn(openHandsClient);
+        when(clientFactory.getClientForUser(userId)).thenReturn(openHandsClient);
         when(messageService.getMessages(conversationId, 10)).thenReturn(List.of());
         doThrow(new RuntimeException("API Error"))
-                .when(openHandsClient).post(anyString(), any(), eq(Void.class));
+                .when(openHandsClient).postRaw(anyString(), any(), eq(Object.class));
 
         validationService.triggerValidation(conversationId);
 
@@ -215,11 +220,13 @@ class ValidationServiceTest {
     @Test
     void testGetValidationResults_Success() {
         String conversationId = "conv-123";
-        String sandboxId = "sandbox-xyz";
+        String userId = "user-123";
 
         Conversation conversation = Conversation.builder()
                 .conversationId(conversationId)
-                .sandboxId(sandboxId)
+                .sandboxId("sandbox-xyz")
+                .ohConversationId("oh-conv-123")
+                .userId(userId)
                 .build();
 
         OpenHandsEvent event1 = OpenHandsEvent.builder()
@@ -235,9 +242,9 @@ class ValidationServiceTest {
                 .build();
 
         when(conversationService.getConversation(conversationId)).thenReturn(conversation);
-        when(openHandsClientFactory.getClient(sandboxId)).thenReturn(openHandsClient);
+        when(clientFactory.getClientForUser(userId)).thenReturn(openHandsClient);
         when(openHandsClient.searchEvents(
-                eq(conversationId),
+                eq("oh-conv-123"),
                 eq("VALIDATION_RESULT"),
                 isNull(),
                 isNull(),
@@ -256,17 +263,19 @@ class ValidationServiceTest {
     @Test
     void testGetValidationResults_Empty() {
         String conversationId = "conv-123";
-        String sandboxId = "sandbox-xyz";
+        String userId = "user-123";
 
         Conversation conversation = Conversation.builder()
                 .conversationId(conversationId)
-                .sandboxId(sandboxId)
+                .sandboxId("sandbox-xyz")
+                .ohConversationId("oh-conv-123")
+                .userId(userId)
                 .build();
 
         when(conversationService.getConversation(conversationId)).thenReturn(conversation);
-        when(openHandsClientFactory.getClient(sandboxId)).thenReturn(openHandsClient);
+        when(clientFactory.getClientForUser(userId)).thenReturn(openHandsClient);
         when(openHandsClient.searchEvents(
-                eq(conversationId),
+                eq("oh-conv-123"),
                 eq("VALIDATION_RESULT"),
                 isNull(),
                 isNull(),
@@ -283,15 +292,17 @@ class ValidationServiceTest {
     @Test
     void testGetValidationResults_Failure() {
         String conversationId = "conv-123";
-        String sandboxId = "sandbox-xyz";
+        String userId = "user-123";
 
         Conversation conversation = Conversation.builder()
                 .conversationId(conversationId)
-                .sandboxId(sandboxId)
+                .sandboxId("sandbox-xyz")
+                .ohConversationId("oh-conv-123")
+                .userId(userId)
                 .build();
 
         when(conversationService.getConversation(conversationId)).thenReturn(conversation);
-        when(openHandsClientFactory.getClient(sandboxId)).thenReturn(openHandsClient);
+        when(clientFactory.getClientForUser(userId)).thenReturn(openHandsClient);
         when(openHandsClient.searchEvents(
                 anyString(),
                 anyString(),

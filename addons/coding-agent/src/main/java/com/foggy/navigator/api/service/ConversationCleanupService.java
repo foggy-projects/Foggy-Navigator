@@ -1,9 +1,10 @@
 package com.foggy.navigator.api.service;
 
-import com.foggy.navigator.api.model.Conversation;
 import com.foggy.navigator.api.model.entity.ConversationEntity;
 import com.foggy.navigator.api.repository.ConversationRepository;
-import com.foggy.navigator.foundation.git.OpenHandsContainerManager;
+import com.foggy.navigator.foundation.git.OpenHandsClient;
+import com.foggy.navigator.foundation.git.OpenHandsClientFactory;
+import com.foggy.navigator.foundation.git.model.v1.AppConversationInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,20 +31,17 @@ public class ConversationCleanupService {
     private ConversationRepository conversationRepository;
 
     @Autowired
-    private OpenHandsContainerManager containerManager;
+    private OpenHandsClientFactory clientFactory;
 
     @Value("${foggy.coding-agent.cleanup.idle-timeout:3600000}")
-    private long idleTimeout; // 默认 1 小时
+    private long idleTimeout;
 
     @Value("${foggy.coding-agent.cleanup.max-age:86400000}")
-    private long maxAge; // 默认 1 天
+    private long maxAge;
 
     private int cleanedIdleCount = 0;
     private int cleanedExpiredCount = 0;
 
-    /**
-     * 清理空闲会话 - 每 5 分钟执行一次
-     */
     @Scheduled(fixedDelayString = "${foggy.coding-agent.cleanup.interval:300000}", initialDelay = 60000)
     @Transactional
     public void cleanupIdleSessions() {
@@ -77,9 +75,6 @@ public class ConversationCleanupService {
         }
     }
 
-    /**
-     * 清理过期会话 - 每 1 小时执行一次
-     */
     @Scheduled(fixedDelayString = "${foggy.coding-agent.cleanup.max-age-check-interval:3600000}", initialDelay = 120000)
     @Transactional
     public void cleanupExpiredSessions() {
@@ -110,9 +105,6 @@ public class ConversationCleanupService {
         }
     }
 
-    /**
-     * 健康检查 - 每 1 分钟执行一次
-     */
     @Scheduled(fixedDelayString = "${foggy.coding-agent.health.check-interval:60000}", initialDelay = 30000)
     @Transactional
     public void performHealthChecks() {
@@ -125,11 +117,12 @@ public class ConversationCleanupService {
             int syncedCount = 0;
             for (ConversationEntity session : runningSessions) {
                 try {
-                    if (session.getSandboxId() != null) {
-                        boolean exists = containerManager.containerExists(session.getSandboxId());
-                        if (!exists) {
-                            log.warn("容器不存在但状态为 READY，同步状态: conversationId={}, sandboxId={}",
-                                    session.getConversationId(), session.getSandboxId());
+                    if (session.getOhConversationId() != null && session.getUserId() != null) {
+                        OpenHandsClient client = clientFactory.getClientForUser(session.getUserId());
+                        AppConversationInfo info = client.getConversationInfo(session.getOhConversationId());
+                        if (info == null || "ERROR".equalsIgnoreCase(info.getSandboxStatus())) {
+                            log.warn("OH 会话异常，同步状态: conversationId={}, ohConversationId={}",
+                                    session.getConversationId(), session.getOhConversationId());
                             session.setStatus(ConversationEntity.ConversationStatus.ERROR);
                             session.setUpdatedAt(LocalDateTime.now());
                             conversationRepository.save(session);
@@ -149,9 +142,6 @@ public class ConversationCleanupService {
         }
     }
 
-    /**
-     * 获取清理统计信息
-     */
     public CleanupStatistics getCleanupStatistics() {
         return CleanupStatistics.builder()
                 .cleanedIdleCount(cleanedIdleCount)

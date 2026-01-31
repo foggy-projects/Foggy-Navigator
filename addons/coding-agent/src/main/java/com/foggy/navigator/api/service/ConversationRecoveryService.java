@@ -3,7 +3,9 @@ package com.foggy.navigator.api.service;
 import com.foggy.navigator.api.model.Conversation;
 import com.foggy.navigator.api.model.entity.ConversationEntity;
 import com.foggy.navigator.api.repository.ConversationRepository;
-import com.foggy.navigator.foundation.git.OpenHandsContainerManager;
+import com.foggy.navigator.foundation.git.OpenHandsClient;
+import com.foggy.navigator.foundation.git.OpenHandsClientFactory;
+import com.foggy.navigator.foundation.git.model.v1.AppConversationInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,7 +27,7 @@ public class ConversationRecoveryService {
     private ConversationService conversationService;
 
     @Autowired
-    private OpenHandsContainerManager containerManager;
+    private OpenHandsClientFactory clientFactory;
 
     @Value("${foggy.coding-agent.recovery.auto-recover-on-startup:false}")
     private boolean autoRecoverOnStartup;
@@ -44,9 +46,10 @@ public class ConversationRecoveryService {
             return;
         }
 
-        if (entity.getStatus() == ConversationEntity.ConversationStatus.STOPPED) {
-            log.info("会话已停止，尝试重启容器: conversationId={}", conversationId);
-            restartContainer(entity);
+        if (entity.getStatus() == ConversationEntity.ConversationStatus.STOPPED ||
+            entity.getStatus() == ConversationEntity.ConversationStatus.PAUSED) {
+            log.info("会话已停止/暂停，尝试恢复 sandbox: conversationId={}", conversationId);
+            resumeSandbox(entity);
         } else if (entity.getStatus() == ConversationEntity.ConversationStatus.ERROR) {
             log.warn("会话处于错误状态，尝试恢复: conversationId={}", conversationId);
             recoverFromError(entity);
@@ -61,6 +64,7 @@ public class ConversationRecoveryService {
 
         List<Conversation> recovered = entities.stream()
                 .filter(entity -> entity.getStatus() == ConversationEntity.ConversationStatus.STOPPED ||
+                                 entity.getStatus() == ConversationEntity.ConversationStatus.PAUSED ||
                                  entity.getStatus() == ConversationEntity.ConversationStatus.ERROR)
                 .map(entity -> {
                     try {
@@ -78,35 +82,28 @@ public class ConversationRecoveryService {
         return recovered;
     }
 
-    private void restartContainer(ConversationEntity entity) {
+    private void resumeSandbox(ConversationEntity entity) {
         try {
-            String containerId = entity.getSandboxId();
-            if (containerId == null || containerId.isEmpty()) {
-                throw new IllegalStateException("容器ID为空，无法重启");
+            String sandboxId = entity.getSandboxId();
+            if (sandboxId == null || sandboxId.isEmpty()) {
+                throw new IllegalStateException("SandboxId 为空，无法恢复");
             }
 
-            log.info("重启容器: containerId={}", containerId);
-            boolean started = containerManager.startContainer(containerId);
+            log.info("恢复 sandbox: sandboxId={}", sandboxId);
+            OpenHandsClient client = clientFactory.getClientForUser(entity.getUserId());
+            client.resumeSandbox(sandboxId);
 
-            if (started) {
-                boolean ready = containerManager.waitForContainerReady(containerId, 60);
-                if (ready) {
-                    entity.setStatus(ConversationEntity.ConversationStatus.READY);
-                    entity.setUpdatedAt(LocalDateTime.now());
-                    conversationRepository.save(entity);
-                    log.info("容器重启成功: conversationId={}, containerId={}", entity.getConversationId(), containerId);
-                } else {
-                    throw new RuntimeException("容器启动超时");
-                }
-            } else {
-                throw new RuntimeException("容器启动失败");
-            }
+            entity.setStatus(ConversationEntity.ConversationStatus.READY);
+            entity.setUpdatedAt(LocalDateTime.now());
+            conversationRepository.save(entity);
+            log.info("Sandbox 恢复成功: conversationId={}, sandboxId={}", entity.getConversationId(), sandboxId);
+
         } catch (Exception e) {
-            log.error("重启容器失败: conversationId={}", entity.getConversationId(), e);
+            log.error("恢复 sandbox 失败: conversationId={}", entity.getConversationId(), e);
             entity.setStatus(ConversationEntity.ConversationStatus.ERROR);
             entity.setUpdatedAt(LocalDateTime.now());
             conversationRepository.save(entity);
-            throw new RuntimeException("重启容器失败", e);
+            throw new RuntimeException("恢复 sandbox 失败", e);
         }
     }
 
@@ -114,19 +111,25 @@ public class ConversationRecoveryService {
         try {
             log.info("尝试从错误状态恢复: conversationId={}", entity.getConversationId());
 
-            String containerId = entity.getSandboxId();
-            if (containerId != null && !containerId.isEmpty()) {
-                boolean exists = containerManager.containerExists(containerId);
-                if (exists) {
-                    boolean running = containerManager.isContainerRunning(containerId);
-                    if (running) {
+            String ohConversationId = entity.getOhConversationId();
+            if (ohConversationId != null && entity.getUserId() != null) {
+                OpenHandsClient client = clientFactory.getClientForUser(entity.getUserId());
+                AppConversationInfo info = client.getConversationInfo(ohConversationId);
+                if (info != null) {
+                    String sandboxStatus = info.getSandboxStatus();
+                    if ("READY".equalsIgnoreCase(sandboxStatus) || "running".equalsIgnoreCase(sandboxStatus)) {
                         entity.setStatus(ConversationEntity.ConversationStatus.READY);
                         entity.setUpdatedAt(LocalDateTime.now());
                         conversationRepository.save(entity);
-                        log.info("容器正在运行，恢复成功: conversationId={}", entity.getConversationId());
+                        log.info("OH 会话正常运行，恢复成功: conversationId={}", entity.getConversationId());
                         return;
-                    } else {
-                        restartContainer(entity);
+                    }
+                    if ("paused".equalsIgnoreCase(sandboxStatus)) {
+                        client.resumeSandbox(entity.getSandboxId());
+                        entity.setStatus(ConversationEntity.ConversationStatus.READY);
+                        entity.setUpdatedAt(LocalDateTime.now());
+                        conversationRepository.save(entity);
+                        log.info("Sandbox 已恢复: conversationId={}", entity.getConversationId());
                         return;
                     }
                 }
@@ -135,7 +138,7 @@ public class ConversationRecoveryService {
             entity.setStatus(ConversationEntity.ConversationStatus.ERROR);
             entity.setUpdatedAt(LocalDateTime.now());
             conversationRepository.save(entity);
-            throw new RuntimeException("无法从错误状态恢复，容器不存在或已损坏");
+            throw new RuntimeException("无法从错误状态恢复，OH 会话不存在或已损坏");
 
         } catch (Exception e) {
             log.error("从错误状态恢复失败: conversationId={}", entity.getConversationId(), e);
@@ -156,11 +159,11 @@ public class ConversationRecoveryService {
 
         for (ConversationEntity entity : stoppedEntities) {
             try {
-                String containerId = entity.getSandboxId();
-                if (containerId != null && !containerId.isEmpty()) {
-                    boolean exists = containerManager.containerExists(containerId);
-                    if (!exists) {
-                        log.info("清理不存在的容器: conversationId={}, containerId={}", entity.getConversationId(), containerId);
+                if (entity.getOhConversationId() != null && entity.getUserId() != null) {
+                    OpenHandsClient client = clientFactory.getClientForUser(entity.getUserId());
+                    AppConversationInfo info = client.getConversationInfo(entity.getOhConversationId());
+                    if (info == null || "ERROR".equalsIgnoreCase(info.getSandboxStatus())) {
+                        log.info("清理不可达的会话: conversationId={}", entity.getConversationId());
                         conversationRepository.delete(entity);
                     }
                 }
@@ -172,9 +175,6 @@ public class ConversationRecoveryService {
         log.info("清理完成");
     }
 
-    /**
-     * 删除会话（支持强制删除）
-     */
     @Transactional
     public void deleteConversation(String conversationId, boolean forceDelete) {
         log.info("删除会话: conversationId={}, forceDelete={}", conversationId, forceDelete);
@@ -191,9 +191,6 @@ public class ConversationRecoveryService {
         }
     }
 
-    /**
-     * 删除过期会话
-     */
     @Transactional
     public int deleteExpiredConversations(LocalDateTime cutoffTime) {
         log.info("删除过期会话: cutoffTime={}", cutoffTime);
@@ -216,9 +213,6 @@ public class ConversationRecoveryService {
         return deletedCount;
     }
 
-    /**
-     * 获取清理统计信息
-     */
     public CleanupStatistics getCleanupStatistics() {
         long totalCount = conversationRepository.count();
         long stoppedCount = conversationRepository.findByStatus(ConversationEntity.ConversationStatus.STOPPED).size();

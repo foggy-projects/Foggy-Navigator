@@ -65,7 +65,7 @@ class EnvironmentControllerTest {
                 .thenReturn(mockEnvironment);
 
         // When & Then
-        mockMvc.perform(post("/api/environments")
+        mockMvc.perform(post("/api/v1/environments")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
@@ -87,7 +87,7 @@ class EnvironmentControllerTest {
                 .build();
 
         // When & Then
-        mockMvc.perform(post("/api/environments")
+        mockMvc.perform(post("/api/v1/environments")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
@@ -110,7 +110,7 @@ class EnvironmentControllerTest {
                 .thenReturn(mockEnvironment);
 
         // When & Then
-        mockMvc.perform(get("/api/environments/env-123"))
+        mockMvc.perform(get("/api/v1/environments/env-123"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value("env-123"));
@@ -125,7 +125,7 @@ class EnvironmentControllerTest {
                 .thenThrow(new RuntimeException("环境不存在"));
 
         // When & Then
-        mockMvc.perform(get("/api/environments/non-existent"))
+        mockMvc.perform(get("/api/v1/environments/non-existent"))
                 .andExpect(status().isNotFound());
 
         verify(environmentService).getEnvironment("non-existent");
@@ -137,7 +137,7 @@ class EnvironmentControllerTest {
         doNothing().when(environmentService).destroyEnvironment("env-123");
 
         // When & Then
-        mockMvc.perform(delete("/api/environments/env-123"))
+        mockMvc.perform(delete("/api/v1/environments/env-123"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.message").value("环境已销毁"));
@@ -152,7 +152,7 @@ class EnvironmentControllerTest {
                 .when(environmentService).destroyEnvironment("env-123");
 
         // When & Then
-        mockMvc.perform(delete("/api/environments/env-123"))
+        mockMvc.perform(delete("/api/v1/environments/env-123"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.errorCode").value("DESTROY_FAILED"));

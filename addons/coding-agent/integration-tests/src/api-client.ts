@@ -25,18 +25,36 @@ export class CodingAgentClient {
       }
     });
 
-    // 添加响应拦截器用于错误处理
+    // 添加响应拦截器：将 AxiosError 转为可序列化的 Error（避免 Vitest DataCloneError）
     this.client.interceptors.response.use(
       response => response,
       (error: AxiosError) => {
-        console.error('API Error:', {
-          url: error.config?.url,
-          status: error.response?.status,
-          data: error.response?.data
-        });
-        throw error;
+        const status = error.response?.status;
+        const data = error.response?.data;
+        const url = error.config?.url;
+        console.error('API Error:', { url, status, data });
+        const apiError: any = new Error(`API Error: ${error.message}`);
+        apiError.response = { status, data };
+        apiError.url = url;
+        throw apiError;
       }
     );
+  }
+
+  /**
+   * 登录并设置 JWT token
+   */
+  async login(username: string, password: string): Promise<void> {
+    const response = await this.client.post('/api/v1/auth/login', {
+      username,
+      password
+    });
+    const token = response.data?.data?.token;
+    if (!token) {
+      throw new Error('Login failed: no token returned');
+    }
+    this.client.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    console.log('✓ Authenticated as', username);
   }
 
   /**
@@ -162,7 +180,10 @@ export class CodingAgentClient {
       url.searchParams.set('lastEventId', lastEventId);
     }
 
-    const eventSource = new EventSource(url.toString());
+    const authHeader = this.client.defaults.headers.common['Authorization'] as string | undefined;
+    const eventSource = new EventSource(url.toString(), {
+      headers: authHeader ? { Authorization: authHeader } : {}
+    } as any);
 
     eventSource.onopen = () => {
       console.log('SSE connection opened');
@@ -248,4 +269,13 @@ export class CodingAgentClient {
  */
 export function createClient(baseURL?: string): CodingAgentClient {
   return new CodingAgentClient(baseURL);
+}
+
+/**
+ * 创建已认证的客户端实例
+ */
+export async function createAuthenticatedClient(baseURL?: string): Promise<CodingAgentClient> {
+  const client = new CodingAgentClient(baseURL);
+  await client.login(TEST_CONFIG.auth.username, TEST_CONFIG.auth.password);
+  return client;
 }

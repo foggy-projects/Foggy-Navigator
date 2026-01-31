@@ -21,7 +21,7 @@ import java.util.Map;
 public class ValidationService {
 
     @Autowired
-    private OpenHandsClientFactory openHandsClientFactory;
+    private OpenHandsClientFactory clientFactory;
 
     @Autowired
     private ConversationService conversationService;
@@ -52,7 +52,6 @@ public class ValidationService {
         log.info("触发验证: conversationId={}", conversationId);
 
         try {
-            // 检查 Conversation 是否存在
             Conversation conversation = conversationService.getConversation(conversationId);
             if (conversation == null) {
                 log.warn("对话不存在，跳过验证: conversationId={}", conversationId);
@@ -60,29 +59,27 @@ public class ValidationService {
                 return;
             }
 
-            // 检查容器是否就绪
             if (conversation.getStatus() != Conversation.ConversationStatus.READY) {
                 log.warn("对话状态不是 READY，跳过验证: conversationId={}, status={}",
                         conversationId, conversation.getStatus());
                 return;
             }
 
-            // 获取最新消息作为验证上下文
             List<Message> messages = messageService.getMessages(conversationId, 10);
             Map<String, Object> context = Map.of(
                     "messageCount", messages.size(),
                     "timestamp", System.currentTimeMillis()
             );
 
-            // 获取最新消息内容，发送到 OpenHands
             String messageContent = messages.isEmpty() ? "" : messages.get(0).getContent();
 
-            OpenHandsClient client = getClientForConversation(conversationId);
-            // 使用 OpenHands 的消息 API: POST /api/conversations/{id}/message
+            OpenHandsClient client = getClientForConversation(conversation);
+            String ohConvId = conversation.getOhConversationId() != null
+                    ? conversation.getOhConversationId()
+                    : conversationId;
             Map<String, Object> messageRequest = Map.of("message", messageContent);
-            client.postRaw("/api/conversations/" + conversationId + "/message", messageRequest, Object.class);
+            client.postRaw("/api/conversations/" + ohConvId + "/message", messageRequest, Object.class);
 
-            // 使用 ApplicationEventPublisher 发布事件
             Event event = Event.builder()
                     .conversationId(conversationId)
                     .kind(Event.EventKind.VALIDATION_TRIGGERED)
@@ -101,13 +98,11 @@ public class ValidationService {
         log.debug("获取验证状态: conversationId={}", conversationId);
 
         try {
-            // 查询最新的 VALIDATION_RESULT 事件
             List<Event> events = eventService.getEventsByKind(conversationId, Event.EventKind.VALIDATION_RESULT);
             if (events != null && !events.isEmpty()) {
-                return events.get(0); // 返回最新的验证结果
+                return events.get(0);
             }
 
-            // 如果没有 VALIDATION_RESULT，检查是否有 VALIDATION_TRIGGERED
             events = eventService.getEventsByKind(conversationId, Event.EventKind.VALIDATION_TRIGGERED);
             if (events != null && !events.isEmpty()) {
                 return Event.builder()
@@ -117,7 +112,6 @@ public class ValidationService {
                         .build();
             }
 
-            // 没有任何验证事件
             return Event.builder()
                     .conversationId(conversationId)
                     .kind(Event.EventKind.VALIDATION_RESULT)
@@ -137,9 +131,17 @@ public class ValidationService {
         log.info("获取验证结果: conversationId={}", conversationId);
 
         try {
-            OpenHandsClient client = getClientForConversation(conversationId);
+            Conversation conversation = conversationService.getConversation(conversationId);
+            if (conversation == null) {
+                throw new RuntimeException("对话不存在: " + conversationId);
+            }
+            OpenHandsClient client = getClientForConversation(conversation);
+            String ohConvId = conversation.getOhConversationId() != null
+                    ? conversation.getOhConversationId()
+                    : conversationId;
+
             List<com.foggy.navigator.foundation.git.model.OpenHandsEvent> events = client.searchEvents(
-                    conversationId,
+                    ohConvId,
                     "VALIDATION_RESULT",
                     null,
                     null,
@@ -164,15 +166,10 @@ public class ValidationService {
         eventPublisher.publishEvent(errorEvent);
     }
 
-    private OpenHandsClient getClientForConversation(String conversationId) {
-        Conversation conversation = conversationService.getConversation(conversationId);
-        if (conversation == null) {
-            throw new RuntimeException("对话不存在: " + conversationId);
+    private OpenHandsClient getClientForConversation(Conversation conversation) {
+        if (conversation.getUserId() == null) {
+            throw new RuntimeException("对话用户ID为空: " + conversation.getConversationId());
         }
-        String sandboxId = conversation.getSandboxId();
-        if (sandboxId == null) {
-            throw new RuntimeException("对话沙箱未就绪: " + conversationId);
-        }
-        return openHandsClientFactory.getClient(sandboxId);
+        return clientFactory.getClientForUser(conversation.getUserId());
     }
 }

@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import { createClient } from '../src/api-client.js';
+import { describe, test, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { createAuthenticatedClient, CodingAgentClient } from '../src/api-client.js';
 import { generateTestUserId, generateTestProjectId, TEST_CONFIG } from '../src/config.js';
 import type { Conversation } from '../src/types.js';
 
@@ -15,8 +15,12 @@ import type { Conversation } from '../src/types.js';
  * 6. 验证清理后无法访问
  */
 describe('03 - 会话清理和恢复测试 (Cleanup & Recovery)', () => {
-  const client = createClient();
+  let client: CodingAgentClient;
   const createdConversations: string[] = [];
+
+  beforeAll(async () => {
+    client = await createAuthenticatedClient();
+  });
 
   const userId = generateTestUserId();
   const projectId = generateTestProjectId();
@@ -158,7 +162,7 @@ describe('03 - 会话清理和恢复测试 (Cleanup & Recovery)', () => {
       const stopped = await client.getConversation(conversation.conversationId);
       if (stopped) {
         console.log(`Conversation status after stop: ${stopped.status}`);
-        expect(['STOPPED', 'IDLE', 'ERROR']).toContain(stopped.status);
+        expect(['STOPPED', 'PAUSED', 'IDLE', 'ERROR']).toContain(stopped.status);
       }
     } catch (error) {
       // 某些情况下停止后可能无法获取

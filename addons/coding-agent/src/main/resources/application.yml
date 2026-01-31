@@ -45,12 +45,15 @@ management:
 # Foggy Navigator 配置
 foggy:
   coding-agent:
-    # OpenHands 配置
+    # OpenHands 配置 (per-user instance)
     openhands:
       image: ghcr.io/all-hands-ai/openhands:main
       workspace-base: /workspace
-      container-timeout: 1800  # 容器超时时间（秒）
-      max-concurrent: 10       # 最大并发容器数
+      port-range-start: 30100
+      port-range-end: 36000
+
+      # 用户实例健康检查间隔（毫秒）
+      instance-health-check-interval: 30000
 
       # LLM 配置
       api-key: ${OPENAI_API_KEY:sk-test-key}
@@ -79,7 +82,6 @@ foggy:
       idle-timeout: 3600000  # 空闲会话超时时间（毫秒，默认 1 小时）
       max-age: 86400000  # 会话最大存活时间（毫秒，默认 1 天）
       max-age-check-interval: 3600000  # 过期会话检查间隔（毫秒，默认 1 小时）
-      orphan-interval: 600000  # 孤儿容器检查间隔（毫秒，默认 10 分钟）
 
     # 健康检查配置
     health:

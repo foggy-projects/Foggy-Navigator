@@ -17,6 +17,12 @@ export const TEST_CONFIG = {
   autoCleanup: true,
   cleanupTimeout: 5000,
 
+  // 认证配置
+  auth: {
+    username: process.env.TEST_USERNAME || 'root',
+    password: process.env.TEST_PASSWORD || 'root123'
+  },
+
   // 测试数据
   testRepo: {
     gitRepoUrl: 'https://github.com/test/semantic-layer.git',

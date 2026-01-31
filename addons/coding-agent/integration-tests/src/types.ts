@@ -17,6 +17,7 @@ export interface CreateConversationRequest {
 export interface Conversation {
   conversationId: string;
   sandboxId?: string;
+  ohConversationId?: string;
   userId: string;
   projectId: string;
   status: ConversationStatus;
@@ -29,9 +30,12 @@ export interface Conversation {
 
 export type ConversationStatus =
   | 'STARTING'
+  | 'WAITING_FOR_SANDBOX'
+  | 'PREPARING_REPOSITORY'
   | 'READY'
   | 'RUNNING'
   | 'IDLE'
+  | 'PAUSED'
   | 'ERROR'
   | 'STOPPED';
 

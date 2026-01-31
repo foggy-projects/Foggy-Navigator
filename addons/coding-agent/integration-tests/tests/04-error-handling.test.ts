@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import { createClient } from '../src/api-client.js';
+import { describe, test, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { createAuthenticatedClient, CodingAgentClient } from '../src/api-client.js';
 import { generateTestUserId, generateTestProjectId, TEST_CONFIG } from '../src/config.js';
 import type { Conversation } from '../src/types.js';
 
@@ -15,8 +15,12 @@ import type { Conversation } from '../src/types.js';
  * 6. 边界情况处理
  */
 describe('04 - 错误处理和并发测试 (Error Handling & Concurrency)', () => {
-  const client = createClient();
+  let client: CodingAgentClient;
   const createdConversations: string[] = [];
+
+  beforeAll(async () => {
+    client = await createAuthenticatedClient();
+  });
 
   const userId = generateTestUserId();
   const projectId = generateTestProjectId();

@@ -4,12 +4,13 @@ import com.foggy.navigator.api.model.CreateConversationRequest;
 import com.foggy.navigator.foundation.git.model.OpenHandsConversationResponse;
 import com.foggy.navigator.foundation.git.model.OpenHandsEvent;
 import com.foggy.navigator.foundation.git.model.OpenHandsMessageResponse;
+import com.foggy.navigator.foundation.git.model.v1.AppConversationInfo;
+import com.foggy.navigator.foundation.git.model.v1.AppConversationStartRequest;
+import com.foggy.navigator.foundation.git.model.v1.AppConversationStartTask;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
-import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -55,9 +56,6 @@ public class OpenHandsClient {
         }
     }
 
-    /**
-     * 发送 POST 请求，使用原始路径（不添加 /api/v1 前缀）
-     */
     public <T> T postRaw(String path, Object request, Class<T> responseType) {
         try {
             String url = openHandsApiUrl + path;
@@ -117,6 +115,53 @@ public class OpenHandsClient {
             throw new RuntimeException("OpenHands API 调用异常", e);
         }
     }
+
+    // ===== V1 API Methods =====
+
+    public AppConversationStartTask startConversation(AppConversationStartRequest req) {
+        log.info("启动 OH V1 会话: repo={}, branch={}", req.getSelectedRepository(), req.getSelectedBranch());
+        return post("/app-conversations", req, AppConversationStartTask.class);
+    }
+
+    public AppConversationInfo getConversationInfo(String ohConversationId) {
+        log.info("获取 OH V1 会话信息: ohConversationId={}", ohConversationId);
+        // V1 API: GET /api/v1/app-conversations?ids=[id]
+        List result = get("/app-conversations?ids=" + ohConversationId, List.class);
+        if (result != null && !result.isEmpty()) {
+            Object first = result.get(0);
+            if (first instanceof Map) {
+                Map<String, Object> map = (Map<String, Object>) first;
+                return AppConversationInfo.builder()
+                        .id((String) map.get("id"))
+                        .sandboxId((String) map.get("sandbox_id"))
+                        .sandboxStatus((String) map.get("sandbox_status"))
+                        .title((String) map.get("title"))
+                        .selectedRepository((String) map.get("selected_repository"))
+                        .selectedBranch((String) map.get("selected_branch"))
+                        .createdAt((String) map.get("created_at"))
+                        .updatedAt((String) map.get("updated_at"))
+                        .build();
+            }
+        }
+        return null;
+    }
+
+    public void deleteSandbox(String sandboxId) {
+        log.info("删除 OH V1 sandbox: sandboxId={}", sandboxId);
+        delete("/sandboxes/" + sandboxId, Void.class);
+    }
+
+    public void pauseSandbox(String sandboxId) {
+        log.info("暂停 OH V1 sandbox: sandboxId={}", sandboxId);
+        post("/sandboxes/" + sandboxId + "/pause", Map.of(), Void.class);
+    }
+
+    public void resumeSandbox(String sandboxId) {
+        log.info("恢复 OH V1 sandbox: sandboxId={}", sandboxId);
+        post("/sandboxes/" + sandboxId + "/resume", Map.of(), Void.class);
+    }
+
+    // ===== Legacy methods (kept for compatibility during transition) =====
 
     public OpenHandsConversationResponse createConversation(CreateConversationRequest request) {
         log.info("创建 OpenHands Conversation: userId={}, projectId={}", request.getUserId(), request.getProjectId());
