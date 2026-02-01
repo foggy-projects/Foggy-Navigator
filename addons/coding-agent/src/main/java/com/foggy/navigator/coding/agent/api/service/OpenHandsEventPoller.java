@@ -5,7 +5,6 @@ import com.foggy.navigator.coding.agent.api.model.Event;
 import com.foggy.navigator.coding.agent.api.model.OpenHandsPollingStartEvent;
 import com.foggy.navigator.coding.agent.git.OpenHandsClient;
 import com.foggy.navigator.coding.agent.git.OpenHandsClientFactory;
-import com.foggy.navigator.coding.agent.git.model.OpenHandsEvent;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,14 +13,16 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 @Slf4j
@@ -61,40 +62,58 @@ public class OpenHandsEventPoller {
 
         log.info("开始轮询 OpenHands 事件: conversationId={}, ohConversationId={}", conversationId, ohConversationId);
 
-        AtomicInteger lastEventId = new AtomicInteger(0);
+        // Use string-based page token for pagination (OH V1 uses UUID-based next_page_id)
+        AtomicReference<String> nextPageId = new AtomicReference<>(null);
+        // Track seen event IDs to avoid emitting duplicates.
+        // When next_page_id is null (all events fit in one page), the server returns ALL events
+        // on every poll. We use this set to skip already-processed events.
+        Set<String> seenEventIds = new HashSet<>();
 
         ScheduledFuture<?> future = scheduler.scheduleWithFixedDelay(() -> {
             try {
                 OpenHandsClient client = clientFactory.getClientForUser(userId);
-                // getNewEvents returns List (raw) at runtime - items may be Map or OpenHandsEvent
-                List<?> rawEvents = client.getNewEvents(ohConversationId, String.valueOf(lastEventId.get()));
+                Map<String, Object> response = client.getNewEvents(ohConversationId, nextPageId.get());
 
-                if (rawEvents == null || rawEvents.isEmpty()) {
+                List<?> items = (List<?>) response.get("items");
+                if (items == null || items.isEmpty()) {
                     return;
                 }
 
-                log.debug("收到 {} 个 OpenHands 事件: conversationId={}", rawEvents.size(), conversationId);
+                // Update page token for next request
+                Object newPageId = response.get("next_page_id");
+                if (newPageId != null) {
+                    nextPageId.set(newPageId.toString());
+                }
 
-                for (Object rawEvent : rawEvents) {
-                    Map<String, Object> eventMap = toEventMap(rawEvent);
-                    if (eventMap == null) continue;
+                int newCount = 0;
+                for (Object rawItem : items) {
+                    if (!(rawItem instanceof Map)) continue;
+                    Map<String, Object> eventMap = (Map<String, Object>) rawItem;
 
+                    // Deduplicate: skip events we've already processed
+                    String eventId = extractEventId(eventMap);
+                    if (eventId != null && !seenEventIds.add(eventId)) {
+                        continue;
+                    }
+
+                    newCount++;
                     Event event = convertOhEvent(conversationId, eventMap);
                     if (event != null) {
                         eventPublisher.publishEvent(event);
                     }
 
-                    int eventId = extractEventId(eventMap);
-                    if (eventId > lastEventId.get()) {
-                        lastEventId.set(eventId);
-                    }
-
                     if (isTerminalEvent(eventMap)) {
-                        log.info("检测到终止事件，停止轮询: conversationId={}", conversationId);
+                        log.info("检测到终止事件，停止轮询: conversationId={}, kind={}",
+                                conversationId, eventMap.get("kind"));
                         updateConversationStatus(conversationId, Conversation.ConversationStatus.IDLE);
                         stopPolling(conversationId);
                         return;
                     }
+                }
+
+                if (newCount > 0) {
+                    log.info("收到 {} 个新 OpenHands 事件 (总计已处理 {}): conversationId={}",
+                            newCount, seenEventIds.size(), conversationId);
                 }
             } catch (Exception e) {
                 log.error("轮询 OpenHands 事件失败: conversationId={}, error={}", conversationId, e.getMessage());
@@ -132,102 +151,91 @@ public class OpenHandsEventPoller {
         scheduler.shutdownNow();
     }
 
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> toEventMap(Object rawEvent) {
-        if (rawEvent instanceof Map) {
-            return (Map<String, Object>) rawEvent;
-        }
-        if (rawEvent instanceof OpenHandsEvent ohEvent) {
-            // Convert OpenHandsEvent to a map-like structure for unified processing
-            Map<String, Object> map = new java.util.HashMap<>();
-            if (ohEvent.getId() != null) map.put("id", ohEvent.getId());
-            if (ohEvent.getKind() != null) map.put("type", ohEvent.getKind());
-            if (ohEvent.getTimestamp() != null) map.put("timestamp", ohEvent.getTimestamp());
-            if (ohEvent.getData() != null) map.putAll(ohEvent.getData());
-            return map;
-        }
-        log.debug("未知的事件类型: {}", rawEvent.getClass().getName());
-        return null;
-    }
-
+    /**
+     * Convert an OH agent server event to our internal Event model.
+     * OH V1 events have a "kind" field like "SystemPromptEvent", "MessageEvent",
+     * "ConversationStateUpdateEvent", "ConversationErrorEvent", "TerminalAction", etc.
+     */
     Event convertOhEvent(String conversationId, Map<String, Object> ohEvent) {
-        String type = getStringValue(ohEvent, "type");
-        if (type == null) {
-            type = getStringValue(ohEvent, "event_type");
+        String kind = getStringValue(ohEvent, "kind");
+        if (kind == null) {
+            kind = getStringValue(ohEvent, "type");
         }
-        if (type == null) {
-            type = getStringValue(ohEvent, "kind");
-        }
-
-        if (type == null) {
-            log.debug("OH 事件缺少 type 字段，跳过: {}", ohEvent);
+        if (kind == null) {
+            log.debug("OH 事件缺少 kind 字段，跳过: keys={}", ohEvent.keySet());
             return null;
         }
 
-        Event.EventKind kind = mapOhEventType(type);
+        // Skip SystemPromptEvent (too large, not useful to relay)
+        if (kind.equals("SystemPromptEvent")) {
+            return null;
+        }
+
+        Event.EventKind eventKind = mapOhEventKind(kind);
 
         return Event.builder()
                 .conversationId(conversationId)
-                .kind(kind)
+                .kind(eventKind)
                 .timestamp(LocalDateTime.now())
                 .data(ohEvent)
                 .build();
     }
 
-    private Event.EventKind mapOhEventType(String ohType) {
-        if (ohType == null) {
+    private Event.EventKind mapOhEventKind(String ohKind) {
+        if (ohKind == null) {
             return Event.EventKind.AGENT_ACTION;
         }
 
-        String lower = ohType.toLowerCase();
-        // Check error/fail first (before observation, since "ErrorObservation" contains both)
-        if (lower.contains("error") || lower.contains("fail")) {
+        String lower = ohKind.toLowerCase();
+
+        // Error events
+        if (lower.contains("error")) {
             return Event.EventKind.ERROR;
         }
-        if (lower.contains("action") || lower.contains("command") || lower.contains("write") || lower.contains("browse")) {
-            return Event.EventKind.AGENT_ACTION;
+        // State/status updates
+        if (lower.contains("state") || lower.contains("status")) {
+            return Event.EventKind.CONVERSATION_STATUS;
         }
+        // User messages
+        if (lower.equals("messageevent")) {
+            return Event.EventKind.MESSAGE_SENT;
+        }
+        // Observations (command output, file content, etc.)
         if (lower.contains("observation") || lower.contains("output") || lower.contains("result")) {
             return Event.EventKind.AGENT_OBSERVATION;
         }
-        if (lower.contains("status") || lower.contains("state")) {
-            return Event.EventKind.CONVERSATION_STATUS;
+        // Actions (terminal, file edit, browse, etc.)
+        if (lower.contains("action") || lower.contains("command") || lower.contains("terminal")
+                || lower.contains("write") || lower.contains("browse") || lower.contains("edit")) {
+            return Event.EventKind.AGENT_ACTION;
         }
 
         return Event.EventKind.AGENT_ACTION;
     }
 
-    int extractEventId(Map<String, Object> ohEvent) {
-        Object id = ohEvent.get("id");
-        if (id == null) {
-            id = ohEvent.get("event_id");
-        }
-        if (id instanceof Number) {
-            return ((Number) id).intValue();
-        }
-        if (id instanceof String) {
-            try {
-                return Integer.parseInt((String) id);
-            } catch (NumberFormatException e) {
-                return 0;
-            }
-        }
-        return 0;
-    }
-
     @SuppressWarnings("unchecked")
     boolean isTerminalEvent(Map<String, Object> ohEvent) {
-        String type = getStringValue(ohEvent, "type");
-        if (type == null) {
-            type = getStringValue(ohEvent, "event_type");
+        String kind = getStringValue(ohEvent, "kind");
+        if (kind == null) return false;
+
+        // ConversationErrorEvent = agent error
+        if (kind.equals("ConversationErrorEvent")) {
+            return true;
         }
 
-        if (type == null) {
-            return false;
+        // ConversationStateUpdateEvent with execution_status = error/completed
+        if (kind.equals("ConversationStateUpdateEvent")) {
+            String key = getStringValue(ohEvent, "key");
+            String value = getStringValue(ohEvent, "value");
+            if ("execution_status".equals(key) && value != null) {
+                return value.equals("error") || value.equals("completed")
+                        || value.equals("stopped") || value.equals("finished");
+            }
         }
 
-        String lower = type.toLowerCase();
-        if (lower.contains("agent_state_changed")) {
+        // AgentStateChangedObservation with terminal states
+        String lower = kind.toLowerCase();
+        if (lower.contains("agent_state_changed") || lower.contains("agentstatechanged")) {
             String state = getStringValue(ohEvent, "state");
             if (state == null) {
                 Object extras = ohEvent.get("extras");
@@ -242,7 +250,7 @@ public class OpenHandsEventPoller {
             }
         }
 
-        return lower.contains("finish") || lower.contains("agent_finish");
+        return false;
     }
 
     private void updateConversationStatus(String conversationId, Conversation.ConversationStatus status) {
@@ -260,6 +268,28 @@ public class OpenHandsEventPoller {
         } catch (Exception e) {
             log.error("更新会话状态失败: conversationId={}, error={}", conversationId, e.getMessage());
         }
+    }
+
+    /**
+     * Extract a unique identifier for an OH event.
+     * OH V1 events have an "id" field (UUID string). Falls back to "event_id" or index-based key.
+     */
+    private String extractEventId(Map<String, Object> eventMap) {
+        Object id = eventMap.get("id");
+        if (id != null) {
+            return id.toString();
+        }
+        Object eventId = eventMap.get("event_id");
+        if (eventId != null) {
+            return eventId.toString();
+        }
+        // Fallback: compose a key from kind + timestamp/content hash to deduplicate
+        String kind = getStringValue(eventMap, "kind");
+        Object timestamp = eventMap.get("timestamp");
+        if (kind != null && timestamp != null) {
+            return kind + ":" + timestamp;
+        }
+        return null;
     }
 
     private String getStringValue(Map<String, Object> map, String key) {

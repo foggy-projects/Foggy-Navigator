@@ -122,7 +122,7 @@ describe('05 - E2E OpenHands 真实交互测试', () => {
 
     // Step 4: 轮询事件，等待 Agent 完成
     console.log('Step 4: Polling events until agent completes...');
-    const events = await pollForAgentCompletion(client, conversationId, 120_000);
+    const events = await pollForAgentCompletion(client, conversationId, 240_000);
 
     console.log(`  Received ${events.length} events`);
     expect(events.length).toBeGreaterThan(0);
@@ -278,7 +278,8 @@ async function pollForAgentCompletion(
 
         const hasTerminal = newEvents.some(e =>
           (e.kind === 'CONVERSATION_STATUS' && e.data?.status === 'IDLE')
-          || e.kind === 'ERROR'
+          // Only treat ERROR as terminal if it's from the agent (not validation service)
+          || (e.kind === 'ERROR' && !e.data?.source?.includes('Validation'))
         );
 
         if (hasTerminal) {
@@ -287,8 +288,9 @@ async function pollForAgentCompletion(
         }
       } else {
         stableCount++;
-        // 20 seconds with no new events -> assume done
-        if (stableCount > 10) {
+        // 60 seconds with no new events -> assume done
+        // LLM responses can take 30-50 seconds, so we need a generous timeout
+        if (stableCount > 30) {
           console.log('  No new events for extended period, assuming complete');
           return allEvents;
         }

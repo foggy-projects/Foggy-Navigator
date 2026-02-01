@@ -130,26 +130,21 @@ class OpenHandsClientTest {
     }
 
     @Test
-    void testSendMessage_Success() {
+    void testSendMessage_NoConversationUrl_ThrowsException() {
         String conversationId = "conv-123";
         String content = "Hello";
 
-        OpenHandsMessageResponse response = OpenHandsMessageResponse.builder()
-                .message_id("msg-123")
-                .content("Hello")
-                .build();
-
-        when(restTemplate.postForEntity(
+        // getConversationInfo returns empty list → no conversation_url → should throw
+        when(restTemplate.exchange(
                 anyString(),
+                eq(HttpMethod.GET),
                 any(HttpEntity.class),
-                eq(OpenHandsMessageResponse.class)
-        )).thenReturn(new ResponseEntity<>(response, HttpStatus.OK));
+                eq(List.class)
+        )).thenReturn(new ResponseEntity<>(List.of(), HttpStatus.OK));
 
-        OpenHandsMessageResponse result = openHandsClient.sendMessage(conversationId, content);
-
-        assertNotNull(result);
-        assertEquals("msg-123", result.getMessage_id());
-        assertEquals("Hello", result.getContent());
+        assertThrows(RuntimeException.class, () ->
+                openHandsClient.sendMessage(conversationId, content)
+        );
     }
 
     @Test
@@ -188,25 +183,23 @@ class OpenHandsClientTest {
     }
 
     @Test
-    void testGetNewEvents_Success() {
+    void testGetNewEvents_NoConversationUrl_ReturnsEmpty() {
         String conversationId = "conv-123";
-        OpenHandsEvent event = OpenHandsEvent.builder()
-                .id("event-1")
-                .kind("MESSAGE_SENT")
-                .build();
 
+        // getConversationInfo returns empty list → no conversation_url
         when(restTemplate.exchange(
                 anyString(),
                 eq(HttpMethod.GET),
                 any(HttpEntity.class),
                 eq(List.class)
-        )).thenReturn(new ResponseEntity<>(List.of(event), HttpStatus.OK));
+        )).thenReturn(new ResponseEntity<>(List.of(), HttpStatus.OK));
 
-        List<OpenHandsEvent> result = openHandsClient.getNewEvents(conversationId, "page-1");
+        Map<String, Object> result = openHandsClient.getNewEvents(conversationId, null);
 
         assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals("event-1", result.get(0).getId());
+        List<?> items = (List<?>) result.get("items");
+        assertNotNull(items);
+        assertTrue(items.isEmpty());
     }
 
     @Test

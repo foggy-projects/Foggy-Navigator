@@ -11,6 +11,8 @@ import com.github.dockerjava.api.model.Volume;
 import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientBuilder;
 import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
+import com.github.dockerjava.api.model.Container;
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.Builder;
 import lombok.Data;
@@ -99,6 +101,48 @@ public class OpenHandsInstanceManager {
         } catch (Exception e) {
             log.warn("无法连接到 Docker，使用模拟模式: {}", e.getMessage());
             this.useMock = true;
+        }
+    }
+
+    /**
+     * 启动时扫描已存在的 openhands-user-* 容器，将其端口注册到 usedPorts，避免端口冲突
+     */
+    @PostConstruct
+    public void recoverExistingContainerPorts() {
+        if (useMock || dockerClient == null) return;
+        try {
+            List<Container> containers = dockerClient.listContainersCmd()
+                    .withShowAll(true)
+                    .withNameFilter(List.of("openhands-user-"))
+                    .exec();
+            for (Container container : containers) {
+                String state = container.getState(); // "running", "created", "exited"
+                String name = container.getNames() != null && container.getNames().length > 0
+                        ? container.getNames()[0].replaceFirst("^/", "") : "";
+                if ("running".equalsIgnoreCase(state)) {
+                    // 正在运行的容器：注册端口
+                    var ports = container.getPorts();
+                    if (ports != null) {
+                        for (var port : ports) {
+                            if (port.getPublicPort() != null && port.getPublicPort() > 0) {
+                                usedPorts.add(port.getPublicPort());
+                                log.info("启动恢复：注册已占用端口 {} (容器: {})", port.getPublicPort(), name);
+                            }
+                        }
+                    }
+                } else {
+                    // 非运行状态（created/exited）：清除残留
+                    log.info("启动清理：移除残留容器 {} (状态: {})", name, state);
+                    try {
+                        dockerClient.removeContainerCmd(container.getId()).withForce(true).exec();
+                    } catch (Exception e) {
+                        log.warn("移除残留容器失败: {}", name, e);
+                    }
+                }
+            }
+            log.info("启动端口恢复完成，已注册端口: {}", usedPorts);
+        } catch (Exception e) {
+            log.warn("扫描已存在容器失败: {}", e.getMessage());
         }
     }
 
@@ -289,7 +333,7 @@ public class OpenHandsInstanceManager {
         List<String> env = new ArrayList<>();
 
         if (apiKey != null && !apiKey.isEmpty()) {
-            env.add("OPENAI_API_KEY=" + apiKey);
+            env.add("LLM_API_KEY=" + apiKey);
         }
         if (modelName != null && !modelName.isEmpty()) {
             env.add("LLM_MODEL=" + modelName);
@@ -317,6 +361,20 @@ public class OpenHandsInstanceManager {
         if (agentServerTag != null && !agentServerTag.isEmpty()) {
             env.add("AGENT_SERVER_IMAGE_TAG=" + agentServerTag);
         }
+
+        // Forward LLM credentials to agent server containers via OH_AGENT_SERVER_ENV
+        // The agent server is a separate container and doesn't inherit env vars from the main OH container.
+        // litellm's OpenAI provider requires OPENAI_API_KEY in the environment.
+        StringBuilder agentServerEnv = new StringBuilder("{");
+        if (apiKey != null && !apiKey.isEmpty()) {
+            agentServerEnv.append("\"OPENAI_API_KEY\":\"").append(apiKey).append("\"");
+        }
+        if (apiBaseUrl != null && !apiBaseUrl.isEmpty()) {
+            if (agentServerEnv.length() > 1) agentServerEnv.append(",");
+            agentServerEnv.append("\"OPENAI_API_BASE\":\"").append(apiBaseUrl).append("\"");
+        }
+        agentServerEnv.append("}");
+        env.add("OH_AGENT_SERVER_ENV=" + agentServerEnv);
 
         return env;
     }

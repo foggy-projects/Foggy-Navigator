@@ -42,11 +42,13 @@ class OpenHandsEventPollerTest {
         poller.shutdown();
     }
 
+    // ===== convertOhEvent tests =====
+
     @Test
-    void testConvertOhEvent_Action() {
+    void testConvertOhEvent_TerminalAction() {
         Map<String, Object> ohEvent = Map.of(
-                "id", 1,
-                "type", "CmdRunAction",
+                "id", "uuid-1",
+                "kind", "TerminalAction",
                 "command", "ls -la"
         );
 
@@ -61,8 +63,8 @@ class OpenHandsEventPollerTest {
     @Test
     void testConvertOhEvent_Observation() {
         Map<String, Object> ohEvent = Map.of(
-                "id", 2,
-                "type", "CmdOutputObservation",
+                "id", "uuid-2",
+                "kind", "TerminalObservation",
                 "content", "file1.txt file2.txt"
         );
 
@@ -73,11 +75,11 @@ class OpenHandsEventPollerTest {
     }
 
     @Test
-    void testConvertOhEvent_Error() {
+    void testConvertOhEvent_ErrorEvent() {
         Map<String, Object> ohEvent = Map.of(
-                "id", 3,
-                "type", "ErrorObservation",
-                "message", "Something failed"
+                "id", "uuid-3",
+                "kind", "ConversationErrorEvent",
+                "detail", "Something failed"
         );
 
         Event event = poller.convertOhEvent("conv-123", ohEvent);
@@ -87,8 +89,50 @@ class OpenHandsEventPollerTest {
     }
 
     @Test
-    void testConvertOhEvent_MissingType_ReturnsNull() {
-        Map<String, Object> ohEvent = Map.of("id", 4, "data", "something");
+    void testConvertOhEvent_StateUpdate() {
+        Map<String, Object> ohEvent = Map.of(
+                "id", "uuid-4",
+                "kind", "ConversationStateUpdateEvent",
+                "key", "execution_status",
+                "value", "running"
+        );
+
+        Event event = poller.convertOhEvent("conv-123", ohEvent);
+
+        assertNotNull(event);
+        assertEquals(Event.EventKind.CONVERSATION_STATUS, event.getKind());
+    }
+
+    @Test
+    void testConvertOhEvent_MessageEvent() {
+        Map<String, Object> ohEvent = Map.of(
+                "id", "uuid-5",
+                "kind", "MessageEvent",
+                "source", "user"
+        );
+
+        Event event = poller.convertOhEvent("conv-123", ohEvent);
+
+        assertNotNull(event);
+        assertEquals(Event.EventKind.MESSAGE_SENT, event.getKind());
+    }
+
+    @Test
+    void testConvertOhEvent_SystemPrompt_SkippedAsNull() {
+        Map<String, Object> ohEvent = Map.of(
+                "id", "uuid-0",
+                "kind", "SystemPromptEvent"
+        );
+
+        Event event = poller.convertOhEvent("conv-123", ohEvent);
+
+        // SystemPromptEvent is too large, should be skipped
+        assertNull(event);
+    }
+
+    @Test
+    void testConvertOhEvent_MissingKind_ReturnsNull() {
+        Map<String, Object> ohEvent = Map.of("id", "uuid-x", "data", "something");
 
         Event event = poller.convertOhEvent("conv-123", ohEvent);
 
@@ -96,58 +140,61 @@ class OpenHandsEventPollerTest {
     }
 
     @Test
-    void testExtractEventId_IntValue() {
-        Map<String, Object> ohEvent = Map.of("id", 42, "type", "test");
-        assertEquals(42, poller.extractEventId(ohEvent));
-    }
-
-    @Test
-    void testExtractEventId_StringValue() {
-        Map<String, Object> ohEvent = Map.of("id", "99", "type", "test");
-        assertEquals(99, poller.extractEventId(ohEvent));
-    }
-
-    @Test
-    void testExtractEventId_Missing_ReturnsZero() {
-        Map<String, Object> ohEvent = Map.of("type", "test");
-        assertEquals(0, poller.extractEventId(ohEvent));
-    }
-
-    @Test
-    void testIsTerminalEvent_AgentFinished() {
+    void testConvertOhEvent_FallbackToType() {
+        // If "kind" is missing, should fall back to "type"
         Map<String, Object> ohEvent = Map.of(
-                "type", "agent_state_changed",
-                "state", "finished"
+                "id", "uuid-6",
+                "type", "CmdRunAction",
+                "command", "echo hello"
+        );
+
+        Event event = poller.convertOhEvent("conv-123", ohEvent);
+
+        assertNotNull(event);
+        assertEquals(Event.EventKind.AGENT_ACTION, event.getKind());
+    }
+
+    // ===== isTerminalEvent tests =====
+
+    @Test
+    void testIsTerminalEvent_ConversationErrorEvent() {
+        Map<String, Object> ohEvent = Map.of(
+                "kind", "ConversationErrorEvent",
+                "code", "LLMBadRequestError",
+                "detail", "model not found"
         );
 
         assertTrue(poller.isTerminalEvent(ohEvent));
     }
 
     @Test
-    void testIsTerminalEvent_AgentStopped() {
+    void testIsTerminalEvent_ExecutionStatusError() {
         Map<String, Object> ohEvent = Map.of(
-                "type", "agent_state_changed",
-                "state", "stopped"
+                "kind", "ConversationStateUpdateEvent",
+                "key", "execution_status",
+                "value", "error"
         );
 
         assertTrue(poller.isTerminalEvent(ohEvent));
     }
 
     @Test
-    void testIsTerminalEvent_AgentError() {
+    void testIsTerminalEvent_ExecutionStatusCompleted() {
         Map<String, Object> ohEvent = Map.of(
-                "type", "agent_state_changed",
-                "state", "error"
+                "kind", "ConversationStateUpdateEvent",
+                "key", "execution_status",
+                "value", "completed"
         );
 
         assertTrue(poller.isTerminalEvent(ohEvent));
     }
 
     @Test
-    void testIsTerminalEvent_AgentRunning_NotTerminal() {
+    void testIsTerminalEvent_ExecutionStatusRunning_NotTerminal() {
         Map<String, Object> ohEvent = Map.of(
-                "type", "agent_state_changed",
-                "state", "running"
+                "kind", "ConversationStateUpdateEvent",
+                "key", "execution_status",
+                "value", "running"
         );
 
         assertFalse(poller.isTerminalEvent(ohEvent));
@@ -156,7 +203,7 @@ class OpenHandsEventPollerTest {
     @Test
     void testIsTerminalEvent_NonStateEvent_NotTerminal() {
         Map<String, Object> ohEvent = Map.of(
-                "type", "CmdRunAction",
+                "kind", "TerminalAction",
                 "command", "ls"
         );
 
@@ -164,20 +211,22 @@ class OpenHandsEventPollerTest {
     }
 
     @Test
-    void testIsTerminalEvent_FinishAction() {
+    void testIsTerminalEvent_MessageEvent_NotTerminal() {
         Map<String, Object> ohEvent = Map.of(
-                "type", "AgentFinishAction",
-                "message", "Done"
+                "kind", "MessageEvent",
+                "source", "user"
         );
 
-        assertTrue(poller.isTerminalEvent(ohEvent));
+        assertFalse(poller.isTerminalEvent(ohEvent));
     }
+
+    // ===== Polling lifecycle tests =====
 
     @Test
     void testStartPolling_DuplicateIgnored() {
-        // Lenient: scheduler thread may or may not call these before test ends
         lenient().when(clientFactory.getClientForUser("user-1")).thenReturn(openHandsClient);
-        lenient().when(openHandsClient.getNewEvents(anyString(), anyString())).thenReturn(List.of());
+        lenient().when(openHandsClient.getNewEvents(anyString(), any()))
+                .thenReturn(Map.of("items", List.of()));
 
         poller.startPolling("conv-123", "user-1", "oh-conv-456");
         assertTrue(poller.isPolling("conv-123"));
@@ -189,9 +238,9 @@ class OpenHandsEventPollerTest {
 
     @Test
     void testStopPolling() {
-        // Lenient: scheduler thread may or may not call these before test ends
         lenient().when(clientFactory.getClientForUser("user-1")).thenReturn(openHandsClient);
-        lenient().when(openHandsClient.getNewEvents(anyString(), anyString())).thenReturn(List.of());
+        lenient().when(openHandsClient.getNewEvents(anyString(), any()))
+                .thenReturn(Map.of("items", List.of()));
 
         poller.startPolling("conv-123", "user-1", "oh-conv-456");
         assertTrue(poller.isPolling("conv-123"));
@@ -209,7 +258,8 @@ class OpenHandsEventPollerTest {
     @Test
     void testOnPollingStart_EventListener() {
         lenient().when(clientFactory.getClientForUser("user-1")).thenReturn(openHandsClient);
-        lenient().when(openHandsClient.getNewEvents(anyString(), anyString())).thenReturn(List.of());
+        lenient().when(openHandsClient.getNewEvents(anyString(), any()))
+                .thenReturn(Map.of("items", List.of()));
 
         OpenHandsPollingStartEvent startEvent = new OpenHandsPollingStartEvent(
                 "conv-123", "user-1", "oh-conv-456");
@@ -217,15 +267,5 @@ class OpenHandsEventPollerTest {
         poller.onPollingStart(startEvent);
 
         assertTrue(poller.isPolling("conv-123"));
-    }
-
-    @Test
-    void testIsTerminalEvent_AwaitingUserInput() {
-        Map<String, Object> ohEvent = Map.of(
-                "type", "agent_state_changed",
-                "state", "awaiting_user_input"
-        );
-
-        assertTrue(poller.isTerminalEvent(ohEvent));
     }
 }

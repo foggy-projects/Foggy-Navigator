@@ -26,8 +26,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
         "com.foggy.navigator.common.entity"
 })
 @EnableJpaRepositories(basePackages = {
-        "com.foggy.navigator.coding.agent.api.repository",
-        "com.foggy.navigator.auth.repository"
+        "com.foggy.navigator.coding.agent.api.repository"
 })
 public class CodingAgentApplication {
 

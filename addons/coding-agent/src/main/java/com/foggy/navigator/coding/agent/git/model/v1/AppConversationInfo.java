@@ -28,6 +28,15 @@ public class AppConversationInfo {
     @JsonProperty("selected_branch")
     private String selectedBranch;
 
+    @JsonProperty("execution_status")
+    private String executionStatus;
+
+    @JsonProperty("conversation_url")
+    private String conversationUrl;
+
+    @JsonProperty("session_api_key")
+    private String sessionApiKey;
+
     @JsonProperty("created_at")
     private String createdAt;
 

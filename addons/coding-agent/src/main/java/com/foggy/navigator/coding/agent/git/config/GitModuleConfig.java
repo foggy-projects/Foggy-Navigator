@@ -1,6 +1,7 @@
 package com.foggy.navigator.coding.agent.git.config;
 
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -15,6 +16,7 @@ import java.util.concurrent.Executor;
 @Configuration
 @EnableAsync
 @EnableScheduling
+@ComponentScan(basePackages = {"com.foggy.navigator.coding.agent.git"})
 public class GitModuleConfig {
 
     @Bean

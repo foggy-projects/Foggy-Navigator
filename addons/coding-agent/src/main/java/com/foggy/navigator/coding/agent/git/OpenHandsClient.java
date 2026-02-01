@@ -158,6 +158,9 @@ public class OpenHandsClient {
                         .title((String) map.get("title"))
                         .selectedRepository((String) map.get("selected_repository"))
                         .selectedBranch((String) map.get("selected_branch"))
+                        .executionStatus((String) map.get("execution_status"))
+                        .conversationUrl((String) map.get("conversation_url"))
+                        .sessionApiKey((String) map.get("session_api_key"))
                         .createdAt((String) map.get("created_at"))
                         .updatedAt((String) map.get("updated_at"))
                         .build();
@@ -213,13 +216,50 @@ public class OpenHandsClient {
     }
 
     public OpenHandsMessageResponse sendMessage(String conversationId, String content) {
-        log.info("发送消息: conversationId={}, content={}", conversationId, content);
+        log.info("发送消息到 OH V1: conversationId={}, contentLength={}", conversationId, content.length());
 
+        // OH V1: Messages go to the agent server via POST /api/conversations/{id}/events
+        // Step 1: Get conversation_url and session_api_key from the main server
+        AppConversationInfo info = getConversationInfo(conversationId);
+        if (info == null || info.getConversationUrl() == null) {
+            throw new RuntimeException("无法获取 OH 会话的 conversation_url: " + conversationId);
+        }
+
+        // conversation_url = http://host:port/api/conversations/{id}
+        // events endpoint  = http://host:port/api/conversations/{id}/events
+        String eventsUrl = info.getConversationUrl() + "/events";
+        log.info("发送消息到 agent server: url={}", eventsUrl);
+
+        // Step 2: Build headers with X-Session-API-Key (agent server auth)
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        if (info.getSessionApiKey() != null) {
+            headers.set("X-Session-API-Key", info.getSessionApiKey());
+        }
+
+        // Step 3: Build SendMessageRequest body
+        // {"role": "user", "content": [{"type": "text", "text": "..."}], "run": true}
+        Map<String, Object> textContent = Map.of(
+                "type", "text",
+                "text", content
+        );
         Map<String, Object> requestBody = Map.of(
-                "content", content
+                "role", "user",
+                "content", List.of(textContent),
+                "run", true  // auto-start the agent loop
         );
 
-        return post("/app-conversations/" + conversationId + "/messages", requestBody, OpenHandsMessageResponse.class);
+        HttpEntity<Object> entity = new HttpEntity<>(requestBody, headers);
+
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                    eventsUrl, entity, Map.class);
+            log.info("消息已发送到 agent server: conversationId={}, response={}", conversationId, response.getBody());
+            return null; // agent server returns {"success": true}, not OpenHandsMessageResponse
+        } catch (Exception e) {
+            log.error("发送消息到 agent server 失败: url={}", eventsUrl, e);
+            throw new RuntimeException("发送消息到 agent server 失败", e);
+        }
     }
 
     public List<OpenHandsEvent> searchEvents(String conversationId, String kind, String timestampGte, String timestampLt, String pageId, int limit) {
@@ -244,11 +284,51 @@ public class OpenHandsClient {
         return get(path.toString(), List.class);
     }
 
-    public List<OpenHandsEvent> getNewEvents(String conversationId, String lastEventId) {
-        log.info("获取新事件: conversationId={}, lastEventId={}", conversationId, lastEventId);
+    /**
+     * Fetch events from the OH agent server.
+     * Returns the raw response body map containing:
+     *   "items": List of event maps
+     *   "next_page_id": String page token for pagination (null if no more pages)
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getNewEvents(String conversationId, String pageId) {
+        log.debug("获取新事件: conversationId={}, pageId={}", conversationId, pageId);
 
-        String path = "/app-conversations/" + conversationId + "/events/new?last_event_id=" + lastEventId;
+        // OH V1: Events must be fetched from the agent server, not the main server.
+        AppConversationInfo info = getConversationInfo(conversationId);
+        if (info == null || info.getConversationUrl() == null) {
+            log.warn("无法获取 conversation_url，跳过事件拉取: conversationId={}", conversationId);
+            return Map.of("items", List.of());
+        }
 
-        return get(path, List.class);
+        // Agent server events endpoint: GET {conversation_url}/events/search
+        String eventsUrl = info.getConversationUrl() + "/events/search?limit=50&sort_order=TIMESTAMP";
+        if (pageId != null && !pageId.isEmpty()) {
+            eventsUrl += "&page_id=" + pageId;
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        if (info.getSessionApiKey() != null) {
+            headers.set("X-Session-API-Key", info.getSessionApiKey());
+        }
+
+        try {
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    eventsUrl, HttpMethod.GET, entity, Map.class);
+            Map<String, Object> body = response.getBody();
+            if (body != null && body.containsKey("items")) {
+                List items = (List) body.get("items");
+                log.debug("从 agent server 获取到 {} 个事件, nextPageId={}",
+                        items.size(), body.get("next_page_id"));
+                return body;
+            }
+            log.debug("agent server 响应中无 items 字段: keys={}", body != null ? body.keySet() : "null");
+            return Map.of("items", List.of());
+        } catch (Exception e) {
+            log.error("从 agent server 获取事件失败: url={}, error={}", eventsUrl, e.getMessage());
+            return Map.of("items", List.of());
+        }
     }
 }
