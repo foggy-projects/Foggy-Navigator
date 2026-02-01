@@ -139,7 +139,7 @@ GET http://localhost:7108/dev/tables/{tableName}
 
 ### 1. 实现 MetadataQueryService
 
-创建 `com.foggy.navigator.metadata.service.MetadataQueryService`：
+创建 `service.com.foggy.navigator.metadata.query.MetadataQueryService`：
 
 ```java
 public interface MetadataQueryService {
@@ -156,7 +156,7 @@ public interface MetadataQueryService {
 
 ### 2. 实现 REST Controller
 
-创建 `com.foggy.navigator.metadata.controller.MetadataQueryController`：
+创建 `controller.com.foggy.navigator.metadata.query.MetadataQueryController`：
 
 ```java
 @RestController

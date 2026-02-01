@@ -627,10 +627,9 @@ tutor-agent/
 ```java
 package com.foggy.navigator.tutor;
 
-import com.foggy.navigator.agent.core.*;
-import com.foggy.navigator.agent.core.model.AgentConfig;
-import com.foggy.navigator.agent.skill.SkillManager;
-import com.foggy.navigator.agent.tool.ToolRegistry;
+import model.core.com.foggy.navigator.agent.framework.AgentConfig;
+import skill.com.foggy.navigator.agent.framework.SkillManager;
+import tool.com.foggy.navigator.agent.framework.ToolRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -663,10 +662,10 @@ public class TutorAgentInitializer implements CommandLineRunner {
         config.getTools().forEach(tool -> {
             if (tool.getHttp() != null) {
                 toolRegistry.registerHttpTool(
-                    config.getId(),
-                    tool.getName(),
-                    tool.getDescription(),
-                    tool.getHttp()
+                        config.getId(),
+                        tool.getName(),
+                        tool.getDescription(),
+                        tool.getHttp()
                 );
             }
         });
@@ -684,12 +683,6 @@ public class TutorAgentInitializer implements CommandLineRunner {
 ```java
 package com.foggy.navigator.tutor.service;
 
-import com.foggy.navigator.agent.core.*;
-import com.foggy.navigator.agent.llm.*;
-import com.foggy.navigator.agent.protocol.*;
-import com.foggy.navigator.agent.router.*;
-import com.foggy.navigator.agent.session.*;
-import com.foggy.navigator.agent.skill.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -708,9 +701,9 @@ public class TutorAgentService {
 
         // 1. 记录用户消息
         sessionManager.addMessage(sessionId, Message.builder()
-            .role(MessageRole.USER)
-            .content(userMessage)
-            .build());
+                .role(MessageRole.USER)
+                .content(userMessage)
+                .build());
 
         // 2. 匹配Skill
         Skill matchedSkill = skillManager.matchSkill(agentId, userMessage);
@@ -723,9 +716,9 @@ public class TutorAgentService {
 
         // 5. 记录助手消息
         sessionManager.addMessage(sessionId, Message.builder()
-            .role(MessageRole.ASSISTANT)
-            .content(response.getContent())
-            .build());
+                .role(MessageRole.ASSISTANT)
+                .content(response.getContent())
+                .build());
 
         // 6. 检查是否需要分派
         if (shouldDelegate(response, matchedSkill)) {
@@ -733,36 +726,36 @@ public class TutorAgentService {
         }
 
         return AgentMessage.builder()
-            .type(MessageType.TEXT_COMPLETE)
-            .payload(response.getContent())
-            .sessionId(sessionId)
-            .agentId(agentId)
-            .build();
+                .type(MessageType.TEXT_COMPLETE)
+                .payload(response.getContent())
+                .sessionId(sessionId)
+                .agentId(agentId)
+                .build();
     }
 
     private AgentMessage handleDelegation(Session session, Skill skill) {
         DelegationResult result = sessionRouter.delegateToAgent(
-            DelegationRequest.builder()
-                .sourceSessionId(session.getId())
-                .targetAgentId(skill.getDelegationCondition())
-                .userId(session.getUserId())
-                .tenantId(session.getTenantId())
-                .intent(skill.getName())
-                .build()
+                DelegationRequest.builder()
+                        .sourceSessionId(session.getId())
+                        .targetAgentId(skill.getDelegationCondition())
+                        .userId(session.getUserId())
+                        .tenantId(session.getTenantId())
+                        .intent(skill.getName())
+                        .build()
         );
 
         if (result.isSuccess()) {
             return AgentMessage.builder()
-                .type(MessageType.ROUTE_REQUEST)
-                .payload(result.getRoute())
-                .sessionId(session.getId())
-                .build();
+                    .type(MessageType.ROUTE_REQUEST)
+                    .payload(result.getRoute())
+                    .sessionId(session.getId())
+                    .build();
         }
 
         return AgentMessage.builder()
-            .type(MessageType.ERROR)
-            .payload(result.getErrorMessage())
-            .build();
+                .type(MessageType.ERROR)
+                .payload(result.getErrorMessage())
+                .build();
     }
 }
 ```

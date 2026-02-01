@@ -16,10 +16,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  * Coding Agent 应用启动类
  */
 @SpringBootApplication(exclude = {
-        HttpClientAutoConfiguration.class,
-        org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration.class,
-        org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration.class,
-        org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration.class
+        HttpClientAutoConfiguration.class
 })
 @Import(AuthAutoConfiguration.class)
 @ComponentScan(basePackages = {

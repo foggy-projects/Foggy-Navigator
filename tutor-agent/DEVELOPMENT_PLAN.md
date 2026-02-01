@@ -85,9 +85,9 @@ public class TutorAgentApplication {
 ```java
 package com.foggy.navigator.tutor;
 
-import com.foggy.navigator.agent.core.AgentConfigLoader;
-import com.foggy.navigator.agent.core.AgentRegistry;
-import com.foggy.navigator.agent.core.model.AgentConfig;
+import core.com.foggy.navigator.agent.framework.AgentConfigLoader;
+import core.com.foggy.navigator.agent.framework.AgentRegistry;
+import model.core.com.foggy.navigator.agent.framework.AgentConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -107,7 +107,7 @@ public class TutorAgentInitializer implements CommandLineRunner {
 
         // 加载Agent配置
         AgentConfig config = configLoader.load(
-            "classpath:agent-config/tutor-agent.yml"
+                "classpath:agent-config/tutor-agent.yml"
         );
 
         // 注册Agent

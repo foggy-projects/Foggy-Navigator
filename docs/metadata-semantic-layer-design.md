@@ -423,7 +423,6 @@ public interface MetadataQueryService {
 ```java
 package com.foggy.navigator.metadata.controller;
 
-import com.foggy.navigator.metadata.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -641,7 +640,6 @@ class FieldDefinition {
 ```java
 package com.foggy.navigator.metadata.controller;
 
-import com.foggy.navigator.metadata.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
