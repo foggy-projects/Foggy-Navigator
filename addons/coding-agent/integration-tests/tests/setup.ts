@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { beforeAll, afterAll } from 'vitest';
 import { createClient, CodingAgentClient } from '../src/api-client.js';
 import { TEST_CONFIG } from '../src/config.js';

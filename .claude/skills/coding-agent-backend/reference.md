@@ -11,6 +11,11 @@
 | `ConversationCleanupService` | 定时清理 | `cleanupIdleSessions`, `cleanupExpiredSessions`, `performHealthChecks` |
 | `OrphanDetectionService` | 孤儿容器检测 | `detectOrphanContainers`, `cleanupOrphans` |
 | `ConversationRecoveryService` | 会话恢复 | `recoverConversation`, `recoverAllConversations`, `deleteConversation` |
+| `OpenHandsEventPoller` | 轮询 OH agent server 事件 | `startPolling`, `stopPolling`, `isPolling`, `convertOhEvent`, `isTerminalEvent` |
+| `OpenHandsMessageForwarder` | 转发用户消息到 OH | `onMessageSent` (@EventListener) |
+| `OpenHandsInstanceManager` | 管理 OH Docker 容器 | `createInstance`, `stopInstance`, `buildEnvironmentVariables` |
+| `OpenHandsClient` | OH HTTP 客户端 | `createConversation`, `sendMessage`, `getNewEvents`, `getConversationInfo` |
+| `OpenHandsClientFactory` | 管理 OH 客户端实例 | `getClientForUser` |
 
 ## 事件类型
 
@@ -55,19 +60,67 @@ public enum ConversationStatus {
 - **队列容量**：50
 - **线程前缀**：`validation-`
 
+## OpenHands V1 Docker 环境变量参考
+
+主容器 (`openhands-local:dev`) 需要以下环境变量：
+
+| 环境变量 | 用途 | 示例 |
+|---------|------|------|
+| `LLM_API_KEY` | OH 配置系统读取的 API Key | `sk-xxx` |
+| `LLM_MODEL` | 模型名（必须带 provider 前缀） | `openai/glm-4.7` |
+| `LLM_BASE_URL` | LLM API 基础 URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `OH_SECRET_KEY` | V1 必需的密钥 | `openhands-dev-secret-key-xxx` |
+| `DISABLE_MCP` | 禁用 MCP 功能 | `true` |
+| `AGENT_SERVER_IMAGE_REPOSITORY` | Agent server 镜像仓库 | `ghcr.io/openhands/agent-server` |
+| `AGENT_SERVER_IMAGE_TAG` | Agent server 镜像 tag | `31536c8-python` |
+| `OH_AGENT_SERVER_ENV` | 注入到 agent server 的环境变量 (JSON) | `{"OPENAI_API_KEY":"sk-xxx","OPENAI_API_BASE":"https://..."}` |
+| `WORKSPACE_BASE` | 工作空间路径 | `/workspace` |
+| `SANDBOX_LOCAL_RUNTIME_URL` | Sandbox 连接 URL | `http://host.docker.internal` |
+| `SANDBOX_USER_ID` | Sandbox 用户 ID | `0` |
+
+### LLM_API_KEY vs OPENAI_API_KEY 区分
+
+- **OH 配置系统**（主容器内 `load_from_env`）：读 `LLM_` 前缀 → 用 `LLM_API_KEY`
+- **litellm 运行时**（agent server 容器内）：读 `OPENAI_API_KEY` → 通过 `OH_AGENT_SERVER_ENV` 传递
+- **model name**：litellm 需要 provider 前缀，如 `openai/glm-4.7`，否则报 `LLM Provider NOT provided`
+
+### OH V1 Agent Server API
+
+Agent server 的 `conversation_url` 从主容器 API 获取：
+
+```
+GET  /api/v1/app-conversations/{id}      → 返回 { conversation_url: "http://host:port" }
+POST /api/v1/app-conversations/{id}/messages  → 发送消息
+GET  {conversation_url}/events/search?limit=50&start_id={page_id}  → 查询事件
+```
+
+事件响应格式：
+```json
+{
+  "items": [
+    { "id": "uuid", "kind": "TerminalAction", "timestamp": "...", "command": "ls -la", ... },
+    { "id": "uuid", "kind": "TerminalObservation", "timestamp": "...", "content": "file1.txt", ... }
+  ],
+  "next_page_id": null
+}
+```
+
 ## 配置参数完整列表
 
 ```yaml
 foggy:
   coding-agent:
     openhands:
-      image: ghcr.io/all-hands-ai/openhands:main
+      image: openhands-local:dev           # OH V1 本地镜像
       workspace-base: /workspace
       container-timeout: 1800  # 秒
       max-concurrent: 10
-      api-key: ${OPENAI_API_KEY}
-      model-name: gpt-4
-      api-base-url: ${OPENAI_API_BASE_URL:}
+      api-key: ${LLM_API_KEY}
+      model-name: openai/glm-4.7           # ⚠️ 必须带 provider 前缀
+      api-base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      agent-server-image: ghcr.io/openhands/agent-server
+      agent-server-tag: 31536c8-python
+      oh-secret-key: openhands-dev-secret-key-1234567890
 
     validation:
       url: http://localhost:7108

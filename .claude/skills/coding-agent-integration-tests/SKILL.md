@@ -29,7 +29,8 @@ addons/coding-agent/integration-tests/
 │   ├── 01-basic-flow.test.ts           # 基本流程测试
 │   ├── 02-sse-events.test.ts           # SSE 事件流测试
 │   ├── 03-cleanup-recovery.test.ts     # 清理恢复测试
-│   └── 04-error-handling.test.ts       # 错误处理测试
+│   ├── 04-error-handling.test.ts       # 错误处理测试
+│   └── 05-e2e-openhands.test.ts        # E2E OpenHands 真实交互测试
 ├── package.json
 ├── vitest.config.ts
 └── .env                    # 环境变量
@@ -206,6 +207,104 @@ npm test -- --failed
 # 显示测试覆盖率
 npm test -- --coverage
 ```
+
+## E2E OpenHands 测试
+
+### 概述
+
+`05-e2e-openhands.test.ts` 验证完整的 OpenHands 集成流程：创建会话 → 发送编码任务 → agent 执行 → 验证 GitLab 提交。
+
+### 环境变量
+
+| 变量 | 用途 | 必需 |
+|------|------|------|
+| `SKIP_OPENHANDS_TESTS=true` | 跳过 OH E2E 测试 | 否 |
+| `GITLAB_TOKEN=glpat-xxx` | GitLab API Token，用于验证 agent 的 git push | 否（无则跳过验证） |
+
+`GITLAB_TOKEN` 也会被嵌入到 git repo URL 中，让 agent 能够 push：
+```
+http://root:{GITLAB_TOKEN}@gitlib.foggysource.com/test/coding-test.git
+```
+
+### 测试结构
+
+```typescript
+test('完整流程', async () => {
+  // Step 1: 创建 Conversation（启动 OH sandbox）
+  const conversation = await client.createConversation({
+    userId, projectId,
+    gitRepoUrl: GIT_REPO_URL,  // 含 token 的 URL
+    branchName: 'main',
+  });
+
+  // Step 2: 等待会话 READY（最多 120 秒）
+  await pollUntilStatus(client, conversationId, ['READY', 'RUNNING'], 120_000);
+
+  // Step 3: 发送编码任务
+  await client.sendMessage(conversationId, { content: taskContent });
+
+  // Step 4: 轮询事件直到 Agent 完成（最多 240 秒）
+  const events = await pollForAgentCompletion(client, conversationId, 240_000);
+
+  // Step 5: 通过 GitLab API 验证文件已提交
+  const verified = await verifyGitLabBranch(GITLAB_URL, GITLAB_TOKEN, ...);
+  expect(verified.branchExists).toBe(true);
+  expect(verified.fileContent).toContain('Hello World');
+}, 300_000);
+```
+
+### 关键 Helper 函数
+
+#### `pollUntilStatus` - 等待会话状态
+
+每 2 秒查询会话状态，直到匹配目标状态或超时。遇到 ERROR/STOPPED 立即返回 false。
+
+```typescript
+async function pollUntilStatus(
+  client, conversationId, targetStatuses: string[], timeoutMs: number
+): Promise<boolean>
+```
+
+#### `pollForAgentCompletion` - 等待 Agent 完成
+
+每 2 秒查询事件列表，累积新事件。终止条件：
+- `CONVERSATION_STATUS` 事件的 `data.status === 'IDLE'`
+- `ERROR` 事件（非 ValidationService 来源）
+- 连续 60 秒无新事件（`stableCount > 30`，每次 2 秒）
+
+```typescript
+async function pollForAgentCompletion(
+  client, conversationId, timeoutMs: number
+): Promise<Event[]>
+```
+
+#### `verifyGitLabBranch` - GitLab 验证
+
+通过 GitLab REST API 验证分支和文件是否存在。带 3 次重试（git push 可能有延迟）。
+
+### 超时调优经验
+
+| 参数 | 推荐值 | 原因 |
+|------|--------|------|
+| 会话创建等待 | 120s | OH 容器启动 + agent server 初始化 |
+| Agent 完成等待 | 240s | 每次 LLM 调用约 30-50 秒，多步任务需要多次调用 |
+| 无新事件超时 | 60s (`stableCount > 30`) | LLM 单次调用可能需要 40+ 秒，20s 太短会误判 |
+| 测试总超时 | 300s (5 分钟) | 包含容器启动 + agent 执行 + GitLab 验证 |
+| GitLab push 生效等待 | 3s + 3 次重试（每次 5s） | git push 到 GitLab 有传播延迟 |
+
+### 常见问题
+
+**Q: Agent 只执行了 1 步就超时？**
+A: DashScope 等 LLM 每次调用 30-50 秒。确保 `stableCount` 阈值足够大（推荐 30 即 60s）。
+
+**Q: 容器启动失败，端口绑定错误？**
+A: Windows Hyper-V 会保留某些端口范围。属于偶发问题，重试通常能解决。
+
+**Q: GitLab 验证找不到分支？**
+A: 确保 `GITLAB_TOKEN` 有写权限，并且嵌入到了 git repo URL 中。agent 需要 push 权限。
+
+**Q: ValidationService 报错但测试没失败？**
+A: 这是预期行为。E2E 测试中 ValidationService 可能不可用，其错误被标记为非终止事件。
 
 ## 约束条件
 

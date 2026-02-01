@@ -205,6 +205,124 @@ foggy:
 2. 运行所有单元测试：`mvn test`
 3. 检查编译：`mvn compile`
 
+## OpenHands V1 集成开发
+
+### 架构概览
+
+OpenHands V1 采用**双容器架构**：
+
+```
+我们的后端
+  ├── OpenHandsInstanceManager    → 创建主容器 (openhands-local:dev)
+  ├── OpenHandsClient             → 与主容器 + agent server 通信
+  ├── OpenHandsMessageForwarder   → 转发用户消息到 OH
+  └── OpenHandsEventPoller        → 轮询 agent server 事件
+
+主容器 (OH Main Server)
+  ├── 管理 app-conversations
+  ├── 接收消息 (POST /api/v1/app-conversations/{id}/messages)
+  └── 创建 agent server 容器
+
+Agent Server 容器 (独立 Docker 容器)
+  ├── 运行 LLM agent
+  ├── 执行命令 (bash, file edit, browse)
+  └── 提供事件查询 API (GET {conversation_url}/events/search)
+```
+
+### 关键组件
+
+| 组件 | 路径 | 职责 |
+|------|------|------|
+| `OpenHandsInstanceManager` | `git/OpenHandsInstanceManager.java` | 创建/管理 OH Docker 容器，配置环境变量 |
+| `OpenHandsClient` | `git/OpenHandsClient.java` | HTTP 客户端，与 OH 主容器和 agent server 通信 |
+| `OpenHandsClientFactory` | `git/OpenHandsClientFactory.java` | 按 userId 管理 OpenHandsClient 实例 |
+| `OpenHandsMessageForwarder` | `api/listener/OpenHandsMessageForwarder.java` | 监听 MESSAGE_SENT 事件，转发到 OH |
+| `OpenHandsEventPoller` | `api/service/OpenHandsEventPoller.java` | 轮询 agent server 事件，转发到内部事件系统 |
+| `OpenHandsPollingStartEvent` | `api/model/OpenHandsPollingStartEvent.java` | 内部 Spring 事件，解耦消息转发与轮询启动 |
+
+### Docker 环境变量（踩坑重点）
+
+OH 主容器和 agent server 是**独立的 Docker 容器**，环境变量不会继承。
+
+```java
+// 主容器环境变量
+env.add("LLM_API_KEY=" + apiKey);           // ⚠️ 不是 OPENAI_API_KEY！OH 用 LLM_ 前缀
+env.add("LLM_MODEL=" + modelName);           // 需要 provider 前缀：openai/glm-4.7
+env.add("LLM_BASE_URL=" + apiBaseUrl);
+env.add("OH_SECRET_KEY=" + ohSecretKey);     // V1 必需
+env.add("DISABLE_MCP=true");
+env.add("AGENT_SERVER_IMAGE_REPOSITORY=" + agentServerImage);
+env.add("AGENT_SERVER_IMAGE_TAG=" + agentServerTag);
+
+// ⚠️ 关键：通过 OH_AGENT_SERVER_ENV 向 agent server 注入凭证
+// agent server 是独立容器，litellm 需要 OPENAI_API_KEY（不是 LLM_API_KEY）
+env.add("OH_AGENT_SERVER_ENV={\"OPENAI_API_KEY\":\"" + apiKey + "\",\"OPENAI_API_BASE\":\"" + apiBaseUrl + "\"}");
+```
+
+**常见错误**：
+- `LLM Provider NOT provided` → model name 缺少 provider 前缀，应为 `openai/glm-4.7` 而非 `glm-4.7`
+- `OPENAI_API_KEY not set` → agent server 缺少 API key，需通过 `OH_AGENT_SERVER_ENV` 传递
+- `LLM_API_KEY` vs `OPENAI_API_KEY`：OH 配置系统读 `LLM_API_KEY`，但 litellm 运行时需要 `OPENAI_API_KEY`
+
+### 事件轮询与去重模式
+
+Agent server 的 `next_page_id` 在事件量小时始终为 null，导致每次轮询返回全部事件。必须在客户端做去重：
+
+```java
+Set<String> seenEventIds = new HashSet<>();
+
+// 在轮询循环内：
+String eventId = extractEventId(eventMap);  // 优先用 id 字段，回退到 event_id 或 kind:timestamp
+if (eventId != null && !seenEventIds.add(eventId)) {
+    continue;  // 跳过已处理的事件
+}
+```
+
+### 终止事件检测
+
+以下 OH 事件表示 agent 完成/出错，需停止轮询：
+
+```java
+// 1. ConversationErrorEvent → 直接终止
+// 2. ConversationStateUpdateEvent + execution_status = error/completed/stopped/finished
+// 3. AgentStateChangedObservation + state = finished/stopped/error/awaiting_user_input
+```
+
+### 消息转发流程
+
+```
+用户 POST /messages → MessageService → 发布 MESSAGE_SENT 事件
+    → OpenHandsMessageForwarder (@Async @EventListener)
+        → client.sendMessage(ohConversationId, content)
+        → 发布 OpenHandsPollingStartEvent
+            → OpenHandsEventPoller.startPolling()
+                → 每 2 秒轮询 agent server 事件
+                → 转换为内部 Event 并 publishEvent
+                → 检测到终止事件 → stopPolling + 更新状态为 IDLE
+```
+
+### 配置参考 (application-docker.yml)
+
+```yaml
+foggy:
+  coding-agent:
+    openhands:
+      image: openhands-local:dev
+      api-key: your-api-key
+      model-name: openai/glm-4.7          # ⚠️ 必须带 provider 前缀
+      api-base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      agent-server-image: ghcr.io/openhands/agent-server
+      agent-server-tag: 31536c8-python
+      oh-secret-key: openhands-dev-secret-key-1234567890
+```
+
+### 调试技巧
+
+1. **查看 agent server 日志**：`docker logs <agent-server-container-id>`
+2. **检查环境变量**：`docker exec <container-id> env | grep -E "LLM|OPENAI|OH_"`
+3. **后端日志关键词**：`oh-poller`（轮询线程）、`event-`（事件线程）、`OpenHands`（客户端日志）
+4. **Windows Hyper-V 端口冲突**：某些端口范围被 Hyper-V 保留，容器启动失败时重试即可（会分配不同端口）
+
 ## 约束条件
 
 ### JPA 规则

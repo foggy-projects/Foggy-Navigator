@@ -376,6 +376,78 @@ npm test -- --failed
 npm test -- --update
 ```
 
+## E2E OpenHands 测试参考
+
+### 环境变量
+
+```bash
+# .env 或运行时设置
+SKIP_OPENHANDS_TESTS=false    # 设为 true 跳过 OH 测试
+GITLAB_TOKEN=glpat-xxx        # GitLab API Token，用于验证 git push
+```
+
+### 运行 E2E 测试
+
+```bash
+# 不带 GitLab 验证（跳过 Step 5）
+cd addons/coding-agent/integration-tests
+npx vitest run tests/05-e2e-openhands.test.ts --reporter=verbose
+
+# 带 GitLab 验证
+GITLAB_TOKEN="glpat-xxx" npx vitest run tests/05-e2e-openhands.test.ts --reporter=verbose
+
+# 跳过 OH 测试
+SKIP_OPENHANDS_TESTS=true npm test
+```
+
+### GitLab 验证 API
+
+```typescript
+// 检查分支是否存在
+GET ${GITLAB_URL}/api/v4/projects/${encodedProject}/repository/branches/${encodedBranch}
+Headers: { 'PRIVATE-TOKEN': token }
+
+// 检查文件是否存在（返回 base64 编码内容）
+GET ${GITLAB_URL}/api/v4/projects/${encodedProject}/repository/files/${encodedFile}?ref=${encodedBranch}
+Headers: { 'PRIVATE-TOKEN': token }
+
+// 解码文件内容
+Buffer.from(response.data.content, 'base64').toString('utf-8')
+```
+
+### E2E 事件流示例
+
+典型的完整 E2E 事件序列：
+
+```
+1. CONVERSATION_STATUS  { status: "STARTING" }
+2. CONVERSATION_STATUS  { status: "READY" }
+3. ERROR                { source: "ValidationService", ... }  ← 非终止，可忽略
+4. MESSAGE_SENT         { content: "Please do..." }            ← 用户消息
+5. CONVERSATION_STATUS  { status: "RUNNING" }
+6. MESSAGE_SENT         { id: "uuid", source: "user", ... }   ← OH 回显
+7. CONVERSATION_STATUS  { key: "execution_status", ... }       ← agent 开始
+8. AGENT_ACTION         { kind: "TerminalAction", command: "git clone ..." }
+9. AGENT_OBSERVATION    { kind: "TerminalObservation", content: "Cloning..." }
+10. CONVERSATION_STATUS { key: "state", value: "finished" }    ← 终止事件
+11. CONVERSATION_STATUS { status: "IDLE" }                     ← 我们的状态更新
+```
+
+### 测试超时配置
+
+```typescript
+// vitest test-level timeout
+test('E2E test', async () => { ... }, 300_000);  // 5 分钟
+
+// pollUntilStatus timeout
+await pollUntilStatus(client, id, ['READY'], 120_000);  // 2 分钟
+
+// pollForAgentCompletion timeout
+const events = await pollForAgentCompletion(client, id, 240_000);  // 4 分钟
+
+// 内部空闲检测: stableCount > 30 (每 2 秒检查一次 = 60 秒无新事件则认为完成)
+```
+
 ## 常见问题
 
 ### Hook 超时
