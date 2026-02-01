@@ -1,1 +1,1 @@
-com.foggy.navigator.api.config.CodingAgentAutoConfiguration
+com.foggy.navigator.coding.agent.api.config.CodingAgentAutoConfiguration
