@@ -10,13 +10,10 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  */
 @AutoConfiguration
 @ComponentScan(basePackages = {
-        "com.foggy.navigator.metadata.config.controller",
-        "com.foggy.navigator.metadata.config.service",
-        "com.foggy.navigator.metadata.config.repository",
-        "com.foggy.navigator.metadata.config.configuration"
+        "com.foggy.navigator.metadata.query.*"
 })
 @EnableJpaRepositories(basePackages = {
-        "com.foggy.navigator.metadata.config.repository"
+        "com.foggy.navigator.metadata.query.config.repository"
 })
 public class MetadataConfigAutoConfiguration {
 }

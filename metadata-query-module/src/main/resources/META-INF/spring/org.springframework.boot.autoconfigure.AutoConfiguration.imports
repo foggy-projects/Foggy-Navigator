@@ -1,1 +1,2 @@
 com.foggy.navigator.metadata.query.config.MetadataQueryAutoConfiguration
+com.foggy.navigator.metadata.query.config.RestTemplateConfig

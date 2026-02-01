@@ -11,13 +11,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  */
 @AutoConfiguration
 @ComponentScan(basePackages = {
-    "com.foggy.navigator.auth.util",
-    "com.foggy.navigator.auth.service",
-    "com.foggy.navigator.auth.repository",
-    "com.foggy.navigator.auth.controller",
-    "com.foggy.navigator.auth.interceptor",
-    "com.foggy.navigator.auth.aspect",
-    "com.foggy.navigator.auth.config"
+    "com.foggy.navigator.auth.*"
 })
 @EntityScan(basePackages = {
     "com.foggy.navigator.auth.entity"

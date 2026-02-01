@@ -1,1 +1,4 @@
 com.foggy.navigator.auth.config.AuthAutoConfiguration
+com.foggy.navigator.auth.config.SecurityConfig
+com.foggy.navigator.auth.config.WebMvcConfig
+com.foggy.navigator.auth.config.CorsConfig

@@ -1,5 +1,6 @@
 package com.foggy.navigator.metadata.query.config;
 
+import com.foggyframework.core.annotates.EnableFoggyFramework;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.context.annotation.ComponentScan;
 
@@ -9,9 +10,8 @@ import org.springframework.context.annotation.ComponentScan;
  */
 @AutoConfiguration
 @ComponentScan(basePackages = {
-        "com.foggy.navigator.metadata.controller",
-        "com.foggy.navigator.metadata.service",
-        "com.foggy.navigator.metadata.config"
+        "com.foggy.navigator.metadata.query.*"
 })
+@EnableFoggyFramework(bundleName = "metadata-query-module")
 public class MetadataQueryAutoConfiguration {
 }
