@@ -1,203 +1,184 @@
 <template>
-  <div class="page-container">
-    <el-card>
+  <div class="chat-page">
+    <ChatPanel
+      :messages="chatStore.sortedMessages"
+      :is-thinking="chatStore.isThinking"
+      :connection-status="chatStore.connectionStatus"
+      :conversation-status="chatStore.conversationStatus"
+      :input-disabled="sending"
+      placeholder="输入消息..."
+      @send="handleSend"
+    >
       <template #header>
-        <div class="card-header">
-          <span>会话详情 - {{ conversationId }}</span>
-          <el-button @click="$router.back()">返回</el-button>
+        <div class="header-left">
+          <el-button text @click="router.push('/conversations')">
+            <span style="margin-right:4px">&larr;</span>返回
+          </el-button>
+          <span class="conv-id">{{ shortId }}</span>
+        </div>
+        <div class="header-right">
+          <StatusBadge v-if="chatStore.conversationStatus" :status="chatStore.conversationStatus" />
+          <span
+            :class="['connection-dot', chatStore.connectionStatus]"
+            :title="connectionLabel"
+          />
         </div>
       </template>
-
-      <el-skeleton v-if="loading" :rows="3" animated />
-
-      <div v-else class="conversation-detail">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="会话ID">
-            {{ conversation?.conversationId }}
-          </el-descriptions-item>
-          <el-descriptions-item label="用户ID">
-            {{ conversation?.userId }}
-          </el-descriptions-item>
-          <el-descriptions-item label="状态">
-            <StatusBadge :status="conversation?.status || ''" />
-          </el-descriptions-item>
-          <el-descriptions-item label="项目ID">
-            {{ conversation?.projectId || '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="创建时间">
-            {{ conversation?.createdAt }}
-          </el-descriptions-item>
-          <el-descriptions-item label="更新时间">
-            {{ conversation?.updatedAt }}
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <el-divider content-position="left">消息记录</el-divider>
-
-        <div class="messages-container">
-          <div
-            v-for="msg in messages"
-            :key="msg.id"
-            :class="['message-item', msg.role.toLowerCase()]"
-          >
-            <div class="message-role">{{ msg.role === 'USER' ? '用户' : 'AI' }}</div>
-            <div class="message-content">{{ msg.content }}</div>
-            <div class="message-time">{{ msg.createdAt }}</div>
-          </div>
-        </div>
-
-        <el-divider content-position="left">实时事件</el-divider>
-
-        <div class="events-container">
-          <div v-for="event in events" :key="event.id" class="event-item">
-            <el-tag size="small">{{ event.type }}</el-tag>
-            <span class="event-data">{{ event.data }}</span>
-            <span class="event-time">{{ event.createdAt }}</span>
-          </div>
-        </div>
-      </div>
-    </el-card>
+    </ChatPanel>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import StatusBadge from '@/components/StatusBadge.vue'
-import { getConversation, getMessages } from '@/api/conversation'
-import { subscribeToEvents } from '@/api/event'
-import type { Conversation, Message, Event } from '@/types'
+import { ChatPanel, StatusBadge, useChatStore, AipMessageType } from '@foggy/chat'
+import type { ConnectionStatus } from '@foggy/chat'
+import { getConversation, getMessages, sendMessage } from '@/api/conversation'
+import { subscribeToConversation } from '@/api/event'
 
 const route = useRoute()
+const router = useRouter()
 const conversationId = route.params.id as string
-
-const loading = ref(false)
-const conversation = ref<Conversation>()
-const messages = ref<Message[]>([])
-const events = ref<Event[]>([])
+const chatStore = useChatStore()
+const sending = ref(false)
 
 let eventSource: EventSource | null = null
 
-const loadData = async () => {
-  loading.value = true
+const shortId = computed(() =>
+  conversationId.length > 12 ? conversationId.slice(0, 12) + '...' : conversationId
+)
+
+const connectionLabel = computed(() => {
+  const map: Record<ConnectionStatus, string> = {
+    disconnected: '未连接',
+    connecting: '连接中',
+    connected: '已连接',
+    error: '连接错误',
+  }
+  return map[chatStore.connectionStatus] ?? ''
+})
+
+async function loadHistory() {
   try {
-    const [convData, messagesData] = await Promise.all([
+    const [conv, msgs] = await Promise.all([
       getConversation(conversationId),
-      getMessages(conversationId)
+      getMessages(conversationId),
     ])
-    conversation.value = convData
-    messages.value = messagesData
-  } catch (error: any) {
-    ElMessage.error(error.message || '加载失败')
-  } finally {
-    loading.value = false
+    chatStore.conversationStatus = conv.status
+    // Convert existing messages to chat messages
+    // Backend returns: { messageId, conversationId, content, timestamp }
+    // Messages from this API are user-sent; agent replies come via SSE events
+    for (const m of msgs) {
+      // Handle Java timestamp with nanosecond precision (trim to ms)
+      const tsStr = m.timestamp?.replace(/(\.\d{3})\d*$/, '$1')
+      chatStore.messages.push({
+        id: m.messageId,
+        type: AipMessageType.TEXT_COMPLETE,
+        sender: m.role === 'ASSISTANT' ? 'assistant' : 'user',
+        content: m.content,
+        timestamp: tsStr ? new Date(tsStr).getTime() : Date.now(),
+      })
+    }
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : '加载历史消息失败'
+    ElMessage.error(msg)
   }
 }
 
-onMounted(() => {
-  loadData()
-
-  eventSource = subscribeToEvents(conversationId, {
-    onEvent: (event) => {
-      events.value.unshift(event)
-      if (events.value.length > 100) {
-        events.value = events.value.slice(0, 100)
+function connectSse() {
+  chatStore.setConnectionStatus('connecting')
+  eventSource = subscribeToConversation(conversationId, {
+    onMessage: (aipMessages) => {
+      for (const m of aipMessages) {
+        chatStore.processAipMessage(m)
       }
     },
-    onError: (error) => {
-      console.error('SSE error:', error)
-    }
+    onConnected: () => {
+      chatStore.setConnectionStatus('connected')
+    },
+    onError: () => {
+      chatStore.setConnectionStatus('error')
+    },
   })
+}
+
+async function handleSend(content: string) {
+  sending.value = true
+  chatStore.addUserMessage(content, conversationId)
+  try {
+    await sendMessage({ conversationId, content })
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : '发送失败'
+    ElMessage.error(msg)
+  } finally {
+    sending.value = false
+  }
+}
+
+onMounted(async () => {
+  chatStore.clearMessages()
+  await loadHistory()
+  connectSse()
 })
 
 onUnmounted(() => {
   eventSource?.close()
+  chatStore.setConnectionStatus('disconnected')
 })
 </script>
 
 <style scoped>
-.page-container {
-  padding: 20px;
+.chat-page {
+  height: calc(100vh - 60px);
+  padding: 16px;
+  box-sizing: border-box;
 }
 
-.card-header {
+.header-left {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 8px;
 }
 
-.conversation-detail {
-  margin-top: 20px;
+.conv-id {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
 }
 
-.messages-container {
-  max-height: 400px;
-  overflow-y: auto;
-  padding: 10px;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
-}
-
-.message-item {
-  margin-bottom: 15px;
-  padding: 10px;
-  border-radius: 4px;
-}
-
-.message-item.user {
-  background-color: #e3f2fd;
-  text-align: right;
-}
-
-.message-item.assistant {
-  background-color: #f5f5f5;
-}
-
-.message-role {
-  font-weight: bold;
-  margin-bottom: 5px;
-  font-size: 12px;
-  color: #606266;
-}
-
-.message-content {
-  margin-bottom: 5px;
-  white-space: pre-wrap;
-}
-
-.message-time {
-  font-size: 12px;
-  color: #909399;
-}
-
-.events-container {
-  max-height: 300px;
-  overflow-y: auto;
-  padding: 10px;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
-}
-
-.event-item {
+.header-right {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px;
-  border-bottom: 1px solid #f0f0f0;
 }
 
-.event-item:last-child {
-  border-bottom: none;
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
 }
 
-.event-data {
-  flex: 1;
-  font-size: 14px;
+.connection-dot.connected {
+  background-color: #67c23a;
 }
 
-.event-time {
-  font-size: 12px;
-  color: #909399;
+.connection-dot.connecting {
+  background-color: #e6a23c;
+  animation: blink 1s infinite;
+}
+
+.connection-dot.disconnected {
+  background-color: #c0c4cc;
+}
+
+.connection-dot.error {
+  background-color: #f56c6c;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 </style>

@@ -1,39 +1,42 @@
 import client from './client'
-import type { Event } from '@/types'
+import type { Event as CodingEvent } from '@/types'
+import { createSseClient } from '@foggy/chat'
+import type { SseClientOptions } from '@foggy/chat'
+import type { OhRawEvent } from '@/adapters/OpenHandsAdapter'
+import { openHandsAdapter } from '@/adapters/OpenHandsAdapter'
+import { getToken } from '@/utils/auth'
 
 export async function listEvents(params?: {
   conversationId?: string
   type?: string
   limit?: number
-}): Promise<Event[]> {
+}): Promise<CodingEvent[]> {
   return client.get('/events', { params })
 }
 
-export function subscribeToEvents(
+export function subscribeToConversation(
   conversationId: string,
   handlers: {
-    onEvent?: (event: Event) => void
-    onError?: (error: any) => void
-    onOpen?: () => void
+    onMessage?: SseClientOptions<OhRawEvent>['onMessage']
+    onConnected?: () => void
+    onError?: (error: globalThis.Event) => void
   }
 ): EventSource {
-  const baseURL = import.meta.env.VITE_API_BASE_URL || ''
-  const url = `${baseURL}/api/v1/events/stream?conversationId=${conversationId}`
+  // Build SSE URL — bypass Vite proxy for SSE to avoid buffering/timeout issues
+  const token = getToken()
+  // In dev mode, connect directly to the backend; in production, use relative path
+  const sseBase = import.meta.env.DEV
+    ? 'http://localhost:8112/api/v1'
+    : (import.meta.env.VITE_API_BASE_URL || '/api/v1')
+  const url = `${sseBase}/events/stream?conversationId=${conversationId}${token ? `&token=${token}` : ''}`
 
-  const eventSource = new EventSource(url)
-
-  eventSource.onopen = () => handlers.onOpen?.()
-
-  eventSource.onmessage = (e) => {
-    try {
-      const event: Event = JSON.parse(e.data)
-      handlers.onEvent?.(event)
-    } catch (error) {
-      console.error('Failed to parse event:', error)
-    }
-  }
-
-  eventSource.onerror = (e) => handlers.onError?.(e)
-
-  return eventSource
+  return createSseClient<OhRawEvent>({
+    url,
+    eventName: 'event',
+    adapter: openHandsAdapter,
+    sessionId: conversationId,
+    onMessage: handlers.onMessage ?? (() => {}),
+    onConnected: handlers.onConnected,
+    onError: handlers.onError,
+  })
 }

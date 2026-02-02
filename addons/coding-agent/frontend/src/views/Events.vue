@@ -27,9 +27,9 @@
       <el-table v-else :data="events" stripe max-height="600">
         <el-table-column prop="id" label="事件ID" width="250" />
         <el-table-column prop="conversationId" label="会话ID" width="250" />
-        <el-table-column prop="type" label="类型" width="150">
+        <el-table-column prop="kind" label="类型" width="150">
           <template #default="{ row }">
-            <el-tag size="small">{{ row.type }}</el-tag>
+            <el-tag size="small">{{ row.kind }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="data" label="数据" show-overflow-tooltip />

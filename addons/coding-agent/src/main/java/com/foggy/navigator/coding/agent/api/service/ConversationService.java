@@ -52,7 +52,9 @@ public class ConversationService {
 
     private final Map<String, Conversation> conversations = new ConcurrentHashMap<>();
 
-    @Transactional
+    // No @Transactional: this method does multiple independent DB ops + long-running
+    // OpenHands polling. A single transaction would cause UnexpectedRollbackException
+    // when the catch block tries to save ERROR state after an inner exception.
     public Conversation createConversation(CreateConversationRequest request) {
         log.info("创建对话: userId={}, projectId={}, branch={}",
                 request.getUserId(), request.getProjectId(), request.getBranchName());

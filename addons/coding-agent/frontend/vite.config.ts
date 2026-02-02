@@ -20,9 +20,17 @@ export default defineConfig({
                 // 保持 cookie 和认证信息
                 configure: (proxy, options) => {
                     proxy.on('proxyReq', (proxyReq, req, res) => {
-                        // 确保代理请求包含原始请求的所有头
+                        // SSE: disable buffering so events stream through immediately
+                        proxyReq.setHeader('X-Accel-Buffering', 'no')
                         if (req.headers.authorization) {
                             proxyReq.setHeader('Authorization', req.headers.authorization)
+                        }
+                    })
+                    proxy.on('proxyRes', (proxyRes, req, res) => {
+                        // SSE: ensure no buffering on the proxy response
+                        if (proxyRes.headers['content-type']?.includes('text/event-stream')) {
+                            proxyRes.headers['cache-control'] = 'no-cache'
+                            proxyRes.headers['x-accel-buffering'] = 'no'
                         }
                     })
                 }

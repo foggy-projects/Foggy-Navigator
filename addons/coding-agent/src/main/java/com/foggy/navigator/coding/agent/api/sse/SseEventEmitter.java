@@ -2,26 +2,43 @@ package com.foggy.navigator.coding.agent.api.sse;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.coding.agent.api.model.Event;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 
 @Component
 @Slf4j
 public class SseEventEmitter {
 
     private final Map<String, CopyOnWriteArrayList<SseEmitter>> conversationEmitters = new ConcurrentHashMap<>();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
+    private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "sse-heartbeat");
+        t.setDaemon(true);
+        return t;
+    });
+
+    public SseEventEmitter(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+        // Send heartbeat comment every 15 seconds to keep SSE connections alive
+        heartbeatScheduler.scheduleAtFixedRate(this::sendHeartbeats, 15, 15, TimeUnit.SECONDS);
+    }
+
+    @PreDestroy
+    public void destroy() {
+        heartbeatScheduler.shutdownNow();
+    }
 
     public SseEmitter createEmitter(String conversationId) {
         log.info("创建 SSE emitter: conversationId={}", conversationId);
 
-        SseEmitter emitter = new SseEmitter(300000L);
+        // Use 0 for no timeout — let the heartbeat keep it alive
+        SseEmitter emitter = new SseEmitter(0L);
 
         emitter.onCompletion(() -> {
             log.info("SSE emitter 完成: conversationId={}", conversationId);
@@ -58,17 +75,54 @@ public class SseEventEmitter {
 
         log.debug("发送 SSE 事件: conversationId={}, kind={}", conversationId, event.getKind());
 
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(event);
+        } catch (Exception e) {
+            log.error("SSE 事件序列化失败: conversationId={}, kind={}", conversationId, event.getKind(), e);
+            return;
+        }
+
         emitters.removeIf(emitter -> {
             try {
                 emitter.send(SseEmitter.event()
                         .name("event")
-                        .data(objectMapper.writeValueAsString(event)));
+                        .data(json));
                 return false;
             } catch (IOException e) {
-                log.error("发送 SSE 事件失败: conversationId={}", conversationId, e);
+                log.error("发送 SSE 事件失败（连接问题）: conversationId={}", conversationId);
                 return true;
             }
         });
+    }
+
+    private void sendHeartbeats() {
+        try {
+            conversationEmitters.forEach((conversationId, emitters) -> {
+                int before = emitters.size();
+                emitters.removeIf(emitter -> {
+                    try {
+                        emitter.send(SseEmitter.event().comment("heartbeat"));
+                        return false;
+                    } catch (Exception e) {
+                        log.debug("心跳发送失败，移除 emitter: conversationId={}", conversationId);
+                        return true;
+                    }
+                });
+                int after = emitters.size();
+                if (after > 0) {
+                    log.debug("心跳发送成功: conversationId={}, emitters={}", conversationId, after);
+                }
+                if (before > 0 && after == 0) {
+                    log.info("所有 emitter 已失效，移除: conversationId={}", conversationId);
+                }
+                if (emitters.isEmpty()) {
+                    conversationEmitters.remove(conversationId);
+                }
+            });
+        } catch (Exception e) {
+            log.error("心跳调度异常（不影响后续心跳）", e);
+        }
     }
 
     private void removeEmitter(String conversationId, SseEmitter emitter) {

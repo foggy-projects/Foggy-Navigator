@@ -15,7 +15,8 @@ export async function getConversation(id: string): Promise<Conversation> {
 export async function createConversation(
   request: CreateConversationRequest
 ): Promise<Conversation> {
-  return client.post('/conversations', request)
+  // Container creation + polling can take up to 120s on the backend
+  return client.post('/conversations', request, { timeout: 150000 })
 }
 
 export async function deleteConversation(id: string): Promise<void> {
@@ -31,5 +32,5 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
 }
 
 export async function sendMessage(request: SendMessageRequest): Promise<Message> {
-  return client.post('/messages', request)
+  return client.post(`/conversations/${request.conversationId}/messages`, request)
 }

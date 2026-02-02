@@ -10,11 +10,11 @@ export interface Conversation {
 }
 
 export interface Message {
-  id: string
+  messageId: string
   conversationId: string
-  role: 'USER' | 'ASSISTANT'
+  role?: 'USER' | 'ASSISTANT'
   content: string
-  createdAt: string
+  timestamp: string
 }
 
 export interface Container {
@@ -29,14 +29,16 @@ export interface Container {
 export interface Event {
   id: string
   conversationId: string
-  type: string
-  data: string
+  kind: string
+  data: Record<string, unknown>
   createdAt: string
 }
 
 export interface CreateConversationRequest {
   userId: string
   initialMessage: string
+  gitRepoUrl?: string
+  branchName?: string
 }
 
 export interface SendMessageRequest {

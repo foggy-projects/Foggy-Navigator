@@ -11,6 +11,7 @@
     "lint": "echo 'Lint not configured yet'"
   },
   "dependencies": {
+    "@foggy/chat": "*",
     "axios": "^1.13.3",
     "element-plus": "^2.13.1",
     "pinia": "^3.0.4",

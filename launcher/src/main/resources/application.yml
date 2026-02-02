@@ -1,6 +1,13 @@
 spring:
   application:
     name: coding-agent
+  main:
+    allow-bean-definition-overriding: true
+
+  # SSE requires long-lived async requests; disable the default 30s timeout
+  mvc:
+    async:
+      request-timeout: -1
 
   datasource:
     url: jdbc:mysql://localhost:13309/coding_agent?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
@@ -19,6 +26,10 @@ spring:
 
 server:
   port: 8112
+  # SSE requires long-lived async requests; disable the default 30s timeout
+  servlet:
+    async:
+      timeout: -1
 
 # JWT 配置
 jwt:
