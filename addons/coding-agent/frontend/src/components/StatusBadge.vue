@@ -13,24 +13,30 @@ const props = defineProps<{
 
 const tagType = computed(() => {
   const statusMap: Record<string, any> = {
-    ACTIVE: 'primary',
+    STARTING: 'warning',
+    WAITING_FOR_SANDBOX: 'warning',
+    PREPARING_REPOSITORY: 'warning',
+    READY: 'primary',
     RUNNING: 'success',
-    COMPLETED: 'success',
-    STOPPED: 'info',
+    IDLE: '',
+    PAUSED: 'info',
     ERROR: 'danger',
-    CREATING: 'warning'
+    STOPPED: 'info'
   }
   return statusMap[props.status] || 'info'
 })
 
 const statusText = computed(() => {
   const textMap: Record<string, string> = {
-    ACTIVE: '活跃',
+    STARTING: '启动中',
+    WAITING_FOR_SANDBOX: '等待沙箱',
+    PREPARING_REPOSITORY: '准备仓库',
+    READY: '就绪',
     RUNNING: '运行中',
-    COMPLETED: '已完成',
-    STOPPED: '已停止',
+    IDLE: '空闲',
+    PAUSED: '已暂停',
     ERROR: '错误',
-    CREATING: '创建中'
+    STOPPED: '已停止'
   }
   return textMap[props.status] || props.status
 })

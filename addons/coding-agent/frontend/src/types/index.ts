@@ -1,11 +1,12 @@
 export interface Conversation {
-  id: string
+  conversationId: string
   userId: string
-  title?: string
-  status: 'ACTIVE' | 'COMPLETED' | 'ERROR' | 'STOPPED'
+  projectId?: string
+  status: 'STARTING' | 'WAITING_FOR_SANDBOX' | 'PREPARING_REPOSITORY' | 'READY' | 'RUNNING' | 'IDLE' | 'PAUSED' | 'ERROR' | 'STOPPED'
+  gitRepoUrl?: string
+  branchName?: string
   createdAt: string
   updatedAt: string
-  containerId?: string
 }
 
 export interface Message {

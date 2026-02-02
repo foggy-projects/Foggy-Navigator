@@ -55,8 +55,8 @@
           </template>
           <el-skeleton v-if="loading" :rows="5" animated />
           <el-table v-else :data="recentConversations" stripe max-height="400">
-            <el-table-column prop="id" label="ID" width="200" />
-            <el-table-column prop="title" label="标题" />
+            <el-table-column prop="conversationId" label="ID" width="320" />
+            <el-table-column prop="projectId" label="项目" />
             <el-table-column prop="status" label="状态" width="100">
               <template #default="{ row }">
                 <StatusBadge :status="row.status" />
@@ -64,7 +64,7 @@
             </el-table-column>
             <el-table-column label="操作" width="100">
               <template #default="{ row }">
-                <el-button link type="primary" @click="viewConversation(row.id)">
+                <el-button link type="primary" @click="viewConversation(row.conversationId)">
                   查看
                 </el-button>
               </template>
@@ -122,7 +122,7 @@ const loadData = async () => {
     ])
 
     stats.value.conversations = conversations.length
-    stats.value.activeConversations = conversations.filter(c => c.status === 'ACTIVE').length
+    stats.value.activeConversations = conversations.filter(c => c.status === 'RUNNING' || c.status === 'READY').length
     stats.value.containers = containers.filter(c => c.status === 'RUNNING').length
     stats.value.todayMessages = 0
 

@@ -130,7 +130,12 @@ public class ConversationCleanupService {
                         }
                     }
                 } catch (Exception e) {
-                    log.error("健康检查失败: conversationId={}", session.getConversationId(), e);
+                    log.warn("健康检查失败，标记为 ERROR: conversationId={}, error={}",
+                            session.getConversationId(), e.getMessage());
+                    session.setStatus(ConversationEntity.ConversationStatus.ERROR);
+                    session.setUpdatedAt(LocalDateTime.now());
+                    conversationRepository.save(session);
+                    syncedCount++;
                 }
             }
 

@@ -4,19 +4,24 @@
       <template #header>
         <div class="card-header">
           <span>会话管理</span>
-          <el-button type="primary" @click="createDialogVisible = true">
-            创建会话
-          </el-button>
+          <div>
+            <el-button @click="loadData" :loading="loading">
+              刷新
+            </el-button>
+            <el-button type="primary" @click="createDialogVisible = true">
+              创建会话
+            </el-button>
+          </div>
         </div>
       </template>
 
       <el-skeleton v-if="loading" :rows="5" animated />
 
       <el-table v-else :data="conversations" stripe>
-        <el-table-column prop="id" label="会话ID" width="250" />
+        <el-table-column prop="conversationId" label="会话ID" width="320" />
         <el-table-column prop="userId" label="用户ID" width="150" />
-        <el-table-column prop="title" label="标题" />
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="projectId" label="项目ID" />
+        <el-table-column prop="status" label="状态" width="120">
           <template #default="{ row }">
             <StatusBadge :status="row.status" />
           </template>
@@ -24,18 +29,18 @@
         <el-table-column prop="createdAt" label="创建时间" width="180" />
         <el-table-column label="操作" width="200">
           <template #default="{ row }">
-            <el-button link type="primary" @click="viewDetail(row.id)">
+            <el-button link type="primary" @click="viewDetail(row.conversationId)">
               查看
             </el-button>
             <el-button
               link
               type="warning"
-              @click="stopConv(row.id)"
-              :disabled="row.status !== 'ACTIVE'"
+              @click="stopConv(row.conversationId)"
+              :disabled="row.status !== 'RUNNING' && row.status !== 'READY'"
             >
               停止
             </el-button>
-            <el-button link type="danger" @click="deleteConv(row.id)">
+            <el-button link type="danger" @click="deleteConv(row.conversationId)">
               删除
             </el-button>
           </template>
@@ -110,13 +115,13 @@ const handleCreate = async () => {
   }
 }
 
-const viewDetail = (id: string) => {
-  router.push(`/conversations/${id}`)
+const viewDetail = (conversationId: string) => {
+  router.push(`/conversations/${conversationId}`)
 }
 
-const stopConv = async (id: string) => {
+const stopConv = async (conversationId: string) => {
   try {
-    await stopConversation(id)
+    await stopConversation(conversationId)
     ElMessage.success('已停止会话')
     loadData()
   } catch (error: any) {
@@ -124,12 +129,12 @@ const stopConv = async (id: string) => {
   }
 }
 
-const deleteConv = async (id: string) => {
+const deleteConv = async (conversationId: string) => {
   await ElMessageBox.confirm('确认删除该会话？', '警告', {
     type: 'warning'
   })
   try {
-    await deleteConversation(id)
+    await deleteConversation(conversationId)
     ElMessage.success('删除成功')
     loadData()
   } catch (error: any) {

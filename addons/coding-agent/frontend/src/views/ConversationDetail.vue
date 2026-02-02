@@ -13,7 +13,7 @@
       <div v-else class="conversation-detail">
         <el-descriptions :column="2" border>
           <el-descriptions-item label="会话ID">
-            {{ conversation?.id }}
+            {{ conversation?.conversationId }}
           </el-descriptions-item>
           <el-descriptions-item label="用户ID">
             {{ conversation?.userId }}
@@ -21,8 +21,8 @@
           <el-descriptions-item label="状态">
             <StatusBadge :status="conversation?.status || ''" />
           </el-descriptions-item>
-          <el-descriptions-item label="容器ID">
-            {{ conversation?.containerId || '-' }}
+          <el-descriptions-item label="项目ID">
+            {{ conversation?.projectId || '-' }}
           </el-descriptions-item>
           <el-descriptions-item label="创建时间">
             {{ conversation?.createdAt }}
