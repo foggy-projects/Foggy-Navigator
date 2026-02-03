@@ -3,7 +3,6 @@ package com.foggy.navigator.agent.framework.router.impl;
 import com.foggy.navigator.agent.framework.core.AgentInfo;
 import com.foggy.navigator.agent.framework.core.AgentRegistry;
 import com.foggy.navigator.agent.framework.protocol.route.*;
-import com.foggy.navigator.agent.protocol.route.*;
 import com.foggy.navigator.agent.framework.router.DelegationRequest;
 import com.foggy.navigator.agent.framework.router.DelegationResult;
 import com.foggy.navigator.agent.framework.router.PreconditionCheckResult;

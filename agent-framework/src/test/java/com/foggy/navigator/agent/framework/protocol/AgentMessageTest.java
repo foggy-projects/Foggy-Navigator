@@ -7,9 +7,6 @@ import com.foggy.navigator.agent.framework.protocol.surface.ActionConfig;
 import com.foggy.navigator.agent.framework.protocol.surface.ComponentType;
 import com.foggy.navigator.agent.framework.protocol.surface.SurfaceUpdatePayload;
 import com.foggy.navigator.agent.framework.protocol.surface.UiComponent;
-import com.foggy.navigator.agent.protocol.route.*;
-import com.foggy.navigator.agent.protocol.surface.*;
-import com.foggy.navigator.agent.protocol.action.*;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

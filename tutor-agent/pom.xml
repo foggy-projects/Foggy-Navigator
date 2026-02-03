@@ -24,10 +24,31 @@
             <version>${project.version}</version>
         </dependency>
 
-        <!-- Spring Boot Web (提供REST接口) -->
+        <!-- Navigator Common -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>navigator-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Navigator SPI -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>navigator-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Spring Boot Web (提供REST接口和RestClient) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Configuration Processor -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <!-- Lombok -->

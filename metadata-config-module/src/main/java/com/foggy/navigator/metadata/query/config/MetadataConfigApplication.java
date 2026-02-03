@@ -17,13 +17,13 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
     MongoDataAutoConfiguration.class
 })
 @ComponentScan(basePackages = {
-    "com.foggy.navigator.metadata.config",
+    "com.foggy.navigator.metadata.query.config",
     "com.foggy.navigator.auth"  // 扫描认证模块
 })
 @EntityScan(basePackages = "com.foggy.navigator.common.entity")
 @EnableJpaRepositories(basePackages = {
-    "com.foggy.navigator.metadata.config.repository",
-    "com.foggy.navigator.auth.repository"  // 扫描认证模块的 Repository
+    "com.foggy.navigator.metadata.query.config.repository"
+    // 认证模块的 Repository 由 AuthAutoConfiguration 自动配置
 })
 public class MetadataConfigApplication {
 

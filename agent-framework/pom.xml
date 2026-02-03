@@ -22,6 +22,20 @@
     </properties>
 
     <dependencies>
+        <!-- Navigator SPI (Skill配置管理接口) -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>navigator-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Navigator Common (DTO定义) -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>navigator-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Spring Boot (不含Web，作为库使用) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

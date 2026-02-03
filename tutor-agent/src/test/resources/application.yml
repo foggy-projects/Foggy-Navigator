@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: tutor-agent-test
+
+foggy:
+  tutor-agent:
+    coding-agent-base-url: http://localhost:8112
+    default-tenant-id: test-tenant
+    agent-id: tutor-agent-test
+    init-skills-on-startup: false
+    connect-timeout: 1000
+    read-timeout: 5000
+
+logging:
+  level:
+    com.foggy.navigator: DEBUG

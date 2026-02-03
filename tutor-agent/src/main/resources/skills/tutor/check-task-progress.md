@@ -1,0 +1,46 @@
+# Skill ID
+check-task-progress
+
+# Skill标题
+查询任务进度
+
+# 描述
+查询编码任务的执行进度和状态
+
+# 触发条件
+- 任务进度
+- 什么状态
+- 查看进度
+- 完成了吗
+- 做得怎么样
+- 任务状态
+
+# 意图
+- check_progress
+- task_status
+- view_progress
+- is_done
+
+# 执行逻辑
+1. 获取用户最近的会话 ID（或让用户指定）
+2. 调用 get_conversation_status 获取会话状态
+3. 解析状态信息，生成友好的进度报告
+4. 如果任务完成，提供结果摘要
+5. 如果任务进行中，提供预估信息
+
+# 输出格式
+**任务进度报告**
+
+📊 **会话信息**
+- 会话 ID: {conversationId}
+- 标题: {title}
+- 状态: {status}
+
+📝 **执行情况**
+- 消息数: {messageCount}
+- 最新更新: {lastUpdate}
+
+{根据状态提供不同的反馈}
+
+# 分派条件
+仅查询和报告状态，不进行新的分派
