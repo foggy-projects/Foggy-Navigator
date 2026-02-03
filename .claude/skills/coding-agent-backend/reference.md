@@ -44,6 +44,138 @@ public enum ConversationStatus {
 }
 ```
 
+## SSE 事件推送基础设施
+
+### SseEventEmitter
+
+位置：`api/sse/SseEventEmitter.java`
+
+核心组件，负责管理 SSE 连接和事件推送。
+
+```java
+@Component
+@Slf4j
+public class SseEventEmitter {
+    private final Map<String, CopyOnWriteArrayList<SseEmitter>> conversationEmitters;
+    private final ObjectMapper objectMapper;  // 必须注入 Spring ObjectMapper（支持 JSR310）
+    private final ScheduledExecutorService heartbeatScheduler;
+
+    // 创建新的 SSE 连接
+    public SseEmitter createEmitter(String conversationId);
+
+    // 发送事件（使用命名事件 "event"）
+    public void sendEvent(String conversationId, Event event);
+
+    // 定期心跳（每 15 秒）防止连接断开
+    private void sendHeartbeats();
+}
+```
+
+**关键实现细节：**
+
+1. **ObjectMapper 必须注入 Spring 管理的实例**
+   ```java
+   // ❌ 错误：new ObjectMapper() 不支持 LocalDateTime
+   private final ObjectMapper objectMapper = new ObjectMapper();
+
+   // ✅ 正确：注入 Spring ObjectMapper（已注册 JavaTimeModule）
+   public SseEventEmitter(ObjectMapper objectMapper) {
+       this.objectMapper = objectMapper;
+   }
+   ```
+
+2. **分离序列化和发送**
+   ```java
+   public void sendEvent(String conversationId, Event event) {
+       // 先序列化，失败不移除 emitter
+       String json;
+       try {
+           json = objectMapper.writeValueAsString(event);
+       } catch (Exception e) {
+           log.error("序列化失败", e);
+           return;  // 不移除 emitter
+       }
+
+       // 再发送，失败移除 emitter
+       emitters.removeIf(emitter -> {
+           try {
+               emitter.send(SseEmitter.event().name("event").data(json));
+               return false;
+           } catch (IOException e) {
+               return true;  // 移除失效的 emitter
+           }
+       });
+   }
+   ```
+
+3. **心跳调度器必须捕获异常**
+   ```java
+   private void sendHeartbeats() {
+       try {
+           // ... 心跳逻辑
+       } catch (Exception e) {
+           log.error("心跳调度异常（不影响后续心跳）", e);
+       }
+   }
+   ```
+
+### SseEventListener
+
+位置：`api/sse/SseEventListener.java`
+
+监听 Spring 事件并推送到 SSE 客户端。
+
+```java
+@Component
+@Slf4j
+public class SseEventListener {
+    private final SseEventEmitter sseEventEmitter;
+
+    @Async("eventPublisherExecutor")
+    @EventListener
+    public void onEvent(Event event) {
+        sseEventEmitter.sendEvent(event.getConversationId(), event);
+    }
+}
+```
+
+### EventStreamController
+
+位置：`api/controller/EventStreamController.java`
+
+SSE 端点控制器。
+
+```java
+@RestController
+@RequestMapping("/api/v1/events")
+public class EventStreamController {
+
+    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream(@RequestParam String conversationId) {
+        SseEmitter emitter = sseEventEmitter.createEmitter(conversationId);
+
+        // 发送初始连接确认
+        Event connectedEvent = Event.builder()
+                .conversationId(conversationId)
+                .kind(EventKind.CONVERSATION_STATUS)
+                .data(Map.of("type", "connected"))
+                .build();
+        sseEventEmitter.sendEvent(conversationId, connectedEvent);
+
+        return emitter;
+    }
+}
+```
+
+### 前端 SSE 集成
+
+前端使用 `@foggy/chat` 的 `createSseClient`，需要配合 `EventAdapter` 将后端 `Event` 转换为 `AipMessage`。
+
+- 事件名：后端 `.name("event")` → 前端 `eventName: 'event'`
+- 开发模式绕过 Vite 代理直连后端（避免 SSE 缓冲问题）
+
+---
+
 ## 线程池配置
 
 ### eventPublisherExecutor

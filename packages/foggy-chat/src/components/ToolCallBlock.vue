@@ -35,6 +35,7 @@ const props = defineProps<{
   border-radius: 8px;
   overflow: hidden;
   max-width: 90%;
+  flex-shrink: 0;
 }
 
 .tool-header {

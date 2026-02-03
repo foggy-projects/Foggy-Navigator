@@ -4,8 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.coding.agent.api.model.Conversation;
 import com.foggy.navigator.coding.agent.api.model.CreateConversationRequest;
 import com.foggy.navigator.coding.agent.api.model.Event;
+import com.foggy.navigator.coding.agent.api.model.GitProject;
 import com.foggy.navigator.coding.agent.api.model.entity.ConversationEntity;
+import com.foggy.navigator.coding.agent.api.model.entity.GitCredentialEntity;
 import com.foggy.navigator.coding.agent.api.repository.ConversationRepository;
+import com.foggy.navigator.coding.agent.api.repository.GitCredentialRepository;
+import com.foggy.navigator.coding.agent.git.GitProviderFactory;
+import com.foggy.navigator.coding.agent.git.GitProviderService;
 import com.foggy.navigator.coding.agent.git.OpenHandsClient;
 import com.foggy.navigator.coding.agent.git.OpenHandsClientFactory;
 import com.foggy.navigator.coding.agent.git.model.v1.AppConversationStartRequest;
@@ -19,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -39,6 +45,12 @@ public class ConversationService {
     private ConversationRepository conversationRepository;
 
     @Autowired
+    private GitCredentialRepository gitCredentialRepository;
+
+    @Autowired
+    private GitProviderFactory gitProviderFactory;
+
+    @Autowired
     @Lazy
     private ValidationService validationService;
 
@@ -52,25 +64,61 @@ public class ConversationService {
 
     private final Map<String, Conversation> conversations = new ConcurrentHashMap<>();
 
+    private static final DateTimeFormatter BRANCH_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+
     // No @Transactional: this method does multiple independent DB ops + long-running
     // OpenHands polling. A single transaction would cause UnexpectedRollbackException
     // when the catch block tries to save ERROR state after an inner exception.
     public Conversation createConversation(CreateConversationRequest request) {
-        log.info("创建对话: userId={}, projectId={}, branch={}",
-                request.getUserId(), request.getProjectId(), request.getBranchName());
-
         String conversationId = UUID.randomUUID().toString();
-
-        Conversation conversation = Conversation.builder()
+        Conversation.ConversationBuilder conversationBuilder = Conversation.builder()
                 .conversationId(conversationId)
                 .userId(request.getUserId())
                 .projectId(request.getProjectId())
-                .gitRepoUrl(request.getGitRepoUrl())
-                .branchName(request.getBranchName())
                 .status(Conversation.ConversationStatus.STARTING)
                 .createdAt(LocalDateTime.now())
-                .updatedAt(LocalDateTime.now())
-                .build();
+                .updatedAt(LocalDateTime.now());
+
+        // 新的 Git 项目流程：通过 gitCredentialId + gitProjectId + baseBranch 创建
+        if (request.getGitCredentialId() != null && request.getGitProjectId() != null) {
+            log.info("创建对话(新流程): userId={}, gitCredentialId={}, gitProjectId={}, baseBranch={}",
+                    request.getUserId(), request.getGitCredentialId(), request.getGitProjectId(), request.getBaseBranch());
+
+            GitCredentialEntity credential = gitCredentialRepository.findByCredentialId(request.getGitCredentialId())
+                    .orElseThrow(() -> new RuntimeException("凭证不存在: " + request.getGitCredentialId()));
+
+            if (!credential.getUserId().equals(request.getUserId())) {
+                throw new RuntimeException("无权使用该凭证");
+            }
+
+            GitProviderService gitService = gitProviderFactory.getService(credential.getProvider());
+            GitProject project = gitService.getProject(credential, request.getGitProjectId());
+
+            String baseBranch = request.getBaseBranch() != null ? request.getBaseBranch() : project.getDefaultBranch();
+            String workingBranch = generateWorkingBranchName(request.getTaskDescription());
+
+            conversationBuilder
+                    .gitCredentialId(request.getGitCredentialId())
+                    .gitProvider(credential.getProvider())
+                    .gitProjectId(request.getGitProjectId())
+                    .gitProjectPath(project.getPathWithNamespace())
+                    .gitRepoUrl(project.getHttpUrlToRepo())
+                    .baseBranch(baseBranch)
+                    .workingBranch(workingBranch)
+                    .branchName(workingBranch);  // 兼容旧字段
+        } else {
+            // 旧流程：直接传入 gitRepoUrl 和 branchName
+            log.info("创建对话(旧流程): userId={}, projectId={}, branch={}",
+                    request.getUserId(), request.getProjectId(), request.getBranchName());
+
+            conversationBuilder
+                    .gitRepoUrl(request.getGitRepoUrl())
+                    .branchName(request.getBranchName())
+                    .baseBranch(request.getBranchName())
+                    .workingBranch(request.getBranchName());
+        }
+
+        Conversation conversation = conversationBuilder.build();
 
         conversations.put(conversationId, conversation);
 
@@ -284,8 +332,13 @@ public class ConversationService {
                     .projectId(conversation.getProjectId())
                     .status(mapStatus(conversation.getStatus()))
                     .namespace(conversation.getNamespace())
+                    .gitCredentialId(conversation.getGitCredentialId())
+                    .gitProvider(conversation.getGitProvider())
+                    .gitProjectId(conversation.getGitProjectId())
+                    .gitProjectPath(conversation.getGitProjectPath())
                     .gitRepoUrl(conversation.getGitRepoUrl())
-                    .branchName(conversation.getBranchName())
+                    .baseBranch(conversation.getBaseBranch())
+                    .workingBranch(conversation.getWorkingBranch())
                     .createdAt(conversation.getCreatedAt())
                     .updatedAt(conversation.getUpdatedAt())
                     .build();
@@ -304,8 +357,13 @@ public class ConversationService {
                         entity.setOhConversationId(conversation.getOhConversationId());
                         entity.setStatus(mapStatus(conversation.getStatus()));
                         entity.setNamespace(conversation.getNamespace());
+                        entity.setGitCredentialId(conversation.getGitCredentialId());
+                        entity.setGitProvider(conversation.getGitProvider());
+                        entity.setGitProjectId(conversation.getGitProjectId());
+                        entity.setGitProjectPath(conversation.getGitProjectPath());
                         entity.setGitRepoUrl(conversation.getGitRepoUrl());
-                        entity.setBranchName(conversation.getBranchName());
+                        entity.setBaseBranch(conversation.getBaseBranch());
+                        entity.setWorkingBranch(conversation.getWorkingBranch());
                         entity.setUpdatedAt(conversation.getUpdatedAt());
                         conversationRepository.save(entity);
                     });
@@ -334,8 +392,14 @@ public class ConversationService {
                             .projectId(entity.getProjectId())
                             .status(mapStatus(entity.getStatus()))
                             .namespace(entity.getNamespace())
+                            .gitCredentialId(entity.getGitCredentialId())
+                            .gitProvider(entity.getGitProvider())
+                            .gitProjectId(entity.getGitProjectId())
+                            .gitProjectPath(entity.getGitProjectPath())
                             .gitRepoUrl(entity.getGitRepoUrl())
-                            .branchName(entity.getBranchName())
+                            .baseBranch(entity.getBaseBranch())
+                            .workingBranch(entity.getWorkingBranch())
+                            .branchName(entity.getWorkingBranch())  // 兼容旧字段
                             .createdAt(entity.getCreatedAt())
                             .updatedAt(entity.getUpdatedAt())
                             .build())
@@ -352,5 +416,24 @@ public class ConversationService {
 
     private Conversation.ConversationStatus mapStatus(ConversationEntity.ConversationStatus status) {
         return Conversation.ConversationStatus.valueOf(status.name());
+    }
+
+    private String generateWorkingBranchName(String taskDescription) {
+        String timestamp = LocalDateTime.now().format(BRANCH_DATE_FORMAT);
+        String safeName = "task";
+        if (taskDescription != null && !taskDescription.isBlank()) {
+            // 将任务描述转换为安全的分支名：只保留字母数字和连字符，限制长度
+            safeName = taskDescription.toLowerCase()
+                    .replaceAll("[^a-z0-9\\u4e00-\\u9fa5]+", "-")  // 非字母数字中文替换为连字符
+                    .replaceAll("^-+|-+$", "")  // 移除首尾连字符
+                    .replaceAll("-+", "-");  // 合并连续连字符
+            if (safeName.length() > 30) {
+                safeName = safeName.substring(0, 30);
+            }
+            if (safeName.isBlank()) {
+                safeName = "task";
+            }
+        }
+        return String.format("coding-agent/%s-%s", safeName, timestamp);
     }
 }

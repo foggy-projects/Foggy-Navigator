@@ -93,7 +93,7 @@ class ConversationServiceTest {
         assertNotNull(conversation);
         assertEquals("user-123", conversation.getUserId());
         assertEquals("project-A", conversation.getProjectId());
-        assertEquals("main", conversation.getBranchName());
+        assertEquals("main", conversation.getBaseBranch());
         assertEquals("sandbox-xyz", conversation.getSandboxId());
         assertEquals("oh-conv-123", conversation.getOhConversationId());
         assertEquals(Conversation.ConversationStatus.READY, conversation.getStatus());
@@ -162,7 +162,8 @@ class ConversationServiceTest {
                 .status(ConversationEntity.ConversationStatus.READY)
                 .namespace("user-user-123-session-123")
                 .gitRepoUrl("https://github.com/org/semantic-layer.git")
-                .branchName("main")
+                .baseBranch("main")
+                .workingBranch("coding-agent/task-20260203")
                 .createdAt(LocalDateTime.now())
                 .updatedAt(LocalDateTime.now())
                 .build();

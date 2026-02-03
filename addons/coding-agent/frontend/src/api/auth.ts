@@ -65,8 +65,7 @@ export async function login(request: LoginRequest): Promise<LoginResponse> {
  * 用户注册
  */
 export async function register(request: RegisterRequest): Promise<LoginResponse> {
-  const response = await authClient.post<RX<string>>('/auth/register', request)
-  const userId = response.data.data
+  await authClient.post<RX<string>>('/auth/register', request)
 
   // 注册成功后需要再登录获取 token
   return login({ username: request.username, password: request.password })

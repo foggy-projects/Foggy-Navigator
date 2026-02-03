@@ -1,5 +1,154 @@
 # Coding Agent 前端技术参考
 
+## @foggy/chat 共享库
+
+共享的聊天 UI 组件库，提供 AIP 协议、SSE 客户端、Pinia store 和 Vue 组件。
+
+### 安装
+
+```json
+// package.json 依赖（workspace 引用）
+{
+  "dependencies": {
+    "@foggy/chat": "workspace:*"
+  }
+}
+```
+
+```typescript
+// main.ts 导入 CSS
+import '@foggy/chat/style.css'
+```
+
+### AIP 消息类型
+
+```typescript
+// AIP (Agent Interaction Protocol) 消息类型枚举
+export enum AipMessageType {
+  TEXT_CHUNK = 'TEXT_CHUNK',         // 流式文本片段
+  TEXT_COMPLETE = 'TEXT_COMPLETE',   // 完整文本消息
+  THINKING = 'THINKING',             // Agent 思考中
+  TOOL_CALL_START = 'TOOL_CALL_START',   // 工具调用开始
+  TOOL_CALL_RESULT = 'TOOL_CALL_RESULT', // 工具调用结果
+  TOOL_CALL_ERROR = 'TOOL_CALL_ERROR',   // 工具调用错误
+  STATE_SYNC = 'STATE_SYNC',         // 会话状态同步
+  ERROR = 'ERROR',                   // 错误消息
+}
+
+// AIP 消息结构
+export interface AipMessage {
+  sessionId: string
+  messageId: string
+  type: AipMessageType
+  payload: Record<string, unknown>
+  timestamp: number
+}
+
+// 各类型 payload 结构
+interface TextPayload { content: string }
+interface ThinkingPayload { thought?: string }
+interface ToolCallStartPayload {
+  toolCallId: string
+  toolName: string
+  command?: string
+  path?: string
+  thought?: string
+}
+interface ToolCallResultPayload {
+  toolCallId: string
+  toolName?: string
+  output?: string
+  exitCode?: number
+}
+interface StateSyncPayload { status: string }
+interface ErrorPayload { error: string; source?: string }
+```
+
+### EventAdapter 接口
+
+```typescript
+// 用于将后端原始事件转换为 AIP 消息的适配器接口
+export interface EventAdapter<T = unknown> {
+  convert(rawEvent: T, sessionId: string): AipMessage[]
+}
+```
+
+### SSE 客户端
+
+```typescript
+import { createSseClient } from '@foggy/chat'
+
+const eventSource = createSseClient({
+  url: '/api/v1/events/stream?conversationId=xxx',
+  eventName: 'event',           // 后端 SSE 命名事件名
+  adapter: openHandsAdapter,    // EventAdapter 实现
+  sessionId: 'xxx',
+  onMessage: (aipMessages) => { /* 处理消息 */ },
+  onConnected: () => { /* 连接成功 */ },
+  onError: (err) => { /* 连接错误 */ },
+})
+
+// 关闭连接
+eventSource.close()
+```
+
+### Pinia Store
+
+```typescript
+import { useChatStore } from '@foggy/chat'
+
+const chatStore = useChatStore()
+
+// 状态
+chatStore.messages           // ChatMessage[]
+chatStore.sortedMessages     // 按时间排序
+chatStore.connectionStatus   // 'connected' | 'connecting' | 'disconnected' | 'error'
+chatStore.conversationStatus // 会话状态（如 'RUNNING', 'IDLE'）
+chatStore.isThinking         // 是否在思考中
+
+// 方法
+chatStore.processAipMessage(aipMsg)  // 处理 AIP 消息
+chatStore.addUserMessage(content)    // 添加用户消息
+chatStore.setConnectionStatus(status)
+chatStore.clearMessages()
+```
+
+### Vue 组件
+
+```vue
+<template>
+  <ChatPanel
+    :messages="chatStore.sortedMessages"
+    :is-thinking="chatStore.isThinking"
+    :connection-status="chatStore.connectionStatus"
+    :conversation-status="chatStore.conversationStatus"
+    :input-disabled="sending"
+    placeholder="输入消息..."
+    @send="handleSend"
+  >
+    <template #header>
+      <!-- 自定义头部内容 -->
+    </template>
+  </ChatPanel>
+</template>
+
+<script setup>
+import { ChatPanel, StatusBadge, useChatStore } from '@foggy/chat'
+</script>
+```
+
+组件列表：
+- `ChatPanel` - 顶层聊天面板（包含 header slot、消息列表、输入框）
+- `MessageList` - 消息滚动列表
+- `MessageBubble` - 文本消息气泡（用户右对齐蓝色，Agent 左对齐灰色）
+- `ToolCallBlock` - 工具调用卡片（thought + command + output 合并显示）
+- `ThinkingIndicator` - 思考动画指示器
+- `ErrorBlock` - 错误消息块
+- `StatusBadge` - 状态标签
+- `MessageInput` - 消息输入框
+
+---
+
 ## TypeScript 类型定义
 
 ### 核心类型

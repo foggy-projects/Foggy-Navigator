@@ -55,7 +55,8 @@ class ConversationRecoveryServiceTest {
                 .status(ConversationEntity.ConversationStatus.STOPPED)
                 .namespace("user-user-123-session-123")
                 .gitRepoUrl("https://github.com/org/semantic-layer.git")
-                .branchName("main")
+                .baseBranch("main")
+                .workingBranch("coding-agent/task-20260203")
                 .createdAt(LocalDateTime.now().minusHours(1))
                 .updatedAt(LocalDateTime.now().minusHours(1))
                 .build();
@@ -70,7 +71,8 @@ class ConversationRecoveryServiceTest {
                 .status(ConversationEntity.ConversationStatus.ERROR)
                 .namespace("user-user-456-session-456")
                 .gitRepoUrl("https://github.com/org/semantic-layer.git")
-                .branchName("main")
+                .baseBranch("main")
+                .workingBranch("coding-agent/task-20260203")
                 .createdAt(LocalDateTime.now().minusHours(2))
                 .updatedAt(LocalDateTime.now().minusHours(2))
                 .build();
@@ -85,7 +87,8 @@ class ConversationRecoveryServiceTest {
                 .status(ConversationEntity.ConversationStatus.READY)
                 .namespace("user-user-789-session-789")
                 .gitRepoUrl("https://github.com/org/semantic-layer.git")
-                .branchName("main")
+                .baseBranch("main")
+                .workingBranch("coding-agent/task-20260203")
                 .createdAt(LocalDateTime.now().minusMinutes(30))
                 .updatedAt(LocalDateTime.now().minusMinutes(30))
                 .build();

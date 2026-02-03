@@ -1,5 +1,6 @@
 package com.foggy.navigator.coding.agent.api.model;
 
+import com.foggy.navigator.coding.agent.api.model.entity.GitProvider;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -27,8 +28,16 @@ public class Conversation {
 
     private String namespace;
 
+    // === Git 项目相关 ===
+    private String gitCredentialId;
+    private GitProvider gitProvider;
+    private String gitProjectId;
+    private String gitProjectPath;
     private String gitRepoUrl;
+    private String baseBranch;
+    private String workingBranch;
 
+    @Deprecated
     private String branchName;
 
     private LocalDateTime createdAt;

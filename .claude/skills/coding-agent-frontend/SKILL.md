@@ -32,21 +32,24 @@ description: Coding Agent 前端管理控制台开发指导。当用户需要开
 ```
 addons/coding-agent/frontend/
 ├── src/
+│   ├── adapters/           # 事件适配器
+│   │   └── OpenHandsAdapter.ts  # OH 事件 → AIP 消息转换
 │   ├── api/                # API 调用封装
 │   │   ├── client.ts       # Axios 实例配置
+│   │   ├── auth.ts         # 认证 API
 │   │   ├── conversation.ts # 会话 API
 │   │   ├── container.ts    # 容器 API
-│   │   └── event.ts        # 事件 API
-│   ├── components/         # 可复用组件
-│   │   ├── ConversationList.vue
+│   │   └── event.ts        # SSE 事件流（使用 @foggy/chat）
+│   ├── components/         # 业务组件
 │   │   ├── ContainerCard.vue
-│   │   ├── EventLog.vue
-│   │   └── StatusBadge.vue
+│   │   └── EventLog.vue
 │   ├── views/              # 页面视图
 │   │   ├── Dashboard.vue   # 系统监控首页
 │   │   ├── Conversations.vue
+│   │   ├── ConversationDetail.vue  # 对话聊天界面
 │   │   ├── Containers.vue
-│   │   └── Events.vue
+│   │   ├── Events.vue
+│   │   └── Login.vue
 │   ├── types/              # TypeScript 类型定义
 │   │   └── index.ts
 │   ├── router/             # 路由配置
@@ -58,6 +61,30 @@ addons/coding-agent/frontend/
 ├── package.json
 ├── vite.config.ts
 └── tsconfig.json
+
+packages/foggy-chat/         # 共享聊天组件库（workspace 依赖）
+├── src/
+│   ├── types/              # AIP 协议类型
+│   │   ├── aip.ts          # AipMessage、AipMessageType
+│   │   ├── adapter.ts      # EventAdapter 接口
+│   │   └── chat.ts         # ChatMessage UI 模型
+│   ├── sse/
+│   │   └── SseClient.ts    # SSE 客户端（支持命名事件）
+│   ├── store/
+│   │   └── useChatStore.ts # Pinia store（消息处理 + 状态管理）
+│   ├── components/         # 聊天 UI 组件
+│   │   ├── ChatPanel.vue       # 顶层聊天面板
+│   │   ├── MessageList.vue     # 消息滚动列表
+│   │   ├── MessageBubble.vue   # 文本消息气泡
+│   │   ├── ToolCallBlock.vue   # 工具调用卡片
+│   │   ├── ThinkingIndicator.vue
+│   │   ├── ErrorBlock.vue
+│   │   ├── StatusBadge.vue
+│   │   └── MessageInput.vue
+│   └── index.ts            # 主入口导出
+├── dist/                   # 构建输出
+├── package.json
+└── vite.config.ts
 ```
 
 ## 执行流程
@@ -236,76 +263,158 @@ export async function stopConversation(id: string): Promise<void> {
 }
 ```
 
-### 4. SSE 事件流处理
+### 4. 聊天界面（使用 @foggy/chat）
 
-```typescript
-// src/api/event.ts
-import type { Event } from '@/types'
+对话详情页使用共享的 `@foggy/chat` 聊天组件库。
 
-export function subscribeToEvents(
-  conversationId: string,
-  handlers: {
-    onEvent?: (event: Event) => void
-    onError?: (error: any) => void
-    onOpen?: () => void
-  }
-): EventSource {
-  const baseURL = import.meta.env.VITE_API_BASE_URL || ''
-  const url = `${baseURL}/api/v1/events/stream?conversationId=${conversationId}`
-
-  const eventSource = new EventSource(url)
-
-  eventSource.onopen = () => handlers.onOpen?.()
-
-  eventSource.onmessage = (e) => {
-    try {
-      const event: Event = JSON.parse(e.data)
-      handlers.onEvent?.(event)
-    } catch (error) {
-      console.error('Failed to parse event:', error)
-    }
-  }
-
-  eventSource.onerror = (e) => handlers.onError?.(e)
-
-  return eventSource
-}
-```
-
-#### 在组件中使用 SSE
+#### ConversationDetail.vue 示例
 
 ```vue
+<template>
+  <div class="chat-page">
+    <ChatPanel
+      :messages="chatStore.sortedMessages"
+      :is-thinking="chatStore.isThinking"
+      :connection-status="chatStore.connectionStatus"
+      :conversation-status="chatStore.conversationStatus"
+      :input-disabled="sending"
+      @send="handleSend"
+    >
+      <template #header>
+        <div class="header-left">
+          <el-button text @click="router.push('/conversations')">← 返回</el-button>
+          <span class="conv-id">{{ shortId }}</span>
+        </div>
+        <div class="header-right">
+          <StatusBadge v-if="chatStore.conversationStatus" :status="chatStore.conversationStatus" />
+          <span :class="['connection-dot', chatStore.connectionStatus]" />
+        </div>
+      </template>
+    </ChatPanel>
+  </div>
+</template>
+
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { subscribeToEvents } from '@/api/event'
-import type { Event } from '@/types'
+import { useRoute, useRouter } from 'vue-router'
+import { ChatPanel, StatusBadge, useChatStore, AipMessageType } from '@foggy/chat'
+import { getConversation, getMessages, sendMessage } from '@/api/conversation'
+import { subscribeToConversation } from '@/api/event'
 
-const props = defineProps<{
-  conversationId: string
-}>()
-
-const events = ref<Event[]>([])
+const route = useRoute()
+const router = useRouter()
+const conversationId = route.params.id as string
+const chatStore = useChatStore()
+const sending = ref(false)
 let eventSource: EventSource | null = null
 
-onMounted(() => {
-  eventSource = subscribeToEvents(props.conversationId, {
-    onEvent: (event) => {
-      events.value.unshift(event) // 新事件添加到顶部
-      // 限制显示数量
-      if (events.value.length > 100) {
-        events.value = events.value.slice(0, 100)
+async function loadHistory() {
+  const [conv, msgs] = await Promise.all([
+    getConversation(conversationId),
+    getMessages(conversationId),
+  ])
+  chatStore.conversationStatus = conv.status
+  for (const m of msgs) {
+    chatStore.messages.push({
+      id: m.messageId,
+      type: AipMessageType.TEXT_COMPLETE,
+      sender: m.role === 'ASSISTANT' ? 'assistant' : 'user',
+      content: m.content,
+      timestamp: new Date(m.timestamp).getTime(),
+    })
+  }
+}
+
+function connectSse() {
+  chatStore.setConnectionStatus('connecting')
+  eventSource = subscribeToConversation(conversationId, {
+    onMessage: (aipMessages) => {
+      for (const m of aipMessages) {
+        chatStore.processAipMessage(m)
       }
     },
-    onError: (error) => {
-      console.error('SSE error:', error)
-    }
+    onConnected: () => chatStore.setConnectionStatus('connected'),
+    onError: () => chatStore.setConnectionStatus('error'),
   })
+}
+
+async function handleSend(content: string) {
+  sending.value = true
+  chatStore.addUserMessage(content)
+  try {
+    await sendMessage({ conversationId, content })
+  } finally {
+    sending.value = false
+  }
+}
+
+onMounted(async () => {
+  chatStore.clearMessages()
+  await loadHistory()
+  connectSse()
 })
 
 onUnmounted(() => {
   eventSource?.close()
+  chatStore.setConnectionStatus('disconnected')
 })
 </script>
+```
+
+#### SSE 订阅（使用 @foggy/chat SseClient）
+
+```typescript
+// src/api/event.ts
+import { createSseClient } from '@foggy/chat'
+import type { AipMessage } from '@foggy/chat'
+import { openHandsAdapter } from '@/adapters/OpenHandsAdapter'
+
+// 开发模式直连后端（绕过 Vite 代理，避免 SSE 问题）
+const sseBase = import.meta.env.DEV
+  ? 'http://localhost:8112/api/v1'
+  : (import.meta.env.VITE_API_BASE_URL || '/api/v1')
+
+export function subscribeToConversation(
+  conversationId: string,
+  handlers: {
+    onMessage: (messages: AipMessage[]) => void
+    onConnected?: () => void
+    onError?: (error: Event) => void
+  }
+): EventSource {
+  return createSseClient({
+    url: `${sseBase}/events/stream?conversationId=${conversationId}`,
+    eventName: 'event',  // 匹配后端 .name("event")
+    adapter: openHandsAdapter,
+    sessionId: conversationId,
+    onMessage: handlers.onMessage,
+    onConnected: handlers.onConnected,
+    onError: handlers.onError,
+  })
+}
+```
+
+#### OpenHands 适配器
+
+```typescript
+// src/adapters/OpenHandsAdapter.ts
+import { AipMessageType } from '@foggy/chat'
+import type { AipMessage, EventAdapter } from '@foggy/chat'
+
+export interface OhRawEvent {
+  id: string
+  conversationId: string
+  kind: string  // MESSAGE_SENT, AGENT_ACTION, AGENT_OBSERVATION, CONVERSATION_STATUS, ERROR
+  data: Record<string, unknown>
+  createdAt: string
+}
+
+export const openHandsAdapter: EventAdapter<OhRawEvent> = {
+  convert(raw: OhRawEvent, sessionId: string): AipMessage[] {
+    // 根据 raw.kind 和 raw.data 结构转换为 AipMessage[]
+    // 详见实际代码 addons/coding-agent/frontend/src/adapters/OpenHandsAdapter.ts
+  },
+}
 ```
 
 ### 5. 路由配置

@@ -42,11 +42,34 @@ public class ConversationEntity {
     @Column(length = 128)
     private String namespace;
 
+    // Git 凭证 ID（关联 GitCredentialEntity）
+    @Column(length = 64)
+    private String gitCredentialId;
+
+    // Git 服务提供商
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private GitProvider gitProvider;
+
+    // Git 项目 ID（GitLab 数字ID 或 GitHub owner/repo）
+    @Column(length = 256)
+    private String gitProjectId;
+
+    // Git 项目路径（如 namespace/project-name）
+    @Column(length = 256)
+    private String gitProjectPath;
+
+    // Git 仓库 clone URL
     @Column(length = 512)
     private String gitRepoUrl;
 
+    // 用户选择的基准分支（如 main, develop）
     @Column(length = 64)
-    private String branchName;
+    private String baseBranch;
+
+    // 系统创建的工作分支（如 coding-agent/fix-login-20240203-143052）
+    @Column(length = 128)
+    private String workingBranch;
 
     @Column(nullable = false)
     private LocalDateTime createdAt;

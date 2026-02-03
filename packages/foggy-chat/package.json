@@ -9,7 +9,8 @@
     ".": {
       "import": "./dist/foggy-chat.js",
       "types": "./dist/index.d.ts"
-    }
+    },
+    "./style.css": "./dist/foggy-chat.css"
   },
   "scripts": {
     "build": "vite build && vue-tsc --emitDeclarationOnly --declaration --outDir dist",

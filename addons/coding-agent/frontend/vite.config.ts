@@ -18,15 +18,15 @@ export default defineConfig({
                 changeOrigin: true,
                 secure: false,
                 // 保持 cookie 和认证信息
-                configure: (proxy, options) => {
-                    proxy.on('proxyReq', (proxyReq, req, res) => {
+                configure: (proxy, _options) => {
+                    proxy.on('proxyReq', (proxyReq, req, _res) => {
                         // SSE: disable buffering so events stream through immediately
                         proxyReq.setHeader('X-Accel-Buffering', 'no')
                         if (req.headers.authorization) {
                             proxyReq.setHeader('Authorization', req.headers.authorization)
                         }
                     })
-                    proxy.on('proxyRes', (proxyRes, req, res) => {
+                    proxy.on('proxyRes', (proxyRes, _req, _res) => {
                         // SSE: ensure no buffering on the proxy response
                         if (proxyRes.headers['content-type']?.includes('text/event-stream')) {
                             proxyRes.headers['cache-control'] = 'no-cache'
