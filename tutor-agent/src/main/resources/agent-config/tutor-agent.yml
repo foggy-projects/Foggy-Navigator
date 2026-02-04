@@ -38,7 +38,7 @@ agent:
 
   model:
     provider: openai
-    model: gpt-4
+    model: glm-4.7
     temperature: 0.7
     systemPrompt: |
       你是Foggy Navigator的导师Agent，负责引导用户完成系统配置。

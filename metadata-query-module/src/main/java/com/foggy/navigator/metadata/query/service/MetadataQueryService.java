@@ -1,6 +1,5 @@
 package com.foggy.navigator.metadata.query.service;
 
-import com.foggy.navigator.metadata.model.*;
 import com.foggy.navigator.metadata.query.model.QueryInfo;
 import com.foggy.navigator.metadata.query.model.QueryParametersDefinition;
 import com.foggy.navigator.metadata.query.model.QueryRequest;

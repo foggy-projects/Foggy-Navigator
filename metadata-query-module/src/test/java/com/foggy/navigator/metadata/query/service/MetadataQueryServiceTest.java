@@ -1,6 +1,6 @@
 package com.foggy.navigator.metadata.query.service;
 
-import com.foggy.navigator.metadata.model.*;
+
 import com.foggy.navigator.metadata.query.model.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

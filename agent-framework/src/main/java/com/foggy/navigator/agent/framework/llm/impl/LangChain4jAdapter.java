@@ -70,6 +70,8 @@ public class LangChain4jAdapter implements LlmAdapter {
                 model.startsWith("gpt-") ||
                 model.startsWith("claude-") ||
                 model.startsWith("o1-") ||
+                model.startsWith("glm-") ||
+                model.startsWith("qwen-") ||
                 model.contains("deepseek")
         );
     }

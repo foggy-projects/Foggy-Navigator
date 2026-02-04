@@ -1,6 +1,5 @@
 package com.foggy.navigator.metadata.query.controller;
 
-import com.foggy.navigator.metadata.model.*;
 import com.foggy.navigator.metadata.query.model.*;
 import com.foggy.navigator.metadata.query.service.MetadataQueryService;
 import com.foggyframework.core.ex.RX;

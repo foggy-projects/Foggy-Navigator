@@ -23,14 +23,19 @@
             <version>${project.version}</version>
         </dependency>
 
-        <!-- 其他可选模块可以在这里添加 -->
-        <!--
+        <!-- Session Module - 会话管理模块 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>session-module</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Tutor Agent - 导师Agent模块 -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>
             <artifactId>tutor-agent</artifactId>
             <version>${project.version}</version>
         </dependency>
-        -->
     </dependencies>
 
     <build>

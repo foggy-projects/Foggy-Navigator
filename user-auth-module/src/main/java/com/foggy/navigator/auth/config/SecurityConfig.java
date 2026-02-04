@@ -61,7 +61,7 @@ public class SecurityConfig {
                         // 开放健康检查接口
                         .requestMatchers("/api/v1/health/**", "/actuator/**").permitAll()
                         // 开放静态资源（前端构建产物）
-                        .requestMatchers("/", "/index.html", "/assets/**", "/*.js", "/*.css", "/*.ico", "/*.png", "/*.jpg", "/*.svg").permitAll()
+                        .requestMatchers("/", "/index.html", "/*.html", "/assets/**", "/*.js", "/*.css", "/*.ico", "/*.png", "/*.jpg", "/*.svg").permitAll()
                         // 开放前端资源路径（包括所有子路径）
                         .requestMatchers("/js/**", "/css/**", "/img/**", "/fonts/**", "/static/**").permitAll()
                         // 开放统计数据 API（用于首页显示，无需认证）
@@ -75,6 +75,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/messages", "/api/v1/messages/**").permitAll()
                         .requestMatchers("/api/v1/git-credentials", "/api/v1/git-credentials/**").permitAll()
                         .requestMatchers("/api/v1/git", "/api/v1/git/**").permitAll()
+                        .requestMatchers("/api/v1/sessions", "/api/v1/sessions/**").permitAll()
                         // 开放 Spring Boot 错误端点（避免异常转发时被拦截返回 403）
                         .requestMatchers("/error").permitAll()
                         // 其他所有请求都需要认证（但具体权限检查由 @RequireAuth AOP 处理）

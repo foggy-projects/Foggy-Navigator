@@ -1,7 +1,7 @@
 package com.foggy.navigator.metadata.query.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.foggy.navigator.metadata.model.*;
+
 import com.foggy.navigator.metadata.query.model.*;
 import com.foggy.navigator.metadata.query.service.MetadataQueryService;
 import org.junit.jupiter.api.Test;

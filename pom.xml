@@ -34,6 +34,7 @@
         <module>user-auth-module</module>
         <module>metadata-config-module</module>
         <module>metadata-query-module</module>
+        <module>session-module</module>
         <module>tutor-agent</module>
         <module>addons/coding-agent</module>
         <!-- 启动器模块（最后编译，依赖其他所有模块） -->

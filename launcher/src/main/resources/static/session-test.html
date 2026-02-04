@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Session Test - Foggy Navigator</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
+
+        /* Top bar */
+        .top-bar { background: #1a1a2e; color: #fff; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; }
+        .top-bar h1 { font-size: 16px; font-weight: 600; }
+        .auth-status { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+        .auth-status .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .dot.ok { background: #4caf50; }
+        .dot.err { background: #f44336; }
+        .dot.pending { background: #ff9800; }
+
+        /* Main layout */
+        .main { display: flex; flex: 1; overflow: hidden; }
+
+        /* Sidebar */
+        .sidebar { width: 280px; background: #fff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; }
+        .sidebar-header { padding: 16px; border-bottom: 1px solid #e0e0e0; }
+        .sidebar-header button { width: 100%; padding: 10px; background: #1a1a2e; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+        .sidebar-header button:hover { background: #16213e; }
+        .session-list { flex: 1; overflow-y: auto; padding: 8px; }
+        .session-item { padding: 12px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .session-item:hover { background: #f0f0f0; }
+        .session-item.active { background: #e3f2fd; }
+        .session-item .title { font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .session-item .delete-btn { color: #999; cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 12px; border: none; background: none; }
+        .session-item .delete-btn:hover { color: #f44336; background: #fce4ec; }
+        .session-item .time { font-size: 11px; color: #999; }
+
+        /* Chat area */
+        .chat-area { flex: 1; display: flex; flex-direction: column; background: #fafafa; }
+        .chat-header { padding: 12px 20px; background: #fff; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; justify-content: space-between; }
+        .chat-header .info { font-size: 14px; color: #333; }
+        .sse-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #666; }
+
+        /* Messages */
+        .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+        .message { max-width: 80%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+        .message.user { align-self: flex-end; background: #1a1a2e; color: #fff; border-bottom-right-radius: 4px; }
+        .message.assistant { align-self: flex-start; background: #fff; color: #333; border: 1px solid #e0e0e0; border-bottom-left-radius: 4px; }
+        .message.system { align-self: center; background: #fff3cd; color: #856404; font-size: 12px; padding: 8px 16px; border-radius: 20px; }
+        .message.error { align-self: center; background: #f8d7da; color: #721c24; font-size: 12px; padding: 8px 16px; border-radius: 20px; }
+        .message.streaming { border-left: 3px solid #2196f3; }
+
+        /* Input area */
+        .input-area { padding: 16px 20px; background: #fff; border-top: 1px solid #e0e0e0; display: flex; gap: 12px; }
+        .input-area input { flex: 1; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; outline: none; }
+        .input-area input:focus { border-color: #1a1a2e; }
+        .input-area button { padding: 12px 24px; background: #1a1a2e; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .input-area button:hover { background: #16213e; }
+        .input-area button:disabled { background: #ccc; cursor: not-allowed; }
+
+        /* Empty state */
+        .empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px; }
+
+        /* Log panel */
+        .log-panel { max-height: 200px; overflow-y: auto; background: #1a1a2e; color: #0f0; font-family: 'Consolas', monospace; font-size: 12px; padding: 12px; border-top: 1px solid #333; }
+        .log-panel .log-line { margin-bottom: 2px; }
+        .log-panel .log-line.error { color: #f44; }
+        .log-panel .log-line.warn { color: #fa0; }
+        .log-panel .log-line.info { color: #0af; }
+        .log-toggle { position: fixed; bottom: 8px; right: 8px; padding: 6px 12px; background: #333; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; z-index: 100; }
+    </style>
+</head>
+<body>
+    <!-- Top Bar -->
+    <div class="top-bar">
+        <h1>Foggy Navigator - Session Test</h1>
+        <div class="auth-status">
+            <span class="dot" id="authDot"></span>
+            <span id="authText">Initializing...</span>
+        </div>
+    </div>
+
+    <!-- Main Layout -->
+    <div class="main">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <button onclick="createSession()">+ New Session</button>
+            </div>
+            <div class="session-list" id="sessionList">
+                <div class="empty-state">No sessions yet</div>
+            </div>
+        </div>
+
+        <!-- Chat Area -->
+        <div class="chat-area">
+            <div class="chat-header">
+                <div class="info" id="chatInfo">Select or create a session</div>
+                <div class="sse-status">
+                    <span class="dot" id="sseDot"></span>
+                    <span id="sseText">SSE: disconnected</span>
+                </div>
+            </div>
+            <div class="messages" id="messages">
+                <div class="empty-state">Start a conversation</div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="msgInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendMessage()" disabled>
+                <button id="sendBtn" onclick="sendMessage()" disabled>Send</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Log Panel -->
+    <button class="log-toggle" onclick="toggleLog()">Toggle Log</button>
+    <div class="log-panel" id="logPanel" style="display:none;"></div>
+
+    <script>
+        // ===== State =====
+        let token = null;
+        let currentSessionId = null;
+        let sessions = [];
+        let sseAbortController = null;
+        let streamingMessageEl = null;
+        let streamingText = '';
+
+        const API = '';  // same origin
+
+        // ===== Logging =====
+        function log(msg, level = 'info') {
+            const panel = document.getElementById('logPanel');
+            const line = document.createElement('div');
+            line.className = 'log-line ' + level;
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            panel.appendChild(line);
+            panel.scrollTop = panel.scrollHeight;
+            console.log(`[${level}] ${msg}`);
+        }
+
+        function toggleLog() {
+            const panel = document.getElementById('logPanel');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        }
+
+        // ===== Auth =====
+        function setAuthStatus(ok, text) {
+            document.getElementById('authDot').className = 'dot ' + (ok ? 'ok' : 'err');
+            document.getElementById('authText').textContent = text;
+        }
+
+        function setSseStatus(status, text) {
+            const dot = document.getElementById('sseDot');
+            dot.className = 'dot ' + (status === 'connected' ? 'ok' : status === 'connecting' ? 'pending' : 'err');
+            document.getElementById('sseText').textContent = 'SSE: ' + text;
+        }
+
+        async function login() {
+            setAuthStatus(false, 'Logging in...');
+            document.getElementById('authDot').className = 'dot pending';
+            try {
+                const res = await fetch(API + '/api/v1/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: 'root', password: 'root123' })
+                });
+                const data = await res.json();
+                log('Login response: ' + JSON.stringify(data));
+
+                if (data.code === 200 && data.data) {
+                    token = data.data.token;
+                    setAuthStatus(true, 'Logged in as root');
+                    log('Token acquired: ' + token.substring(0, 20) + '...');
+                    document.getElementById('msgInput').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    loadSessions();
+                } else {
+                    setAuthStatus(false, 'Login failed: ' + (data.message || data.msg || 'unknown'));
+                    log('Login failed: ' + JSON.stringify(data), 'error');
+                }
+            } catch (e) {
+                setAuthStatus(false, 'Login error: ' + e.message);
+                log('Login error: ' + e.message, 'error');
+            }
+        }
+
+        function authHeaders() {
+            const h = { 'Content-Type': 'application/json' };
+            if (token) h['Authorization'] = 'Bearer ' + token;
+            return h;
+        }
+
+        // ===== Sessions =====
+        async function loadSessions() {
+            try {
+                const res = await fetch(API + '/api/v1/sessions?agentId=tutor-agent', { headers: authHeaders() });
+                const data = await res.json();
+                if (data.code === 200) {
+                    sessions = data.data || [];
+                    renderSessionList();
+                    log('Loaded ' + sessions.length + ' sessions');
+                }
+            } catch (e) {
+                log('Load sessions error: ' + e.message, 'error');
+            }
+        }
+
+        function renderSessionList() {
+            const list = document.getElementById('sessionList');
+            if (sessions.length === 0) {
+                list.innerHTML = '<div class="empty-state">No sessions yet</div>';
+                return;
+            }
+            list.innerHTML = sessions.map(s => `
+                <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" onclick="selectSession('${s.id}')">
+                    <div>
+                        <div class="title">${s.taskName || s.agentId || 'Untitled'}</div>
+                        <div class="time">${s.createdAt ? new Date(s.createdAt).toLocaleString() : ''}</div>
+                    </div>
+                    <button class="delete-btn" onclick="event.stopPropagation();deleteSession('${s.id}')">&times;</button>
+                </div>
+            `).join('');
+        }
+
+        async function createSession() {
+            if (!token) { log('Not logged in', 'warn'); return; }
+            try {
+                const res = await fetch(API + '/api/v1/sessions', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ title: 'Test Session ' + new Date().toLocaleTimeString(), agentId: 'tutor-agent' })
+                });
+                const data = await res.json();
+                log('Create session response: ' + JSON.stringify(data));
+                if (data.code === 200 && data.data) {
+                    await loadSessions();
+                    selectSession(data.data.id);
+                } else {
+                    log('Create session failed: ' + (data.message || JSON.stringify(data)), 'error');
+                }
+            } catch (e) {
+                log('Create session error: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteSession(id) {
+            if (!confirm('Delete this session?')) return;
+            try {
+                await fetch(API + '/api/v1/sessions/' + id, { method: 'DELETE', headers: authHeaders() });
+                log('Deleted session: ' + id);
+                if (currentSessionId === id) {
+                    currentSessionId = null;
+                    disconnectSSE();
+                    document.getElementById('messages').innerHTML = '<div class="empty-state">Start a conversation</div>';
+                    document.getElementById('chatInfo').textContent = 'Select or create a session';
+                }
+                await loadSessions();
+            } catch (e) {
+                log('Delete session error: ' + e.message, 'error');
+            }
+        }
+
+        async function selectSession(id) {
+            currentSessionId = id;
+            renderSessionList();
+            const session = sessions.find(s => s.id === id);
+            document.getElementById('chatInfo').textContent = session ? (session.taskName || session.agentId) + ' - ' + id.substring(0, 8) : id;
+
+            // Load existing messages
+            await loadMessages(id);
+
+            // Connect SSE
+            connectSSE(id);
+        }
+
+        async function loadMessages(sessionId) {
+            const container = document.getElementById('messages');
+            container.innerHTML = '';
+            try {
+                const res = await fetch(API + '/api/v1/sessions/' + sessionId + '/messages', { headers: authHeaders() });
+                const data = await res.json();
+                if (data.code === 200 && data.data) {
+                    data.data.forEach(msg => {
+                        appendMessage(msg.role === 'USER' ? 'user' : msg.role === 'ASSISTANT' ? 'assistant' : 'system', msg.content);
+                    });
+                    log('Loaded ' + data.data.length + ' messages');
+                }
+            } catch (e) {
+                log('Load messages error: ' + e.message, 'error');
+            }
+        }
+
+        // ===== SSE via fetch + ReadableStream =====
+        function disconnectSSE() {
+            if (sseAbortController) {
+                sseAbortController.abort();
+                sseAbortController = null;
+            }
+            setSseStatus('disconnected', 'disconnected');
+        }
+
+        async function connectSSE(sessionId) {
+            disconnectSSE();
+            setSseStatus('connecting', 'connecting...');
+            log('Connecting SSE to session: ' + sessionId);
+
+            sseAbortController = new AbortController();
+            try {
+                const res = await fetch(API + '/api/v1/sessions/' + sessionId + '/stream', {
+                    headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'text/event-stream' },
+                    signal: sseAbortController.signal
+                });
+
+                if (!res.ok) {
+                    setSseStatus('error', 'HTTP ' + res.status);
+                    log('SSE HTTP error: ' + res.status, 'error');
+                    return;
+                }
+
+                setSseStatus('connected', 'connected');
+                log('SSE connected');
+
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        log('SSE stream ended');
+                        setSseStatus('disconnected', 'stream ended');
+                        break;
+                    }
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // keep incomplete line in buffer
+
+                    let currentEventName = null;
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            currentEventName = line.substring(6).trim();
+                        } else if (line.startsWith('data:')) {
+                            const dataStr = line.substring(5).trim();
+                            if (dataStr) {
+                                handleSSEData(currentEventName, dataStr);
+                            }
+                            currentEventName = null;
+                        } else if (line.trim() === '') {
+                            currentEventName = null;
+                        }
+                    }
+                }
+            } catch (e) {
+                if (e.name === 'AbortError') {
+                    log('SSE aborted (intentional)');
+                } else {
+                    setSseStatus('error', e.message);
+                    log('SSE error: ' + e.message, 'error');
+                    // Auto-reconnect after 3s
+                    setTimeout(() => {
+                        if (currentSessionId === sessionId) connectSSE(sessionId);
+                    }, 3000);
+                }
+            }
+        }
+
+        function handleSSEData(eventName, dataStr) {
+            log('SSE event=' + (eventName || 'message') + ' data=' + dataStr.substring(0, 100));
+            try {
+                const msg = JSON.parse(dataStr);
+                const type = msg.type;
+                const payload = msg.payload;
+
+                switch (type) {
+                    case 'connected':
+                        setSseStatus('connected', 'connected');
+                        log('SSE connected event received');
+                        break;
+
+                    case 'TEXT_CHUNK':
+                        // Streaming text fragment
+                        if (!streamingMessageEl) {
+                            streamingText = '';
+                            streamingMessageEl = appendMessage('assistant', '', true);
+                        }
+                        streamingText += (typeof payload === 'string' ? payload : payload.text || payload.content || '');
+                        streamingMessageEl.textContent = streamingText;
+                        scrollMessages();
+                        break;
+
+                    case 'TEXT_COMPLETE':
+                        // Stream complete
+                        if (streamingMessageEl) {
+                            streamingMessageEl.classList.remove('streaming');
+                            const finalText = typeof payload === 'string' ? payload : payload.text || payload.content || streamingText;
+                            if (finalText) streamingMessageEl.textContent = finalText;
+                            streamingMessageEl = null;
+                            streamingText = '';
+                        } else {
+                            const text = typeof payload === 'string' ? payload : payload.text || payload.content || '';
+                            if (text) appendMessage('assistant', text);
+                        }
+                        break;
+
+                    case 'ERROR':
+                        if (streamingMessageEl) {
+                            streamingMessageEl.classList.remove('streaming');
+                            streamingMessageEl = null;
+                            streamingText = '';
+                        }
+                        const errMsg = typeof payload === 'string' ? payload : payload.message || payload.error || JSON.stringify(payload);
+                        appendMessage('error', 'Error: ' + errMsg);
+                        log('Agent error: ' + errMsg, 'error');
+                        break;
+
+                    case 'HEARTBEAT':
+                        // Silently acknowledge
+                        break;
+
+                    case 'THINKING':
+                        log('Agent thinking...');
+                        break;
+
+                    case 'SESSION_START':
+                        log('Session started');
+                        break;
+
+                    case 'SESSION_END':
+                        log('Session ended');
+                        break;
+
+                    default:
+                        log('Unhandled SSE type: ' + type + ' payload: ' + JSON.stringify(payload).substring(0, 200), 'warn');
+                }
+            } catch (e) {
+                // Non-JSON data (e.g., comment or plain text)
+                log('SSE non-JSON data: ' + dataStr.substring(0, 100), 'warn');
+            }
+        }
+
+        // ===== Messages UI =====
+        function appendMessage(role, content, streaming = false) {
+            const container = document.getElementById('messages');
+            // Remove empty state
+            const empty = container.querySelector('.empty-state');
+            if (empty) empty.remove();
+
+            const div = document.createElement('div');
+            div.className = 'message ' + role + (streaming ? ' streaming' : '');
+            div.textContent = content;
+            container.appendChild(div);
+            scrollMessages();
+            return div;
+        }
+
+        function scrollMessages() {
+            const container = document.getElementById('messages');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // ===== Send Message =====
+        async function sendMessage() {
+            const input = document.getElementById('msgInput');
+            const content = input.value.trim();
+            if (!content || !currentSessionId || !token) return;
+
+            input.value = '';
+            appendMessage('user', content);
+            log('Sending message: ' + content.substring(0, 50));
+
+            try {
+                const res = await fetch(API + '/api/v1/sessions/' + currentSessionId + '/messages', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ content })
+                });
+                const data = await res.json();
+                if (data.code === 200) {
+                    log('Message sent, id=' + data.data.id);
+                } else {
+                    log('Send message failed: ' + (data.message || JSON.stringify(data)), 'error');
+                    appendMessage('error', 'Failed to send: ' + (data.message || 'unknown error'));
+                }
+            } catch (e) {
+                log('Send message error: ' + e.message, 'error');
+                appendMessage('error', 'Network error: ' + e.message);
+            }
+        }
+
+        // ===== Init =====
+        window.addEventListener('load', () => {
+            log('Page loaded, starting auto-login...');
+            login();
+        });
+    </script>
+</body>
+</html>

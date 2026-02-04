@@ -1,7 +1,6 @@
 package com.foggy.navigator.agent.framework.session.impl;
 
 import com.foggy.navigator.agent.framework.session.*;
-import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -12,8 +11,8 @@ import java.util.stream.Collectors;
 
 /**
  * 内存实现的会话管理器
+ * 通过 AgentFrameworkAutoConfiguration 条件注册（@ConditionalOnMissingBean）
  */
-@Component
 public class InMemorySessionManager implements SessionManager {
 
     private final ConcurrentHashMap<String, Session> sessions = new ConcurrentHashMap<>();
