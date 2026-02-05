@@ -21,16 +21,45 @@ export const useChatStore = defineStore('foggy-chat', () => {
 
   function processAipMessage(aip: AipMessage) {
     switch (aip.type) {
+      case AipMessageType.TEXT_CHUNK: {
+        const p = aip.payload as TextPayload
+        isThinking.value = false
+        // Find the last TEXT_CHUNK message from assistant to append to (handles different messageIds per chunk)
+        const lastChunk = [...messages.value].reverse().find(
+          m => m.type === AipMessageType.TEXT_CHUNK && m.sender === 'assistant'
+        )
+        if (lastChunk) {
+          lastChunk.content += p.content
+        } else {
+          messages.value.push({
+            id: aip.messageId,
+            type: aip.type,
+            sender: 'assistant',
+            content: p.content,
+            timestamp: aip.timestamp,
+          })
+        }
+        break
+      }
       case AipMessageType.TEXT_COMPLETE: {
         const p = aip.payload as TextPayload
-        messages.value.push({
-          id: aip.messageId,
-          type: aip.type,
-          sender: 'assistant',
-          content: p.content,
-          timestamp: aip.timestamp,
-        })
         isThinking.value = false
+        // Find the last TEXT_CHUNK message to finalize, or create new
+        const lastChunk = [...messages.value].reverse().find(
+          m => m.type === AipMessageType.TEXT_CHUNK && m.sender === 'assistant'
+        )
+        if (lastChunk) {
+          lastChunk.content = p.content
+          lastChunk.type = AipMessageType.TEXT_COMPLETE
+        } else {
+          messages.value.push({
+            id: aip.messageId,
+            type: aip.type,
+            sender: 'assistant',
+            content: p.content,
+            timestamp: aip.timestamp,
+          })
+        }
         break
       }
       case AipMessageType.THINKING: {

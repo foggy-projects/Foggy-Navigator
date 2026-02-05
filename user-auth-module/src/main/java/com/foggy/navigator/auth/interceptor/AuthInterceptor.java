@@ -63,7 +63,13 @@ public class AuthInterceptor implements HandlerInterceptor {
             return extractFromToken(token);
         }
 
-        // 2. 尝试从 API Key 获取
+        // 2. 尝试从 URL query param 获取 token（SSE 场景，EventSource 不支持自定义 header）
+        String queryToken = request.getParameter("token");
+        if (queryToken != null && !queryToken.isEmpty()) {
+            return extractFromToken(queryToken);
+        }
+
+        // 3. 尝试从 API Key 获取
         String apiKey = request.getHeader(API_KEY_HEADER);
         if (apiKey != null && !apiKey.isEmpty()) {
             return extractFromApiKey(apiKey);

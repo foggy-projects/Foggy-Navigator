@@ -4,13 +4,63 @@
       <span class="sender-label">{{ senderLabel }}</span>
       <span class="timestamp">{{ formattedTime }}</span>
     </div>
-    <div class="bubble-content">{{ props.message.content }}</div>
+    <div class="bubble-content markdown-body" v-html="renderedContent"></div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import MarkdownIt from 'markdown-it'
+import hljs from 'highlight.js/lib/core'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import python from 'highlight.js/lib/languages/python'
+import java from 'highlight.js/lib/languages/java'
+import sql from 'highlight.js/lib/languages/sql'
+import json from 'highlight.js/lib/languages/json'
+import bash from 'highlight.js/lib/languages/bash'
+import xml from 'highlight.js/lib/languages/xml'
+import css from 'highlight.js/lib/languages/css'
+import 'highlight.js/styles/github-dark.css'
 import type { ChatMessage } from '../types/chat'
+
+// Register commonly used languages
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('js', javascript)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('ts', typescript)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('py', python)
+hljs.registerLanguage('java', java)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('sh', bash)
+hljs.registerLanguage('shell', bash)
+hljs.registerLanguage('html', xml)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('css', css)
+
+const md = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+  highlight: (str: string, lang: string): string => {
+    if (lang && hljs.getLanguage(lang)) {
+      try {
+        return `<pre class="hljs"><code>${hljs.highlight(str, { language: lang }).value}</code></pre>`
+      } catch {
+        // ignore
+      }
+    }
+    // Auto-detect if no language specified
+    try {
+      return `<pre class="hljs"><code>${hljs.highlightAuto(str).value}</code></pre>`
+    } catch {
+      return ''
+    }
+  },
+})
 
 const props = defineProps<{
   message: ChatMessage
@@ -28,6 +78,21 @@ const senderLabel = computed(() => {
 const formattedTime = computed(() => {
   const d = new Date(props.message.timestamp)
   return d.toLocaleTimeString()
+})
+
+// Clean LLM artifacts like <think>...</think> tags
+function cleanContent(content: string): string {
+  if (!content) return ''
+  // Remove <think>...</think> blocks (including multiline)
+  let cleaned = content.replace(/<think>[\s\S]*?<\/think>/gi, '')
+  // Remove orphaned </think> tags
+  cleaned = cleaned.replace(/<\/?think>/gi, '')
+  // Remove leading/trailing whitespace from the result
+  return cleaned.trim()
+}
+
+const renderedContent = computed(() => {
+  return md.render(cleanContent(props.message.content || ''))
 })
 </script>
 
@@ -78,8 +143,69 @@ const formattedTime = computed(() => {
 }
 
 .bubble-content {
-  white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.5;
+  line-height: 1.6;
+}
+
+.bubble-content :deep(p) {
+  margin: 0 0 8px 0;
+}
+
+.bubble-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.bubble-content :deep(ul),
+.bubble-content :deep(ol) {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.bubble-content :deep(li) {
+  margin: 4px 0;
+}
+
+.bubble-content :deep(code) {
+  background-color: rgba(0, 0, 0, 0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.bubble-content :deep(pre),
+.bubble-content :deep(pre.hljs) {
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.bubble-content :deep(pre code),
+.bubble-content :deep(pre.hljs code) {
+  background: none;
+  padding: 0;
+  font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
+.bubble-content :deep(strong) {
+  font-weight: 600;
+}
+
+.bubble-content :deep(a) {
+  color: #409eff;
+  text-decoration: none;
+}
+
+.bubble-content :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.bubble-content :deep(blockquote) {
+  border-left: 3px solid #dcdfe6;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #606266;
 }
 </style>

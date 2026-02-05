@@ -1,6 +1,10 @@
 <template>
   <div ref="listRef" class="message-list" @scroll="handleScroll">
-    <div v-if="messages.length === 0" class="empty-hint">暂无消息</div>
+    <div v-if="messages.length === 0" class="empty-state">
+      <slot name="empty">
+        <div class="empty-hint">暂无消息</div>
+      </slot>
+    </div>
     <template v-for="msg in messages" :key="msg.id">
       <MessageBubble
         v-if="isBubble(msg)"
@@ -77,7 +81,13 @@ function handleScroll() {
   userScrolledUp.value = scrollHeight - scrollTop - clientHeight > 80
 }
 
+// Watch messages array length
 watch(() => props.messages.length, scrollToBottom)
+// Watch last message content for TEXT_CHUNK streaming updates
+watch(
+  () => props.messages[props.messages.length - 1]?.content,
+  scrollToBottom
+)
 watch(() => props.isThinking, scrollToBottom)
 onMounted(scrollToBottom)
 </script>
@@ -91,10 +101,17 @@ onMounted(scrollToBottom)
   flex-direction: column;
 }
 
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
 .empty-hint {
   text-align: center;
   color: #c0c4cc;
-  margin-top: 40px;
   font-size: 14px;
 }
 </style>

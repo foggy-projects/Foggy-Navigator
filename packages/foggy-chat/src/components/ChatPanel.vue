@@ -14,7 +14,13 @@
     <MessageList
       :messages="messages"
       :is-thinking="isThinking"
-    />
+    >
+      <template #empty>
+        <slot name="empty">
+          <div class="empty-hint">暂无消息</div>
+        </slot>
+      </template>
+    </MessageList>
     <MessageInput
       :disabled="inputDisabled"
       :placeholder="placeholder"
