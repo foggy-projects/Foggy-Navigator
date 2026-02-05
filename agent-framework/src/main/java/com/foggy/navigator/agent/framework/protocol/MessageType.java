@@ -10,10 +10,14 @@ public enum MessageType {
     TEXT_CHUNK,             // 流式文本片段
     TEXT_COMPLETE,          // 文本完成
 
-    // ===== 工具调用 =====
+    // ===== 服务端工具调用 =====
     TOOL_CALL_START,        // 工具调用开始
     TOOL_CALL_RESULT,       // 工具调用结果
     TOOL_CALL_ERROR,        // 工具调用错误
+
+    // ===== 客户端工具调用（Client-side Skills） =====
+    CLIENT_TOOL_CALL,       // 请求客户端执行工具（type=CLIENT的Skill）
+    CLIENT_TOOL_RESULT,     // 客户端工具执行结果
 
     // ===== UI渲染（参考A2UI） =====
     SURFACE_UPDATE,         // UI结构更新

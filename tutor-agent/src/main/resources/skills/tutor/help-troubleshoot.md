@@ -1,28 +1,25 @@
-# Skill ID
-help-troubleshoot
-
-# Skill标题
-帮助排查问题
-
-# 描述
-帮助用户排查和解决使用过程中遇到的问题
-
-# 触发条件
-- 遇到问题
-- 报错了
-- 出错
-- 帮助
-- 怎么办
-- 不工作
-- 失败了
-
-# 意图
-- troubleshoot
-- help
-- error
-- fix_problem
+---
+id: help-troubleshoot
+name: 帮助排查问题
+description: 帮助用户排查和解决使用过程中遇到的问题
+type: instruction
+triggers:
+  - 遇到问题
+  - 报错了
+  - 出错
+  - 帮助
+  - 怎么办
+  - 不工作
+  - 失败了
+intents:
+  - troubleshoot
+  - help
+  - error
+  - fix_problem
+---
 
 # 执行逻辑
+
 1. 首先询问用户遇到的具体问题
 2. 根据问题类型进行排查：
    - Git 凭证问题：检查凭证配置
@@ -33,6 +30,7 @@ help-troubleshoot
 4. 如果无法解决，建议联系支持
 
 # 输出格式
+
 **问题排查**
 
 🔍 **问题描述**
@@ -48,4 +46,5 @@ help-troubleshoot
 请联系技术支持或查看文档
 
 # 分派条件
+
 仅提供排查和建议，不自动执行修复操作

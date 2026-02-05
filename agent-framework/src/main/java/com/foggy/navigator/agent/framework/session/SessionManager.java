@@ -43,6 +43,11 @@ public interface SessionManager {
     void closeSession(String sessionId);
 
     /**
+     * 删除会话及其所有消息
+     */
+    void deleteSession(String sessionId);
+
+    /**
      * 查找用户的待办会话
      */
     List<Session> findPendingByUser(String userId);

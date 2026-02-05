@@ -114,6 +114,14 @@ public class JpaSessionManager implements SessionManager {
     }
 
     @Override
+    @Transactional
+    public void deleteSession(String sessionId) {
+        messageRepository.deleteBySessionId(sessionId);
+        sessionRepository.deleteById(sessionId);
+        log.info("Session deleted: sessionId={}", sessionId);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public List<Session> findPendingByUser(String userId) {
         List<String> statuses = List.of(SessionStatus.ACTIVE.name(), SessionStatus.PAUSED.name());

@@ -12,4 +12,6 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
     List<SessionMessageEntity> findTop50BySessionIdOrderByCreatedAtDesc(String sessionId);
 
     long countBySessionId(String sessionId);
+
+    void deleteBySessionId(String sessionId);
 }

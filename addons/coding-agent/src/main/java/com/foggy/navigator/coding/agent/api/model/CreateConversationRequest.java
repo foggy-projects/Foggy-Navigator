@@ -29,6 +29,9 @@ public class CreateConversationRequest {
     // 任务描述（用于生成工作分支名）
     private String taskDescription;
 
+    // 父会话 ID（委托场景：从 tutor-agent 会话发起的编码任务）
+    private String parentSessionId;
+
     // === 旧字段（兼容老接口）===
     @Deprecated
     private String gitRepoUrl;

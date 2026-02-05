@@ -1,6 +1,8 @@
 package com.foggy.navigator.coding.agent.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
+import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.coding.agent.api.model.Conversation;
 import com.foggy.navigator.coding.agent.api.model.CreateConversationRequest;
 import com.foggy.navigator.coding.agent.api.model.Event;
@@ -53,6 +55,9 @@ public class ConversationService {
     @Autowired
     @Lazy
     private ValidationService validationService;
+
+    @Autowired
+    private SessionManager sessionManager;
 
     @Value("${foggy.coding-agent.openhands.model-name:gpt-4}")
     private String configuredModel;
@@ -119,6 +124,18 @@ public class ConversationService {
         }
 
         Conversation conversation = conversationBuilder.build();
+
+        // 创建关联的 Session（统一会话管理）
+        String taskTitle = request.getTaskDescription() != null ? request.getTaskDescription() : "Coding Session";
+        SessionCreateRequest sessionReq = SessionCreateRequest.builder()
+                .userId(request.getUserId())
+                .agentId("coding-agent")
+                .taskName(taskTitle)
+                .parentSessionId(request.getParentSessionId())
+                .build();
+        String sessionId = sessionManager.createSession(sessionReq);
+        conversation.setSessionId(sessionId);
+        log.info("Created associated session: conversationId={}, sessionId={}", conversationId, sessionId);
 
         conversations.put(conversationId, conversation);
 
@@ -276,9 +293,54 @@ public class ConversationService {
             }
         }
 
+        // 删除关联的 Session
+        if (conversation.getSessionId() != null) {
+            try {
+                sessionManager.deleteSession(conversation.getSessionId());
+                log.info("Deleted associated session: sessionId={}", conversation.getSessionId());
+            } catch (Exception e) {
+                log.error("删除关联 Session 失败: sessionId={}", conversation.getSessionId(), e);
+            }
+        }
+
         conversations.remove(conversationId);
         deleteConversationFromDatabase(conversationId);
         log.info("对话已删除: conversationId={}", conversationId);
+    }
+
+    /**
+     * 仅删除 Conversation（不删除关联的 Session）
+     * 用于从 session-module 删除会话时调用
+     */
+    public void deleteConversationOnly(String conversationId) {
+        Conversation conversation = conversations.get(conversationId);
+        if (conversation == null) {
+            conversation = loadConversationFromDatabase(conversationId);
+            if (conversation != null) {
+                conversations.put(conversationId, conversation);
+            }
+        }
+
+        if (conversation == null) {
+            log.warn("对话不存在: {}", conversationId);
+            return;
+        }
+
+        log.info("删除对话(不含Session): conversationId={}", conversationId);
+
+        // 停止 sandbox
+        if (conversation.getSandboxId() != null) {
+            try {
+                OpenHandsClient client = clientFactory.getClientForUser(conversation.getUserId());
+                client.deleteSandbox(conversation.getSandboxId());
+            } catch (Exception e) {
+                log.error("删除 OH sandbox 失败: sandboxId={}", conversation.getSandboxId(), e);
+            }
+        }
+
+        conversations.remove(conversationId);
+        deleteConversationFromDatabase(conversationId);
+        log.info("对话已删除(不含Session): conversationId={}", conversationId);
     }
 
     public void stopConversation(String conversationId) {
@@ -327,6 +389,7 @@ public class ConversationService {
             ConversationEntity entity = ConversationEntity.builder()
                     .conversationId(conversation.getConversationId())
                     .sandboxId(conversation.getSandboxId())
+                    .sessionId(conversation.getSessionId())
                     .ohConversationId(conversation.getOhConversationId())
                     .userId(conversation.getUserId())
                     .projectId(conversation.getProjectId())
@@ -387,6 +450,7 @@ public class ConversationService {
                     .map(entity -> Conversation.builder()
                             .conversationId(entity.getConversationId())
                             .sandboxId(entity.getSandboxId())
+                            .sessionId(entity.getSessionId())
                             .ohConversationId(entity.getOhConversationId())
                             .userId(entity.getUserId())
                             .projectId(entity.getProjectId())

@@ -96,6 +96,12 @@ public class InMemorySessionManager implements SessionManager {
     }
 
     @Override
+    public void deleteSession(String sessionId) {
+        sessions.remove(sessionId);
+        messages.remove(sessionId);
+    }
+
+    @Override
     public List<Session> findPendingByUser(String userId) {
         return sessions.values().stream()
                 .filter(s -> userId.equals(s.getUserId()))

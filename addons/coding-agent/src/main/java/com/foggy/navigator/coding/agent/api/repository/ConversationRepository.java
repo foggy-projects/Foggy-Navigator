@@ -32,4 +32,8 @@ public interface ConversationRepository extends JpaRepository<ConversationEntity
     List<ConversationEntity> findByCreatedAtBefore(LocalDateTime createdAtBefore);
 
     void deleteByConversationId(String conversationId);
+
+    Optional<ConversationEntity> findBySessionId(String sessionId);
+
+    List<ConversationEntity> findBySessionIdIn(List<String> sessionIds);
 }

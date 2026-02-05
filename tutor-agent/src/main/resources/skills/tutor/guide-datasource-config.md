@@ -1,19 +1,19 @@
-# Skill ID
-guide-datasource-config
-
-# Skill标题
-引导配置数据源
-
-# 触发条件
-- 配置数据源
-- 连接数据库
-- 添加数据库
-
-# 意图
-- configure_datasource
-- add_datasource
+---
+id: guide-datasource-config
+name: 引导配置数据源
+description: 引导用户配置数据库数据源连接
+type: instruction
+triggers:
+  - 配置数据源
+  - 连接数据库
+  - 添加数据库
+intents:
+  - configure_datasource
+  - add_datasource
+---
 
 # 执行逻辑
+
 1. 调用 checkDatasourceStatus() 检查当前状态
 2. 如果已配置，询问是否添加新数据源或修改现有数据源
 3. 如果未配置，开始逐步收集信息：
@@ -27,11 +27,14 @@ guide-datasource-config
 5. 如果信息完整，分派给 datasource-agent
 
 # 分派条件
+
 - 所有必要信息已收集（dbType, host, port, database, username, password）
 - 用户确认开始配置
 - 触发 delegate-datasource-config 规则
 
 # 上下文传递
+
+```json
 {
   "dbType": "MySQL",
   "connectionInfo": {
@@ -42,8 +45,10 @@ guide-datasource-config
     "password": "******"
   }
 }
+```
 
 # 示例对话流程
+
 用户: 我想配置数据源
 导师: 好的，请选择数据库类型：1. MySQL 2. PostgreSQL 3. Oracle 4. SQL Server
 用户: MySQL

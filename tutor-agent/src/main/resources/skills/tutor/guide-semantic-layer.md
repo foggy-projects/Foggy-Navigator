@@ -1,19 +1,19 @@
-# Skill ID
-guide-semantic-layer
-
-# Skill标题
-引导生成语义层
-
-# 触发条件
-- 生成语义层
-- 创建模型
-- 分析数据库
-
-# 意图
-- generate_semantic_layer
-- create_models
+---
+id: guide-semantic-layer
+name: 引导生成语义层
+description: 引导用户生成数据库语义层模型
+type: instruction
+triggers:
+  - 生成语义层
+  - 创建模型
+  - 分析数据库
+intents:
+  - generate_semantic_layer
+  - create_models
+---
 
 # 前置条件
+
 **必须满足**: 数据源已配置
 
 调用 checkDatasourceStatus() 验证前置条件
@@ -21,6 +21,7 @@ guide-semantic-layer
 **如果未满足**: 提示用户需要先配置数据源，引导至 guide-datasource-config
 
 # 执行逻辑
+
 1. 调用 checkDatasourceStatus() 检查数据源配置状态
 2. 如果未配置，提示先配置数据源
 3. 说明语义层生成过程：
@@ -32,11 +33,14 @@ guide-semantic-layer
 6. 如果用户确认，分派给 semantic-layer-agent
 
 # 分派条件
+
 - 数据源已配置（datasource_configured: true）
 - 用户确认使用当前数据源
 - 触发 delegate-semantic-layer-generation 规则
 
 # 上下文传递
+
+```json
 {
   "datasourceId": "datasource-123",
   "mode": "auto-generate",
@@ -45,8 +49,10 @@ guide-semantic-layer
     "generateDescriptions": true
   }
 }
+```
 
 # 示例对话
+
 用户: 生成语义层
 导师: [调用 checkDatasourceStatus()]
 导师: 好的！我将帮您生成语义层。

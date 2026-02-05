@@ -1,20 +1,20 @@
-# Skill ID
-suggest-next-step
-
-# Skill标题
-建议下一步操作
-
-# 触发条件
-- 下一步做什么
-- 接下来怎么做
-- 给我建议
-- 推荐下一步
-
-# 意图
-- suggest_next_step
-- what_next
+---
+id: suggest-next-step
+name: 建议下一步操作
+description: 根据当前配置进度为用户推荐下一步操作
+type: instruction
+triggers:
+  - 下一步做什么
+  - 接下来怎么做
+  - 给我建议
+  - 推荐下一步
+intents:
+  - suggest_next_step
+  - what_next
+---
 
 # 执行逻辑
+
 1. 调用 getConfigProgress() 获取配置完成情况
 2. 根据配置进度生成建议，按优先级：
 
@@ -32,6 +32,7 @@ suggest-next-step
 3. 提供操作指引（不仅告诉下一步是什么，还要告诉如何操作）
 
 # 输出格式
+
 **根据您当前的配置进度，建议下一步：**
 
 📋 **[任务名称]**
@@ -45,6 +46,7 @@ suggest-next-step
 是否开始此任务？
 
 # 示例输出
+
 **根据您当前的配置进度，建议下一步：**
 
 📋 **生成语义层**

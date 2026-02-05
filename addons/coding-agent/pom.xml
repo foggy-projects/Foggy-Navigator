@@ -30,6 +30,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Agent Framework (for SessionManager) -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>agent-framework</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- User Auth Module -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>

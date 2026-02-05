@@ -26,6 +26,10 @@ public class ConversationEntity {
     @Column(length = 64)
     private String sandboxId;
 
+    // 关联到 session-module 的 SessionEntity
+    @Column(name = "session_id", length = 64)
+    private String sessionId;
+
     @Column(length = 128)
     private String ohConversationId;
 

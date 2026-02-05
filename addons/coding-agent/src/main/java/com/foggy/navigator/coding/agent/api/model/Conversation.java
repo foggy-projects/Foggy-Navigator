@@ -18,6 +18,9 @@ public class Conversation {
 
     private String sandboxId;
 
+    // 关联到 session-module 的 Session ID
+    private String sessionId;
+
     private String ohConversationId;
 
     private String userId;
