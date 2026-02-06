@@ -39,4 +39,9 @@ public class TutorAgentProperties {
      * Agent ID
      */
     private String agentId = "tutor-agent";
+
+    /**
+     * Skills 目录路径（支持 classpath: 或文件系统路径）
+     */
+    private String skillsDirectory = "classpath:skills/tutor";
 }
