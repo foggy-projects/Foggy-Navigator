@@ -1,0 +1,28 @@
+responses:
+  # 规则 1：关键词匹配
+  - name: "greeting"
+    match:
+      keywords: ["你好", "hello", "hi"]
+    response:
+      content: "你好！我是 Mock LLM 服务，有什么可以帮助您的？"
+    stream:
+      chunk_size: 5
+      delay_ms: 30
+
+  # 规则 2：正则匹配
+  - name: "help-request"
+    match:
+      pattern: "帮.*我|help.*me"
+    response:
+      content: "当然，我很乐意帮助您。请告诉我具体需要什么帮助？"
+
+  # 规则 3：默认响应（必须有且只有一个）
+  - name: "default"
+    match:
+      default: true
+    response:
+      content: |
+        收到您的消息。
+
+        我是 Mock LLM 服务，用于测试和开发。
+        当前没有匹配的响应规则。

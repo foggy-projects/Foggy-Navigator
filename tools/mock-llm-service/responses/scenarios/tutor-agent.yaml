@@ -1,0 +1,86 @@
+responses:
+  # 数据源配置引导
+  - name: "guide-datasource"
+    match:
+      keywords: ["配置数据源", "连接数据库", "添加数据源", "数据库连接"]
+    response:
+      content: |
+        好的，我来帮您配置数据源。
+
+        请选择数据库类型：
+        1. MySQL
+        2. PostgreSQL
+        3. Oracle
+        4. SQL Server
+
+        请告诉我您要连接的数据库类型。
+    stream:
+      chunk_size: 15
+      delay_ms: 40
+
+  # 选择 MySQL
+  - name: "mysql-selected"
+    match:
+      keywords: ["mysql", "MySQL"]
+    response:
+      content: |
+        好的，您选择了 MySQL 数据库。
+
+        请提供以下连接信息：
+        - 主机地址（如：localhost 或 192.168.1.100）
+        - 端口号（默认 3306）
+        - 数据库名称
+        - 用户名
+        - 密码
+
+        您可以按格式提供：主机:端口/数据库名 用户名 密码
+
+  # 语义层生成引导
+  - name: "guide-semantic-layer"
+    match:
+      keywords: ["语义层", "生成模型", "semantic"]
+    response:
+      content: |
+        我将帮您生成语义层模型。
+
+        语义层是数据库结构的业务抽象层，让用户可以用自然语言查询数据。
+
+        当前数据源状态：
+        - sales_db (MySQL) - localhost:3306 ✓
+
+        是否使用此数据源生成语义层？
+
+  # 系统状态检查
+  - name: "check-status"
+    match:
+      keywords: ["检查状态", "系统状态", "配置进度"]
+      pattern: "检查.*状态|状态.*检查"
+    response:
+      content: |
+        **系统配置状态**
+
+        | 项目 | 状态 |
+        |------|------|
+        | 数据源 | ✅ 已配置 (sales_db) |
+        | 语义层 | ⏳ 待生成 |
+        | 权限 | ❌ 未配置 |
+
+        建议下一步：生成语义层
+
+  # 下一步建议
+  - name: "suggest-next"
+    match:
+      keywords: ["下一步", "接下来", "建议"]
+    response:
+      content: |
+        **根据您当前的配置进度，建议下一步：**
+
+        📋 **生成语义层**
+
+        **为什么要做**：
+        语义层是连接数据库和 AI 分析的桥梁。生成后，您的用户就可以用自然语言查询数据。
+
+        **如何操作**：
+        说"生成语义层"，我会自动分析数据库结构并生成模型。
+
+        是否开始生成语义层？

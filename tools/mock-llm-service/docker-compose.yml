@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  mock-llm:
+    build: .
+    image: foggy/mock-llm-service:latest
+    container_name: mock-llm-service
+    ports:
+      - "8200:8200"
+    volumes:
+      # 挂载响应配置，支持热更新
+      - ./responses:/app/responses:ro
+    environment:
+      - MOCK_LLM_PORT=8200
+      - MOCK_LLM_LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8200/admin/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
