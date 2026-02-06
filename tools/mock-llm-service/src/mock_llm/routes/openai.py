@@ -1,3 +1,4 @@
+import json
 import time
 import uuid
 from fastapi import APIRouter
@@ -7,6 +8,8 @@ from ..models import (
     ChatCompletionResponse,
     ChatChoice,
     ChatMessage,
+    ToolCall,
+    FunctionCall,
     Usage,
     StreamConfig,
 )
@@ -48,8 +51,9 @@ async def chat_completions(request: ChatCompletionRequest):
     # 流式响应
     if request.stream:
         stream_config = rule.stream if rule and rule.stream else StreamConfig()
+        tool_calls = rule.response.tool_calls if rule and rule.response.tool_calls else None
         return StreamingResponse(
-            generate_sse_stream(content, request.model, stream_config),
+            generate_sse_stream(content, request.model, stream_config, tool_calls),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -59,6 +63,31 @@ async def chat_completions(request: ChatCompletionRequest):
         )
 
     # 同步响应
+    # 构建响应消息
+    response_message = ChatMessage(role="assistant", content=content)
+    finish_reason = "stop"
+
+    # 如果规则配置了 tool_calls，添加到响应中
+    if rule and rule.response.tool_calls:
+        tool_calls = []
+        for i, tc in enumerate(rule.response.tool_calls):
+            tool_calls.append(
+                ToolCall(
+                    id=tc.get("id", f"call_{uuid.uuid4().hex[:8]}"),
+                    type=tc.get("type", "function"),
+                    function=FunctionCall(
+                        name=tc["function"]["name"],
+                        arguments=json.dumps(tc["function"]["arguments"])
+                        if isinstance(tc["function"]["arguments"], dict)
+                        else tc["function"]["arguments"],
+                    ),
+                )
+            )
+        response_message = ChatMessage(
+            role="assistant", content=content, tool_calls=tool_calls
+        )
+        finish_reason = "tool_calls"
+
     return ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
         created=int(time.time()),
@@ -66,8 +95,8 @@ async def chat_completions(request: ChatCompletionRequest):
         choices=[
             ChatChoice(
                 index=0,
-                message=ChatMessage(role="assistant", content=content),
-                finish_reason="stop",
+                message=response_message,
+                finish_reason=finish_reason,
             )
         ],
         usage=Usage(

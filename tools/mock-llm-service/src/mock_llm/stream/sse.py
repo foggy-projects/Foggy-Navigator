@@ -1,12 +1,23 @@
 import asyncio
+import json
 import time
 import uuid
-from typing import AsyncGenerator
-from ..models import ChatCompletionChunk, StreamChoice, DeltaContent, StreamConfig
+from typing import AsyncGenerator, List, Optional
+from ..models import (
+    ChatCompletionChunk,
+    StreamChoice,
+    DeltaContent,
+    DeltaToolCall,
+    DeltaToolCallFunction,
+    StreamConfig,
+)
 
 
 async def generate_sse_stream(
-    content: str, model: str, config: StreamConfig = None
+    content: str,
+    model: str,
+    config: StreamConfig = None,
+    tool_calls: Optional[List[dict]] = None,
 ) -> AsyncGenerator[str, None]:
     """
     生成 SSE 流式响应
@@ -53,14 +64,80 @@ async def generate_sse_stream(
         )
         await asyncio.sleep(config.delay_ms / 1000)
 
+    # 如果有 tool_calls，流式发送
+    if tool_calls:
+        for i, tc in enumerate(tool_calls):
+            # 发送 tool_call 开始（包含 id、type、name）
+            tc_id = tc.get("id", f"call_{uuid.uuid4().hex[:8]}")
+            func_name = tc["function"]["name"]
+            func_args = tc["function"]["arguments"]
+            if isinstance(func_args, dict):
+                func_args = json.dumps(func_args)
+
+            yield _format_chunk(
+                ChatCompletionChunk(
+                    id=chunk_id,
+                    created=created,
+                    model=model,
+                    choices=[
+                        StreamChoice(
+                            index=0,
+                            delta=DeltaContent(
+                                tool_calls=[
+                                    DeltaToolCall(
+                                        index=i,
+                                        id=tc_id,
+                                        type="function",
+                                        function=DeltaToolCallFunction(
+                                            name=func_name, arguments=""
+                                        ),
+                                    )
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ],
+                )
+            )
+            await asyncio.sleep(config.delay_ms / 1000)
+
+            # 分块发送 arguments
+            for j in range(0, len(func_args), config.chunk_size):
+                arg_chunk = func_args[j : j + config.chunk_size]
+                yield _format_chunk(
+                    ChatCompletionChunk(
+                        id=chunk_id,
+                        created=created,
+                        model=model,
+                        choices=[
+                            StreamChoice(
+                                index=0,
+                                delta=DeltaContent(
+                                    tool_calls=[
+                                        DeltaToolCall(
+                                            index=i,
+                                            function=DeltaToolCallFunction(
+                                                arguments=arg_chunk
+                                            ),
+                                        )
+                                    ]
+                                ),
+                                finish_reason=None,
+                            )
+                        ],
+                    )
+                )
+                await asyncio.sleep(config.delay_ms / 1000)
+
     # 发送结束标记
+    finish_reason = "tool_calls" if tool_calls else "stop"
     yield _format_chunk(
         ChatCompletionChunk(
             id=chunk_id,
             created=created,
             model=model,
             choices=[
-                StreamChoice(index=0, delta=DeltaContent(), finish_reason="stop")
+                StreamChoice(index=0, delta=DeltaContent(), finish_reason=finish_reason)
             ],
         )
     )

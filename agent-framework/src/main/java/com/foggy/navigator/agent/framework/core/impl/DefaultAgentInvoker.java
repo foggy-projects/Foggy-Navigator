@@ -5,16 +5,20 @@ import com.foggy.navigator.agent.framework.core.AgentInvoker;
 import com.foggy.navigator.agent.framework.core.AgentRegistry;
 import com.foggy.navigator.agent.framework.core.model.AgentConfig;
 import com.foggy.navigator.agent.framework.core.model.ModelConfig;
-import com.foggy.navigator.agent.framework.llm.LlmAdapter;
-import com.foggy.navigator.agent.framework.llm.LlmMessage;
-import com.foggy.navigator.agent.framework.llm.LlmRequest;
+import com.foggy.navigator.agent.framework.llm.*;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
+import com.foggy.navigator.agent.framework.router.DelegationRequest;
+import com.foggy.navigator.agent.framework.router.DelegationResult;
+import com.foggy.navigator.agent.framework.router.SessionRouter;
 import com.foggy.navigator.agent.framework.session.Message;
+import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.agent.framework.skill.Skill;
 import com.foggy.navigator.agent.framework.skill.SkillManager;
+import com.foggy.navigator.agent.framework.tool.BuiltInTool;
 import com.foggy.navigator.agent.framework.tool.ToolDefinition;
+import com.foggy.navigator.agent.framework.tool.builtin.DelegateTool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -40,6 +44,8 @@ public class DefaultAgentInvoker implements AgentInvoker {
     private final ApplicationEventPublisher eventPublisher;
     private final AsyncTaskExecutor agentExecutor;
     private final SkillManager skillManager;
+    private final SessionRouter sessionRouter;
+    private final List<BuiltInTool> builtInTools;
 
     @Override
     public void invokeAsync(String sessionId, String agentId, Message userMessage) {
@@ -94,10 +100,64 @@ public class DefaultAgentInvoker implements AgentInvoker {
                     sessionId, matchedSkill.getName(), matchedSkill.getPath());
         }
 
-        // 7. 流式调用LLM，通过回调发布事件
-        llmAdapter.chatStream(request, new AgentStreamHandler(
-                sessionId, agentId, eventPublisher
+        // 7. 流式调用LLM，通过回调发布事件（委托感知）
+        llmAdapter.chatStream(request, new DelegationAwareStreamHandler(
+                sessionId, agentId, eventPublisher, this::handleDelegation
         ));
+    }
+
+    /**
+     * 处理委托请求
+     * 当 LLM 调用 delegate 工具时触发
+     */
+    private void handleDelegation(String sessionId, String agentId, ToolCall toolCall) {
+        Map<String, Object> args = toolCall.getArguments();
+        String targetAgentId = (String) args.get("targetAgentId");
+        String intent = (String) args.get("intent");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> context = (Map<String, Object>) args.getOrDefault("context", Map.of());
+
+        // 获取当前会话信息
+        Session currentSession = sessionManager.getSession(sessionId);
+        if (currentSession == null) {
+            log.error("Session not found for delegation: {}", sessionId);
+            eventPublisher.publishEvent(AgentMessage.of(
+                    sessionId, agentId, MessageType.ERROR,
+                    Map.of("error", "Session not found for delegation")
+            ));
+            return;
+        }
+
+        // 构建委托请求
+        DelegationRequest delegationRequest = DelegationRequest.builder()
+                .sourceSessionId(sessionId)
+                .sourceAgentId(agentId)
+                .targetAgentId(targetAgentId)
+                .userId(currentSession.getUserId())
+                .tenantId(currentSession.getTenantId())
+                .intent(intent)
+                .parameters(context)
+                .build();
+
+        // 执行委托
+        DelegationResult result = sessionRouter.delegateToAgent(delegationRequest);
+
+        if (result.isSuccess()) {
+            log.info("Delegation successful: {} -> {} (newSession={})",
+                    sessionId, targetAgentId, result.getNewSessionId());
+
+            // 发送 ROUTE_REQUEST 消息给前端
+            eventPublisher.publishEvent(AgentMessage.of(
+                    sessionId, agentId, MessageType.ROUTE_REQUEST,
+                    result.getRoute()
+            ));
+        } else {
+            log.error("Delegation failed: {}", result.getErrorMessage());
+            eventPublisher.publishEvent(AgentMessage.of(
+                    sessionId, agentId, MessageType.ERROR,
+                    Map.of("error", "Delegation failed: " + result.getErrorMessage())
+            ));
+        }
     }
 
     /**
@@ -175,14 +235,30 @@ public class DefaultAgentInvoker implements AgentInvoker {
     }
 
     private List<ToolDefinition> resolveTools(AgentConfig config) {
-        if (config.getTools() == null || config.getTools().isEmpty()) {
-            return Collections.emptyList();
+        List<ToolDefinition> tools = new ArrayList<>();
+
+        // 1. 添加内置工具（如 DelegateTool）
+        if (builtInTools != null) {
+            for (BuiltInTool builtIn : builtInTools) {
+                tools.add(ToolDefinition.builder()
+                        .name(builtIn.getName())
+                        .description(builtIn.getDescription())
+                        .parameters(builtIn.getParameters())
+                        .build());
+            }
         }
-        return config.getTools().stream()
-                .map(tool -> ToolDefinition.builder()
+
+        // 2. 添加配置中定义的工具
+        if (config.getTools() != null) {
+            for (var tool : config.getTools()) {
+                tools.add(ToolDefinition.builder()
                         .name(tool.getName())
                         .description(tool.getDescription())
-                        .build())
-                .collect(Collectors.toList());
+                        .build());
+            }
+        }
+
+        log.debug("Resolved {} tools for agent", tools.size());
+        return tools;
     }
 }

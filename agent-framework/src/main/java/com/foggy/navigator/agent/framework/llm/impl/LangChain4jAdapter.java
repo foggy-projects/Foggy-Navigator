@@ -1,6 +1,9 @@
 package com.foggy.navigator.agent.framework.llm.impl;
 
 import com.foggy.navigator.agent.framework.llm.*;
+import com.foggy.navigator.agent.framework.tool.ToolDefinition;
+import dev.langchain4j.agent.tool.ToolParameters;
+import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -17,8 +20,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
 /**
@@ -27,6 +35,8 @@ import java.util.concurrent.CountDownLatch;
 @Slf4j
 @Component
 public class LangChain4jAdapter implements LlmAdapter {
+
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${agent.llm.openai.api-key:}")
     private String openaiApiKey;
@@ -59,10 +69,14 @@ public class LangChain4jAdapter implements LlmAdapter {
         try {
             StreamingChatLanguageModel streamingModel = buildStreamingChatModel(request);
             List<ChatMessage> messages = convertMessages(request);
+            List<ToolSpecification> toolSpecs = convertTools(request.getTools());
             StringBuilder fullContent = new StringBuilder();
             CountDownLatch latch = new CountDownLatch(1);
 
-            streamingModel.generate(messages, new StreamingResponseHandler<>() {
+            log.debug("Starting stream with {} tools", toolSpecs != null ? toolSpecs.size() : 0);
+
+            // 使用带 tools 的 generate 方法
+            StreamingResponseHandler<AiMessage> responseHandler = new StreamingResponseHandler<>() {
                 @Override
                 public void onNext(String token) {
                     fullContent.append(token);
@@ -71,11 +85,54 @@ public class LangChain4jAdapter implements LlmAdapter {
 
                 @Override
                 public void onComplete(Response<AiMessage> response) {
+                    AiMessage aiMessage = response.content();
+                    List<ToolCall> toolCalls = null;
+                    String finishReasonStr = response.finishReason() != null ? response.finishReason().name() : null;
+
+                    // 调试日志
+                    log.debug("onComplete - aiMessage: {}", aiMessage);
+                    log.debug("onComplete - finishReason: {}", finishReasonStr);
+
+                    // 提取 tool calls（如果有）
+                    if (aiMessage != null && aiMessage.hasToolExecutionRequests()) {
+                        log.info("Found {} tool execution requests from streaming", aiMessage.toolExecutionRequests().size());
+                        toolCalls = aiMessage.toolExecutionRequests().stream()
+                                .map(req -> ToolCall.builder()
+                                        .id(req.id())
+                                        .name(req.name())
+                                        .arguments(parseArguments(req.arguments()))
+                                        .build())
+                                .toList();
+
+                        // 通知 handler 每个 tool call
+                        for (ToolCall tc : toolCalls) {
+                            handler.onToolCall(tc);
+                        }
+                    }
+                    // LangChain4j 流式处理的 bug workaround：
+                    // 当 finishReason 是 TOOL_EXECUTION 但 toolExecutionRequests 为 null 时，
+                    // 回退到非流式请求来获取 tool calls
+                    else if ("TOOL_EXECUTION".equals(finishReasonStr)) {
+                        log.warn("finishReason is TOOL_EXECUTION but toolExecutionRequests is null, falling back to non-streaming request");
+                        try {
+                            toolCalls = fetchToolCallsWithNonStreaming(request);
+                            if (toolCalls != null) {
+                                log.info("Fetched {} tool calls via fallback", toolCalls.size());
+                                for (ToolCall tc : toolCalls) {
+                                    handler.onToolCall(tc);
+                                }
+                            }
+                        } catch (Exception e) {
+                            log.error("Failed to fetch tool calls via fallback", e);
+                        }
+                    }
+
                     LlmResponse llmResponse = LlmResponse.builder()
                             .content(fullContent.toString())
+                            .toolCalls(toolCalls)
                             .inputTokens(response.tokenUsage() != null ? response.tokenUsage().inputTokenCount() : 0)
                             .outputTokens(response.tokenUsage() != null ? response.tokenUsage().outputTokenCount() : 0)
-                            .finishReason(response.finishReason() != null ? response.finishReason().name() : null)
+                            .finishReason(finishReasonStr)
                             .build();
                     handler.onComplete(llmResponse);
                     latch.countDown();
@@ -86,7 +143,14 @@ public class LangChain4jAdapter implements LlmAdapter {
                     handler.onError(error);
                     latch.countDown();
                 }
-            });
+            };
+
+            // 根据是否有 tools 选择不同的 generate 方法
+            if (toolSpecs != null && !toolSpecs.isEmpty()) {
+                streamingModel.generate(messages, toolSpecs, responseHandler);
+            } else {
+                streamingModel.generate(messages, responseHandler);
+            }
 
             latch.await();
         } catch (InterruptedException e) {
@@ -150,5 +214,108 @@ public class LangChain4jAdapter implements LlmAdapter {
         }
 
         return messages;
+    }
+
+    /**
+     * 当流式处理无法获取 tool calls 时，回退到非流式请求
+     * 这是 LangChain4j 流式处理 bug 的 workaround
+     */
+    private List<ToolCall> fetchToolCallsWithNonStreaming(LlmRequest request) {
+        try {
+            ChatLanguageModel model = buildChatModel(request);
+            List<ChatMessage> messages = convertMessages(request);
+
+            ChatRequest chatRequest = ChatRequest.builder()
+                    .messages(messages)
+                    .build();
+
+            ChatResponse response = model.chat(chatRequest);
+            AiMessage aiMessage = response.aiMessage();
+
+            if (aiMessage != null && aiMessage.hasToolExecutionRequests()) {
+                return aiMessage.toolExecutionRequests().stream()
+                        .map(req -> ToolCall.builder()
+                                .id(req.id())
+                                .name(req.name())
+                                .arguments(parseArguments(req.arguments()))
+                                .build())
+                        .toList();
+            }
+        } catch (Exception e) {
+            log.error("Error in fetchToolCallsWithNonStreaming", e);
+        }
+        return null;
+    }
+
+    /**
+     * 解析 tool call 参数（JSON 字符串 -> Map）
+     */
+    private Map<String, Object> parseArguments(String argumentsJson) {
+        if (argumentsJson == null || argumentsJson.isBlank()) {
+            return new HashMap<>();
+        }
+        try {
+            return objectMapper.readValue(argumentsJson, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse tool call arguments: {}", argumentsJson, e);
+            return new HashMap<>();
+        }
+    }
+
+    /**
+     * 将 ToolDefinition 列表转换为 LangChain4j 的 ToolSpecification 列表
+     */
+    private List<ToolSpecification> convertTools(List<ToolDefinition> tools) {
+        if (tools == null || tools.isEmpty()) {
+            return List.of();
+        }
+
+        List<ToolSpecification> specs = new ArrayList<>();
+        for (ToolDefinition tool : tools) {
+            ToolSpecification.Builder builder = ToolSpecification.builder()
+                    .name(tool.getName())
+                    .description(tool.getDescription());
+
+            // 转换参数 schema
+            if (tool.getParameters() != null && !tool.getParameters().isEmpty()) {
+                ToolParameters toolParams = convertToToolParameters(tool.getParameters());
+                builder.parameters(toolParams);
+            }
+
+            specs.add(builder.build());
+            log.debug("Converted tool: {} -> {}", tool.getName(), tool.getDescription());
+        }
+
+        return specs;
+    }
+
+    /**
+     * 将参数 Map 转换为 LangChain4j 的 ToolParameters
+     */
+    @SuppressWarnings("unchecked")
+    private ToolParameters convertToToolParameters(Map<String, Object> params) {
+        ToolParameters.Builder builder = ToolParameters.builder();
+
+        // 从 parameters 中提取 properties
+        Object propertiesObj = params.get("properties");
+        if (propertiesObj instanceof Map<?, ?>) {
+            Map<String, Map<String, Object>> properties = new HashMap<>();
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) propertiesObj).entrySet()) {
+                String key = (String) entry.getKey();
+                Map<String, Object> value = (Map<String, Object>) entry.getValue();
+                properties.put(key, value);
+            }
+            builder.properties(properties);
+        }
+
+        // 提取 required 字段
+        Object required = params.get("required");
+        if (required instanceof String[] requiredArr) {
+            builder.required(List.of(requiredArr));
+        } else if (required instanceof List<?> requiredList) {
+            builder.required((List<String>) requiredList);
+        }
+
+        return builder.build();
     }
 }

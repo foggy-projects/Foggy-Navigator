@@ -84,3 +84,39 @@ responses:
         说"生成语义层"，我会自动分析数据库结构并生成模型。
 
         是否开始生成语义层？
+
+  # 委托到 coding-agent（用于测试会话跳转）
+  - name: "delegate-to-coding"
+    match:
+      keywords: ["写代码", "编程", "开发功能", "实现代码"]
+    response:
+      content: "好的，这个任务需要专业的编程能力，我来为您转接到编程助手。"
+      tool_calls:
+        - id: "call_delegate_001"
+          type: "function"
+          function:
+            name: "delegate"
+            arguments:
+              targetAgentId: "coding-agent"
+              intent: "用户需要编写代码，请协助完成编程任务"
+              context:
+                source: "tutor-agent"
+                task: "code-writing"
+
+  # 委托到 data-agent（数据分析任务）
+  - name: "delegate-to-data"
+    match:
+      keywords: ["分析数据", "数据报表", "查询数据"]
+    response:
+      content: "这是一个数据分析任务，让我为您转接到数据分析专家。"
+      tool_calls:
+        - id: "call_delegate_002"
+          type: "function"
+          function:
+            name: "delegate"
+            arguments:
+              targetAgentId: "data-agent"
+              intent: "用户需要进行数据分析"
+              context:
+                source: "tutor-agent"
+                task: "data-analysis"

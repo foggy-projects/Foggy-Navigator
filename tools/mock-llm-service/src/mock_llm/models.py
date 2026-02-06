@@ -4,11 +4,23 @@ from typing import Optional, List, Dict, Any
 # ========== OpenAI API 请求/响应模型 ==========
 
 
+class FunctionCall(BaseModel):
+    name: str
+    arguments: str  # JSON string
+
+
+class ToolCall(BaseModel):
+    id: str
+    type: str = "function"
+    function: FunctionCall
+
+
 class ChatMessage(BaseModel):
     role: str  # system / user / assistant / tool
-    content: str
+    content: Optional[str] = None
     name: Optional[str] = None
     tool_call_id: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -44,9 +56,22 @@ class ChatCompletionResponse(BaseModel):
 # ========== 流式响应模型 ==========
 
 
+class DeltaToolCallFunction(BaseModel):
+    name: Optional[str] = None
+    arguments: Optional[str] = None
+
+
+class DeltaToolCall(BaseModel):
+    index: int
+    id: Optional[str] = None
+    type: Optional[str] = None
+    function: Optional[DeltaToolCallFunction] = None
+
+
 class DeltaContent(BaseModel):
     role: Optional[str] = None
     content: Optional[str] = None
+    tool_calls: Optional[List[DeltaToolCall]] = None
 
 
 class StreamChoice(BaseModel):

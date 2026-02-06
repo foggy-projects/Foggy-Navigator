@@ -3,6 +3,7 @@ package com.foggy.navigator.agent.framework.core.impl;
 import com.foggy.navigator.agent.framework.core.AgentRegistry;
 import com.foggy.navigator.agent.framework.llm.LlmAdapter;
 import com.foggy.navigator.agent.framework.llm.LlmMessage;
+import com.foggy.navigator.agent.framework.router.SessionRouter;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.SessionManager;
@@ -37,6 +38,8 @@ class DefaultAgentInvokerTest {
     private AsyncTaskExecutor agentExecutor;
     @Mock
     private SkillManager skillManager;
+    @Mock
+    private SessionRouter sessionRouter;
 
     private DefaultAgentInvoker invoker;
 
@@ -44,7 +47,8 @@ class DefaultAgentInvokerTest {
     void setUp() {
         invoker = new DefaultAgentInvoker(
                 agentRegistry, sessionManager, llmAdapter,
-                eventPublisher, agentExecutor, skillManager
+                eventPublisher, agentExecutor, skillManager, sessionRouter,
+                List.of() // builtInTools - empty for unit tests
         );
     }
 

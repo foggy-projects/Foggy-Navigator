@@ -85,10 +85,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Close } from '@element-plus/icons-vue'
 import { ChatPanel, useChatStore } from '@foggy/chat'
 import { useSessionStore } from '@/stores/sessionStore'
-import { useSession } from '@/composables/useSession'
+import { useSession, setRouteRequestHandler } from '@/composables/useSession'
 import { getUserInfo, clearAuth } from '@/utils/auth'
 import * as sessionApi from '@/api/session'
-import type { GuideCard } from '@/types'
+import type { GuideCard, RoutePayload } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -118,6 +118,9 @@ onMounted(async () => {
     ]
   }
 
+  // 设置路由请求处理器（用于处理 Agent 委托跳转）
+  setRouteRequestHandler(handleRouteRequest)
+
   // 如果 URL 带有 session id，自动连接
   const id = route.params.id as string | undefined
   if (id) {
@@ -128,6 +131,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   disconnectSession()
+  setRouteRequestHandler(null) // 清理路由请求处理器
 })
 
 // 监听路由参数变化
@@ -191,6 +195,41 @@ function handleGuideClick(card: GuideCard) {
 function handleLogout() {
   clearAuth()
   router.push('/login')
+}
+
+/** 处理 Agent 发起的路由请求（委托跳转） */
+async function handleRouteRequest(payload: RoutePayload) {
+  console.log('Handling route request:', payload)
+
+  if (payload.action === 'DELEGATE' && payload.target.sessionId) {
+    // 委托跳转：导航到新的子会话
+    const targetSessionId = payload.target.sessionId
+
+    // 刷新会话列表以显示新创建的子会话
+    await sessionStore.loadSessions()
+
+    // 根据 mode 决定跳转方式
+    if (payload.mode === 'NEW_TAB') {
+      // 在新标签页打开
+      window.open(`/c/${targetSessionId}`, '_blank')
+    } else {
+      // 替换当前页面（默认行为）
+      router.push(`/c/${targetSessionId}`)
+    }
+
+    ElMessage.success(`已转接到 ${payload.target.agentId || '专业助手'}`)
+  } else if (payload.action === 'RETURN' && payload.target.sessionId) {
+    // 返回父会话
+    router.push(`/c/${payload.target.sessionId}`)
+    ElMessage.info('已返回上级会话')
+  } else if (payload.action === 'NAVIGATE' && payload.target.url) {
+    // 导航到指定 URL
+    if (payload.mode === 'NEW_TAB') {
+      window.open(payload.target.url, '_blank')
+    } else {
+      window.location.href = payload.target.url
+    }
+  }
 }
 
 function formatTime(dateStr: string): string {

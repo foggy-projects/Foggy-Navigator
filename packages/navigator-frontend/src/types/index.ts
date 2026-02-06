@@ -42,3 +42,24 @@ export interface RX<T> {
   message: string
   data: T
 }
+
+/** 路由动作 */
+export type RouteAction = 'DELEGATE' | 'RETURN' | 'NAVIGATE'
+
+/** 路由模式 */
+export type RouteMode = 'REPLACE' | 'NEW_TAB'
+
+/** 路由目标 */
+export interface RouteTarget {
+  agentId?: string
+  sessionId?: string
+  url?: string
+}
+
+/** ROUTE_REQUEST 事件的 payload */
+export interface RoutePayload {
+  action: RouteAction
+  mode: RouteMode
+  target: RouteTarget
+  context?: Record<string, unknown>
+}

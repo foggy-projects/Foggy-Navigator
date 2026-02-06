@@ -4,10 +4,21 @@ import type { ChatMessage } from '@foggy/chat'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'
 import { getToken } from '@/utils/auth'
-import type { AgentMessage } from '@/types'
+import type { AgentMessage, RoutePayload } from '@/types'
 
 let currentEventSource: EventSource | null = null
 const connectedSessionId = ref<string | null>(null)
+
+/** ROUTE_REQUEST 回调类型 */
+export type RouteRequestHandler = (payload: RoutePayload) => void
+
+/** 全局路由请求处理器 */
+let routeRequestHandler: RouteRequestHandler | null = null
+
+/** 设置路由请求处理器 */
+export function setRouteRequestHandler(handler: RouteRequestHandler | null) {
+  routeRequestHandler = handler
+}
 
 export function useSession() {
   const chatStore = useChatStore()
@@ -53,6 +64,13 @@ export function useSession() {
       },
       onError: () => {
         chatStore.setConnectionStatus('error')
+      },
+      onRawEvent: (raw: AgentMessage) => {
+        // 处理 ROUTE_REQUEST 事件（不经过 adapter 转换）
+        if (raw.type === 'ROUTE_REQUEST' && routeRequestHandler) {
+          console.log('ROUTE_REQUEST received:', raw.payload)
+          routeRequestHandler(raw.payload as RoutePayload)
+        }
       },
     })
   }

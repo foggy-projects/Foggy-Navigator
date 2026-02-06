@@ -4,9 +4,11 @@ import com.foggy.navigator.agent.framework.core.AgentInvoker;
 import com.foggy.navigator.agent.framework.core.AgentRegistry;
 import com.foggy.navigator.agent.framework.core.impl.DefaultAgentInvoker;
 import com.foggy.navigator.agent.framework.llm.LlmAdapter;
+import com.foggy.navigator.agent.framework.router.SessionRouter;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.agent.framework.session.impl.InMemorySessionManager;
 import com.foggy.navigator.agent.framework.skill.SkillManager;
+import com.foggy.navigator.agent.framework.tool.BuiltInTool;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.ApplicationEventPublisher;
@@ -14,6 +16,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.List;
 
 /**
  * Agent Framework 模块自动配置
@@ -38,8 +42,11 @@ public class AgentFrameworkAutoConfiguration {
                                             LlmAdapter llmAdapter,
                                             ApplicationEventPublisher publisher,
                                             AsyncTaskExecutor agentExecutor,
-                                            SkillManager skillManager) {
-        return new DefaultAgentInvoker(registry, sessionManager, llmAdapter, publisher, agentExecutor, skillManager);
+                                            SkillManager skillManager,
+                                            SessionRouter sessionRouter,
+                                            List<BuiltInTool> builtInTools) {
+        return new DefaultAgentInvoker(registry, sessionManager, llmAdapter, publisher,
+                agentExecutor, skillManager, sessionRouter, builtInTools);
     }
 
     @Bean("agentExecutor")

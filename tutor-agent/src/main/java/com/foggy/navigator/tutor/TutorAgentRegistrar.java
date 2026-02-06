@@ -22,21 +22,27 @@ public class TutorAgentRegistrar {
 
     @PostConstruct
     public void register() {
+        // 注册所有 agent 配置
+        registerAgent("/agent-config/tutor-agent.yml");
+        registerAgent("/agent-config/coding-agent.yml");
+    }
+
+    private void registerAgent(String configPath) {
         try {
             ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
             yamlMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
             yamlMapper.configure(DeserializationFeature.FAIL_ON_INVALID_SUBTYPE, false);
 
-            InputStream input = getClass().getResourceAsStream("/agent-config/tutor-agent.yml");
+            InputStream input = getClass().getResourceAsStream(configPath);
             if (input == null) {
-                log.warn("tutor-agent.yml not found on classpath");
+                log.warn("{} not found on classpath", configPath);
                 return;
             }
 
             JsonNode tree = yamlMapper.readTree(input);
             JsonNode agentNode = tree.get("agent");
             if (agentNode == null) {
-                log.warn("No 'agent' node in tutor-agent.yml");
+                log.warn("No 'agent' node in {}", configPath);
                 return;
             }
 
@@ -49,7 +55,7 @@ public class TutorAgentRegistrar {
             agentRegistry.register(config);
             log.info("Registered agent: id={}, name={}", config.getId(), config.getName());
         } catch (Exception e) {
-            log.error("Failed to register tutor-agent", e);
+            log.error("Failed to register agent from {}", configPath, e);
         }
     }
 }
