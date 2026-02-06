@@ -102,8 +102,9 @@ public class DefaultAgentInvoker implements AgentInvoker {
 
     /**
      * 构建增强的 system prompt（包含 Skills 摘要列表）
+     * Package-private for testing
      */
-    private String buildEnhancedSystemPrompt(String basePrompt, List<Skill> skills) {
+    String buildEnhancedSystemPrompt(String basePrompt, List<Skill> skills) {
         if (skills == null || skills.isEmpty()) {
             return basePrompt;
         }
@@ -127,8 +128,9 @@ public class DefaultAgentInvoker implements AgentInvoker {
 
     /**
      * 构建消息列表，如果匹配到 Skill 则在用户消息前注入
+     * Package-private for testing
      */
-    private List<LlmMessage> buildMessages(List<Message> history, Skill matchedSkill) {
+    List<LlmMessage> buildMessages(List<Message> history, Skill matchedSkill) {
         List<LlmMessage> messages = new ArrayList<>();
 
         // 转换历史消息，但在最后一条用户消息前插入 Skill 内容
@@ -150,8 +152,9 @@ public class DefaultAgentInvoker implements AgentInvoker {
 
     /**
      * 构建 Skill 注入消息（包含 Base directory）
+     * Package-private for testing
      */
-    private LlmMessage buildSkillInjectionMessage(Skill skill) {
+    LlmMessage buildSkillInjectionMessage(Skill skill) {
         StringBuilder sb = new StringBuilder();
         sb.append("Base directory for this skill: ").append(skill.getPath()).append("\n\n");
         sb.append(skill.getContent());
