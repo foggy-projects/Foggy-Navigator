@@ -11,14 +11,16 @@ import com.foggy.navigator.agent.framework.llm.LlmRequest;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.agent.framework.session.Message;
-import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.agent.framework.skill.Skill;
+import com.foggy.navigator.agent.framework.skill.SkillManager;
 import com.foggy.navigator.agent.framework.tool.ToolDefinition;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.task.AsyncTaskExecutor;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +39,7 @@ public class DefaultAgentInvoker implements AgentInvoker {
     private final LlmAdapter llmAdapter;
     private final ApplicationEventPublisher eventPublisher;
     private final AsyncTaskExecutor agentExecutor;
+    private final SkillManager skillManager;
 
     @Override
     public void invokeAsync(String sessionId, String agentId, Message userMessage) {
@@ -60,40 +63,112 @@ public class DefaultAgentInvoker implements AgentInvoker {
             throw new IllegalArgumentException("Agent not found: " + agentId);
         }
 
-        // 2. 构建LLM请求（系统提示 + 历史消息 + 工具定义）
+        // 2. 获取历史消息和配置
         List<Message> history = sessionManager.getRecentMessages(sessionId, 20);
         AgentConfig config = agent.getConfig();
         ModelConfig modelConfig = config.getModel();
 
+        // 3. 获取 Agent 的所有 Skills 并构建增强的 system prompt
+        List<Skill> skills = skillManager.getSkillsByAgent(agentId);
+        String baseSystemPrompt = modelConfig != null ? modelConfig.getSystemPrompt() : "";
+        String enhancedSystemPrompt = buildEnhancedSystemPrompt(baseSystemPrompt, skills);
+
+        // 4. 匹配 Skill（基于用户最新消息）
+        String userContent = userMessage != null ? userMessage.getContent() : "";
+        Skill matchedSkill = skillManager.matchSkill(userContent, agentId);
+
+        // 5. 构建消息列表（可能包含 Skill 注入）
+        List<LlmMessage> messages = buildMessages(history, matchedSkill);
+
+        // 6. 构建 LLM 请求
         LlmRequest request = LlmRequest.builder()
                 .model(modelConfig != null ? modelConfig.getModel() : null)
                 .temperature(modelConfig != null ? modelConfig.getTemperature() : 0.7)
-                .systemPrompt(modelConfig != null ? modelConfig.getSystemPrompt() : null)
-                .messages(toLlmMessages(history))
+                .systemPrompt(enhancedSystemPrompt)
+                .messages(messages)
                 .tools(resolveTools(config))
                 .build();
 
-        // 3. 流式调用LLM，通过回调发布事件
+        if (matchedSkill != null) {
+            log.info("Skill matched for session {}: {} (path: {})",
+                    sessionId, matchedSkill.getName(), matchedSkill.getPath());
+        }
+
+        // 7. 流式调用LLM，通过回调发布事件
         llmAdapter.chatStream(request, new AgentStreamHandler(
                 sessionId, agentId, eventPublisher
         ));
     }
 
-    private List<LlmMessage> toLlmMessages(List<Message> history) {
-        return history.stream()
-                .map(msg -> {
-                    String role = switch (msg.getRole()) {
-                        case USER -> "user";
-                        case ASSISTANT -> "assistant";
-                        case SYSTEM -> "system";
-                        case TOOL -> "tool";
-                    };
-                    return LlmMessage.builder()
-                            .role(role)
-                            .content(msg.getContent())
-                            .build();
-                })
-                .collect(Collectors.toList());
+    /**
+     * 构建增强的 system prompt（包含 Skills 摘要列表）
+     */
+    private String buildEnhancedSystemPrompt(String basePrompt, List<Skill> skills) {
+        if (skills == null || skills.isEmpty()) {
+            return basePrompt;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        if (basePrompt != null && !basePrompt.isBlank()) {
+            sb.append(basePrompt).append("\n\n");
+        }
+
+        sb.append("## Available Skills\n\n");
+        sb.append("You have the following skills available. When a user request matches a skill, ");
+        sb.append("that skill's detailed instructions will be provided to guide your response.\n\n");
+
+        for (Skill skill : skills) {
+            sb.append("- **").append(skill.getName()).append("**: ")
+              .append(skill.getDescription()).append("\n");
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * 构建消息列表，如果匹配到 Skill 则在用户消息前注入
+     */
+    private List<LlmMessage> buildMessages(List<Message> history, Skill matchedSkill) {
+        List<LlmMessage> messages = new ArrayList<>();
+
+        // 转换历史消息，但在最后一条用户消息前插入 Skill 内容
+        for (int i = 0; i < history.size(); i++) {
+            Message msg = history.get(i);
+            boolean isLastUserMessage = (i == history.size() - 1)
+                    && msg.getRole() == com.foggy.navigator.agent.framework.session.MessageRole.USER;
+
+            // 在最后一条用户消息前注入 Skill 内容
+            if (isLastUserMessage && matchedSkill != null) {
+                messages.add(buildSkillInjectionMessage(matchedSkill));
+            }
+
+            messages.add(toLlmMessage(msg));
+        }
+
+        return messages;
+    }
+
+    /**
+     * 构建 Skill 注入消息（包含 Base directory）
+     */
+    private LlmMessage buildSkillInjectionMessage(Skill skill) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Base directory for this skill: ").append(skill.getPath()).append("\n\n");
+        sb.append(skill.getContent());
+        return LlmMessage.system(sb.toString());
+    }
+
+    private LlmMessage toLlmMessage(Message msg) {
+        String role = switch (msg.getRole()) {
+            case USER -> "user";
+            case ASSISTANT -> "assistant";
+            case SYSTEM -> "system";
+            case TOOL -> "tool";
+        };
+        return LlmMessage.builder()
+                .role(role)
+                .content(msg.getContent())
+                .build();
     }
 
     private List<ToolDefinition> resolveTools(AgentConfig config) {

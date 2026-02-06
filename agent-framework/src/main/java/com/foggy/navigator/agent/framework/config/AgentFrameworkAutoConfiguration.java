@@ -6,6 +6,7 @@ import com.foggy.navigator.agent.framework.core.impl.DefaultAgentInvoker;
 import com.foggy.navigator.agent.framework.llm.LlmAdapter;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.agent.framework.session.impl.InMemorySessionManager;
+import com.foggy.navigator.agent.framework.skill.SkillManager;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.ApplicationEventPublisher;
@@ -36,8 +37,9 @@ public class AgentFrameworkAutoConfiguration {
                                             SessionManager sessionManager,
                                             LlmAdapter llmAdapter,
                                             ApplicationEventPublisher publisher,
-                                            AsyncTaskExecutor agentExecutor) {
-        return new DefaultAgentInvoker(registry, sessionManager, llmAdapter, publisher, agentExecutor);
+                                            AsyncTaskExecutor agentExecutor,
+                                            SkillManager skillManager) {
+        return new DefaultAgentInvoker(registry, sessionManager, llmAdapter, publisher, agentExecutor, skillManager);
     }
 
     @Bean("agentExecutor")
