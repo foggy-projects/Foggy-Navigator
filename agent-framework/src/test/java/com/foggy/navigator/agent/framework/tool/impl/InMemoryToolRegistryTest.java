@@ -2,10 +2,7 @@ package com.foggy.navigator.agent.framework.tool.impl;
 
 import com.foggy.navigator.agent.framework.core.model.HttpToolConfig;
 import com.foggy.navigator.agent.framework.core.model.McpToolConfig;
-import com.foggy.navigator.agent.framework.tool.ToolDefinition;
-import com.foggy.navigator.agent.framework.tool.ToolExecutionRequest;
-import com.foggy.navigator.agent.framework.tool.ToolExecutionResult;
-import com.foggy.navigator.agent.framework.tool.UserToolCredential;
+import com.foggy.navigator.agent.framework.tool.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -24,6 +21,58 @@ class InMemoryToolRegistryTest {
     void setUp() {
         credentialStore = new InMemoryCredentialStore();
         registry = new InMemoryToolRegistry(credentialStore);
+    }
+
+    @Test
+    void registerBuiltInTool_shouldMakeToolAvailableToAllAgents() {
+        BuiltInTool testTool = new BuiltInTool() {
+            @Override
+            public String getName() { return "test-builtin"; }
+            @Override
+            public String getDescription() { return "Test built-in tool"; }
+            @Override
+            public Map<String, Object> getParameters() { return Map.of(); }
+            @Override
+            public ToolExecutionResult execute(ToolExecutionRequest request) {
+                return ToolExecutionResult.success("executed");
+            }
+        };
+
+        registry.registerBuiltInTool(testTool);
+
+        List<ToolDefinition> builtInTools = registry.getBuiltInTools();
+        assertEquals(1, builtInTools.size());
+        assertEquals("test-builtin", builtInTools.get(0).getName());
+
+        // Built-in tools should be available for any agent
+        List<ToolDefinition> availableTools = registry.getAvailableTools("any-agent", "any-user");
+        assertTrue(availableTools.stream().anyMatch(t -> t.getName().equals("test-builtin")));
+    }
+
+    @Test
+    void executeBuiltInTool_shouldWork() {
+        BuiltInTool testTool = new BuiltInTool() {
+            @Override
+            public String getName() { return "echo"; }
+            @Override
+            public String getDescription() { return "Echo tool"; }
+            @Override
+            public Map<String, Object> getParameters() { return Map.of(); }
+            @Override
+            public ToolExecutionResult execute(ToolExecutionRequest request) {
+                return ToolExecutionResult.success(request.getParameters().get("message"));
+            }
+        };
+        registry.registerBuiltInTool(testTool);
+
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .toolName("echo")
+                .parameters(Map.of("message", "hello"))
+                .build();
+
+        ToolExecutionResult result = registry.executeTool(request);
+        assertTrue(result.isSuccess());
+        assertEquals("hello", result.getData());
     }
 
     @Test
@@ -122,10 +171,12 @@ class InMemoryToolRegistryTest {
                 .build();
         registry.registerHttpTool("agent-1", "public-tool", "Public API", httpConfig);
 
-        // User without credentials
+        // User without credentials - should only see public tool (no built-in tools registered)
         List<ToolDefinition> availableWithoutCred = registry.getAvailableTools("agent-1", "user-1");
-        assertEquals(1, availableWithoutCred.size());
-        assertEquals("public-tool", availableWithoutCred.get(0).getName());
+        long agentToolCount = availableWithoutCred.stream()
+                .filter(t -> t.getName().equals("public-tool"))
+                .count();
+        assertEquals(1, agentToolCount);
 
         // Add valid credential for user
         UserToolCredential credential = UserToolCredential.builder()
@@ -136,13 +187,14 @@ class InMemoryToolRegistryTest {
                 .build();
         registry.bindUserCredential("user-1", "private-tool", credential);
 
-        // User with credentials should see both tools
+        // User with credentials should see both agent tools
         List<ToolDefinition> availableWithCred = registry.getAvailableTools("agent-1", "user-1");
-        assertEquals(2, availableWithCred.size());
+        assertTrue(availableWithCred.stream().anyMatch(t -> t.getName().equals("public-tool")));
+        assertTrue(availableWithCred.stream().anyMatch(t -> t.getName().equals("private-tool")));
     }
 
     @Test
-    void executeTool_shouldReturnErrorForUnknownAgent() {
+    void executeTool_shouldReturnErrorForUnknownTool_WhenNoBuiltInOrAgentToolMatches() {
         ToolExecutionRequest request = ToolExecutionRequest.builder()
                 .agentId("unknown")
                 .toolName("some-tool")
@@ -152,7 +204,7 @@ class InMemoryToolRegistryTest {
         ToolExecutionResult result = registry.executeTool(request);
 
         assertFalse(result.isSuccess());
-        assertEquals("AGENT_NOT_FOUND", result.getErrorCode());
+        assertEquals("TOOL_NOT_FOUND", result.getErrorCode());
     }
 
     @Test

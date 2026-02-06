@@ -28,53 +28,54 @@ class KeywordSkillMatcherTest {
     }
 
     @Test
-    void match_shouldMatchByTriggerKeyword() {
+    void match_shouldMatchByName() {
         Skill codeReviewSkill = Skill.builder()
-                .id("code-review")
-                .triggerKeywords(List.of("review", "审查", "code review"))
+                .name("code-review")
+                .description("代码审查技能")
                 .build();
 
-        Skill result = matcher.match("请帮我review一下这段代码", List.of(codeReviewSkill));
+        Skill result = matcher.match("请帮我做code-review", List.of(codeReviewSkill));
 
         assertNotNull(result);
-        assertEquals("code-review", result.getId());
+        assertEquals("code-review", result.getName());
     }
 
     @Test
-    void match_shouldMatchByIntent() {
+    void match_shouldMatchByDescription() {
         Skill debugSkill = Skill.builder()
-                .id("debug")
-                .intents(List.of("debug", "fix bug", "错误"))
+                .name("debug-helper")
+                .description("Help debug code issues, fix bugs, and troubleshoot errors")
                 .build();
 
-        Skill result = matcher.match("帮我debug这个问题", List.of(debugSkill));
+        // Using words that will match description
+        Skill result = matcher.match("help debug this issue", List.of(debugSkill));
 
         assertNotNull(result);
-        assertEquals("debug", result.getId());
+        assertEquals("debug-helper", result.getName());
     }
 
     @Test
     void match_shouldReturnBestMatch() {
         Skill codeSkill = Skill.builder()
-                .id("code")
-                .triggerKeywords(List.of("code", "编程"))
+                .name("code-generator")
+                .description("Generate code from templates")
                 .build();
         Skill codeReviewSkill = Skill.builder()
-                .id("code-review")
-                .triggerKeywords(List.of("code", "review", "审查"))
+                .name("code-review")
+                .description("Review code quality and standards")
                 .build();
 
-        // "code review" should match code-review better (2/3) than code (1/2)
-        Skill result = matcher.match("帮我做code review", List.of(codeSkill, codeReviewSkill));
+        // "code-review" in message should match code-review skill name exactly
+        Skill result = matcher.match("please do code-review", List.of(codeSkill, codeReviewSkill));
 
-        assertEquals("code-review", result.getId());
+        assertEquals("code-review", result.getName());
     }
 
     @Test
     void match_shouldBeCaseInsensitive() {
         Skill skill = Skill.builder()
-                .id("test")
-                .triggerKeywords(List.of("Review", "CODE"))
+                .name("test-skill")
+                .description("Review CODE quality")
                 .build();
 
         Skill result = matcher.match("code review please", List.of(skill));
@@ -85,8 +86,8 @@ class KeywordSkillMatcherTest {
     @Test
     void match_shouldReturnNullWhenNoMatch() {
         Skill skill = Skill.builder()
-                .id("code-review")
-                .triggerKeywords(List.of("review", "审查"))
+                .name("code-review")
+                .description("代码审查技能")
                 .build();
 
         Skill result = matcher.match("今天天气怎么样", List.of(skill));
@@ -95,8 +96,8 @@ class KeywordSkillMatcherTest {
     }
 
     @Test
-    void calculateScore_shouldReturnZeroForNoKeywords() {
-        Skill skill = Skill.builder().id("empty").build();
+    void calculateScore_shouldReturnZeroForEmptySkill() {
+        Skill skill = Skill.builder().build();
 
         double score = matcher.calculateScore("any message", skill);
 
@@ -104,70 +105,58 @@ class KeywordSkillMatcherTest {
     }
 
     @Test
-    void calculateScore_shouldCalculateCorrectRatio() {
+    void calculateScore_shouldScoreByNameMatch() {
         Skill skill = Skill.builder()
-                .id("test")
-                .triggerKeywords(List.of("code", "review", "test"))
-                .intents(List.of("debug"))
+                .name("spring-boot")
+                .description("Spring Boot 开发")
                 .build();
 
-        // "code review" matches 2 out of 4 keywords = 0.5
-        double score = matcher.calculateScore("code review", skill);
+        // Name match should contribute 0.5
+        double score = matcher.calculateScore("spring-boot application", skill);
 
-        assertEquals(0.5, score, 0.001);
+        assertTrue(score >= 0.5, "Score should be at least 0.5 for name match");
     }
 
     @Test
-    void calculateScore_shouldCombineKeywordsAndIntents() {
+    void calculateScore_shouldScoreByDescriptionMatch() {
         Skill skill = Skill.builder()
-                .id("test")
-                .triggerKeywords(List.of("code"))
-                .intents(List.of("debug", "fix"))
+                .name("db-tool")
+                .description("Database query and optimization tool")
                 .build();
 
-        // "code debug" matches 2 out of 3 = 0.667
-        double score = matcher.calculateScore("code debug issue", skill);
+        // Words "query" and "optimization" should match
+        double score = matcher.calculateScore("help with query optimization", skill);
 
-        assertEquals(2.0 / 3.0, score, 0.001);
+        assertTrue(score > 0, "Score should be positive for description match");
     }
 
     @Test
     void match_shouldRequireMinimumScore() {
         Skill skill = Skill.builder()
-                .id("test")
-                .triggerKeywords(List.of("a", "b", "c", "d", "e", "f", "g", "h", "i", "j"))
+                .name("very-specific-skill")
+                .description("非常特殊的技能用于处理极其罕见的场景")
                 .build();
 
-        // Only matching 1 out of 10 = 0.1, which is at the threshold
-        Skill result = matcher.match("a", List.of(skill));
+        // No relevant words should not match
+        Skill result = matcher.match("hello world", List.of(skill));
 
-        // Score exactly at 0.1 should not match (> 0.1 required)
         assertNull(result);
     }
 
     @Test
     void match_shouldSelectHighestScoringSkill() {
         Skill skill1 = Skill.builder()
-                .id("skill-1")
-                .triggerKeywords(List.of("java", "spring"))
+                .name("java-spring")
+                .description("Java Spring 开发")
                 .build();
         Skill skill2 = Skill.builder()
-                .id("skill-2")
-                .triggerKeywords(List.of("java", "spring", "boot", "mvc"))
-                .build();
-        Skill skill3 = Skill.builder()
-                .id("skill-3")
-                .triggerKeywords(List.of("java"))
+                .name("java")
+                .description("Java 开发")
                 .build();
 
-        // "java spring" matches:
-        // skill-1: 2/2 = 1.0
-        // skill-2: 2/4 = 0.5
-        // skill-3: 1/1 = 1.0
-        // Should return first one with highest score
-        Skill result = matcher.match("java spring", List.of(skill1, skill2, skill3));
+        // "java-spring" should match better for message containing "spring"
+        Skill result = matcher.match("java-spring application", List.of(skill1, skill2));
 
-        // Both skill-1 and skill-3 have score 1.0, first one wins
-        assertEquals("skill-1", result.getId());
+        assertEquals("java-spring", result.getName());
     }
 }

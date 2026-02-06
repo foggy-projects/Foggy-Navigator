@@ -1,44 +1,39 @@
 ---
-id: guide-semantic-layer
-name: 引导生成语义层
-description: 引导用户生成数据库语义层模型
-type: instruction
-triggers:
-  - 生成语义层
-  - 创建模型
-  - 分析数据库
-intents:
-  - generate_semantic_layer
-  - create_models
+name: guide-semantic-layer
+description: 引导用户生成数据库语义层模型。当用户需要生成语义层、创建模型、分析数据库时使用。
 ---
 
-# 前置条件
+# 引导生成语义层
+
+帮助用户基于已配置的数据源生成语义层模型。
+
+## 前置条件
 
 **必须满足**: 数据源已配置
 
-调用 checkDatasourceStatus() 验证前置条件
+调用 `checkDatasourceStatus()` 验证前置条件。
 
-**如果未满足**: 提示用户需要先配置数据源，引导至 guide-datasource-config
+**如果未满足**: 提示用户需要先配置数据源，引导至 `guide-datasource-config`。
 
-# 执行逻辑
+## 执行流程
 
-1. 调用 checkDatasourceStatus() 检查数据源配置状态
+1. 调用 `checkDatasourceStatus()` 检查数据源配置状态
 2. 如果未配置，提示先配置数据源
 3. 说明语义层生成过程：
    - 什么是语义层
-   - 生成过程（AI分析数据库结构 → 自动生成模型）
+   - 生成过程（AI 分析数据库结构 → 自动生成模型）
    - 预计耗时
 4. 显示当前配置的数据源信息
 5. 询问是否使用该数据源生成语义层
 6. 如果用户确认，分派给 semantic-layer-agent
 
-# 分派条件
+## 分派条件
 
 - 数据源已配置（datasource_configured: true）
 - 用户确认使用当前数据源
-- 触发 delegate-semantic-layer-generation 规则
+- 触发 `delegate-semantic-layer-generation` 规则
 
-# 上下文传递
+## 上下文传递
 
 ```json
 {
@@ -51,7 +46,7 @@ intents:
 }
 ```
 
-# 示例对话
+## 示例对话
 
 用户: 生成语义层
 导师: [调用 checkDatasourceStatus()]

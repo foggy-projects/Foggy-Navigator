@@ -7,7 +7,8 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 基于关键词的Skill匹配器
+ * 基于描述的 Skill 匹配器
+ * 使用简单的关键词匹配（在新设计中，主要由 LLM 基于 description 来决定何时触发 Skill）
  */
 @Component
 public class KeywordSkillMatcher implements SkillMatcher {
@@ -38,31 +39,25 @@ public class KeywordSkillMatcher implements SkillMatcher {
     public double calculateScore(String userMessage, Skill skill) {
         String messageLower = userMessage.toLowerCase();
         double score = 0;
-        int matchCount = 0;
-        int totalKeywords = 0;
 
-        // 检查触发关键词
-        if (skill.getTriggerKeywords() != null) {
-            totalKeywords += skill.getTriggerKeywords().size();
-            for (String keyword : skill.getTriggerKeywords()) {
-                if (messageLower.contains(keyword.toLowerCase())) {
+        // 基于 name 匹配（skill 名称通常与功能相关）
+        if (skill.getName() != null && messageLower.contains(skill.getName().toLowerCase())) {
+            score += 0.5;
+        }
+
+        // 基于 description 中的关键词匹配
+        if (skill.getDescription() != null) {
+            String descLower = skill.getDescription().toLowerCase();
+            String[] words = messageLower.split("\\s+");
+            int matchCount = 0;
+            for (String word : words) {
+                if (word.length() > 2 && descLower.contains(word)) {
                     matchCount++;
                 }
             }
-        }
-
-        // 检查意图
-        if (skill.getIntents() != null) {
-            totalKeywords += skill.getIntents().size();
-            for (String intent : skill.getIntents()) {
-                if (messageLower.contains(intent.toLowerCase())) {
-                    matchCount++;
-                }
+            if (words.length > 0) {
+                score += 0.5 * matchCount / words.length;
             }
-        }
-
-        if (totalKeywords > 0) {
-            score = (double) matchCount / totalKeywords;
         }
 
         return score;

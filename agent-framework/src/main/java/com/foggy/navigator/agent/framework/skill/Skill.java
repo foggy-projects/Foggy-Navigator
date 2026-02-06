@@ -6,59 +6,60 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.Map;
 
 /**
- * Skill定义
+ * Skill 定义（对齐 Claude Code 格式）
+ *
+ * 目录结构：
+ * skill-name/
+ * ├── SKILL.md        # 必需，包含 frontmatter + body
+ * ├── references/     # 可选，参考文档
+ * └── scripts/        # 可选，可执行脚本
  */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
 public class Skill {
-    private String id;
-    private String name;
-    private String agentId;
 
     /**
-     * Skill 执行类型：CLIENT, HTTP, BASH, INSTRUCTION
+     * 技能名称（必需）
+     * 格式：小写字母、数字、连字符，如 "dispatch-coding-task"
      */
-    @Builder.Default
-    private SkillType type = SkillType.INSTRUCTION;
+    private String name;
 
-    private List<String> triggerKeywords;
-    private List<String> intents;
+    /**
+     * 技能描述（必需）
+     * 包含：功能描述 + 触发场景（何时使用）
+     * 这是 LLM 判断何时触发技能的主要依据
+     */
     private String description;
 
     /**
-     * 执行逻辑（Markdown 格式的指令）
+     * Markdown body 内容
+     * 包含执行流程、输入要求、输出格式、约束条件、决策规则等
      */
-    private String executionLogic;
+    private String content;
 
     /**
-     * 输出格式模板
+     * 技能目录路径
      */
-    private String outputFormat;
+    private String path;
 
     /**
-     * 分派/委托条件
+     * 所属 Agent ID
      */
-    private String delegationCondition;
+    private String agentId;
 
     /**
-     * 工具定义（JSON 格式，描述工具参数和调用方式）
+     * 引用的参考文档（references/ 目录下的文件）
+     * key: 文件名, value: 文件内容
      */
-    private String toolDefinition;
+    private Map<String, String> references;
 
     /**
-     * 原始 Markdown 文件路径
+     * 加载时间
      */
-    private String markdownPath;
-
-    /**
-     * 原始 Markdown 内容（解析 @import 后的完整内容）
-     */
-    private String rawContent;
-
     private LocalDateTime loadedAt;
 }

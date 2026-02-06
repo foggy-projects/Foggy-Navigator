@@ -11,6 +11,10 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * DefaultSkillParser 测试
+ * 测试 Claude Code 格式的 SKILL.md 解析
+ */
 class DefaultSkillParserTest {
 
     private DefaultSkillParser parser;
@@ -24,192 +28,62 @@ class DefaultSkillParserTest {
     }
 
     @Test
-    void parse_shouldExtractSkillId() {
+    void parse_shouldExtractNameAndDescription() {
         String markdown = """
-                # Skill ID
-                code-review
+                ---
+                name: code-review
+                description: 代码审查技能。当用户需要审查代码质量时使用。
+                ---
 
-                # Name
-                Code Review Skill
+                # Code Review
+
+                执行代码审查任务。
                 """;
 
         Skill skill = parser.parse(markdown);
 
-        assertEquals("code-review", skill.getId());
+        assertEquals("code-review", skill.getName());
+        assertEquals("代码审查技能。当用户需要审查代码质量时使用。", skill.getDescription());
+        assertNotNull(skill.getContent());
+        assertTrue(skill.getContent().contains("Code Review"));
     }
 
     @Test
-    void parse_shouldExtractName() {
+    void parse_shouldExtractContent() {
         String markdown = """
-                # Skill标题
-                代码审查技能
+                ---
+                name: test-skill
+                description: Test skill description
+                ---
 
-                # Description
-                审查代码质量
+                # Execution Steps
+
+                1. Step one
+                2. Step two
+                3. Step three
                 """;
 
         Skill skill = parser.parse(markdown);
 
-        assertEquals("代码审查技能", skill.getName());
+        assertNotNull(skill.getContent());
+        assertTrue(skill.getContent().contains("Step one"));
+        assertTrue(skill.getContent().contains("Step two"));
     }
 
     @Test
-    void parse_shouldExtractTriggerKeywords() {
+    void parse_shouldHandleMissingFrontmatter() {
         String markdown = """
-                # 触发条件
-                - review
-                - 审查
-                - code review
+                # Plain Markdown
 
-                # Description
-                Some description
+                No frontmatter here.
                 """;
 
         Skill skill = parser.parse(markdown);
 
-        assertNotNull(skill.getTriggerKeywords());
-        // Commonmark parses lists as a single block, keywords are extracted from text
-        assertFalse(skill.getTriggerKeywords().isEmpty());
-    }
-
-    @Test
-    void parse_shouldExtractIntents() {
-        String markdown = """
-                # Intents
-                - code_review
-                - quality_check
-                """;
-
-        Skill skill = parser.parse(markdown);
-
-        assertNotNull(skill.getIntents());
-        assertFalse(skill.getIntents().isEmpty());
-    }
-
-    @Test
-    void parse_shouldExtractDescription() {
-        String markdown = """
-                # Description
-                This is a detailed description
-                of the skill capabilities.
-                """;
-
-        Skill skill = parser.parse(markdown);
-
-        assertTrue(skill.getDescription().contains("detailed description"));
-    }
-
-    @Test
-    void parse_shouldExtractExecutionLogic() {
-        String markdown = """
-                # 执行逻辑
-                1. 读取代码文件
-                2. 分析代码结构
-                3. 生成审查报告
-                """;
-
-        Skill skill = parser.parse(markdown);
-
-        assertNotNull(skill.getExecutionLogic());
-        assertTrue(skill.getExecutionLogic().contains("读取代码文件"));
-    }
-
-    @Test
-    void parse_shouldExtractOutputFormat() {
-        String markdown = """
-                # Output
-                返回JSON格式的审查报告
-                """;
-
-        Skill skill = parser.parse(markdown);
-
-        assertTrue(skill.getOutputFormat().contains("JSON"));
-    }
-
-    @Test
-    void parse_shouldExtractDelegationCondition() {
-        String markdown = """
-                # Delegation
-                当需要执行git操作时，分派给git-agent
-                """;
-
-        Skill skill = parser.parse(markdown);
-
-        assertTrue(skill.getDelegationCondition().contains("git-agent"));
-    }
-
-    @Test
-    void parse_shouldHandleCompleteSkillFile() {
-        String markdown = """
-                # Skill ID
-                code-assistant
-
-                # Skill标题
-                代码助手
-
-                # 触发条件
-                - 写代码
-                - 编程
-                - coding
-
-                # 意图
-                - write_code
-                - debug
-
-                # 描述
-                帮助用户编写和调试代码
-
-                # 执行逻辑
-                1. 理解用户需求
-                2. 生成代码
-                3. 解释代码
-
-                # 输出格式
-                代码块加解释说明
-
-                # 分派条件
-                当需要运行代码时，分派给sandbox-agent
-                """;
-
-        Skill skill = parser.parse(markdown);
-
-        assertEquals("code-assistant", skill.getId());
-        assertEquals("代码助手", skill.getName());
-        assertNotNull(skill.getTriggerKeywords());
-        assertFalse(skill.getTriggerKeywords().isEmpty());
-        assertNotNull(skill.getIntents());
-        assertFalse(skill.getIntents().isEmpty());
-        assertNotNull(skill.getDescription());
-        assertNotNull(skill.getExecutionLogic());
-        assertNotNull(skill.getOutputFormat());
-        assertNotNull(skill.getDelegationCondition());
-        assertNotNull(skill.getLoadedAt());
-    }
-
-    @Test
-    void parseFile_shouldReadFromFile() throws IOException {
-        String markdown = """
-                # Skill ID
-                file-skill
-
-                # Name
-                File Skill
-                """;
-        Path skillFile = tempDir.resolve("test-skill.md");
-        Files.writeString(skillFile, markdown);
-
-        Skill skill = parser.parseFile(skillFile.toString());
-
-        assertEquals("file-skill", skill.getId());
-        assertEquals("File Skill", skill.getName());
-        assertEquals(skillFile.toString(), skill.getMarkdownPath());
-    }
-
-    @Test
-    void parseFile_shouldThrowForNonExistentFile() {
-        assertThrows(RuntimeException.class, () -> {
-            parser.parseFile("/non/existent/file.md");
-        });
+        assertNull(skill.getName());
+        assertNull(skill.getDescription());
+        assertNotNull(skill.getContent());
+        assertTrue(skill.getContent().contains("Plain Markdown"));
     }
 
     @Test
@@ -217,20 +91,144 @@ class DefaultSkillParserTest {
         Skill skill = parser.parse("");
 
         assertNotNull(skill);
-        assertNull(skill.getId());
+        assertNull(skill.getName());
     }
 
     @Test
-    void parse_shouldHandleListWithDifferentMarkers() {
+    void parse_shouldSetLoadedAt() {
         String markdown = """
-                # Trigger
-                - item with dash
-                * item with asterisk
-                plain item
+                ---
+                name: test
+                description: test
+                ---
+                Content
                 """;
 
         Skill skill = parser.parse(markdown);
 
-        assertEquals(3, skill.getTriggerKeywords().size());
+        assertNotNull(skill.getLoadedAt());
+    }
+
+    @Test
+    void loadFromDirectory_shouldLoadSkillMd() throws IOException {
+        // Create skill directory structure
+        Path skillDir = tempDir.resolve("test-skill");
+        Files.createDirectories(skillDir);
+
+        String skillMd = """
+                ---
+                name: test-skill
+                description: A test skill for unit testing
+                ---
+
+                # Test Skill
+
+                This is the body content.
+                """;
+        Files.writeString(skillDir.resolve("SKILL.md"), skillMd);
+
+        Skill skill = parser.loadFromDirectory(skillDir.toString());
+
+        assertEquals("test-skill", skill.getName());
+        assertEquals("A test skill for unit testing", skill.getDescription());
+        assertTrue(skill.getContent().contains("Test Skill"));
+        assertEquals(skillDir.toString(), skill.getPath());
+    }
+
+    @Test
+    void loadFromDirectory_shouldLoadReferences() throws IOException {
+        // Create skill directory with references
+        Path skillDir = tempDir.resolve("skill-with-refs");
+        Files.createDirectories(skillDir);
+        Path refsDir = skillDir.resolve("references");
+        Files.createDirectories(refsDir);
+
+        String skillMd = """
+                ---
+                name: skill-with-refs
+                description: Skill with reference files
+                ---
+
+                # Main Content
+                """;
+        Files.writeString(skillDir.resolve("SKILL.md"), skillMd);
+        Files.writeString(refsDir.resolve("api-guide.md"), "API Guide content");
+        Files.writeString(refsDir.resolve("examples.md"), "Examples content");
+
+        Skill skill = parser.loadFromDirectory(skillDir.toString());
+
+        assertNotNull(skill.getReferences());
+        assertEquals(2, skill.getReferences().size());
+        assertTrue(skill.getReferences().containsKey("api-guide.md"));
+        assertTrue(skill.getReferences().containsKey("examples.md"));
+        assertEquals("API Guide content", skill.getReferences().get("api-guide.md"));
+    }
+
+    @Test
+    void loadFromDirectory_shouldThrowForMissingSkillMd() {
+        Path emptyDir = tempDir.resolve("empty-dir");
+
+        assertThrows(RuntimeException.class, () -> {
+            parser.loadFromDirectory(emptyDir.toString());
+        });
+    }
+
+    @Test
+    void parse_shouldHandleMultilineDescription() {
+        String markdown = """
+                ---
+                name: multi-desc
+                description: >
+                  This is a long description
+                  that spans multiple lines
+                  in YAML flow style.
+                ---
+
+                Content here.
+                """;
+
+        Skill skill = parser.parse(markdown);
+
+        assertEquals("multi-desc", skill.getName());
+        assertNotNull(skill.getDescription());
+        assertTrue(skill.getDescription().contains("long description"));
+    }
+
+    @Test
+    void parse_shouldHandleYamlWithExtraFields() {
+        String markdown = """
+                ---
+                name: extra-fields
+                description: Basic description
+                version: 1.0
+                author: test
+                ---
+
+                Content.
+                """;
+
+        // Should not throw - extra fields are ignored
+        Skill skill = parser.parse(markdown);
+
+        assertEquals("extra-fields", skill.getName());
+        assertEquals("Basic description", skill.getDescription());
+    }
+
+    @Test
+    void parse_shouldTrimBodyContent() {
+        String markdown = """
+                ---
+                name: trim-test
+                description: Test
+                ---
+
+
+                   Trimmed content
+
+                """;
+
+        Skill skill = parser.parse(markdown);
+
+        assertTrue(skill.getContent().startsWith("Trimmed"));
     }
 }
