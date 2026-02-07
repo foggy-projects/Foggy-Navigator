@@ -7,12 +7,9 @@ spring:
 
 foggy:
   tutor-agent:
-    coding-agent-base-url: http://localhost:8112
     default-tenant-id: default
     agent-id: tutor-agent
     init-skills-on-startup: true
-    connect-timeout: 5000
-    read-timeout: 30000
 
 logging:
   level:

@@ -4,10 +4,7 @@ import com.foggy.navigator.agent.framework.llm.*;
 import com.foggy.navigator.agent.framework.tool.ToolDefinition;
 import dev.langchain4j.agent.tool.ToolParameters;
 import dev.langchain4j.agent.tool.ToolSpecification;
-import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.data.message.*;
 import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
@@ -23,6 +20,7 @@ import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,22 +44,55 @@ public class LangChain4jAdapter implements LlmAdapter {
 
     @Override
     public LlmResponse chat(LlmRequest request) {
-        ChatLanguageModel model = buildChatModel(request);
-        List<ChatMessage> messages = convertMessages(request);
+        return chatWithRetry(request, 0);
+    }
 
-        ChatRequest chatRequest = ChatRequest.builder()
-                .messages(messages)
-                .build();
+    private LlmResponse chatWithRetry(LlmRequest request, int attempt) {
+        try {
+            ChatLanguageModel model = buildChatModel(request);
+            List<ChatMessage> messages = convertMessages(request);
+            List<ToolSpecification> toolSpecs = convertTools(request.getTools());
 
-        ChatResponse response = model.chat(chatRequest);
-        AiMessage aiMessage = response.aiMessage();
+            ChatRequest.Builder chatRequestBuilder = ChatRequest.builder().messages(messages);
+            if (toolSpecs != null && !toolSpecs.isEmpty()) {
+                chatRequestBuilder.toolSpecifications(toolSpecs);
+            }
 
-        return LlmResponse.builder()
-                .content(aiMessage.text())
-                .inputTokens(response.tokenUsage() != null ? response.tokenUsage().inputTokenCount() : 0)
-                .outputTokens(response.tokenUsage() != null ? response.tokenUsage().outputTokenCount() : 0)
-                .finishReason(response.finishReason() != null ? response.finishReason().name() : null)
-                .build();
+            ChatResponse response = model.chat(chatRequestBuilder.build());
+            AiMessage aiMessage = response.aiMessage();
+
+            List<ToolCall> toolCalls = null;
+            if (aiMessage != null && aiMessage.hasToolExecutionRequests()) {
+                toolCalls = aiMessage.toolExecutionRequests().stream()
+                        .map(req -> ToolCall.builder()
+                                .id(req.id())
+                                .name(req.name())
+                                .arguments(parseArguments(req.arguments()))
+                                .build())
+                        .toList();
+            }
+
+            return LlmResponse.builder()
+                    .content(aiMessage != null ? aiMessage.text() : null)
+                    .toolCalls(toolCalls)
+                    .inputTokens(response.tokenUsage() != null ? response.tokenUsage().inputTokenCount() : 0)
+                    .outputTokens(response.tokenUsage() != null ? response.tokenUsage().outputTokenCount() : 0)
+                    .finishReason(response.finishReason() != null ? response.finishReason().name() : null)
+                    .build();
+        } catch (Exception e) {
+            if (isRetryable(e) && attempt < request.getMaxRetries()) {
+                long delay = request.getRetryBaseDelayMs() * (1L << attempt);
+                log.warn("LLM chat failed (attempt {}), retrying in {}ms: {}", attempt + 1, delay, e.getMessage());
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during retry", ie);
+                }
+                return chatWithRetry(request, attempt + 1);
+            }
+            throw e;
+        }
     }
 
     @Override
@@ -197,6 +228,7 @@ public class LangChain4jAdapter implements LlmAdapter {
                 .baseUrl(openaiBaseUrl)
                 .modelName(request.getModel() != null ? request.getModel() : "gpt-4")
                 .temperature(request.getTemperature())
+                .timeout(Duration.ofSeconds(request.getTimeoutSeconds()))
                 .build();
     }
 
@@ -206,10 +238,11 @@ public class LangChain4jAdapter implements LlmAdapter {
                 .baseUrl(openaiBaseUrl)
                 .modelName(request.getModel() != null ? request.getModel() : "gpt-4")
                 .temperature(request.getTemperature())
+                .timeout(Duration.ofSeconds(request.getTimeoutSeconds()))
                 .build();
     }
 
-    private List<ChatMessage> convertMessages(LlmRequest request) {
+    List<ChatMessage> convertMessages(LlmRequest request) {
         List<ChatMessage> messages = new ArrayList<>();
 
         if (request.getSystemPrompt() != null && !request.getSystemPrompt().isBlank()) {
@@ -221,7 +254,35 @@ public class LangChain4jAdapter implements LlmAdapter {
                 switch (msg.getRole()) {
                     case "system" -> messages.add(SystemMessage.from(msg.getContent()));
                     case "user" -> messages.add(UserMessage.from(msg.getContent()));
-                    case "assistant" -> messages.add(AiMessage.from(msg.getContent()));
+                    case "assistant" -> {
+                        if (msg.getToolCalls() != null && !msg.getToolCalls().isEmpty()) {
+                            // Assistant message with tool calls
+                            List<dev.langchain4j.agent.tool.ToolExecutionRequest> toolRequests =
+                                    msg.getToolCalls().stream()
+                                            .map(tc -> dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                                                    .id(tc.getId())
+                                                    .name(tc.getName())
+                                                    .arguments(serializeArguments(tc.getArguments()))
+                                                    .build())
+                                            .toList();
+                            messages.add(new AiMessage(
+                                    msg.getContent() != null ? msg.getContent() : "",
+                                    toolRequests));
+                        } else {
+                            messages.add(AiMessage.from(
+                                    msg.getContent() != null ? msg.getContent() : ""));
+                        }
+                    }
+                    case "tool" -> {
+                        // ToolExecutionResultMessage.from(id, toolName, text)
+                        // We use toolCallId as both id and toolName since tool name
+                        // is not separately stored in LlmMessage
+                        String toolCallId = msg.getToolCallId() != null ? msg.getToolCallId() : "";
+                        messages.add(new ToolExecutionResultMessage(
+                                toolCallId,
+                                toolCallId,
+                                msg.getContent() != null ? msg.getContent() : ""));
+                    }
                 }
             }
         }
@@ -282,6 +343,21 @@ public class LangChain4jAdapter implements LlmAdapter {
         } catch (Exception e) {
             log.warn("Failed to parse tool call arguments: {}", argumentsJson, e);
             return new HashMap<>();
+        }
+    }
+
+    /**
+     * 序列化 tool call 参数（Map -> JSON 字符串）
+     */
+    private String serializeArguments(Map<String, Object> arguments) {
+        if (arguments == null || arguments.isEmpty()) {
+            return "{}";
+        }
+        try {
+            return objectMapper.writeValueAsString(arguments);
+        } catch (Exception e) {
+            log.warn("Failed to serialize tool call arguments", e);
+            return "{}";
         }
     }
 
@@ -369,5 +445,23 @@ public class LangChain4jAdapter implements LlmAdapter {
                 .properties(properties)
                 .required(requiredList)
                 .build();
+    }
+
+    /**
+     * 判断异常是否可重试（连接超时、5xx、429）
+     */
+    private boolean isRetryable(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null) return false;
+        String lower = msg.toLowerCase();
+        return lower.contains("timeout") ||
+               lower.contains("timed out") ||
+               lower.contains("500") ||
+               lower.contains("502") ||
+               lower.contains("503") ||
+               lower.contains("429") ||
+               lower.contains("rate limit") ||
+               lower.contains("connection refused") ||
+               lower.contains("connection reset");
     }
 }

@@ -15,7 +15,7 @@ export type { ChatMessage, ConnectionStatus } from './types/chat'
 
 // SSE
 export { createSseClient } from './sse/SseClient'
-export type { SseClientOptions } from './sse/SseClient'
+export type { SseClientOptions, SseController } from './sse/SseClient'
 
 // Store
 export { useChatStore } from './store/useChatStore'

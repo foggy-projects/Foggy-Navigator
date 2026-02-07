@@ -22,4 +22,11 @@ public class LlmRequest {
     private String systemPrompt;
     private List<LlmMessage> messages;
     private List<ToolDefinition> tools;
+
+    @Builder.Default
+    private int timeoutSeconds = 60;
+    @Builder.Default
+    private int maxRetries = 2;
+    @Builder.Default
+    private long retryBaseDelayMs = 1000;
 }

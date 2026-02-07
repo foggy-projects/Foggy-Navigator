@@ -4,6 +4,7 @@ import com.foggy.navigator.agent.framework.core.AgentInfo;
 import com.foggy.navigator.agent.framework.core.AgentRegistry;
 import com.foggy.navigator.agent.framework.core.AgentStatus;
 import com.foggy.navigator.agent.framework.core.model.AgentConfig;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -13,9 +14,10 @@ import java.util.stream.Collectors;
 
 /**
  * 内存实现的Agent注册表
- * MVP阶段使用，后续可替换为Redis/DB实现
+ * MVP阶段使用，当 JpaAgentRegistry 存在时会被替代
  */
 @Component
+@ConditionalOnMissingBean(AgentRegistry.class)
 public class InMemoryAgentRegistry implements AgentRegistry {
 
     private final ConcurrentHashMap<String, AgentInfo> agents = new ConcurrentHashMap<>();

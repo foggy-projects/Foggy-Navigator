@@ -1,12 +1,12 @@
 import { ref } from 'vue'
 import { useChatStore, createSseClient, AipMessageType } from '@foggy/chat'
-import type { ChatMessage } from '@foggy/chat'
+import type { ChatMessage, SseController } from '@foggy/chat'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'
 import { getToken } from '@/utils/auth'
 import type { AgentMessage, RoutePayload } from '@/types'
 
-let currentEventSource: EventSource | null = null
+let currentSseController: SseController | null = null
 const connectedSessionId = ref<string | null>(null)
 
 /** ROUTE_REQUEST 回调类型 */
@@ -50,7 +50,7 @@ export function useSession() {
     const token = getToken()
     const sseUrl = `/api/v1/sessions/${sessionId}/stream${token ? `?token=${token}` : ''}`
 
-    currentEventSource = createSseClient<AgentMessage>({
+    currentSseController = createSseClient<AgentMessage>({
       url: sseUrl,
       adapter: tutorAgentAdapter,
       sessionId,
@@ -64,6 +64,9 @@ export function useSession() {
       },
       onError: () => {
         chatStore.setConnectionStatus('error')
+      },
+      onReconnecting: () => {
+        chatStore.setConnectionStatus('connecting')
       },
       onRawEvent: (raw: AgentMessage) => {
         // 处理 ROUTE_REQUEST 事件（不经过 adapter 转换）
@@ -87,9 +90,9 @@ export function useSession() {
   }
 
   function disconnectSession() {
-    if (currentEventSource) {
-      currentEventSource.close()
-      currentEventSource = null
+    if (currentSseController) {
+      currentSseController.close()
+      currentSseController = null
     }
     connectedSessionId.value = null
     chatStore.setConnectionStatus('disconnected')

@@ -30,6 +30,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Navigator SPI -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>navigator-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Agent Framework (for SessionManager) -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>

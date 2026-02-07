@@ -48,7 +48,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,beans
+        include: health,beans,metrics
   endpoint:
     health:
       show-details: always
@@ -111,8 +111,8 @@ logging:
     name: logs/backend.log
     path: logs
   pattern:
-    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId}] [%X{sessionId}] %-5level %logger{50} - %msg%n"
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId}] [%X{sessionId}] %-5level %logger{36} - %msg%n"
   logback:
     rollingpolicy:
       max-file-size: 10MB

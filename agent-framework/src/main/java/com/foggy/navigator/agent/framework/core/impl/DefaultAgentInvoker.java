@@ -18,26 +18,30 @@ import com.foggy.navigator.agent.framework.skill.Skill;
 import com.foggy.navigator.agent.framework.skill.SkillManager;
 import com.foggy.navigator.agent.framework.tool.BuiltInTool;
 import com.foggy.navigator.agent.framework.tool.ToolDefinition;
+import com.foggy.navigator.agent.framework.tool.ToolExecutionRequest;
+import com.foggy.navigator.agent.framework.tool.ToolExecutionResult;
 import com.foggy.navigator.agent.framework.tool.builtin.DelegateTool;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.task.AsyncTaskExecutor;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * 默认Agent调用器实现
- * 查找Agent → 构建LlmRequest → 流式调用LLM → 通过事件发布结果
+ * 查找Agent → 构建LlmRequest → 工具执行循环 → 通过事件发布结果
  */
 @Slf4j
 @RequiredArgsConstructor
 public class DefaultAgentInvoker implements AgentInvoker {
+
+    private static final int MAX_TOOL_ITERATIONS = 10;
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private final AgentRegistry agentRegistry;
     private final SessionManager sessionManager;
@@ -50,7 +54,11 @@ public class DefaultAgentInvoker implements AgentInvoker {
 
     @Override
     public void invokeAsync(String sessionId, String agentId, Message userMessage) {
+        Map<String, String> mdcContext = MDC.getCopyOfContextMap();
         agentExecutor.execute(() -> {
+            if (mdcContext != null) MDC.setContextMap(mdcContext);
+            MDC.put("sessionId", sessionId);
+            MDC.put("agentId", agentId);
             try {
                 doInvoke(sessionId, agentId, userMessage);
             } catch (Exception e) {
@@ -59,6 +67,8 @@ public class DefaultAgentInvoker implements AgentInvoker {
                         sessionId, agentId, MessageType.ERROR,
                         Map.of("error", "Agent processing failed: " + e.getMessage())
                 ));
+            } finally {
+                MDC.clear();
             }
         });
     }
@@ -87,24 +97,149 @@ public class DefaultAgentInvoker implements AgentInvoker {
         // 5. 构建消息列表（可能包含 Skill 注入）
         List<LlmMessage> messages = buildMessages(history, matchedSkill);
 
-        // 6. 构建 LLM 请求
-        LlmRequest request = LlmRequest.builder()
-                .model(modelConfig != null ? modelConfig.getModel() : null)
-                .temperature(modelConfig != null ? modelConfig.getTemperature() : 0.7)
-                .systemPrompt(enhancedSystemPrompt)
-                .messages(messages)
-                .tools(resolveTools(config))
-                .build();
+        // 6. 解析工具定义
+        List<ToolDefinition> tools = resolveTools(config);
 
         if (matchedSkill != null) {
             log.info("Skill matched for session {}: {} (path: {})",
                     sessionId, matchedSkill.getName(), matchedSkill.getPath());
         }
 
-        // 7. 流式调用LLM，通过回调发布事件（委托感知）
-        llmAdapter.chatStream(request, new DelegationAwareStreamHandler(
-                sessionId, agentId, eventPublisher, this::handleDelegation
+        // 7. 获取 userId（用于工具执行上下文）
+        String userId = null;
+        Session currentSession = sessionManager.getSession(sessionId);
+        if (currentSession != null) {
+            userId = currentSession.getUserId();
+        }
+
+        // 8. 工具执行循环
+        for (int iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+            LlmRequest request = LlmRequest.builder()
+                    .model(modelConfig != null ? modelConfig.getModel() : null)
+                    .temperature(modelConfig != null ? modelConfig.getTemperature() : 0.7)
+                    .systemPrompt(enhancedSystemPrompt)
+                    .messages(new ArrayList<>(messages))
+                    .tools(tools)
+                    .build();
+
+            LlmResponse response = llmAdapter.chat(request);
+
+            if (!response.hasToolCalls()) {
+                // LLM 返回纯文本 → 发布事件，结束循环
+                String content = response.getContent() != null ? response.getContent() : "";
+                eventPublisher.publishEvent(AgentMessage.of(
+                        sessionId, agentId, MessageType.TEXT_COMPLETE,
+                        Map.of("content", content)
+                ));
+                return;
+            }
+
+            // 处理 tool calls
+            boolean delegated = false;
+            List<ToolCall> toolCalls = response.getToolCalls();
+            List<ToolExecutionResult> toolResults = new ArrayList<>();
+
+            for (ToolCall toolCall : toolCalls) {
+                if (DelegateTool.TOOL_NAME.equals(toolCall.getName())) {
+                    // 委派工具 → 特殊处理
+                    eventPublisher.publishEvent(AgentMessage.of(
+                            sessionId, agentId, MessageType.TOOL_CALL_START,
+                            Map.of(
+                                    "toolCallId", toolCall.getId(),
+                                    "toolName", toolCall.getName(),
+                                    "arguments", toolCall.getArguments()
+                            )
+                    ));
+                    handleDelegation(sessionId, agentId, toolCall);
+                    delegated = true;
+                    break;
+                }
+
+                // 普通工具 → 执行并收集结果
+                eventPublisher.publishEvent(AgentMessage.of(
+                        sessionId, agentId, MessageType.TOOL_CALL_START,
+                        Map.of(
+                                "toolCallId", toolCall.getId(),
+                                "toolName", toolCall.getName(),
+                                "arguments", toolCall.getArguments()
+                        )
+                ));
+
+                ToolExecutionResult result = findAndExecuteTool(toolCall, sessionId, agentId, userId);
+                toolResults.add(result);
+
+                eventPublisher.publishEvent(AgentMessage.of(
+                        sessionId, agentId, MessageType.TOOL_CALL_RESULT,
+                        Map.of(
+                                "toolCallId", toolCall.getId(),
+                                "toolName", toolCall.getName(),
+                                "success", result.isSuccess(),
+                                "data", result.isSuccess()
+                                        ? String.valueOf(result.getData())
+                                        : result.getErrorMessage()
+                        )
+                ));
+            }
+
+            if (delegated) {
+                return;
+            }
+
+            // 将本轮 assistant+toolCalls 和 tool results 追加到 messages
+            messages.add(LlmMessage.assistantWithToolCalls(
+                    response.getContent(), toolCalls));
+
+            for (int j = 0; j < toolCalls.size(); j++) {
+                ToolCall toolCall = toolCalls.get(j);
+                ToolExecutionResult result = toolResults.get(j);
+                String resultContent = result.isSuccess()
+                        ? serializeResult(result.getData())
+                        : "Error: " + result.getErrorMessage();
+                messages.add(LlmMessage.tool(toolCall.getId(), resultContent));
+            }
+
+            log.debug("Tool iteration {} completed, {} tool calls processed", iteration + 1, toolCalls.size());
+        }
+
+        log.warn("Max tool iterations ({}) reached for session {}", MAX_TOOL_ITERATIONS, sessionId);
+        eventPublisher.publishEvent(AgentMessage.of(
+                sessionId, agentId, MessageType.ERROR,
+                Map.of("error", "工具调用次数超过上限，请重新描述您的需求。")
         ));
+    }
+
+    /**
+     * 查找并执行工具
+     */
+    private ToolExecutionResult findAndExecuteTool(ToolCall toolCall, String sessionId, String agentId, String userId) {
+        for (BuiltInTool tool : builtInTools) {
+            if (tool.getName().equals(toolCall.getName())) {
+                ToolExecutionRequest execRequest = ToolExecutionRequest.builder()
+                        .toolName(toolCall.getName())
+                        .userId(userId)
+                        .sessionId(sessionId)
+                        .agentId(agentId)
+                        .parameters(toolCall.getArguments())
+                        .build();
+                try {
+                    return tool.execute(execRequest);
+                } catch (Exception e) {
+                    log.error("Tool execution failed: tool={}, error={}", toolCall.getName(), e.getMessage(), e);
+                    return ToolExecutionResult.error("Tool execution failed: " + e.getMessage());
+                }
+            }
+        }
+        return ToolExecutionResult.error("Unknown tool: " + toolCall.getName());
+    }
+
+    private String serializeResult(Object data) {
+        if (data == null) return "null";
+        if (data instanceof String) return (String) data;
+        try {
+            return objectMapper.writeValueAsString(data);
+        } catch (Exception e) {
+            return String.valueOf(data);
+        }
     }
 
     /**
@@ -126,9 +261,8 @@ public class DefaultAgentInvoker implements AgentInvoker {
         } else if (contextObj instanceof String contextStr && !contextStr.isBlank()) {
             // 尝试解析 JSON 字符串
             try {
-                ObjectMapper mapper = new ObjectMapper();
                 @SuppressWarnings("unchecked")
-                Map<String, Object> parsed = mapper.readValue(contextStr, Map.class);
+                Map<String, Object> parsed = objectMapper.readValue(contextStr, Map.class);
                 context = parsed;
             } catch (Exception e) {
                 log.warn("Failed to parse context as JSON: {}, using as plain string", contextStr);

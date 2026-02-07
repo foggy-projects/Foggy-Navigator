@@ -22,7 +22,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
     "com.foggy.navigator.session.service",
     "com.foggy.navigator.session.controller",
     "com.foggy.navigator.session.sse",
-    "com.foggy.navigator.session.event"
+    "com.foggy.navigator.session.event",
+    "com.foggy.navigator.session.filter",
+    "com.foggy.navigator.session.registry"
 })
 @EntityScan(basePackages = {"com.foggy.navigator.common.entity"})
 @EnableJpaRepositories(basePackages = {"com.foggy.navigator.session.repository"})
