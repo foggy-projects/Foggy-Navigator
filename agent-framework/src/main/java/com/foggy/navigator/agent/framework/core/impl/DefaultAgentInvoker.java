@@ -1,5 +1,6 @@
 package com.foggy.navigator.agent.framework.core.impl;
 
+import com.foggy.navigator.agent.framework.context.ContextWindowManager;
 import com.foggy.navigator.agent.framework.core.AgentInfo;
 import com.foggy.navigator.agent.framework.core.AgentInvoker;
 import com.foggy.navigator.agent.framework.core.AgentRegistry;
@@ -41,7 +42,9 @@ import java.util.Map;
 public class DefaultAgentInvoker implements AgentInvoker {
 
     private static final int MAX_TOOL_ITERATIONS = 10;
+    private static final int HISTORY_FETCH_LIMIT = 50;
     private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final ContextWindowManager contextWindowManager = new ContextWindowManager();
 
     private final AgentRegistry agentRegistry;
     private final SessionManager sessionManager;
@@ -82,10 +85,12 @@ public class DefaultAgentInvoker implements AgentInvoker {
             throw new IllegalArgumentException("Agent not found: " + agentId);
         }
 
-        // 2. 获取历史消息和配置
-        List<Message> history = sessionManager.getRecentMessages(sessionId, 20);
+        // 2. 获取历史消息和配置（token-aware 上下文窗口）
         AgentConfig config = agent.getConfig();
         ModelConfig modelConfig = config.getModel();
+        int maxContextTokens = modelConfig != null ? modelConfig.getMaxContextTokens() : 8000;
+        List<Message> rawHistory = sessionManager.getRecentMessages(sessionId, HISTORY_FETCH_LIMIT);
+        List<Message> history = contextWindowManager.selectMessages(rawHistory, maxContextTokens);
 
         // 3. 获取 Agent 的所有 Skills 并构建增强的 system prompt
         List<Skill> skills = skillManager.getSkillsByAgent(agentId);

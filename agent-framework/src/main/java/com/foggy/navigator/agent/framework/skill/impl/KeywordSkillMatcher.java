@@ -2,15 +2,13 @@ package com.foggy.navigator.agent.framework.skill.impl;
 
 import com.foggy.navigator.agent.framework.skill.Skill;
 import com.foggy.navigator.agent.framework.skill.SkillMatcher;
-import org.springframework.stereotype.Component;
 
 import java.util.List;
 
 /**
  * 基于描述的 Skill 匹配器
- * 使用简单的关键词匹配（在新设计中，主要由 LLM 基于 description 来决定何时触发 Skill）
+ * 使用简单的关键词匹配，作为 LlmSkillMatcher 的回退方案
  */
-@Component
 public class KeywordSkillMatcher implements SkillMatcher {
 
     @Override

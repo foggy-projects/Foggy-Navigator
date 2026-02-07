@@ -8,6 +8,9 @@ import com.foggy.navigator.agent.framework.router.SessionRouter;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.agent.framework.session.impl.InMemorySessionManager;
 import com.foggy.navigator.agent.framework.skill.SkillManager;
+import com.foggy.navigator.agent.framework.skill.SkillMatcher;
+import com.foggy.navigator.agent.framework.skill.impl.KeywordSkillMatcher;
+import com.foggy.navigator.agent.framework.skill.impl.LlmSkillMatcher;
 import com.foggy.navigator.agent.framework.tool.BuiltInTool;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -33,6 +36,16 @@ public class AgentFrameworkAutoConfiguration {
     @ConditionalOnMissingBean(SessionManager.class)
     public SessionManager inMemorySessionManager() {
         return new InMemorySessionManager();
+    }
+
+    /**
+     * LLM-based Skill 匹配器（主选），失败时自动回退到 KeywordSkillMatcher
+     * 如果上下文中无 LlmAdapter（极端情况），则直接使用 KeywordSkillMatcher
+     */
+    @Bean
+    @ConditionalOnMissingBean(SkillMatcher.class)
+    public SkillMatcher skillMatcher(LlmAdapter llmAdapter) {
+        return new LlmSkillMatcher(llmAdapter);
     }
 
     @Bean
