@@ -2,6 +2,7 @@ package com.foggy.navigator.agent.framework.llm.impl;
 
 import com.foggy.navigator.agent.framework.llm.*;
 import com.foggy.navigator.agent.framework.tool.ToolDefinition;
+import org.slf4j.MDC;
 import dev.langchain4j.agent.tool.ToolParameters;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.*;
@@ -42,14 +43,50 @@ public class LangChain4jAdapter implements LlmAdapter {
     @Value("${agent.llm.openai.base-url:https://api.openai.com/v1}")
     private String openaiBaseUrl;
 
+    @Value("${agent.llm.circuit-breaker.failure-threshold:5}")
+    private int circuitBreakerFailureThreshold;
+
+    @Value("${agent.llm.circuit-breaker.cooldown-ms:30000}")
+    private long circuitBreakerCooldownMs;
+
+    private volatile LlmCircuitBreaker circuitBreaker;
+
+    private LlmCircuitBreaker getCircuitBreaker() {
+        if (circuitBreaker == null) {
+            synchronized (this) {
+                if (circuitBreaker == null) {
+                    circuitBreaker = new LlmCircuitBreaker(circuitBreakerFailureThreshold, circuitBreakerCooldownMs);
+                }
+            }
+        }
+        return circuitBreaker;
+    }
+
     @Override
     public LlmResponse chat(LlmRequest request) {
-        return chatWithRetry(request, 0);
+        LlmCircuitBreaker cb = getCircuitBreaker();
+        if (!cb.allowRequest()) {
+            log.warn("LLM circuit breaker is OPEN, rejecting request (model={})", request.getModel());
+            throw new RuntimeException("LLM 服务暂时不可用（熔断中），请稍后重试");
+        }
+        try {
+            LlmResponse response = chatWithRetry(request, 0);
+            cb.recordSuccess();
+            return response;
+        } catch (Exception e) {
+            cb.recordFailure();
+            throw e;
+        }
     }
 
     private LlmResponse chatWithRetry(LlmRequest request, int attempt) {
+        long startTime = System.currentTimeMillis();
+        String model = request.getModel() != null ? request.getModel() : "gpt-4";
+        String traceId = MDC.get("traceId");
+        String sessionId = MDC.get("sessionId");
+
         try {
-            ChatLanguageModel model = buildChatModel(request);
+            ChatLanguageModel chatModel = buildChatModel(request);
             List<ChatMessage> messages = convertMessages(request);
             List<ToolSpecification> toolSpecs = convertTools(request.getTools());
 
@@ -58,7 +95,7 @@ public class LangChain4jAdapter implements LlmAdapter {
                 chatRequestBuilder.toolSpecifications(toolSpecs);
             }
 
-            ChatResponse response = model.chat(chatRequestBuilder.build());
+            ChatResponse response = chatModel.chat(chatRequestBuilder.build());
             AiMessage aiMessage = response.aiMessage();
 
             List<ToolCall> toolCalls = null;
@@ -72,17 +109,30 @@ public class LangChain4jAdapter implements LlmAdapter {
                         .toList();
             }
 
+            long durationMs = System.currentTimeMillis() - startTime;
+            int inputTokens = response.tokenUsage() != null ? response.tokenUsage().inputTokenCount() : 0;
+            int outputTokens = response.tokenUsage() != null ? response.tokenUsage().outputTokenCount() : 0;
+
+            log.info("LLM call completed: model={}, durationMs={}, inputTokens={}, outputTokens={}, " +
+                     "toolCalls={}, finishReason={}, attempt={}, traceId={}, sessionId={}",
+                    model, durationMs, inputTokens, outputTokens,
+                    toolCalls != null ? toolCalls.size() : 0,
+                    response.finishReason(),
+                    attempt + 1, traceId, sessionId);
+
             return LlmResponse.builder()
                     .content(aiMessage != null ? aiMessage.text() : null)
                     .toolCalls(toolCalls)
-                    .inputTokens(response.tokenUsage() != null ? response.tokenUsage().inputTokenCount() : 0)
-                    .outputTokens(response.tokenUsage() != null ? response.tokenUsage().outputTokenCount() : 0)
+                    .inputTokens(inputTokens)
+                    .outputTokens(outputTokens)
                     .finishReason(response.finishReason() != null ? response.finishReason().name() : null)
                     .build();
         } catch (Exception e) {
+            long durationMs = System.currentTimeMillis() - startTime;
             if (isRetryable(e) && attempt < request.getMaxRetries()) {
                 long delay = request.getRetryBaseDelayMs() * (1L << attempt);
-                log.warn("LLM chat failed (attempt {}), retrying in {}ms: {}", attempt + 1, delay, e.getMessage());
+                log.warn("LLM call failed: model={}, durationMs={}, attempt={}, retryIn={}ms, error={}, traceId={}",
+                        model, durationMs, attempt + 1, delay, e.getMessage(), traceId);
                 try {
                     Thread.sleep(delay);
                 } catch (InterruptedException ie) {
@@ -91,6 +141,8 @@ public class LangChain4jAdapter implements LlmAdapter {
                 }
                 return chatWithRetry(request, attempt + 1);
             }
+            log.error("LLM call failed (no more retries): model={}, durationMs={}, attempt={}, error={}, traceId={}",
+                    model, durationMs, attempt + 1, e.getMessage(), traceId);
             throw e;
         }
     }

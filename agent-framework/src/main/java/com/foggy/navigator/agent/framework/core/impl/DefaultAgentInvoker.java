@@ -74,6 +74,8 @@ public class DefaultAgentInvoker implements AgentInvoker {
     }
 
     private void doInvoke(String sessionId, String agentId, Message userMessage) {
+        long invokeStartTime = System.currentTimeMillis();
+
         // 1. 查找Agent配置
         AgentInfo agent = agentRegistry.findById(agentId);
         if (agent == null) {
@@ -129,6 +131,11 @@ public class DefaultAgentInvoker implements AgentInvoker {
             if (!response.hasToolCalls()) {
                 // LLM 返回纯文本 → 发布事件，结束循环
                 String content = response.getContent() != null ? response.getContent() : "";
+                long totalDurationMs = System.currentTimeMillis() - invokeStartTime;
+                log.info("Agent invocation completed: sessionId={}, agentId={}, " +
+                         "totalDurationMs={}, toolIterations={}, finalContentLength={}",
+                        sessionId, agentId, totalDurationMs, iteration + 1,
+                        content.length());
                 eventPublisher.publishEvent(AgentMessage.of(
                         sessionId, agentId, MessageType.TEXT_COMPLETE,
                         Map.of("content", content)

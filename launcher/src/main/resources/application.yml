@@ -53,6 +53,13 @@ management:
     health:
       show-details: always
 
+# LLM 熔断器配置
+agent:
+  llm:
+    circuit-breaker:
+      failure-threshold: ${LLM_CB_FAILURE_THRESHOLD:5}
+      cooldown-ms: ${LLM_CB_COOLDOWN_MS:30000}
+
 # 凭证加密配置
 navigator:
   security:
@@ -117,8 +124,8 @@ logging:
     name: logs/backend.log
     path: logs
   pattern:
-    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId}] [%X{sessionId}] %-5level %logger{50} - %msg%n"
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId}] [%X{sessionId}] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId}] [%X{sessionId}] [%X{agentId}] %-5level %logger{50} - %msg%n"
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId}] [%X{sessionId}] [%X{agentId}] %-5level %logger{36} - %msg%n"
   logback:
     rollingpolicy:
       max-file-size: 10MB

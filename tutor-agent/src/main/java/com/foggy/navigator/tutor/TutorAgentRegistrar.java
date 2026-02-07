@@ -22,12 +22,12 @@ public class TutorAgentRegistrar {
 
     @PostConstruct
     public void register() {
-        // 注册所有 agent 配置
-        registerAgent("/agent-config/tutor-agent.yml");
-        registerAgent("/agent-config/coding-agent.yml");
+        // 仅当 DB 中不存在时从 YAML 初始化（YAML 作为种子，DB 为 source of truth）
+        seedAgentIfAbsent("/agent-config/tutor-agent.yml");
+        seedAgentIfAbsent("/agent-config/coding-agent.yml");
     }
 
-    private void registerAgent(String configPath) {
+    private void seedAgentIfAbsent(String configPath) {
         try {
             ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
             yamlMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
@@ -52,10 +52,16 @@ public class TutorAgentRegistrar {
             }
 
             AgentConfig config = yamlMapper.treeToValue(agentNode, AgentConfig.class);
+
+            if (agentRegistry.exists(config.getId())) {
+                log.info("Agent already in registry (DB), skipping YAML seed: id={}", config.getId());
+                return;
+            }
+
             agentRegistry.register(config);
-            log.info("Registered agent: id={}, name={}", config.getId(), config.getName());
+            log.info("Seeded agent from YAML: id={}, name={}", config.getId(), config.getName());
         } catch (Exception e) {
-            log.error("Failed to register agent from {}", configPath, e);
+            log.error("Failed to seed agent from {}", configPath, e);
         }
     }
 }
