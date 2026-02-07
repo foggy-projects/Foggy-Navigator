@@ -50,9 +50,10 @@ public class DelegateTool implements BuiltInTool {
         params.put("intent", intent);
 
         // context - 上下文参数（可选）
+        // 注意: LangChain4j 要求 object 类型必须有 properties 字段
         Map<String, Object> context = new LinkedHashMap<>();
-        context.put("type", "object");
-        context.put("description", "传递给目标 Agent 的上下文参数，如数据集ID、查询条件等");
+        context.put("type", "string");
+        context.put("description", "传递给目标 Agent 的上下文参数（JSON 字符串格式），如数据集ID、查询条件等");
         params.put("context", context);
 
         // 包装为 JSON Schema 格式

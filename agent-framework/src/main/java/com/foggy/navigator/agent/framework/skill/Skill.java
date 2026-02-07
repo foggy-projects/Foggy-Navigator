@@ -53,12 +53,6 @@ public class Skill {
     private String agentId;
 
     /**
-     * 引用的参考文档（references/ 目录下的文件）
-     * key: 文件名, value: 文件内容
-     */
-    private Map<String, String> references;
-
-    /**
      * 加载时间
      */
     private LocalDateTime loadedAt;

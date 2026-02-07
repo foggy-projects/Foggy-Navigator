@@ -136,35 +136,6 @@ class DefaultSkillParserTest {
     }
 
     @Test
-    void loadFromDirectory_shouldLoadReferences() throws IOException {
-        // Create skill directory with references
-        Path skillDir = tempDir.resolve("skill-with-refs");
-        Files.createDirectories(skillDir);
-        Path refsDir = skillDir.resolve("references");
-        Files.createDirectories(refsDir);
-
-        String skillMd = """
-                ---
-                name: skill-with-refs
-                description: Skill with reference files
-                ---
-
-                # Main Content
-                """;
-        Files.writeString(skillDir.resolve("SKILL.md"), skillMd);
-        Files.writeString(refsDir.resolve("api-guide.md"), "API Guide content");
-        Files.writeString(refsDir.resolve("examples.md"), "Examples content");
-
-        Skill skill = parser.loadFromDirectory(skillDir.toString());
-
-        assertNotNull(skill.getReferences());
-        assertEquals(2, skill.getReferences().size());
-        assertTrue(skill.getReferences().containsKey("api-guide.md"));
-        assertTrue(skill.getReferences().containsKey("examples.md"));
-        assertEquals("API Guide content", skill.getReferences().get("api-guide.md"));
-    }
-
-    @Test
     void loadFromDirectory_shouldThrowForMissingSkillMd() {
         Path emptyDir = tempDir.resolve("empty-dir");
 

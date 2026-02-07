@@ -121,23 +121,6 @@ public class DefaultSkillParser implements SkillParser {
         Skill skill = parse(content);
         skill.setPath(classpathDir);
 
-        // 加载 references/ 目录
-        String refsPattern = classpathDir.endsWith("/") ? classpathDir + "references/*.md" : classpathDir + "/references/*.md";
-        try {
-            Resource[] refResources = resourceResolver.getResources(refsPattern);
-            if (refResources.length > 0) {
-                Map<String, String> references = new HashMap<>();
-                for (Resource ref : refResources) {
-                    String filename = ref.getFilename();
-                    String refContent = readResource(ref);
-                    references.put(filename, refContent);
-                }
-                skill.setReferences(references);
-            }
-        } catch (Exception e) {
-            log.debug("No references found for skill: {}", classpathDir);
-        }
-
         return skill;
     }
 
@@ -151,25 +134,6 @@ public class DefaultSkillParser implements SkillParser {
         String content = Files.readString(skillMdPath, StandardCharsets.UTF_8);
         Skill skill = parse(content);
         skill.setPath(skillDir.toString());
-
-        // 加载 references/ 目录
-        Path refsDir = skillDir.resolve("references");
-        if (Files.isDirectory(refsDir)) {
-            Map<String, String> references = new HashMap<>();
-            try (Stream<Path> files = Files.list(refsDir)) {
-                files.filter(f -> f.toString().endsWith(".md"))
-                        .forEach(f -> {
-                            try {
-                                references.put(f.getFileName().toString(), Files.readString(f, StandardCharsets.UTF_8));
-                            } catch (IOException e) {
-                                log.warn("Failed to read reference file: {}", f, e);
-                            }
-                        });
-            }
-            if (!references.isEmpty()) {
-                skill.setReferences(references);
-            }
-        }
 
         return skill;
     }

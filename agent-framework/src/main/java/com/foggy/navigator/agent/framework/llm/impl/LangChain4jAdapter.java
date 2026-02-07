@@ -74,6 +74,11 @@ public class LangChain4jAdapter implements LlmAdapter {
             CountDownLatch latch = new CountDownLatch(1);
 
             log.debug("Starting stream with {} tools", toolSpecs != null ? toolSpecs.size() : 0);
+            if (toolSpecs != null) {
+                for (ToolSpecification ts : toolSpecs) {
+                    log.debug("  Tool: name={}, hasParams={}", ts.name(), ts.parameters() != null);
+                }
+            }
 
             // 使用带 tools 的 generate 方法
             StreamingResponseHandler<AiMessage> responseHandler = new StreamingResponseHandler<>() {
@@ -147,7 +152,15 @@ public class LangChain4jAdapter implements LlmAdapter {
 
             // 根据是否有 tools 选择不同的 generate 方法
             if (toolSpecs != null && !toolSpecs.isEmpty()) {
-                streamingModel.generate(messages, toolSpecs, responseHandler);
+                try {
+                    log.debug("Calling streamingModel.generate with {} tools", toolSpecs.size());
+                    streamingModel.generate(messages, toolSpecs, responseHandler);
+                } catch (Exception e) {
+                    log.error("Error calling streamingModel.generate with tools: {}", e.getMessage(), e);
+                    // 如果带工具调用失败，尝试不带工具
+                    log.warn("Falling back to generate without tools");
+                    streamingModel.generate(messages, responseHandler);
+                }
             } else {
                 streamingModel.generate(messages, responseHandler);
             }
@@ -224,15 +237,25 @@ public class LangChain4jAdapter implements LlmAdapter {
         try {
             ChatLanguageModel model = buildChatModel(request);
             List<ChatMessage> messages = convertMessages(request);
+            List<ToolSpecification> toolSpecs = convertTools(request.getTools());
 
-            ChatRequest chatRequest = ChatRequest.builder()
-                    .messages(messages)
-                    .build();
+            // 使用带 tools 的 ChatRequest
+            ChatRequest.Builder chatRequestBuilder = ChatRequest.builder()
+                    .messages(messages);
 
-            ChatResponse response = model.chat(chatRequest);
+            if (toolSpecs != null && !toolSpecs.isEmpty()) {
+                chatRequestBuilder.toolSpecifications(toolSpecs);
+                log.debug("Fallback request with {} tools", toolSpecs.size());
+            }
+
+            ChatResponse response = model.chat(chatRequestBuilder.build());
             AiMessage aiMessage = response.aiMessage();
 
+            log.debug("Fallback response - aiMessage: {}, finishReason: {}",
+                    aiMessage, response.finishReason());
+
             if (aiMessage != null && aiMessage.hasToolExecutionRequests()) {
+                log.info("Fallback got {} tool execution requests", aiMessage.toolExecutionRequests().size());
                 return aiMessage.toolExecutionRequests().stream()
                         .map(req -> ToolCall.builder()
                                 .id(req.id())
@@ -272,18 +295,37 @@ public class LangChain4jAdapter implements LlmAdapter {
 
         List<ToolSpecification> specs = new ArrayList<>();
         for (ToolDefinition tool : tools) {
-            ToolSpecification.Builder builder = ToolSpecification.builder()
-                    .name(tool.getName())
-                    .description(tool.getDescription());
+            try {
+                ToolSpecification.Builder builder = ToolSpecification.builder()
+                        .name(tool.getName())
+                        .description(tool.getDescription());
 
-            // 转换参数 schema
-            if (tool.getParameters() != null && !tool.getParameters().isEmpty()) {
-                ToolParameters toolParams = convertToToolParameters(tool.getParameters());
-                builder.parameters(toolParams);
+                // 转换参数 schema - 只有当有 properties 时才设置
+                if (tool.getParameters() != null && !tool.getParameters().isEmpty()) {
+                    Object propertiesObj = tool.getParameters().get("properties");
+                    log.debug("Tool {} parameters: type={}, propertiesObj={}",
+                            tool.getName(),
+                            tool.getParameters().get("type"),
+                            propertiesObj != null ? propertiesObj.getClass().getSimpleName() : "null");
+
+                    if (propertiesObj instanceof Map<?, ?> propsMap && !propsMap.isEmpty()) {
+                        ToolParameters toolParams = convertToToolParameters(tool.getParameters());
+                        log.debug("Tool {} converted ToolParameters: properties.size={}, required={}",
+                                tool.getName(),
+                                toolParams.properties() != null ? toolParams.properties().size() : 0,
+                                toolParams.required());
+                        builder.parameters(toolParams);
+                    }
+                }
+
+                ToolSpecification spec = builder.build();
+                log.debug("Built ToolSpecification: name={}, hasParameters={}",
+                        spec.name(), spec.parameters() != null);
+                specs.add(spec);
+            } catch (Exception e) {
+                log.error("Failed to convert tool {}: {}", tool.getName(), e.getMessage(), e);
+                // 跳过失败的工具，继续处理其他工具
             }
-
-            specs.add(builder.build());
-            log.debug("Converted tool: {} -> {}", tool.getName(), tool.getDescription());
         }
 
         return specs;
@@ -294,28 +336,38 @@ public class LangChain4jAdapter implements LlmAdapter {
      */
     @SuppressWarnings("unchecked")
     private ToolParameters convertToToolParameters(Map<String, Object> params) {
-        ToolParameters.Builder builder = ToolParameters.builder();
+        Map<String, Map<String, Object>> properties = new HashMap<>();
+        List<String> requiredList = new ArrayList<>();
 
         // 从 parameters 中提取 properties
         Object propertiesObj = params.get("properties");
         if (propertiesObj instanceof Map<?, ?>) {
-            Map<String, Map<String, Object>> properties = new HashMap<>();
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) propertiesObj).entrySet()) {
                 String key = (String) entry.getKey();
-                Map<String, Object> value = (Map<String, Object>) entry.getValue();
-                properties.put(key, value);
+                Object valueObj = entry.getValue();
+                if (valueObj instanceof Map<?, ?>) {
+                    Map<String, Object> value = new HashMap<>();
+                    for (Map.Entry<?, ?> e : ((Map<?, ?>) valueObj).entrySet()) {
+                        value.put((String) e.getKey(), e.getValue());
+                    }
+                    properties.put(key, value);
+                }
             }
-            builder.properties(properties);
         }
 
         // 提取 required 字段
         Object required = params.get("required");
         if (required instanceof String[] requiredArr) {
-            builder.required(List.of(requiredArr));
-        } else if (required instanceof List<?> requiredList) {
-            builder.required((List<String>) requiredList);
+            requiredList = List.of(requiredArr);
+        } else if (required instanceof List<?> reqList) {
+            for (Object r : reqList) {
+                requiredList.add((String) r);
+            }
         }
 
-        return builder.build();
+        return ToolParameters.builder()
+                .properties(properties)
+                .required(requiredList)
+                .build();
     }
 }

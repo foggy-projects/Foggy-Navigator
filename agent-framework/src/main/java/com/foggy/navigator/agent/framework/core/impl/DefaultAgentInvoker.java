@@ -19,6 +19,7 @@ import com.foggy.navigator.agent.framework.skill.SkillManager;
 import com.foggy.navigator.agent.framework.tool.BuiltInTool;
 import com.foggy.navigator.agent.framework.tool.ToolDefinition;
 import com.foggy.navigator.agent.framework.tool.builtin.DelegateTool;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -114,8 +115,28 @@ public class DefaultAgentInvoker implements AgentInvoker {
         Map<String, Object> args = toolCall.getArguments();
         String targetAgentId = (String) args.get("targetAgentId");
         String intent = (String) args.get("intent");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> context = (Map<String, Object>) args.getOrDefault("context", Map.of());
+
+        // context 可能是 Map 或 JSON 字符串（因为 DelegateTool 定义为 string 类型）
+        Map<String, Object> context;
+        Object contextObj = args.get("context");
+        if (contextObj instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> contextMap = (Map<String, Object>) contextObj;
+            context = contextMap;
+        } else if (contextObj instanceof String contextStr && !contextStr.isBlank()) {
+            // 尝试解析 JSON 字符串
+            try {
+                ObjectMapper mapper = new ObjectMapper();
+                @SuppressWarnings("unchecked")
+                Map<String, Object> parsed = mapper.readValue(contextStr, Map.class);
+                context = parsed;
+            } catch (Exception e) {
+                log.warn("Failed to parse context as JSON: {}, using as plain string", contextStr);
+                context = Map.of("raw", contextStr);
+            }
+        } else {
+            context = Map.of();
+        }
 
         // 获取当前会话信息
         Session currentSession = sessionManager.getSession(sessionId);
