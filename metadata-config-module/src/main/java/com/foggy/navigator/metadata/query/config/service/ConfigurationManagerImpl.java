@@ -28,6 +28,7 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
     private final DatasourceConfigRepository datasourceRepo;
     private final SemanticLayerConfigRepository semanticLayerRepo;
     private final ApplicationEventPublisher eventPublisher;
+    private final CredentialEncryptor credentialEncryptor;
 
     // ===== 数据源配置 =====
 
@@ -58,7 +59,7 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
             entity.setPort(jdbc.getPort());
             entity.setDatabaseName(jdbc.getDatabaseName());
             entity.setUsername(jdbc.getUsername());
-            entity.setPassword(jdbc.getPassword()); // TODO: 加密存储
+            entity.setPassword(credentialEncryptor.encrypt(jdbc.getPassword()));
             entity.setJdbcUrl(jdbc.getJdbcUrl());
             entity.setExtraParams(jdbc.getExtraParams());
         }
@@ -70,7 +71,7 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
             entity.setPort(mongo.getPort());
             entity.setDatabaseName(mongo.getDatabase());
             entity.setUsername(mongo.getUsername());
-            entity.setPassword(mongo.getPassword()); // TODO: 加密存储
+            entity.setPassword(credentialEncryptor.encrypt(mongo.getPassword()));
             entity.setConnectionString(mongo.getConnectionString());
         }
 
@@ -106,7 +107,7 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
             if (jdbc.getPort() != null) entity.setPort(jdbc.getPort());
             if (jdbc.getDatabaseName() != null) entity.setDatabaseName(jdbc.getDatabaseName());
             if (jdbc.getUsername() != null) entity.setUsername(jdbc.getUsername());
-            if (jdbc.getPassword() != null) entity.setPassword(jdbc.getPassword());
+            if (jdbc.getPassword() != null) entity.setPassword(credentialEncryptor.encrypt(jdbc.getPassword()));
             if (jdbc.getJdbcUrl() != null) entity.setJdbcUrl(jdbc.getJdbcUrl());
             if (jdbc.getExtraParams() != null) entity.setExtraParams(jdbc.getExtraParams());
         }
@@ -118,7 +119,7 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
             if (mongo.getPort() != null) entity.setPort(mongo.getPort());
             if (mongo.getDatabase() != null) entity.setDatabaseName(mongo.getDatabase());
             if (mongo.getUsername() != null) entity.setUsername(mongo.getUsername());
-            if (mongo.getPassword() != null) entity.setPassword(mongo.getPassword());
+            if (mongo.getPassword() != null) entity.setPassword(credentialEncryptor.encrypt(mongo.getPassword()));
             if (mongo.getConnectionString() != null) entity.setConnectionString(mongo.getConnectionString());
         }
 
@@ -199,9 +200,9 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
             entity.setGitRepoUrl(git.getRepoUrl());
             entity.setGitBranch(git.getBranch() != null ? git.getBranch() : "main");
             entity.setGitAuthType(git.getAuthType());
-            entity.setGitAccessToken(git.getAccessToken()); // TODO: 加密存储
+            entity.setGitAccessToken(credentialEncryptor.encrypt(git.getAccessToken()));
             entity.setGitUsername(git.getUsername());
-            entity.setGitPassword(git.getPassword()); // TODO: 加密存储
+            entity.setGitPassword(credentialEncryptor.encrypt(git.getPassword()));
         }
 
         // 路径配置
@@ -237,9 +238,9 @@ public class ConfigurationManagerImpl implements ConfigurationManager {
             if (git.getRepoUrl() != null) entity.setGitRepoUrl(git.getRepoUrl());
             if (git.getBranch() != null) entity.setGitBranch(git.getBranch());
             if (git.getAuthType() != null) entity.setGitAuthType(git.getAuthType());
-            if (git.getAccessToken() != null) entity.setGitAccessToken(git.getAccessToken());
+            if (git.getAccessToken() != null) entity.setGitAccessToken(credentialEncryptor.encrypt(git.getAccessToken()));
             if (git.getUsername() != null) entity.setGitUsername(git.getUsername());
-            if (git.getPassword() != null) entity.setGitPassword(git.getPassword());
+            if (git.getPassword() != null) entity.setGitPassword(credentialEncryptor.encrypt(git.getPassword()));
         }
 
         // 更新路径配置

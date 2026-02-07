@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class DatasourceBeanRegistrar {
 
     private final ApplicationContext applicationContext;
+    private final CredentialEncryptor credentialEncryptor;
     private final Map<String, String> registeredBeans = new ConcurrentHashMap<>();
 
     @Async("datasourceRegistrarExecutor")
@@ -90,7 +91,7 @@ public class DatasourceBeanRegistrar {
         HikariConfig hikariConfig = new HikariConfig();
         hikariConfig.setJdbcUrl(buildJdbcUrl(config));
         hikariConfig.setUsername(config.getUsername());
-        hikariConfig.setPassword(config.getPassword());
+        hikariConfig.setPassword(credentialEncryptor.decrypt(config.getPassword()));
         hikariConfig.setMaximumPoolSize(10);
         hikariConfig.setMinimumIdle(2);
         hikariConfig.setPoolName("HikariPool-" + config.getId());
@@ -191,7 +192,7 @@ public class DatasourceBeanRegistrar {
         Integer port = config.getPort() != null ? config.getPort() : 27017;
         String database = config.getDatabaseName();
         String username = config.getUsername();
-        String password = config.getPassword();
+        String password = credentialEncryptor.decrypt(config.getPassword());
 
         if (StringUtils.hasText(username) && StringUtils.hasText(password)) {
             return String.format("mongodb://%s:%s@%s:%d/%s", username, password, host, port, database);

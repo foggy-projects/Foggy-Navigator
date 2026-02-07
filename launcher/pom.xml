@@ -36,6 +36,13 @@
             <artifactId>tutor-agent</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <!-- Metadata Config Module - 元数据配置模块 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>metadata-config-module</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

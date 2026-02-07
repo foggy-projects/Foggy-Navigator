@@ -53,6 +53,12 @@ management:
     health:
       show-details: always
 
+# 凭证加密配置
+navigator:
+  security:
+    credential-key: ${NAVIGATOR_CREDENTIAL_KEY:default-dev-key-change-in-prod}
+    credential-salt: ${NAVIGATOR_CREDENTIAL_SALT:abcdef0123456789}
+
 # Foggy Navigator 配置
 foggy:
   coding-agent:

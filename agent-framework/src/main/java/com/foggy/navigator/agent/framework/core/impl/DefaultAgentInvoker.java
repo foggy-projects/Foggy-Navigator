@@ -105,11 +105,13 @@ public class DefaultAgentInvoker implements AgentInvoker {
                     sessionId, matchedSkill.getName(), matchedSkill.getPath());
         }
 
-        // 7. 获取 userId（用于工具执行上下文）
+        // 7. 获取 userId 和 tenantId（用于工具执行上下文）
         String userId = null;
+        String tenantId = null;
         Session currentSession = sessionManager.getSession(sessionId);
         if (currentSession != null) {
             userId = currentSession.getUserId();
+            tenantId = currentSession.getTenantId();
         }
 
         // 8. 工具执行循环
@@ -165,7 +167,7 @@ public class DefaultAgentInvoker implements AgentInvoker {
                         )
                 ));
 
-                ToolExecutionResult result = findAndExecuteTool(toolCall, sessionId, agentId, userId);
+                ToolExecutionResult result = findAndExecuteTool(toolCall, sessionId, agentId, userId, tenantId);
                 toolResults.add(result);
 
                 eventPublisher.publishEvent(AgentMessage.of(
@@ -211,12 +213,13 @@ public class DefaultAgentInvoker implements AgentInvoker {
     /**
      * 查找并执行工具
      */
-    private ToolExecutionResult findAndExecuteTool(ToolCall toolCall, String sessionId, String agentId, String userId) {
+    private ToolExecutionResult findAndExecuteTool(ToolCall toolCall, String sessionId, String agentId, String userId, String tenantId) {
         for (BuiltInTool tool : builtInTools) {
             if (tool.getName().equals(toolCall.getName())) {
                 ToolExecutionRequest execRequest = ToolExecutionRequest.builder()
                         .toolName(toolCall.getName())
                         .userId(userId)
+                        .tenantId(tenantId)
                         .sessionId(sessionId)
                         .agentId(agentId)
                         .parameters(toolCall.getArguments())
