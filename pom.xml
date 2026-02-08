@@ -37,6 +37,7 @@
         <module>session-module</module>
         <module>tutor-agent</module>
         <module>addons/coding-agent</module>
+        <module>addons/claude-worker-agent</module>
         <!-- 启动器模块（最后编译，依赖其他所有模块） -->
         <module>launcher</module>
     </modules>

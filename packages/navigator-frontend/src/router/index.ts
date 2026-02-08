@@ -26,6 +26,12 @@ const routes = [
     component: () => import('@/views/Settings.vue'),
     meta: { requireAuth: true },
   },
+  {
+    path: '/workers',
+    name: 'Workers',
+    component: () => import('@/views/ClaudeWorkerView.vue'),
+    meta: { requireAuth: true },
+  },
 ]
 
 const router = createRouter({

@@ -1,0 +1,179 @@
+package com.foggy.navigator.claude.worker.service;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.protocol.AgentMessage;
+import com.foggy.navigator.agent.framework.protocol.MessageType;
+import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
+import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
+import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
+import com.foggy.navigator.claude.worker.model.event.WorkerEvent;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Component;
+import reactor.core.Disposable;
+
+import java.math.BigDecimal;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Worker SSE → AgentMessage 桥接
+ *
+ * 监听 ClaudeTaskStartEvent，通过 WebClient 消费 Worker SSE 流，
+ * 将每个 Worker 事件转为 AgentMessage 并 publishEvent，
+ * 后续由现有 SessionEventListener 处理持久化和 SSE 推送。
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class WorkerStreamRelay {
+
+    private static final String AGENT_ID = "claude-worker";
+
+    private final ClaudeWorkerService workerService;
+    private final ClaudeTaskService taskService;
+    private final ApplicationEventPublisher eventPublisher;
+    private final ObjectMapper objectMapper;
+
+    /** 活跃的流订阅，用于 abort */
+    private final ConcurrentHashMap<String, Disposable> activeStreams = new ConcurrentHashMap<>();
+
+    @Async("sessionEventExecutor")
+    @EventListener
+    public void onTaskStart(ClaudeTaskStartEvent event) {
+        String taskId = event.getTaskId();
+        String sessionId = event.getSessionId();
+        String workerId = event.getWorkerId();
+
+        log.info("Starting stream relay: taskId={}, sessionId={}, workerId={}", taskId, sessionId, workerId);
+
+        // 发送 SESSION_START
+        publishMessage(sessionId, MessageType.SESSION_START,
+                Map.of("content", "Connecting to worker...", "taskId", taskId));
+
+        try {
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+            ClaudeWorkerClient client = workerService.createClient(worker);
+
+            Disposable subscription = client.streamQuery(event.getPrompt(), event.getCwd(), event.getClaudeSessionId())
+                    .doOnNext(sse -> {
+                        String data = sse.data();
+                        if (data == null || data.isEmpty()) return;
+
+                        try {
+                            WorkerEvent workerEvent = objectMapper.readValue(data, WorkerEvent.class);
+                            relayEvent(sessionId, taskId, workerEvent);
+                        } catch (Exception e) {
+                            log.warn("Failed to parse worker event: {}", data, e);
+                        }
+                    })
+                    .doOnComplete(() -> {
+                        log.info("Worker stream completed: taskId={}", taskId);
+                        activeStreams.remove(taskId);
+                    })
+                    .doOnError(e -> {
+                        log.error("Worker stream error: taskId={}", taskId, e);
+                        activeStreams.remove(taskId);
+                        taskService.failTask(taskId, e.getMessage());
+                        publishMessage(sessionId, MessageType.ERROR,
+                                Map.of("content", "Worker connection error: " + e.getMessage(), "taskId", taskId));
+                    })
+                    .subscribe();
+
+            activeStreams.put(taskId, subscription);
+
+        } catch (Exception e) {
+            log.error("Failed to start stream relay: taskId={}", taskId, e);
+            taskService.failTask(taskId, e.getMessage());
+            publishMessage(sessionId, MessageType.ERROR,
+                    Map.of("content", "Failed to connect to worker: " + e.getMessage(), "taskId", taskId));
+        }
+    }
+
+    /**
+     * 中止任务的流
+     */
+    public void abortStream(String taskId) {
+        Disposable subscription = activeStreams.remove(taskId);
+        if (subscription != null && !subscription.isDisposed()) {
+            subscription.dispose();
+            log.info("Stream aborted: taskId={}", taskId);
+        }
+    }
+
+    /**
+     * 将 Worker 事件转为 AgentMessage 并发布
+     */
+    private void relayEvent(String sessionId, String taskId, WorkerEvent event) {
+        if (event.getType() == null) return;
+
+        switch (event.getType()) {
+            case "system" -> {
+                // 系统消息，携带 session_id 等元数据
+                publishMessage(sessionId, MessageType.SESSION_START,
+                        Map.of("content", "Task started", "taskId", taskId,
+                                "claudeSessionId", nullSafe(event.getSessionId())));
+            }
+            case "assistant_text" -> {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("content", event.getContent());
+                payload.put("taskId", taskId);
+                publishMessage(sessionId, MessageType.TEXT_CHUNK, payload);
+            }
+            case "tool_use" -> {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("content", "Tool: " + event.getTool());
+                payload.put("toolName", event.getTool());
+                payload.put("toolInput", event.getInput());
+                payload.put("taskId", taskId);
+                publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
+            }
+            case "tool_result" -> {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("content", event.getOutput());
+                payload.put("toolName", event.getTool());
+                payload.put("taskId", taskId);
+                publishMessage(sessionId, MessageType.TOOL_CALL_RESULT, payload);
+            }
+            case "result" -> {
+                // 任务完成
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("content", event.getResult());
+                payload.put("taskId", taskId);
+                payload.put("costUsd", event.getCostUsd());
+                payload.put("durationMs", event.getDurationMs());
+                payload.put("claudeSessionId", nullSafe(event.getSessionId()));
+                publishMessage(sessionId, MessageType.TEXT_COMPLETE, payload);
+
+                // 更新任务状态
+                taskService.completeTask(taskId, event.getSessionId(),
+                        event.getCostUsd(), event.getInputTokens(),
+                        event.getOutputTokens(), event.getDurationMs());
+                activeStreams.remove(taskId);
+            }
+            case "error" -> {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("content", event.getError());
+                payload.put("taskId", taskId);
+                publishMessage(sessionId, MessageType.ERROR, payload);
+
+                taskService.failTask(taskId, event.getError());
+                activeStreams.remove(taskId);
+            }
+            default -> log.debug("Unknown worker event type: {}", event.getType());
+        }
+    }
+
+    private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
+        AgentMessage message = AgentMessage.of(sessionId, AGENT_ID, type, payload);
+        eventPublisher.publishEvent(message);
+    }
+
+    private String nullSafe(String value) {
+        return value != null ? value : "";
+    }
+}

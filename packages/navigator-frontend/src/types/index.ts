@@ -144,3 +144,36 @@ export interface SemanticLayerConfigForm {
     password?: string
   }
 }
+
+// ===== Claude Worker 类型 =====
+
+/** Claude Agent Worker */
+export interface ClaudeWorker {
+  workerId: string
+  name: string
+  baseUrl: string
+  authMode: 'SUBSCRIPTION' | 'API_KEY' | 'CUSTOM_ENDPOINT'
+  status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN'
+  hostname?: string
+  workerVersion?: string
+  lastHeartbeat?: string
+  createdAt: string
+}
+
+/** Claude 任务 */
+export interface ClaudeTask {
+  taskId: string
+  sessionId: string
+  workerId: string
+  prompt: string
+  cwd?: string
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED'
+  claudeSessionId?: string
+  costUsd?: number
+  inputTokens?: number
+  outputTokens?: number
+  durationMs?: number
+  errorMessage?: string
+  createdAt: string
+  updatedAt: string
+}

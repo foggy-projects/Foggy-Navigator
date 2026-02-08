@@ -50,6 +50,13 @@
             <artifactId>metadata-query-module</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <!-- Claude Worker Agent - Claude Code 远程控制模块 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>claude-worker-agent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

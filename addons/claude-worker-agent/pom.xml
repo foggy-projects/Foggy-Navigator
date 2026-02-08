@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.foggy.navigator</groupId>
+        <artifactId>foggy-navigator-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>claude-worker-agent</artifactId>
+    <name>Claude Worker Agent</name>
+    <description>Claude Code Agent Worker 集成模块 - 远程控制 Claude Code 开发机</description>
+
+    <dependencies>
+        <!-- Navigator Common -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>navigator-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Navigator SPI -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>navigator-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Agent Framework (for AgentMessage, SessionManager) -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>agent-framework</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- User Auth Module -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>user-auth-module</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Spring Boot -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- WebFlux (WebClient for consuming Worker SSE streams) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
+        <!-- Spring Security Crypto (for token encryption) -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
+        <!-- Lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
