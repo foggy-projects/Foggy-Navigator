@@ -20,6 +20,12 @@ const routes = [
     component: () => import('@/views/ChatView.vue'),
     meta: { requireAuth: true },
   },
+  {
+    path: '/settings',
+    name: 'Settings',
+    component: () => import('@/views/Settings.vue'),
+    meta: { requireAuth: true },
+  },
 ]
 
 const router = createRouter({

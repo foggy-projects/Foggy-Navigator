@@ -7,23 +7,65 @@ import com.foggy.navigator.common.enums.ConfigItemStatus;
 import com.foggy.navigator.common.form.DatasourceConfigForm;
 import com.foggy.navigator.common.form.SemanticLayerConfigForm;
 import com.foggy.navigator.spi.config.ConfigurationManager;
+import com.foggy.navigator.spi.metadata.MetadataFacade;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+import java.util.Map;
+
 /**
- * 配置管理 REST API（写入侧）
- * 查询功能由 MetadataQueryController 提供
+ * 配置管理 REST API（读写）
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/config")
+@RequestMapping("/api/v1/config")
 @RequiredArgsConstructor
-@RequireAuth  // 整个 Controller 需要认证
+@RequireAuth
 public class ConfigurationController {
 
     private final ConfigurationManager configManager;
+    private final MetadataFacade metadataFacade;
+
+    // ===== 数据源查询 =====
+
+    /**
+     * 列出当前租户所有数据源
+     */
+    @GetMapping("/datasources")
+    public RX<List<Map<String, Object>>> listDatasources() {
+        CurrentUser user = UserContext.getCurrentUser();
+        return RX.ok(metadataFacade.listDatasources(user.getTenantId()));
+    }
+
+    /**
+     * 获取单个数据源详情
+     */
+    @GetMapping("/datasource/{configId}")
+    public RX<Map<String, Object>> getDatasource(@PathVariable String configId) {
+        return RX.ok(metadataFacade.getDatasource(configId));
+    }
+
+    /**
+     * 列出语义层（可选按数据源筛选）
+     */
+    @GetMapping("/semantic-layers")
+    public RX<List<Map<String, Object>>> listSemanticLayers(
+            @RequestParam(required = false) String datasourceId) {
+        CurrentUser user = UserContext.getCurrentUser();
+        return RX.ok(metadataFacade.listSemanticLayers(user.getTenantId(), datasourceId));
+    }
+
+    /**
+     * 测试数据源连接
+     */
+    @PostMapping("/datasource/{configId}/test-connection")
+    public RX<Map<String, Object>> testDatasourceConnection(@PathVariable String configId) {
+        log.info("Test datasource connection: id={}", configId);
+        return RX.ok(metadataFacade.testDatasourceConnection(configId));
+    }
 
     // ===== 数据源配置 =====
 

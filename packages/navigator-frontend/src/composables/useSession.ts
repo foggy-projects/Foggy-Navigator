@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { useChatStore, createSseClient, AipMessageType } from '@foggy/chat'
 import type { ChatMessage, SseController } from '@foggy/chat'
+import { ElMessage } from 'element-plus'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'
 import { getToken } from '@/utils/auth'
@@ -46,12 +47,13 @@ export function useSession() {
       console.error('Failed to load history messages:', e)
     }
 
-    // 建立 SSE 连接
+    // 建立 SSE 连接（通过 Authorization header 传递 token，不再使用 query string）
     const token = getToken()
-    const sseUrl = `/api/v1/sessions/${sessionId}/stream${token ? `?token=${token}` : ''}`
+    const sseUrl = `/api/v1/sessions/${sessionId}/stream`
 
     currentSseController = createSseClient<AgentMessage>({
       url: sseUrl,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       adapter: tutorAgentAdapter,
       sessionId,
       onMessage: (msgs) => {
@@ -67,6 +69,9 @@ export function useSession() {
       },
       onReconnecting: () => {
         chatStore.setConnectionStatus('connecting')
+      },
+      onMaxRetriesExceeded: () => {
+        ElMessage.error('连接已断开，请刷新页面重试')
       },
       onRawEvent: (raw: AgentMessage) => {
         // 处理 ROUTE_REQUEST 事件（不经过 adapter 转换）

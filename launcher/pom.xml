@@ -43,6 +43,13 @@
             <artifactId>metadata-config-module</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <!-- Metadata Query Module - 元数据查询模块 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>metadata-query-module</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

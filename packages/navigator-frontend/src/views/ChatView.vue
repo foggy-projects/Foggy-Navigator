@@ -29,7 +29,12 @@
       </div>
       <div class="sidebar-footer">
         <span class="username">{{ userInfo?.username }}</span>
-        <el-button text size="small" @click="handleLogout">退出</el-button>
+        <div class="footer-actions">
+          <el-icon class="settings-icon" @click="router.push('/settings')" title="系统配置">
+            <Setting />
+          </el-icon>
+          <el-button text size="small" @click="handleLogout">退出</el-button>
+        </div>
       </div>
     </aside>
 
@@ -82,7 +87,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close } from '@element-plus/icons-vue'
+import { Close, Setting } from '@element-plus/icons-vue'
 import { ChatPanel, useChatStore } from '@foggy/chat'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSession, setRouteRequestHandler } from '@/composables/useSession'
@@ -336,6 +341,23 @@ function formatTime(dateStr: string): string {
 
 .username {
   color: #606266;
+}
+
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-icon {
+  font-size: 16px;
+  color: #909399;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.settings-icon:hover {
+  color: #409eff;
 }
 
 .chat-main {

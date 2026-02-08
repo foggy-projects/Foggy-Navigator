@@ -76,6 +76,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/git-credentials", "/api/v1/git-credentials/**").permitAll()
                         .requestMatchers("/api/v1/git", "/api/v1/git/**").permitAll()
                         .requestMatchers("/api/v1/sessions", "/api/v1/sessions/**").permitAll()
+                        .requestMatchers("/api/v1/config", "/api/v1/config/**").permitAll()
                         // 开放 Spring Boot 错误端点（避免异常转发时被拦截返回 403）
                         .requestMatchers("/error").permitAll()
                         // 其他所有请求都需要认证（但具体权限检查由 @RequireAuth AOP 处理）

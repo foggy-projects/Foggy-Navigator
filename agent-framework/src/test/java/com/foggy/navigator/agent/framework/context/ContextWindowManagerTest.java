@@ -138,6 +138,49 @@ class ContextWindowManagerTest {
             List<Message> result = manager.selectMessages(messages, 1);
             assertTrue(result.size() >= 2, "Should keep at least MIN_MESSAGES=2");
         }
+
+        @Test
+        @DisplayName("大量消息（100+）应正常处理")
+        void shouldHandleLargeMessageVolume() {
+            List<Message> messages = createMessages(200);
+            // 充裕预算 — 应全部返回
+            List<Message> allResult = manager.selectMessages(messages, 1_000_000);
+            assertEquals(200, allResult.size());
+
+            // 有限预算 — 应只保留尾部消息
+            List<Message> limitedResult = manager.selectMessages(messages, 100);
+            assertTrue(limitedResult.size() >= 2);
+            assertTrue(limitedResult.size() < 200);
+            // 最后一条是最新消息
+            assertEquals("msg-199", limitedResult.get(limitedResult.size() - 1).getContent());
+        }
+    }
+
+    @Nested
+    @DisplayName("中文消息 token 估算")
+    class ChineseTokenEstimationTest {
+
+        @Test
+        @DisplayName("中文消息 token 估算应基于字符数")
+        void shouldEstimateChineseMessageTokens() {
+            // 10 个中文字符 → 10 chars / 2.5 = 4 tokens + 4 overhead = 8
+            String chinese = "你好世界测试数据源配置项";
+            Message msg = Message.builder().role(MessageRole.USER).content(chinese).build();
+            int tokens = manager.estimateTokens(msg);
+            // 11 chars / 2.5 = 4.4 → ceil = 5 + 4 = 9
+            assertTrue(tokens > 4, "Chinese tokens should include overhead");
+            assertTrue(tokens < 20, "Should not overestimate");
+        }
+
+        @Test
+        @DisplayName("中英文混合消息 token 估算")
+        void shouldEstimateMixedContent() {
+            String mixed = "配置 MySQL 数据源 host=localhost port=3306";
+            Message msg = Message.builder().role(MessageRole.USER).content(mixed).build();
+            int tokens = manager.estimateTokens(msg);
+            // 39 chars / 2.5 = 15.6 → ceil = 16 + 4 = 20
+            assertEquals(4 + (int) Math.ceil(mixed.length() / 2.5), tokens);
+        }
     }
 
     private List<Message> createMessages(int count) {
