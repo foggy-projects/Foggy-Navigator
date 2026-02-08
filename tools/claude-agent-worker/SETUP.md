@@ -99,26 +99,27 @@ AGENT_WORKER_ALLOWED_CWDS=["/home/user/projects","/opt/work"]
 
 ### LLM 凭证配置
 
-Worker 支持三种模式，按需选一种：
+和你平时在终端启动 `claude` 的方式保持一致。Worker 会把这些变量注入 Claude Code 子进程。
 
-**模式 1：订阅模式（推荐个人使用）**
+**模式 1：订阅模式**
 
-不设置任何 LLM 相关变量，Worker 使用 `claude login` 的订阅额度。
+不设置任何 LLM 相关变量，Worker 使用本机 `claude login` 的订阅额度。
 
 ```properties
 # 什么都不填，确保本机已 claude login
 ```
 
-**模式 2：API Key 模式**
+**模式 2：AUTH_TOKEN + 自定义端点（对应平时设置 `$env:ANTHROPIC_AUTH_TOKEN` 的场景）**
+
+```properties
+AGENT_WORKER_ANTHROPIC_AUTH_TOKEN=sk-xxx
+AGENT_WORKER_ANTHROPIC_BASE_URL=https://your-endpoint.com/v1
+```
+
+**模式 3：API Key 模式（console.anthropic.com 的 Key，按 token 计费）**
 
 ```properties
 AGENT_WORKER_ANTHROPIC_API_KEY=sk-ant-api03-xxxx
-```
-
-**模式 3：自定义端点（代理 / DashScope 等）**
-
-```properties
-AGENT_WORKER_ANTHROPIC_API_KEY=sk-xxxx
 AGENT_WORKER_ANTHROPIC_BASE_URL=https://your-proxy.example.com/v1
 ```
 

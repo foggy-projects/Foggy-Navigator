@@ -16,7 +16,9 @@ class Settings(BaseSettings):
     max_concurrent_tasks: int = 3
 
     # LLM config -- injected into Claude Code CLI subprocess via env
+    # 二选一：api_key 或 auth_token（取决于你平时用哪个）
     anthropic_api_key: str = ""
+    anthropic_auth_token: str = ""
     anthropic_base_url: str = ""
 
     model_config = SettingsConfigDict(env_prefix="AGENT_WORKER_", env_file=".env", env_file_encoding="utf-8")

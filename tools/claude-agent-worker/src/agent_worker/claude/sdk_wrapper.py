@@ -123,6 +123,8 @@ class SdkWrapper:
         env: dict[str, str] = {}
         if settings.anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+        if settings.anthropic_auth_token:
+            env["ANTHROPIC_AUTH_TOKEN"] = settings.anthropic_auth_token
         if settings.anthropic_base_url:
             env["ANTHROPIC_BASE_URL"] = settings.anthropic_base_url
         return env
