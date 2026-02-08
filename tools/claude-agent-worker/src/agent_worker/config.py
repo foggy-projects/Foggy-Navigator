@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     ``AGENT_WORKER_``.  For example ``AGENT_WORKER_PORT=4000``.
     """
 
-    port: int = 3001
+    port: int = 3031
     host: str = "0.0.0.0"
     worker_token: str = ""
     worker_name: str = ""
