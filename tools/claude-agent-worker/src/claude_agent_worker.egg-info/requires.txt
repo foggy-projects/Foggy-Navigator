@@ -1,0 +1,10 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pydantic-settings>=2.0.0
+claude-code-sdk>=0.0.10
+sse-starlette>=2.0.0
+
+[dev]
+pytest
+httpx
+pytest-asyncio
