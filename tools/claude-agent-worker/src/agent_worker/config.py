@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_base_url: str = ""
 
-    model_config = SettingsConfigDict(env_prefix="AGENT_WORKER_")
+    model_config = SettingsConfigDict(env_prefix="AGENT_WORKER_", env_file=".env", env_file_encoding="utf-8")
 
 
 settings = Settings()
