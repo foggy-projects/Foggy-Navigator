@@ -78,6 +78,23 @@ def map_result(
     }
 
 
+def map_system(
+    task_id: str,
+    subtype: str,
+    data: dict[str, Any] | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Map a ``SystemMessage`` to an SSE dict."""
+
+    return {
+        "type": "system",
+        "subtype": subtype,
+        "data": data,
+        "task_id": task_id,
+        "session_id": session_id,
+    }
+
+
 def map_error(task_id: str, error: str, session_id: str | None = None) -> dict[str, Any]:
     """Map an error condition to an SSE dict."""
 

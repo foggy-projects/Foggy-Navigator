@@ -247,13 +247,25 @@ class SdkWrapper:
                         session_id=current_session_id,
                     )
 
-                # -- SystemMessage (informational, forwarded as assistant_text)
+                # -- SystemMessage
                 elif _SystemMessage is not None and isinstance(message, _SystemMessage):
-                    data = getattr(message, "data", {})
+                    data = getattr(message, "data", {}) or {}
                     subtype = getattr(message, "subtype", "system")
-                    yield event_mapper.map_assistant_text(
+
+                    # Extract session_id from init event and propagate to all subsequent events
+                    if subtype == "init" and isinstance(data, dict):
+                        init_session_id = data.get("session_id")
+                        if init_session_id:
+                            current_session_id = init_session_id
+
+                    # Skip verbose hook events (hook_started, hook_response)
+                    if subtype in ("hook_started", "hook_response"):
+                        continue
+
+                    yield event_mapper.map_system(
                         task_id=task_id,
-                        text=f"[system:{subtype}] {data}",
+                        subtype=subtype,
+                        data=data if subtype == "init" else None,
                         session_id=current_session_id,
                     )
 
