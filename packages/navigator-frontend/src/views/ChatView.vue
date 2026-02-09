@@ -33,9 +33,6 @@
           <el-icon class="settings-icon" @click="router.push('/workers')" title="Workers">
             <Monitor />
           </el-icon>
-          <el-icon class="settings-icon" @click="router.push('/settings')" title="系统配置">
-            <Setting />
-          </el-icon>
           <el-button text size="small" @click="handleLogout">退出</el-button>
         </div>
       </div>
@@ -90,7 +87,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close, Setting, Monitor } from '@element-plus/icons-vue'
+import { Close, Monitor } from '@element-plus/icons-vue'
 import { ChatPanel, useChatStore } from '@foggy/chat'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSession, setRouteRequestHandler } from '@/composables/useSession'

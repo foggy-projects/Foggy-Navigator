@@ -1,4 +1,4 @@
-package com.foggy.navigator.metadata.query.config.service;
+package com.foggy.navigator.common.security;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 凭证加密器 - 使用 AES-256 GCM 对敏感信息进行可逆加密
+ * 公共安全组件，供所有模块使用
  */
 @Slf4j
 @Component
