@@ -96,6 +96,5 @@ containerManager.destroyContainer(containerId);
 
 ## 参考文档
 
-- [编程 Agent 集成设计](../docs/02-modules/coding-agent-integration.md)
-- [语义层验证服务设计](../docs/02-modules/semantic-layer-validation.md)
-- [完整工作流设计](../docs/02-modules/semantic-layer-workflow.md)
+- [编程 Agent 集成设计](../../docs/02-modules/coding-agent-integration.md)
+- [系统架构概览](../../docs/00-system-overview.md)

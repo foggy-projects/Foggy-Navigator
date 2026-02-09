@@ -194,8 +194,7 @@ messages-by-session.qm
 
 ## 相关文档
 
-- [配置管理模块设计](../docs/configuration-module-design.md)
-- [元数据语义层统一查询设计](../docs/metadata-semantic-layer-design.md)
+- [系统架构概览](../docs/00-system-overview.md)
 - [Foggy Dataset Model 文档](https://foggy-projects.github.io/foggy-data-mcp-bridge/)
 
 ## 依赖版本

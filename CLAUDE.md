@@ -1,6 +1,6 @@
 # Claude AI 开发指南
 
-Foggy Navigator - 基于 LangChain4j 的企业级动态 Agent 编排系统。
+Foggy Navigator - 基于 LangChain4j 的个人 AI Agent 编排中枢。
 
 ## 模块结构
 
@@ -8,16 +8,17 @@ Foggy Navigator - 基于 LangChain4j 的企业级动态 Agent 编排系统。
 
 ```
 Foggy-Navigator/
-├── navigator-common/       # 公共 DTO、工具类
-├── navigator-spi/          # SPI 接口定义
-├── agent-framework/        # Agent 核心框架（LLM调用、Skill解析、会话路由）
-├── user-auth-module/       # 用户认证（JWT）
-├── metadata-config-module/ # 元数据配置管理
-├── metadata-query-module/  # 元数据查询服务
-├── session-module/         # 会话管理 + SSE 推送
-├── tutor-agent/            # 导师 Agent（引导用户配置）
-├── addons/coding-agent/    # 编程 Agent（OpenHands 集成）
-└── launcher/               # Spring Boot 启动器
+├── navigator-common/           # 公共 DTO、Entity、CredentialEncryptor
+├── navigator-spi/              # SPI 接口定义（CodingAgentFacade、ClaudeWorkerFacade）
+├── agent-framework/            # Agent 核心框架（LLM调用、Skill解析、工具执行、会话路由）
+├── user-auth-module/           # 用户认证（JWT）
+├── metadata-config-module/     # Skill 配置管理
+├── metadata-query-module/      # 元数据查询服务
+├── session-module/             # 会话管理 + SSE 推送 + JpaAgentRegistry
+├── tutor-agent/                # 导师 Agent（引导用户、分派任务）
+├── addons/coding-agent/        # 编程 Agent（OpenHands 集成）
+├── addons/claude-worker-agent/ # Claude Code 工人 Agent（远程编程）
+└── launcher/                   # Spring Boot 启动器
 ```
 
 ### 前端模块（pnpm workspace）
