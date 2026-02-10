@@ -60,6 +60,11 @@ export async function testLlmConnection(form: Pick<LlmModelConfigForm, 'baseUrl'
   return rx.data
 }
 
+export async function testSavedLlmConnection(id: string): Promise<string> {
+  const rx = (await client.post(`${BASE}/llm/${id}/test-connection`)) as unknown as RX<string>
+  return rx.data
+}
+
 export async function saveModelConfig(form: LlmModelConfigForm): Promise<string> {
   const rx = (await client.post(`${BASE}/llm`, form)) as unknown as RX<string>
   return rx.data

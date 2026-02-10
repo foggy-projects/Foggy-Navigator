@@ -13,6 +13,7 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,9 +34,12 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class LlmModelManagerImpl implements LlmModelManager {
 
+    private static final Duration TEST_TIMEOUT = Duration.ofSeconds(10);
+
     private final LlmModelConfigRepository llmModelRepo;
     private final AgentModelOverrideRepository overrideRepo;
     private final CredentialEncryptor credentialEncryptor;
+    private final RestTemplateBuilder restTemplateBuilder;
 
     // ========== 模型配置 CRUD ==========
 
@@ -221,7 +225,10 @@ public class LlmModelManagerImpl implements LlmModelManager {
         );
 
         try {
-            RestTemplate restTemplate = new RestTemplate();
+            RestTemplate restTemplate = restTemplateBuilder
+                    .connectTimeout(TEST_TIMEOUT)
+                    .readTimeout(TEST_TIMEOUT)
+                    .build();
             HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
             ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, request, Map.class);
 

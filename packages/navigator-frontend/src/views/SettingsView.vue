@@ -87,8 +87,9 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="140" align="center">
+          <el-table-column label="操作" width="200" align="center">
             <template #default="{ row }">
+              <el-button text size="small" :loading="row._testing" @click="handleTestSaved(row)">测试</el-button>
               <el-button text size="small" @click="editLlmModel(row)">编辑</el-button>
               <el-button text type="danger" size="small" @click="deleteLlm(row.id)">删除</el-button>
             </template>
@@ -285,6 +286,7 @@ import {
   setAgentModelOverride as apiSetOverride,
   removeAgentModelOverride as apiRemoveOverride,
   testLlmConnection as apiTestLlm,
+  testSavedLlmConnection as apiTestSavedLlm,
 } from '@/api/platform'
 import {
   listWorkers as apiListWorkers,
@@ -498,6 +500,18 @@ async function handleTestLlm() {
     ElMessage.error('连接失败: ' + (e?.response?.data?.msg || e?.message || '未知错误'))
   } finally {
     testingLlm.value = false
+  }
+}
+
+async function handleTestSaved(row: LlmModelConfig & { _testing?: boolean }) {
+  row._testing = true
+  try {
+    const reply = await apiTestSavedLlm(row.id)
+    ElMessage.success('连接成功: ' + (reply || 'OK'))
+  } catch (e: any) {
+    ElMessage.error('连接失败: ' + (e?.response?.data?.msg || e?.message || '未知错误'))
+  } finally {
+    row._testing = false
   }
 }
 

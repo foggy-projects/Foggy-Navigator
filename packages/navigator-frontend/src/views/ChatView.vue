@@ -95,6 +95,7 @@ import { ChatPanel, useChatStore } from '@foggy/chat'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSession, setRouteRequestHandler } from '@/composables/useSession'
 import { getUserInfo, clearAuth } from '@/utils/auth'
+import { resetSetupStatus } from '@/router'
 import * as sessionApi from '@/api/session'
 import type { GuideCard, RoutePayload } from '@/types'
 
@@ -202,6 +203,7 @@ function handleGuideClick(card: GuideCard) {
 
 function handleLogout() {
   clearAuth()
+  resetSetupStatus()
   router.push('/login')
 }
 

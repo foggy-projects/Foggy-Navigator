@@ -92,9 +92,10 @@ public class DefaultAgentInvoker implements AgentInvoker {
                 doInvoke(sessionId, agentId, userMessage);
             } catch (Exception e) {
                 log.error("Agent invocation failed: sessionId={}, agentId={}", sessionId, agentId, e);
+                String userMessage2 = toLlmErrorMessage(e);
                 eventPublisher.publishEvent(AgentMessage.of(
                         sessionId, agentId, MessageType.ERROR,
-                        Map.of("error", "Agent processing failed: " + e.getMessage())
+                        Map.of("error", userMessage2)
                 ));
             } finally {
                 MDC.clear();
@@ -484,5 +485,38 @@ public class DefaultAgentInvoker implements AgentInvoker {
 
         log.debug("Resolved {} tools for agent", tools.size());
         return tools;
+    }
+
+    /**
+     * 将 LLM 调用异常转换为用户友好的错误信息
+     */
+    private String toLlmErrorMessage(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null) {
+            return "AI 服务调用失败，请稍后重试。";
+        }
+        String lower = msg.toLowerCase();
+        if (lower.contains("401") || lower.contains("unauthorized") || lower.contains("invalid api key")) {
+            return "AI 模型认证失败（API Key 无效），请在「设置 → AI 模型」中检查配置。";
+        }
+        if (lower.contains("403") || lower.contains("forbidden")) {
+            return "AI 模型访问被拒绝，请检查 API Key 权限或账户余额。";
+        }
+        if (lower.contains("404") || lower.contains("not found") || lower.contains("model_not_found")) {
+            return "AI 模型不存在，请在「设置 → AI 模型」中检查模型名称。";
+        }
+        if (lower.contains("429") || lower.contains("rate limit")) {
+            return "AI 服务请求过于频繁，请稍后重试。";
+        }
+        if (lower.contains("timeout") || lower.contains("timed out")) {
+            return "AI 服务响应超时，请检查网络连接或稍后重试。";
+        }
+        if (lower.contains("connection refused") || lower.contains("connection reset")) {
+            return "无法连接 AI 服务，请在「设置 → AI 模型」中检查 Base URL 配置。";
+        }
+        if (lower.contains("熔断")) {
+            return msg;
+        }
+        return "AI 服务调用失败: " + msg;
     }
 }

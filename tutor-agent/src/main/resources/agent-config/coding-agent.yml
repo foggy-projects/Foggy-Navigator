@@ -6,6 +6,7 @@ agent:
   model:
     provider: openai
     model: glm-4.7
+    category: CODING
     temperature: 0.3
     systemPrompt: |
       你是Foggy Navigator的编程助手Agent，专门帮助用户完成代码相关任务。

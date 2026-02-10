@@ -101,6 +101,16 @@ public class PlatformConfigController {
         return RX.ok(reply);
     }
 
+    @PostMapping("/llm/{id}/test-connection")
+    public RX<String> testSavedLlmConnection(@PathVariable String id) {
+        log.info("Test saved LLM connection: id={}", id);
+        LlmModelConfigDTO dto = llmModelManager.getModelConfig(id)
+                .orElseThrow(() -> RX.throwB("LLM model config not found: " + id));
+        String apiKey = llmModelManager.getDecryptedApiKey(id);
+        String reply = llmModelManager.testConnection(dto.getBaseUrl(), apiKey, dto.getModelName());
+        return RX.ok(reply);
+    }
+
     @PostMapping("/llm")
     public RX<String> saveModelConfig(@RequestBody LlmModelConfigForm form) {
         CurrentUser user = UserContext.getCurrentUser();
