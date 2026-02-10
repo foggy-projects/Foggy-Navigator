@@ -94,6 +94,13 @@ public class PlatformConfigController {
 
     // ========== LLM 模型配置 ==========
 
+    @PostMapping("/llm/test-connection")
+    public RX<String> testLlmConnection(@RequestBody LlmModelConfigForm form) {
+        log.info("Test LLM connection: baseUrl={}, model={}", form.getBaseUrl(), form.getModelName());
+        String reply = llmModelManager.testConnection(form.getBaseUrl(), form.getApiKey(), form.getModelName());
+        return RX.ok(reply);
+    }
+
     @PostMapping("/llm")
     public RX<String> saveModelConfig(@RequestBody LlmModelConfigForm form) {
         CurrentUser user = UserContext.getCurrentUser();

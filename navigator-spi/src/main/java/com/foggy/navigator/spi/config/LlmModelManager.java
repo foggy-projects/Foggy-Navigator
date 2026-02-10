@@ -113,4 +113,17 @@ public interface LlmModelManager {
      * @return true 如果至少配置了一个
      */
     boolean hasAnyModel(String tenantId);
+
+    // ========== 连通性测试 ==========
+
+    /**
+     * 测试 LLM 模型连通性
+     * 发送一条简单 prompt 验证 apiKey/baseUrl/modelName 是否可用
+     *
+     * @param baseUrl API Base URL
+     * @param apiKey API Key（明文）
+     * @param modelName 模型名称
+     * @return 成功时返回模型回复片段，失败时抛出异常
+     */
+    String testConnection(String baseUrl, String apiKey, String modelName);
 }

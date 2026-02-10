@@ -153,8 +153,16 @@ public class DefaultAgentInvoker implements AgentInvoker {
         String effectiveBaseUrl = null;
 
         if (llmModelManager != null && tenantId != null) {
+            LlmModelCategory category = LlmModelCategory.GENERAL;
+            if (modelConfig != null && modelConfig.getCategory() != null) {
+                try {
+                    category = LlmModelCategory.valueOf(modelConfig.getCategory());
+                } catch (IllegalArgumentException e) {
+                    log.warn("Invalid model category '{}', falling back to GENERAL", modelConfig.getCategory());
+                }
+            }
             Optional<LlmModelConfigDTO> resolved = llmModelManager.resolveModelForAgent(
-                    tenantId, agentId, LlmModelCategory.GENERAL);
+                    tenantId, agentId, category);
             if (resolved.isPresent()) {
                 LlmModelConfigDTO dto = resolved.get();
                 effectiveModel = dto.getModelName();

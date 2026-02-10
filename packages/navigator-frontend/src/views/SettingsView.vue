@@ -210,6 +210,7 @@
       </el-form>
       <template #footer>
         <el-button @click="showLlmDialog_ = false">取消</el-button>
+        <el-button :loading="testingLlm" @click="handleTestLlm">测试连接</el-button>
         <el-button type="primary" :loading="saving" @click="saveLlm">保存</el-button>
       </template>
     </el-dialog>
@@ -268,6 +269,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { resetSetupStatus } from '@/router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
 import {
@@ -282,6 +284,7 @@ import {
   listAgentModelOverrides as apiListOverrides,
   setAgentModelOverride as apiSetOverride,
   removeAgentModelOverride as apiRemoveOverride,
+  testLlmConnection as apiTestLlm,
 } from '@/api/platform'
 import {
   listWorkers as apiListWorkers,
@@ -373,6 +376,7 @@ async function deleteGit(id: string) {
   try {
     await ElMessageBox.confirm('确认删除该 Git 提供者？', '提示', { type: 'warning' })
     await apiDeleteGit(id)
+    resetSetupStatus()
     ElMessage.success('已删除')
     await loadGitProviders()
   } catch { /* cancelled */ }
@@ -475,10 +479,33 @@ async function saveLlm() {
   }
 }
 
+const testingLlm = ref(false)
+
+async function handleTestLlm() {
+  if (!llmForm.value.baseUrl || !llmForm.value.modelName || !llmForm.value.apiKey) {
+    ElMessage.warning('请先填写 Base URL、模型名称和 API Key')
+    return
+  }
+  testingLlm.value = true
+  try {
+    const reply = await apiTestLlm({
+      baseUrl: llmForm.value.baseUrl,
+      apiKey: llmForm.value.apiKey,
+      modelName: llmForm.value.modelName,
+    })
+    ElMessage.success('连接成功: ' + (reply || 'OK'))
+  } catch (e: any) {
+    ElMessage.error('连接失败: ' + (e?.response?.data?.msg || e?.message || '未知错误'))
+  } finally {
+    testingLlm.value = false
+  }
+}
+
 async function deleteLlm(id: string) {
   try {
     await ElMessageBox.confirm('确认删除该模型配置？', '提示', { type: 'warning' })
     await apiDeleteLlm(id)
+    resetSetupStatus()
     ElMessage.success('已删除')
     await loadLlmModels()
   } catch { /* cancelled */ }

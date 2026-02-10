@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 public class ModelConfig {
     private String provider;  // openai / anthropic / ollama
     private String model;
+    private String category;  // GENERAL / CODING / REASONING / VISION
     @Builder.Default
     private double temperature = 0.7;
     private String systemPrompt;

@@ -13,10 +13,14 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -196,6 +200,50 @@ public class LlmModelManagerImpl implements LlmModelManager {
     @Override
     public boolean hasAnyModel(String tenantId) {
         return llmModelRepo.existsByTenantId(tenantId);
+    }
+
+    // ========== 连通性测试 ==========
+
+    @Override
+    public String testConnection(String baseUrl, String apiKey, String modelName) {
+        log.info("Testing LLM connection: baseUrl={}, model={}", baseUrl, modelName);
+
+        String url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(apiKey);
+
+        Map<String, Object> body = Map.of(
+                "model", modelName,
+                "messages", List.of(Map.of("role", "user", "content", "Hi, reply with OK")),
+                "max_tokens", 10
+        );
+
+        try {
+            RestTemplate restTemplate = new RestTemplate();
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, request, Map.class);
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                log.info("LLM connection test passed: model={}", modelName);
+                // 从 choices[0].message.content 提取回复
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> choices = (List<Map<String, Object>>) response.getBody().get("choices");
+                if (choices != null && !choices.isEmpty()) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
+                    if (message != null) {
+                        return (String) message.get("content");
+                    }
+                }
+                return "连接成功";
+            }
+            throw RX.throwB("Unexpected response: " + response.getStatusCode());
+        } catch (Exception e) {
+            log.error("LLM connection test failed: baseUrl={}, model={}, error={}", baseUrl, modelName, e.getMessage());
+            throw RX.throwB("连接测试失败: " + e.getMessage());
+        }
     }
 
     // ===== 内部方法 =====

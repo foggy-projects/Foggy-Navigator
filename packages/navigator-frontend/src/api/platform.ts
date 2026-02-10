@@ -55,6 +55,11 @@ export async function getModelConfig(id: string): Promise<LlmModelConfig> {
   return rx.data
 }
 
+export async function testLlmConnection(form: Pick<LlmModelConfigForm, 'baseUrl' | 'apiKey' | 'modelName'>): Promise<string> {
+  const rx = (await client.post(`${BASE}/llm/test-connection`, form)) as unknown as RX<string>
+  return rx.data
+}
+
 export async function saveModelConfig(form: LlmModelConfigForm): Promise<string> {
   const rx = (await client.post(`${BASE}/llm`, form)) as unknown as RX<string>
   return rx.data

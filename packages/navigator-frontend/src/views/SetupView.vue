@@ -99,6 +99,12 @@
             </el-row>
             <el-form-item>
               <el-checkbox v-model="model.isDefault">设为该类别的默认模型</el-checkbox>
+              <el-button
+                style="margin-left: 16px"
+                :loading="model.testing"
+                :disabled="!model.baseUrl || !model.modelName || !model.apiKey"
+                @click="handleTestModel(model)"
+              >测试连接</el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -172,7 +178,7 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { resetSetupStatus } from '@/router'
 import { ElMessage } from 'element-plus'
-import { saveGitProvider, saveModelConfig } from '@/api/platform'
+import { saveGitProvider, saveModelConfig, testLlmConnection } from '@/api/platform'
 import { registerWorker } from '@/api/claudeWorker'
 import type { GitProviderType, LlmModelCategory } from '@/types'
 
@@ -213,6 +219,7 @@ interface LlmForm {
   modelName: string
   apiKey: string
   isDefault: boolean
+  testing: boolean
 }
 
 const llmModels = ref<LlmForm[]>([])
@@ -249,6 +256,7 @@ function applyPreset(preset: (typeof llmPresets)[number]) {
     modelName: preset.modelName,
     apiKey: '',
     isDefault: llmModels.value.length === 0,
+    testing: false,
   })
 }
 
@@ -260,11 +268,28 @@ function addLlmModel() {
     modelName: '',
     apiKey: '',
     isDefault: llmModels.value.length === 0,
+    testing: false,
   })
 }
 
 function removeLlmModel(idx: number) {
   llmModels.value.splice(idx, 1)
+}
+
+async function handleTestModel(model: LlmForm) {
+  model.testing = true
+  try {
+    const reply = await testLlmConnection({
+      baseUrl: model.baseUrl,
+      apiKey: model.apiKey,
+      modelName: model.modelName,
+    })
+    ElMessage.success('连接成功: ' + (reply || 'OK'))
+  } catch (e: any) {
+    ElMessage.error('连接失败: ' + (e?.response?.data?.msg || e?.message || '未知错误'))
+  } finally {
+    model.testing = false
+  }
 }
 
 // ===== Step 3: Claude Worker =====
