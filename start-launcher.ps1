@@ -10,32 +10,26 @@ Write-Host "  Coding Agent Launcher" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Step 1: Kill old processes
-Write-Host "[1/4] Stopping old Java processes..." -ForegroundColor Yellow
-$javaProcesses = Get-Process java -ErrorAction SilentlyContinue
-if ($javaProcesses) {
-    $javaProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
-    Write-Host "  Stopped $($javaProcesses.Count) Java process(es)" -ForegroundColor Green
-    Start-Sleep -Seconds 3
-} else {
-    Write-Host "  No Java processes running" -ForegroundColor Gray
-}
-
-# Check and kill process on port 8112
+# Step 1: Stop existing service on port (only kill the specific process, not all Java)
+Write-Host "[1/4] Checking port $BACKEND_PORT..." -ForegroundColor Yellow
 $portConnection = Get-NetTCPConnection -LocalPort $BACKEND_PORT -State Listen -ErrorAction SilentlyContinue
 if ($portConnection) {
-    Write-Host "  Port $BACKEND_PORT is in use, stopping..." -ForegroundColor Yellow
-    Stop-Process -Id $portConnection.OwningProcess -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    $procId = $portConnection.OwningProcess | Select-Object -First 1
+    $process = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    Write-Host "  Port $BACKEND_PORT in use by $($process.ProcessName) (PID=$procId), stopping..." -ForegroundColor Yellow
+    Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+} else {
+    Write-Host "  Port $BACKEND_PORT is free" -ForegroundColor Gray
 }
 
 Write-Host ""
 
-# Step 2: Clean and build
-Write-Host "[2/4] Building project (mvn clean package)..." -ForegroundColor Yellow
+# Step 2: Build (skip clean to avoid locked jar issues)
+Write-Host "[2/4] Building project (mvn package)..." -ForegroundColor Yellow
 Write-Host "  This may take 30-60 seconds..." -ForegroundColor Gray
 
-$buildOutput = & mvn clean package -pl launcher -am -DskipTests 2>&1
+$buildOutput = & mvn package -pl launcher -am -DskipTests 2>&1
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  Build successful!" -ForegroundColor Green

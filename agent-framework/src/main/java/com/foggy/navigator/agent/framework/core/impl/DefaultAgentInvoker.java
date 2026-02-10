@@ -22,23 +22,27 @@ import com.foggy.navigator.agent.framework.tool.ToolDefinition;
 import com.foggy.navigator.agent.framework.tool.ToolExecutionRequest;
 import com.foggy.navigator.agent.framework.tool.ToolExecutionResult;
 import com.foggy.navigator.agent.framework.tool.builtin.DelegateTool;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.lang.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 默认Agent调用器实现
  * 查找Agent → 构建LlmRequest → 工具执行循环 → 通过事件发布结果
  */
 @Slf4j
-@RequiredArgsConstructor
 public class DefaultAgentInvoker implements AgentInvoker {
 
     private static final int MAX_TOOL_ITERATIONS = 10;
@@ -54,6 +58,28 @@ public class DefaultAgentInvoker implements AgentInvoker {
     private final SkillManager skillManager;
     private final SessionRouter sessionRouter;
     private final List<BuiltInTool> builtInTools;
+    @Nullable
+    private final LlmModelManager llmModelManager;
+
+    public DefaultAgentInvoker(AgentRegistry agentRegistry,
+                               SessionManager sessionManager,
+                               LlmAdapter llmAdapter,
+                               ApplicationEventPublisher eventPublisher,
+                               AsyncTaskExecutor agentExecutor,
+                               SkillManager skillManager,
+                               SessionRouter sessionRouter,
+                               List<BuiltInTool> builtInTools,
+                               @Nullable LlmModelManager llmModelManager) {
+        this.agentRegistry = agentRegistry;
+        this.sessionManager = sessionManager;
+        this.llmAdapter = llmAdapter;
+        this.eventPublisher = eventPublisher;
+        this.agentExecutor = agentExecutor;
+        this.skillManager = skillManager;
+        this.sessionRouter = sessionRouter;
+        this.builtInTools = builtInTools;
+        this.llmModelManager = llmModelManager;
+    }
 
     @Override
     public void invokeAsync(String sessionId, String agentId, Message userMessage) {
@@ -121,10 +147,30 @@ public class DefaultAgentInvoker implements AgentInvoker {
             tenantId = currentSession.getTenantId();
         }
 
+        // 7.5 从 DB 解析模型配置（覆盖 YAML 默认值）
+        String effectiveModel = modelConfig != null ? modelConfig.getModel() : null;
+        String effectiveApiKey = null;
+        String effectiveBaseUrl = null;
+
+        if (llmModelManager != null && tenantId != null) {
+            Optional<LlmModelConfigDTO> resolved = llmModelManager.resolveModelForAgent(
+                    tenantId, agentId, LlmModelCategory.GENERAL);
+            if (resolved.isPresent()) {
+                LlmModelConfigDTO dto = resolved.get();
+                effectiveModel = dto.getModelName();
+                effectiveBaseUrl = dto.getBaseUrl();
+                effectiveApiKey = llmModelManager.getDecryptedApiKey(dto.getId());
+                log.info("Using DB model config: name={}, model={}, category={}",
+                        dto.getName(), dto.getModelName(), dto.getCategory());
+            }
+        }
+
         // 8. 工具执行循环
         for (int iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
             LlmRequest request = LlmRequest.builder()
-                    .model(modelConfig != null ? modelConfig.getModel() : null)
+                    .model(effectiveModel)
+                    .apiKey(effectiveApiKey)
+                    .baseUrl(effectiveBaseUrl)
                     .temperature(modelConfig != null ? modelConfig.getTemperature() : 0.7)
                     .systemPrompt(enhancedSystemPrompt)
                     .messages(new ArrayList<>(messages))

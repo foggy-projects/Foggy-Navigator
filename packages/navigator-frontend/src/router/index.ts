@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { isLoggedIn } from '@/utils/auth'
+import { getSetupStatus } from '@/api/platform'
 
 const routes = [
   {
@@ -26,6 +27,18 @@ const routes = [
     component: () => import('@/views/ClaudeWorkerView.vue'),
     meta: { requireAuth: true },
   },
+  {
+    path: '/setup',
+    name: 'Setup',
+    component: () => import('@/views/SetupView.vue'),
+    meta: { requireAuth: true, skipSetupCheck: true },
+  },
+  {
+    path: '/settings',
+    name: 'Settings',
+    component: () => import('@/views/SettingsView.vue'),
+    meta: { requireAuth: true, skipSetupCheck: true },
+  },
 ]
 
 const router = createRouter({
@@ -33,14 +46,41 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, _from, next) => {
+// Setup 状态缓存：避免每次路由切换都请求后端
+let setupComplete: boolean | null = null
+
+export function resetSetupStatus() {
+  setupComplete = null
+}
+
+router.beforeEach(async (to, _from, next) => {
+  // 1. 未登录 → 去登录页
   if (to.meta.requireAuth && !isLoggedIn()) {
     next('/login')
-  } else if (to.path === '/login' && isLoggedIn()) {
-    next('/')
-  } else {
-    next()
+    return
   }
+  // 2. 已登录访问登录页 → 去首页
+  if (to.path === '/login' && isLoggedIn()) {
+    next('/')
+    return
+  }
+  // 3. 已登录 + 需要检查 setup 状态的页面
+  if (isLoggedIn() && !to.meta.skipSetupCheck && !to.meta.public) {
+    if (setupComplete === null) {
+      try {
+        const status = await getSetupStatus()
+        setupComplete = status.setupComplete
+      } catch {
+        // API 失败时放行，避免阻塞用户
+        setupComplete = true
+      }
+    }
+    if (!setupComplete) {
+      next('/setup')
+      return
+    }
+  }
+  next()
 })
 
 export default router

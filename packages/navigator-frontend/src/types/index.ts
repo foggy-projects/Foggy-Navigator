@@ -96,3 +96,67 @@ export interface ClaudeTask {
   createdAt: string
   updatedAt: string
 }
+
+// ===== 平台配置类型 =====
+
+export type GitProviderType = 'GITHUB' | 'GITLAB' | 'GITEE'
+
+export type LlmModelCategory = 'GENERAL' | 'CODING' | 'REASONING' | 'VISION'
+
+/** Git 提供者配置 */
+export interface GitProviderConfig {
+  id: string
+  tenantId: string
+  providerType: GitProviderType
+  baseUrl?: string
+  username?: string
+  isActive: boolean
+  hasToken: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+/** Git 提供者配置表单 */
+export interface GitProviderConfigForm {
+  providerType: GitProviderType
+  baseUrl?: string
+  accessToken: string
+  username?: string
+}
+
+/** LLM 模型配置 */
+export interface LlmModelConfig {
+  id: string
+  tenantId: string
+  name: string
+  category: LlmModelCategory
+  baseUrl: string
+  modelName: string
+  isDefault: boolean
+  hasApiKey: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+/** LLM 模型配置表单 */
+export interface LlmModelConfigForm {
+  name: string
+  category: LlmModelCategory
+  baseUrl: string
+  modelName: string
+  apiKey: string
+  isDefault?: boolean
+}
+
+/** Agent 模型覆盖 */
+export interface AgentModelOverride {
+  agentId: string
+  modelConfigId: string
+}
+
+/** 初始化状态 */
+export interface SetupStatus {
+  gitConfigured: boolean
+  llmConfigured: boolean
+  setupComplete: boolean
+}

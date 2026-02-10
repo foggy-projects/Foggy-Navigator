@@ -275,9 +275,11 @@ public class LangChain4jAdapter implements LlmAdapter {
     }
 
     private ChatLanguageModel buildChatModel(LlmRequest request) {
+        String effectiveApiKey = (request.getApiKey() != null) ? request.getApiKey() : openaiApiKey;
+        String effectiveBaseUrl = (request.getBaseUrl() != null) ? request.getBaseUrl() : openaiBaseUrl;
         return OpenAiChatModel.builder()
-                .apiKey(openaiApiKey)
-                .baseUrl(openaiBaseUrl)
+                .apiKey(effectiveApiKey)
+                .baseUrl(effectiveBaseUrl)
                 .modelName(request.getModel() != null ? request.getModel() : "gpt-4")
                 .temperature(request.getTemperature())
                 .timeout(Duration.ofSeconds(request.getTimeoutSeconds()))
@@ -285,9 +287,11 @@ public class LangChain4jAdapter implements LlmAdapter {
     }
 
     private StreamingChatLanguageModel buildStreamingChatModel(LlmRequest request) {
+        String effectiveApiKey = (request.getApiKey() != null) ? request.getApiKey() : openaiApiKey;
+        String effectiveBaseUrl = (request.getBaseUrl() != null) ? request.getBaseUrl() : openaiBaseUrl;
         return OpenAiStreamingChatModel.builder()
-                .apiKey(openaiApiKey)
-                .baseUrl(openaiBaseUrl)
+                .apiKey(effectiveApiKey)
+                .baseUrl(effectiveBaseUrl)
                 .modelName(request.getModel() != null ? request.getModel() : "gpt-4")
                 .temperature(request.getTemperature())
                 .timeout(Duration.ofSeconds(request.getTimeoutSeconds()))

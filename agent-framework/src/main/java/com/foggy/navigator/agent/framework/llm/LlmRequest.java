@@ -17,6 +17,8 @@ import java.util.List;
 @AllArgsConstructor
 public class LlmRequest {
     private String model;
+    private String apiKey;
+    private String baseUrl;
     @Builder.Default
     private double temperature = 0.7;
     private String systemPrompt;

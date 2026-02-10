@@ -12,7 +12,7 @@ Foggy-Navigator/
 ├── navigator-spi/              # SPI 接口定义（CodingAgentFacade、ClaudeWorkerFacade）
 ├── agent-framework/            # Agent 核心框架（LLM调用、Skill解析、工具执行、会话路由）
 ├── user-auth-module/           # 用户认证（JWT）
-├── metadata-config-module/     # Skill 配置管理
+├── metadata-config-module/     # Skill 配置 + 平台配置管理（Git/LLM/AgentModel）
 ├── metadata-query-module/      # 元数据查询服务
 ├── session-module/             # 会话管理 + SSE 推送 + JpaAgentRegistry
 ├── tutor-agent/                # 导师 Agent（引导用户、分派任务）
@@ -31,31 +31,60 @@ packages/
 
 ## 项目启动
 
+### 启动脚本一览
+
+| 脚本 | 说明 | 端口 |
+|------|------|------|
+| `start-launcher.ps1` | 后端（编译+启动） | 8112 |
+| `start-launcher-mock.ps1` | 后端（Mock LLM 模式） | 8112 |
+| `stop-launcher.ps1` | 停止后端 | - |
+| `start-frontend.ps1` | 前端开发服务器 | 5174 |
+| `tools/claude-agent-worker/start.ps1` | Claude Worker | 3031 |
+| `tools/claude-agent-worker/stop.ps1` | 停止 Claude Worker | - |
+
 ### 后端启动
 
 ```powershell
-# 推荐：一键启动脚本
+# 推荐：一键启动脚本（仅停止 8112 端口进程，不影响其他 Java/Node 进程）
 powershell -ExecutionPolicy Bypass -File start-launcher.ps1
 
 # 手动启动
-mvn clean package -pl launcher -am -DskipTests
+mvn package -pl launcher -am -DskipTests
 java -jar launcher/target/launcher-1.0.0-SNAPSHOT.jar --spring.profiles.active=docker
+
+# 停止
+powershell -ExecutionPolicy Bypass -File stop-launcher.ps1
 ```
 
 后端端口：8112，健康检查：`curl http://localhost:8112/actuator/health`
 
 ### 前端启动
 
-```bash
+```powershell
+# 推荐：一键启动脚本
+powershell -ExecutionPolicy Bypass -File start-frontend.ps1
+
+# 手动启动
 cd packages/navigator-frontend
 pnpm install && pnpm dev
 ```
 
 前端端口：5174，登录账号：root / root123
 
+### 编译（不启动）
+
+```powershell
+# 后端编译
+mvn compile -pl launcher -am -DskipTests
+
+# 前端编译
+cd packages/navigator-frontend && pnpm exec vite build
+```
+
 ## 重要配置
 
 - **LLM 配置**：`launcher/src/main/resources/application-docker.yml`（已 gitignore）
+- **平台配置**：首次使用需在 `/#/setup` 配置 Git 提供者和 AI 模型
 - **日志文件**：`logs/backend.log`、`logs/backend-error.log`
 
 ## 开发规范

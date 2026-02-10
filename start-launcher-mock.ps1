@@ -28,22 +28,17 @@ try {
 
 Write-Host ""
 
-# Step 1: Kill old processes
-Write-Host "[1/5] Stopping old Java processes..." -ForegroundColor Yellow
-$javaProcesses = Get-Process java -ErrorAction SilentlyContinue
-if ($javaProcesses) {
-    $javaProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
-    Write-Host "  Stopped $($javaProcesses.Count) Java process(es)" -ForegroundColor Green
-    Start-Sleep -Seconds 3
-} else {
-    Write-Host "  No Java processes running" -ForegroundColor Gray
-}
-
+# Step 1: Stop existing service on port (only kill the specific process, not all Java)
+Write-Host "[1/5] Checking port $BACKEND_PORT..." -ForegroundColor Yellow
 $portConnection = Get-NetTCPConnection -LocalPort $BACKEND_PORT -State Listen -ErrorAction SilentlyContinue
 if ($portConnection) {
-    Write-Host "  Port $BACKEND_PORT is in use, stopping..." -ForegroundColor Yellow
-    Stop-Process -Id $portConnection.OwningProcess -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    $procId = $portConnection.OwningProcess | Select-Object -First 1
+    $process = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    Write-Host "  Port $BACKEND_PORT in use by $($process.ProcessName) (PID=$procId), stopping..." -ForegroundColor Yellow
+    Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+} else {
+    Write-Host "  Port $BACKEND_PORT is free" -ForegroundColor Gray
 }
 
 Write-Host ""
