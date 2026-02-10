@@ -7,9 +7,11 @@ import com.foggy.navigator.coding.agent.api.service.GitCredentialService;
 import com.foggy.navigator.coding.agent.api.service.MessageService;
 import com.foggy.navigator.coding.agent.git.GitProviderFactory;
 import com.foggy.navigator.coding.agent.git.GitProviderService;
+import com.foggy.navigator.common.dto.GitProviderConfigDTO;
 import com.foggy.navigator.spi.coding.CodingAgentFacade;
-import lombok.RequiredArgsConstructor;
+import com.foggy.navigator.spi.config.GitProviderManager;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -23,21 +25,45 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class CodingAgentFacadeImpl implements CodingAgentFacade {
 
     private final GitCredentialService gitCredentialService;
     private final GitProviderFactory gitProviderFactory;
     private final ConversationService conversationService;
     private final MessageService messageService;
+    @Nullable
+    private final GitProviderManager gitProviderManager;
+
+    public CodingAgentFacadeImpl(GitCredentialService gitCredentialService,
+                                  GitProviderFactory gitProviderFactory,
+                                  ConversationService conversationService,
+                                  MessageService messageService,
+                                  @Nullable GitProviderManager gitProviderManager) {
+        this.gitCredentialService = gitCredentialService;
+        this.gitProviderFactory = gitProviderFactory;
+        this.conversationService = conversationService;
+        this.messageService = messageService;
+        this.gitProviderManager = gitProviderManager;
+    }
 
     @Override
     public List<Map<String, Object>> listGitCredentials(String userId) {
         log.debug("SPI: listGitCredentials for userId={}", userId);
         List<GitCredentialResponse> credentials = gitCredentialService.listCredentials(userId);
-        return credentials.stream()
-                .map(this::credentialToMap)
-                .collect(Collectors.toList());
+        if (!credentials.isEmpty()) {
+            return credentials.stream()
+                    .map(this::credentialToMap)
+                    .collect(Collectors.toList());
+        }
+        // 回退到平台 Git 配置（Setup 向导中配置的）
+        if (gitProviderManager != null && gitProviderManager.hasAnyProvider(userId)) {
+            log.info("No local git credentials, falling back to platform git providers for userId={}", userId);
+            List<GitProviderConfigDTO> providers = gitProviderManager.listGitProviders(userId);
+            return providers.stream()
+                    .map(this::platformProviderToMap)
+                    .collect(Collectors.toList());
+        }
+        return List.of();
     }
 
     @Override
@@ -94,6 +120,16 @@ public class CodingAgentFacadeImpl implements CodingAgentFacade {
         log.debug("SPI: getConversationStatus for conversationId={}", conversationId);
         Conversation conversation = conversationService.getConversation(conversationId);
         return conversationToMap(conversation);
+    }
+
+    private Map<String, Object> platformProviderToMap(GitProviderConfigDTO dto) {
+        Map<String, Object> map = new HashMap<>();
+        map.put("id", "platform:" + dto.getId());
+        map.put("name", dto.getProviderType().name() + (dto.getUsername() != null ? " (" + dto.getUsername() + ")" : ""));
+        map.put("type", dto.getProviderType().name());
+        map.put("serverUrl", dto.getBaseUrl());
+        map.put("source", "platform");
+        return map;
     }
 
     private Map<String, Object> credentialToMap(GitCredentialResponse cred) {

@@ -48,7 +48,8 @@ class DefaultAgentInvokerTest {
         invoker = new DefaultAgentInvoker(
                 agentRegistry, sessionManager, llmAdapter,
                 eventPublisher, agentExecutor, skillManager, sessionRouter,
-                List.of() // builtInTools - empty for unit tests
+                List.of(), // builtInTools - empty for unit tests
+                null // llmModelManager - not needed for unit tests
         );
     }
 

@@ -8,15 +8,12 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.RegisterWorkerForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkerForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
+import com.foggy.navigator.common.security.CredentialEncryptor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.crypto.encrypt.Encryptors;
-import org.springframework.security.crypto.encrypt.TextEncryptor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import jakarta.annotation.PostConstruct;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -32,19 +29,7 @@ public class ClaudeWorkerService {
 
     private final ClaudeWorkerRepository workerRepository;
     private final ClaudeWorkerClientFactory clientFactory;
-
-    @Value("${navigator.security.credential-key:default-dev-key-change-in-prod}")
-    private String credentialKey;
-
-    @Value("${navigator.security.credential-salt:abcdef0123456789}")
-    private String credentialSalt;
-
-    private TextEncryptor textEncryptor;
-
-    @PostConstruct
-    void init() {
-        this.textEncryptor = Encryptors.text(credentialKey, credentialSalt);
-    }
+    private final CredentialEncryptor credentialEncryptor;
 
     /**
      * 注册 Worker
@@ -165,18 +150,11 @@ public class ClaudeWorkerService {
     }
 
     private String encrypt(String plaintext) {
-        if (plaintext == null || plaintext.isEmpty()) return plaintext;
-        return textEncryptor.encrypt(plaintext);
+        return credentialEncryptor.encrypt(plaintext);
     }
 
     private String decrypt(String ciphertext) {
-        if (ciphertext == null || ciphertext.isEmpty()) return ciphertext;
-        try {
-            return textEncryptor.decrypt(ciphertext);
-        } catch (Exception e) {
-            log.warn("Failed to decrypt worker auth token, returning original value");
-            return ciphertext;
-        }
+        return credentialEncryptor.decrypt(ciphertext);
     }
 
     private WorkerDTO toDTO(ClaudeWorkerEntity entity) {

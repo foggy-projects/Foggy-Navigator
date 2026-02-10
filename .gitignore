@@ -82,6 +82,13 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
 # Node.js (Frontend)
 node_modules/
 npm-debug.log*
