@@ -56,6 +56,7 @@ Agent (LLM) → save_memory BuiltInTool → UserMemoryManager.save()
 
 | 文件 | 说明 |
 |------|------|
+| `MemoryToolsTest.java` | SaveMemoryTool / DeleteMemoryTool / ListMemoryTool 单元测试（14 cases） |
 | `DefaultAgentInvokerTest.java` | 构造函数含 UserMemoryManager 参数（null） |
 | `DelegationChainTest.java` | 构造函数含 UserMemoryManager 参数（null） |
 
@@ -82,6 +83,11 @@ Agent (LLM) → save_memory BuiltInTool → UserMemoryManager.save()
 - name: `delete_memory`
 - parameters: `keyword`（必填，按内容关键词匹配删除）
 - 大小写不敏感匹配，可能删除多条
+
+### ListMemoryTool 设计
+- name: `list_memory`
+- 无参数，列出当前用户所有记忆
+- 返回按 category 标注的列表文本
 
 ### 记忆去重
 - `saveMemory()` 保存前检查用户已有记忆，`equalsIgnoreCase` + `trim()` 完全匹配时跳过

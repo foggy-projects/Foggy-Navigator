@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.foggy.navigator.agent.framework.core.AgentInfo;
 import com.foggy.navigator.agent.framework.core.AgentRegistry;
 import com.foggy.navigator.agent.framework.core.model.AgentConfig;
 import jakarta.annotation.PostConstruct;
@@ -54,7 +55,8 @@ public class TutorAgentRegistrar {
             AgentConfig config = yamlMapper.treeToValue(agentNode, AgentConfig.class);
 
             if (agentRegistry.exists(config.getId())) {
-                log.info("Agent already in registry (DB), skipping YAML seed: id={}", config.getId());
+                // Agent 已存在，同步 system prompt（YAML 为模板，允许覆盖更新）
+                syncSystemPrompt(config);
                 return;
             }
 
@@ -62,6 +64,29 @@ public class TutorAgentRegistrar {
             log.info("Seeded agent from YAML: id={}, name={}", config.getId(), config.getName());
         } catch (Exception e) {
             log.error("Failed to seed agent from {}", configPath, e);
+        }
+    }
+
+    /**
+     * 同步 system prompt：YAML 有变更时更新到 DB
+     */
+    private void syncSystemPrompt(AgentConfig yamlConfig) {
+        AgentInfo existing = agentRegistry.findById(yamlConfig.getId());
+        if (existing == null || existing.getConfig() == null) {
+            return;
+        }
+
+        String yamlPrompt = yamlConfig.getModel() != null ? yamlConfig.getModel().getSystemPrompt() : null;
+        String dbPrompt = existing.getConfig().getModel() != null
+                ? existing.getConfig().getModel().getSystemPrompt() : null;
+
+        if (yamlPrompt != null && !yamlPrompt.equals(dbPrompt)) {
+            // 用 YAML 版 system prompt 覆盖 DB 版，其余字段保持 DB 值
+            existing.getConfig().getModel().setSystemPrompt(yamlPrompt);
+            agentRegistry.register(existing.getConfig());
+            log.info("Synced system prompt from YAML: id={}", yamlConfig.getId());
+        } else {
+            log.info("Agent system prompt unchanged, skipping sync: id={}", yamlConfig.getId());
         }
     }
 }
