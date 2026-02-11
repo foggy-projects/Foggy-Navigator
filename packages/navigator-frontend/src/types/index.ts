@@ -160,3 +160,26 @@ export interface SetupStatus {
   llmConfigured: boolean
   setupComplete: boolean
 }
+
+// ===== 用户记忆类型 =====
+
+export type UserMemoryCategory = 'PREFERENCE' | 'FACT' | 'NOTE'
+
+export type UserMemorySource = 'AUTO' | 'MANUAL'
+
+/** 用户记忆 */
+export interface UserMemory {
+  id: string
+  userId: string
+  category: UserMemoryCategory
+  content: string
+  source: UserMemorySource
+  createdAt: string
+  updatedAt: string
+}
+
+/** 用户记忆表单 */
+export interface UserMemoryForm {
+  category?: UserMemoryCategory
+  content: string
+}

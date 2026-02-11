@@ -63,7 +63,7 @@ class DelegationChainTest {
         invoker = new DefaultAgentInvoker(
                 agentRegistry, sessionManager, llmAdapter,
                 eventPublisher, agentExecutor, skillManager, sessionRouter,
-                List.of(delegateTool), null
+                List.of(delegateTool), null, null
         );
     }
 
@@ -262,7 +262,7 @@ class DelegationChainTest {
             invoker = new DefaultAgentInvoker(
                     agentRegistry, sessionManager, llmAdapter,
                     eventPublisher, agentExecutor, skillManager, sessionRouter,
-                    List.of(delegateTool, listTool), null
+                    List.of(delegateTool, listTool), null, null
             );
 
             AgentInfo agent = AgentInfo.builder()
@@ -341,7 +341,7 @@ class DelegationChainTest {
             invoker = new DefaultAgentInvoker(
                     agentRegistry, sessionManager, llmAdapter,
                     eventPublisher, agentExecutor, skillManager, sessionRouter,
-                    List.of(delegateTool, failingTool), null
+                    List.of(delegateTool, failingTool), null, null
             );
 
             AgentInfo agent = AgentInfo.builder()
@@ -413,7 +413,7 @@ class DelegationChainTest {
             invoker = new DefaultAgentInvoker(
                     agentRegistry, sessionManager, llmAdapter,
                     eventPublisher, agentExecutor, skillManager, sessionRouter,
-                    List.of(delegateTool, tool), null
+                    List.of(delegateTool, tool), null, null
             );
 
             AgentInfo agent = AgentInfo.builder()

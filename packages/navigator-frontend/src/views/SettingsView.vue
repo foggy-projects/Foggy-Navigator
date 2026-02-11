@@ -118,6 +118,40 @@
         </el-table>
       </el-tab-pane>
 
+      <!-- Tab 5: User Memories -->
+      <el-tab-pane label="记忆管理" name="memories">
+        <div class="tab-toolbar">
+          <el-button type="primary" size="small" @click="showMemoryDialog('add')">+ 添加记忆</el-button>
+        </div>
+
+        <el-table :data="memories" v-loading="loadingMemories" stripe>
+          <el-table-column prop="category" label="类别" width="100">
+            <template #default="{ row }">
+              <el-tag :type="memoryCategoryTag(row.category)" size="small">
+                {{ memoryCategoryLabel(row.category) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="content" label="内容" min-width="300" show-overflow-tooltip />
+          <el-table-column prop="source" label="来源" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.source === 'AUTO' ? 'warning' : ''" size="small">
+                {{ row.source === 'AUTO' ? '自动' : '手动' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="更新时间" width="170">
+            <template #default="{ row }">{{ formatTime(row.updatedAt) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="140" align="center">
+            <template #default="{ row }">
+              <el-button text size="small" @click="editMemory(row)">编辑</el-button>
+              <el-button text type="danger" size="small" @click="deleteMemoryById(row.id)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
       <!-- Tab 4: Claude Workers -->
       <el-tab-pane label="Claude Workers" name="workers">
         <div class="tab-toolbar">
@@ -264,6 +298,25 @@
         <el-button type="primary" :loading="saving" @click="saveWorkerForm">保存</el-button>
       </template>
     </el-dialog>
+    <!-- Memory Add/Edit Dialog -->
+    <el-dialog v-model="showMemoryDialog_" :title="memoryDialogMode === 'add' ? '添加记忆' : '编辑记忆'" width="480px">
+      <el-form :model="memoryForm" label-position="top">
+        <el-form-item label="类别">
+          <el-select v-model="memoryForm.category" style="width: 100%">
+            <el-option label="偏好" value="PREFERENCE" />
+            <el-option label="事实" value="FACT" />
+            <el-option label="备注" value="NOTE" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="内容" required>
+          <el-input v-model="memoryForm.content" type="textarea" :rows="3" placeholder="如：我偏好使用 Python 编程" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showMemoryDialog_ = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="saveMemoryForm">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -287,6 +340,10 @@ import {
   removeAgentModelOverride as apiRemoveOverride,
   testLlmConnection as apiTestLlm,
   testSavedLlmConnection as apiTestSavedLlm,
+  listMemories as apiListMemories,
+  saveMemory as apiSaveMemory,
+  updateMemory as apiUpdateMemory,
+  deleteMemory as apiDeleteMemory,
 } from '@/api/platform'
 import {
   listWorkers as apiListWorkers,
@@ -295,7 +352,7 @@ import {
   deleteWorker as apiDeleteWorker,
   triggerHealthCheck as apiHealthCheck,
 } from '@/api/claudeWorker'
-import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory } from '@/types'
+import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, UserMemory, UserMemoryCategory } from '@/types'
 
 const router = useRouter()
 const activeTab = ref('git')
@@ -306,12 +363,14 @@ const loadingGit = ref(false)
 const loadingLlm = ref(false)
 const loadingOverrides = ref(false)
 const loadingWorkers = ref(false)
+const loadingMemories = ref(false)
 
 // ===== Data =====
 const gitProviders = ref<GitProviderConfig[]>([])
 const llmModels = ref<LlmModelConfig[]>([])
 const agentOverrides = ref<AgentModelOverride[]>([])
 const workers = ref<ClaudeWorker[]>([])
+const memories = ref<UserMemory[]>([])
 
 // ===== Git Dialog =====
 const showGitDialog = ref(false)
@@ -635,6 +694,74 @@ async function handleWorkerHealthCheck(workerId: string) {
   }
 }
 
+// ===== Memories =====
+const showMemoryDialog_ = ref(false)
+const memoryDialogMode = ref<'add' | 'edit'>('add')
+const editingMemoryId = ref('')
+const memoryForm = ref({ category: 'FACT' as UserMemoryCategory, content: '' })
+
+function showMemoryDialog(mode: 'add' | 'edit') {
+  memoryDialogMode.value = mode
+  if (mode === 'add') {
+    editingMemoryId.value = ''
+    memoryForm.value = { category: 'FACT', content: '' }
+  }
+  showMemoryDialog_.value = true
+}
+
+function editMemory(row: UserMemory) {
+  memoryDialogMode.value = 'edit'
+  editingMemoryId.value = row.id
+  memoryForm.value = { category: row.category, content: row.content }
+  showMemoryDialog_.value = true
+}
+
+async function saveMemoryForm() {
+  if (!memoryForm.value.content) {
+    ElMessage.warning('请填写记忆内容')
+    return
+  }
+  saving.value = true
+  try {
+    if (memoryDialogMode.value === 'add') {
+      await apiSaveMemory(memoryForm.value)
+    } else {
+      await apiUpdateMemory(editingMemoryId.value, memoryForm.value)
+    }
+    showMemoryDialog_.value = false
+    ElMessage.success('保存成功')
+    await loadMemories()
+  } catch {
+    ElMessage.error('保存失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function deleteMemoryById(id: string) {
+  try {
+    await ElMessageBox.confirm('确认删除该记忆？', '提示', { type: 'warning' })
+    await apiDeleteMemory(id)
+    ElMessage.success('已删除')
+    await loadMemories()
+  } catch { /* cancelled */ }
+}
+
+function memoryCategoryLabel(c: string): string {
+  const map: Record<string, string> = { PREFERENCE: '偏好', FACT: '事实', NOTE: '备注' }
+  return map[c] || c
+}
+
+function memoryCategoryTag(c: string): '' | 'success' | 'warning' {
+  const map: Record<string, '' | 'success' | 'warning'> = { PREFERENCE: 'success', FACT: '', NOTE: 'warning' }
+  return map[c] || ''
+}
+
+function formatTime(t: string): string {
+  if (!t) return '-'
+  return t.replace('T', ' ').substring(0, 19)
+}
+
 // ===== Data Loading =====
 async function loadGitProviders() {
   loadingGit.value = true
@@ -660,11 +787,18 @@ async function loadWorkers() {
   finally { loadingWorkers.value = false }
 }
 
+async function loadMemories() {
+  loadingMemories.value = true
+  try { memories.value = await apiListMemories() } catch { /* handled by interceptor */ }
+  finally { loadingMemories.value = false }
+}
+
 onMounted(() => {
   loadGitProviders()
   loadLlmModels()
   loadOverrides()
   loadWorkers()
+  loadMemories()
 })
 </script>
 

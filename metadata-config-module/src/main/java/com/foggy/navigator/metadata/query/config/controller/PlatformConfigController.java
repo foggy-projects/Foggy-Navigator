@@ -3,11 +3,14 @@ package com.foggy.navigator.metadata.query.config.controller;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.*;
+import com.foggy.navigator.common.enums.UserMemorySource;
 import com.foggy.navigator.common.form.AgentModelOverrideForm;
 import com.foggy.navigator.common.form.GitProviderConfigForm;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
+import com.foggy.navigator.common.form.UserMemoryForm;
 import com.foggy.navigator.spi.config.GitProviderManager;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.memory.UserMemoryManager;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +31,7 @@ public class PlatformConfigController {
 
     private final GitProviderManager gitProviderManager;
     private final LlmModelManager llmModelManager;
+    private final UserMemoryManager userMemoryManager;
 
     /**
      * 获取当前用户的 tenantId，SUPER_ADMIN 无 tenantId 时用 userId 兜底
@@ -173,5 +177,37 @@ public class PlatformConfigController {
         log.info("List agent model overrides: tenantId={}", tenantId);
         List<AgentModelOverrideForm> list = llmModelManager.listAgentModelOverrides(tenantId);
         return RX.ok(list);
+    }
+
+    // ========== 用户记忆 ==========
+
+    @GetMapping("/memories")
+    public RX<List<UserMemoryDTO>> listMemories() {
+        CurrentUser user = UserContext.getCurrentUser();
+        log.info("List user memories: userId={}", user.getUserId());
+        List<UserMemoryDTO> list = userMemoryManager.listMemories(user.getUserId());
+        return RX.ok(list);
+    }
+
+    @PostMapping("/memories")
+    public RX<String> saveMemory(@RequestBody UserMemoryForm form) {
+        CurrentUser user = UserContext.getCurrentUser();
+        log.info("Save user memory: userId={}, category={}", user.getUserId(), form.getCategory());
+        String id = userMemoryManager.saveMemory(user.getUserId(), resolveTenantId(), form, UserMemorySource.MANUAL);
+        return RX.ok(id);
+    }
+
+    @PutMapping("/memories/{id}")
+    public RX<Void> updateMemory(@PathVariable String id, @RequestBody UserMemoryForm form) {
+        log.info("Update user memory: id={}", id);
+        userMemoryManager.updateMemory(id, form);
+        return RX.ok();
+    }
+
+    @DeleteMapping("/memories/{id}")
+    public RX<Void> deleteMemory(@PathVariable String id) {
+        log.info("Delete user memory: id={}", id);
+        userMemoryManager.deleteMemory(id);
+        return RX.ok();
     }
 }

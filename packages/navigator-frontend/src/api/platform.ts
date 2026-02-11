@@ -7,6 +7,8 @@ import type {
   LlmModelConfig,
   LlmModelConfigForm,
   AgentModelOverride,
+  UserMemory,
+  UserMemoryForm,
 } from '@/types'
 
 const BASE = '/config/platform'
@@ -91,4 +93,24 @@ export async function setAgentModelOverride(form: AgentModelOverride): Promise<v
 
 export async function removeAgentModelOverride(agentId: string): Promise<void> {
   await client.delete(`${BASE}/agent-model/${agentId}`)
+}
+
+// ===== 用户记忆 =====
+
+export async function listMemories(): Promise<UserMemory[]> {
+  const rx = (await client.get(`${BASE}/memories`)) as unknown as RX<UserMemory[]>
+  return rx.data
+}
+
+export async function saveMemory(form: UserMemoryForm): Promise<string> {
+  const rx = (await client.post(`${BASE}/memories`, form)) as unknown as RX<string>
+  return rx.data
+}
+
+export async function updateMemory(id: string, form: Partial<UserMemoryForm>): Promise<void> {
+  await client.put(`${BASE}/memories/${id}`, form)
+}
+
+export async function deleteMemory(id: string): Promise<void> {
+  await client.delete(`${BASE}/memories/${id}`)
 }

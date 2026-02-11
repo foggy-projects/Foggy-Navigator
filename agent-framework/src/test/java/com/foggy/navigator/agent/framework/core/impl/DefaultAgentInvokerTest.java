@@ -49,7 +49,8 @@ class DefaultAgentInvokerTest {
                 agentRegistry, sessionManager, llmAdapter,
                 eventPublisher, agentExecutor, skillManager, sessionRouter,
                 List.of(), // builtInTools - empty for unit tests
-                null // llmModelManager - not needed for unit tests
+                null, // llmModelManager - not needed for unit tests
+                null // userMemoryManager - not needed for unit tests
         );
     }
 

@@ -25,6 +25,7 @@ import com.foggy.navigator.agent.framework.tool.builtin.DelegateTool;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.memory.UserMemoryManager;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
@@ -60,6 +61,8 @@ public class DefaultAgentInvoker implements AgentInvoker {
     private final List<BuiltInTool> builtInTools;
     @Nullable
     private final LlmModelManager llmModelManager;
+    @Nullable
+    private final UserMemoryManager userMemoryManager;
 
     public DefaultAgentInvoker(AgentRegistry agentRegistry,
                                SessionManager sessionManager,
@@ -69,7 +72,8 @@ public class DefaultAgentInvoker implements AgentInvoker {
                                SkillManager skillManager,
                                SessionRouter sessionRouter,
                                List<BuiltInTool> builtInTools,
-                               @Nullable LlmModelManager llmModelManager) {
+                               @Nullable LlmModelManager llmModelManager,
+                               @Nullable UserMemoryManager userMemoryManager) {
         this.agentRegistry = agentRegistry;
         this.sessionManager = sessionManager;
         this.llmAdapter = llmAdapter;
@@ -79,6 +83,7 @@ public class DefaultAgentInvoker implements AgentInvoker {
         this.sessionRouter = sessionRouter;
         this.builtInTools = builtInTools;
         this.llmModelManager = llmModelManager;
+        this.userMemoryManager = userMemoryManager;
     }
 
     @Override
@@ -112,7 +117,19 @@ public class DefaultAgentInvoker implements AgentInvoker {
             throw new IllegalArgumentException("Agent not found: " + agentId);
         }
 
-        // 2. 获取历史消息和配置（token-aware 上下文窗口）
+        // 2. 获取 userId 和 tenantId（用于记忆注入和工具执行上下文）
+        String userId = null;
+        String tenantId = null;
+        Session currentSession = sessionManager.getSession(sessionId);
+        if (currentSession != null) {
+            userId = currentSession.getUserId();
+            tenantId = currentSession.getTenantId();
+            if (tenantId == null || tenantId.isEmpty()) {
+                tenantId = userId;
+            }
+        }
+
+        // 2.5 获取历史消息和配置（token-aware 上下文窗口）
         AgentConfig config = agent.getConfig();
         ModelConfig modelConfig = config.getModel();
         int maxContextTokens = modelConfig != null ? modelConfig.getMaxContextTokens() : 8000;
@@ -123,6 +140,14 @@ public class DefaultAgentInvoker implements AgentInvoker {
         List<Skill> skills = skillManager.getSkillsByAgent(agentId);
         String baseSystemPrompt = modelConfig != null ? modelConfig.getSystemPrompt() : "";
         String enhancedSystemPrompt = buildEnhancedSystemPrompt(baseSystemPrompt, skills);
+
+        // 3.5 注入用户长期记忆
+        if (userMemoryManager != null && userId != null) {
+            String memoryContext = userMemoryManager.buildMemoryContext(userId);
+            if (memoryContext != null && !memoryContext.isBlank()) {
+                enhancedSystemPrompt = enhancedSystemPrompt + "\n\n" + memoryContext;
+            }
+        }
 
         // 4. 匹配 Skill（基于用户最新消息）
         String userContent = userMessage != null ? userMessage.getContent() : "";
@@ -139,20 +164,7 @@ public class DefaultAgentInvoker implements AgentInvoker {
                     sessionId, matchedSkill.getName(), matchedSkill.getPath());
         }
 
-        // 7. 获取 userId 和 tenantId（用于工具执行上下文）
-        String userId = null;
-        String tenantId = null;
-        Session currentSession = sessionManager.getSession(sessionId);
-        if (currentSession != null) {
-            userId = currentSession.getUserId();
-            tenantId = currentSession.getTenantId();
-            // SUPER_ADMIN 无 tenantId 时，用 userId 兜底（与 PlatformConfigController 一致）
-            if (tenantId == null || tenantId.isEmpty()) {
-                tenantId = userId;
-            }
-        }
-
-        // 7.5 从 DB 解析模型配置（覆盖 YAML 默认值）
+        // 7. 从 DB 解析模型配置（覆盖 YAML 默认值）
         String effectiveModel = modelConfig != null ? modelConfig.getModel() : null;
         String effectiveApiKey = null;
         String effectiveBaseUrl = null;

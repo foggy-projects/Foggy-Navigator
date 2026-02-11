@@ -13,6 +13,7 @@ import com.foggy.navigator.agent.framework.skill.impl.KeywordSkillMatcher;
 import com.foggy.navigator.agent.framework.skill.impl.LlmSkillMatcher;
 import com.foggy.navigator.agent.framework.tool.BuiltInTool;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.spi.memory.UserMemoryManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -60,9 +61,10 @@ public class AgentFrameworkAutoConfiguration {
                                             SkillManager skillManager,
                                             SessionRouter sessionRouter,
                                             List<BuiltInTool> builtInTools,
-                                            @Autowired(required = false) LlmModelManager llmModelManager) {
+                                            @Autowired(required = false) LlmModelManager llmModelManager,
+                                            @Autowired(required = false) UserMemoryManager userMemoryManager) {
         return new DefaultAgentInvoker(registry, sessionManager, llmAdapter, publisher,
-                agentExecutor, skillManager, sessionRouter, builtInTools, llmModelManager);
+                agentExecutor, skillManager, sessionRouter, builtInTools, llmModelManager, userMemoryManager);
     }
 
     @Bean("agentExecutor")
