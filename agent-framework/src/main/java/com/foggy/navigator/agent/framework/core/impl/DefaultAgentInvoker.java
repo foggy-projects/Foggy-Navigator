@@ -274,8 +274,12 @@ public class DefaultAgentInvoker implements AgentInvoker {
             }
 
             // 将本轮 assistant+toolCalls 和 tool results 追加到 messages
-            messages.add(LlmMessage.assistantWithToolCalls(
-                    response.getContent(), toolCalls));
+            // 注意：LangChain4j 要求带 tool calls 的 assistant 消息必须有非空 content
+            String assistantContent = response.getContent();
+            if (assistantContent == null || assistantContent.isBlank()) {
+                assistantContent = "<tool_calls>";
+            }
+            messages.add(LlmMessage.assistantWithToolCalls(assistantContent, toolCalls));
 
             for (int j = 0; j < toolCalls.size(); j++) {
                 ToolCall toolCall = toolCalls.get(j);
