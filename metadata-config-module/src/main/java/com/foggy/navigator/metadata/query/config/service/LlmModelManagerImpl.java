@@ -249,7 +249,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
             throw RX.throwB("Unexpected response: " + response.getStatusCode());
         } catch (Exception e) {
             log.error("LLM connection test failed: baseUrl={}, model={}, error={}", baseUrl, modelName, e.getMessage());
-            throw RX.throwB("连接测试失败: " + e.getMessage());
+            throw RX.throwB(toFriendlyTestError(e));
         }
     }
 
@@ -264,6 +264,37 @@ public class LlmModelManagerImpl implements LlmModelManager {
                 llmModelRepo.save(e);
             }
         }
+    }
+
+    private String toFriendlyTestError(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null) return "连接测试失败，请检查配置后重试";
+        String lower = msg.toLowerCase();
+        if (lower.contains("401") || lower.contains("unauthorized") || lower.contains("invalid api key") || lower.contains("invalid_api_key")) {
+            return "API Key 无效，请检查后重试";
+        }
+        if (lower.contains("403") || lower.contains("forbidden")) {
+            return "访问被拒绝，请检查 API Key 权限或账户余额";
+        }
+        if (lower.contains("404") || lower.contains("not found") || lower.contains("model_not_found")) {
+            return "模型不存在，请检查模型名称是否正确";
+        }
+        if (lower.contains("429") || lower.contains("rate limit")) {
+            return "请求过于频繁，请稍后重试";
+        }
+        if (lower.contains("timeout") || lower.contains("timed out")) {
+            return "连接超时，请检查 API 地址是否可达";
+        }
+        if (lower.contains("connection refused") || lower.contains("connection reset")) {
+            return "无法连接服务，请检查 API 地址是否正确";
+        }
+        if (lower.contains("unknown host") || lower.contains("unknownhost")) {
+            return "域名解析失败，请检查 API 地址是否正确";
+        }
+        if (lower.contains("ssl") || lower.contains("certificate")) {
+            return "SSL 证书错误，请检查 API 地址或网络环境";
+        }
+        return "连接测试失败: " + msg;
     }
 
     private LlmModelConfigDTO toDTO(LlmModelConfigEntity entity) {

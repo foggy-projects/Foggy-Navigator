@@ -146,6 +146,10 @@ public class DefaultAgentInvoker implements AgentInvoker {
         if (currentSession != null) {
             userId = currentSession.getUserId();
             tenantId = currentSession.getTenantId();
+            // SUPER_ADMIN 无 tenantId 时，用 userId 兜底（与 PlatformConfigController 一致）
+            if (tenantId == null || tenantId.isEmpty()) {
+                tenantId = userId;
+            }
         }
 
         // 7.5 从 DB 解析模型配置（覆盖 YAML 默认值）
