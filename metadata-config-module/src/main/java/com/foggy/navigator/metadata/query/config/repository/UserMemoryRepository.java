@@ -13,4 +13,8 @@ import java.util.List;
 public interface UserMemoryRepository extends JpaRepository<UserMemoryEntity, String> {
 
     List<UserMemoryEntity> findByUserIdOrderByUpdatedAtDesc(String userId);
+
+    long countByUserId(String userId);
+
+    List<UserMemoryEntity> findByUserIdOrderByUpdatedAtAsc(String userId);
 }

@@ -13,6 +13,7 @@ import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -46,7 +47,7 @@ public class SaveMemoryTool implements BuiltInTool {
         Map<String, Object> category = new LinkedHashMap<>();
         category.put("type", "string");
         category.put("description", "记忆类别：PREFERENCE（偏好）、FACT（事实）、NOTE（备注）");
-        category.put("enum", new String[]{"PREFERENCE", "FACT", "NOTE"});
+        category.put("enum", List.of("PREFERENCE", "FACT", "NOTE"));
         properties.put("category", category);
 
         Map<String, Object> content = new LinkedHashMap<>();

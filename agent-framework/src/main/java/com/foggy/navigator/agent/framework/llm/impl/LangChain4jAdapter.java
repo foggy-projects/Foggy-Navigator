@@ -480,7 +480,12 @@ public class LangChain4jAdapter implements LlmAdapter {
                 if (valueObj instanceof Map<?, ?>) {
                     Map<String, Object> value = new HashMap<>();
                     for (Map.Entry<?, ?> e : ((Map<?, ?>) valueObj).entrySet()) {
-                        value.put((String) e.getKey(), e.getValue());
+                        Object v = e.getValue();
+                        // String[] → List<String> 转换，避免 LangChain4j 序列化 ClassCastException
+                        if (v instanceof String[] arr) {
+                            v = List.of(arr);
+                        }
+                        value.put((String) e.getKey(), v);
                     }
                     properties.put(key, value);
                 }

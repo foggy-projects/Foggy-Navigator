@@ -27,6 +27,7 @@ import java.util.stream.Collectors;
 public class UserMemoryManagerImpl implements UserMemoryManager {
 
     private static final int MAX_MEMORIES_IN_CONTEXT = 50;
+    private static final int MAX_MEMORIES_PER_USER = 200;
 
     private final UserMemoryRepository userMemoryRepo;
 
@@ -36,17 +37,42 @@ public class UserMemoryManagerImpl implements UserMemoryManager {
         log.info("Saving user memory: userId={}, category={}, source={}", userId,
                 form.getCategory(), source);
 
+        // 去重：检查是否已有完全相同内容的记忆
+        String normalizedContent = form.getContent().trim();
+        List<UserMemoryEntity> existing = userMemoryRepo.findByUserIdOrderByUpdatedAtDesc(userId);
+        for (UserMemoryEntity e : existing) {
+            if (e.getContent().trim().equalsIgnoreCase(normalizedContent)) {
+                log.info("Duplicate memory detected, skipping save: userId={}, content={}", userId, normalizedContent);
+                return e.getId();
+            }
+        }
+
         UserMemoryEntity entity = new UserMemoryEntity();
         entity.setId(UUID.randomUUID().toString());
         entity.setUserId(userId);
         entity.setTenantId(tenantId);
         entity.setCategory(form.getCategory() != null ? form.getCategory() : UserMemoryCategory.FACT);
-        entity.setContent(form.getContent());
+        entity.setContent(normalizedContent);
         entity.setSource(source);
 
         userMemoryRepo.save(entity);
         log.info("User memory saved: id={}", entity.getId());
+
+        // 淘汰超出上限的最旧记忆
+        evictOldestIfOverLimit(userId);
+
         return entity.getId();
+    }
+
+    private void evictOldestIfOverLimit(String userId) {
+        long count = userMemoryRepo.countByUserId(userId);
+        if (count > MAX_MEMORIES_PER_USER) {
+            int toDelete = (int) (count - MAX_MEMORIES_PER_USER);
+            List<UserMemoryEntity> oldest = userMemoryRepo.findByUserIdOrderByUpdatedAtAsc(userId);
+            List<UserMemoryEntity> toRemove = oldest.subList(0, Math.min(toDelete, oldest.size()));
+            userMemoryRepo.deleteAll(toRemove);
+            log.info("Evicted {} oldest memories for userId={}, remaining={}", toRemove.size(), userId, MAX_MEMORIES_PER_USER);
+        }
     }
 
     @Override

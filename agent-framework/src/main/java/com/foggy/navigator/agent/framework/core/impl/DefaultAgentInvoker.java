@@ -146,6 +146,9 @@ public class DefaultAgentInvoker implements AgentInvoker {
             String memoryContext = userMemoryManager.buildMemoryContext(userId);
             if (memoryContext != null && !memoryContext.isBlank()) {
                 enhancedSystemPrompt = enhancedSystemPrompt + "\n\n" + memoryContext;
+                log.debug("Injected user memory context: userId={}, length={}", userId, memoryContext.length());
+            } else {
+                log.debug("No user memory to inject: userId={}", userId);
             }
         }
 
