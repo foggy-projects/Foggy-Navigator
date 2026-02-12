@@ -4,8 +4,8 @@ import com.foggy.navigator.agent.framework.tool.BuiltInTool;
 import com.foggy.navigator.agent.framework.tool.ToolExecutionRequest;
 import com.foggy.navigator.agent.framework.tool.ToolExecutionResult;
 import com.foggy.navigator.spi.coding.CodingAgentFacade;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
@@ -16,10 +16,13 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class CreateCodingConversationTool implements BuiltInTool {
 
     private final CodingAgentFacade codingAgentFacade;
+
+    public CreateCodingConversationTool(@Nullable CodingAgentFacade codingAgentFacade) {
+        this.codingAgentFacade = codingAgentFacade;
+    }
 
     @Override
     public String getName() {
@@ -64,6 +67,10 @@ public class CreateCodingConversationTool implements BuiltInTool {
 
     @Override
     public ToolExecutionResult execute(ToolExecutionRequest request) {
+        if (codingAgentFacade == null) {
+            log.warn("CodingAgentFacade not available, tool disabled");
+            return ToolExecutionResult.error("编程 Agent 模块未启用");
+        }
         Map<String, Object> params = request.getParameters();
         log.info("Executing create_coding_conversation for userId={}, title={}",
                 request.getUserId(), params.get("title"));

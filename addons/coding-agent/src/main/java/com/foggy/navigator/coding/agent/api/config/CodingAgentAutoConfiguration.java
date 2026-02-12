@@ -14,7 +14,9 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  */
 @AutoConfiguration
 @ComponentScan(basePackages = {
-        "com.foggy.navigator.coding.agent.api.*"
+        "com.foggy.navigator.coding.agent.api",
+        "com.foggy.navigator.coding.agent.spi",
+        "com.foggy.navigator.coding.agent.git"
 })
 @EntityScan(basePackages = {
         "com.foggy.navigator.coding.agent.api.model.entity"
