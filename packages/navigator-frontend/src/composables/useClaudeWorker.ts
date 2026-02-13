@@ -61,6 +61,17 @@ export function useClaudeWorker() {
     return task
   }
 
+  async function resumeTask(form: {
+    workerId: string
+    claudeSessionId: string
+    prompt: string
+    cwd?: string
+  }) {
+    const task = await api.resumeTask(form)
+    tasks.value.unshift(task)
+    return task
+  }
+
   async function abortTask(taskId: string) {
     const result = await api.abortTask(taskId)
     const idx = tasks.value.findIndex((t) => t.taskId === taskId)
@@ -80,6 +91,7 @@ export function useClaudeWorker() {
     deleteWorker,
     refreshWorkerStatus,
     createTask,
+    resumeTask,
     abortTask,
   }
 }

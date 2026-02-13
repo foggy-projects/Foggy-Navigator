@@ -33,7 +33,7 @@
     </aside>
 
     <!-- Right Panel -->
-    <main class="worker-main">
+    <main :class="['worker-main', { 'has-panes': panes.length > 0 }]">
       <template v-if="selectedWorker">
         <!-- Worker Detail Header -->
         <div class="worker-header">
@@ -77,47 +77,21 @@
               >
                 运行任务
               </el-button>
+              <span v-if="panes.length >= MAX_PANES" class="pane-limit-hint">
+                已达最大面板数 ({{ MAX_PANES }})，请关闭一个面板后再创建
+              </span>
             </el-form-item>
           </el-form>
         </div>
 
-        <!-- Active Task / Chat Panel -->
-        <div v-if="activeTask" class="task-panel">
-          <div class="task-header">
-            <span class="task-label">
-              任务: {{ activeTask.taskId }}
-              <el-tag :type="taskStatusType(activeTask.status)" size="small">
-                {{ activeTask.status }}
-              </el-tag>
-            </span>
-            <div class="task-actions">
-              <span v-if="activeTask.costUsd" class="cost-label">
-                ${{ activeTask.costUsd?.toFixed(4) }}
-              </span>
-              <el-button
-                v-if="activeTask.status === 'RUNNING'"
-                size="small"
-                type="danger"
-                @click="handleAbort"
-              >
-                中止
-              </el-button>
-            </div>
-          </div>
-          <div class="chat-container">
-            <ChatPanel
-              :messages="chatStore.sortedMessages"
-              :is-thinking="chatStore.isThinking"
-              :connection-status="chatStore.connectionStatus"
-              :conversation-status="chatStore.conversationStatus"
-              :show-input="false"
-            >
-              <template #empty>
-                <div class="waiting-hint">等待 Worker 响应...</div>
-              </template>
-            </ChatPanel>
-          </div>
-        </div>
+        <!-- Multi-Pane Grid -->
+        <TaskPaneGrid
+          v-if="panes.length > 0"
+          :panes="panes"
+          @close="closePane"
+          @abort="abortPane"
+          @resume="resumePane"
+        />
 
         <!-- Task History -->
         <div v-if="workerTasks.length > 0" class="task-history">
@@ -216,25 +190,28 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
-import { ChatPanel, useChatStore } from '@foggy/chat'
 import { useClaudeWorker } from '@/composables/useClaudeWorker'
-import { useSession } from '@/composables/useSession'
-import type { ClaudeWorker, ClaudeTask } from '@/types'
+import { useTaskPane } from '@/composables/useTaskPane'
+import type { TaskPaneState } from '@/composables/useTaskPane'
+import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
+import type { ClaudeTask } from '@/types'
+
+const MAX_PANES = 4
 
 const router = useRouter()
-const chatStore = useChatStore()
 const workerState = useClaudeWorker()
-const { connectToSession, disconnectSession } = useSession()
 
 const selectedWorkerId = ref<string | null>(null)
-const activeTask = ref<ClaudeTask | null>(null)
+const panes = ref<TaskPaneState[]>([])
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
 const saving = ref(false)
+
+let paneCounter = 0
 
 const addForm = ref({
   name: '',
@@ -267,11 +244,26 @@ onMounted(async () => {
   await Promise.all([workerState.loadWorkers(), workerState.loadTasks()])
 })
 
+onUnmounted(() => {
+  disposeAllPanes()
+})
+
+/** Called when any pane's task reaches a terminal state */
+function handleTaskFinished(_paneId: string) {
+  // Refresh task list so history shows updated status / cost / duration
+  workerState.loadTasks()
+}
+
+function disposeAllPanes() {
+  for (const pane of panes.value) {
+    pane.dispose()
+  }
+  panes.value = []
+}
+
 function selectWorker(workerId: string) {
   selectedWorkerId.value = workerId
-  activeTask.value = null
-  disconnectSession()
-  chatStore.clearMessages()
+  disposeAllPanes()
 }
 
 async function handleAdd() {
@@ -314,6 +306,7 @@ async function handleDelete() {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
+    disposeAllPanes()
     await workerState.deleteWorker(selectedWorkerId.value)
     selectedWorkerId.value = null
     ElMessage.success('已删除')
@@ -334,36 +327,98 @@ async function handleRefreshStatus() {
 
 async function handleCreateTask() {
   if (!selectedWorkerId.value || !taskForm.value.prompt) return
+  if (panes.value.length >= MAX_PANES) {
+    ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
+    return
+  }
   try {
     const task = await workerState.createTask({
       workerId: selectedWorkerId.value,
       prompt: taskForm.value.prompt,
       cwd: taskForm.value.cwd || undefined,
     })
-    activeTask.value = task
     taskForm.value.prompt = ''
 
-    // Connect to the session for live streaming
-    await connectToSession(task.sessionId)
+    const pane = createPane(task)
+    await pane.connect(task.sessionId)
   } catch (e: unknown) {
     ElMessage.error('创建任务失败: ' + ((e as Error).message || '未知错误'))
   }
 }
 
-async function handleAbort() {
-  if (!activeTask.value) return
+function createPane(task: ClaudeTask): TaskPaneState {
+  const paneId = `pane-${++paneCounter}`
+  const pane = useTaskPane(paneId, { onTaskFinished: handleTaskFinished })
+  pane.task.value = task
+  panes.value.push(pane)
+  return pane
+}
+
+function closePane(paneId: string) {
+  const idx = panes.value.findIndex((p) => p.paneId === paneId)
+  if (idx >= 0) {
+    panes.value[idx].dispose()
+    panes.value.splice(idx, 1)
+  }
+}
+
+async function abortPane(paneId: string) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  if (!pane?.task.value) return
   try {
-    await workerState.abortTask(activeTask.value.taskId)
-    activeTask.value.status = 'ABORTED'
+    await workerState.abortTask(pane.task.value.taskId)
+    pane.task.value.status = 'ABORTED'
     ElMessage.info('任务已中止')
   } catch {
     ElMessage.error('中止失败')
   }
 }
 
+async function resumePane(paneId: string) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  const oldTask = pane?.task.value
+  if (!oldTask?.claudeSessionId || !selectedWorkerId.value) return
+
+  try {
+    const { value: prompt } = await ElMessageBox.prompt('输入后续指令', '继续对话', {
+      confirmButtonText: '发送',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputPlaceholder: '请输入后续任务描述...',
+    })
+    if (!prompt) return
+
+    if (panes.value.length >= MAX_PANES) {
+      // Close the old pane to make room
+      closePane(paneId)
+    }
+
+    const newTask = await workerState.resumeTask({
+      workerId: selectedWorkerId.value,
+      claudeSessionId: oldTask.claudeSessionId,
+      prompt,
+      cwd: oldTask.cwd,
+    })
+
+    const newPane = createPane(newTask)
+    await newPane.connect(newTask.sessionId)
+  } catch {
+    // cancelled or failed
+  }
+}
+
 function viewTask(task: ClaudeTask) {
-  activeTask.value = task
-  connectToSession(task.sessionId)
+  // If already open in a pane, don't duplicate
+  const existing = panes.value.find((p) => p.task.value?.taskId === task.taskId)
+  if (existing) return
+
+  if (panes.value.length >= MAX_PANES) {
+    ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
+    return
+  }
+
+  const pane = createPane(task)
+  pane.connect(task.sessionId)
 }
 
 watch(showEditDialog, (val) => {
@@ -504,6 +559,7 @@ function formatTime(dateStr: string): string {
   border-top: 1px solid #e4e7ed;
 }
 
+/* Default: scrollable (no panes open) */
 .worker-main {
   flex: 1;
   min-width: 0;
@@ -513,11 +569,17 @@ function formatTime(dateStr: string): string {
   padding: 20px 24px;
 }
 
+/* When panes are open: no scroll, pane grid fills remaining space */
+.worker-main.has-panes {
+  overflow: hidden;
+}
+
 .worker-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  flex-shrink: 0;
 }
 
 .header-info {
@@ -546,7 +608,8 @@ function formatTime(dateStr: string): string {
   border: 1px solid #ebeef5;
   border-radius: 8px;
   padding: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .task-form h4 {
@@ -555,55 +618,21 @@ function formatTime(dateStr: string): string {
   color: #303133;
 }
 
-.task-panel {
-  margin-bottom: 20px;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.task-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 16px;
-  background: #fafafa;
-  border-bottom: 1px solid #e4e7ed;
-}
-
-.task-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #606266;
-}
-
-.task-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.cost-label {
-  font-size: 13px;
+.pane-limit-hint {
+  margin-left: 12px;
+  font-size: 12px;
   color: #e6a23c;
-  font-weight: 500;
 }
 
-.chat-container {
-  height: 400px;
+.task-history {
+  flex-shrink: 0;
+  margin-top: 12px;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
-.chat-container > :deep(.chat-panel) {
-  height: 100%;
-  border: none;
-  border-radius: 0;
-}
-
-.waiting-hint {
-  color: #909399;
-  font-size: 14px;
+.has-panes .task-history {
+  max-height: 160px;
 }
 
 .task-history h4 {

@@ -22,6 +22,7 @@
       </template>
     </MessageList>
     <MessageInput
+      v-if="showInput"
       :disabled="inputDisabled"
       :placeholder="placeholder"
       @send="(content) => emit('send', content)"
@@ -44,12 +45,14 @@ const props = withDefaults(defineProps<{
   inputDisabled?: boolean
   placeholder?: string
   showHeader?: boolean
+  showInput?: boolean
 }>(), {
   isThinking: false,
   connectionStatus: 'disconnected',
   inputDisabled: false,
   placeholder: '输入消息...',
   showHeader: true,
+  showInput: true,
 })
 
 const emit = defineEmits<{

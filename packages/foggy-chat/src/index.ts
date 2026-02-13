@@ -19,6 +19,8 @@ export type { SseClientOptions, SseController } from './sse/SseClient'
 
 // Store
 export { useChatStore } from './store/useChatStore'
+export { createChatState } from './store/chatState'
+export type { ChatState } from './store/chatState'
 
 // Components
 export { default as ChatPanel } from './components/ChatPanel.vue'
