@@ -14,6 +14,8 @@ import com.foggy.navigator.agent.framework.skill.impl.LlmSkillMatcher;
 import com.foggy.navigator.agent.framework.tool.BuiltInTool;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.memory.UserMemoryManager;
+import com.foggy.navigator.spi.task.AgentTaskManager;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -62,9 +64,12 @@ public class AgentFrameworkAutoConfiguration {
                                             SessionRouter sessionRouter,
                                             List<BuiltInTool> builtInTools,
                                             @Autowired(required = false) LlmModelManager llmModelManager,
-                                            @Autowired(required = false) UserMemoryManager userMemoryManager) {
+                                            @Autowired(required = false) UserMemoryManager userMemoryManager,
+                                            @Autowired(required = false) MeterRegistry meterRegistry,
+                                            @Autowired(required = false) AgentTaskManager agentTaskManager) {
         return new DefaultAgentInvoker(registry, sessionManager, llmAdapter, publisher,
-                agentExecutor, skillManager, sessionRouter, builtInTools, llmModelManager, userMemoryManager);
+                agentExecutor, skillManager, sessionRouter, builtInTools, llmModelManager,
+                userMemoryManager, meterRegistry, agentTaskManager);
     }
 
     @Bean("agentExecutor")

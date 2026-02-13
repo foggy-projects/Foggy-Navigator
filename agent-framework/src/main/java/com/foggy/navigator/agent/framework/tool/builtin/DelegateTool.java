@@ -56,6 +56,12 @@ public class DelegateTool implements BuiltInTool {
         context.put("description", "传递给目标 Agent 的上下文参数（JSON 字符串格式），如数据集ID、查询条件等");
         params.put("context", context);
 
+        // background - 后台模式（可选）
+        Map<String, Object> background = new LinkedHashMap<>();
+        background.put("type", "boolean");
+        background.put("description", "是否在后台执行。true 时不跳转，仅创建子会话和任务记录并返回 taskId，可通过 check_agent_tasks 查看进度");
+        params.put("background", background);
+
         // 包装为 JSON Schema 格式
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");

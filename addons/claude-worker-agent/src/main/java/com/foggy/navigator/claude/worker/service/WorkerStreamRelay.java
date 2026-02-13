@@ -1,6 +1,7 @@
 package com.foggy.navigator.claude.worker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
@@ -154,6 +155,15 @@ public class WorkerStreamRelay {
                         event.getCostUsd(), event.getInputTokens(),
                         event.getOutputTokens(), event.getDurationMs());
                 activeStreams.remove(taskId);
+
+                // 发布跨 Agent 任务完成事件
+                eventPublisher.publishEvent(TaskCompletionEvent.builder()
+                        .externalTaskId(taskId)
+                        .parentSessionId(sessionId)
+                        .targetAgentId(AGENT_ID)
+                        .status("COMPLETED")
+                        .resultSummary(truncateResult(event.getResult()))
+                        .build());
             }
             case "error" -> {
                 Map<String, Object> payload = new LinkedHashMap<>();
@@ -163,6 +173,15 @@ public class WorkerStreamRelay {
 
                 taskService.failTask(taskId, event.getError());
                 activeStreams.remove(taskId);
+
+                // 发布跨 Agent 任务失败事件
+                eventPublisher.publishEvent(TaskCompletionEvent.builder()
+                        .externalTaskId(taskId)
+                        .parentSessionId(sessionId)
+                        .targetAgentId(AGENT_ID)
+                        .status("FAILED")
+                        .resultSummary(event.getError())
+                        .build());
             }
             default -> log.debug("Unknown worker event type: {}", event.getType());
         }
@@ -175,5 +194,10 @@ public class WorkerStreamRelay {
 
     private String nullSafe(String value) {
         return value != null ? value : "";
+    }
+
+    private String truncateResult(String result) {
+        if (result == null) return null;
+        return result.length() > 500 ? result.substring(0, 500) + "..." : result;
     }
 }

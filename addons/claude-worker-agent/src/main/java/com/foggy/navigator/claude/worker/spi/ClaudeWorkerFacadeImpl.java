@@ -94,6 +94,13 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         }
     }
 
+    @Override
+    public List<Map<String, Object>> listTasks(String userId) {
+        return taskService.listTasks(userId).stream()
+                .map(this::taskToMap)
+                .toList();
+    }
+
     private Map<String, Object> workerToMap(WorkerDTO dto) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("workerId", dto.getWorkerId());

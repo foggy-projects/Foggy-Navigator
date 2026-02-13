@@ -13,6 +13,7 @@ import com.foggy.navigator.common.context.UserContext;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -56,6 +57,14 @@ public class ClaudeTaskController {
     public RX<List<TaskDTO>> listTasks() {
         String userId = UserContext.getCurrentUserId();
         return RX.ok(taskService.listTasks(userId));
+    }
+
+    @GetMapping("/page")
+    public RX<Page<TaskDTO>> listTasksPaged(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskService.listTasks(userId, page, size));
     }
 
     @PostMapping("/{taskId}/abort")

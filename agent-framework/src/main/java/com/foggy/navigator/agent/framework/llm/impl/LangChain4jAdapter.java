@@ -1,7 +1,11 @@
 package com.foggy.navigator.agent.framework.llm.impl;
 
 import com.foggy.navigator.agent.framework.llm.*;
+import com.foggy.navigator.agent.framework.metrics.NavigatorMetrics;
 import com.foggy.navigator.agent.framework.tool.ToolDefinition;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.MDC;
 import dev.langchain4j.agent.tool.ToolParameters;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -15,18 +19,22 @@ import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.model.output.Response;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import jakarta.annotation.PostConstruct;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * LangChain4j实现的LLM适配器
@@ -36,6 +44,10 @@ import java.util.concurrent.CountDownLatch;
 public class LangChain4jAdapter implements LlmAdapter {
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Autowired(required = false)
+    @Nullable
+    private MeterRegistry meterRegistry;
 
     @Value("${agent.llm.openai.api-key:}")
     private String openaiApiKey;
@@ -60,6 +72,16 @@ public class LangChain4jAdapter implements LlmAdapter {
             }
         }
         return circuitBreaker;
+    }
+
+    @PostConstruct
+    public void registerCircuitBreakerGauges() {
+        if (meterRegistry == null) return;
+        LlmCircuitBreaker cb = getCircuitBreaker();
+        meterRegistry.gauge(NavigatorMetrics.LLM_CIRCUIT_BREAKER_STATE, cb,
+                b -> b.getState().ordinal());
+        meterRegistry.gauge(NavigatorMetrics.LLM_CIRCUIT_BREAKER_FAILURES, cb,
+                LlmCircuitBreaker::getConsecutiveFailures);
     }
 
     @Override
@@ -113,19 +135,38 @@ public class LangChain4jAdapter implements LlmAdapter {
             int inputTokens = response.tokenUsage() != null ? response.tokenUsage().inputTokenCount() : 0;
             int outputTokens = response.tokenUsage() != null ? response.tokenUsage().outputTokenCount() : 0;
 
+            String finishReason = response.finishReason() != null ? response.finishReason().name() : "unknown";
+
             log.info("LLM call completed: model={}, durationMs={}, inputTokens={}, outputTokens={}, " +
                      "toolCalls={}, finishReason={}, attempt={}, traceId={}, sessionId={}",
                     model, durationMs, inputTokens, outputTokens,
                     toolCalls != null ? toolCalls.size() : 0,
-                    response.finishReason(),
+                    finishReason,
                     attempt + 1, traceId, sessionId);
+
+            // Record Micrometer metrics
+            if (meterRegistry != null) {
+                Counter.builder(NavigatorMetrics.LLM_CALLS)
+                        .tag(NavigatorMetrics.TAG_MODEL, model)
+                        .tag(NavigatorMetrics.TAG_SUCCESS, "true")
+                        .tag(NavigatorMetrics.TAG_FINISH_REASON, finishReason)
+                        .register(meterRegistry).increment();
+                Timer.builder(NavigatorMetrics.LLM_DURATION)
+                        .tag(NavigatorMetrics.TAG_MODEL, model)
+                        .tag(NavigatorMetrics.TAG_SUCCESS, "true")
+                        .register(meterRegistry).record(durationMs, TimeUnit.MILLISECONDS);
+                meterRegistry.summary(NavigatorMetrics.LLM_TOKENS_INPUT, NavigatorMetrics.TAG_MODEL, model)
+                        .record(inputTokens);
+                meterRegistry.summary(NavigatorMetrics.LLM_TOKENS_OUTPUT, NavigatorMetrics.TAG_MODEL, model)
+                        .record(outputTokens);
+            }
 
             return LlmResponse.builder()
                     .content(aiMessage != null ? aiMessage.text() : null)
                     .toolCalls(toolCalls)
                     .inputTokens(inputTokens)
                     .outputTokens(outputTokens)
-                    .finishReason(response.finishReason() != null ? response.finishReason().name() : null)
+                    .finishReason(finishReason)
                     .build();
         } catch (Exception e) {
             long durationMs = System.currentTimeMillis() - startTime;
@@ -143,6 +184,19 @@ public class LangChain4jAdapter implements LlmAdapter {
             }
             log.error("LLM call failed (no more retries): model={}, durationMs={}, attempt={}, error={}, traceId={}",
                     model, durationMs, attempt + 1, e.getMessage(), traceId);
+
+            // Record failure metrics
+            if (meterRegistry != null) {
+                Counter.builder(NavigatorMetrics.LLM_CALLS)
+                        .tag(NavigatorMetrics.TAG_MODEL, model)
+                        .tag(NavigatorMetrics.TAG_SUCCESS, "false")
+                        .tag(NavigatorMetrics.TAG_FINISH_REASON, "error")
+                        .register(meterRegistry).increment();
+                Timer.builder(NavigatorMetrics.LLM_DURATION)
+                        .tag(NavigatorMetrics.TAG_MODEL, model)
+                        .tag(NavigatorMetrics.TAG_SUCCESS, "false")
+                        .register(meterRegistry).record(durationMs, TimeUnit.MILLISECONDS);
+            }
             throw e;
         }
     }

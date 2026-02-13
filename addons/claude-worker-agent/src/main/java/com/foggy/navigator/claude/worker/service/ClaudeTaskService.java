@@ -12,10 +12,14 @@ import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -136,6 +140,14 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 分页列出用户的任务
+     */
+    public Page<TaskDTO> listTasks(String userId, int page, int size) {
+        return taskRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(page, size))
+                .map(this::toDTO);
+    }
+
+    /**
      * 更新任务状态为完成
      */
     @Transactional
@@ -176,6 +188,26 @@ public class ClaudeTaskService {
             taskRepository.save(entity);
             log.info("Task aborted: taskId={}", taskId);
         });
+    }
+
+    /**
+     * 定时检查超时任务（每5分钟）
+     * RUNNING 超过 2 小时的任务标记为 FAILED
+     */
+    @Scheduled(fixedDelay = 300000)
+    @Transactional
+    public void checkTimeoutTasks() {
+        LocalDateTime cutoff = LocalDateTime.now().minusHours(2);
+        List<ClaudeTaskEntity> timedOut = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", cutoff);
+        for (ClaudeTaskEntity entity : timedOut) {
+            entity.setStatus("FAILED");
+            entity.setErrorMessage("Task timed out (exceeded 2 hours)");
+            taskRepository.save(entity);
+            log.warn("Task timed out: taskId={}, createdAt={}", entity.getTaskId(), entity.getCreatedAt());
+        }
+        if (!timedOut.isEmpty()) {
+            log.info("Marked {} timed-out tasks as FAILED", timedOut.size());
+        }
     }
 
     /**

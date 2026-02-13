@@ -1,8 +1,11 @@
 package com.foggy.navigator.claude.worker.repository;
 
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -18,5 +21,9 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
 
     List<ClaudeTaskEntity> findByUserIdOrderByCreatedAtDesc(String userId);
 
+    Page<ClaudeTaskEntity> findByUserIdOrderByCreatedAtDesc(String userId, Pageable pageable);
+
     List<ClaudeTaskEntity> findByStatusIn(List<String> statuses);
+
+    List<ClaudeTaskEntity> findByStatusAndCreatedAtBefore(String status, LocalDateTime before);
 }

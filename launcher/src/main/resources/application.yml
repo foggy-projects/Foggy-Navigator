@@ -52,6 +52,9 @@ management:
   endpoint:
     health:
       show-details: always
+  metrics:
+    tags:
+      application: foggy-navigator
 
 # LLM 熔断器配置
 agent:

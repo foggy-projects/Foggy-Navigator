@@ -1,10 +1,13 @@
 package com.foggy.navigator.session.sse;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.metrics.NavigatorMetrics;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -28,9 +31,13 @@ public class SseSessionEmitter {
         return t;
     });
 
-    public SseSessionEmitter(ObjectMapper objectMapper) {
+    public SseSessionEmitter(ObjectMapper objectMapper, @Nullable MeterRegistry meterRegistry) {
         this.objectMapper = objectMapper;
         heartbeatScheduler.scheduleAtFixedRate(this::sendHeartbeats, 15, 15, TimeUnit.SECONDS);
+        if (meterRegistry != null) {
+            meterRegistry.gauge(NavigatorMetrics.SSE_ACTIVE_CONNECTIONS, this,
+                    SseSessionEmitter::getTotalEmitterCount);
+        }
     }
 
     @PreDestroy
@@ -150,5 +157,9 @@ public class SseSessionEmitter {
     public int getEmitterCount(String sessionId) {
         CopyOnWriteArrayList<SseEmitter> emitters = sessionEmitters.get(sessionId);
         return emitters != null ? emitters.size() : 0;
+    }
+
+    public int getTotalEmitterCount() {
+        return sessionEmitters.values().stream().mapToInt(CopyOnWriteArrayList::size).sum();
     }
 }

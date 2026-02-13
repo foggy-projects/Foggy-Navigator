@@ -7,6 +7,7 @@ import com.foggy.navigator.agent.framework.core.AgentRegistry;
 import com.foggy.navigator.agent.framework.core.model.AgentConfig;
 import com.foggy.navigator.agent.framework.core.model.ModelConfig;
 import com.foggy.navigator.agent.framework.llm.*;
+import com.foggy.navigator.agent.framework.metrics.NavigatorMetrics;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.agent.framework.router.DelegationRequest;
@@ -26,7 +27,11 @@ import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.memory.UserMemoryManager;
+import com.foggy.navigator.spi.task.AgentTaskManager;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 
@@ -38,6 +43,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 默认Agent调用器实现
@@ -63,6 +69,10 @@ public class DefaultAgentInvoker implements AgentInvoker {
     private final LlmModelManager llmModelManager;
     @Nullable
     private final UserMemoryManager userMemoryManager;
+    @Nullable
+    private final MeterRegistry meterRegistry;
+    @Nullable
+    private final AgentTaskManager agentTaskManager;
 
     public DefaultAgentInvoker(AgentRegistry agentRegistry,
                                SessionManager sessionManager,
@@ -73,7 +83,9 @@ public class DefaultAgentInvoker implements AgentInvoker {
                                SessionRouter sessionRouter,
                                List<BuiltInTool> builtInTools,
                                @Nullable LlmModelManager llmModelManager,
-                               @Nullable UserMemoryManager userMemoryManager) {
+                               @Nullable UserMemoryManager userMemoryManager,
+                               @Nullable MeterRegistry meterRegistry,
+                               @Nullable AgentTaskManager agentTaskManager) {
         this.agentRegistry = agentRegistry;
         this.sessionManager = sessionManager;
         this.llmAdapter = llmAdapter;
@@ -84,6 +96,8 @@ public class DefaultAgentInvoker implements AgentInvoker {
         this.builtInTools = builtInTools;
         this.llmModelManager = llmModelManager;
         this.userMemoryManager = userMemoryManager;
+        this.meterRegistry = meterRegistry;
+        this.agentTaskManager = agentTaskManager;
     }
 
     @Override
@@ -215,6 +229,10 @@ public class DefaultAgentInvoker implements AgentInvoker {
                          "totalDurationMs={}, toolIterations={}, finalContentLength={}",
                         sessionId, agentId, totalDurationMs, iteration + 1,
                         content.length());
+
+                // Record agent invocation metrics
+                recordAgentMetrics(agentId, true, totalDurationMs, iteration + 1);
+
                 eventPublisher.publishEvent(AgentMessage.of(
                         sessionId, agentId, MessageType.TEXT_COMPLETE,
                         Map.of("content", content)
@@ -293,7 +311,9 @@ public class DefaultAgentInvoker implements AgentInvoker {
             log.debug("Tool iteration {} completed, {} tool calls processed", iteration + 1, toolCalls.size());
         }
 
+        long totalDurationMs = System.currentTimeMillis() - invokeStartTime;
         log.warn("Max tool iterations ({}) reached for session {}", MAX_TOOL_ITERATIONS, sessionId);
+        recordAgentMetrics(agentId, false, totalDurationMs, MAX_TOOL_ITERATIONS);
         eventPublisher.publishEvent(AgentMessage.of(
                 sessionId, agentId, MessageType.ERROR,
                 Map.of("error", "工具调用次数超过上限，请重新描述您的需求。")
@@ -314,10 +334,14 @@ public class DefaultAgentInvoker implements AgentInvoker {
                         .agentId(agentId)
                         .parameters(toolCall.getArguments())
                         .build();
+                long toolStart = System.currentTimeMillis();
                 try {
-                    return tool.execute(execRequest);
+                    ToolExecutionResult result = tool.execute(execRequest);
+                    recordToolMetrics(toolCall.getName(), result.isSuccess(), System.currentTimeMillis() - toolStart);
+                    return result;
                 } catch (Exception e) {
                     log.error("Tool execution failed: tool={}, error={}", toolCall.getName(), e.getMessage(), e);
+                    recordToolMetrics(toolCall.getName(), false, System.currentTimeMillis() - toolStart);
                     return ToolExecutionResult.error("Tool execution failed: " + e.getMessage());
                 }
             }
@@ -343,6 +367,16 @@ public class DefaultAgentInvoker implements AgentInvoker {
         Map<String, Object> args = toolCall.getArguments();
         String targetAgentId = (String) args.get("targetAgentId");
         String intent = (String) args.get("intent");
+
+        // Check background mode
+        Object backgroundObj = args.get("background");
+        boolean background = Boolean.TRUE.equals(backgroundObj)
+                || "true".equals(String.valueOf(backgroundObj));
+
+        if (background) {
+            handleBackgroundDelegation(sessionId, agentId, targetAgentId, intent, args);
+            return;
+        }
 
         // context 可能是 Map 或 JSON 字符串（因为 DelegateTool 定义为 string 类型）
         Map<String, Object> context;
@@ -406,6 +440,94 @@ public class DefaultAgentInvoker implements AgentInvoker {
                     Map.of("error", "Delegation failed: " + result.getErrorMessage())
             ));
         }
+    }
+
+    /**
+     * 后台委派：创建子会话和 AgentTask 记录，不发 ROUTE_REQUEST
+     */
+    private void handleBackgroundDelegation(String sessionId, String agentId,
+                                             String targetAgentId, String intent,
+                                             Map<String, Object> args) {
+        Session currentSession = sessionManager.getSession(sessionId);
+        if (currentSession == null) {
+            log.error("Session not found for background delegation: {}", sessionId);
+            eventPublisher.publishEvent(AgentMessage.of(
+                    sessionId, agentId, MessageType.ERROR,
+                    Map.of("error", "Session not found")
+            ));
+            return;
+        }
+
+        // Create child session via router
+        DelegationRequest delegationRequest = DelegationRequest.builder()
+                .sourceSessionId(sessionId)
+                .sourceAgentId(agentId)
+                .targetAgentId(targetAgentId)
+                .userId(currentSession.getUserId())
+                .tenantId(currentSession.getTenantId())
+                .intent(intent)
+                .parameters(Map.of())
+                .build();
+
+        DelegationResult result = sessionRouter.delegateToAgent(delegationRequest);
+        if (!result.isSuccess()) {
+            log.error("Background delegation failed: {}", result.getErrorMessage());
+            eventPublisher.publishEvent(AgentMessage.of(
+                    sessionId, agentId, MessageType.TOOL_CALL_RESULT,
+                    Map.of("toolCallId", "delegate", "success", false,
+                           "data", "Background delegation failed: " + result.getErrorMessage())
+            ));
+            return;
+        }
+
+        // Create AgentTask record if manager available
+        String taskId = null;
+        if (agentTaskManager != null) {
+            taskId = agentTaskManager.createTask(
+                    sessionId, currentSession.getUserId(), agentId,
+                    targetAgentId, "DELEGATION", intent,
+                    result.getNewSessionId(), null);
+        }
+
+        log.info("Background delegation created: sessionId={} -> targetAgent={}, newSession={}, taskId={}",
+                sessionId, targetAgentId, result.getNewSessionId(), taskId);
+
+        // Return task info as tool result (not ROUTE_REQUEST)
+        eventPublisher.publishEvent(AgentMessage.of(
+                sessionId, agentId, MessageType.TOOL_CALL_RESULT,
+                Map.of("toolCallId", "delegate", "success", true,
+                       "data", "后台任务已创建：taskId=" + taskId
+                               + ", targetAgent=" + targetAgentId
+                               + ", childSession=" + result.getNewSessionId())
+        ));
+    }
+
+    private void recordAgentMetrics(String agentId, boolean success, long durationMs, int iterations) {
+        if (meterRegistry == null) return;
+        String successStr = String.valueOf(success);
+        Counter.builder(NavigatorMetrics.AGENT_INVOCATIONS)
+                .tag(NavigatorMetrics.TAG_AGENT_ID, agentId)
+                .tag(NavigatorMetrics.TAG_SUCCESS, successStr)
+                .register(meterRegistry).increment();
+        Timer.builder(NavigatorMetrics.AGENT_DURATION)
+                .tag(NavigatorMetrics.TAG_AGENT_ID, agentId)
+                .tag(NavigatorMetrics.TAG_SUCCESS, successStr)
+                .register(meterRegistry).record(durationMs, TimeUnit.MILLISECONDS);
+        meterRegistry.summary(NavigatorMetrics.AGENT_ITERATIONS, NavigatorMetrics.TAG_AGENT_ID, agentId)
+                .record(iterations);
+    }
+
+    private void recordToolMetrics(String toolName, boolean success, long durationMs) {
+        if (meterRegistry == null) return;
+        String successStr = String.valueOf(success);
+        Counter.builder(NavigatorMetrics.TOOL_EXECUTIONS)
+                .tag(NavigatorMetrics.TAG_TOOL_NAME, toolName)
+                .tag(NavigatorMetrics.TAG_SUCCESS, successStr)
+                .register(meterRegistry).increment();
+        Timer.builder(NavigatorMetrics.TOOL_DURATION)
+                .tag(NavigatorMetrics.TAG_TOOL_NAME, toolName)
+                .tag(NavigatorMetrics.TAG_SUCCESS, successStr)
+                .register(meterRegistry).record(durationMs, TimeUnit.MILLISECONDS);
     }
 
     /**

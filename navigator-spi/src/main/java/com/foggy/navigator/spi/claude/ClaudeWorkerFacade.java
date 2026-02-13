@@ -43,4 +43,9 @@ public interface ClaudeWorkerFacade {
      * 列出 Worker 上的 Claude Code 会话
      */
     List<Map<String, Object>> listWorkerSessions(String userId, String workerId);
+
+    /**
+     * 列出用户的所有任务
+     */
+    List<Map<String, Object>> listTasks(String userId);
 }

@@ -76,6 +76,12 @@
             <version>${commonmark.version}</version>
         </dependency>
 
+        <!-- Micrometer (observability metrics) -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
