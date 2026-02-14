@@ -1,11 +1,12 @@
 import { ref } from 'vue'
 import { useChatStore, createSseClient, AipMessageType } from '@foggy/chat'
 import type { ChatMessage, SseController } from '@foggy/chat'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'
 import { getToken } from '@/utils/auth'
 import type { AgentMessage, RoutePayload } from '@/types'
+import router from '@/router'
 
 let currentSseController: SseController | null = null
 const connectedSessionId = ref<string | null>(null)
@@ -78,6 +79,19 @@ export function useSession() {
         if (raw.type === 'ROUTE_REQUEST' && routeRequestHandler) {
           console.log('ROUTE_REQUEST received:', raw.payload)
           routeRequestHandler(raw.payload as RoutePayload)
+        }
+        // 处理 TASK_COMPLETED 事件 — toast 通知
+        if (raw.type === 'TASK_COMPLETED') {
+          const p = raw.payload as Record<string, string>
+          const status = p.status || 'COMPLETED'
+          const agent = p.targetAgentId || p.taskType || ''
+          ElNotification({
+            title: status === 'FAILED' ? '任务失败' : '任务完成',
+            message: `${agent} ${p.resultSummary ? '— ' + p.resultSummary.substring(0, 80) : ''}`,
+            type: status === 'FAILED' ? 'error' : 'success',
+            duration: 6000,
+            onClick: () => router.push('/tasks'),
+          })
         }
       },
     })

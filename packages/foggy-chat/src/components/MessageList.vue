@@ -22,6 +22,10 @@
         v-else-if="isError(msg)"
         :error="msg.error || msg.content"
       />
+      <TaskCompletionCard
+        v-else-if="msg.type === AipMessageType.TASK_COMPLETED"
+        :message="msg"
+      />
       <MessageBubble
         v-else-if="msg.type === AipMessageType.STATE_SYNC"
         :message="msg"
@@ -39,6 +43,7 @@ import MessageBubble from './MessageBubble.vue'
 import ToolCallBlock from './ToolCallBlock.vue'
 import ThinkingIndicator from './ThinkingIndicator.vue'
 import ErrorBlock from './ErrorBlock.vue'
+import TaskCompletionCard from './TaskCompletionCard.vue'
 
 const props = defineProps<{
   messages: ChatMessage[]

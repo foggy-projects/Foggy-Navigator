@@ -37,6 +37,9 @@ public enum MessageType {
     THINKING,               // 思考中状态
     ERROR,                  // 错误
 
+    // ===== 任务通知 =====
+    TASK_COMPLETED,         // 子任务完成通知
+
     // ===== 生命周期 =====
     SESSION_START,          // 会话开始
     SESSION_END,            // 会话结束

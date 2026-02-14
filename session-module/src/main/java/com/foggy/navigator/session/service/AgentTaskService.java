@@ -1,8 +1,11 @@
 package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
+import com.foggy.navigator.agent.framework.protocol.AgentMessage;
+import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.common.entity.AgentTaskEntity;
 import com.foggy.navigator.session.repository.AgentTaskRepository;
+import com.foggy.navigator.session.sse.SseSessionEmitter;
 import com.foggy.navigator.spi.task.AgentTaskManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +25,7 @@ import java.util.*;
 public class AgentTaskService implements AgentTaskManager {
 
     private final AgentTaskRepository agentTaskRepository;
+    private final SseSessionEmitter sseSessionEmitter;
 
     @Override
     @Transactional
@@ -63,6 +67,7 @@ public class AgentTaskService implements AgentTaskManager {
             entity.setCompletedAt(LocalDateTime.now());
             agentTaskRepository.save(entity);
             log.info("AgentTask completed: taskId={}, status={}", taskId, status);
+            notifyParentSession(entity);
         });
     }
 
@@ -76,7 +81,33 @@ public class AgentTaskService implements AgentTaskManager {
             agentTaskRepository.save(entity);
             log.info("AgentTask completed via external ID: taskId={}, externalId={}, status={}",
                     entity.getTaskId(), externalTaskId, status);
+            notifyParentSession(entity);
         });
+    }
+
+    /**
+     * 向父会话推送子任务完成 SSE 通知
+     */
+    private void notifyParentSession(AgentTaskEntity entity) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("taskId", entity.getTaskId());
+            payload.put("targetAgentId", entity.getTargetAgentId());
+            payload.put("taskType", entity.getTaskType());
+            payload.put("status", entity.getStatus());
+            payload.put("resultSummary", entity.getResultSummary());
+
+            AgentMessage message = AgentMessage.of(
+                    entity.getParentSessionId(),
+                    entity.getSourceAgentId(),
+                    MessageType.TASK_COMPLETED,
+                    payload
+            );
+            sseSessionEmitter.sendEvent(entity.getParentSessionId(), message);
+            log.info("Task completion SSE sent: taskId={}, parentSession={}", entity.getTaskId(), entity.getParentSessionId());
+        } catch (Exception e) {
+            log.warn("Failed to send task completion SSE: taskId={}", entity.getTaskId(), e);
+        }
     }
 
     @EventListener

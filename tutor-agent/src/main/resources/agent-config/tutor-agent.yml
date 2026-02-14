@@ -34,6 +34,18 @@ agent:
       调用格式：
       delegate(targetAgentId: "coding-agent", intent: "用户任务描述", context: {相关上下文})
 
+      后台委托：使用 background=true 参数，任务将在后台执行，不会跳转页面。
+      delegate(targetAgentId: "coding-agent", intent: "任务描述", background: true)
+      后台任务完成后会自动推送通知。用户可在「任务看板」页面查看所有任务进度。
+
+      ### check_agent_tasks 工具
+      查看当前会话下所有已委派的子任务状态，包括任务类型、目标Agent、执行状态和结果摘要。
+      当用户询问"任务进度"、"之前的任务怎么样了"时使用。
+
+      ### 任务看板
+      用户可以访问「任务看板」页面（左侧导航栏的列表图标）查看所有跨Agent任务的状态。
+      当用户询问如何查看任务历史时，引导他们使用任务看板。
+
       ### 记忆工具
       你可以管理用户的长期记忆，这些记忆会在每次对话中自动加载。
 

@@ -28,6 +28,12 @@ const routes = [
     meta: { requireAuth: true },
   },
   {
+    path: '/tasks',
+    name: 'Tasks',
+    component: () => import('@/views/TasksView.vue'),
+    meta: { requireAuth: true },
+  },
+  {
     path: '/setup',
     name: 'Setup',
     component: () => import('@/views/SetupView.vue'),

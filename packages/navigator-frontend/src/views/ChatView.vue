@@ -30,6 +30,9 @@
       <div class="sidebar-footer">
         <span class="username">{{ userInfo?.username }}</span>
         <div class="footer-actions">
+          <el-icon class="settings-icon" @click="router.push('/tasks')" title="任务看板">
+            <List />
+          </el-icon>
           <el-icon class="settings-icon" @click="router.push('/settings')" title="设置">
             <Setting />
           </el-icon>
@@ -90,7 +93,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close, Monitor, Setting } from '@element-plus/icons-vue'
+import { Close, List, Monitor, Setting } from '@element-plus/icons-vue'
 import { ChatPanel, useChatStore } from '@foggy/chat'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSession, setRouteRequestHandler } from '@/composables/useSession'

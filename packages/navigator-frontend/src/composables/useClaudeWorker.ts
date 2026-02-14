@@ -5,6 +5,9 @@ import type { ClaudeWorker, ClaudeTask } from '@/types'
 const workers = ref<ClaudeWorker[]>([])
 const tasks = ref<ClaudeTask[]>([])
 const loading = ref(false)
+const taskPage = ref(0)
+const taskSize = ref(20)
+const taskTotal = ref(0)
 
 export function useClaudeWorker() {
   const onlineWorkers = computed(() => workers.value.filter((w) => w.status === 'ONLINE'))
@@ -19,7 +22,21 @@ export function useClaudeWorker() {
   }
 
   async function loadTasks() {
-    tasks.value = await api.listTasks()
+    try {
+      const result = await api.listTasksPaged(taskPage.value, taskSize.value)
+      tasks.value = result.content
+      taskTotal.value = result.totalElements
+    } catch {
+      // Fallback to non-paged API
+      tasks.value = await api.listTasks()
+      taskTotal.value = tasks.value.length
+    }
+  }
+
+  async function loadTasksPage(page: number, size?: number) {
+    taskPage.value = page
+    if (size !== undefined) taskSize.value = size
+    await loadTasks()
   }
 
   async function registerWorker(form: {
@@ -83,9 +100,13 @@ export function useClaudeWorker() {
     workers,
     tasks,
     loading,
+    taskPage,
+    taskSize,
+    taskTotal,
     onlineWorkers,
     loadWorkers,
     loadTasks,
+    loadTasksPage,
     registerWorker,
     updateWorker,
     deleteWorker,

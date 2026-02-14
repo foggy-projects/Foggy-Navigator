@@ -97,6 +97,28 @@ export interface ClaudeTask {
   updatedAt: string
 }
 
+// ===== 跨 Agent 任务类型 =====
+
+export type AgentTaskType = 'CODING' | 'CLAUDE_WORKER' | 'DELEGATION'
+
+export type AgentTaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+
+/** 跨 Agent 任务 */
+export interface AgentTask {
+  taskId: string
+  parentSessionId: string
+  userId: string
+  sourceAgentId: string
+  targetAgentId: string
+  taskType: AgentTaskType
+  status: AgentTaskStatus
+  prompt: string
+  resultSummary?: string
+  externalTaskId?: string
+  createdAt: string
+  completedAt?: string
+}
+
 // ===== 平台配置类型 =====
 
 export type GitProviderType = 'GITHUB' | 'GITLAB' | 'GITEE'

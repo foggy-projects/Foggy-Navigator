@@ -73,6 +73,16 @@ export async function listTasks(): Promise<ClaudeTask[]> {
   return rx.data
 }
 
+export async function listTasksPaged(
+  page: number,
+  size: number,
+): Promise<{ content: ClaudeTask[]; totalElements: number; totalPages: number }> {
+  const rx = (await client.get('/claude-tasks/page', {
+    params: { page, size },
+  })) as unknown as RX<{ content: ClaudeTask[]; totalElements: number; totalPages: number }>
+  return rx.data
+}
+
 export async function abortTask(
   taskId: string,
 ): Promise<{ taskId: string; status: string }> {

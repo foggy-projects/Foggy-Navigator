@@ -94,9 +94,9 @@
         />
 
         <!-- Task History -->
-        <div v-if="workerTasks.length > 0" class="task-history">
+        <div class="task-history">
           <h4>历史任务</h4>
-          <div class="task-list">
+          <div v-if="workerTasks.length > 0" class="task-list">
             <div
               v-for="task in workerTasks"
               :key="task.taskId"
@@ -114,6 +114,17 @@
               </div>
             </div>
           </div>
+          <div v-else class="empty-hint">暂无历史任务</div>
+          <el-pagination
+            v-if="workerState.taskTotal.value > workerState.taskSize.value"
+            class="task-pagination"
+            small
+            layout="prev, pager, next"
+            :total="workerState.taskTotal.value"
+            :page-size="workerState.taskSize.value"
+            :current-page="workerState.taskPage.value + 1"
+            @current-change="handlePageChange"
+          />
         </div>
       </template>
 
@@ -407,6 +418,10 @@ async function resumePane(paneId: string) {
   }
 }
 
+function handlePageChange(page: number) {
+  workerState.loadTasksPage(page - 1)
+}
+
 function viewTask(task: ClaudeTask) {
   // If already open in a pane, don't duplicate
   const existing = panes.value.find((p) => p.task.value?.taskId === task.taskId)
@@ -672,6 +687,11 @@ function formatTime(dateStr: string): string {
   gap: 10px;
   font-size: 12px;
   color: #909399;
+}
+
+.task-pagination {
+  margin-top: 12px;
+  justify-content: center;
 }
 
 .empty-hint {

@@ -9,6 +9,7 @@ import type {
   ThinkingPayload,
   StateSyncPayload,
   ErrorPayload,
+  TaskCompletedPayload,
 } from '../types/aip'
 import type { ChatMessage, ConnectionStatus } from '../types/chat'
 
@@ -182,6 +183,18 @@ export function createChatState(): ChatState {
           sender: 'system',
           content: '',
           error: p.error,
+          timestamp: aip.timestamp,
+        })
+        break
+      }
+      case AipMessageType.TASK_COMPLETED: {
+        const p = aip.payload as TaskCompletedPayload
+        messages.value.push({
+          id: aip.messageId,
+          type: aip.type,
+          sender: 'system',
+          content: p.resultSummary || '',
+          raw: p,
           timestamp: aip.timestamp,
         })
         break

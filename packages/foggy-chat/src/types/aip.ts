@@ -7,6 +7,7 @@ export enum AipMessageType {
   THINKING = 'THINKING',
   STATE_SYNC = 'STATE_SYNC',
   ERROR = 'ERROR',
+  TASK_COMPLETED = 'TASK_COMPLETED',
 }
 
 export interface AipMessage<T = unknown> {
@@ -55,4 +56,12 @@ export interface StateSyncPayload {
 export interface ErrorPayload {
   error: string
   source?: string
+}
+
+export interface TaskCompletedPayload {
+  taskId: string
+  targetAgentId: string
+  taskType: string
+  status: string
+  resultSummary?: string
 }

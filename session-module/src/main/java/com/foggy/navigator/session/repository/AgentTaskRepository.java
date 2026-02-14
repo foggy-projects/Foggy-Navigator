@@ -15,4 +15,6 @@ public interface AgentTaskRepository extends JpaRepository<AgentTaskEntity, Stri
     Optional<AgentTaskEntity> findByExternalTaskIdAndTaskType(String externalTaskId, String taskType);
 
     List<AgentTaskEntity> findByUserIdAndStatusIn(String userId, List<String> statuses);
+
+    List<AgentTaskEntity> findByUserIdOrderByCreatedAtDesc(String userId);
 }
