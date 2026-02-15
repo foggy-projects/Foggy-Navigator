@@ -63,13 +63,18 @@ public class WorkerStreamRelay {
             Disposable subscription = client.streamQuery(event.getPrompt(), event.getCwd(), event.getClaudeSessionId())
                     .doOnNext(sse -> {
                         String data = sse.data();
-                        if (data == null || data.isEmpty()) return;
+                        if (data == null || data.isEmpty()) {
+                            log.debug("Received empty SSE data for task: {}", taskId);
+                            return;
+                        }
 
                         try {
+                            log.debug("Task {} received SSE data: {}", taskId, data.substring(0, Math.min(200, data.length())));
                             WorkerEvent workerEvent = objectMapper.readValue(data, WorkerEvent.class);
+                            log.debug("Task {} parsed event type: {}", taskId, workerEvent.getType());
                             relayEvent(sessionId, taskId, workerEvent);
                         } catch (Exception e) {
-                            log.warn("Failed to parse worker event: {}", data, e);
+                            log.warn("Failed to parse worker event for task {}: {}", taskId, data, e);
                         }
                     })
                     .doOnComplete(() -> {
@@ -142,8 +147,10 @@ public class WorkerStreamRelay {
             }
             case "result" -> {
                 // 任务完成
+                // Worker 返回的 result 事件使用 content 字段，不是 result 字段
+                String resultContent = event.getContent() != null ? event.getContent() : event.getResult();
                 Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("content", event.getResult());
+                payload.put("content", resultContent);
                 payload.put("taskId", taskId);
                 payload.put("costUsd", event.getCostUsd());
                 payload.put("durationMs", event.getDurationMs());
@@ -189,6 +196,7 @@ public class WorkerStreamRelay {
 
     private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
         AgentMessage message = AgentMessage.of(sessionId, AGENT_ID, type, payload);
+        log.debug("Publishing message: sessionId={}, type={}, payload={}", sessionId, type, payload);
         eventPublisher.publishEvent(message);
     }
 

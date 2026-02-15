@@ -30,6 +30,8 @@ public class SessionEventListener {
     @EventListener
     public void onAgentMessage(AgentMessage message) {
         String sessionId = message.getSessionId();
+        log.debug("Received AgentMessage: sessionId={}, type={}, agentId={}",
+                sessionId, message.getType(), message.getAgentId());
 
         // 1. 持久化（只保存需要存储的消息类型）
         if (shouldPersist(message.getType())) {
@@ -42,6 +44,7 @@ public class SessionEventListener {
         }
 
         // 2. SSE推送
+        log.debug("Sending SSE event: sessionId={}, type={}", sessionId, message.getType());
         sseEmitter.sendEvent(sessionId, message);
     }
 

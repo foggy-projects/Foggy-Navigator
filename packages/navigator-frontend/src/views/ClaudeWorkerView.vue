@@ -76,7 +76,7 @@
       </div>
     </aside>
 
-    <!-- Right Panel -->
+    <!-- Middle Panel: Main Content Area -->
     <main :class="['worker-main', { 'has-panes': panes.length > 0 }]">
       <!-- Directory selected: show git info + task form scoped to directory -->
       <template v-if="selectedDirectory">
@@ -147,40 +147,6 @@
           @abort="abortPane"
           @resume="resumePane"
         />
-
-        <!-- Task History (filtered by directory) -->
-        <div class="task-history">
-          <h4>历史任务</h4>
-          <div v-if="directoryTasks.length > 0" class="task-list">
-            <div
-              v-for="task in directoryTasks"
-              :key="task.taskId"
-              class="task-item"
-              @click="viewTask(task)"
-            >
-              <div class="task-prompt">{{ truncate(task.prompt, 80) }}</div>
-              <div class="task-meta">
-                <el-tag :type="taskStatusType(task.status)" size="small">
-                  {{ task.status }}
-                </el-tag>
-                <span v-if="task.costUsd">${{ task.costUsd?.toFixed(4) }}</span>
-                <span v-if="task.durationMs">{{ (task.durationMs / 1000).toFixed(1) }}s</span>
-                <span>{{ formatTime(task.createdAt) }}</span>
-              </div>
-            </div>
-          </div>
-          <div v-else class="empty-hint">暂无历史任务</div>
-          <el-pagination
-            v-if="dirTaskTotal > dirTaskSize"
-            class="task-pagination"
-            small
-            layout="prev, pager, next"
-            :total="dirTaskTotal"
-            :page-size="dirTaskSize"
-            :current-page="dirTaskPage + 1"
-            @current-change="handleDirPageChange"
-          />
-        </div>
       </template>
 
       <!-- Worker selected (no directory): show worker details + all tasks -->
@@ -241,10 +207,55 @@
           @abort="abortPane"
           @resume="resumePane"
         />
+      </template>
 
-        <!-- Task History (all tasks for this worker) -->
-        <div class="task-history">
-          <h4>历史任务</h4>
+      <template v-else>
+        <div class="empty-state">
+          <h2>Claude Workers</h2>
+          <p>选择一个 Worker 或添加新的 Worker 开始使用</p>
+        </div>
+      </template>
+    </main>
+
+    <!-- Right Panel: Task History -->
+    <aside v-if="selectedWorkerId" class="worker-history">
+      <div class="history-header">
+        <h3>历史任务</h3>
+      </div>
+      <div class="history-content">
+        <!-- Directory-specific tasks -->
+        <template v-if="selectedDirectoryId">
+          <div v-if="directoryTasks.length > 0" class="task-list">
+            <div
+              v-for="task in directoryTasks"
+              :key="task.taskId"
+              class="task-item"
+              @click="viewTask(task)"
+            >
+              <div class="task-prompt">{{ truncate(task.prompt, 60) }}</div>
+              <div class="task-meta">
+                <el-tag :type="taskStatusType(task.status)" size="small">
+                  {{ task.status }}
+                </el-tag>
+                <span>{{ formatTime(task.createdAt) }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="empty-hint">暂无历史任务</div>
+          <el-pagination
+            v-if="dirTaskTotal > dirTaskSize"
+            class="task-pagination"
+            small
+            layout="prev, pager, next"
+            :total="dirTaskTotal"
+            :page-size="dirTaskSize"
+            :current-page="dirTaskPage + 1"
+            @current-change="handleDirPageChange"
+          />
+        </template>
+
+        <!-- Worker-level tasks -->
+        <template v-else>
           <div v-if="workerTasks.length > 0" class="task-list">
             <div
               v-for="task in workerTasks"
@@ -252,13 +263,11 @@
               class="task-item"
               @click="viewTask(task)"
             >
-              <div class="task-prompt">{{ truncate(task.prompt, 80) }}</div>
+              <div class="task-prompt">{{ truncate(task.prompt, 60) }}</div>
               <div class="task-meta">
                 <el-tag :type="taskStatusType(task.status)" size="small">
                   {{ task.status }}
                 </el-tag>
-                <span v-if="task.costUsd">${{ task.costUsd?.toFixed(4) }}</span>
-                <span v-if="task.durationMs">{{ (task.durationMs / 1000).toFixed(1) }}s</span>
                 <span>{{ formatTime(task.createdAt) }}</span>
               </div>
             </div>
@@ -274,16 +283,9 @@
             :current-page="workerState.taskPage.value + 1"
             @current-change="handlePageChange"
           />
-        </div>
-      </template>
-
-      <template v-else>
-        <div class="empty-state">
-          <h2>Claude Workers</h2>
-          <p>选择一个 Worker 或添加新的 Worker 开始使用</p>
-        </div>
-      </template>
-    </main>
+        </template>
+      </div>
+    </aside>
 
     <!-- Add Worker Dialog -->
     <el-dialog v-model="showAddDialog" title="添加 Worker" width="480px">
@@ -844,7 +846,7 @@ function formatTime(dateStr: string): string {
 }
 
 .worker-sidebar {
-  width: 280px;
+  width: 260px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1000,7 +1002,7 @@ function formatTime(dateStr: string): string {
   border-top: 1px solid #e4e7ed;
 }
 
-/* Default: scrollable (no panes open) */
+/* Main content area (middle column) */
 .worker-main {
   flex: 1;
   min-width: 0;
@@ -1013,6 +1015,34 @@ function formatTime(dateStr: string): string {
 /* When panes are open: no scroll, pane grid fills remaining space */
 .worker-main.has-panes {
   overflow: hidden;
+}
+
+/* History panel (right column) */
+.worker-history {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fafafa;
+  border-left: 1px solid #e4e7ed;
+}
+
+.history-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e4e7ed;
+  background: #fff;
+}
+
+.history-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #303133;
+}
+
+.history-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
 }
 
 .worker-header {
@@ -1093,23 +1123,7 @@ function formatTime(dateStr: string): string {
   color: #e6a23c;
 }
 
-.task-history {
-  flex-shrink: 0;
-  margin-top: 12px;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.has-panes .task-history {
-  max-height: 160px;
-}
-
-.task-history h4 {
-  margin: 0 0 12px 0;
-  font-size: 15px;
-  color: #303133;
-}
-
+/* Task list in history panel */
 .task-list {
   display: flex;
   flex-direction: column;
@@ -1117,28 +1131,31 @@ function formatTime(dateStr: string): string {
 }
 
 .task-item {
-  padding: 10px 14px;
-  background: #fafafa;
+  padding: 10px 12px;
+  background: #fff;
   border: 1px solid #ebeef5;
   border-radius: 6px;
   cursor: pointer;
-  transition: border-color 0.2s;
+  transition: all 0.2s;
 }
 
 .task-item:hover {
   border-color: #409eff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .task-prompt {
-  font-size: 14px;
+  font-size: 13px;
   color: #303133;
   margin-bottom: 6px;
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .task-meta {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 4px;
   font-size: 12px;
   color: #909399;
 }
