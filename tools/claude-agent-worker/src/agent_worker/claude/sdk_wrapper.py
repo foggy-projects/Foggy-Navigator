@@ -39,6 +39,12 @@ _TextBlock = None
 _ToolUseBlock = None
 _ToolResultBlock = None
 
+# Error types -- for structured error reporting.
+_ProcessError = None
+_CLIConnectionError = None
+_CLIJSONDecodeError = None
+_CLINotFoundError = None
+
 try:
     from claude_code_sdk import query as _q, ClaudeCodeOptions as _opts  # type: ignore[import-untyped]
     from claude_code_sdk import (  # type: ignore[import-untyped]
@@ -50,6 +56,12 @@ try:
         ToolUseBlock as _TUB,
         ToolResultBlock as _TRB,
     )
+    from claude_code_sdk import (  # type: ignore[import-untyped]
+        ProcessError as _PE,
+        CLIConnectionError as _CCE,
+        CLIJSONDecodeError as _CJDE,
+        CLINotFoundError as _CNFE,
+    )
 
     _query_fn = _q
     _options_cls = _opts
@@ -60,6 +72,10 @@ try:
     _TextBlock = _TB
     _ToolUseBlock = _TUB
     _ToolResultBlock = _TRB
+    _ProcessError = _PE
+    _CLIConnectionError = _CCE
+    _CLIJSONDecodeError = _CJDE
+    _CLINotFoundError = _CNFE
     _sdk_available = True
     logger.info("Loaded claude-code-sdk successfully")
 except ImportError:
@@ -74,6 +90,12 @@ except ImportError:
             ToolUseBlock as _TUB2,
             ToolResultBlock as _TRB2,
         )
+        from claude_agent_sdk import (  # type: ignore[import-untyped]
+            ProcessError as _PE2,
+            CLIConnectionError as _CCE2,
+            CLIJSONDecodeError as _CJDE2,
+            CLINotFoundError as _CNFE2,
+        )
 
         _query_fn = _q2
         _options_cls = _opts2
@@ -84,6 +106,10 @@ except ImportError:
         _TextBlock = _TB2
         _ToolUseBlock = _TUB2
         _ToolResultBlock = _TRB2
+        _ProcessError = _PE2
+        _CLIConnectionError = _CCE2
+        _CLIJSONDecodeError = _CJDE2
+        _CLINotFoundError = _CNFE2
         _sdk_available = True
         logger.info("Loaded claude-agent-sdk successfully")
     except ImportError:
@@ -101,6 +127,100 @@ task_registry: dict[str, dict[str, Any]] = {}
 
 session_store: dict[str, dict[str, Any]] = {}
 """Mapping of *session_id* -> metadata dict for tracked sessions."""
+
+
+# ---------------------------------------------------------------------------
+# Error detail extraction
+# ---------------------------------------------------------------------------
+
+def _extract_error_detail(exc: Exception, task_id: str) -> str:
+    """Build a detailed error message from an SDK exception.
+
+    Inspects known SDK exception types (``ProcessError``,
+    ``CLINotFoundError``, ``CLIJSONDecodeError``) to extract structured
+    information (exit code, stderr, malformed output) that would otherwise
+    be buried in the generic ``str(exc)`` representation.
+
+    NOTE: The SDK sometimes wraps ProcessError in a generic Exception,
+    losing the structured attributes. We parse the string message as
+    a fallback to extract exit code information.
+    """
+
+    exc_type = type(exc).__name__
+    exc_str = str(exc)
+
+    # -- ProcessError: CLI process exited with non-zero code ----------------
+    if _ProcessError is not None and isinstance(exc, _ProcessError):
+        exit_code = getattr(exc, "exit_code", None)
+        stderr = getattr(exc, "stderr", None)
+
+        parts = [f"[{exc_type}] Claude CLI process failed"]
+        if exit_code is not None:
+            parts.append(f"exit_code={exit_code}")
+        if stderr:
+            parts.append(f"stderr:\n{stderr}")
+        else:
+            parts.append("(no stderr captured)")
+
+        detail = " | ".join(parts[:2])
+        if stderr:
+            detail += f"\n{parts[2]}"
+        else:
+            detail += f" | {parts[2]}"
+
+        logger.error(
+            "Task %s ProcessError: exit_code=%s, stderr=%s",
+            task_id, exit_code, stderr[:500] if stderr else None,
+        )
+        return detail
+
+    # -- CLINotFoundError: claude binary not on PATH ------------------------
+    if _CLINotFoundError is not None and isinstance(exc, _CLINotFoundError):
+        logger.error("Task %s CLINotFoundError: %s", task_id, exc)
+        return (
+            f"[{exc_type}] Claude Code CLI not found. "
+            "Ensure 'claude' is installed and available on the system PATH."
+        )
+
+    # -- CLIJSONDecodeError: malformed CLI output ---------------------------
+    if _CLIJSONDecodeError is not None and isinstance(exc, _CLIJSONDecodeError):
+        line = getattr(exc, "line", "")
+        original = getattr(exc, "original_error", None)
+        logger.error(
+            "Task %s CLIJSONDecodeError: line=%s, original=%s",
+            task_id, line[:200] if line else None, original,
+        )
+        return (
+            f"[{exc_type}] Failed to parse CLI output. "
+            f"Malformed line: {line[:200]}"
+        )
+
+    # -- CLIConnectionError: generic connection failure ---------------------
+    if _CLIConnectionError is not None and isinstance(exc, _CLIConnectionError):
+        logger.error("Task %s CLIConnectionError: %s", task_id, exc)
+        return f"[{exc_type}] {exc}"
+
+    # -- Generic Exception with ProcessError-like message -------------------
+    # The SDK sometimes raises Exception("Command failed...") instead of
+    # ProcessError, so we parse the message string to extract exit code.
+    if "Command failed with exit code" in exc_str:
+        import re
+        # Extract exit code from message like "Command failed with exit code 1 (exit code: 1)"
+        match = re.search(r"exit code[:\s]+(\d+)", exc_str)
+        exit_code_str = match.group(1) if match else "unknown"
+
+        detail = (
+            f"[CLI Process Failed] Claude Code CLI terminated with exit_code={exit_code_str}\n"
+            f"Note: The SDK wrapped this error, stderr details are not available.\n"
+            f"Original error: {exc_str}"
+        )
+        logger.error("Task %s CLI process failed: exit_code=%s, raw_message=%s",
+                    task_id, exit_code_str, exc_str)
+        return detail
+
+    # -- Fallback: unknown exception ----------------------------------------
+    logger.exception("Task %s unexpected error (%s)", task_id, exc_type)
+    return f"[{exc_type}] {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -278,10 +398,10 @@ class SdkWrapper:
             )
 
         except Exception as exc:
-            logger.exception("Error executing task %s", task_id)
+            error_detail = _extract_error_detail(exc, task_id)
             yield event_mapper.map_error(
                 task_id=task_id,
-                error=str(exc),
+                error=error_detail,
                 session_id=current_session_id,
             )
 
