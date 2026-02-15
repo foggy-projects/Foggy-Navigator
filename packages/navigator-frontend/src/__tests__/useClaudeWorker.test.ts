@@ -12,11 +12,15 @@ vi.mock('@/api/claudeWorker', () => ({
   createTask: vi.fn(),
   resumeTask: vi.fn(),
   abortTask: vi.fn(),
+  listDirectoriesByWorker: vi.fn(),
+  createDirectory: vi.fn(),
+  deleteDirectory: vi.fn(),
+  syncDirectoryGitInfo: vi.fn(),
 }))
 
 import * as api from '@/api/claudeWorker'
 import { useClaudeWorker } from '@/composables/useClaudeWorker'
-import type { ClaudeWorker, ClaudeTask } from '@/types'
+import type { ClaudeWorker, ClaudeTask, WorkingDirectory } from '@/types'
 
 const mockApi = vi.mocked(api)
 
@@ -45,13 +49,27 @@ function makeTask(overrides?: Partial<ClaudeTask>): ClaudeTask {
   }
 }
 
+function makeDirectory(overrides?: Partial<WorkingDirectory>): WorkingDirectory {
+  return {
+    directoryId: 'd-1',
+    workerId: 'w-1',
+    projectName: 'my-project',
+    path: '/home/user/my-project',
+    createdAt: '2026-02-10T10:00:00',
+    updatedAt: '2026-02-10T10:00:00',
+    ...overrides,
+  }
+}
+
 describe('useClaudeWorker', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Reset the module-level state by directly mutating refs
-    const { workers, tasks, loading, taskPage, taskSize, taskTotal } = useClaudeWorker()
+    const { workers, tasks, directories, loading, taskPage, taskSize, taskTotal } =
+      useClaudeWorker()
     workers.value = []
     tasks.value = []
+    directories.value = []
     loading.value = false
     taskPage.value = 0
     taskSize.value = 20
@@ -232,6 +250,20 @@ describe('useClaudeWorker', () => {
       expect(tasks.value).toHaveLength(2)
       expect(tasks.value[0]!.taskId).toBe('t-new')
     })
+
+    it('passes directoryId when provided', async () => {
+      const task = makeTask({ taskId: 't-dir', directoryId: 'd-1' })
+      mockApi.createTask.mockResolvedValue(task)
+
+      const { createTask } = useClaudeWorker()
+      await createTask({ workerId: 'w-1', prompt: 'Do stuff', directoryId: 'd-1' })
+
+      expect(mockApi.createTask).toHaveBeenCalledWith({
+        workerId: 'w-1',
+        prompt: 'Do stuff',
+        directoryId: 'd-1',
+      })
+    })
   })
 
   // ========== abortTask ==========
@@ -246,6 +278,89 @@ describe('useClaudeWorker', () => {
       await abortTask('t-1')
 
       expect(tasks.value[0]!.status).toBe('ABORTED')
+    })
+  })
+
+  // ========== loadDirectories ==========
+
+  describe('loadDirectories', () => {
+    it('loads directories for a worker', async () => {
+      const d1 = makeDirectory({ directoryId: 'd-1' })
+      const d2 = makeDirectory({ directoryId: 'd-2', projectName: 'other-project' })
+      mockApi.listDirectoriesByWorker.mockResolvedValue([d1, d2])
+
+      const { loadDirectories, directories } = useClaudeWorker()
+      await loadDirectories('w-1')
+
+      expect(mockApi.listDirectoriesByWorker).toHaveBeenCalledWith('w-1')
+      expect(directories.value).toHaveLength(2)
+    })
+  })
+
+  // ========== createDirectory ==========
+
+  describe('createDirectory', () => {
+    it('adds to directories list', async () => {
+      const newDir = makeDirectory({ directoryId: 'd-new' })
+      mockApi.createDirectory.mockResolvedValue(newDir)
+
+      const { createDirectory, directories } = useClaudeWorker()
+      const result = await createDirectory({
+        workerId: 'w-1',
+        projectName: 'new-project',
+        path: '/home/user/new-project',
+      })
+
+      expect(result).toEqual(newDir)
+      expect(directories.value).toContainEqual(newDir)
+      expect(mockApi.createDirectory).toHaveBeenCalledWith({
+        workerId: 'w-1',
+        projectName: 'new-project',
+        path: '/home/user/new-project',
+      })
+    })
+  })
+
+  // ========== deleteDirectory ==========
+
+  describe('deleteDirectory', () => {
+    it('removes directory from list', async () => {
+      mockApi.deleteDirectory.mockResolvedValue(undefined)
+
+      const { directories, deleteDirectory } = useClaudeWorker()
+      directories.value = [
+        makeDirectory({ directoryId: 'd-1' }),
+        makeDirectory({ directoryId: 'd-2' }),
+      ]
+
+      await deleteDirectory('d-1')
+
+      expect(directories.value).toHaveLength(1)
+      expect(directories.value[0]!.directoryId).toBe('d-2')
+    })
+  })
+
+  // ========== syncGitInfo ==========
+
+  describe('syncGitInfo', () => {
+    it('updates directory in list', async () => {
+      const updated = makeDirectory({
+        directoryId: 'd-1',
+        gitBranch: 'main',
+        gitStatus: 'clean',
+        gitProvider: 'GITHUB',
+      })
+      mockApi.syncDirectoryGitInfo.mockResolvedValue(updated)
+
+      const { syncGitInfo, directories } = useClaudeWorker()
+      directories.value = [makeDirectory({ directoryId: 'd-1' })]
+
+      const result = await syncGitInfo('d-1')
+
+      expect(result.gitBranch).toBe('main')
+      expect(result.gitStatus).toBe('clean')
+      expect(directories.value[0]!.gitBranch).toBe('main')
+      expect(mockApi.syncDirectoryGitInfo).toHaveBeenCalledWith('d-1')
     })
   })
 })

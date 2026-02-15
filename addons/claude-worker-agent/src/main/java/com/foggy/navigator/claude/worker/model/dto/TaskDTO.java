@@ -17,6 +17,7 @@ public class TaskDTO {
     private String workerId;
     private String prompt;
     private String cwd;
+    private String directoryId;
     private String status;
     private String claudeSessionId;
     private BigDecimal costUsd;

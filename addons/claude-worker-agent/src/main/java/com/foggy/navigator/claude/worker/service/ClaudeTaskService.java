@@ -5,6 +5,7 @@ import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
+import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
@@ -36,6 +37,7 @@ public class ClaudeTaskService {
 
     private final ClaudeTaskRepository taskRepository;
     private final ClaudeWorkerService workerService;
+    private final WorkingDirectoryService workingDirectoryService;
     private final SessionManager sessionManager;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -53,7 +55,18 @@ public class ClaudeTaskService {
             throw new IllegalStateException("Worker is not online: " + worker.getStatus());
         }
 
-        // 2. 创建 Foggy Session
+        // 2. 如果指定了 directoryId，从目录解析 cwd
+        String cwd = form.getCwd();
+        String directoryId = form.getDirectoryId();
+        if (directoryId != null && !directoryId.isEmpty()) {
+            WorkingDirectoryEntity dir = workingDirectoryService.getDirectoryEntity(userId, directoryId);
+            if (!dir.getWorkerId().equals(form.getWorkerId())) {
+                throw new IllegalArgumentException("Directory does not belong to the specified worker");
+            }
+            cwd = dir.getPath();
+        }
+
+        // 3. 创建 Foggy Session
         String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
                 .userId(userId)
                 .tenantId(tenantId)
@@ -61,7 +74,7 @@ public class ClaudeTaskService {
                 .taskName(truncate(form.getPrompt(), 100))
                 .build());
 
-        // 3. 持久化任务
+        // 4. 持久化任务
         String taskId = UUID.randomUUID().toString().substring(0, 12);
         ClaudeTaskEntity entity = new ClaudeTaskEntity();
         entity.setTaskId(taskId);
@@ -69,16 +82,17 @@ public class ClaudeTaskService {
         entity.setWorkerId(form.getWorkerId());
         entity.setUserId(userId);
         entity.setPrompt(form.getPrompt());
-        entity.setCwd(form.getCwd());
+        entity.setCwd(cwd);
+        entity.setDirectoryId(directoryId);
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
 
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}", taskId, sessionId, form.getWorkerId(), userId);
 
-        // 4. 发布任务启动事件 → WorkerStreamRelay 监听
+        // 5. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
-                form.getPrompt(), form.getCwd(), null));
+                form.getPrompt(), cwd, null));
 
         return toDTO(entity);
     }
@@ -144,6 +158,23 @@ public class ClaudeTaskService {
      */
     public Page<TaskDTO> listTasks(String userId, int page, int size) {
         return taskRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(page, size))
+                .map(this::toDTO);
+    }
+
+    /**
+     * 按目录列出任务
+     */
+    public List<TaskDTO> listTasksByDirectory(String userId, String directoryId) {
+        return taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId).stream()
+                .map(this::toDTO)
+                .toList();
+    }
+
+    /**
+     * 按目录分页列出任务
+     */
+    public Page<TaskDTO> listTasksByDirectory(String userId, String directoryId, int page, int size) {
+        return taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId, PageRequest.of(page, size))
                 .map(this::toDTO);
     }
 
@@ -230,6 +261,7 @@ public class ClaudeTaskService {
                 .workerId(entity.getWorkerId())
                 .prompt(entity.getPrompt())
                 .cwd(entity.getCwd())
+                .directoryId(entity.getDirectoryId())
                 .status(entity.getStatus())
                 .claudeSessionId(entity.getClaudeSessionId())
                 .costUsd(entity.getCostUsd())

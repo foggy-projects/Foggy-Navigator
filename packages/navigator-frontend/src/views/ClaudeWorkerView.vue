@@ -1,26 +1,70 @@
 <template>
   <div class="worker-layout">
-    <!-- Left Panel: Worker List -->
+    <!-- Left Panel: Two-level Tree Sidebar -->
     <aside class="worker-sidebar">
       <div class="sidebar-header">
         <h3>Workers</h3>
-        <el-button type="primary" size="small" @click="showAddDialog = true">
-          + 添加
-        </el-button>
+        <el-dropdown trigger="click" @command="handleAddCommand">
+          <el-button type="primary" size="small">+ 添加</el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="worker">添加 Worker</el-dropdown-item>
+              <el-dropdown-item command="directory" :disabled="!selectedWorkerId">
+                添加工作目录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
       <div class="worker-list">
-        <div
-          v-for="worker in workerState.workers.value"
-          :key="worker.workerId"
-          :class="['worker-item', { active: selectedWorkerId === worker.workerId }]"
-          @click="selectWorker(worker.workerId)"
-        >
-          <div class="worker-info">
-            <span :class="['status-dot', worker.status?.toLowerCase()]" />
-            <span class="worker-name">{{ worker.name }}</span>
+        <template v-for="worker in workerState.workers.value" :key="worker.workerId">
+          <!-- Worker node (Level 1) -->
+          <div
+            :class="[
+              'worker-item',
+              { active: selectedWorkerId === worker.workerId && !selectedDirectoryId },
+            ]"
+            @click="selectWorker(worker.workerId)"
+          >
+            <div class="worker-info">
+              <span
+                class="expand-icon"
+                @click.stop="toggleExpand(worker.workerId)"
+              >
+                {{ expandedWorkerIds.has(worker.workerId) ? '▼' : '▶' }}
+              </span>
+              <span :class="['status-dot', worker.status?.toLowerCase()]" />
+              <span class="worker-name">{{ worker.name }}</span>
+            </div>
+            <div class="worker-meta">{{ worker.hostname || worker.baseUrl }}</div>
           </div>
-          <div class="worker-meta">{{ worker.hostname || worker.baseUrl }}</div>
-        </div>
+          <!-- Directory nodes (Level 2) -->
+          <template v-if="expandedWorkerIds.has(worker.workerId)">
+            <div
+              v-for="dir in directoriesForWorker(worker.workerId)"
+              :key="dir.directoryId"
+              :class="[
+                'directory-item',
+                { active: selectedDirectoryId === dir.directoryId },
+              ]"
+              @click="selectDirectory(worker.workerId, dir.directoryId)"
+            >
+              <div class="dir-info">
+                <span class="dir-name">{{ dir.projectName }}</span>
+                <span v-if="dir.gitStatus === 'dirty'" class="dirty-dot" title="Uncommitted changes" />
+              </div>
+              <div v-if="dir.gitBranch" class="dir-branch">
+                <span class="branch-icon">⎇</span> {{ dir.gitBranch }}
+              </div>
+            </div>
+            <div
+              v-if="directoriesForWorker(worker.workerId).length === 0"
+              class="empty-dir-hint"
+            >
+              暂无工作目录
+            </div>
+          </template>
+        </template>
         <div v-if="workerState.workers.value.length === 0" class="empty-hint">
           暂无 Worker，点击上方添加
         </div>
@@ -34,23 +78,37 @@
 
     <!-- Right Panel -->
     <main :class="['worker-main', { 'has-panes': panes.length > 0 }]">
-      <template v-if="selectedWorker">
-        <!-- Worker Detail Header -->
+      <!-- Directory selected: show git info + task form scoped to directory -->
+      <template v-if="selectedDirectory">
         <div class="worker-header">
           <div class="header-info">
-            <h2>{{ selectedWorker.name }}</h2>
-            <el-tag :type="statusTagType(selectedWorker.status)" size="small">
-              {{ selectedWorker.status }}
+            <h2>{{ selectedDirectory.projectName }}</h2>
+            <el-tag v-if="selectedDirectory.gitBranch" size="small">
+              ⎇ {{ selectedDirectory.gitBranch }}
             </el-tag>
-            <span v-if="selectedWorker.workerVersion" class="version-tag">
-              v{{ selectedWorker.workerVersion }}
+            <el-tag
+              v-if="selectedDirectory.gitStatus"
+              :type="selectedDirectory.gitStatus === 'clean' ? 'success' : selectedDirectory.gitStatus === 'dirty' ? 'warning' : 'info'"
+              size="small"
+            >
+              {{ selectedDirectory.gitStatus }}
+            </el-tag>
+            <span v-if="selectedDirectory.gitRemoteUrl" class="remote-url">
+              {{ selectedDirectory.gitRemoteUrl }}
             </span>
           </div>
           <div class="header-actions">
-            <el-button size="small" @click="handleRefreshStatus">刷新状态</el-button>
-            <el-button size="small" @click="showEditDialog = true">编辑</el-button>
-            <el-button size="small" type="danger" @click="handleDelete">删除</el-button>
+            <el-button size="small" :loading="syncing" @click="handleSyncGitInfo">
+              同步 Git
+            </el-button>
+            <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
+            <el-button size="small" type="danger" @click="handleDeleteDirectory">删除目录</el-button>
           </div>
+        </div>
+
+        <div class="dir-path-bar">
+          <span class="path-label">路径：</span>
+          <code>{{ selectedDirectory.path }}</code>
         </div>
 
         <!-- Task Form -->
@@ -66,13 +124,10 @@
                 @keydown.ctrl.enter="handleCreateTask"
               />
             </el-form-item>
-            <el-form-item label="工作目录 (cwd)">
-              <el-input v-model="taskForm.cwd" placeholder="可选，如 /home/user/project" />
-            </el-form-item>
             <el-form-item>
               <el-button
                 type="primary"
-                :disabled="!taskForm.prompt || selectedWorker.status !== 'ONLINE'"
+                :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
                 @click="handleCreateTask"
               >
                 运行任务
@@ -93,7 +148,101 @@
           @resume="resumePane"
         />
 
-        <!-- Task History -->
+        <!-- Task History (filtered by directory) -->
+        <div class="task-history">
+          <h4>历史任务</h4>
+          <div v-if="directoryTasks.length > 0" class="task-list">
+            <div
+              v-for="task in directoryTasks"
+              :key="task.taskId"
+              class="task-item"
+              @click="viewTask(task)"
+            >
+              <div class="task-prompt">{{ truncate(task.prompt, 80) }}</div>
+              <div class="task-meta">
+                <el-tag :type="taskStatusType(task.status)" size="small">
+                  {{ task.status }}
+                </el-tag>
+                <span v-if="task.costUsd">${{ task.costUsd?.toFixed(4) }}</span>
+                <span v-if="task.durationMs">{{ (task.durationMs / 1000).toFixed(1) }}s</span>
+                <span>{{ formatTime(task.createdAt) }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="empty-hint">暂无历史任务</div>
+          <el-pagination
+            v-if="dirTaskTotal > dirTaskSize"
+            class="task-pagination"
+            small
+            layout="prev, pager, next"
+            :total="dirTaskTotal"
+            :page-size="dirTaskSize"
+            :current-page="dirTaskPage + 1"
+            @current-change="handleDirPageChange"
+          />
+        </div>
+      </template>
+
+      <!-- Worker selected (no directory): show worker details + all tasks -->
+      <template v-else-if="selectedWorkerEntity">
+        <div class="worker-header">
+          <div class="header-info">
+            <h2>{{ selectedWorkerEntity.name }}</h2>
+            <el-tag :type="statusTagType(selectedWorkerEntity.status)" size="small">
+              {{ selectedWorkerEntity.status }}
+            </el-tag>
+            <span v-if="selectedWorkerEntity.workerVersion" class="version-tag">
+              v{{ selectedWorkerEntity.workerVersion }}
+            </span>
+          </div>
+          <div class="header-actions">
+            <el-button size="small" @click="handleRefreshStatus">刷新状态</el-button>
+            <el-button size="small" @click="showEditDialog = true">编辑</el-button>
+            <el-button size="small" type="danger" @click="handleDelete">删除</el-button>
+          </div>
+        </div>
+
+        <!-- Task Form (worker-level, free cwd) -->
+        <div class="task-form">
+          <h4>新建任务</h4>
+          <el-form :model="taskForm" label-position="top" size="default">
+            <el-form-item label="Prompt">
+              <el-input
+                v-model="taskForm.prompt"
+                type="textarea"
+                :rows="3"
+                placeholder="输入任务描述..."
+                @keydown.ctrl.enter="handleCreateTask"
+              />
+            </el-form-item>
+            <el-form-item label="工作目录 (cwd)">
+              <el-input v-model="taskForm.cwd" placeholder="可选，如 /home/user/project" />
+            </el-form-item>
+            <el-form-item>
+              <el-button
+                type="primary"
+                :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE'"
+                @click="handleCreateTask"
+              >
+                运行任务
+              </el-button>
+              <span v-if="panes.length >= MAX_PANES" class="pane-limit-hint">
+                已达最大面板数 ({{ MAX_PANES }})，请关闭一个面板后再创建
+              </span>
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <!-- Multi-Pane Grid -->
+        <TaskPaneGrid
+          v-if="panes.length > 0"
+          :panes="panes"
+          @close="closePane"
+          @abort="abortPane"
+          @resume="resumePane"
+        />
+
+        <!-- Task History (all tasks for this worker) -->
         <div class="task-history">
           <h4>历史任务</h4>
           <div v-if="workerTasks.length > 0" class="task-list">
@@ -197,11 +346,43 @@
         <el-button type="primary" :loading="saving" @click="handleEdit">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- Add Directory Dialog -->
+    <el-dialog v-model="showAddDirectoryDialog" title="添加工作目录" width="480px">
+      <el-form :model="addDirForm" label-position="top">
+        <el-form-item label="项目名称" required>
+          <el-input v-model="addDirForm.projectName" placeholder="如：foggy-navigator / feature-branch" />
+        </el-form-item>
+        <el-form-item label="路径" required>
+          <el-input v-model="addDirForm.path" placeholder="如：/home/user/projects/foggy-navigator" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAddDirectoryDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleAddDirectory">添加</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Edit Directory Dialog -->
+    <el-dialog v-model="showEditDirectoryDialog" title="编辑工作目录" width="480px">
+      <el-form :model="editDirForm" label-position="top">
+        <el-form-item label="项目名称">
+          <el-input v-model="editDirForm.projectName" />
+        </el-form-item>
+        <el-form-item label="路径">
+          <el-input v-model="editDirForm.path" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEditDirectoryDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleEditDirectory">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, shallowRef, triggerRef, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, shallowRef, triggerRef, computed, reactive, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
@@ -209,7 +390,8 @@ import { useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useTaskPane } from '@/composables/useTaskPane'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
-import type { ClaudeTask } from '@/types'
+import * as dirApi from '@/api/claudeWorker'
+import type { ClaudeTask, WorkingDirectory } from '@/types'
 
 const MAX_PANES = 4
 
@@ -217,10 +399,21 @@ const router = useRouter()
 const workerState = useClaudeWorker()
 
 const selectedWorkerId = ref<string | null>(null)
+const selectedDirectoryId = ref<string | null>(null)
+const expandedWorkerIds = reactive(new Set<string>())
 const panes = shallowRef<TaskPaneState[]>([])
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
+const showAddDirectoryDialog = ref(false)
+const showEditDirectoryDialog = ref(false)
 const saving = ref(false)
+const syncing = ref(false)
+
+// Directory task pagination (separate from global task pagination)
+const directoryTasks = ref<ClaudeTask[]>([])
+const dirTaskPage = ref(0)
+const dirTaskSize = ref(20)
+const dirTaskTotal = ref(0)
 
 let paneCounter = 0
 
@@ -238,18 +431,36 @@ const editForm = ref({
   authMode: 'SUBSCRIPTION',
 })
 
+const addDirForm = ref({
+  projectName: '',
+  path: '',
+})
+
+const editDirForm = ref({
+  projectName: '',
+  path: '',
+})
+
 const taskForm = ref({
   prompt: '',
   cwd: '',
 })
 
-const selectedWorker = computed(() =>
+const selectedWorkerEntity = computed(() =>
   workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value),
+)
+
+const selectedDirectory = computed(() =>
+  workerState.directories.value.find((d) => d.directoryId === selectedDirectoryId.value),
 )
 
 const workerTasks = computed(() =>
   workerState.tasks.value.filter((t) => t.workerId === selectedWorkerId.value),
 )
+
+function directoriesForWorker(workerId: string): WorkingDirectory[] {
+  return workerState.directories.value.filter((d) => d.workerId === workerId)
+}
 
 onMounted(async () => {
   await Promise.all([workerState.loadWorkers(), workerState.loadTasks()])
@@ -261,8 +472,10 @@ onUnmounted(() => {
 
 /** Called when any pane's task reaches a terminal state */
 function handleTaskFinished(_paneId: string) {
-  // Refresh task list so history shows updated status / cost / duration
   workerState.loadTasks()
+  if (selectedDirectoryId.value) {
+    loadDirectoryTasks()
+  }
 }
 
 function disposeAllPanes() {
@@ -272,9 +485,68 @@ function disposeAllPanes() {
   panes.value = []
 }
 
+function toggleExpand(workerId: string) {
+  if (expandedWorkerIds.has(workerId)) {
+    expandedWorkerIds.delete(workerId)
+  } else {
+    expandedWorkerIds.add(workerId)
+    workerState.loadDirectories(workerId)
+  }
+}
+
 function selectWorker(workerId: string) {
   selectedWorkerId.value = workerId
+  selectedDirectoryId.value = null
   disposeAllPanes()
+  // Auto-expand
+  if (!expandedWorkerIds.has(workerId)) {
+    expandedWorkerIds.add(workerId)
+    workerState.loadDirectories(workerId)
+  }
+}
+
+function selectDirectory(workerId: string, directoryId: string) {
+  selectedWorkerId.value = workerId
+  selectedDirectoryId.value = directoryId
+  disposeAllPanes()
+  taskForm.value.prompt = ''
+  taskForm.value.cwd = ''
+  dirTaskPage.value = 0
+  loadDirectoryTasks()
+}
+
+async function loadDirectoryTasks() {
+  if (!selectedDirectoryId.value) return
+  try {
+    const result = await dirApi.listTasksByDirectoryPaged(
+      selectedDirectoryId.value,
+      dirTaskPage.value,
+      dirTaskSize.value,
+    )
+    directoryTasks.value = result.content
+    dirTaskTotal.value = result.totalElements
+  } catch {
+    try {
+      directoryTasks.value = await dirApi.listTasksByDirectory(selectedDirectoryId.value)
+      dirTaskTotal.value = directoryTasks.value.length
+    } catch {
+      directoryTasks.value = []
+      dirTaskTotal.value = 0
+    }
+  }
+}
+
+function handleAddCommand(command: string) {
+  if (command === 'worker') {
+    showAddDialog.value = true
+  } else if (command === 'directory') {
+    if (!selectedWorkerId.value) {
+      ElMessage.warning('请先选择一个 Worker')
+      return
+    }
+    addDirForm.value = { projectName: '', path: '' }
+    showAddDirectoryDialog.value = true
+  }
 }
 
 async function handleAdd() {
@@ -320,6 +592,7 @@ async function handleDelete() {
     disposeAllPanes()
     await workerState.deleteWorker(selectedWorkerId.value)
     selectedWorkerId.value = null
+    selectedDirectoryId.value = null
     ElMessage.success('已删除')
   } catch {
     // cancelled
@@ -336,6 +609,75 @@ async function handleRefreshStatus() {
   }
 }
 
+async function handleAddDirectory() {
+  if (!selectedWorkerId.value || !addDirForm.value.projectName || !addDirForm.value.path) {
+    ElMessage.warning('请填写完整信息')
+    return
+  }
+  saving.value = true
+  try {
+    await workerState.createDirectory({
+      workerId: selectedWorkerId.value,
+      projectName: addDirForm.value.projectName,
+      path: addDirForm.value.path,
+    })
+    showAddDirectoryDialog.value = false
+    ElMessage.success('工作目录添加成功')
+  } catch (e: unknown) {
+    ElMessage.error('添加失败: ' + ((e as Error).message || '未知错误'))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleEditDirectory() {
+  if (!selectedDirectoryId.value) return
+  saving.value = true
+  try {
+    const updated = await dirApi.updateDirectory(selectedDirectoryId.value, editDirForm.value)
+    const idx = workerState.directories.value.findIndex(
+      (d) => d.directoryId === selectedDirectoryId.value,
+    )
+    if (idx >= 0) workerState.directories.value[idx] = updated
+    showEditDirectoryDialog.value = false
+    ElMessage.success('更新成功')
+  } catch {
+    ElMessage.error('更新失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleDeleteDirectory() {
+  if (!selectedDirectoryId.value) return
+  try {
+    await ElMessageBox.confirm('确认删除该工作目录？', '提示', {
+      type: 'warning',
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+    })
+    disposeAllPanes()
+    await workerState.deleteDirectory(selectedDirectoryId.value)
+    selectedDirectoryId.value = null
+    ElMessage.success('已删除')
+  } catch {
+    // cancelled
+  }
+}
+
+async function handleSyncGitInfo() {
+  if (!selectedDirectoryId.value) return
+  syncing.value = true
+  try {
+    await workerState.syncGitInfo(selectedDirectoryId.value)
+    ElMessage.success('Git 信息已同步')
+  } catch {
+    ElMessage.error('同步失败')
+  } finally {
+    syncing.value = false
+  }
+}
+
 async function handleCreateTask() {
   if (!selectedWorkerId.value || !taskForm.value.prompt) return
   if (panes.value.length >= MAX_PANES) {
@@ -343,11 +685,18 @@ async function handleCreateTask() {
     return
   }
   try {
-    const task = await workerState.createTask({
+    const form: { workerId: string; prompt: string; cwd?: string; directoryId?: string } = {
       workerId: selectedWorkerId.value,
       prompt: taskForm.value.prompt,
-      cwd: taskForm.value.cwd || undefined,
-    })
+    }
+
+    if (selectedDirectoryId.value) {
+      form.directoryId = selectedDirectoryId.value
+    } else if (taskForm.value.cwd) {
+      form.cwd = taskForm.value.cwd
+    }
+
+    const task = await workerState.createTask(form)
     taskForm.value.prompt = ''
 
     const pane = createPane(task)
@@ -401,7 +750,6 @@ async function resumePane(paneId: string) {
     if (!prompt) return
 
     if (panes.value.length >= MAX_PANES) {
-      // Close the old pane to make room
       closePane(paneId)
     }
 
@@ -423,8 +771,12 @@ function handlePageChange(page: number) {
   workerState.loadTasksPage(page - 1)
 }
 
+function handleDirPageChange(page: number) {
+  dirTaskPage.value = page - 1
+  loadDirectoryTasks()
+}
+
 function viewTask(task: ClaudeTask) {
-  // If already open in a pane, don't duplicate
   const existing = panes.value.find((p) => p.task.value?.taskId === task.taskId)
   if (existing) return
 
@@ -438,12 +790,21 @@ function viewTask(task: ClaudeTask) {
 }
 
 watch(showEditDialog, (val) => {
-  if (val && selectedWorker.value) {
+  if (val && selectedWorkerEntity.value) {
     editForm.value = {
-      name: selectedWorker.value.name,
-      baseUrl: selectedWorker.value.baseUrl,
+      name: selectedWorkerEntity.value.name,
+      baseUrl: selectedWorkerEntity.value.baseUrl,
       authToken: '',
-      authMode: selectedWorker.value.authMode || 'SUBSCRIPTION',
+      authMode: selectedWorkerEntity.value.authMode || 'SUBSCRIPTION',
+    }
+  }
+})
+
+watch(showEditDirectoryDialog, (val) => {
+  if (val && selectedDirectory.value) {
+    editDirForm.value = {
+      projectName: selectedDirectory.value.projectName,
+      path: selectedDirectory.value.path,
     }
   }
 })
@@ -483,7 +844,7 @@ function formatTime(dateStr: string): string {
 }
 
 .worker-sidebar {
-  width: 260px;
+  width: 280px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -513,7 +874,7 @@ function formatTime(dateStr: string): string {
 
 .worker-item {
   padding: 10px 12px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   border-radius: 6px;
   cursor: pointer;
   transition: background-color 0.2s;
@@ -530,7 +891,15 @@ function formatTime(dateStr: string): string {
 .worker-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.expand-icon {
+  font-size: 10px;
+  width: 14px;
+  color: #909399;
+  cursor: pointer;
+  user-select: none;
 }
 
 .status-dot {
@@ -564,10 +933,66 @@ function formatTime(dateStr: string): string {
   font-size: 12px;
   color: #909399;
   margin-top: 2px;
-  margin-left: 16px;
+  margin-left: 28px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Directory items (Level 2) */
+.directory-item {
+  padding: 8px 12px 8px 40px;
+  margin-bottom: 2px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.directory-item:hover {
+  background: #ebeef5;
+}
+
+.directory-item.active {
+  background: #d4e5ff;
+}
+
+.dir-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dir-name {
+  font-size: 13px;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dirty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e6a23c;
+  flex-shrink: 0;
+}
+
+.dir-branch {
+  font-size: 11px;
+  color: #909399;
+  margin-top: 2px;
+  margin-left: 0;
+}
+
+.branch-icon {
+  font-size: 12px;
+}
+
+.empty-dir-hint {
+  padding: 8px 12px 8px 40px;
+  font-size: 12px;
+  color: #c0c4cc;
 }
 
 .sidebar-footer {
@@ -594,7 +1019,7 @@ function formatTime(dateStr: string): string {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   flex-shrink: 0;
 }
 
@@ -614,9 +1039,37 @@ function formatTime(dateStr: string): string {
   color: #909399;
 }
 
+.remote-url {
+  font-size: 12px;
+  color: #909399;
+  max-width: 300px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .header-actions {
   display: flex;
   gap: 8px;
+}
+
+.dir-path-bar {
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.path-label {
+  color: #909399;
+}
+
+.dir-path-bar code {
+  color: #606266;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
 }
 
 .task-form {

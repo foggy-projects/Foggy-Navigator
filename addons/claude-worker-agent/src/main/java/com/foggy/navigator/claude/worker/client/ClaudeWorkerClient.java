@@ -89,6 +89,19 @@ public class ClaudeWorkerClient {
                 .doOnError(e -> log.warn("List sessions failed for worker {}: {}", workerId, e.getMessage()));
     }
 
+    /**
+     * 查询 Git 仓库信息
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getGitInfo(String path) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/git-info").queryParam("path", path).build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Git info failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
     public String getWorkerId() {
         return workerId;
     }

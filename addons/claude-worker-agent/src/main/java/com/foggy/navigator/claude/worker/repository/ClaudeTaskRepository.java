@@ -23,6 +23,10 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
 
     Page<ClaudeTaskEntity> findByUserIdOrderByCreatedAtDesc(String userId, Pageable pageable);
 
+    List<ClaudeTaskEntity> findByDirectoryIdAndUserIdOrderByCreatedAtDesc(String directoryId, String userId);
+
+    Page<ClaudeTaskEntity> findByDirectoryIdAndUserIdOrderByCreatedAtDesc(String directoryId, String userId, Pageable pageable);
+
     List<ClaudeTaskEntity> findByStatusIn(List<String> statuses);
 
     List<ClaudeTaskEntity> findByStatusAndCreatedAtBefore(String status, LocalDateTime before);

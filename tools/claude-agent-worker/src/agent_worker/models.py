@@ -74,3 +74,18 @@ class AbortResponse(BaseModel):
 
     task_id: str
     status: str
+
+
+# ---------------------------------------------------------------------------
+# Git info
+# ---------------------------------------------------------------------------
+
+class GitInfoResponse(BaseModel):
+    """Response for ``GET /api/v1/git-info``."""
+
+    path: str
+    is_git_repo: bool
+    branch: str | None = None
+    remote_url: str | None = None
+    status: str = "unknown"      # clean | dirty | unknown
+    provider: str = "OTHER"      # GITHUB | GITLAB | GITEE | OTHER

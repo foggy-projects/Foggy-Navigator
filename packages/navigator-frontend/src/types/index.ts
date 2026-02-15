@@ -86,6 +86,7 @@ export interface ClaudeTask {
   workerId: string
   prompt: string
   cwd?: string
+  directoryId?: string
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED'
   claudeSessionId?: string
   costUsd?: number
@@ -93,6 +94,21 @@ export interface ClaudeTask {
   outputTokens?: number
   durationMs?: number
   errorMessage?: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** Worker 工作目录 */
+export interface WorkingDirectory {
+  directoryId: string
+  workerId: string
+  projectName: string
+  path: string
+  gitBranch?: string
+  gitRemoteUrl?: string
+  gitProvider?: 'GITHUB' | 'GITLAB' | 'GITEE' | 'OTHER'
+  gitStatus?: 'clean' | 'dirty' | 'unknown'
+  lastSyncedAt?: string
   createdAt: string
   updatedAt: string
 }

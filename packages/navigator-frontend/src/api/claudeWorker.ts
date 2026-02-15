@@ -1,5 +1,5 @@
 import client from './client'
-import type { RX, ClaudeWorker, ClaudeTask } from '@/types'
+import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory } from '@/types'
 
 // ===== Worker API =====
 
@@ -42,12 +42,53 @@ export async function triggerHealthCheck(workerId: string): Promise<ClaudeWorker
   return rx.data
 }
 
+// ===== Working Directory API =====
+
+export async function listDirectoriesByWorker(workerId: string): Promise<WorkingDirectory[]> {
+  const rx = (await client.get(
+    `/working-directories/worker/${workerId}`,
+  )) as unknown as RX<WorkingDirectory[]>
+  return rx.data
+}
+
+export async function createDirectory(form: {
+  workerId: string
+  projectName: string
+  path: string
+}): Promise<WorkingDirectory> {
+  const rx = (await client.post('/working-directories', form)) as unknown as RX<WorkingDirectory>
+  return rx.data
+}
+
+export async function updateDirectory(
+  directoryId: string,
+  form: { projectName?: string; path?: string },
+): Promise<WorkingDirectory> {
+  const rx = (await client.put(
+    `/working-directories/${directoryId}`,
+    form,
+  )) as unknown as RX<WorkingDirectory>
+  return rx.data
+}
+
+export async function deleteDirectory(directoryId: string): Promise<void> {
+  await client.delete(`/working-directories/${directoryId}`)
+}
+
+export async function syncDirectoryGitInfo(directoryId: string): Promise<WorkingDirectory> {
+  const rx = (await client.post(
+    `/working-directories/${directoryId}/sync`,
+  )) as unknown as RX<WorkingDirectory>
+  return rx.data
+}
+
 // ===== Task API =====
 
 export async function createTask(form: {
   workerId: string
   prompt: string
   cwd?: string
+  directoryId?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks', form)) as unknown as RX<ClaudeTask>
   return rx.data
@@ -78,6 +119,26 @@ export async function listTasksPaged(
   size: number,
 ): Promise<{ content: ClaudeTask[]; totalElements: number; totalPages: number }> {
   const rx = (await client.get('/claude-tasks/page', {
+    params: { page, size },
+  })) as unknown as RX<{ content: ClaudeTask[]; totalElements: number; totalPages: number }>
+  return rx.data
+}
+
+export async function listTasksByDirectory(
+  directoryId: string,
+): Promise<ClaudeTask[]> {
+  const rx = (await client.get(
+    `/claude-tasks/directory/${directoryId}`,
+  )) as unknown as RX<ClaudeTask[]>
+  return rx.data
+}
+
+export async function listTasksByDirectoryPaged(
+  directoryId: string,
+  page: number,
+  size: number,
+): Promise<{ content: ClaudeTask[]; totalElements: number; totalPages: number }> {
+  const rx = (await client.get(`/claude-tasks/directory/${directoryId}/page`, {
     params: { page, size },
   })) as unknown as RX<{ content: ClaudeTask[]; totalElements: number; totalPages: number }>
   return rx.data

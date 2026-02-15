@@ -14,7 +14,8 @@ import java.time.LocalDateTime;
 @Table(name = "claude_tasks", indexes = {
     @Index(name = "idx_ct_session_id", columnList = "sessionId"),
     @Index(name = "idx_ct_worker_id", columnList = "workerId"),
-    @Index(name = "idx_ct_user_id", columnList = "userId")
+    @Index(name = "idx_ct_user_id", columnList = "userId"),
+    @Index(name = "idx_ct_directory_id", columnList = "directoryId")
 })
 public class ClaudeTaskEntity {
 
@@ -39,6 +40,9 @@ public class ClaudeTaskEntity {
 
     @Column(length = 512)
     private String cwd;
+
+    @Column(length = 64)
+    private String directoryId;
 
     @Column(length = 32)
     private String status;

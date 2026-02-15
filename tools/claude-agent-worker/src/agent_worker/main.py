@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routes import health, query, sessions
+from .routes import git_info, health, query, sessions
 
 import sys
 
@@ -64,6 +64,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(query.router)
 app.include_router(sessions.router)
+app.include_router(git_info.router)
 
 
 if __name__ == "__main__":

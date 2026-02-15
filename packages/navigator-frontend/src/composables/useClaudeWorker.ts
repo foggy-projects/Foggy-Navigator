@@ -1,9 +1,10 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
-import type { ClaudeWorker, ClaudeTask } from '@/types'
+import type { ClaudeWorker, ClaudeTask, WorkingDirectory } from '@/types'
 
 const workers = ref<ClaudeWorker[]>([])
 const tasks = ref<ClaudeTask[]>([])
+const directories = ref<WorkingDirectory[]>([])
 const loading = ref(false)
 const taskPage = ref(0)
 const taskSize = ref(20)
@@ -72,7 +73,12 @@ export function useClaudeWorker() {
     return updated
   }
 
-  async function createTask(form: { workerId: string; prompt: string; cwd?: string }) {
+  async function createTask(form: {
+    workerId: string
+    prompt: string
+    cwd?: string
+    directoryId?: string
+  }) {
     const task = await api.createTask(form)
     tasks.value.unshift(task)
     return task
@@ -96,9 +102,34 @@ export function useClaudeWorker() {
     return result
   }
 
+  // ===== Directory methods =====
+
+  async function loadDirectories(workerId: string) {
+    directories.value = await api.listDirectoriesByWorker(workerId)
+  }
+
+  async function createDirectory(form: { workerId: string; projectName: string; path: string }) {
+    const dir = await api.createDirectory(form)
+    directories.value.push(dir)
+    return dir
+  }
+
+  async function deleteDirectory(directoryId: string) {
+    await api.deleteDirectory(directoryId)
+    directories.value = directories.value.filter((d) => d.directoryId !== directoryId)
+  }
+
+  async function syncGitInfo(directoryId: string) {
+    const updated = await api.syncDirectoryGitInfo(directoryId)
+    const idx = directories.value.findIndex((d) => d.directoryId === directoryId)
+    if (idx >= 0) directories.value[idx] = updated
+    return updated
+  }
+
   return {
     workers,
     tasks,
+    directories,
     loading,
     taskPage,
     taskSize,
@@ -114,5 +145,9 @@ export function useClaudeWorker() {
     createTask,
     resumeTask,
     abortTask,
+    loadDirectories,
+    createDirectory,
+    deleteDirectory,
+    syncGitInfo,
   }
 }

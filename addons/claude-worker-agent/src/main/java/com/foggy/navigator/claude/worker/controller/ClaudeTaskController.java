@@ -93,6 +93,21 @@ public class ClaudeTaskController {
         return RX.ok(Map.of("taskId", taskId, "status", "ABORTED"));
     }
 
+    @GetMapping("/directory/{directoryId}")
+    public RX<List<TaskDTO>> listTasksByDirectory(@PathVariable String directoryId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskService.listTasksByDirectory(userId, directoryId));
+    }
+
+    @GetMapping("/directory/{directoryId}/page")
+    public RX<Page<TaskDTO>> listTasksByDirectoryPaged(
+            @PathVariable String directoryId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskService.listTasksByDirectory(userId, directoryId, page, size));
+    }
+
     @GetMapping("/worker/{workerId}/sessions")
     public RX<List<Map<String, Object>>> listWorkerSessions(@PathVariable String workerId) {
         String userId = UserContext.getCurrentUserId();
