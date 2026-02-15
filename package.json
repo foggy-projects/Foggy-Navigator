@@ -1,5 +1,9 @@
 {
   "private": true,
+  "scripts": {
+    "test": "pnpm -r run test",
+    "build:frontend": "pnpm --filter @foggy/chat build && pnpm --filter @foggy/navigator-frontend build"
+  },
   "workspaces": [
     "packages/*",
     "addons/coding-agent/frontend",

@@ -201,7 +201,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, shallowRef, triggerRef, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
@@ -217,7 +217,7 @@ const router = useRouter()
 const workerState = useClaudeWorker()
 
 const selectedWorkerId = ref<string | null>(null)
-const panes = ref<TaskPaneState[]>([])
+const panes = shallowRef<TaskPaneState[]>([])
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
 const saving = ref(false)
@@ -361,15 +361,15 @@ function createPane(task: ClaudeTask): TaskPaneState {
   const paneId = `pane-${++paneCounter}`
   const pane = useTaskPane(paneId, { onTaskFinished: handleTaskFinished })
   pane.task.value = task
-  panes.value.push(pane)
+  panes.value = [...panes.value, pane]
   return pane
 }
 
 function closePane(paneId: string) {
   const idx = panes.value.findIndex((p) => p.paneId === paneId)
   if (idx >= 0) {
-    panes.value[idx].dispose()
-    panes.value.splice(idx, 1)
+    panes.value[idx]!.dispose()
+    panes.value = panes.value.filter((_, i) => i !== idx)
   }
 }
 
@@ -379,6 +379,7 @@ async function abortPane(paneId: string) {
   try {
     await workerState.abortTask(pane.task.value.taskId)
     pane.task.value.status = 'ABORTED'
+    triggerRef(panes)
     ElMessage.info('任务已中止')
   } catch {
     ElMessage.error('中止失败')

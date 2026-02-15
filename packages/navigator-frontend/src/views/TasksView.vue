@@ -22,8 +22,26 @@
         </div>
       </div>
 
+      <!-- Filters -->
+      <div class="filters">
+        <el-select v-model="filterStatus" placeholder="状态" clearable size="small" style="width: 120px">
+          <el-option label="PENDING" value="PENDING" />
+          <el-option label="RUNNING" value="RUNNING" />
+          <el-option label="COMPLETED" value="COMPLETED" />
+          <el-option label="FAILED" value="FAILED" />
+        </el-select>
+        <el-select v-model="filterType" placeholder="类型" clearable size="small" style="width: 150px">
+          <el-option label="CODING" value="CODING" />
+          <el-option label="CLAUDE_WORKER" value="CLAUDE_WORKER" />
+          <el-option label="DELEGATION" value="DELEGATION" />
+        </el-select>
+        <el-select v-model="filterAgent" placeholder="目标 Agent" clearable size="small" style="width: 160px">
+          <el-option v-for="a in agentOptions" :key="a" :label="a" :value="a" />
+        </el-select>
+      </div>
+
       <el-table
-        :data="tasks"
+        :data="filteredTasks"
         v-loading="loading"
         stripe
         style="width: 100%"
@@ -89,15 +107,15 @@
         </el-table-column>
       </el-table>
 
-      <div v-if="!loading && tasks.length === 0" class="empty-state">
-        <p>暂无任务记录</p>
+      <div v-if="!loading && filteredTasks.length === 0" class="empty-state">
+        <p>{{ tasks.length === 0 ? '暂无任务记录' : '无匹配的任务' }}</p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Back, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -109,7 +127,24 @@ const tasks = ref<AgentTask[]>([])
 const loading = ref(false)
 const expandedRows = ref<string[]>([])
 const autoRefresh = ref(false)
+const filterStatus = ref('')
+const filterType = ref('')
+const filterAgent = ref('')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
+
+const agentOptions = computed(() => {
+  const agents = new Set(tasks.value.map((t) => t.targetAgentId))
+  return [...agents].sort()
+})
+
+const filteredTasks = computed(() => {
+  return tasks.value.filter((t) => {
+    if (filterStatus.value && t.status !== filterStatus.value) return false
+    if (filterType.value && t.taskType !== filterType.value) return false
+    if (filterAgent.value && t.targetAgentId !== filterAgent.value) return false
+    return true
+  })
+})
 
 onMounted(() => {
   loadTasks()
@@ -225,6 +260,12 @@ function formatTime(dateStr: string): string {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.filters {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
 .truncated-text {

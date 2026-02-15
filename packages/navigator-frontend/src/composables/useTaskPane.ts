@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import { createChatState, createSseClient, AipMessageType } from '@foggy/chat'
 import type { ChatState, SseController, ChatMessage } from '@foggy/chat'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
@@ -8,7 +8,7 @@ import type { AgentMessage, ClaudeTask } from '@/types'
 
 export interface TaskPaneState {
   paneId: string
-  task: ReturnType<typeof ref<ClaudeTask | null>>
+  task: Ref<ClaudeTask | null>
   chatState: ChatState
   connect(sessionId: string): Promise<void>
   disconnect(): void

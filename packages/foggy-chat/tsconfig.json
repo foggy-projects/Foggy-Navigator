@@ -15,5 +15,6 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": false
   },
-  "include": ["src/**/*.ts", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.vue"],
+  "exclude": ["src/**/*.test.ts", "src/__tests__"]
 }

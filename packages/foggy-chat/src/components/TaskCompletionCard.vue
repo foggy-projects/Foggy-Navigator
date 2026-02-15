@@ -3,7 +3,7 @@
     <div class="card-header">
       <span class="card-icon">{{ statusIcon }}</span>
       <span class="card-title">{{ title }}</span>
-      <span :class="['status-badge', statusClass]">{{ message.raw?.status || 'COMPLETED' }}</span>
+      <span :class="['status-badge', statusClass]">{{ status }}</span>
     </div>
     <div v-if="message.content" class="card-body">
       {{ message.content }}

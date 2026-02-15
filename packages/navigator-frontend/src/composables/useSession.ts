@@ -76,12 +76,12 @@ export function useSession() {
       },
       onRawEvent: (raw: AgentMessage) => {
         // 处理 ROUTE_REQUEST 事件（不经过 adapter 转换）
-        if (raw.type === 'ROUTE_REQUEST' && routeRequestHandler) {
+        if (raw.type === AipMessageType.ROUTE_REQUEST && routeRequestHandler) {
           console.log('ROUTE_REQUEST received:', raw.payload)
           routeRequestHandler(raw.payload as RoutePayload)
         }
         // 处理 TASK_COMPLETED 事件 — toast 通知
-        if (raw.type === 'TASK_COMPLETED') {
+        if (raw.type === AipMessageType.TASK_COMPLETED) {
           const p = raw.payload as Record<string, string>
           const status = p.status || 'COMPLETED'
           const agent = p.targetAgentId || p.taskType || ''

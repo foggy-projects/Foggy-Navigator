@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, type ComputedRef, type Ref } from 'vue'
 import { AipMessageType } from '../types/aip'
 import type {
   AipMessage,
@@ -19,11 +19,11 @@ function nextId(): string {
 }
 
 export interface ChatState {
-  messages: ReturnType<typeof ref<ChatMessage[]>>
-  sortedMessages: ReturnType<typeof computed<ChatMessage[]>>
-  connectionStatus: ReturnType<typeof ref<ConnectionStatus>>
-  conversationStatus: ReturnType<typeof ref<string>>
-  isThinking: ReturnType<typeof ref<boolean>>
+  messages: Ref<ChatMessage[]>
+  sortedMessages: ComputedRef<ChatMessage[]>
+  connectionStatus: Ref<ConnectionStatus>
+  conversationStatus: Ref<string>
+  isThinking: Ref<boolean>
   processAipMessage: (aip: AipMessage) => void
   addUserMessage: (content: string, sessionId?: string) => void
   setConnectionStatus: (status: ConnectionStatus) => void

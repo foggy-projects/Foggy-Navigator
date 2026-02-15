@@ -92,7 +92,7 @@ export function useClaudeWorker() {
   async function abortTask(taskId: string) {
     const result = await api.abortTask(taskId)
     const idx = tasks.value.findIndex((t) => t.taskId === taskId)
-    if (idx >= 0) tasks.value[idx].status = 'ABORTED'
+    if (idx >= 0) tasks.value[idx]!.status = 'ABORTED'
     return result
   }
 
