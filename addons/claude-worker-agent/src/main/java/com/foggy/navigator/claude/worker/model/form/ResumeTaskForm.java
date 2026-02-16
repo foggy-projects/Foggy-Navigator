@@ -14,4 +14,6 @@ public class ResumeTaskForm {
     private String directoryId;
     /** 复用已有 Navigator Session（per-conversation 模式） */
     private String sessionId;
+    private String model;
+    private Integer maxTurns;
 }

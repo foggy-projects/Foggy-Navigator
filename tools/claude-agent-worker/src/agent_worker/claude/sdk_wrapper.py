@@ -258,6 +258,7 @@ class SdkWrapper:
         cwd: str,
         session_id: str | None = None,
         max_turns: int | None = None,
+        model: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
@@ -299,20 +300,30 @@ class SdkWrapper:
                 options_kwargs["env"] = env
             if max_turns is not None:
                 options_kwargs["max_turns"] = max_turns
+            if model is not None:
+                options_kwargs["model"] = model
             if session_id is not None:
                 options_kwargs["resume"] = session_id
 
             options = _options_cls(**options_kwargs)
 
+            current_model: str | None = None
+
             async for message in _query_fn(prompt=prompt, options=options):
                 # -- AssistantMessage (may contain text, tool_use, tool_result blocks)
                 if _AssistantMessage is not None and isinstance(message, _AssistantMessage):
+                    # Extract model from AssistantMessage
+                    msg_model = getattr(message, "model", None)
+                    if msg_model:
+                        current_model = msg_model
+
                     for block in message.content:
                         if _TextBlock is not None and isinstance(block, _TextBlock):
                             yield event_mapper.map_assistant_text(
                                 task_id=task_id,
                                 text=block.text,
                                 session_id=current_session_id,
+                                model=current_model,
                             )
                         elif _ToolUseBlock is not None and isinstance(block, _ToolUseBlock):
                             yield event_mapper.map_tool_use(
@@ -359,12 +370,26 @@ class SdkWrapper:
                                 "updated_at": now,
                             }
 
+                    # Extract usage (token counts) and num_turns
+                    input_tokens: int | None = None
+                    output_tokens: int | None = None
+                    usage = getattr(message, "usage", None)
+                    if isinstance(usage, dict):
+                        input_tokens = usage.get("input_tokens")
+                        output_tokens = usage.get("output_tokens")
+
+                    num_turns = getattr(message, "num_turns", None)
+
                     yield event_mapper.map_result(
                         task_id=task_id,
                         result_text=getattr(message, "result", None),
                         cost_usd=getattr(message, "total_cost_usd", None),
                         duration_ms=getattr(message, "duration_ms", None),
                         session_id=current_session_id,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        num_turns=num_turns,
+                        model=current_model,
                     )
 
                 # -- SystemMessage

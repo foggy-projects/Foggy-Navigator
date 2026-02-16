@@ -55,6 +55,7 @@ async def _event_generator(
     cwd: str,
     session_id: str | None,
     max_turns: int | None,
+    model: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield SSE-compatible ``dict`` payloads from the SDK wrapper stream."""
 
@@ -65,6 +66,7 @@ async def _event_generator(
             cwd=cwd,
             session_id=session_id,
             max_turns=max_turns,
+            model=model,
         ):
             yield {"event": "message", "data": json.dumps(event)}
     except asyncio.CancelledError:
@@ -108,6 +110,7 @@ async def query(body: QueryRequest):
             cwd=cwd,
             session_id=body.session_id,
             max_turns=body.max_turns,
+            model=body.model,
         ),
         media_type="text/event-stream",
     )

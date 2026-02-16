@@ -66,6 +66,10 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
           task.value.status = 'COMPLETED'
           if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
           if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs
+          if (typeof payload.inputTokens === 'number') task.value.inputTokens = payload.inputTokens
+          if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
+          if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
+          if (typeof payload.model === 'string') task.value.model = payload.model
           if (typeof payload.claudeSessionId === 'string')
             task.value.claudeSessionId = payload.claudeSessionId
           options?.onTaskFinished?.(paneId)

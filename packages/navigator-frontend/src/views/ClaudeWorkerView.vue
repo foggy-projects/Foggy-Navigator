@@ -80,8 +80,9 @@
     <main :class="['worker-main', { 'has-panes': panes.length > 0 }]">
       <!-- Directory selected: show git info + task form scoped to directory -->
       <template v-if="selectedDirectory">
-        <div class="worker-header">
-          <div class="header-info">
+        <!-- Compact directory header -->
+        <div class="dir-compact-header">
+          <div class="dir-compact-info">
             <h2>{{ selectedDirectory.projectName }}</h2>
             <el-tag v-if="selectedDirectory.gitBranch" size="small">
               ⎇ {{ selectedDirectory.gitBranch }}
@@ -93,27 +94,19 @@
             >
               {{ selectedDirectory.gitStatus }}
             </el-tag>
-            <span v-if="selectedDirectory.gitRemoteUrl" class="remote-url">
-              {{ selectedDirectory.gitRemoteUrl }}
-            </span>
+            <code class="dir-path-inline">{{ selectedDirectory.path }}</code>
           </div>
           <div class="header-actions">
             <el-button size="small" :loading="syncing" @click="handleSyncGitInfo">
               同步 Git
             </el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
-            <el-button size="small" type="danger" @click="handleDeleteDirectory">删除目录</el-button>
+            <el-button size="small" type="danger" text @click="handleDeleteDirectory">删除</el-button>
           </div>
         </div>
 
-        <div class="dir-path-bar">
-          <span class="path-label">路径：</span>
-          <code>{{ selectedDirectory.path }}</code>
-        </div>
-
-        <!-- Task Form -->
-        <div class="task-form">
-          <h4>新建任务</h4>
+        <!-- Task Form: collapse when panes are open -->
+        <div v-if="panes.length === 0" class="task-form">
           <el-form :model="taskForm" label-position="top" size="default">
             <el-form-item label="Prompt">
               <el-input
@@ -124,6 +117,20 @@
                 @keydown.ctrl.enter="handleCreateTask"
               />
             </el-form-item>
+            <el-collapse class="advanced-options">
+              <el-collapse-item title="高级选项">
+                <el-form-item label="模型">
+                  <el-select v-model="taskForm.model" clearable placeholder="默认" style="width: 100%">
+                    <el-option label="Claude Sonnet 4" value="claude-sonnet-4-20250514" />
+                    <el-option label="Claude Opus 4" value="claude-opus-4-20250514" />
+                    <el-option label="Claude Haiku 4" value="claude-haiku-4-20250514" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="最大轮次">
+                  <el-input-number v-model="taskForm.maxTurns" :min="1" :max="50" placeholder="不限" controls-position="right" />
+                </el-form-item>
+              </el-collapse-item>
+            </el-collapse>
             <el-form-item>
               <el-button
                 type="primary"
@@ -132,11 +139,30 @@
               >
                 运行任务
               </el-button>
-              <span v-if="panes.length >= MAX_PANES" class="pane-limit-hint">
-                已达最大面板数 ({{ MAX_PANES }})，请关闭一个面板后再创建
-              </span>
             </el-form-item>
           </el-form>
+        </div>
+        <div v-else class="new-task-mini">
+          <el-input
+            v-model="taskForm.prompt"
+            size="small"
+            placeholder="新建任务..."
+            @keydown.enter="handleCreateTask"
+          >
+            <template #append>
+              <el-button
+                :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE' || panes.length >= MAX_PANES"
+                @click="handleCreateTask"
+              >
+                运行
+              </el-button>
+            </template>
+          </el-input>
+        </div>
+
+        <!-- Empty state when no panes -->
+        <div v-if="panes.length === 0" class="pane-empty-hint">
+          从右侧历史选择会话查看，或新建任务开始
         </div>
 
         <!-- Multi-Pane Grid -->
@@ -145,7 +171,7 @@
           :panes="panes"
           @close="closePane"
           @abort="abortPane"
-          @resume="resumePane"
+          @send="handlePaneSend"
         />
       </template>
 
@@ -164,13 +190,12 @@
           <div class="header-actions">
             <el-button size="small" @click="handleRefreshStatus">刷新状态</el-button>
             <el-button size="small" @click="showEditDialog = true">编辑</el-button>
-            <el-button size="small" type="danger" @click="handleDelete">删除</el-button>
+            <el-button size="small" type="danger" text @click="handleDelete">删除</el-button>
           </div>
         </div>
 
-        <!-- Task Form (worker-level, free cwd) -->
-        <div class="task-form">
-          <h4>新建任务</h4>
+        <!-- Task Form: collapse when panes are open -->
+        <div v-if="panes.length === 0" class="task-form">
           <el-form :model="taskForm" label-position="top" size="default">
             <el-form-item label="Prompt">
               <el-input
@@ -184,6 +209,20 @@
             <el-form-item label="工作目录 (cwd)">
               <el-input v-model="taskForm.cwd" placeholder="可选，如 /home/user/project" />
             </el-form-item>
+            <el-collapse class="advanced-options">
+              <el-collapse-item title="高级选项">
+                <el-form-item label="模型">
+                  <el-select v-model="taskForm.model" clearable placeholder="默认" style="width: 100%">
+                    <el-option label="Claude Sonnet 4" value="claude-sonnet-4-20250514" />
+                    <el-option label="Claude Opus 4" value="claude-opus-4-20250514" />
+                    <el-option label="Claude Haiku 4" value="claude-haiku-4-20250514" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="最大轮次">
+                  <el-input-number v-model="taskForm.maxTurns" :min="1" :max="50" placeholder="不限" controls-position="right" />
+                </el-form-item>
+              </el-collapse-item>
+            </el-collapse>
             <el-form-item>
               <el-button
                 type="primary"
@@ -192,11 +231,30 @@
               >
                 运行任务
               </el-button>
-              <span v-if="panes.length >= MAX_PANES" class="pane-limit-hint">
-                已达最大面板数 ({{ MAX_PANES }})，请关闭一个面板后再创建
-              </span>
             </el-form-item>
           </el-form>
+        </div>
+        <div v-else class="new-task-mini">
+          <el-input
+            v-model="taskForm.prompt"
+            size="small"
+            placeholder="新建任务..."
+            @keydown.enter="handleCreateTask"
+          >
+            <template #append>
+              <el-button
+                :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE' || panes.length >= MAX_PANES"
+                @click="handleCreateTask"
+              >
+                运行
+              </el-button>
+            </template>
+          </el-input>
+        </div>
+
+        <!-- Empty state when no panes -->
+        <div v-if="panes.length === 0" class="pane-empty-hint">
+          从右侧历史选择会话查看，或新建任务开始
         </div>
 
         <!-- Multi-Pane Grid -->
@@ -205,7 +263,7 @@
           :panes="panes"
           @close="closePane"
           @abort="abortPane"
-          @resume="resumePane"
+          @send="handlePaneSend"
         />
       </template>
 
@@ -223,26 +281,27 @@
         <h3>历史会话</h3>
       </div>
       <div class="history-content">
-        <!-- Directory conversations (grouped) -->
-        <template v-if="selectedDirectoryId">
-          <div v-if="directoryConversations.length > 0" class="task-list">
-            <div
-              v-for="conv in directoryConversations"
-              :key="conv.sessionId"
-              class="task-item"
-            >
-              <div class="task-content" @click="viewTask(conv.latestTask)">
-                <div class="task-prompt">{{ truncate(conv.firstPrompt, 50) }}</div>
-                <div class="task-meta">
-                  <el-tag :type="taskStatusType(conv.latestTask.status)" size="small">
-                    {{ conv.latestTask.status }}
-                  </el-tag>
-                  <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }} 轮</span>
-                  <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(4) }}</span>
-                  <span>{{ formatTime(conv.latestTask.createdAt) }}</span>
-                </div>
-              </div>
-              <div class="task-actions" @click.stop>
+        <!-- Conversation list (shared template for directory / worker-level) -->
+        <div
+          v-if="activeConversations.length > 0"
+          class="conv-list"
+        >
+          <div
+            v-for="conv in activeConversations"
+            :key="conv.sessionId"
+            class="conv-item"
+            @click="viewTask(conv.latestTask)"
+          >
+            <div class="conv-row-1">
+              <span class="conv-prompt" :title="conv.firstPrompt">{{ truncate(conv.firstPrompt, 36) }}</span>
+              <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
+            </div>
+            <div class="conv-row-2">
+              <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }}轮</span>
+              <span v-if="conv.latestTask.model" class="conv-model">{{ shortModel(conv.latestTask.model) }}</span>
+              <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(2) }}</span>
+              <span class="conv-time">{{ formatTime(conv.latestTask.createdAt) }}</span>
+              <span class="conv-hover-actions" @click.stop>
                 <el-button
                   v-if="conv.latestTask.status === 'RUNNING'"
                   type="warning"
@@ -263,91 +322,29 @@
                 </el-button>
                 <el-button
                   v-if="conv.latestTask.status !== 'RUNNING'"
-                  type="danger"
                   size="small"
                   text
+                  class="delete-btn"
                   @click="handleDeleteConversation(conv)"
                 >
                   删除
                 </el-button>
-              </div>
+              </span>
             </div>
           </div>
-          <div v-else class="empty-hint">暂无历史任务</div>
-          <el-pagination
-            v-if="dirTaskTotal > dirTaskSize"
-            class="task-pagination"
-            small
-            layout="prev, pager, next"
-            :total="dirTaskTotal"
-            :page-size="dirTaskSize"
-            :current-page="dirTaskPage + 1"
-            @current-change="handleDirPageChange"
-          />
-        </template>
-
-        <!-- Worker-level conversations (grouped) -->
-        <template v-else>
-          <div v-if="workerConversations.length > 0" class="task-list">
-            <div
-              v-for="conv in workerConversations"
-              :key="conv.sessionId"
-              class="task-item"
-            >
-              <div class="task-content" @click="viewTask(conv.latestTask)">
-                <div class="task-prompt">{{ truncate(conv.firstPrompt, 50) }}</div>
-                <div class="task-meta">
-                  <el-tag :type="taskStatusType(conv.latestTask.status)" size="small">
-                    {{ conv.latestTask.status }}
-                  </el-tag>
-                  <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }} 轮</span>
-                  <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(4) }}</span>
-                  <span>{{ formatTime(conv.latestTask.createdAt) }}</span>
-                </div>
-              </div>
-              <div class="task-actions" @click.stop>
-                <el-button
-                  v-if="conv.latestTask.status === 'RUNNING'"
-                  type="warning"
-                  size="small"
-                  text
-                  @click="handleAbortTask(conv.latestTask.taskId)"
-                >
-                  中止
-                </el-button>
-                <el-button
-                  v-if="(conv.latestTask.status === 'COMPLETED' || conv.latestTask.status === 'ABORTED') && conv.claudeSessionId"
-                  type="primary"
-                  size="small"
-                  text
-                  @click="handleResumeFromHistory(conv.latestTask)"
-                >
-                  继续
-                </el-button>
-                <el-button
-                  v-if="conv.latestTask.status !== 'RUNNING'"
-                  type="danger"
-                  size="small"
-                  text
-                  @click="handleDeleteConversation(conv)"
-                >
-                  删除
-                </el-button>
-              </div>
-            </div>
-          </div>
-          <div v-else class="empty-hint">暂无历史任务</div>
-          <el-pagination
-            v-if="workerState.taskTotal.value > workerState.taskSize.value"
-            class="task-pagination"
-            small
-            layout="prev, pager, next"
-            :total="workerState.taskTotal.value"
-            :page-size="workerState.taskSize.value"
-            :current-page="workerState.taskPage.value + 1"
-            @current-change="handlePageChange"
-          />
-        </template>
+        </div>
+        <div v-else class="empty-hint">暂无历史会话</div>
+        <!-- Pagination -->
+        <el-pagination
+          v-if="selectedDirectoryId ? dirTaskTotal > dirTaskSize : workerState.taskTotal.value > workerState.taskSize.value"
+          class="task-pagination"
+          small
+          layout="prev, pager, next"
+          :total="selectedDirectoryId ? dirTaskTotal : workerState.taskTotal.value"
+          :page-size="selectedDirectoryId ? dirTaskSize : workerState.taskSize.value"
+          :current-page="(selectedDirectoryId ? dirTaskPage : workerState.taskPage.value) + 1"
+          @current-change="selectedDirectoryId ? handleDirPageChange($event) : handlePageChange($event)"
+        />
       </div>
     </aside>
 
@@ -510,6 +507,8 @@ const editDirForm = ref({
 const taskForm = ref({
   prompt: '',
   cwd: '',
+  model: '' as string,
+  maxTurns: null as number | null,
 })
 
 const selectedWorkerEntity = computed(() =>
@@ -559,6 +558,9 @@ function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] 
 
 const workerConversations = computed(() => groupTasksToConversations(workerTasks.value))
 const directoryConversations = computed(() => groupTasksToConversations(directoryTasks.value))
+const activeConversations = computed(() =>
+  selectedDirectoryId.value ? directoryConversations.value : workerConversations.value,
+)
 
 function directoriesForWorker(workerId: string): WorkingDirectory[] {
   return workerState.directories.value.filter((d) => d.workerId === workerId)
@@ -787,7 +789,10 @@ async function handleCreateTask() {
     return
   }
   try {
-    const form: { workerId: string; prompt: string; cwd?: string; directoryId?: string } = {
+    const form: {
+      workerId: string; prompt: string; cwd?: string; directoryId?: string
+      model?: string; maxTurns?: number
+    } = {
       workerId: selectedWorkerId.value,
       prompt: taskForm.value.prompt,
     }
@@ -796,6 +801,12 @@ async function handleCreateTask() {
       form.directoryId = selectedDirectoryId.value
     } else if (taskForm.value.cwd) {
       form.cwd = taskForm.value.cwd
+    }
+    if (taskForm.value.model) {
+      form.model = taskForm.value.model
+    }
+    if (taskForm.value.maxTurns != null) {
+      form.maxTurns = taskForm.value.maxTurns
     }
 
     const task = await workerState.createTask(form)
@@ -837,30 +848,22 @@ async function abortPane(paneId: string) {
   }
 }
 
-async function resumePane(paneId: string) {
+/** Handle inline send from pane input (replaces dialog-based resume) */
+async function handlePaneSend(paneId: string, content: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   const oldTask = pane?.task.value
   if (!pane || !oldTask?.claudeSessionId || !selectedWorkerId.value) return
 
   try {
-    const { value: prompt } = await ElMessageBox.prompt('输入后续指令', '继续对话', {
-      confirmButtonText: '发送',
-      cancelButtonText: '取消',
-      inputType: 'textarea',
-      inputPlaceholder: '请输入后续任务描述...',
-    })
-    if (!prompt) return
-
     const newTask = await workerState.resumeTask({
       workerId: selectedWorkerId.value,
       claudeSessionId: oldTask.claudeSessionId,
-      prompt,
+      prompt: content,
       cwd: oldTask.cwd,
       directoryId: oldTask.directoryId,
-      sessionId: oldTask.sessionId,  // per-conversation: reuse session
+      sessionId: oldTask.sessionId,
     })
 
-    // Resume in the same pane (keep messages, reconnect SSE)
     pane.resumeInPlace(newTask)
 
     workerState.loadTasks()
@@ -868,7 +871,7 @@ async function resumePane(paneId: string) {
       loadDirectoryTasks()
     }
   } catch {
-    // cancelled or failed
+    ElMessage.error('发送失败')
   }
 }
 
@@ -1012,16 +1015,13 @@ function statusTagType(status: string) {
   return 'info'
 }
 
-function taskStatusType(status: string) {
-  if (status === 'COMPLETED') return 'success'
-  if (status === 'RUNNING') return 'primary'
-  if (status === 'FAILED') return 'danger'
-  if (status === 'ABORTED') return 'warning'
-  return 'info'
-}
-
 function truncate(text: string, maxLen: number) {
   return text.length > maxLen ? text.substring(0, maxLen) + '...' : text
+}
+
+function shortModel(model: string): string {
+  const match = model.match(/(sonnet|opus|haiku)[\w-]*/i)
+  return match ? match[0] : model.split('-').slice(1, 3).join('-')
 }
 
 function formatTime(dateStr: string): string {
@@ -1278,25 +1278,6 @@ function formatTime(dateStr: string): string {
   gap: 8px;
 }
 
-.dir-path-bar {
-  padding: 8px 12px;
-  background: #f5f7fa;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  margin-bottom: 12px;
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.path-label {
-  color: #909399;
-}
-
-.dir-path-bar code {
-  color: #606266;
-  font-family: 'Cascadia Code', 'Fira Code', monospace;
-}
-
 .task-form {
   background: #fafafa;
   border: 1px solid #ebeef5;
@@ -1306,67 +1287,134 @@ function formatTime(dateStr: string): string {
   flex-shrink: 0;
 }
 
-.task-form h4 {
-  margin: 0 0 12px 0;
-  font-size: 15px;
-  color: #303133;
+.advanced-options {
+  margin-bottom: 12px;
+  border: none;
 }
 
-.pane-limit-hint {
-  margin-left: 12px;
+.advanced-options :deep(.el-collapse-item__header) {
+  font-size: 13px;
+  color: #909399;
+  height: 32px;
+  line-height: 32px;
+  background: transparent;
+}
+
+.advanced-options :deep(.el-collapse-item__wrap) {
+  background: transparent;
+  border-bottom: none;
+}
+
+
+/* Compact directory header */
+.dir-compact-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.dir-compact-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dir-compact-info h2 {
+  margin: 0;
+  font-size: 18px;
+  white-space: nowrap;
+}
+
+.dir-path-inline {
   font-size: 12px;
-  color: #e6a23c;
+  color: #909399;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
 }
 
-/* Task list in history panel */
-.task-list {
+/* Mini task form (when panes are open) */
+.new-task-mini {
+  flex-shrink: 0;
+  margin-bottom: 8px;
+}
+
+/* Empty pane hint */
+.pane-empty-hint {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #c0c4cc;
+  font-size: 14px;
+}
+
+/* Conversation list (compact history panel) */
+.conv-list {
   display: flex;
   flex-direction: column;
+  gap: 2px;
+}
+
+.conv-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.conv-item:hover {
+  background: #ebeef5;
+}
+
+.conv-item:hover .conv-hover-actions {
+  opacity: 1;
+}
+
+.conv-row-1 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
-.task-item {
-  display: flex;
-  flex-direction: column;
-  background: #fff;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  transition: all 0.2s;
-  overflow: hidden;
-}
-
-.task-item:hover {
-  border-color: #409eff;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.task-content {
-  padding: 10px 12px;
-  cursor: pointer;
-  flex: 1;
-}
-
-.task-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 4px;
-  padding: 6px 12px;
-  background: #f9fafb;
-  border-top: 1px solid #ebeef5;
-}
-
-.task-prompt {
+.conv-prompt {
   font-size: 13px;
   color: #303133;
-  margin-bottom: 6px;
-  line-height: 1.4;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
-.task-meta {
+.conv-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.conv-status-dot.completed { background: #67c23a; }
+.conv-status-dot.running { background: #409eff; animation: convPulse 1.5s infinite; }
+.conv-status-dot.failed { background: #f56c6c; }
+.conv-status-dot.aborted { background: #e6a23c; }
+
+@keyframes convPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.conv-row-2 {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
   font-size: 12px;
   color: #909399;
 }
@@ -1376,8 +1424,37 @@ function formatTime(dateStr: string): string {
   font-weight: 500;
 }
 
+.conv-model {
+  font-size: 11px;
+  color: #909399;
+  background: #f0f2f5;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+
 .conv-cost {
   color: #67c23a;
+}
+
+.conv-time {
+  flex-shrink: 0;
+}
+
+.conv-hover-actions {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s;
+  display: flex;
+  gap: 0;
+}
+
+.delete-btn {
+  color: #c0c4cc !important;
+}
+
+.delete-btn:hover {
+  color: #f56c6c !important;
 }
 
 .task-pagination {

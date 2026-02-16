@@ -59,6 +59,11 @@ public class ClaudeTaskEntity {
 
     private Long durationMs;
 
+    private Integer numTurns;
+
+    @Column(length = 64)
+    private String model;
+
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
 

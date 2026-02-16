@@ -78,6 +78,8 @@ export function useClaudeWorker() {
     prompt: string
     cwd?: string
     directoryId?: string
+    model?: string
+    maxTurns?: number
   }) {
     const task = await api.createTask(form)
     tasks.value.unshift(task)
@@ -91,6 +93,8 @@ export function useClaudeWorker() {
     cwd?: string
     directoryId?: string
     sessionId?: string
+    model?: string
+    maxTurns?: number
   }) {
     const task = await api.resumeTask(form)
     tasks.value.unshift(task)

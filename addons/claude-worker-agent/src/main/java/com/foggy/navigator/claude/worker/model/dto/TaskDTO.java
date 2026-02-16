@@ -24,6 +24,8 @@ public class TaskDTO {
     private Long inputTokens;
     private Long outputTokens;
     private Long durationMs;
+    private Integer numTurns;
+    private String model;
     private String errorMessage;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

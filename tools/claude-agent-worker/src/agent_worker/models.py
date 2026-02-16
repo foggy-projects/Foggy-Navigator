@@ -17,6 +17,7 @@ class QueryRequest(BaseModel):
     cwd: str | None = Field(None, description="Working directory for the Claude Code session")
     session_id: str | None = Field(None, description="Existing session ID to resume")
     max_turns: int | None = Field(None, description="Maximum number of agentic turns")
+    model: str | None = Field(None, description="Model to use (e.g. claude-sonnet-4-20250514)")
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +36,10 @@ class QueryEvent(BaseModel):
     session_id: str | None = Field(None, description="Claude Code session ID")
     cost_usd: float | None = Field(None, description="Total cost in USD (result events)")
     duration_ms: int | None = Field(None, description="Total duration in milliseconds (result events)")
+    input_tokens: int | None = Field(None, description="Input tokens consumed (result events)")
+    output_tokens: int | None = Field(None, description="Output tokens consumed (result events)")
+    num_turns: int | None = Field(None, description="Number of agentic turns (result events)")
+    model: str | None = Field(None, description="Model used (assistant_text / result events)")
     error: str | None = Field(None, description="Error message (error events)")
 
 

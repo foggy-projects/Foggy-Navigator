@@ -20,6 +20,7 @@ import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Worker SSE → AgentMessage 桥接
@@ -60,7 +61,10 @@ public class WorkerStreamRelay {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
             ClaudeWorkerClient client = workerService.createClient(worker);
 
-            Disposable subscription = client.streamQuery(event.getPrompt(), event.getCwd(), event.getClaudeSessionId())
+            AtomicReference<String> detectedModel = new AtomicReference<>();
+
+            Disposable subscription = client.streamQuery(event.getPrompt(), event.getCwd(),
+                            event.getClaudeSessionId(), event.getModel(), event.getMaxTurns())
                     .doOnNext(sse -> {
                         String data = sse.data();
                         if (data == null || data.isEmpty()) {
@@ -72,7 +76,7 @@ public class WorkerStreamRelay {
                             log.debug("Task {} received SSE data: {}", taskId, data.substring(0, Math.min(200, data.length())));
                             WorkerEvent workerEvent = objectMapper.readValue(data, WorkerEvent.class);
                             log.debug("Task {} parsed event type: {}", taskId, workerEvent.getType());
-                            relayEvent(sessionId, taskId, workerEvent);
+                            relayEvent(sessionId, taskId, workerEvent, detectedModel);
                         } catch (Exception e) {
                             log.warn("Failed to parse worker event for task {}: {}", taskId, data, e);
                         }
@@ -114,7 +118,8 @@ public class WorkerStreamRelay {
     /**
      * 将 Worker 事件转为 AgentMessage 并发布
      */
-    private void relayEvent(String sessionId, String taskId, WorkerEvent event) {
+    private void relayEvent(String sessionId, String taskId, WorkerEvent event,
+                            AtomicReference<String> detectedModel) {
         if (event.getType() == null) return;
 
         switch (event.getType()) {
@@ -125,6 +130,10 @@ public class WorkerStreamRelay {
                                 "claudeSessionId", nullSafe(event.getSessionId())));
             }
             case "assistant_text" -> {
+                // Track model from assistant_text events
+                if (event.getModel() != null) {
+                    detectedModel.set(event.getModel());
+                }
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("content", event.getContent());
                 payload.put("taskId", taskId);
@@ -149,18 +158,24 @@ public class WorkerStreamRelay {
                 // 任务完成
                 // Worker 返回的 result 事件使用 content 字段，不是 result 字段
                 String resultContent = event.getContent() != null ? event.getContent() : event.getResult();
+                String resolvedModel = event.getModel() != null ? event.getModel() : detectedModel.get();
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("content", resultContent);
                 payload.put("taskId", taskId);
                 payload.put("costUsd", event.getCostUsd());
                 payload.put("durationMs", event.getDurationMs());
+                payload.put("inputTokens", event.getInputTokens());
+                payload.put("outputTokens", event.getOutputTokens());
+                payload.put("numTurns", event.getNumTurns());
+                payload.put("model", resolvedModel);
                 payload.put("claudeSessionId", nullSafe(event.getSessionId()));
                 publishMessage(sessionId, MessageType.TEXT_COMPLETE, payload);
 
                 // 更新任务状态
                 taskService.completeTask(taskId, event.getSessionId(),
                         event.getCostUsd(), event.getInputTokens(),
-                        event.getOutputTokens(), event.getDurationMs());
+                        event.getOutputTokens(), event.getDurationMs(),
+                        event.getNumTurns(), resolvedModel);
                 activeStreams.remove(taskId);
 
                 // 发布跨 Agent 任务完成事件

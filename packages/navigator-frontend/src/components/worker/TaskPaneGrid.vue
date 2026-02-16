@@ -7,7 +7,7 @@
       :class="{ 'span-full': panes.length === 3 && pane === panes[2] }"
       @close="(id) => emit('close', id)"
       @abort="(id) => emit('abort', id)"
-      @resume="(id) => emit('resume', id)"
+      @send="(id, content) => emit('send', id, content)"
     />
   </div>
 </template>
@@ -23,7 +23,7 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'close', paneId: string): void
   (e: 'abort', paneId: string): void
-  (e: 'resume', paneId: string): void
+  (e: 'send', paneId: string, content: string): void
 }>()
 </script>
 

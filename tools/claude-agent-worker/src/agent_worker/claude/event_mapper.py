@@ -12,15 +12,19 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def map_assistant_text(task_id: str, text: str, session_id: str | None = None) -> dict[str, Any]:
+def map_assistant_text(task_id: str, text: str, session_id: str | None = None,
+                       model: str | None = None) -> dict[str, Any]:
     """Map a ``TextBlock`` from an ``AssistantMessage`` to an SSE dict."""
 
-    return {
+    d: dict[str, Any] = {
         "type": "assistant_text",
         "content": text,
         "task_id": task_id,
         "session_id": session_id,
     }
+    if model:
+        d["model"] = model
+    return d
 
 
 def map_tool_use(
@@ -65,6 +69,10 @@ def map_result(
     cost_usd: float | None,
     duration_ms: int | None,
     session_id: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    num_turns: int | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Map a ``ResultMessage`` to an SSE dict."""
 
@@ -73,6 +81,10 @@ def map_result(
         "content": result_text,
         "cost_usd": cost_usd,
         "duration_ms": duration_ms,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "num_turns": num_turns,
+        "model": model,
         "task_id": task_id,
         "session_id": session_id,
     }

@@ -11,4 +11,6 @@ public class CreateTaskForm {
     private String prompt;
     private String cwd;
     private String directoryId;
+    private String model;
+    private Integer maxTurns;
 }

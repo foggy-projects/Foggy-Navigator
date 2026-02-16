@@ -30,5 +30,8 @@ public class WorkerEvent {
     private Long inputTokens;
     @JsonProperty("output_tokens")
     private Long outputTokens;
+    @JsonProperty("num_turns")
+    private Integer numTurns;
+    private String model;
     private String error;
 }

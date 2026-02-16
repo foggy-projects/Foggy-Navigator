@@ -45,7 +45,8 @@ public class ClaudeWorkerClient {
     /**
      * 流式查询 - 返回 Worker SSE 事件流
      */
-    public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId) {
+    public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
+                                                       String model, Integer maxTurns) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) {
@@ -53,6 +54,12 @@ public class ClaudeWorkerClient {
         }
         if (sessionId != null) {
             body.put("session_id", sessionId);
+        }
+        if (model != null) {
+            body.put("model", model);
+        }
+        if (maxTurns != null) {
+            body.put("max_turns", maxTurns);
         }
 
         return webClient.post()

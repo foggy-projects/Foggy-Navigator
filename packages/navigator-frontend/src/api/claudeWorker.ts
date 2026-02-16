@@ -89,6 +89,8 @@ export async function createTask(form: {
   prompt: string
   cwd?: string
   directoryId?: string
+  model?: string
+  maxTurns?: number
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks', form)) as unknown as RX<ClaudeTask>
   return rx.data
@@ -101,6 +103,8 @@ export async function resumeTask(form: {
   cwd?: string
   directoryId?: string
   sessionId?: string
+  model?: string
+  maxTurns?: number
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks/resume', form)) as unknown as RX<ClaudeTask>
   return rx.data

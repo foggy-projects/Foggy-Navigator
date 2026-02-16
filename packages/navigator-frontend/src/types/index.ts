@@ -93,6 +93,8 @@ export interface ClaudeTask {
   inputTokens?: number
   outputTokens?: number
   durationMs?: number
+  numTurns?: number
+  model?: string
   errorMessage?: string
   createdAt: string
   updatedAt: string

@@ -100,7 +100,7 @@ public class ClaudeTaskService {
         // 5. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
-                form.getPrompt(), cwd, null));
+                form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns()));
 
         return toDTO(entity);
     }
@@ -167,7 +167,8 @@ public class ClaudeTaskService {
 
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
-                form.getPrompt(), cwd, form.getClaudeSessionId()));
+                form.getPrompt(), cwd, form.getClaudeSessionId(),
+                form.getModel(), form.getMaxTurns()));
 
         return toDTO(entity);
     }
@@ -220,7 +221,8 @@ public class ClaudeTaskService {
      */
     @Transactional
     public void completeTask(String taskId, String claudeSessionId, BigDecimal costUsd,
-                              Long inputTokens, Long outputTokens, Long durationMs) {
+                              Long inputTokens, Long outputTokens, Long durationMs,
+                              Integer numTurns, String model) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setStatus("COMPLETED");
             entity.setClaudeSessionId(claudeSessionId);
@@ -228,8 +230,10 @@ public class ClaudeTaskService {
             entity.setInputTokens(inputTokens);
             entity.setOutputTokens(outputTokens);
             entity.setDurationMs(durationMs);
+            entity.setNumTurns(numTurns);
+            entity.setModel(model);
             taskRepository.save(entity);
-            log.info("Task completed: taskId={}, costUsd={}, durationMs={}", taskId, costUsd, durationMs);
+            log.info("Task completed: taskId={}, model={}, costUsd={}, durationMs={}", taskId, model, costUsd, durationMs);
         });
     }
 
@@ -322,6 +326,8 @@ public class ClaudeTaskService {
                 .inputTokens(entity.getInputTokens())
                 .outputTokens(entity.getOutputTokens())
                 .durationMs(entity.getDurationMs())
+                .numTurns(entity.getNumTurns())
+                .model(entity.getModel())
                 .errorMessage(entity.getErrorMessage())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
