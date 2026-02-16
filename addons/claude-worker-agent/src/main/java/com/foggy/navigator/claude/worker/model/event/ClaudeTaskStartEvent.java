@@ -19,17 +19,25 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
     private final String claudeSessionId;
     private final String model;
     private final Integer maxTurns;
+    private final String agentTeamsJson;
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
                                  String workerId, String userId, String prompt,
                                  String cwd, String claudeSessionId) {
-        this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId, null, null);
+        this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId, null, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
                                  String workerId, String userId, String prompt,
                                  String cwd, String claudeSessionId,
                                  String model, Integer maxTurns) {
+        this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId, model, maxTurns, null);
+    }
+
+    public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
+                                 String workerId, String userId, String prompt,
+                                 String cwd, String claudeSessionId,
+                                 String model, Integer maxTurns, String agentTeamsJson) {
         super(source);
         this.taskId = taskId;
         this.sessionId = sessionId;
@@ -40,5 +48,6 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
         this.claudeSessionId = claudeSessionId;
         this.model = model;
         this.maxTurns = maxTurns;
+        this.agentTeamsJson = agentTeamsJson;
     }
 }

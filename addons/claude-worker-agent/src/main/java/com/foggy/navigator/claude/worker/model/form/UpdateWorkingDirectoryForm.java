@@ -9,4 +9,5 @@ import lombok.Data;
 public class UpdateWorkingDirectoryForm {
     private String projectName;
     private String path;
+    private String agentTeamsConfig;
 }

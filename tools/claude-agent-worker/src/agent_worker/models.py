@@ -18,6 +18,9 @@ class QueryRequest(BaseModel):
     session_id: str | None = Field(None, description="Existing session ID to resume")
     max_turns: int | None = Field(None, description="Maximum number of agentic turns")
     model: str | None = Field(None, description="Model to use (e.g. claude-sonnet-4-20250514)")
+    extra_args: dict[str, str | None] | None = Field(
+        None, description="Additional CLI args passed to ClaudeCodeOptions.extra_args"
+    )
 
 
 # ---------------------------------------------------------------------------

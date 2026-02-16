@@ -19,6 +19,7 @@ public class WorkingDirectoryDTO {
     private String gitRemoteUrl;
     private String gitProvider;
     private String gitStatus;
+    private String agentTeamsConfig;
     private LocalDateTime lastSyncedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

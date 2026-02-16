@@ -62,7 +62,7 @@ export async function createDirectory(form: {
 
 export async function updateDirectory(
   directoryId: string,
-  form: { projectName?: string; path?: string },
+  form: { projectName?: string; path?: string; agentTeamsConfig?: string },
 ): Promise<WorkingDirectory> {
   const rx = (await client.put(
     `/working-directories/${directoryId}`,
@@ -91,6 +91,7 @@ export async function createTask(form: {
   directoryId?: string
   model?: string
   maxTurns?: number
+  agentTeamsJson?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks', form)) as unknown as RX<ClaudeTask>
   return rx.data
@@ -105,6 +106,7 @@ export async function resumeTask(form: {
   sessionId?: string
   model?: string
   maxTurns?: number
+  agentTeamsJson?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks/resume', form)) as unknown as RX<ClaudeTask>
   return rx.data

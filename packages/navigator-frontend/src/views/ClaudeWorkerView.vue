@@ -104,6 +104,12 @@
             <el-button size="small" type="danger" text @click="handleDeleteDirectory">删除</el-button>
           </div>
         </div>
+        <div v-if="parsedAgentTeams.length" class="agent-teams-bar">
+          <span class="agent-teams-label">Agent Teams:</span>
+          <el-tag v-for="agent in parsedAgentTeams" :key="agent" size="small" type="info">
+            {{ agent }}
+          </el-tag>
+        </div>
 
         <!-- Task Form: collapse when panes are open -->
         <div v-if="panes.length === 0" class="task-form">
@@ -435,6 +441,17 @@
         <el-form-item label="路径">
           <el-input v-model="editDirForm.path" />
         </el-form-item>
+        <el-form-item label="Agent Teams">
+          <el-input
+            v-model="editDirForm.agentTeamsConfig"
+            type="textarea"
+            :rows="6"
+            placeholder='{"reviewer": {"description": "...", "prompt": "..."}}'
+          />
+          <div class="form-tip">
+            JSON 格式定义子 Agent 团队。Claude 会自动分派子任务给团队成员。
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showEditDirectoryDialog = false">取消</el-button>
@@ -502,6 +519,7 @@ const addDirForm = ref({
 const editDirForm = ref({
   projectName: '',
   path: '',
+  agentTeamsConfig: '',
 })
 
 const taskForm = ref({
@@ -518,6 +536,13 @@ const selectedWorkerEntity = computed(() =>
 const selectedDirectory = computed(() =>
   workerState.directories.value.find((d) => d.directoryId === selectedDirectoryId.value),
 )
+
+const parsedAgentTeams = computed(() => {
+  const dir = selectedDirectory.value
+  if (!dir?.agentTeamsConfig) return []
+  try { return Object.keys(JSON.parse(dir.agentTeamsConfig)) }
+  catch { return [] }
+})
 
 const workerTasks = computed(() =>
   workerState.tasks.value.filter((t) => t.workerId === selectedWorkerId.value),
@@ -791,7 +816,7 @@ async function handleCreateTask() {
   try {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
-      model?: string; maxTurns?: number
+      model?: string; maxTurns?: number; agentTeamsJson?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt: taskForm.value.prompt,
@@ -807,6 +832,9 @@ async function handleCreateTask() {
     }
     if (taskForm.value.maxTurns != null) {
       form.maxTurns = taskForm.value.maxTurns
+    }
+    if (selectedDirectory.value?.agentTeamsConfig) {
+      form.agentTeamsJson = selectedDirectory.value.agentTeamsConfig
     }
 
     const task = await workerState.createTask(form)
@@ -1005,6 +1033,7 @@ watch(showEditDirectoryDialog, (val) => {
     editDirForm.value = {
       projectName: selectedDirectory.value.projectName,
       path: selectedDirectory.value.path,
+      agentTeamsConfig: selectedDirectory.value.agentTeamsConfig || '',
     }
   }
 })
@@ -1336,6 +1365,26 @@ function formatTime(dateStr: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 260px;
+}
+
+.agent-teams-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.agent-teams-label {
+  font-size: 12px;
+  color: #909399;
+}
+
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+  line-height: 1.4;
 }
 
 /* Mini task form (when panes are open) */

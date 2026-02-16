@@ -81,6 +81,9 @@ public class WorkingDirectoryService {
         if (form.getPath() != null) {
             entity.setPath(form.getPath());
         }
+        if (form.getAgentTeamsConfig() != null) {
+            entity.setAgentTeamsConfig(form.getAgentTeamsConfig().isEmpty() ? null : form.getAgentTeamsConfig());
+        }
 
         directoryRepository.save(entity);
         log.info("Working directory updated: directoryId={}", directoryId);
@@ -180,6 +183,7 @@ public class WorkingDirectoryService {
                 .gitRemoteUrl(entity.getGitRemoteUrl())
                 .gitProvider(entity.getGitProvider())
                 .gitStatus(entity.getGitStatus())
+                .agentTeamsConfig(entity.getAgentTeamsConfig())
                 .lastSyncedAt(entity.getLastSyncedAt())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())

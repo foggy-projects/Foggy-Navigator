@@ -13,4 +13,6 @@ public class CreateTaskForm {
     private String directoryId;
     private String model;
     private Integer maxTurns;
+    /** Agent Teams JSON (直接传入或由 directoryId 解析) */
+    private String agentTeamsJson;
 }

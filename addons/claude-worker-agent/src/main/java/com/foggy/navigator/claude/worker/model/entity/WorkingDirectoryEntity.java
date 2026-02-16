@@ -50,6 +50,9 @@ public class WorkingDirectoryEntity {
     @Column(length = 32)
     private String gitStatus;
 
+    @Column(columnDefinition = "TEXT")
+    private String agentTeamsConfig;
+
     private LocalDateTime lastSyncedAt;
 
     @Column(nullable = false, updatable = false)

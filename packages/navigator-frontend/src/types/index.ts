@@ -110,6 +110,7 @@ export interface WorkingDirectory {
   gitRemoteUrl?: string
   gitProvider?: 'GITHUB' | 'GITLAB' | 'GITEE' | 'OTHER'
   gitStatus?: 'clean' | 'dirty' | 'unknown'
+  agentTeamsConfig?: string
   lastSyncedAt?: string
   createdAt: string
   updatedAt: string

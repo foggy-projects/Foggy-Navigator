@@ -259,6 +259,7 @@ class SdkWrapper:
         session_id: str | None = None,
         max_turns: int | None = None,
         model: str | None = None,
+        extra_args: dict | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
@@ -302,6 +303,8 @@ class SdkWrapper:
                 options_kwargs["max_turns"] = max_turns
             if model is not None:
                 options_kwargs["model"] = model
+            if extra_args:
+                options_kwargs["extra_args"] = extra_args
             if session_id is not None:
                 options_kwargs["resume"] = session_id
 

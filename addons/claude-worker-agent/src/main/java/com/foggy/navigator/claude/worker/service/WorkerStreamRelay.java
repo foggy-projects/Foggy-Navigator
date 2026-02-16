@@ -64,7 +64,8 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedModel = new AtomicReference<>();
 
             Disposable subscription = client.streamQuery(event.getPrompt(), event.getCwd(),
-                            event.getClaudeSessionId(), event.getModel(), event.getMaxTurns())
+                            event.getClaudeSessionId(), event.getModel(), event.getMaxTurns(),
+                            event.getAgentTeamsJson())
                     .doOnNext(sse -> {
                         String data = sse.data();
                         if (data == null || data.isEmpty()) {

@@ -56,15 +56,19 @@ public class ClaudeTaskService {
             throw new IllegalStateException("Worker is not online: " + worker.getStatus());
         }
 
-        // 2. 如果指定了 directoryId，从目录解析 cwd
+        // 2. 如果指定了 directoryId，从目录解析 cwd 和 agentTeams
         String cwd = form.getCwd();
         String directoryId = form.getDirectoryId();
+        String agentTeamsJson = form.getAgentTeamsJson();
         if (directoryId != null && !directoryId.isEmpty()) {
             WorkingDirectoryEntity dir = workingDirectoryService.getDirectoryEntity(userId, directoryId);
             if (!dir.getWorkerId().equals(form.getWorkerId())) {
                 throw new IllegalArgumentException("Directory does not belong to the specified worker");
             }
             cwd = dir.getPath();
+            if ((agentTeamsJson == null || agentTeamsJson.isEmpty()) && dir.getAgentTeamsConfig() != null) {
+                agentTeamsJson = dir.getAgentTeamsConfig();
+            }
         }
 
         // 3. 创建 Foggy Session
@@ -100,7 +104,7 @@ public class ClaudeTaskService {
         // 5. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
-                form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns()));
+                form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson));
 
         return toDTO(entity);
     }
@@ -115,15 +119,19 @@ public class ClaudeTaskService {
             throw new IllegalArgumentException("Worker not found: " + form.getWorkerId());
         }
 
-        // 如果指定了 directoryId，从目录解析 cwd
+        // 如果指定了 directoryId，从目录解析 cwd 和 agentTeams
         String cwd = form.getCwd();
         String directoryId = form.getDirectoryId();
+        String agentTeamsJson = form.getAgentTeamsJson();
         if (directoryId != null && !directoryId.isEmpty()) {
             WorkingDirectoryEntity dir = workingDirectoryService.getDirectoryEntity(userId, directoryId);
             if (!dir.getWorkerId().equals(form.getWorkerId())) {
                 throw new IllegalArgumentException("Directory does not belong to the specified worker");
             }
             cwd = dir.getPath();
+            if ((agentTeamsJson == null || agentTeamsJson.isEmpty()) && dir.getAgentTeamsConfig() != null) {
+                agentTeamsJson = dir.getAgentTeamsConfig();
+            }
         }
 
         // Per-conversation: 复用已有 session 或创建新 session
@@ -168,7 +176,7 @@ public class ClaudeTaskService {
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
-                form.getModel(), form.getMaxTurns()));
+                form.getModel(), form.getMaxTurns(), agentTeamsJson));
 
         return toDTO(entity);
     }
