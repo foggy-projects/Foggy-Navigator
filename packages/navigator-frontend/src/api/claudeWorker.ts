@@ -99,6 +99,8 @@ export async function resumeTask(form: {
   claudeSessionId: string
   prompt: string
   cwd?: string
+  directoryId?: string
+  sessionId?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks/resume', form)) as unknown as RX<ClaudeTask>
   return rx.data
@@ -150,6 +152,14 @@ export async function abortTask(
   const rx = (await client.post(`/claude-tasks/${taskId}/abort`)) as unknown as RX<{
     taskId: string
     status: string
+  }>
+  return rx.data
+}
+
+export async function deleteTask(taskId: string): Promise<{ taskId: string; deleted: boolean }> {
+  const rx = (await client.delete(`/claude-tasks/${taskId}`)) as unknown as RX<{
+    taskId: string
+    deleted: boolean
   }>
   return rx.data
 }

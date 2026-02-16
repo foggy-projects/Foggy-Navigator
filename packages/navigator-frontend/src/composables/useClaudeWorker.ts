@@ -89,6 +89,8 @@ export function useClaudeWorker() {
     claudeSessionId: string
     prompt: string
     cwd?: string
+    directoryId?: string
+    sessionId?: string
   }) {
     const task = await api.resumeTask(form)
     tasks.value.unshift(task)
@@ -99,6 +101,12 @@ export function useClaudeWorker() {
     const result = await api.abortTask(taskId)
     const idx = tasks.value.findIndex((t) => t.taskId === taskId)
     if (idx >= 0) tasks.value[idx]!.status = 'ABORTED'
+    return result
+  }
+
+  async function deleteTask(taskId: string) {
+    const result = await api.deleteTask(taskId)
+    tasks.value = tasks.value.filter((t) => t.taskId !== taskId)
     return result
   }
 
@@ -145,6 +153,7 @@ export function useClaudeWorker() {
     createTask,
     resumeTask,
     abortTask,
+    deleteTask,
     loadDirectories,
     createDirectory,
     deleteDirectory,

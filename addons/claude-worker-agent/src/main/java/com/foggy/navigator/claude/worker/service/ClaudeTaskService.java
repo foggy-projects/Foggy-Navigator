@@ -1,5 +1,6 @@
 package com.foggy.navigator.claude.worker.service;
 
+import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
@@ -74,6 +75,13 @@ public class ClaudeTaskService {
                 .taskName(truncate(form.getPrompt(), 100))
                 .build());
 
+        // 3.5. 添加用户 prompt 作为 USER 消息
+        sessionManager.addMessage(sessionId, com.foggy.navigator.agent.framework.session.Message.builder()
+                .sessionId(sessionId)
+                .role(com.foggy.navigator.agent.framework.session.MessageRole.USER)
+                .content(form.getPrompt())
+                .build());
+
         // 4. 持久化任务
         String taskId = UUID.randomUUID().toString().substring(0, 12);
         ClaudeTaskEntity entity = new ClaudeTaskEntity();
@@ -107,11 +115,39 @@ public class ClaudeTaskService {
             throw new IllegalArgumentException("Worker not found: " + form.getWorkerId());
         }
 
-        String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
-                .userId(userId)
-                .tenantId(tenantId)
-                .agentId(AGENT_ID)
-                .taskName("Resume: " + truncate(form.getPrompt(), 80))
+        // 如果指定了 directoryId，从目录解析 cwd
+        String cwd = form.getCwd();
+        String directoryId = form.getDirectoryId();
+        if (directoryId != null && !directoryId.isEmpty()) {
+            WorkingDirectoryEntity dir = workingDirectoryService.getDirectoryEntity(userId, directoryId);
+            if (!dir.getWorkerId().equals(form.getWorkerId())) {
+                throw new IllegalArgumentException("Directory does not belong to the specified worker");
+            }
+            cwd = dir.getPath();
+        }
+
+        // Per-conversation: 复用已有 session 或创建新 session
+        String sessionId;
+        if (form.getSessionId() != null && !form.getSessionId().isEmpty()) {
+            Session existing = sessionManager.getSession(form.getSessionId());
+            if (existing == null || !existing.getUserId().equals(userId)) {
+                throw new IllegalArgumentException("Session not found or access denied");
+            }
+            sessionId = existing.getId();
+        } else {
+            sessionId = sessionManager.createSession(SessionCreateRequest.builder()
+                    .userId(userId)
+                    .tenantId(tenantId)
+                    .agentId(AGENT_ID)
+                    .taskName("Resume: " + truncate(form.getPrompt(), 80))
+                    .build());
+        }
+
+        // 添加用户 prompt 作为 USER 消息
+        sessionManager.addMessage(sessionId, com.foggy.navigator.agent.framework.session.Message.builder()
+                .sessionId(sessionId)
+                .role(com.foggy.navigator.agent.framework.session.MessageRole.USER)
+                .content(form.getPrompt())
                 .build());
 
         String taskId = UUID.randomUUID().toString().substring(0, 12);
@@ -121,16 +157,17 @@ public class ClaudeTaskService {
         entity.setWorkerId(form.getWorkerId());
         entity.setUserId(userId);
         entity.setPrompt(form.getPrompt());
-        entity.setCwd(form.getCwd());
+        entity.setCwd(cwd);
+        entity.setDirectoryId(directoryId);
         entity.setClaudeSessionId(form.getClaudeSessionId());
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
 
-        log.info("Task resumed: taskId={}, claudeSessionId={}", taskId, form.getClaudeSessionId());
+        log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}", taskId, form.getClaudeSessionId(), directoryId);
 
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
-                form.getPrompt(), form.getCwd(), form.getClaudeSessionId()));
+                form.getPrompt(), cwd, form.getClaudeSessionId()));
 
         return toDTO(entity);
     }
@@ -219,6 +256,23 @@ public class ClaudeTaskService {
             taskRepository.save(entity);
             log.info("Task aborted: taskId={}", taskId);
         });
+    }
+
+    /**
+     * 删除任务（仅允许删除已结束的任务）
+     */
+    @Transactional
+    public void deleteTask(String userId, String taskId) {
+        ClaudeTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+
+        // 只允许删除已完成/失败/中止的任务，不能删除运行中的任务
+        if ("RUNNING".equals(entity.getStatus())) {
+            throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
+        }
+
+        taskRepository.delete(entity);
+        log.info("Task deleted: taskId={}, userId={}", taskId, userId);
     }
 
     /**

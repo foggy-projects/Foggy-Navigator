@@ -11,4 +11,7 @@ public class ResumeTaskForm {
     private String claudeSessionId;
     private String prompt;
     private String cwd;
+    private String directoryId;
+    /** 复用已有 Navigator Session（per-conversation 模式） */
+    private String sessionId;
 }

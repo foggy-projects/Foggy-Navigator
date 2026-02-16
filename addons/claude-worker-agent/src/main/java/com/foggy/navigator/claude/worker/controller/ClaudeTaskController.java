@@ -126,4 +126,11 @@ public class ClaudeTaskController {
             return RX.ok(List.of());
         }
     }
+
+    @DeleteMapping("/{taskId}")
+    public RX<Map<String, Object>> deleteTask(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        taskService.deleteTask(userId, taskId);
+        return RX.ok(Map.of("taskId", taskId, "deleted", true));
+    }
 }

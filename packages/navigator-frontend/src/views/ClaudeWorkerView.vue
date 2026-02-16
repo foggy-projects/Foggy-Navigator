@@ -220,24 +220,56 @@
     <!-- Right Panel: Task History -->
     <aside v-if="selectedWorkerId" class="worker-history">
       <div class="history-header">
-        <h3>历史任务</h3>
+        <h3>历史会话</h3>
       </div>
       <div class="history-content">
-        <!-- Directory-specific tasks -->
+        <!-- Directory conversations (grouped) -->
         <template v-if="selectedDirectoryId">
-          <div v-if="directoryTasks.length > 0" class="task-list">
+          <div v-if="directoryConversations.length > 0" class="task-list">
             <div
-              v-for="task in directoryTasks"
-              :key="task.taskId"
+              v-for="conv in directoryConversations"
+              :key="conv.sessionId"
               class="task-item"
-              @click="viewTask(task)"
             >
-              <div class="task-prompt">{{ truncate(task.prompt, 60) }}</div>
-              <div class="task-meta">
-                <el-tag :type="taskStatusType(task.status)" size="small">
-                  {{ task.status }}
-                </el-tag>
-                <span>{{ formatTime(task.createdAt) }}</span>
+              <div class="task-content" @click="viewTask(conv.latestTask)">
+                <div class="task-prompt">{{ truncate(conv.firstPrompt, 50) }}</div>
+                <div class="task-meta">
+                  <el-tag :type="taskStatusType(conv.latestTask.status)" size="small">
+                    {{ conv.latestTask.status }}
+                  </el-tag>
+                  <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }} 轮</span>
+                  <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(4) }}</span>
+                  <span>{{ formatTime(conv.latestTask.createdAt) }}</span>
+                </div>
+              </div>
+              <div class="task-actions" @click.stop>
+                <el-button
+                  v-if="conv.latestTask.status === 'RUNNING'"
+                  type="warning"
+                  size="small"
+                  text
+                  @click="handleAbortTask(conv.latestTask.taskId)"
+                >
+                  中止
+                </el-button>
+                <el-button
+                  v-if="(conv.latestTask.status === 'COMPLETED' || conv.latestTask.status === 'ABORTED') && conv.claudeSessionId"
+                  type="primary"
+                  size="small"
+                  text
+                  @click="handleResumeFromHistory(conv.latestTask)"
+                >
+                  继续
+                </el-button>
+                <el-button
+                  v-if="conv.latestTask.status !== 'RUNNING'"
+                  type="danger"
+                  size="small"
+                  text
+                  @click="handleDeleteConversation(conv)"
+                >
+                  删除
+                </el-button>
               </div>
             </div>
           </div>
@@ -254,21 +286,53 @@
           />
         </template>
 
-        <!-- Worker-level tasks -->
+        <!-- Worker-level conversations (grouped) -->
         <template v-else>
-          <div v-if="workerTasks.length > 0" class="task-list">
+          <div v-if="workerConversations.length > 0" class="task-list">
             <div
-              v-for="task in workerTasks"
-              :key="task.taskId"
+              v-for="conv in workerConversations"
+              :key="conv.sessionId"
               class="task-item"
-              @click="viewTask(task)"
             >
-              <div class="task-prompt">{{ truncate(task.prompt, 60) }}</div>
-              <div class="task-meta">
-                <el-tag :type="taskStatusType(task.status)" size="small">
-                  {{ task.status }}
-                </el-tag>
-                <span>{{ formatTime(task.createdAt) }}</span>
+              <div class="task-content" @click="viewTask(conv.latestTask)">
+                <div class="task-prompt">{{ truncate(conv.firstPrompt, 50) }}</div>
+                <div class="task-meta">
+                  <el-tag :type="taskStatusType(conv.latestTask.status)" size="small">
+                    {{ conv.latestTask.status }}
+                  </el-tag>
+                  <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }} 轮</span>
+                  <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(4) }}</span>
+                  <span>{{ formatTime(conv.latestTask.createdAt) }}</span>
+                </div>
+              </div>
+              <div class="task-actions" @click.stop>
+                <el-button
+                  v-if="conv.latestTask.status === 'RUNNING'"
+                  type="warning"
+                  size="small"
+                  text
+                  @click="handleAbortTask(conv.latestTask.taskId)"
+                >
+                  中止
+                </el-button>
+                <el-button
+                  v-if="(conv.latestTask.status === 'COMPLETED' || conv.latestTask.status === 'ABORTED') && conv.claudeSessionId"
+                  type="primary"
+                  size="small"
+                  text
+                  @click="handleResumeFromHistory(conv.latestTask)"
+                >
+                  继续
+                </el-button>
+                <el-button
+                  v-if="conv.latestTask.status !== 'RUNNING'"
+                  type="danger"
+                  size="small"
+                  text
+                  @click="handleDeleteConversation(conv)"
+                >
+                  删除
+                </el-button>
               </div>
             </div>
           </div>
@@ -459,6 +523,42 @@ const selectedDirectory = computed(() =>
 const workerTasks = computed(() =>
   workerState.tasks.value.filter((t) => t.workerId === selectedWorkerId.value),
 )
+
+// Per-conversation grouping for history panel
+interface ConversationGroup {
+  sessionId: string
+  claudeSessionId: string
+  latestTask: ClaudeTask
+  tasks: ClaudeTask[]
+  totalCost: number
+  firstPrompt: string
+}
+
+function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] {
+  const groups = new Map<string, ClaudeTask[]>()
+  for (const task of taskList) {
+    const key = task.sessionId
+    const existing = groups.get(key)
+    if (existing) {
+      existing.push(task)
+    } else {
+      groups.set(key, [task])
+    }
+  }
+  return Array.from(groups.values())
+    .map((tasks) => ({
+      sessionId: tasks[0]!.sessionId,
+      claudeSessionId: tasks.find((t) => t.claudeSessionId)?.claudeSessionId || '',
+      latestTask: tasks[0]!,
+      tasks,
+      totalCost: tasks.reduce((s, t) => s + (t.costUsd || 0), 0),
+      firstPrompt: tasks[tasks.length - 1]!.prompt,
+    }))
+    .sort((a, b) => new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime())
+}
+
+const workerConversations = computed(() => groupTasksToConversations(workerTasks.value))
+const directoryConversations = computed(() => groupTasksToConversations(directoryTasks.value))
 
 function directoriesForWorker(workerId: string): WorkingDirectory[] {
   return workerState.directories.value.filter((d) => d.workerId === workerId)
@@ -740,7 +840,7 @@ async function abortPane(paneId: string) {
 async function resumePane(paneId: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   const oldTask = pane?.task.value
-  if (!oldTask?.claudeSessionId || !selectedWorkerId.value) return
+  if (!pane || !oldTask?.claudeSessionId || !selectedWorkerId.value) return
 
   try {
     const { value: prompt } = await ElMessageBox.prompt('输入后续指令', '继续对话', {
@@ -751,19 +851,22 @@ async function resumePane(paneId: string) {
     })
     if (!prompt) return
 
-    if (panes.value.length >= MAX_PANES) {
-      closePane(paneId)
-    }
-
     const newTask = await workerState.resumeTask({
       workerId: selectedWorkerId.value,
       claudeSessionId: oldTask.claudeSessionId,
       prompt,
       cwd: oldTask.cwd,
+      directoryId: oldTask.directoryId,
+      sessionId: oldTask.sessionId,  // per-conversation: reuse session
     })
 
-    const newPane = createPane(newTask)
-    await newPane.connect(newTask.sessionId)
+    // Resume in the same pane (keep messages, reconnect SSE)
+    pane.resumeInPlace(newTask)
+
+    workerState.loadTasks()
+    if (selectedDirectoryId.value) {
+      loadDirectoryTasks()
+    }
   } catch {
     // cancelled or failed
   }
@@ -779,7 +882,8 @@ function handleDirPageChange(page: number) {
 }
 
 function viewTask(task: ClaudeTask) {
-  const existing = panes.value.find((p) => p.task.value?.taskId === task.taskId)
+  // Per-conversation: match by sessionId (same conversation = same pane)
+  const existing = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
   if (existing) return
 
   if (panes.value.length >= MAX_PANES) {
@@ -789,6 +893,97 @@ function viewTask(task: ClaudeTask) {
 
   const pane = createPane(task)
   pane.connect(task.sessionId)
+}
+
+async function handleAbortTask(taskId: string) {
+  try {
+    await ElMessageBox.confirm('确认中止该任务？', '提示', {
+      type: 'warning',
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+    })
+    await workerState.abortTask(taskId)
+    ElMessage.success('任务已中止')
+    // Refresh task lists
+    workerState.loadTasks()
+    if (selectedDirectoryId.value) {
+      loadDirectoryTasks()
+    }
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('中止失败')
+    }
+  }
+}
+
+async function handleDeleteConversation(conv: ConversationGroup) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除该会话？包含 ${conv.tasks.length} 个任务，此操作不可恢复。`,
+      '提示',
+      { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
+    )
+    // Delete all non-running tasks in the conversation
+    for (const task of conv.tasks) {
+      if (task.status !== 'RUNNING') {
+        await workerState.deleteTask(task.taskId)
+      }
+    }
+    ElMessage.success('会话已删除')
+    workerState.loadTasks()
+    if (selectedDirectoryId.value) {
+      loadDirectoryTasks()
+    }
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('删除失败')
+    }
+  }
+}
+
+async function handleResumeFromHistory(task: ClaudeTask) {
+  if (!task.claudeSessionId || !selectedWorkerId.value) return
+
+  try {
+    const { value: prompt } = await ElMessageBox.prompt('输入后续指令', '继续对话', {
+      confirmButtonText: '发送',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputPlaceholder: '请输入后续任务描述...',
+    })
+    if (!prompt) return
+
+    const newTask = await workerState.resumeTask({
+      workerId: selectedWorkerId.value,
+      claudeSessionId: task.claudeSessionId,
+      prompt,
+      cwd: task.cwd,
+      directoryId: task.directoryId,
+      sessionId: task.sessionId,  // per-conversation: reuse session
+    })
+
+    // Per-conversation: find existing pane by sessionId
+    const existingPane = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
+    if (existingPane) {
+      existingPane.resumeInPlace(newTask)
+    } else {
+      if (panes.value.length >= MAX_PANES) {
+        ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
+        return
+      }
+      const newPane = createPane(newTask)
+      await newPane.connect(newTask.sessionId)  // load full history
+    }
+
+    workerState.loadTasks()
+    if (selectedDirectoryId.value) {
+      loadDirectoryTasks()
+    }
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('创建任务失败')
+    }
+  }
 }
 
 watch(showEditDialog, (val) => {
@@ -1131,17 +1326,33 @@ function formatTime(dateStr: string): string {
 }
 
 .task-item {
-  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
   background: #fff;
   border: 1px solid #ebeef5;
   border-radius: 6px;
-  cursor: pointer;
   transition: all 0.2s;
+  overflow: hidden;
 }
 
 .task-item:hover {
   border-color: #409eff;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.task-content {
+  padding: 10px 12px;
+  cursor: pointer;
+  flex: 1;
+}
+
+.task-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 6px 12px;
+  background: #f9fafb;
+  border-top: 1px solid #ebeef5;
 }
 
 .task-prompt {
@@ -1158,6 +1369,15 @@ function formatTime(dateStr: string): string {
   gap: 4px;
   font-size: 12px;
   color: #909399;
+}
+
+.conv-rounds {
+  color: #409eff;
+  font-weight: 500;
+}
+
+.conv-cost {
+  color: #67c23a;
 }
 
 .task-pagination {

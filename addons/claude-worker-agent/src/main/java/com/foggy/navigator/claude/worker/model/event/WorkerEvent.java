@@ -1,5 +1,6 @@
 package com.foggy.navigator.claude.worker.model.event;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -16,12 +17,18 @@ public class WorkerEvent {
     private String tool;
     private Map<String, Object> input;
     private String output;
+    @JsonProperty("task_id")
     private String taskId;
+    @JsonProperty("session_id")
     private String sessionId;
     private String result;
+    @JsonProperty("cost_usd")
     private BigDecimal costUsd;
+    @JsonProperty("duration_ms")
     private Long durationMs;
+    @JsonProperty("input_tokens")
     private Long inputTokens;
+    @JsonProperty("output_tokens")
     private Long outputTokens;
     private String error;
 }

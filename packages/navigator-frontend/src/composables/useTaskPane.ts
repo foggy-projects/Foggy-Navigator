@@ -11,6 +11,8 @@ export interface TaskPaneState {
   task: Ref<ClaudeTask | null>
   chatState: ChatState
   connect(sessionId: string): Promise<void>
+  /** Resume in-place: keep messages, update task, reconnect SSE */
+  resumeInPlace(newTask: ClaudeTask): void
   disconnect(): void
   dispose(): void
 }
@@ -25,29 +27,8 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   const chatState = createChatState()
   let sseController: SseController | null = null
 
-  async function connect(sessionId: string) {
-    disconnect()
-    chatState.clearMessages()
-    chatState.setConnectionStatus('connecting')
-
-    // Load history messages
-    try {
-      const messages = await sessionApi.getMessages(sessionId)
-      for (const msg of messages) {
-        const chatMsg: ChatMessage = {
-          id: msg.id,
-          type: AipMessageType.TEXT_COMPLETE,
-          sender: msg.role === 'USER' ? 'user' : 'assistant',
-          content: msg.content,
-          timestamp: new Date(msg.createdAt).getTime(),
-        }
-        chatState.messages.value.push(chatMsg)
-      }
-    } catch (e) {
-      console.error(`[TaskPane ${paneId}] Failed to load history:`, e)
-    }
-
-    // Create independent SSE connection
+  /** Create SSE connection for a given sessionId (shared by connect and resumeInPlace) */
+  function createSseConnection(sessionId: string) {
     const token = getToken()
     const sseUrl = `/api/v1/sessions/${sessionId}/stream`
 
@@ -78,6 +59,9 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         const payload = raw.payload as Record<string, unknown> | undefined
         if (!payload?.taskId) return
 
+        // taskId guard: ignore events from previous tasks in the same session
+        if (payload.taskId !== task.value.taskId) return
+
         if (raw.type === 'TEXT_COMPLETE') {
           task.value.status = 'COMPLETED'
           if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
@@ -93,6 +77,47 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         }
       },
     })
+  }
+
+  async function connect(sessionId: string) {
+    disconnect()
+    chatState.clearMessages()
+    chatState.setConnectionStatus('connecting')
+
+    // Load history messages
+    try {
+      const messages = await sessionApi.getMessages(sessionId)
+      for (const msg of messages) {
+        const chatMsg: ChatMessage = {
+          id: msg.id,
+          type: AipMessageType.TEXT_COMPLETE,
+          sender: msg.role === 'USER' ? 'user' : 'assistant',
+          content: msg.content,
+          timestamp: new Date(msg.createdAt).getTime(),
+        }
+        chatState.messages.value.push(chatMsg)
+      }
+    } catch (e) {
+      console.error(`[TaskPane ${paneId}] Failed to load history:`, e)
+    }
+
+    createSseConnection(sessionId)
+  }
+
+  /** Resume in the same pane without clearing messages */
+  function resumeInPlace(newTask: ClaudeTask) {
+    task.value = newTask
+    chatState.addUserMessage(newTask.prompt)
+
+    // Disconnect old SSE (without clearing messages)
+    if (sseController) {
+      sseController.close()
+      sseController = null
+    }
+    chatState.setConnectionStatus('connecting')
+
+    // Reconnect SSE to the same sessionId (no history reload)
+    createSseConnection(newTask.sessionId)
   }
 
   function disconnect() {
@@ -113,6 +138,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     task,
     chatState,
     connect,
+    resumeInPlace,
     disconnect,
     dispose,
   }
