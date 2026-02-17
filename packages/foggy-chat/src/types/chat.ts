@@ -1,17 +1,1 @@
-import type { AipMessageType } from './aip'
-
-export interface ChatMessage {
-  id: string
-  type: AipMessageType
-  sender: 'user' | 'assistant' | 'system' | 'tool'
-  content: string
-  timestamp: number
-  toolCallId?: string
-  toolName?: string
-  toolOutput?: string
-  thought?: string
-  error?: string
-  raw?: unknown
-}
-
-export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+export type { ChatMessage, ConnectionStatus } from '@foggy/chat-core'

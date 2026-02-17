@@ -1,5 +1,5 @@
 import client from './client'
-import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo } from '@/types'
+import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession } from '@/types'
 
 // ===== Worker API =====
 
@@ -179,9 +179,28 @@ export async function deleteTask(taskId: string): Promise<{ taskId: string; dele
 
 export async function listWorkerSessions(
   workerId: string,
-): Promise<Record<string, unknown>[]> {
+): Promise<WorkerSession[]> {
   const rx = (await client.get(
     `/claude-tasks/worker/${workerId}/sessions`,
-  )) as unknown as RX<Record<string, unknown>[]>
+  )) as unknown as RX<WorkerSession[]>
+  return rx.data
+}
+
+export async function getWorkerSessionMessages(
+  workerId: string,
+  sessionId: string,
+): Promise<{ role: string; content: string; timestamp: string }[]> {
+  const rx = (await client.get(
+    `/claude-tasks/worker/${workerId}/sessions/${sessionId}/messages`,
+  )) as unknown as RX<{ role: string; content: string; timestamp: string }[]>
+  return rx.data
+}
+
+export async function syncWorkerSessions(
+  workerId: string,
+): Promise<{ synced: number; total: number }> {
+  const rx = (await client.post(
+    `/claude-tasks/worker/${workerId}/sessions/sync`,
+  )) as unknown as RX<{ synced: number; total: number }>
   return rx.data
 }

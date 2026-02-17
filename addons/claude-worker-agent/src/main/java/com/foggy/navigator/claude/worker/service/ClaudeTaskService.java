@@ -11,6 +11,7 @@ import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -39,6 +40,7 @@ public class ClaudeTaskService {
     private final ClaudeTaskRepository taskRepository;
     private final ClaudeWorkerService workerService;
     private final WorkingDirectoryService workingDirectoryService;
+    private final WorkingDirectoryRepository workingDirectoryRepository;
     private final SessionManager sessionManager;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -288,6 +290,89 @@ public class ClaudeTaskService {
 
         taskRepository.delete(entity);
         log.info("Task deleted: taskId={}, userId={}", taskId, userId);
+    }
+
+    /**
+     * 同步 Worker 本地会话为 ClaudeTask 记录
+     * 对每个从 Worker 获取的会话，若不存在相同 claudeSessionId 的记录则创建
+     */
+    @Transactional
+    public int syncLocalSessions(String userId, String tenantId, String workerId,
+                                 List<Map<String, Object>> sessions) {
+        if (sessions == null || sessions.isEmpty()) return 0;
+
+        int created = 0;
+        for (Map<String, Object> session : sessions) {
+            String claudeSessionId = (String) session.get("session_id");
+            if (claudeSessionId == null || claudeSessionId.isEmpty()) continue;
+
+            // Dedup: skip if already synced
+            if (taskRepository.existsByClaudeSessionIdAndWorkerId(claudeSessionId, workerId)) {
+                continue;
+            }
+
+            String cwd = (String) session.get("cwd");
+            String slug = (String) session.get("slug");
+
+            // Match cwd to a WorkingDirectory for directoryId
+            String directoryId = null;
+            if (cwd != null && !cwd.isEmpty()) {
+                var dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, cwd, userId);
+                if (dirOpt.isPresent()) {
+                    directoryId = dirOpt.get().getDirectoryId();
+                }
+            }
+
+            String prompt = (slug != null && !slug.isEmpty()) ? slug : "(synced session)";
+
+            // Create Navigator session
+            String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
+                    .userId(userId)
+                    .tenantId(tenantId)
+                    .agentId(AGENT_ID)
+                    .taskName(truncate(prompt, 100))
+                    .build());
+
+            // Create ClaudeTask entity
+            String taskId = UUID.randomUUID().toString().substring(0, 12);
+            ClaudeTaskEntity entity = new ClaudeTaskEntity();
+            entity.setTaskId(taskId);
+            entity.setSessionId(sessionId);
+            entity.setWorkerId(workerId);
+            entity.setUserId(userId);
+            entity.setPrompt(prompt);
+            entity.setCwd(cwd);
+            entity.setDirectoryId(directoryId);
+            entity.setClaudeSessionId(claudeSessionId);
+            entity.setStatus("COMPLETED");
+
+            // Preserve original timestamps from JSONL
+            LocalDateTime createdAt = parseSessionDateTime(session.get("created_at"));
+            LocalDateTime updatedAt = parseSessionDateTime(session.get("updated_at"));
+            if (createdAt != null) entity.setCreatedAt(createdAt);
+            if (updatedAt != null) entity.setUpdatedAt(updatedAt);
+
+            taskRepository.save(entity);
+            created++;
+        }
+
+        log.info("Synced {} local sessions as tasks for worker {}", created, workerId);
+        return created;
+    }
+
+    private LocalDateTime parseSessionDateTime(Object value) {
+        if (value == null) return null;
+        try {
+            String str = value.toString();
+            // Handle ISO datetime with timezone (e.g. "2026-02-15T10:30:00+00:00")
+            if (str.contains("T")) {
+                java.time.OffsetDateTime odt = java.time.OffsetDateTime.parse(str);
+                return odt.toLocalDateTime();
+            }
+        } catch (Exception e) {
+            log.debug("Failed to parse session datetime: {}", value);
+        }
+        return null;
     }
 
     /**

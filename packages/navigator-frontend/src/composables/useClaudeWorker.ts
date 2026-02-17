@@ -140,6 +140,11 @@ export function useClaudeWorker() {
     return updated
   }
 
+  async function syncSessions(workerId: string) {
+    const result = await api.syncWorkerSessions(workerId)
+    return result
+  }
+
   return {
     workers,
     tasks,
@@ -164,5 +169,6 @@ export function useClaudeWorker() {
     createDirectory,
     deleteDirectory,
     syncGitInfo,
+    syncSessions,
   }
 }

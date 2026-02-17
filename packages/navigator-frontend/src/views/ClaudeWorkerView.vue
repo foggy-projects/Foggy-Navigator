@@ -100,6 +100,9 @@
             <el-button size="small" :loading="syncing" @click="handleSyncGitInfo">
               同步 Git
             </el-button>
+            <el-button size="small" :loading="syncingSessions" @click="handleSyncSessions">
+              同步会话
+            </el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
             <el-button size="small" type="danger" text @click="handleDeleteDirectory">删除</el-button>
           </div>
@@ -355,7 +358,7 @@
             </div>
           </div>
         </div>
-        <div v-else class="empty-hint">暂无历史会话</div>
+        <div v-if="activeConversations.length === 0" class="empty-hint">暂无历史会话</div>
         <!-- Pagination -->
         <el-pagination
           v-if="selectedDirectoryId ? dirTaskTotal > dirTaskSize : workerState.taskTotal.value > workerState.taskSize.value"
@@ -505,6 +508,7 @@ const showAddDirectoryDialog = ref(false)
 const showEditDirectoryDialog = ref(false)
 const saving = ref(false)
 const syncing = ref(false)
+const syncingSessions = ref(false)
 const directorySkills = ref<SkillInfo[]>([])
 
 // Directory task pagination (separate from global task pagination)
@@ -827,6 +831,24 @@ async function handleSyncGitInfo() {
   }
 }
 
+async function handleSyncSessions() {
+  if (!selectedWorkerId.value) return
+  syncingSessions.value = true
+  try {
+    const result = await workerState.syncSessions(selectedWorkerId.value)
+    ElMessage.success(`已同步 ${result.synced} 个新会话，共 ${result.total} 个`)
+    // Refresh task lists to show newly synced sessions
+    workerState.loadTasks()
+    if (selectedDirectoryId.value) {
+      loadDirectoryTasks()
+    }
+  } catch {
+    ElMessage.error('会话同步失败')
+  } finally {
+    syncingSessions.value = false
+  }
+}
+
 function handleSlashCommand(payload: { command: string; value: string | number }) {
   if (payload.command === 'model') {
     taskForm.value.model = payload.value as string
@@ -937,8 +959,8 @@ async function handlePaneSend(paneId: string, content: string) {
       prompt: content,
       cwd: oldTask.cwd,
       directoryId: oldTask.directoryId,
-      sessionId: oldTask.sessionId,
     }
+    resumeForm.sessionId = oldTask.sessionId
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -967,7 +989,7 @@ function handleDirPageChange(page: number) {
   loadDirectoryTasks()
 }
 
-function viewTask(task: ClaudeTask) {
+async function viewTask(task: ClaudeTask) {
   // Per-conversation: match by sessionId (same conversation = same pane)
   const existing = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
   if (existing) return
@@ -978,7 +1000,27 @@ function viewTask(task: ClaudeTask) {
   }
 
   const pane = createPane(task)
-  pane.connect(task.sessionId)
+  await pane.connect(task.sessionId)
+
+  // For synced tasks: if Navigator session was empty, load JSONL history from Worker
+  if (pane.chatState.messages.value.length === 0 && task.claudeSessionId && task.workerId) {
+    try {
+      const history = await dirApi.getWorkerSessionMessages(task.workerId, task.claudeSessionId)
+      if (history.length > 0) {
+        const { AipMessageType } = await import('@foggy/chat')
+        const historyMsgs = history.map((m, i) => ({
+          id: `synced-${task.claudeSessionId}-${i}`,
+          type: AipMessageType.TEXT_COMPLETE,
+          sender: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+          content: m.content,
+          timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
+        }))
+        pane.chatState.messages.value.push(...historyMsgs)
+      }
+    } catch {
+      // JSONL history loading is best-effort
+    }
+  }
 }
 
 async function handleAbortTask(taskId: string) {

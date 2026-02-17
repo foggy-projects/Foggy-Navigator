@@ -371,6 +371,8 @@ class SdkWrapper:
                                 "cwd": cwd,
                                 "created_at": now,
                                 "updated_at": now,
+                                "slug": None,
+                                "git_branch": None,
                             }
 
                     # Extract usage (token counts) and num_turns

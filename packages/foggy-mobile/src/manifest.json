@@ -1,0 +1,30 @@
+{
+  "name": "Foggy Navigator",
+  "appid": "__UNI__FOGGY_NAV",
+  "description": "Foggy Navigator 移动端",
+  "versionName": "0.1.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "h5": {
+    "title": "Foggy Navigator",
+    "router": {
+      "mode": "hash"
+    },
+    "devServer": {
+      "port": 5175,
+      "proxy": {
+        "/api": {
+          "target": "http://localhost:8112",
+          "changeOrigin": true
+        }
+      }
+    }
+  },
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": false
+    },
+    "usingComponents": true
+  }
+}

@@ -116,6 +116,16 @@ export interface WorkingDirectory {
   updatedAt: string
 }
 
+/** Worker 上的 Claude Code 本地会话 */
+export interface WorkerSession {
+  session_id: string
+  cwd: string
+  created_at: string
+  updated_at: string
+  slug?: string
+  git_branch?: string
+}
+
 /** Claude Code 技能 */
 export interface SkillInfo {
   name: string

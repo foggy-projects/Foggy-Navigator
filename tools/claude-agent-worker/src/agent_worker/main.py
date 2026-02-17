@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI):
         "  anthropic_url  = %s",
         settings.anthropic_base_url or "(default)",
     )
+
     yield
     logger.info("Claude Agent Worker stopped")
 

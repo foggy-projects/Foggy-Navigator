@@ -103,6 +103,33 @@ public class ClaudeWorkerClient {
     }
 
     /**
+     * 读取 Claude Code 本地会话的对话历史
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<java.util.List<Map<String, Object>>> getSessionMessages(String sessionId) {
+        return webClient.get()
+                .uri("/api/v1/sessions/{sessionId}/messages", sessionId)
+                .retrieve()
+                .bodyToMono(java.util.List.class)
+                .map(list -> (java.util.List<Map<String, Object>>) list)
+                .doOnError(e -> log.warn("Get session messages failed for worker {}, session {}: {}",
+                        workerId, sessionId, e.getMessage()));
+    }
+
+    /**
+     * 触发 Worker 重新扫描 Claude Code 本地会话
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> syncSessions() {
+        return webClient.post()
+                .uri("/api/v1/sessions/sync")
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Sync sessions failed for worker {}: {}", workerId, e.getMessage()));
+    }
+
+    /**
      * 查询 Git 仓库信息
      */
     @SuppressWarnings("unchecked")

@@ -71,6 +71,8 @@ class SessionInfo(BaseModel):
     cwd: str
     created_at: datetime
     updated_at: datetime
+    slug: str | None = None
+    git_branch: str | None = None
 
 
 # ---------------------------------------------------------------------------

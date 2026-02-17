@@ -37,6 +37,7 @@
     "vue-tsc": "^3.1.4"
   },
   "dependencies": {
+    "@foggy/chat-core": "workspace:*",
     "highlight.js": "^11.11.1",
     "markdown-it": "^14.1.0"
   }

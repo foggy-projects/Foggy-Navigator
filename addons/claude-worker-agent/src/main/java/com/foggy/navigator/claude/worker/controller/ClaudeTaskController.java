@@ -127,6 +127,58 @@ public class ClaudeTaskController {
         }
     }
 
+    @GetMapping("/worker/{workerId}/sessions/{sessionId}/messages")
+    public RX<List<Map<String, Object>>> getWorkerSessionMessages(
+            @PathVariable String workerId,
+            @PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw RX.throwB("Worker not found");
+        }
+
+        try {
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            List<Map<String, Object>> messages = client.getSessionMessages(sessionId)
+                    .block(java.time.Duration.ofSeconds(30));
+            return RX.ok(messages != null ? messages : List.of());
+        } catch (Exception e) {
+            log.warn("Failed to get session messages: workerId={}, sessionId={}, error={}",
+                    workerId, sessionId, e.getMessage());
+            return RX.ok(List.of());
+        }
+    }
+
+    @PostMapping("/worker/{workerId}/sessions/sync")
+    public RX<Map<String, Object>> syncWorkerSessions(@PathVariable String workerId) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw RX.throwB("Worker not found");
+        }
+
+        try {
+            ClaudeWorkerClient client = workerService.createClient(worker);
+
+            // 1. Trigger Worker to re-scan JSONL files
+            client.syncSessions().block(java.time.Duration.ofSeconds(30));
+
+            // 2. Get all sessions from Worker
+            java.util.List<Map<String, Object>> sessions = client.listSessions()
+                    .block(java.time.Duration.ofSeconds(10));
+            if (sessions == null) sessions = java.util.List.of();
+
+            // 3. Create ClaudeTask entities for new sessions
+            int created = taskService.syncLocalSessions(userId, tenantId, workerId, sessions);
+
+            return RX.ok(Map.of("synced", created, "total", sessions.size()));
+        } catch (Exception e) {
+            log.warn("Failed to sync sessions on worker: workerId={}, error={}", workerId, e.getMessage());
+            return RX.failB("同步失败: " + e.getMessage());
+        }
+    }
+
     @DeleteMapping("/{taskId}")
     public RX<Map<String, Object>> deleteTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();

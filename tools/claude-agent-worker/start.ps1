@@ -30,5 +30,6 @@ if ($existingPid) {
 
 # Start the worker
 Set-Location $WorkerDir
+$env:PYTHONPATH = Join-Path $WorkerDir "src"
 Write-Host "Starting Agent Worker on port $Port..." -ForegroundColor Green
 python -m uvicorn agent_worker.main:app --host 0.0.0.0 --port $Port
