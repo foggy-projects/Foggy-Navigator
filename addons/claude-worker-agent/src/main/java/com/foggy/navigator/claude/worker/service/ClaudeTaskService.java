@@ -246,15 +246,18 @@ public class ClaudeTaskService {
     }
 
     /**
-     * 标记任务失败
+     * 标记任务失败（保留 claudeSessionId 以便后续继续会话）
      */
     @Transactional
-    public void failTask(String taskId, String errorMessage) {
+    public void failTask(String taskId, String claudeSessionId, String errorMessage) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setStatus("FAILED");
             entity.setErrorMessage(errorMessage);
+            if (claudeSessionId != null && entity.getClaudeSessionId() == null) {
+                entity.setClaudeSessionId(claudeSessionId);
+            }
             taskRepository.save(entity);
-            log.warn("Task failed: taskId={}, error={}", taskId, errorMessage);
+            log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
         });
     }
 

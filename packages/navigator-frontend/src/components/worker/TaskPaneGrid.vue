@@ -4,10 +4,12 @@
       v-for="pane in panes"
       :key="pane.paneId"
       :pane-state="pane"
+      :skills="skills"
       :class="{ 'span-full': panes.length === 3 && pane === panes[2] }"
       @close="(id) => emit('close', id)"
       @abort="(id) => emit('abort', id)"
       @send="(id, content) => emit('send', id, content)"
+      @command="(payload) => emit('command', payload)"
     />
   </div>
 </template>
@@ -15,15 +17,18 @@
 <script setup lang="ts">
 import TaskPane from './TaskPane.vue'
 import type { TaskPaneState } from '@/composables/useTaskPane'
+import type { SkillInfo } from '@/types'
 
 defineProps<{
   panes: TaskPaneState[]
+  skills?: SkillInfo[]
 }>()
 
 const emit = defineEmits<{
   (e: 'close', paneId: string): void
   (e: 'abort', paneId: string): void
   (e: 'send', paneId: string, content: string): void
+  (e: 'command', payload: { command: string; value: string | number }): void
 }>()
 </script>
 

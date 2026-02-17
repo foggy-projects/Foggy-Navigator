@@ -1,8 +1,11 @@
 package com.foggy.navigator.claude.worker.controller;
 
+import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
+import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
+import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
 import com.foggy.navigator.claude.worker.service.WorkingDirectoryService;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
@@ -11,7 +14,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 工作目录管理 API
@@ -24,6 +29,7 @@ import java.util.List;
 public class WorkingDirectoryController {
 
     private final WorkingDirectoryService directoryService;
+    private final ClaudeWorkerService workerService;
 
     @GetMapping("/worker/{workerId}")
     public RX<List<WorkingDirectoryDTO>> listByWorker(@PathVariable String workerId) {
@@ -57,5 +63,16 @@ public class WorkingDirectoryController {
     public RX<WorkingDirectoryDTO> syncGitInfo(@PathVariable String directoryId) {
         String userId = UserContext.getCurrentUserId();
         return RX.ok(directoryService.syncGitInfo(userId, directoryId));
+    }
+
+    @GetMapping("/{directoryId}/skills")
+    public RX<List<Map<String, Object>>> listSkills(@PathVariable String directoryId) {
+        String userId = UserContext.getCurrentUserId();
+        WorkingDirectoryEntity entity = directoryService.getDirectoryEntity(userId, directoryId);
+        ClaudeWorkerClient client = workerService.createClient(
+                workerService.getWorkerEntity(entity.getWorkerId()));
+        List<Map<String, Object>> skills = client.listSkills(entity.getPath())
+                .block(Duration.ofSeconds(10));
+        return RX.ok(skills != null ? skills : List.of());
     }
 }

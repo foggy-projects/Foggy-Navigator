@@ -21,12 +21,13 @@
         </slot>
       </template>
     </MessageList>
-    <MessageInput
-      v-if="showInput"
-      :disabled="inputDisabled"
-      :placeholder="placeholder"
-      @send="(content) => emit('send', content)"
-    />
+    <slot v-if="showInput" name="input">
+      <MessageInput
+        :disabled="inputDisabled"
+        :placeholder="placeholder"
+        @send="(content) => emit('send', content)"
+      />
+    </slot>
   </div>
 </template>
 

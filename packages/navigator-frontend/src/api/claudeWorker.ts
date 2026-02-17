@@ -1,5 +1,5 @@
 import client from './client'
-import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory } from '@/types'
+import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo } from '@/types'
 
 // ===== Worker API =====
 
@@ -79,6 +79,13 @@ export async function syncDirectoryGitInfo(directoryId: string): Promise<Working
   const rx = (await client.post(
     `/working-directories/${directoryId}/sync`,
   )) as unknown as RX<WorkingDirectory>
+  return rx.data
+}
+
+export async function listSkills(directoryId: string): Promise<SkillInfo[]> {
+  const rx = (await client.get(
+    `/working-directories/${directoryId}/skills`,
+  )) as unknown as RX<SkillInfo[]>
   return rx.data
 }
 

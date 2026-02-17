@@ -97,3 +97,15 @@ class GitInfoResponse(BaseModel):
     remote_url: str | None = None
     status: str = "unknown"      # clean | dirty | unknown
     provider: str = "OTHER"      # GITHUB | GITLAB | GITEE | OTHER
+
+
+# ---------------------------------------------------------------------------
+# Skills
+# ---------------------------------------------------------------------------
+
+class SkillInfo(BaseModel):
+    """A single Claude Code skill discovered from ``.claude/skills/``."""
+
+    name: str
+    description: str = ""
+    scope: str = "project"       # "project" | "user"

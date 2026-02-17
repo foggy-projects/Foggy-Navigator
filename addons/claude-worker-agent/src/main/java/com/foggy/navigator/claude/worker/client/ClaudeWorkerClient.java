@@ -64,7 +64,7 @@ public class ClaudeWorkerClient {
         }
         if (agentTeamsJson != null && !agentTeamsJson.isEmpty()) {
             Map<String, Object> extraArgs = new java.util.HashMap<>();
-            extraArgs.put("--agents", agentTeamsJson);
+            extraArgs.put("agents", agentTeamsJson);
             body.put("extra_args", extraArgs);
         }
 
@@ -113,6 +113,19 @@ public class ClaudeWorkerClient {
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
                 .doOnError(e -> log.warn("Git info failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
+     * 获取项目技能列表
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<java.util.List<Map<String, Object>>> listSkills(String cwd) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/skills").queryParam("cwd", cwd).build())
+                .retrieve()
+                .bodyToMono(java.util.List.class)
+                .map(list -> (java.util.List<Map<String, Object>>) list)
+                .doOnError(e -> log.warn("List skills failed for worker {}, cwd {}: {}", workerId, cwd, e.getMessage()));
     }
 
     public String getWorkerId() {

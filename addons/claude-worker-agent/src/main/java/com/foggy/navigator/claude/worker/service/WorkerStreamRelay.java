@@ -62,6 +62,7 @@ public class WorkerStreamRelay {
             ClaudeWorkerClient client = workerService.createClient(worker);
 
             AtomicReference<String> detectedModel = new AtomicReference<>();
+            AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(event.getClaudeSessionId());
 
             Disposable subscription = client.streamQuery(event.getPrompt(), event.getCwd(),
                             event.getClaudeSessionId(), event.getModel(), event.getMaxTurns(),
@@ -77,7 +78,7 @@ public class WorkerStreamRelay {
                             log.debug("Task {} received SSE data: {}", taskId, data.substring(0, Math.min(200, data.length())));
                             WorkerEvent workerEvent = objectMapper.readValue(data, WorkerEvent.class);
                             log.debug("Task {} parsed event type: {}", taskId, workerEvent.getType());
-                            relayEvent(sessionId, taskId, workerEvent, detectedModel);
+                            relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
                         } catch (Exception e) {
                             log.warn("Failed to parse worker event for task {}: {}", taskId, data, e);
                         }
@@ -89,7 +90,7 @@ public class WorkerStreamRelay {
                     .doOnError(e -> {
                         log.error("Worker stream error: taskId={}", taskId, e);
                         activeStreams.remove(taskId);
-                        taskService.failTask(taskId, e.getMessage());
+                        taskService.failTask(taskId, detectedClaudeSessionId.get(), e.getMessage());
                         publishMessage(sessionId, MessageType.ERROR,
                                 Map.of("content", "Worker connection error: " + e.getMessage(), "taskId", taskId));
                     })
@@ -99,7 +100,7 @@ public class WorkerStreamRelay {
 
         } catch (Exception e) {
             log.error("Failed to start stream relay: taskId={}", taskId, e);
-            taskService.failTask(taskId, e.getMessage());
+            taskService.failTask(taskId, null, e.getMessage());
             publishMessage(sessionId, MessageType.ERROR,
                     Map.of("content", "Failed to connect to worker: " + e.getMessage(), "taskId", taskId));
         }
@@ -120,12 +121,16 @@ public class WorkerStreamRelay {
      * 将 Worker 事件转为 AgentMessage 并发布
      */
     private void relayEvent(String sessionId, String taskId, WorkerEvent event,
-                            AtomicReference<String> detectedModel) {
+                            AtomicReference<String> detectedModel,
+                            AtomicReference<String> detectedClaudeSessionId) {
         if (event.getType() == null) return;
 
         switch (event.getType()) {
             case "system" -> {
-                // 系统消息，携带 session_id 等元数据
+                // 系统消息，携带 session_id 等元数据 — 尽早记住 claudeSessionId
+                if (event.getSessionId() != null) {
+                    detectedClaudeSessionId.set(event.getSessionId());
+                }
                 publishMessage(sessionId, MessageType.SESSION_START,
                         Map.of("content", "Task started", "taskId", taskId,
                                 "claudeSessionId", nullSafe(event.getSessionId())));
@@ -189,12 +194,18 @@ public class WorkerStreamRelay {
                         .build());
             }
             case "error" -> {
+                // 错误事件也可能携带 session_id
+                if (event.getSessionId() != null) {
+                    detectedClaudeSessionId.set(event.getSessionId());
+                }
+                String errorClaudeSessionId = detectedClaudeSessionId.get();
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("content", event.getError());
                 payload.put("taskId", taskId);
+                payload.put("claudeSessionId", nullSafe(errorClaudeSessionId));
                 publishMessage(sessionId, MessageType.ERROR, payload);
 
-                taskService.failTask(taskId, event.getError());
+                taskService.failTask(taskId, errorClaudeSessionId, event.getError());
                 activeStreams.remove(taskId);
 
                 // 发布跨 Agent 任务失败事件

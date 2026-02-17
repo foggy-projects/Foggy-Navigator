@@ -116,6 +116,13 @@ export interface WorkingDirectory {
   updatedAt: string
 }
 
+/** Claude Code 技能 */
+export interface SkillInfo {
+  name: string
+  description: string
+  scope: 'project' | 'user'
+}
+
 // ===== 跨 Agent 任务类型 =====
 
 export type AgentTaskType = 'CODING' | 'CLAUDE_WORKER' | 'DELEGATION'

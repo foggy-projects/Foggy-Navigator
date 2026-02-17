@@ -47,25 +47,51 @@
         <template #empty>
           <div class="waiting-hint">等待 Worker 响应...</div>
         </template>
+        <template #input>
+          <div class="pane-input-wrap">
+            <SlashCommandInput
+              v-model="paneInput"
+              :rows="1"
+              :disabled="inputDisabled"
+              placeholder="输入后续指令... (输入 / 触发命令)"
+              :skills="skills || []"
+              @submit="handleSend()"
+              @command="handleCommand"
+            />
+            <el-button
+              type="primary"
+              :disabled="inputDisabled || !paneInput.trim()"
+              @click="handleSend()"
+            >
+              发送
+            </el-button>
+          </div>
+        </template>
       </ChatPanel>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { ChatPanel } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
+import type { SkillInfo } from '@/types'
+import SlashCommandInput from './SlashCommandInput.vue'
 
 const props = defineProps<{
   paneState: TaskPaneState
+  skills?: SkillInfo[]
 }>()
 
 const emit = defineEmits<{
   (e: 'close', paneId: string): void
   (e: 'abort', paneId: string): void
   (e: 'send', paneId: string, content: string): void
+  (e: 'command', payload: { command: string; value: string | number }): void
 }>()
+
+const paneInput = ref('')
 
 const modelShort = computed(() => {
   const m = props.paneState.task.value?.model
@@ -76,7 +102,7 @@ const modelShort = computed(() => {
 
 const canInput = computed(() => {
   const t = props.paneState.task.value
-  return !!t && (t.status === 'COMPLETED' || t.status === 'ABORTED') && !!t.claudeSessionId
+  return !!t && t.status !== 'RUNNING' && t.status !== 'PENDING' && !!t.claudeSessionId
 })
 
 const inputDisabled = computed(() => {
@@ -84,8 +110,18 @@ const inputDisabled = computed(() => {
   return !!t && t.status === 'RUNNING'
 })
 
-function handleSend(content: string) {
-  emit('send', props.paneState.paneId, content)
+function handleSend(content?: string) {
+  const text = content || paneInput.value.trim()
+  if (!text) return
+  // Strip leading "/" to prevent CLI from interpreting as slash command
+  const safeText = text.startsWith('/') ? text.slice(1) : text
+  if (!safeText.trim()) return
+  emit('send', props.paneState.paneId, safeText)
+  paneInput.value = ''
+}
+
+function handleCommand(payload: { command: string; value: string | number }) {
+  emit('command', payload)
 }
 
 function truncate(text: string, maxLen: number) {
@@ -196,5 +232,18 @@ function truncate(text: string, maxLen: number) {
 .waiting-hint {
   color: #909399;
   font-size: 14px;
+}
+
+.pane-input-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #e4e7ed;
+  background: #fff;
+}
+
+.pane-input-wrap .slash-input-wrap {
+  flex: 1;
 }
 </style>

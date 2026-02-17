@@ -62,6 +62,11 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         // taskId guard: ignore events from previous tasks in the same session
         if (payload.taskId !== task.value.taskId) return
 
+        // Capture claudeSessionId as early as possible (from SESSION_START / system events)
+        if (typeof payload.claudeSessionId === 'string' && payload.claudeSessionId) {
+          task.value.claudeSessionId = payload.claudeSessionId
+        }
+
         if (raw.type === 'TEXT_COMPLETE') {
           task.value.status = 'COMPLETED'
           if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
@@ -70,8 +75,6 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
           if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
           if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
           if (typeof payload.model === 'string') task.value.model = payload.model
-          if (typeof payload.claudeSessionId === 'string')
-            task.value.claudeSessionId = payload.claudeSessionId
           options?.onTaskFinished?.(paneId)
         } else if (raw.type === 'ERROR') {
           task.value.status = 'FAILED'

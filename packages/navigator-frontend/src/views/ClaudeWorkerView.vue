@@ -115,28 +115,23 @@
         <div v-if="panes.length === 0" class="task-form">
           <el-form :model="taskForm" label-position="top" size="default">
             <el-form-item label="Prompt">
-              <el-input
+              <SlashCommandInput
                 v-model="taskForm.prompt"
-                type="textarea"
                 :rows="3"
-                placeholder="输入任务描述..."
-                @keydown.ctrl.enter="handleCreateTask"
+                placeholder="输入任务描述... (输入 / 触发命令)"
+                :skills="directorySkills"
+                @submit="handleCreateTask"
+                @command="handleSlashCommand"
               />
             </el-form-item>
-            <el-collapse class="advanced-options">
-              <el-collapse-item title="高级选项">
-                <el-form-item label="模型">
-                  <el-select v-model="taskForm.model" clearable placeholder="默认" style="width: 100%">
-                    <el-option label="Claude Sonnet 4" value="claude-sonnet-4-20250514" />
-                    <el-option label="Claude Opus 4" value="claude-opus-4-20250514" />
-                    <el-option label="Claude Haiku 4" value="claude-haiku-4-20250514" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="最大轮次">
-                  <el-input-number v-model="taskForm.maxTurns" :min="1" :max="50" placeholder="不限" controls-position="right" />
-                </el-form-item>
-              </el-collapse-item>
-            </el-collapse>
+            <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
+              <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
+                模型: {{ shortModel(taskForm.model) }}
+              </el-tag>
+              <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
+                轮次: {{ taskForm.maxTurns }}
+              </el-tag>
+            </div>
             <el-form-item>
               <el-button
                 type="primary"
@@ -149,11 +144,14 @@
           </el-form>
         </div>
         <div v-else class="new-task-mini">
-          <el-input
+          <SlashCommandInput
             v-model="taskForm.prompt"
+            :rows="1"
             size="small"
             placeholder="新建任务..."
-            @keydown.enter="handleCreateTask"
+            :skills="directorySkills"
+            @submit="handleCreateTask"
+            @command="handleSlashCommand"
           >
             <template #append>
               <el-button
@@ -163,7 +161,15 @@
                 运行
               </el-button>
             </template>
-          </el-input>
+          </SlashCommandInput>
+          <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
+            <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
+              模型: {{ shortModel(taskForm.model) }}
+            </el-tag>
+            <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
+              轮次: {{ taskForm.maxTurns }}
+            </el-tag>
+          </div>
         </div>
 
         <!-- Empty state when no panes -->
@@ -175,9 +181,11 @@
         <TaskPaneGrid
           v-if="panes.length > 0"
           :panes="panes"
+          :skills="directorySkills"
           @close="closePane"
           @abort="abortPane"
           @send="handlePaneSend"
+          @command="handleSlashCommand"
         />
       </template>
 
@@ -204,31 +212,26 @@
         <div v-if="panes.length === 0" class="task-form">
           <el-form :model="taskForm" label-position="top" size="default">
             <el-form-item label="Prompt">
-              <el-input
+              <SlashCommandInput
                 v-model="taskForm.prompt"
-                type="textarea"
                 :rows="3"
-                placeholder="输入任务描述..."
-                @keydown.ctrl.enter="handleCreateTask"
+                placeholder="输入任务描述... (输入 / 触发命令)"
+                :skills="directorySkills"
+                @submit="handleCreateTask"
+                @command="handleSlashCommand"
               />
             </el-form-item>
             <el-form-item label="工作目录 (cwd)">
               <el-input v-model="taskForm.cwd" placeholder="可选，如 /home/user/project" />
             </el-form-item>
-            <el-collapse class="advanced-options">
-              <el-collapse-item title="高级选项">
-                <el-form-item label="模型">
-                  <el-select v-model="taskForm.model" clearable placeholder="默认" style="width: 100%">
-                    <el-option label="Claude Sonnet 4" value="claude-sonnet-4-20250514" />
-                    <el-option label="Claude Opus 4" value="claude-opus-4-20250514" />
-                    <el-option label="Claude Haiku 4" value="claude-haiku-4-20250514" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="最大轮次">
-                  <el-input-number v-model="taskForm.maxTurns" :min="1" :max="50" placeholder="不限" controls-position="right" />
-                </el-form-item>
-              </el-collapse-item>
-            </el-collapse>
+            <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
+              <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
+                模型: {{ shortModel(taskForm.model) }}
+              </el-tag>
+              <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
+                轮次: {{ taskForm.maxTurns }}
+              </el-tag>
+            </div>
             <el-form-item>
               <el-button
                 type="primary"
@@ -241,11 +244,14 @@
           </el-form>
         </div>
         <div v-else class="new-task-mini">
-          <el-input
+          <SlashCommandInput
             v-model="taskForm.prompt"
+            :rows="1"
             size="small"
             placeholder="新建任务..."
-            @keydown.enter="handleCreateTask"
+            :skills="directorySkills"
+            @submit="handleCreateTask"
+            @command="handleSlashCommand"
           >
             <template #append>
               <el-button
@@ -255,7 +261,15 @@
                 运行
               </el-button>
             </template>
-          </el-input>
+          </SlashCommandInput>
+          <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
+            <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
+              模型: {{ shortModel(taskForm.model) }}
+            </el-tag>
+            <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
+              轮次: {{ taskForm.maxTurns }}
+            </el-tag>
+          </div>
         </div>
 
         <!-- Empty state when no panes -->
@@ -267,9 +281,11 @@
         <TaskPaneGrid
           v-if="panes.length > 0"
           :panes="panes"
+          :skills="directorySkills"
           @close="closePane"
           @abort="abortPane"
           @send="handlePaneSend"
+          @command="handleSlashCommand"
         />
       </template>
 
@@ -318,7 +334,7 @@
                   中止
                 </el-button>
                 <el-button
-                  v-if="(conv.latestTask.status === 'COMPLETED' || conv.latestTask.status === 'ABORTED') && conv.claudeSessionId"
+                  v-if="conv.latestTask.status !== 'RUNNING' && conv.claudeSessionId"
                   type="primary"
                   size="small"
                   text
@@ -470,8 +486,9 @@ import { useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useTaskPane } from '@/composables/useTaskPane'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
+import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import * as dirApi from '@/api/claudeWorker'
-import type { ClaudeTask, WorkingDirectory } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo } from '@/types'
 
 const MAX_PANES = 4
 
@@ -488,6 +505,7 @@ const showAddDirectoryDialog = ref(false)
 const showEditDirectoryDialog = ref(false)
 const saving = ref(false)
 const syncing = ref(false)
+const directorySkills = ref<SkillInfo[]>([])
 
 // Directory task pagination (separate from global task pagination)
 const directoryTasks = ref<ClaudeTask[]>([])
@@ -626,6 +644,7 @@ function toggleExpand(workerId: string) {
 function selectWorker(workerId: string) {
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = null
+  directorySkills.value = []
   disposeAllPanes()
   // Auto-expand
   if (!expandedWorkerIds.has(workerId)) {
@@ -642,6 +661,7 @@ function selectDirectory(workerId: string, directoryId: string) {
   taskForm.value.cwd = ''
   dirTaskPage.value = 0
   loadDirectoryTasks()
+  loadDirectorySkills()
 }
 
 async function loadDirectoryTasks() {
@@ -807,8 +827,36 @@ async function handleSyncGitInfo() {
   }
 }
 
+function handleSlashCommand(payload: { command: string; value: string | number }) {
+  if (payload.command === 'model') {
+    taskForm.value.model = payload.value as string
+    ElMessage.success(payload.value ? `模型已设为 ${shortModel(payload.value as string)}` : '已恢复默认模型')
+  } else if (payload.command === 'turns') {
+    taskForm.value.maxTurns = payload.value as number
+    ElMessage.success(`最大轮次已设为 ${payload.value}`)
+  }
+}
+
+async function loadDirectorySkills() {
+  if (!selectedDirectoryId.value) {
+    directorySkills.value = []
+    return
+  }
+  try {
+    directorySkills.value = await dirApi.listSkills(selectedDirectoryId.value)
+  } catch {
+    directorySkills.value = []
+  }
+}
+
 async function handleCreateTask() {
   if (!selectedWorkerId.value || !taskForm.value.prompt) return
+  // Strip leading "/" to prevent Claude Code CLI from interpreting it as a slash command
+  let prompt = taskForm.value.prompt
+  if (prompt.startsWith('/')) {
+    prompt = prompt.slice(1)
+  }
+  if (!prompt.trim()) return
   if (panes.value.length >= MAX_PANES) {
     ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
     return
@@ -819,7 +867,7 @@ async function handleCreateTask() {
       model?: string; maxTurns?: number; agentTeamsJson?: string
     } = {
       workerId: selectedWorkerId.value,
-      prompt: taskForm.value.prompt,
+      prompt,
     }
 
     if (selectedDirectoryId.value) {
@@ -1316,22 +1364,11 @@ function formatTime(dateStr: string): string {
   flex-shrink: 0;
 }
 
-.advanced-options {
+.active-overrides {
+  display: flex;
+  gap: 6px;
   margin-bottom: 12px;
-  border: none;
-}
-
-.advanced-options :deep(.el-collapse-item__header) {
-  font-size: 13px;
-  color: #909399;
-  height: 32px;
-  line-height: 32px;
-  background: transparent;
-}
-
-.advanced-options :deep(.el-collapse-item__wrap) {
-  background: transparent;
-  border-bottom: none;
+  flex-wrap: wrap;
 }
 
 
