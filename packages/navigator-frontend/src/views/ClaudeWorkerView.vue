@@ -931,14 +931,21 @@ async function handlePaneSend(paneId: string, content: string) {
   if (!pane || !oldTask?.claudeSessionId || !selectedWorkerId.value) return
 
   try {
-    const newTask = await workerState.resumeTask({
+    const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
       workerId: selectedWorkerId.value,
       claudeSessionId: oldTask.claudeSessionId,
       prompt: content,
       cwd: oldTask.cwd,
       directoryId: oldTask.directoryId,
       sessionId: oldTask.sessionId,
-    })
+    }
+    if (taskForm.value.model) {
+      resumeForm.model = taskForm.value.model
+    }
+    if (taskForm.value.maxTurns != null) {
+      resumeForm.maxTurns = taskForm.value.maxTurns
+    }
+    const newTask = await workerState.resumeTask(resumeForm)
 
     pane.resumeInPlace(newTask)
 
