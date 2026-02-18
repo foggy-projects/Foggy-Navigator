@@ -158,7 +158,10 @@ pnpm test
 
 ## 已知约束
 
-- **Pinia 版本 2.x**（非 3.x）— uni-app 兼容性要求
+- **Vue 版本必须为 3.4.21** — uni-app SDK 内置 `@dcloudio/uni-h5-vue` 是 Vue 3.4.21 分支
+- **必须在 package.json 中显式固定所有 `@vue/*` 子包为 3.4.21** — pnpm workspace 会从根级提升 @vue/shared@3.5.x（来自 foggy-chat/navigator-frontend），导致 `updateSlots` 中 "Cannot assign to read only property '_'" 崩溃。原因：`@vue/shared` 3.5.x 的 `def()` 函数签名变更（显式 `writable: false`），与 uni-h5-vue 的 `Object.assign` 路径冲突
+- **Pinia 版本 2.1.7**（非 2.2+/3.x）— Pinia 2.2+ 要求 Vue 3.5.11+
 - **Vite 5.x**（非 7.x）— `@dcloudio/vite-plugin-uni` 要求
 - **Tab 图标为占位 PNG** — 需替换为实际设计图标（81x81px）
 - **暗色模式**：Wot Design Uni 原生支持，需在 App.vue 中配置 CSS 变量切换
+- **避免 `<template v-else-if>` 在 scroll-view 内** — 用独立 `v-if` 块替代

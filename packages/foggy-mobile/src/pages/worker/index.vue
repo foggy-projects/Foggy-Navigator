@@ -15,7 +15,15 @@
         <text class="loading-text">加载中...</text>
       </view>
 
-      <template v-else-if="workers.length > 0">
+      <view v-if="!workerStore.loading && workers.length === 0" class="empty-section">
+        <EmptyState
+          icon="🖥️"
+          title="暂无 Worker"
+          description="请在 Web 端添加 Worker"
+        />
+      </view>
+
+      <view v-if="workers.length > 0">
         <view class="worker-section" v-for="worker in workers" :key="worker.workerId">
           <WorkerCard
             :worker="worker"
@@ -28,7 +36,7 @@
             <view v-if="loadingDirs" class="dir-loading">
               <text class="loading-text">加载目录...</text>
             </view>
-            <template v-else>
+            <view v-if="!loadingDirs">
               <view
                 v-for="dir in getDirectories(worker.workerId)"
                 :key="dir.directoryId"
@@ -44,17 +52,10 @@
               <view v-if="getDirectories(worker.workerId).length === 0" class="dir-empty">
                 <text class="empty-text">暂无工作目录</text>
               </view>
-            </template>
+            </view>
           </view>
         </view>
-      </template>
-
-      <EmptyState
-        v-else
-        icon="🖥️"
-        title="暂无 Worker"
-        description="请在 Web 端添加 Worker"
-      />
+      </view>
     </scroll-view>
   </view>
 </template>
@@ -146,6 +147,9 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
 .loading-text {
   font-size: 28rpx;
   color: #909399;
+}
+.empty-section {
+  padding: 0;
 }
 .directory-list {
   background: #ffffff;

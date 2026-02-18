@@ -16,22 +16,23 @@
       :refresher-triggered="refreshing"
       @refresherrefresh="onRefresh"
     >
-      <view v-if="sessionStore.loading && sessions.length === 0" class="loading-wrap">
+      <view v-if="loading && sessions.length === 0" class="loading-wrap">
         <text class="loading-text">加载中...</text>
       </view>
-      <template v-else-if="sessions.length > 0">
+      <view v-if="sessions.length > 0">
         <view v-for="session in sessions" :key="session.id" class="session-swipe-wrap">
           <SessionItem
             :session="session"
             @tap="openSession(session)"
           />
         </view>
-      </template>
-      <EmptyState
-        v-else
-        title="暂无会话"
-        description="点击右上角 + 开始新对话"
-      />
+      </view>
+      <view v-if="!loading && sessions.length === 0" class="empty-wrap">
+        <EmptyState
+          title="暂无会话"
+          description="点击右上角 + 开始新对话"
+        />
+      </view>
     </scroll-view>
   </view>
 </template>
@@ -46,6 +47,7 @@ import EmptyState from '@/components/EmptyState.vue'
 
 const sessionStore = useSessionStore()
 const refreshing = ref(false)
+const loading = computed(() => sessionStore.loading)
 
 const sessions = computed(() =>
   [...sessionStore.sessions].sort(
@@ -86,18 +88,18 @@ function openSession(session: Session) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 24rpx 32rpx;
+  padding: 12px 16px;
   background: #ffffff;
-  border-bottom: 2rpx solid #f0f0f0;
+  border-bottom: 1px solid #f0f0f0;
 }
 .header-title {
-  font-size: 36rpx;
+  font-size: 18px;
   font-weight: 600;
   color: #303133;
 }
 .header-action {
-  width: 56rpx;
-  height: 56rpx;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -105,19 +107,22 @@ function openSession(session: Session) {
   border-radius: 50%;
 }
 .action-icon {
-  font-size: 36rpx;
+  font-size: 18px;
   color: #ffffff;
   font-weight: 300;
 }
 .session-list {
   flex: 1;
 }
+.empty-wrap {
+  padding: 24px;
+}
 .loading-wrap {
-  padding: 48rpx;
+  padding: 24px;
   text-align: center;
 }
 .loading-text {
-  font-size: 28rpx;
+  font-size: 14px;
   color: #909399;
 }
 </style>
