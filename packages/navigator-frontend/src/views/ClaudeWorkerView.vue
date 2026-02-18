@@ -314,19 +314,52 @@
           <div
             v-for="conv in activeConversations"
             :key="conv.sessionId"
-            class="conv-item"
+            :class="['conv-item', { 'conv-pinned': conv.config?.pinned }]"
             @click="viewTask(conv.latestTask)"
           >
             <div class="conv-row-1">
-              <span class="conv-prompt" :title="conv.firstPrompt">{{ truncate(conv.firstPrompt, 36) }}</span>
+              <span
+                v-if="conv.config?.pinned"
+                class="conv-pin-icon active"
+                title="已置顶"
+                @click.stop="handleTogglePin(conv)"
+              >&#128204;</span>
+              <span class="conv-prompt" :title="conv.config?.customTitle || conv.firstPrompt">{{
+                truncate(conv.config?.customTitle || conv.firstPrompt, 36)
+              }}</span>
               <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
             </div>
             <div class="conv-row-2">
               <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }}轮</span>
               <span v-if="conv.latestTask.model" class="conv-model">{{ shortModel(conv.latestTask.model) }}</span>
               <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(2) }}</span>
+              <span v-if="conv.config?.authBound" class="conv-auth-badge" :title="'Auth: ' + (conv.config.authMode || 'bound')">&#128273;</span>
               <span class="conv-time">{{ formatTime(conv.latestTask.createdAt) }}</span>
               <span class="conv-hover-actions" @click.stop>
+                <el-button
+                  size="small"
+                  text
+                  :title="conv.config?.pinned ? '取消置顶' : '置顶'"
+                  @click="handleTogglePin(conv)"
+                >
+                  {{ conv.config?.pinned ? '&#128204;' : '&#128392;' }}
+                </el-button>
+                <el-button
+                  size="small"
+                  text
+                  title="编辑标题"
+                  @click="handleEditTitle(conv)"
+                >
+                  &#9998;
+                </el-button>
+                <el-button
+                  size="small"
+                  text
+                  title="Auth 配置"
+                  @click="handleAuthConfig(conv)"
+                >
+                  &#128273;
+                </el-button>
                 <el-button
                   v-if="conv.latestTask.status === 'RUNNING'"
                   type="warning"
@@ -491,7 +524,7 @@ import type { TaskPaneState } from '@/composables/useTaskPane'
 import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
 import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import * as dirApi from '@/api/claudeWorker'
-import type { ClaudeTask, WorkingDirectory, SkillInfo } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig } from '@/types'
 
 const MAX_PANES = 4
 
@@ -578,6 +611,7 @@ interface ConversationGroup {
   tasks: ClaudeTask[]
   totalCost: number
   firstPrompt: string
+  config?: ConversationConfig
 }
 
 function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] {
@@ -599,8 +633,22 @@ function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] 
       tasks,
       totalCost: tasks.reduce((s, t) => s + (t.costUsd || 0), 0),
       firstPrompt: tasks[tasks.length - 1]!.prompt,
+      config: workerState.conversationConfigs.value.get(tasks[0]!.sessionId),
     }))
-    .sort((a, b) => new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime())
+    .sort((a, b) => {
+      // Pinned conversations first (by pinnedAt desc)
+      const aPinned = a.config?.pinned ?? false
+      const bPinned = b.config?.pinned ?? false
+      if (aPinned && !bPinned) return -1
+      if (!aPinned && bPinned) return 1
+      if (aPinned && bPinned) {
+        const aTime = a.config?.pinnedAt ? new Date(a.config.pinnedAt).getTime() : 0
+        const bTime = b.config?.pinnedAt ? new Date(b.config.pinnedAt).getTime() : 0
+        return bTime - aTime
+      }
+      // Then by creation time desc
+      return new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime()
+    })
 }
 
 const workerConversations = computed(() => groupTasksToConversations(workerTasks.value))
@@ -615,6 +663,11 @@ function directoriesForWorker(workerId: string): WorkingDirectory[] {
 
 onMounted(async () => {
   await Promise.all([workerState.loadWorkers(), workerState.loadTasks()])
+  // Load conversation configs for all loaded tasks
+  const sessionIds = [...new Set(workerState.tasks.value.map((t) => t.sessionId))]
+  if (sessionIds.length > 0) {
+    await workerState.loadConversationConfigs(sessionIds)
+  }
 })
 
 onUnmounted(() => {
@@ -686,6 +739,11 @@ async function loadDirectoryTasks() {
       directoryTasks.value = []
       dirTaskTotal.value = 0
     }
+  }
+  // Load configs for directory tasks
+  const sessionIds = [...new Set(directoryTasks.value.map((t) => t.sessionId))]
+  if (sessionIds.length > 0) {
+    workerState.loadConversationConfigs(sessionIds)
   }
 }
 
@@ -838,14 +896,88 @@ async function handleSyncSessions() {
     const result = await workerState.syncSessions(selectedWorkerId.value)
     ElMessage.success(`已同步 ${result.synced} 个新会话，共 ${result.total} 个`)
     // Refresh task lists to show newly synced sessions
-    workerState.loadTasks()
+    await workerState.loadTasks()
     if (selectedDirectoryId.value) {
-      loadDirectoryTasks()
+      await loadDirectoryTasks()
+    }
+    // Reload configs for all tasks
+    const sessionIds = [...new Set(workerState.tasks.value.map((t) => t.sessionId))]
+    if (sessionIds.length > 0) {
+      workerState.loadConversationConfigs(sessionIds)
     }
   } catch {
     ElMessage.error('会话同步失败')
   } finally {
     syncingSessions.value = false
+  }
+}
+
+async function handleTogglePin(conv: ConversationGroup) {
+  try {
+    const newPinned = !(conv.config?.pinned ?? false)
+    await workerState.togglePin(conv.sessionId, newPinned)
+    ElMessage.success(newPinned ? '已置顶' : '已取消置顶')
+  } catch {
+    ElMessage.error('操作失败')
+  }
+}
+
+async function handleEditTitle(conv: ConversationGroup) {
+  try {
+    const { value: title } = await ElMessageBox.prompt('输入自定义标题', '编辑标题', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: conv.config?.customTitle || '',
+      inputPlaceholder: '留空则显示原始 prompt',
+    })
+    await workerState.setTitle(conv.sessionId, title || '')
+    ElMessage.success('标题已更新')
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('更新失败')
+    }
+  }
+}
+
+async function handleAuthConfig(conv: ConversationGroup) {
+  if (conv.config?.authBound) {
+    // Already bound — show info
+    ElMessageBox.alert(
+      `认证模式: ${conv.config.authMode || '-'}\n` +
+      `Base URL: ${conv.config.baseUrl || '(默认)'}\n` +
+      `状态: 已锁定，不可修改`,
+      'Auth 配置',
+      { confirmButtonText: '确定' },
+    )
+    return
+  }
+
+  // Not bound — show bind form
+  try {
+    const { value: authToken } = await ElMessageBox.prompt(
+      '输入 Anthropic API Key 或 Auth Token',
+      '绑定 Auth',
+      {
+        confirmButtonText: '绑定',
+        cancelButtonText: '取消',
+        inputType: 'password',
+        inputPlaceholder: 'sk-ant-... 或 auth token',
+      },
+    )
+    if (!authToken) return
+
+    // Determine mode based on token format
+    let authMode = 'SUBSCRIPTION'
+    if (authToken.startsWith('sk-ant-')) {
+      authMode = 'API_KEY'
+    }
+
+    await workerState.bindAuth(conv.sessionId, { authMode, authToken })
+    ElMessage.success('Auth 已绑定')
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('绑定失败')
+    }
   }
 }
 
@@ -1582,6 +1714,27 @@ function formatTime(dateStr: string): string {
   transition: opacity 0.15s;
   display: flex;
   gap: 0;
+}
+
+.conv-pinned {
+  background: #fdf6ec;
+  border-left: 2px solid #e6a23c;
+}
+
+.conv-pin-icon {
+  cursor: pointer;
+  font-size: 12px;
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.conv-pin-icon.active {
+  opacity: 1;
+}
+
+.conv-auth-badge {
+  font-size: 11px;
+  cursor: default;
 }
 
 .delete-btn {

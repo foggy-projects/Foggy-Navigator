@@ -1,5 +1,5 @@
 import client from './client'
-import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession } from '@/types'
+import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig } from '@/types'
 
 // ===== Worker API =====
 
@@ -202,5 +202,47 @@ export async function syncWorkerSessions(
   const rx = (await client.post(
     `/claude-tasks/worker/${workerId}/sessions/sync`,
   )) as unknown as RX<{ synced: number; total: number }>
+  return rx.data
+}
+
+// ===== Conversation Config API =====
+
+export async function updateConversationPin(
+  sessionId: string,
+  pinned: boolean,
+): Promise<ConversationConfig> {
+  const rx = (await client.patch(`/claude-tasks/conversations/${sessionId}/pin`, {
+    pinned,
+  })) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
+export async function updateConversationTitle(
+  sessionId: string,
+  title: string,
+): Promise<ConversationConfig> {
+  const rx = (await client.patch(`/claude-tasks/conversations/${sessionId}/title`, {
+    title,
+  })) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
+export async function bindConversationAuth(
+  sessionId: string,
+  form: { authMode: string; authToken: string; baseUrl?: string },
+): Promise<ConversationConfig> {
+  const rx = (await client.post(
+    `/claude-tasks/conversations/${sessionId}/bind-auth`,
+    form,
+  )) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
+export async function listConversationConfigs(
+  sessionIds: string[],
+): Promise<ConversationConfig[]> {
+  const rx = (await client.get('/claude-tasks/conversation-configs', {
+    params: { sessionIds: sessionIds.join(',') },
+  })) as unknown as RX<ConversationConfig[]>
   return rx.data
 }

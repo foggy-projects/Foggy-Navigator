@@ -1,0 +1,18 @@
+package com.foggy.navigator.claude.worker.repository;
+
+import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface ConversationConfigRepository extends JpaRepository<ConversationConfigEntity, Long> {
+
+    Optional<ConversationConfigEntity> findBySessionId(String sessionId);
+
+    List<ConversationConfigEntity> findBySessionIdIn(List<String> sessionIds);
+
+    List<ConversationConfigEntity> findByUserIdAndWorkerIdAndPinnedTrue(String userId, String workerId);
+}

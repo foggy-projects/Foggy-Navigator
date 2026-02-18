@@ -233,20 +233,28 @@ class SdkWrapper:
     # -- Environment ---------------------------------------------------------
 
     @staticmethod
-    def _build_env() -> dict[str, str]:
+    def _build_env(
+        api_key: str | None = None,
+        auth_token: str | None = None,
+        base_url: str | None = None,
+    ) -> dict[str, str]:
         """Build an environment-variable dict to inject into the CLI subprocess.
 
+        Per-request overrides take priority over global settings.
         Only non-empty values are included so that the CLI falls back to its
         own defaults when the worker has no explicit configuration.
         """
 
         env: dict[str, str] = {}
-        if settings.anthropic_api_key:
-            env["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
-        if settings.anthropic_auth_token:
-            env["ANTHROPIC_AUTH_TOKEN"] = settings.anthropic_auth_token
-        if settings.anthropic_base_url:
-            env["ANTHROPIC_BASE_URL"] = settings.anthropic_base_url
+        key = api_key or settings.anthropic_api_key
+        token = auth_token or settings.anthropic_auth_token
+        url = base_url or settings.anthropic_base_url
+        if key:
+            env["ANTHROPIC_API_KEY"] = key
+        if token:
+            env["ANTHROPIC_AUTH_TOKEN"] = token
+        if url:
+            env["ANTHROPIC_BASE_URL"] = url
         return env
 
     # -- Query ---------------------------------------------------------------
@@ -260,6 +268,9 @@ class SdkWrapper:
         max_turns: int | None = None,
         model: str | None = None,
         extra_args: dict | None = None,
+        api_key: str | None = None,
+        auth_token: str | None = None,
+        base_url: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
@@ -290,7 +301,7 @@ class SdkWrapper:
         current_session_id: str | None = session_id
 
         try:
-            env = self._build_env()
+            env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url)
 
             # Build SDK options.  We use keyword arguments so that the call
             # works with both ``ClaudeCodeOptions`` and ``ClaudeAgentOptions``.

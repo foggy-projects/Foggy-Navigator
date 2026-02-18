@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
-import type { ClaudeWorker, ClaudeTask, WorkingDirectory } from '@/types'
+import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
 
 const workers = ref<ClaudeWorker[]>([])
 const tasks = ref<ClaudeTask[]>([])
@@ -9,6 +9,7 @@ const loading = ref(false)
 const taskPage = ref(0)
 const taskSize = ref(20)
 const taskTotal = ref(0)
+const conversationConfigs = ref<Map<string, ConversationConfig>>(new Map())
 
 export function useClaudeWorker() {
   const onlineWorkers = computed(() => workers.value.filter((w) => w.status === 'ONLINE'))
@@ -145,6 +146,38 @@ export function useClaudeWorker() {
     return result
   }
 
+  // ===== Conversation Config methods =====
+
+  async function loadConversationConfigs(sessionIds: string[]) {
+    if (sessionIds.length === 0) return
+    try {
+      const configs = await api.listConversationConfigs(sessionIds)
+      for (const config of configs) {
+        conversationConfigs.value.set(config.sessionId, config)
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
+  async function togglePin(sessionId: string, pinned: boolean) {
+    const config = await api.updateConversationPin(sessionId, pinned)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
+  async function setTitle(sessionId: string, title: string) {
+    const config = await api.updateConversationTitle(sessionId, title)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
+  async function bindAuth(sessionId: string, form: { authMode: string; authToken: string; baseUrl?: string }) {
+    const config = await api.bindConversationAuth(sessionId, form)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
   return {
     workers,
     tasks,
@@ -170,5 +203,10 @@ export function useClaudeWorker() {
     deleteDirectory,
     syncGitInfo,
     syncSessions,
+    conversationConfigs,
+    loadConversationConfigs,
+    togglePin,
+    setTitle,
+    bindAuth,
   }
 }

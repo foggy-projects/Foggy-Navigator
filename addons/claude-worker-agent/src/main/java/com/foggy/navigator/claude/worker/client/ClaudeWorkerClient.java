@@ -48,6 +48,16 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson) {
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null);
+    }
+
+    /**
+     * 流式查询（含 per-request auth 覆盖）
+     */
+    public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
+                                                       String model, Integer maxTurns,
+                                                       String agentTeamsJson,
+                                                       String apiKey, String authToken, String baseUrl) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) {
@@ -67,6 +77,16 @@ public class ClaudeWorkerClient {
             extraArgs.put("agents", agentTeamsJson);
             body.put("extra_args", extraArgs);
         }
+        // Per-request auth overrides
+        if (apiKey != null) {
+            body.put("api_key", apiKey);
+        }
+        if (authToken != null) {
+            body.put("auth_token", authToken);
+        }
+        if (baseUrl != null) {
+            body.put("base_url", baseUrl);
+        }
 
         return webClient.post()
                 .uri("/api/v1/query")
@@ -74,6 +94,19 @@ public class ClaudeWorkerClient {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {});
+    }
+
+    /**
+     * 获取 Worker 当前 auth 配置
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getAuthConfig() {
+        return webClient.get()
+                .uri("/api/v1/auth-config")
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Get auth config failed for worker {}: {}", workerId, e.getMessage()));
     }
 
     /**

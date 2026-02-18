@@ -133,6 +133,17 @@ export interface SkillInfo {
   scope: 'project' | 'user'
 }
 
+/** 会话级配置（置顶、标题、Auth 绑定） */
+export interface ConversationConfig {
+  sessionId: string
+  pinned: boolean
+  pinnedAt?: string
+  customTitle?: string
+  authMode?: string
+  authBound: boolean
+  baseUrl?: string
+}
+
 // ===== 跨 Agent 任务类型 =====
 
 export type AgentTaskType = 'CODING' | 'CLAUDE_WORKER' | 'DELEGATION'

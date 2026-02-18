@@ -1,12 +1,13 @@
 package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
+import com.foggy.navigator.claude.worker.model.dto.ConversationConfigDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
-import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
-import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
+import com.foggy.navigator.claude.worker.model.form.*;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
+import com.foggy.navigator.claude.worker.service.ConversationConfigService;
 import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
@@ -31,6 +32,7 @@ public class ClaudeTaskController {
 
     private final ClaudeTaskService taskService;
     private final ClaudeWorkerService workerService;
+    private final ConversationConfigService configService;
     private final WorkerStreamRelay streamRelay;
 
     @PostMapping
@@ -169,14 +171,60 @@ public class ClaudeTaskController {
                     .block(java.time.Duration.ofSeconds(10));
             if (sessions == null) sessions = java.util.List.of();
 
-            // 3. Create ClaudeTask entities for new sessions
-            int created = taskService.syncLocalSessions(userId, tenantId, workerId, sessions);
+            // 2.5. Get Worker auth config (for auto-binding)
+            Map<String, Object> workerAuthConfig = null;
+            try {
+                workerAuthConfig = client.getAuthConfig()
+                        .block(java.time.Duration.ofSeconds(5));
+            } catch (Exception e) {
+                log.warn("Failed to get auth config from worker {}: {}", workerId, e.getMessage());
+            }
+
+            // 3. Create ClaudeTask entities for new sessions (with auth binding)
+            int created = taskService.syncLocalSessions(userId, tenantId, workerId, sessions, workerAuthConfig);
 
             return RX.ok(Map.of("synced", created, "total", sessions.size()));
         } catch (Exception e) {
             log.warn("Failed to sync sessions on worker: workerId={}, error={}", workerId, e.getMessage());
             return RX.failB("同步失败: " + e.getMessage());
         }
+    }
+
+    // ===== Conversation Config endpoints =====
+
+    @PatchMapping("/conversations/{sessionId}/pin")
+    public RX<ConversationConfigDTO> updatePin(
+            @PathVariable String sessionId,
+            @RequestBody UpdatePinForm form) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.updatePin(sessionId, userId, form.isPinned()));
+    }
+
+    @PatchMapping("/conversations/{sessionId}/title")
+    public RX<ConversationConfigDTO> updateTitle(
+            @PathVariable String sessionId,
+            @RequestBody UpdateTitleForm form) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.updateTitle(sessionId, userId, form.getTitle()));
+    }
+
+    @PostMapping("/conversations/{sessionId}/bind-auth")
+    public RX<ConversationConfigDTO> bindAuth(
+            @PathVariable String sessionId,
+            @RequestBody BindAuthForm form) {
+        String userId = UserContext.getCurrentUserId();
+        try {
+            return RX.ok(configService.bindAuth(sessionId, userId,
+                    form.getAuthMode(), form.getAuthToken(), form.getBaseUrl()));
+        } catch (IllegalStateException e) {
+            throw RX.throwB(e.getMessage());
+        }
+    }
+
+    @GetMapping("/conversation-configs")
+    public RX<List<ConversationConfigDTO>> listConversationConfigs(
+            @RequestParam List<String> sessionIds) {
+        return RX.ok(configService.listBySessionIds(sessionIds));
     }
 
     @DeleteMapping("/{taskId}")

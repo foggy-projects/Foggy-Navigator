@@ -66,7 +66,8 @@ public class WorkerStreamRelay {
 
             Disposable subscription = client.streamQuery(event.getPrompt(), event.getCwd(),
                             event.getClaudeSessionId(), event.getModel(), event.getMaxTurns(),
-                            event.getAgentTeamsJson())
+                            event.getAgentTeamsJson(),
+                            event.getApiKey(), event.getAuthToken(), event.getBaseUrl())
                     .doOnNext(sse -> {
                         String data = sse.data();
                         if (data == null || data.isEmpty()) {

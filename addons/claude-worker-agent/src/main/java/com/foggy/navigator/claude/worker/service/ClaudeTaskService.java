@@ -3,9 +3,11 @@ package com.foggy.navigator.claude.worker.service;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
+import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
@@ -39,6 +41,7 @@ public class ClaudeTaskService {
 
     private final ClaudeTaskRepository taskRepository;
     private final ClaudeWorkerService workerService;
+    private final ConversationConfigService conversationConfigService;
     private final WorkingDirectoryService workingDirectoryService;
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final SessionManager sessionManager;
@@ -103,10 +106,14 @@ public class ClaudeTaskService {
 
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}", taskId, sessionId, form.getWorkerId(), userId);
 
-        // 5. 发布任务启动事件 → WorkerStreamRelay 监听
+        // 5. 解析 per-conversation auth
+        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId);
+
+        // 6. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
-                form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson));
+                form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
+                authParams[0], authParams[1], authParams[2]));
 
         return toDTO(entity);
     }
@@ -175,10 +182,14 @@ public class ClaudeTaskService {
 
         log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}", taskId, form.getClaudeSessionId(), directoryId);
 
+        // 解析 per-conversation auth
+        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId);
+
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
-                form.getModel(), form.getMaxTurns(), agentTeamsJson));
+                form.getModel(), form.getMaxTurns(), agentTeamsJson,
+                authParams[0], authParams[1], authParams[2]));
 
         return toDTO(entity);
     }
@@ -298,7 +309,8 @@ public class ClaudeTaskService {
      */
     @Transactional
     public int syncLocalSessions(String userId, String tenantId, String workerId,
-                                 List<Map<String, Object>> sessions) {
+                                 List<Map<String, Object>> sessions,
+                                 Map<String, Object> workerAuthConfig) {
         if (sessions == null || sessions.isEmpty()) return 0;
 
         int created = 0;
@@ -353,11 +365,62 @@ public class ClaudeTaskService {
             if (updatedAt != null) entity.setUpdatedAt(updatedAt);
 
             taskRepository.save(entity);
+
+            // Auto-bind auth from Worker config for synced sessions
+            if (workerAuthConfig != null) {
+                conversationConfigService.bindAuthFromWorker(sessionId, workerId, userId, workerAuthConfig);
+            }
+
             created++;
         }
 
         log.info("Synced {} local sessions as tasks for worker {}", created, workerId);
         return created;
+    }
+
+    /**
+     * 解析 per-conversation auth 配置
+     * 1. 查询 ConversationConfigEntity
+     * 2. 如果已绑定 auth → 解密 token 返回
+     * 3. 如果未绑定 → 调用 Worker getAuthConfig() 自动绑定，再返回
+     * 返回 [apiKey, authToken, baseUrl]（可能全 null 表示使用 Worker 全局默认）
+     */
+    private String[] resolveAuth(String sessionId, String workerId, String userId) {
+        ConversationConfigEntity config = conversationConfigService.getOrCreate(sessionId, workerId, userId);
+
+        if (config.getAuthBoundAt() != null) {
+            // Already bound — decrypt and return
+            String decryptedToken = conversationConfigService.getDecryptedToken(config);
+            String authMode = config.getAuthMode();
+            String apiKey = null;
+            String authToken = null;
+            if ("API_KEY".equals(authMode) || "CUSTOM_ENDPOINT".equals(authMode)) {
+                apiKey = decryptedToken;
+            } else {
+                authToken = decryptedToken;
+            }
+            return new String[]{apiKey, authToken, config.getBaseUrl()};
+        }
+
+        // Not bound yet — auto-bind from Worker
+        try {
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            Map<String, Object> workerAuth = client.getAuthConfig()
+                    .block(java.time.Duration.ofSeconds(5));
+            if (workerAuth != null) {
+                conversationConfigService.bindAuthFromWorker(sessionId, workerId, userId, workerAuth);
+                // Return the raw values (not re-encrypted)
+                String apiKey = (String) workerAuth.get("api_key");
+                String authToken = (String) workerAuth.get("auth_token");
+                String baseUrl = (String) workerAuth.get("base_url");
+                return new String[]{apiKey, authToken, baseUrl};
+            }
+        } catch (Exception e) {
+            log.warn("Failed to auto-bind auth from worker for session {}: {}", sessionId, e.getMessage());
+        }
+
+        return new String[]{null, null, null};
     }
 
     private LocalDateTime parseSessionDateTime(Object value) {

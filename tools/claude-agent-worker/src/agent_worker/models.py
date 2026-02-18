@@ -21,6 +21,10 @@ class QueryRequest(BaseModel):
     extra_args: dict[str, str | None] | None = Field(
         None, description="Additional CLI args passed to ClaudeCodeOptions.extra_args"
     )
+    # Per-request auth overrides (from bound conversation config)
+    api_key: str | None = Field(None, description="Per-request Anthropic API key override")
+    auth_token: str | None = Field(None, description="Per-request Anthropic auth token override")
+    base_url: str | None = Field(None, description="Per-request Anthropic base URL override")
 
 
 # ---------------------------------------------------------------------------
