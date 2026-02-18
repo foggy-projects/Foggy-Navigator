@@ -246,3 +246,17 @@ export async function listConversationConfigs(
   })) as unknown as RX<ConversationConfig[]>
   return rx.data
 }
+
+export async function batchBindConversationAuth(form: {
+  sessionIds: string[]
+  authMode: string
+  authToken: string
+  baseUrl?: string
+  skipExisting?: boolean
+}): Promise<{ bound: number; total: number }> {
+  const rx = (await client.post(
+    '/claude-tasks/conversations/batch-bind-auth',
+    form,
+  )) as unknown as RX<{ bound: number; total: number }>
+  return rx.data
+}

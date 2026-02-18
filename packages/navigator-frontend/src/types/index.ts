@@ -142,6 +142,7 @@ export interface ConversationConfig {
   authMode?: string
   authBound: boolean
   baseUrl?: string
+  maskedAuthToken?: string
 }
 
 // ===== 跨 Agent 任务类型 =====

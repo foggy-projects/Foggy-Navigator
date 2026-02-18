@@ -304,6 +304,15 @@
     <aside v-if="selectedWorkerId" class="worker-history">
       <div class="history-header">
         <h3>历史会话</h3>
+        <el-button
+          v-if="activeConversations.length > 0"
+          size="small"
+          text
+          title="批量配置 Auth"
+          @click="handleBatchAuthConfig"
+        >
+          &#128273; 批量
+        </el-button>
       </div>
       <div class="history-content">
         <!-- Conversation list (shared template for directory / worker-level) -->
@@ -359,6 +368,14 @@
                   @click="handleAuthConfig(conv)"
                 >
                   &#128273;
+                </el-button>
+                <el-button
+                  size="small"
+                  text
+                  title="详情"
+                  @click="handleShowDetail(conv)"
+                >
+                  &#8505;
                 </el-button>
                 <el-button
                   v-if="conv.latestTask.status === 'RUNNING'"
@@ -510,6 +527,122 @@
         <el-button type="primary" :loading="saving" @click="handleEditDirectory">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- Auth Bind Dialog -->
+    <el-dialog v-model="showAuthDialog" title="Auth 配置" width="500px">
+      <template v-if="authDialogReadonly">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="认证模式">{{ authForm.authMode || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="Base URL">{{ authForm.baseUrl || '(默认)' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">已锁定，不可修改</el-descriptions-item>
+        </el-descriptions>
+      </template>
+      <template v-else>
+        <el-form :model="authForm" label-position="top">
+          <el-form-item label="认证模式">
+            <el-radio-group v-model="authForm.authMode">
+              <el-radio value="SUBSCRIPTION">订阅模式</el-radio>
+              <el-radio value="API_KEY">API Key</el-radio>
+              <el-radio value="CUSTOM_ENDPOINT">自定义端点</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="authForm.authMode === 'SUBSCRIPTION'" label="Auth Token">
+            <el-input v-model="authForm.authToken" type="password" show-password placeholder="留空则使用 claude login 的订阅" />
+            <div class="form-tip">订阅模式可不填 token，使用 Worker 端的 claude login 凭据</div>
+          </el-form-item>
+          <el-form-item v-if="authForm.authMode === 'API_KEY'" label="API Key" required>
+            <el-input v-model="authForm.authToken" type="password" show-password placeholder="sk-ant-xxx" />
+          </el-form-item>
+          <el-form-item v-if="authForm.authMode === 'CUSTOM_ENDPOINT'" label="Auth Token" required>
+            <el-input v-model="authForm.authToken" type="password" show-password placeholder="自定义端点的认证 token" />
+          </el-form-item>
+          <el-form-item v-if="authForm.authMode === 'CUSTOM_ENDPOINT'" label="Base URL" required>
+            <el-input v-model="authForm.baseUrl" placeholder="https://aiproxy.example.com/api/v1/anthropic" />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="showAuthDialog = false">{{ authDialogReadonly ? '关闭' : '取消' }}</el-button>
+        <el-button v-if="!authDialogReadonly" type="primary" :loading="saving" @click="handleBindAuth">绑定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Batch Auth Bind Dialog -->
+    <el-dialog v-model="showBatchAuthDialog" title="批量 Auth 配置" width="520px">
+      <el-form :model="batchAuthForm" label-position="top">
+        <el-form-item label="认证模式">
+          <el-radio-group v-model="batchAuthForm.authMode">
+            <el-radio value="SUBSCRIPTION">订阅模式</el-radio>
+            <el-radio value="API_KEY">API Key</el-radio>
+            <el-radio value="CUSTOM_ENDPOINT">自定义端点</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="batchAuthForm.authMode === 'SUBSCRIPTION'" label="Auth Token">
+          <el-input v-model="batchAuthForm.authToken" type="password" show-password placeholder="留空则使用订阅凭据" />
+        </el-form-item>
+        <el-form-item v-if="batchAuthForm.authMode === 'API_KEY'" label="API Key" required>
+          <el-input v-model="batchAuthForm.authToken" type="password" show-password placeholder="sk-ant-xxx" />
+        </el-form-item>
+        <el-form-item v-if="batchAuthForm.authMode === 'CUSTOM_ENDPOINT'" label="Auth Token" required>
+          <el-input v-model="batchAuthForm.authToken" type="password" show-password placeholder="自定义端点的认证 token" />
+        </el-form-item>
+        <el-form-item v-if="batchAuthForm.authMode === 'CUSTOM_ENDPOINT'" label="Base URL" required>
+          <el-input v-model="batchAuthForm.baseUrl" placeholder="https://aiproxy.example.com/api/v1/anthropic" />
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="batchAuthForm.skipExisting">跳过已有 Auth 配置的会话</el-checkbox>
+        </el-form-item>
+        <div class="form-tip">
+          将为当前 {{ selectedDirectoryId ? '目录' : 'Worker' }} 下的 {{ batchAuthSessionIds.length }} 个会话批量配置 Auth
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="showBatchAuthDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleBatchBindAuth">批量绑定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Conversation Detail Dialog -->
+    <el-dialog v-model="showDetailDialog" title="会话详情" width="560px">
+      <el-descriptions v-if="detailConv" :column="2" border>
+        <el-descriptions-item label="Session ID" :span="2">
+          <code>{{ detailConv.sessionId }}</code>
+        </el-descriptions-item>
+        <el-descriptions-item label="Claude Session ID" :span="2">
+          <code>{{ detailConv.claudeSessionId || '-' }}</code>
+        </el-descriptions-item>
+        <el-descriptions-item label="自定义标题" :span="2">
+          {{ detailConv.config?.customTitle || '(未设置)' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="原始 Prompt" :span="2">
+          {{ detailConv.firstPrompt }}
+        </el-descriptions-item>
+        <el-descriptions-item label="任务轮次">{{ detailConv.tasks.length }}</el-descriptions-item>
+        <el-descriptions-item label="状态">{{ detailConv.latestTask.status }}</el-descriptions-item>
+        <el-descriptions-item label="模型">{{ detailConv.latestTask.model || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="工作目录">{{ detailConv.latestTask.cwd || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="总费用">${{ detailConv.totalCost.toFixed(4) }}</el-descriptions-item>
+        <el-descriptions-item label="总 Tokens">
+          {{ detailTotalTokens.input }} in / {{ detailTotalTokens.output }} out
+        </el-descriptions-item>
+        <el-descriptions-item label="置顶">{{ detailConv.config?.pinned ? '是' : '否' }}</el-descriptions-item>
+        <el-descriptions-item label="Auth 模式">
+          {{ detailConv.config?.authBound ? detailAuthModeLabel : '未绑定' }}
+        </el-descriptions-item>
+        <el-descriptions-item v-if="detailConv.config?.authBound" label="Auth Token" :span="2">
+          <code>{{ detailConv.config.maskedAuthToken || '(无)' }}</code>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="detailConv.config?.baseUrl" label="Base URL" :span="2">
+          {{ detailConv.config.baseUrl }}
+        </el-descriptions-item>
+        <el-descriptions-item label="创建时间" :span="2">
+          {{ new Date(detailConv.latestTask.createdAt).toLocaleString('zh-CN') }}
+        </el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="showDetailDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -543,6 +676,36 @@ const saving = ref(false)
 const syncing = ref(false)
 const syncingSessions = ref(false)
 const directorySkills = ref<SkillInfo[]>([])
+
+// Auth dialog state
+const showAuthDialog = ref(false)
+const authDialogReadonly = ref(false)
+const authDialogSessionId = ref('')
+const authForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '' })
+
+// Batch auth dialog state
+const showBatchAuthDialog = ref(false)
+const batchAuthForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', skipExisting: true })
+const batchAuthSessionIds = ref<string[]>([])
+
+// Detail dialog state
+const showDetailDialog = ref(false)
+const detailConv = ref<ConversationGroup | null>(null)
+const detailTotalTokens = computed(() => {
+  if (!detailConv.value) return { input: 0, output: 0 }
+  const tasks = detailConv.value.tasks
+  return {
+    input: tasks.reduce((s, t) => s + (t.inputTokens || 0), 0),
+    output: tasks.reduce((s, t) => s + (t.outputTokens || 0), 0),
+  }
+})
+const detailAuthModeLabel = computed(() => {
+  const mode = detailConv.value?.config?.authMode
+  if (mode === 'SUBSCRIPTION') return '订阅模式'
+  if (mode === 'API_KEY') return 'API Key'
+  if (mode === 'CUSTOM_ENDPOINT') return '自定义端点'
+  return mode || '-'
+})
 
 // Directory task pagination (separate from global task pagination)
 const directoryTasks = ref<ClaudeTask[]>([])
@@ -939,46 +1102,86 @@ async function handleEditTitle(conv: ConversationGroup) {
   }
 }
 
-async function handleAuthConfig(conv: ConversationGroup) {
+function handleAuthConfig(conv: ConversationGroup) {
+  authDialogSessionId.value = conv.sessionId
   if (conv.config?.authBound) {
-    // Already bound — show info
-    ElMessageBox.alert(
-      `认证模式: ${conv.config.authMode || '-'}\n` +
-      `Base URL: ${conv.config.baseUrl || '(默认)'}\n` +
-      `状态: 已锁定，不可修改`,
-      'Auth 配置',
-      { confirmButtonText: '确定' },
-    )
+    authDialogReadonly.value = true
+    authForm.value = {
+      authMode: conv.config.authMode || '',
+      authToken: '',
+      baseUrl: conv.config.baseUrl || '',
+    }
+  } else {
+    authDialogReadonly.value = false
+    authForm.value = { authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '' }
+  }
+  showAuthDialog.value = true
+}
+
+async function handleBindAuth() {
+  const mode = authForm.value.authMode
+  if (mode === 'API_KEY' && !authForm.value.authToken) {
+    ElMessage.warning('请填写 API Key')
     return
   }
-
-  // Not bound — show bind form
-  try {
-    const { value: authToken } = await ElMessageBox.prompt(
-      '输入 Anthropic API Key 或 Auth Token',
-      '绑定 Auth',
-      {
-        confirmButtonText: '绑定',
-        cancelButtonText: '取消',
-        inputType: 'password',
-        inputPlaceholder: 'sk-ant-... 或 auth token',
-      },
-    )
-    if (!authToken) return
-
-    // Determine mode based on token format
-    let authMode = 'SUBSCRIPTION'
-    if (authToken.startsWith('sk-ant-')) {
-      authMode = 'API_KEY'
-    }
-
-    await workerState.bindAuth(conv.sessionId, { authMode, authToken })
-    ElMessage.success('Auth 已绑定')
-  } catch (e) {
-    if (e !== 'cancel') {
-      ElMessage.error('绑定失败')
-    }
+  if (mode === 'CUSTOM_ENDPOINT' && (!authForm.value.authToken || !authForm.value.baseUrl)) {
+    ElMessage.warning('请填写 Token 和 Base URL')
+    return
   }
+  saving.value = true
+  try {
+    await workerState.bindAuth(authDialogSessionId.value, {
+      authMode: mode,
+      authToken: authForm.value.authToken,
+      baseUrl: mode === 'CUSTOM_ENDPOINT' ? authForm.value.baseUrl : undefined,
+    })
+    showAuthDialog.value = false
+    ElMessage.success('Auth 已绑定')
+  } catch {
+    ElMessage.error('绑定失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+function handleBatchAuthConfig() {
+  const convs = activeConversations.value
+  batchAuthSessionIds.value = convs.map((c) => c.sessionId)
+  batchAuthForm.value = { authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', skipExisting: true }
+  showBatchAuthDialog.value = true
+}
+
+async function handleBatchBindAuth() {
+  const mode = batchAuthForm.value.authMode
+  if (mode === 'API_KEY' && !batchAuthForm.value.authToken) {
+    ElMessage.warning('请填写 API Key')
+    return
+  }
+  if (mode === 'CUSTOM_ENDPOINT' && (!batchAuthForm.value.authToken || !batchAuthForm.value.baseUrl)) {
+    ElMessage.warning('请填写 Token 和 Base URL')
+    return
+  }
+  saving.value = true
+  try {
+    const result = await workerState.batchBindAuth({
+      sessionIds: batchAuthSessionIds.value,
+      authMode: mode,
+      authToken: batchAuthForm.value.authToken,
+      baseUrl: mode === 'CUSTOM_ENDPOINT' ? batchAuthForm.value.baseUrl : undefined,
+      skipExisting: batchAuthForm.value.skipExisting,
+    })
+    showBatchAuthDialog.value = false
+    ElMessage.success(`已绑定 ${result.bound} / ${result.total} 个会话`)
+  } catch {
+    ElMessage.error('批量绑定失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+function handleShowDetail(conv: ConversationGroup) {
+  detailConv.value = conv
+  showDetailDialog.value = true
 }
 
 function handleSlashCommand(payload: { command: string; value: string | number }) {

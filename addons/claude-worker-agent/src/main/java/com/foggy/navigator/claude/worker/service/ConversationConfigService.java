@@ -2,7 +2,9 @@ package com.foggy.navigator.claude.worker.service;
 
 import com.foggy.navigator.claude.worker.model.dto.ConversationConfigDTO;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
+import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.repository.ConversationConfigRepository;
+import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +25,7 @@ import java.util.stream.Collectors;
 public class ConversationConfigService {
 
     private final ConversationConfigRepository configRepository;
+    private final ClaudeTaskRepository taskRepository;
     private final CredentialEncryptor credentialEncryptor;
 
     /**
@@ -41,12 +44,31 @@ public class ConversationConfigService {
     }
 
     /**
+     * 按 sessionId 获取或自动创建配置（从 task 表推断 workerId）
+     */
+    @Transactional
+    public ConversationConfigEntity getOrCreateBySessionId(String sessionId, String userId) {
+        return configRepository.findBySessionId(sessionId)
+                .orElseGet(() -> {
+                    // 从 task 表推断 workerId
+                    String workerId = taskRepository.findBySessionId(sessionId).stream()
+                            .findFirst()
+                            .map(ClaudeTaskEntity::getWorkerId)
+                            .orElse("unknown");
+                    ConversationConfigEntity entity = new ConversationConfigEntity();
+                    entity.setSessionId(sessionId);
+                    entity.setWorkerId(workerId);
+                    entity.setUserId(userId);
+                    return configRepository.save(entity);
+                });
+    }
+
+    /**
      * 切换置顶
      */
     @Transactional
     public ConversationConfigDTO updatePin(String sessionId, String userId, boolean pinned) {
-        ConversationConfigEntity entity = configRepository.findBySessionId(sessionId)
-                .orElseThrow(() -> new IllegalArgumentException("Config not found for session: " + sessionId));
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
         if (!entity.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Access denied");
         }
@@ -61,8 +83,7 @@ public class ConversationConfigService {
      */
     @Transactional
     public ConversationConfigDTO updateTitle(String sessionId, String userId, String title) {
-        ConversationConfigEntity entity = configRepository.findBySessionId(sessionId)
-                .orElseThrow(() -> new IllegalArgumentException("Config not found for session: " + sessionId));
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
         if (!entity.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Access denied");
         }
@@ -77,8 +98,7 @@ public class ConversationConfigService {
     @Transactional
     public ConversationConfigDTO bindAuth(String sessionId, String userId,
                                            String authMode, String authToken, String baseUrl) {
-        ConversationConfigEntity entity = configRepository.findBySessionId(sessionId)
-                .orElseThrow(() -> new IllegalArgumentException("Config not found for session: " + sessionId));
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
         if (!entity.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Access denied");
         }
@@ -86,12 +106,41 @@ public class ConversationConfigService {
             throw new IllegalStateException("Auth already bound for this conversation");
         }
         entity.setAuthMode(authMode);
-        entity.setAuthToken(credentialEncryptor.encrypt(authToken));
+        if (authToken != null && !authToken.isEmpty()) {
+            entity.setAuthToken(credentialEncryptor.encrypt(authToken));
+        }
         entity.setBaseUrl(baseUrl);
         entity.setAuthBoundAt(LocalDateTime.now());
         configRepository.save(entity);
         log.info("Auth bound for session {}: mode={}", sessionId, authMode);
         return toDTO(entity);
+    }
+
+    /**
+     * 批量绑定 Auth（按 sessionId 列表）
+     */
+    @Transactional
+    public int batchBindAuth(List<String> sessionIds, String userId,
+                              String authMode, String authToken, String baseUrl,
+                              boolean skipExisting) {
+        int bound = 0;
+        for (String sessionId : sessionIds) {
+            ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+            if (!entity.getUserId().equals(userId)) continue;
+            if (skipExisting && entity.getAuthBoundAt() != null) continue;
+            if (entity.getAuthBoundAt() != null) continue; // immutable
+
+            entity.setAuthMode(authMode);
+            if (authToken != null && !authToken.isEmpty()) {
+                entity.setAuthToken(credentialEncryptor.encrypt(authToken));
+            }
+            entity.setBaseUrl(baseUrl);
+            entity.setAuthBoundAt(LocalDateTime.now());
+            configRepository.save(entity);
+            bound++;
+        }
+        log.info("Batch auth bound: {} sessions, mode={}", bound, authMode);
+        return bound;
     }
 
     /**
@@ -154,6 +203,15 @@ public class ConversationConfigService {
     }
 
     private ConversationConfigDTO toDTO(ConversationConfigEntity entity) {
+        String masked = null;
+        if (entity.getAuthToken() != null && entity.getAuthBoundAt() != null) {
+            try {
+                String plain = credentialEncryptor.decrypt(entity.getAuthToken());
+                masked = maskToken(plain);
+            } catch (Exception e) {
+                masked = "***";
+            }
+        }
         return ConversationConfigDTO.builder()
                 .sessionId(entity.getSessionId())
                 .pinned(Boolean.TRUE.equals(entity.getPinned()))
@@ -162,6 +220,18 @@ public class ConversationConfigService {
                 .authMode(entity.getAuthMode())
                 .authBound(entity.getAuthBoundAt() != null)
                 .baseUrl(entity.getBaseUrl())
+                .maskedAuthToken(masked)
                 .build();
+    }
+
+    /**
+     * 脱敏 token：保留前6位和后4位，中间用 **** 替代
+     */
+    private String maskToken(String token) {
+        if (token == null || token.isEmpty()) return null;
+        if (token.length() <= 10) {
+            return token.substring(0, 2) + "****" + token.substring(token.length() - 2);
+        }
+        return token.substring(0, 6) + "****" + token.substring(token.length() - 4);
     }
 }

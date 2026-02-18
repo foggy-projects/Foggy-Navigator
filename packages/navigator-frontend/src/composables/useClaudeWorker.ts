@@ -178,6 +178,21 @@ export function useClaudeWorker() {
     return config
   }
 
+  async function batchBindAuth(form: {
+    sessionIds: string[]
+    authMode: string
+    authToken: string
+    baseUrl?: string
+    skipExisting?: boolean
+  }) {
+    const result = await api.batchBindConversationAuth(form)
+    // Reload configs for affected sessions
+    if (form.sessionIds.length > 0) {
+      await loadConversationConfigs(form.sessionIds)
+    }
+    return result
+  }
+
   return {
     workers,
     tasks,
@@ -208,5 +223,6 @@ export function useClaudeWorker() {
     togglePin,
     setTitle,
     bindAuth,
+    batchBindAuth,
   }
 }

@@ -227,6 +227,15 @@ public class ClaudeTaskController {
         return RX.ok(configService.listBySessionIds(sessionIds));
     }
 
+    @PostMapping("/conversations/batch-bind-auth")
+    public RX<Map<String, Object>> batchBindAuth(@RequestBody BatchBindAuthForm form) {
+        String userId = UserContext.getCurrentUserId();
+        int bound = configService.batchBindAuth(form.getSessionIds(), userId,
+                form.getAuthMode(), form.getAuthToken(), form.getBaseUrl(),
+                form.isSkipExisting());
+        return RX.ok(Map.of("bound", bound, "total", form.getSessionIds().size()));
+    }
+
     @DeleteMapping("/{taskId}")
     public RX<Map<String, Object>> deleteTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();

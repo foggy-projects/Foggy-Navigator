@@ -6,7 +6,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * 会话配置 DTO（不含 authToken）
+ * 会话配置 DTO（authToken 脱敏显示）
  */
 @Data
 @Builder
@@ -18,4 +18,5 @@ public class ConversationConfigDTO {
     private String authMode;
     private boolean authBound;
     private String baseUrl;
+    private String maskedAuthToken;
 }
