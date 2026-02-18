@@ -58,6 +58,8 @@ export interface ToolCallStartPayload {
   command?: string
   path?: string
   thought?: string
+  /** Backend sends arguments as Map/string */
+  arguments?: unknown
 }
 
 export interface ToolCallResultPayload {
@@ -65,6 +67,10 @@ export interface ToolCallResultPayload {
   toolName: string
   output?: string
   exitCode?: number
+  /** Backend sends result as 'data' field */
+  data?: string
+  /** Backend sends success boolean */
+  success?: boolean
 }
 
 export interface ToolCallErrorPayload {

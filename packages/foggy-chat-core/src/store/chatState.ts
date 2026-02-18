@@ -30,6 +30,18 @@ export interface ChatState {
   clearMessages: () => void
 }
 
+function formatArguments(args: unknown): string {
+  if (!args) return ''
+  if (typeof args === 'string') return args
+  try {
+    const str = JSON.stringify(args)
+    // Treat empty object as no arguments
+    return str === '{}' ? '' : str
+  } catch {
+    return String(args)
+  }
+}
+
 export function createChatState(): ChatState {
   const messages = ref<ChatMessage[]>([])
   const connectionStatus = ref<ConnectionStatus>('disconnected')
@@ -97,12 +109,14 @@ export function createChatState(): ChatState {
       case AipMessageType.TOOL_CALL_START: {
         const p = aip.payload as ToolCallStartPayload
         isThinking.value = false
+        // Map backend fields: arguments → command fallback
+        const command = p.command ?? p.path ?? formatArguments(p.arguments)
         const existingResult = messages.value.find(
           (m) => m.toolCallId === p.toolCallId && m.type === AipMessageType.TOOL_CALL_RESULT,
         )
         if (existingResult) {
           existingResult.type = AipMessageType.TOOL_CALL_START
-          existingResult.content = p.command ?? p.path ?? ''
+          existingResult.content = command
           existingResult.thought = p.thought
           existingResult.toolName = p.toolName
           existingResult.timestamp = Math.min(existingResult.timestamp, aip.timestamp)
@@ -111,7 +125,7 @@ export function createChatState(): ChatState {
             id: aip.messageId,
             type: aip.type,
             sender: 'tool',
-            content: p.command ?? p.path ?? '',
+            content: command,
             toolCallId: p.toolCallId,
             toolName: p.toolName,
             thought: p.thought,
@@ -122,11 +136,13 @@ export function createChatState(): ChatState {
       }
       case AipMessageType.TOOL_CALL_RESULT: {
         const p = aip.payload as ToolCallResultPayload
+        // Map backend fields: data → output fallback
+        const output = p.output ?? p.data ?? ''
         const existing = messages.value.find(
           (m) => m.toolCallId === p.toolCallId && m.type === AipMessageType.TOOL_CALL_START,
         )
         if (existing) {
-          existing.toolOutput = p.output
+          existing.toolOutput = output
         } else {
           messages.value.push({
             id: aip.messageId,
@@ -135,7 +151,7 @@ export function createChatState(): ChatState {
             content: '',
             toolCallId: p.toolCallId,
             toolName: p.toolName,
-            toolOutput: p.output,
+            toolOutput: output,
             timestamp: aip.timestamp,
           })
         }

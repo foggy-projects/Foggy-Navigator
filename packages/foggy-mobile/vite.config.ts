@@ -5,4 +5,7 @@ export default defineConfig({
   plugins: [
     uni(),
   ],
+  optimizeDeps: {
+    exclude: ['@foggy/chat-core'],
+  },
 })

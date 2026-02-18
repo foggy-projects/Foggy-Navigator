@@ -388,10 +388,14 @@ public class LangChain4jAdapter implements LlmAdapter {
                         // We use toolCallId as both id and toolName since tool name
                         // is not separately stored in LlmMessage
                         String toolCallId = msg.getToolCallId() != null ? msg.getToolCallId() : "";
+                        String toolText = msg.getContent();
+                        if (toolText == null || toolText.isBlank()) {
+                            toolText = "(no output)";
+                        }
                         messages.add(new ToolExecutionResultMessage(
                                 toolCallId,
                                 toolCallId,
-                                msg.getContent() != null ? msg.getContent() : ""));
+                                toolText));
                     }
                 }
             }
