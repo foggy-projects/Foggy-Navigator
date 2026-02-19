@@ -40,4 +40,15 @@ public class GlobalExceptionHandler {
         RX<?> rx = RX.error(ex.getMessage());
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(rx);
     }
+
+    /**
+     * 处理参数校验异常（如 Service 层的 IllegalArgumentException）
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<RX<?>> handleIllegalArgumentException(IllegalArgumentException ex) {
+        log.warn("Validation error: {}", ex.getMessage());
+
+        RX<?> rx = RX.error(ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(rx);
+    }
 }
