@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routes import auth, git_info, health, query, sessions, skills
+from .routes import auth, git_info, health, query, sessions, skills, worktree
 
 import sys
 
@@ -68,6 +68,7 @@ app.include_router(sessions.router)
 app.include_router(git_info.router)
 app.include_router(skills.router)
 app.include_router(auth.router)
+app.include_router(worktree.router)
 
 
 if __name__ == "__main__":

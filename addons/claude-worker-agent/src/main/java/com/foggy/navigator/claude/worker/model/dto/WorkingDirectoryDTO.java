@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 工作目录 DTO
@@ -20,6 +21,12 @@ public class WorkingDirectoryDTO {
     private String gitProvider;
     private String gitStatus;
     private String agentTeamsConfig;
+    private String directoryType;
+    private String parentProjectId;
+    private String projectTaskPrompt;
+    private Boolean worktree;
+    private String sourceDirectoryId;
+    private List<WorkingDirectoryDTO> children;
     private LocalDateTime lastSyncedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

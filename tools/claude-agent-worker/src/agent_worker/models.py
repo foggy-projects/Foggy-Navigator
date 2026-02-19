@@ -115,3 +115,36 @@ class SkillInfo(BaseModel):
     name: str
     description: str = ""
     scope: str = "project"       # "project" | "user"
+
+
+# ---------------------------------------------------------------------------
+# Worktree
+# ---------------------------------------------------------------------------
+
+class CreateWorktreeRequest(BaseModel):
+    """Payload for ``POST /api/v1/worktrees``."""
+
+    repo_path: str = Field(..., description="Absolute path to the main repository")
+    branch: str = Field(..., description="Branch to checkout in the worktree")
+    worktree_path: str | None = Field(None, description="Optional custom path for the worktree")
+
+
+class WorktreeInfo(BaseModel):
+    """A single git worktree entry."""
+
+    path: str
+    branch: str
+    is_main: bool
+
+
+class CreateWorktreeResponse(BaseModel):
+    """Response for ``POST /api/v1/worktrees``."""
+
+    path: str
+    branch: str
+
+
+class RemoveWorktreeRequest(BaseModel):
+    """Payload for ``DELETE /api/v1/worktrees``."""
+
+    worktree_path: str = Field(..., description="Absolute path to the worktree to remove")

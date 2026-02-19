@@ -12,7 +12,8 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "claude_working_directories", indexes = {
     @Index(name = "idx_cwd_worker_id", columnList = "workerId"),
-    @Index(name = "idx_cwd_user_id", columnList = "userId")
+    @Index(name = "idx_cwd_user_id", columnList = "userId"),
+    @Index(name = "idx_cwd_parent_project", columnList = "parentProjectId")
 })
 public class WorkingDirectoryEntity {
 
@@ -52,6 +53,26 @@ public class WorkingDirectoryEntity {
 
     @Column(columnDefinition = "TEXT")
     private String agentTeamsConfig;
+
+    /** STANDARD | PROJECT */
+    @Column(length = 32, nullable = false)
+    private String directoryType = "STANDARD";
+
+    /** 指向 PROJECT 类型目录的 directoryId */
+    @Column(length = 64)
+    private String parentProjectId;
+
+    /** PROJECT 类型的任务分配 system prompt */
+    @Column(columnDefinition = "TEXT")
+    private String projectTaskPrompt;
+
+    /** 是否为 git worktree 创建的临时目录 */
+    @Column
+    private Boolean worktree = false;
+
+    /** worktree 来源目录的 directoryId */
+    @Column(length = 64)
+    private String sourceDirectoryId;
 
     private LocalDateTime lastSyncedAt;
 

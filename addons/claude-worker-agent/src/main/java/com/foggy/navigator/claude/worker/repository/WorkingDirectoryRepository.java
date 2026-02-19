@@ -13,4 +13,10 @@ public interface WorkingDirectoryRepository extends JpaRepository<WorkingDirecto
     List<WorkingDirectoryEntity> findByWorkerIdAndUserIdOrderByProjectNameAsc(String workerId, String userId);
 
     Optional<WorkingDirectoryEntity> findByWorkerIdAndPathAndUserId(String workerId, String path, String userId);
+
+    List<WorkingDirectoryEntity> findByWorkerIdAndUserIdAndDirectoryTypeOrderByProjectNameAsc(
+            String workerId, String userId, String directoryType);
+
+    List<WorkingDirectoryEntity> findByParentProjectIdAndUserIdOrderByProjectNameAsc(
+            String parentProjectId, String userId);
 }

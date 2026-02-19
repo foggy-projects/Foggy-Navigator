@@ -1,20 +1,23 @@
 ---
 name: coding-agent-frontend
-description: Coding Agent 前端管理控制台开发指导。当用户需要开发 coding-agent 模块的 Vue 3 前端功能、添加页面、修改组件、调用 API 时使用。触发词：/ca-frontend, /dev-frontend, 提及"前端开发"、"管理控制台"、"Vue组件"。
+description: 前端开发指导（Coding Agent 管理控制台 + Navigator 主前端）。当用户需要开发 Vue 3 前端功能、添加页面、修改组件、调用 API 时使用。覆盖 coding-agent/frontend（OpenHands 管理台）和 navigator-frontend（主前端含 ClaudeWorkerView）。触发词：/ca-frontend, /dev-frontend, 提及"前端开发"、"管理控制台"、"Vue组件"、"ClaudeWorkerView"。
 ---
 
-# Coding Agent 前端开发指导
+# 前端开发指导
 
-为 `addons/coding-agent/frontend` 模块提供 Vue 3 管理控制台开发的标准化指导。
+为两个 Vue 3 前端模块提供开发指导：
+- `addons/coding-agent/frontend` — OpenHands 管理控制台
+- `packages/navigator-frontend` — Navigator 主前端（含 ClaudeWorkerView、Setup 向导等）
 
 ## 使用场景
 
 当用户需要以下操作时激活：
 - 创建新的页面或组件
-- 修改现有页面逻辑
-- 调用后端 API
+- 修改现有页面逻辑（ClaudeWorkerView、会话管理等）
+- 调用后端 API（claudeWorker API、会话配置等）
 - 处理 SSE 实时事件流
 - 添加表单验证或交互功能
+- 修改 composable（useClaudeWorker 等）
 - 优化界面或修复 Bug
 
 ## 技术栈
@@ -505,20 +508,175 @@ export default router
 ## 常用命令
 
 ```bash
-# 开发
+# Coding Agent 前端
 cd addons/coding-agent/frontend && npm run dev
-
-# 构建
 cd addons/coding-agent/frontend && npm run build
 
-# 类型检查
-cd addons/coding-agent/frontend && npm run type-check
+# Navigator 主前端
+cd packages/navigator-frontend && pnpm dev
+cd packages/navigator-frontend && pnpm exec vite build
+```
 
-# 代码检查
-cd addons/coding-agent/frontend && npm run lint
+---
+
+## Navigator 主前端 (packages/navigator-frontend)
+
+### 模块结构
+
+```
+packages/navigator-frontend/
+├── src/
+│   ├── api/
+│   │   ├── client.ts            # Axios 实例（JWT 认证）
+│   │   ├── claudeWorker.ts      # Claude Worker API（任务/目录/会话配置）
+│   │   ├── session.ts           # 通用会话 API
+│   │   ├── platform.ts          # 平台配置 API（Git/LLM/Agent Model）
+│   │   ├── memory.ts            # 用户记忆 API
+│   │   └── auth.ts              # 认证 API
+│   ├── composables/
+│   │   └── useClaudeWorker.ts   # Claude Worker 组合函数
+│   ├── views/
+│   │   ├── ClaudeWorkerView.vue # Claude Worker 主页面（核心）
+│   │   ├── HomeView.vue         # 首页
+│   │   ├── SetupView.vue        # 初始化向导
+│   │   └── ...
+│   ├── types/
+│   │   └── index.ts             # 全局类型定义
+│   ├── router/
+│   │   └── index.ts
+│   ├── App.vue
+│   └── main.ts
+├── index.html
+├── package.json
+└── vite.config.ts               # 端口 5174，代理到 8112
+```
+
+### ClaudeWorkerView.vue 核心概念
+
+ClaudeWorkerView 是 Claude Worker 功能的主页面，采用左右分栏布局：
+
+**左侧面板**：Worker 树 + 工作目录 + 会话历史
+- Worker 列表（注册/编辑/删除/健康检查）
+- 工作目录管理（添加/编辑/删除/同步 Git）
+- Agent Teams 标签栏 + useTeams 开关
+- 历史会话列表（按目录分组，支持置顶/标题/Auth 绑定）
+
+**右侧面板**：对话区（ChatPanel from @foggy/chat）
+- SSE 实时消息流
+- 工具调用卡片
+- 任务状态/费用显示
+
+**核心数据结构**：
+
+```typescript
+// 会话分组
+interface ConversationGroup {
+  sessionId: string
+  claudeSessionId: string
+  tasks: ClaudeTask[]
+  firstPrompt: string
+  latestTask: ClaudeTask
+  config?: ConversationConfig  // 合并自 conversationConfigs
+}
+
+// 任务表单
+const taskForm = ref({
+  prompt: '',
+  model: '',
+  maxTurns: undefined,
+  useTeams: true,  // Agent Teams 开关
+})
+```
+
+**排序规则**：
+1. pinned 会话置顶（按 pinnedAt 排序）
+2. 其余按 createdAt 降序
+
+**显示优先级**：
+- 标题：`config.customTitle` > `firstPrompt`（截断）
+
+### Claude Worker API (api/claudeWorker.ts)
+
+所有函数从 `RX<T>` 包装中提取 `data` 返回。
+
+| 函数 | 方法 | 端点 |
+|------|------|------|
+| `listWorkers()` | GET | `/claude-workers` |
+| `registerWorker(form)` | POST | `/claude-workers` |
+| `updateWorker(id, form)` | PUT | `/claude-workers/{id}` |
+| `deleteWorker(id)` | DELETE | `/claude-workers/{id}` |
+| `triggerHealthCheck(id)` | POST | `/claude-workers/{id}/health-check` |
+| `listDirectoriesByWorker(id)` | GET | `/working-directories/worker/{id}` |
+| `createDirectory(form)` | POST | `/working-directories` |
+| `updateDirectory(id, form)` | PUT | `/working-directories/{id}` |
+| `deleteDirectory(id)` | DELETE | `/working-directories/{id}` |
+| `syncDirectoryGitInfo(id)` | POST | `/working-directories/{id}/sync` |
+| `listSkills(directoryId)` | GET | `/working-directories/{id}/skills` |
+| `createTask(form)` | POST | `/claude-tasks` |
+| `resumeTask(form)` | POST | `/claude-tasks/resume` |
+| `abortTask(id)` | POST | `/claude-tasks/{id}/abort` |
+| `deleteTask(id)` | DELETE | `/claude-tasks/{id}` |
+| `listTasksByDirectory(id)` | GET | `/claude-tasks/directory/{id}` |
+| `syncWorkerSessions(workerId)` | POST | `/claude-tasks/worker/{id}/sessions/sync` |
+| `updateConversationPin(sid, pinned)` | PATCH | `/claude-tasks/conversations/{sid}/pin` |
+| `updateConversationTitle(sid, title)` | PATCH | `/claude-tasks/conversations/{sid}/title` |
+| `bindConversationAuth(sid, form)` | POST | `/claude-tasks/conversations/{sid}/bind-auth` |
+| `listConversationConfigs(sids)` | GET | `/claude-tasks/conversation-configs` |
+| `batchBindConversationAuth(form)` | POST | `/claude-tasks/conversations/batch-bind-auth` |
+
+### useClaudeWorker Composable
+
+```typescript
+const {
+  // 响应式状态
+  workers, tasks, directories, loading,
+  taskPage, taskSize, taskTotal,
+  onlineWorkers,              // computed
+  conversationConfigs,        // Map<sessionId, ConversationConfig>
+
+  // Worker CRUD
+  loadWorkers, registerWorker, updateWorker, deleteWorker, refreshWorkerStatus,
+
+  // Task 操作
+  loadTasks, loadTasksPage, createTask, resumeTask, abortTask, deleteTask,
+
+  // Directory 操作
+  loadDirectories, createDirectory, deleteDirectory, syncGitInfo, syncSessions,
+
+  // Conversation Config 操作
+  loadConversationConfigs, togglePin, setTitle, bindAuth, batchBindAuth,
+} = useClaudeWorker()
+```
+
+### TypeScript 类型（types/index.ts）
+
+```typescript
+interface ClaudeWorker { workerId, name, baseUrl, authMode, status, ... }
+interface ClaudeTask { taskId, sessionId, workerId, prompt, status, claudeSessionId, costUsd, ... }
+interface WorkingDirectory { directoryId, workerId, projectName, path, agentTeamsConfig, ... }
+interface ConversationConfig { sessionId, pinned, pinnedAt?, customTitle?, authMode?, authBound, baseUrl?, maskedAuthToken? }
+interface WorkerSession { session_id, cwd, created_at, updated_at, slug?, git_branch? }
+```
+
+完整类型定义见 `packages/navigator-frontend/src/types/index.ts`。
+
+### SSE 连接（Navigator 前端）
+
+Navigator 前端通过 session-module 的 SSE 端点接收消息：
+
+```typescript
+// 开发模式直连后端
+const sseBase = import.meta.env.DEV ? 'http://localhost:8112' : ''
+const url = `${sseBase}/api/v1/sessions/${sessionId}/events/stream`
+const eventSource = new EventSource(url)
+eventSource.addEventListener('event', (e) => {
+  const message = JSON.parse(e.data)
+  // 处理 AgentMessage: TEXT_CHUNK, TEXT_COMPLETE, TOOL_CALL_START, etc.
+})
 ```
 
 ## 参考文件
 
 详细的技术参考请查看：
-- [reference.md](./reference.md) - API 类型和组件参考
+- [reference.md](./reference.md) - OpenHands 前端 API 类型和组件参考
+- Claude Worker 详细参考见 `claude-worker-agent` 技能

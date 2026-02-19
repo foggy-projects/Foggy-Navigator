@@ -55,6 +55,8 @@ export async function createDirectory(form: {
   workerId: string
   projectName: string
   path: string
+  directoryType?: string
+  parentProjectId?: string
 }): Promise<WorkingDirectory> {
   const rx = (await client.post('/working-directories', form)) as unknown as RX<WorkingDirectory>
   return rx.data
@@ -62,7 +64,7 @@ export async function createDirectory(form: {
 
 export async function updateDirectory(
   directoryId: string,
-  form: { projectName?: string; path?: string; agentTeamsConfig?: string },
+  form: { projectName?: string; path?: string; agentTeamsConfig?: string; projectTaskPrompt?: string; parentProjectId?: string },
 ): Promise<WorkingDirectory> {
   const rx = (await client.put(
     `/working-directories/${directoryId}`,
@@ -87,6 +89,25 @@ export async function listSkills(directoryId: string): Promise<SkillInfo[]> {
     `/working-directories/${directoryId}/skills`,
   )) as unknown as RX<SkillInfo[]>
   return rx.data
+}
+
+export async function listChildDirectories(directoryId: string): Promise<WorkingDirectory[]> {
+  const rx = (await client.get(
+    `/working-directories/${directoryId}/children`,
+  )) as unknown as RX<WorkingDirectory[]>
+  return rx.data
+}
+
+export async function createWorktree(directoryId: string, branch: string): Promise<WorkingDirectory> {
+  const rx = (await client.post(
+    `/working-directories/${directoryId}/worktree`,
+    { branch },
+  )) as unknown as RX<WorkingDirectory>
+  return rx.data
+}
+
+export async function removeWorktree(directoryId: string): Promise<void> {
+  await client.delete(`/working-directories/${directoryId}/worktree`)
 }
 
 // ===== Task API =====

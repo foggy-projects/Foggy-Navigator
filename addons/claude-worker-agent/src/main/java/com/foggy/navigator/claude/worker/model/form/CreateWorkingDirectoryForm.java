@@ -10,4 +10,8 @@ public class CreateWorkingDirectoryForm {
     private String workerId;
     private String projectName;
     private String path;
+    /** optional, default "STANDARD". Values: STANDARD | PROJECT */
+    private String directoryType;
+    /** optional, 关联到 PROJECT 类型目录 */
+    private String parentProjectId;
 }

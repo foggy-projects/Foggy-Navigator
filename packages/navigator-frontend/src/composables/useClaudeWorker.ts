@@ -123,7 +123,7 @@ export function useClaudeWorker() {
     directories.value = await api.listDirectoriesByWorker(workerId)
   }
 
-  async function createDirectory(form: { workerId: string; projectName: string; path: string }) {
+  async function createDirectory(form: { workerId: string; projectName: string; path: string; directoryType?: string; parentProjectId?: string }) {
     const dir = await api.createDirectory(form)
     directories.value.push(dir)
     return dir

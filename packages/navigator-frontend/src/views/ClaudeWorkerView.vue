@@ -12,6 +12,9 @@
               <el-dropdown-item command="directory" :disabled="!selectedWorkerId">
                 添加工作目录
               </el-dropdown-item>
+              <el-dropdown-item command="project" :disabled="!selectedWorkerId">
+                添加项目目录
+              </el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -38,10 +41,56 @@
             </div>
             <div class="worker-meta">{{ worker.hostname || worker.baseUrl }}</div>
           </div>
-          <!-- Directory nodes (Level 2) -->
+          <!-- Directory nodes (Level 2): PROJECT dirs first, then orphan STANDARD dirs -->
           <template v-if="expandedWorkerIds.has(worker.workerId)">
+            <!-- PROJECT directories -->
+            <template v-for="dir in projectDirectoriesForWorker(worker.workerId)" :key="dir.directoryId">
+              <div
+                :class="[
+                  'directory-item project-dir',
+                  { active: selectedDirectoryId === dir.directoryId },
+                ]"
+                @click="selectDirectory(worker.workerId, dir.directoryId)"
+              >
+                <div class="dir-info">
+                  <span
+                    class="expand-icon"
+                    @click.stop="toggleProjectExpand(dir.directoryId)"
+                  >
+                    {{ expandedProjectIds.has(dir.directoryId) ? '▼' : '▶' }}
+                  </span>
+                  <span class="project-icon">&#128230;</span>
+                  <span class="dir-name">{{ dir.projectName }}</span>
+                  <span class="child-count" :title="childrenForProject(dir.directoryId).length + ' 子目录'">
+                    {{ childrenForProject(dir.directoryId).length }}
+                  </span>
+                </div>
+              </div>
+              <!-- Level 3: child directories under PROJECT -->
+              <template v-if="expandedProjectIds.has(dir.directoryId)">
+                <div
+                  v-for="child in childrenForProject(dir.directoryId)"
+                  :key="child.directoryId"
+                  :class="[
+                    'directory-item child-dir',
+                    { active: selectedDirectoryId === child.directoryId },
+                  ]"
+                  @click="selectDirectory(worker.workerId, child.directoryId)"
+                >
+                  <div class="dir-info">
+                    <span class="dir-name">{{ child.projectName }}</span>
+                    <el-tag v-if="child.worktree" size="small" type="info" effect="plain" class="worktree-tag">worktree</el-tag>
+                    <span v-if="child.gitStatus === 'dirty'" class="dirty-dot" title="Uncommitted changes" />
+                  </div>
+                  <div v-if="child.gitBranch" class="dir-branch">
+                    <span class="branch-icon">⎇</span> {{ child.gitBranch }}
+                  </div>
+                </div>
+              </template>
+            </template>
+            <!-- Orphan STANDARD directories (no parentProjectId) -->
             <div
-              v-for="dir in directoriesForWorker(worker.workerId)"
+              v-for="dir in orphanDirectoriesForWorker(worker.workerId)"
               :key="dir.directoryId"
               :class="[
                 'directory-item',
@@ -51,6 +100,7 @@
             >
               <div class="dir-info">
                 <span class="dir-name">{{ dir.projectName }}</span>
+                <el-tag v-if="dir.worktree" size="small" type="info" effect="plain" class="worktree-tag">worktree</el-tag>
                 <span v-if="dir.gitStatus === 'dirty'" class="dirty-dot" title="Uncommitted changes" />
               </div>
               <div v-if="dir.gitBranch" class="dir-branch">
@@ -103,13 +153,44 @@
             <el-button size="small" :loading="syncingSessions" @click="handleSyncSessions">
               同步会话
             </el-button>
+            <el-button
+              v-if="!selectedDirectory.worktree && selectedDirectory.directoryType !== 'PROJECT'"
+              size="small"
+              @click="showWorktreeDialog = true"
+            >
+              创建 Worktree
+            </el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
-            <el-button size="small" type="danger" text @click="handleDeleteDirectory">删除</el-button>
+            <el-button
+              v-if="selectedDirectory.worktree"
+              size="small"
+              type="warning"
+              text
+              @click="handleRemoveWorktree"
+            >
+              清理 Worktree
+            </el-button>
+            <el-button v-else size="small" type="danger" text @click="handleDeleteDirectory">删除</el-button>
           </div>
         </div>
         <div v-if="parsedAgentTeams.length" class="agent-teams-bar">
-          <span class="agent-teams-label">Agent Teams:</span>
-          <el-tag v-for="agent in parsedAgentTeams" :key="agent" size="small" type="info">
+          <el-switch
+            v-model="taskForm.useTeams"
+            size="small"
+            inline-prompt
+            active-text="ON"
+            inactive-text="OFF"
+            style="margin-right: 6px"
+          />
+          <span class="agent-teams-label" :style="{ opacity: taskForm.useTeams ? 1 : 0.4 }">Agent Teams:</span>
+          <el-tag
+            v-for="agent in parsedAgentTeams"
+            :key="agent"
+            size="small"
+            :type="taskForm.useTeams ? 'info' : 'info'"
+            :effect="taskForm.useTeams ? 'light' : 'plain'"
+            :style="{ opacity: taskForm.useTeams ? 1 : 0.4 }"
+          >
             {{ agent }}
           </el-tag>
         </div>
@@ -486,13 +567,29 @@
     </el-dialog>
 
     <!-- Add Directory Dialog -->
-    <el-dialog v-model="showAddDirectoryDialog" title="添加工作目录" width="480px">
+    <el-dialog v-model="showAddDirectoryDialog" :title="addDirForm.directoryType === 'PROJECT' ? '添加项目目录' : '添加工作目录'" width="480px">
       <el-form :model="addDirForm" label-position="top">
+        <el-form-item label="目录类型">
+          <el-radio-group v-model="addDirForm.directoryType">
+            <el-radio value="STANDARD">普通目录</el-radio>
+            <el-radio value="PROJECT">项目目录</el-radio>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="项目名称" required>
           <el-input v-model="addDirForm.projectName" placeholder="如：foggy-navigator / feature-branch" />
         </el-form-item>
         <el-form-item label="路径" required>
           <el-input v-model="addDirForm.path" placeholder="如：/home/user/projects/foggy-navigator" />
+        </el-form-item>
+        <el-form-item v-if="addDirForm.directoryType === 'STANDARD' && projectDirectoriesForCurrentWorker.length > 0" label="所属项目">
+          <el-select v-model="addDirForm.parentProjectId" clearable placeholder="(独立目录)" style="width: 100%">
+            <el-option
+              v-for="proj in projectDirectoriesForCurrentWorker"
+              :key="proj.directoryId"
+              :label="proj.projectName"
+              :value="proj.directoryId"
+            />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -520,6 +617,27 @@
           <div class="form-tip">
             JSON 格式定义子 Agent 团队。Claude 会自动分派子任务给团队成员。
           </div>
+        </el-form-item>
+        <el-form-item v-if="selectedDirectory?.directoryType === 'PROJECT'" label="项目任务 Prompt">
+          <el-input
+            v-model="editDirForm.projectTaskPrompt"
+            type="textarea"
+            :rows="4"
+            placeholder="定义项目级任务分配的 system prompt..."
+          />
+          <div class="form-tip">
+            项目编排器使用此 prompt 将任务分解并分派给子目录。
+          </div>
+        </el-form-item>
+        <el-form-item v-if="selectedDirectory?.directoryType === 'STANDARD' && projectDirectoriesForCurrentWorker.length > 0" label="所属项目">
+          <el-select v-model="editDirForm.parentProjectId" clearable placeholder="(独立目录)" style="width: 100%">
+            <el-option
+              v-for="proj in projectDirectoriesForCurrentWorker"
+              :key="proj.directoryId"
+              :label="proj.projectName"
+              :value="proj.directoryId"
+            />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -602,6 +720,22 @@
       </template>
     </el-dialog>
 
+    <!-- Create Worktree Dialog -->
+    <el-dialog v-model="showWorktreeDialog" title="创建 Git Worktree" width="440px">
+      <el-form :model="worktreeForm" label-position="top">
+        <el-form-item label="分支名" required>
+          <el-input v-model="worktreeForm.branch" placeholder="如：hotfix/prod-issue-123" />
+        </el-form-item>
+      </el-form>
+      <div class="form-tip">
+        将基于当前目录创建 git worktree，在新分支上并发工作。
+      </div>
+      <template #footer>
+        <el-button @click="showWorktreeDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleCreateWorktree">创建</el-button>
+      </template>
+    </el-dialog>
+
     <!-- Conversation Detail Dialog -->
     <el-dialog v-model="showDetailDialog" title="会话详情" width="560px">
       <el-descriptions v-if="detailConv" :column="2" border>
@@ -667,6 +801,7 @@ const workerState = useClaudeWorker()
 const selectedWorkerId = ref<string | null>(null)
 const selectedDirectoryId = ref<string | null>(null)
 const expandedWorkerIds = reactive(new Set<string>())
+const expandedProjectIds = reactive(new Set<string>())
 const panes = shallowRef<TaskPaneState[]>([])
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
@@ -676,6 +811,10 @@ const saving = ref(false)
 const syncing = ref(false)
 const syncingSessions = ref(false)
 const directorySkills = ref<SkillInfo[]>([])
+
+// Worktree dialog state
+const showWorktreeDialog = ref(false)
+const worktreeForm = ref({ branch: '' })
 
 // Auth dialog state
 const showAuthDialog = ref(false)
@@ -732,12 +871,16 @@ const editForm = ref({
 const addDirForm = ref({
   projectName: '',
   path: '',
+  directoryType: 'STANDARD' as string,
+  parentProjectId: '' as string,
 })
 
 const editDirForm = ref({
   projectName: '',
   path: '',
   agentTeamsConfig: '',
+  projectTaskPrompt: '',
+  parentProjectId: '' as string,
 })
 
 const taskForm = ref({
@@ -745,6 +888,7 @@ const taskForm = ref({
   cwd: '',
   model: '' as string,
   maxTurns: null as number | null,
+  useTeams: true,
 })
 
 const selectedWorkerEntity = computed(() =>
@@ -822,6 +966,37 @@ const activeConversations = computed(() =>
 
 function directoriesForWorker(workerId: string): WorkingDirectory[] {
   return workerState.directories.value.filter((d) => d.workerId === workerId)
+}
+
+function projectDirectoriesForWorker(workerId: string): WorkingDirectory[] {
+  return workerState.directories.value.filter(
+    (d) => d.workerId === workerId && d.directoryType === 'PROJECT',
+  )
+}
+
+function orphanDirectoriesForWorker(workerId: string): WorkingDirectory[] {
+  return workerState.directories.value.filter(
+    (d) => d.workerId === workerId && d.directoryType !== 'PROJECT' && !d.parentProjectId,
+  )
+}
+
+function childrenForProject(projectDirectoryId: string): WorkingDirectory[] {
+  return workerState.directories.value.filter(
+    (d) => d.parentProjectId === projectDirectoryId,
+  )
+}
+
+const projectDirectoriesForCurrentWorker = computed(() => {
+  if (!selectedWorkerId.value) return []
+  return projectDirectoriesForWorker(selectedWorkerId.value)
+})
+
+function toggleProjectExpand(projectId: string) {
+  if (expandedProjectIds.has(projectId)) {
+    expandedProjectIds.delete(projectId)
+  } else {
+    expandedProjectIds.add(projectId)
+  }
 }
 
 onMounted(async () => {
@@ -918,7 +1093,15 @@ function handleAddCommand(command: string) {
       ElMessage.warning('请先选择一个 Worker')
       return
     }
-    addDirForm.value = { projectName: '', path: '' }
+    const parentId = selectedDirectory.value?.directoryType === 'PROJECT' ? selectedDirectory.value.directoryId : ''
+    addDirForm.value = { projectName: '', path: '', directoryType: 'STANDARD', parentProjectId: parentId }
+    showAddDirectoryDialog.value = true
+  } else if (command === 'project') {
+    if (!selectedWorkerId.value) {
+      ElMessage.warning('请先选择一个 Worker')
+      return
+    }
+    addDirForm.value = { projectName: '', path: '', directoryType: 'PROJECT', parentProjectId: '' }
     showAddDirectoryDialog.value = true
   }
 }
@@ -990,13 +1173,20 @@ async function handleAddDirectory() {
   }
   saving.value = true
   try {
-    await workerState.createDirectory({
+    const form: Parameters<typeof workerState.createDirectory>[0] = {
       workerId: selectedWorkerId.value,
       projectName: addDirForm.value.projectName,
       path: addDirForm.value.path,
-    })
+    }
+    if (addDirForm.value.directoryType && addDirForm.value.directoryType !== 'STANDARD') {
+      (form as Record<string, unknown>).directoryType = addDirForm.value.directoryType
+    }
+    if (addDirForm.value.parentProjectId) {
+      (form as Record<string, unknown>).parentProjectId = addDirForm.value.parentProjectId
+    }
+    await workerState.createDirectory(form)
     showAddDirectoryDialog.value = false
-    ElMessage.success('工作目录添加成功')
+    ElMessage.success(addDirForm.value.directoryType === 'PROJECT' ? '项目目录添加成功' : '工作目录添加成功')
   } catch (e: unknown) {
     ElMessage.error('添加失败: ' + ((e as Error).message || '未知错误'))
   } finally {
@@ -1008,7 +1198,18 @@ async function handleEditDirectory() {
   if (!selectedDirectoryId.value) return
   saving.value = true
   try {
-    const updated = await dirApi.updateDirectory(selectedDirectoryId.value, editDirForm.value)
+    const form: Record<string, string | undefined> = {
+      projectName: editDirForm.value.projectName,
+      path: editDirForm.value.path,
+      agentTeamsConfig: editDirForm.value.agentTeamsConfig,
+    }
+    if (selectedDirectory.value?.directoryType === 'PROJECT') {
+      form.projectTaskPrompt = editDirForm.value.projectTaskPrompt
+    }
+    if (selectedDirectory.value?.directoryType === 'STANDARD') {
+      form.parentProjectId = editDirForm.value.parentProjectId || ''
+    }
+    const updated = await dirApi.updateDirectory(selectedDirectoryId.value, form)
     const idx = workerState.directories.value.findIndex(
       (d) => d.directoryId === selectedDirectoryId.value,
     )
@@ -1036,6 +1237,47 @@ async function handleDeleteDirectory() {
     ElMessage.success('已删除')
   } catch {
     // cancelled
+  }
+}
+
+async function handleCreateWorktree() {
+  if (!selectedDirectoryId.value || !worktreeForm.value.branch) {
+    ElMessage.warning('请填写分支名')
+    return
+  }
+  saving.value = true
+  try {
+    const newDir = await dirApi.createWorktree(selectedDirectoryId.value, worktreeForm.value.branch)
+    workerState.directories.value.push(newDir)
+    showWorktreeDialog.value = false
+    worktreeForm.value = { branch: '' }
+    ElMessage.success(`Worktree 已创建: ${newDir.projectName}`)
+  } catch (e: unknown) {
+    ElMessage.error('创建 Worktree 失败: ' + ((e as Error).message || '未知错误'))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleRemoveWorktree() {
+  if (!selectedDirectoryId.value) return
+  try {
+    await ElMessageBox.confirm('确认清理该 Worktree？会删除磁盘上的 worktree 目录。', '提示', {
+      type: 'warning',
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+    })
+    await dirApi.removeWorktree(selectedDirectoryId.value)
+    workerState.directories.value = workerState.directories.value.filter(
+      (d) => d.directoryId !== selectedDirectoryId.value,
+    )
+    selectedDirectoryId.value = null
+    disposeAllPanes()
+    ElMessage.success('Worktree 已清理')
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('清理失败')
+    }
   }
 }
 
@@ -1238,7 +1480,7 @@ async function handleCreateTask() {
     if (taskForm.value.maxTurns != null) {
       form.maxTurns = taskForm.value.maxTurns
     }
-    if (selectedDirectory.value?.agentTeamsConfig) {
+    if (taskForm.value.useTeams && selectedDirectory.value?.agentTeamsConfig) {
       form.agentTeamsJson = selectedDirectory.value.agentTeamsConfig
     }
 
@@ -1466,6 +1708,8 @@ watch(showEditDirectoryDialog, (val) => {
       projectName: selectedDirectory.value.projectName,
       path: selectedDirectory.value.path,
       agentTeamsConfig: selectedDirectory.value.agentTeamsConfig || '',
+      projectTaskPrompt: selectedDirectory.value.projectTaskPrompt || '',
+      parentProjectId: selectedDirectory.value.parentProjectId || '',
     }
   }
 })
@@ -1645,6 +1889,33 @@ function formatTime(dateStr: string): string {
 
 .branch-icon {
   font-size: 12px;
+}
+
+.project-dir .dir-info {
+  gap: 4px;
+}
+
+.project-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.child-count {
+  font-size: 11px;
+  color: #909399;
+  background: #f0f2f5;
+  padding: 0 5px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.child-dir {
+  padding-left: 56px !important;
+}
+
+.worktree-tag {
+  margin-left: 4px;
+  transform: scale(0.85);
 }
 
 .empty-dir-hint {

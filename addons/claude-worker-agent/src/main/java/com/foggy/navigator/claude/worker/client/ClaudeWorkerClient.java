@@ -188,6 +188,55 @@ public class ClaudeWorkerClient {
                 .doOnError(e -> log.warn("List skills failed for worker {}, cwd {}: {}", workerId, cwd, e.getMessage()));
     }
 
+    /**
+     * 列出工作树
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<java.util.List<Map<String, Object>>> listWorktrees(String repoPath) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/worktrees").queryParam("path", repoPath).build())
+                .retrieve()
+                .bodyToMono(java.util.List.class)
+                .map(list -> (java.util.List<Map<String, Object>>) list)
+                .doOnError(e -> log.warn("List worktrees failed for worker {}, path {}: {}", workerId, repoPath, e.getMessage()));
+    }
+
+    /**
+     * 创建工作树
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> createWorktree(String repoPath, String branch, String worktreePath) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("repo_path", repoPath);
+        body.put("branch", branch);
+        if (worktreePath != null) {
+            body.put("worktree_path", worktreePath);
+        }
+        return webClient.post()
+                .uri("/api/v1/worktrees")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Create worktree failed for worker {}, path {}: {}", workerId, repoPath, e.getMessage()));
+    }
+
+    /**
+     * 删除工作树
+     */
+    public Mono<Void> removeWorktree(String worktreePath) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("worktree_path", worktreePath);
+        return webClient.method(org.springframework.http.HttpMethod.DELETE)
+                .uri("/api/v1/worktrees")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Void.class)
+                .doOnError(e -> log.warn("Remove worktree failed for worker {}, path {}: {}", workerId, worktreePath, e.getMessage()));
+    }
+
     public String getWorkerId() {
         return workerId;
     }

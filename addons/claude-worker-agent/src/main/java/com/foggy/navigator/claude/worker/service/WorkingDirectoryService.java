@@ -46,6 +46,23 @@ public class WorkingDirectoryService {
                     throw new IllegalArgumentException("Directory already exists: " + form.getPath());
                 });
 
+        String directoryType = form.getDirectoryType() != null ? form.getDirectoryType() : "STANDARD";
+
+        // PROJECT 类型不能有 parentProjectId
+        if ("PROJECT".equals(directoryType) && form.getParentProjectId() != null) {
+            throw new IllegalArgumentException("PROJECT directory cannot have a parentProjectId");
+        }
+
+        // 如果指定了 parentProjectId，验证目标存在且是 PROJECT 类型
+        if (form.getParentProjectId() != null) {
+            WorkingDirectoryEntity parent = directoryRepository
+                    .findByDirectoryIdAndUserId(form.getParentProjectId(), userId)
+                    .orElseThrow(() -> new IllegalArgumentException("Parent project not found: " + form.getParentProjectId()));
+            if (!"PROJECT".equals(parent.getDirectoryType())) {
+                throw new IllegalArgumentException("Parent directory is not a PROJECT: " + form.getParentProjectId());
+            }
+        }
+
         WorkingDirectoryEntity entity = new WorkingDirectoryEntity();
         entity.setDirectoryId(UUID.randomUUID().toString().substring(0, 8));
         entity.setWorkerId(form.getWorkerId());
@@ -53,9 +70,12 @@ public class WorkingDirectoryService {
         entity.setTenantId(tenantId);
         entity.setProjectName(form.getProjectName());
         entity.setPath(form.getPath());
+        entity.setDirectoryType(directoryType);
+        entity.setParentProjectId(form.getParentProjectId());
 
         directoryRepository.save(entity);
-        log.info("Working directory created: directoryId={}, workerId={}, path={}", entity.getDirectoryId(), form.getWorkerId(), form.getPath());
+        log.info("Working directory created: directoryId={}, workerId={}, path={}, type={}",
+                entity.getDirectoryId(), form.getWorkerId(), form.getPath(), directoryType);
 
         // 自动同步 Git 信息（非阻塞，失败不影响创建）
         try {
@@ -84,6 +104,25 @@ public class WorkingDirectoryService {
         if (form.getAgentTeamsConfig() != null) {
             entity.setAgentTeamsConfig(form.getAgentTeamsConfig().isEmpty() ? null : form.getAgentTeamsConfig());
         }
+        // projectTaskPrompt 仅 PROJECT 类型有效
+        if (form.getProjectTaskPrompt() != null && "PROJECT".equals(entity.getDirectoryType())) {
+            entity.setProjectTaskPrompt(form.getProjectTaskPrompt().isEmpty() ? null : form.getProjectTaskPrompt());
+        }
+        // parentProjectId 可修改
+        if (form.getParentProjectId() != null) {
+            if (form.getParentProjectId().isEmpty()) {
+                entity.setParentProjectId(null);
+            } else {
+                // 验证目标是 PROJECT 类型
+                WorkingDirectoryEntity parent = directoryRepository
+                        .findByDirectoryIdAndUserId(form.getParentProjectId(), userId)
+                        .orElseThrow(() -> new IllegalArgumentException("Parent project not found: " + form.getParentProjectId()));
+                if (!"PROJECT".equals(parent.getDirectoryType())) {
+                    throw new IllegalArgumentException("Parent directory is not a PROJECT: " + form.getParentProjectId());
+                }
+                entity.setParentProjectId(form.getParentProjectId());
+            }
+        }
 
         directoryRepository.save(entity);
         log.info("Working directory updated: directoryId={}", directoryId);
@@ -106,6 +145,16 @@ public class WorkingDirectoryService {
      */
     public List<WorkingDirectoryDTO> listByWorker(String userId, String workerId) {
         return directoryRepository.findByWorkerIdAndUserIdOrderByProjectNameAsc(workerId, userId).stream()
+                .map(this::toDTO)
+                .toList();
+    }
+
+    /**
+     * 列出 PROJECT 目录的子目录
+     */
+    public List<WorkingDirectoryDTO> listChildDirectories(String userId, String projectDirectoryId) {
+        return directoryRepository.findByParentProjectIdAndUserIdOrderByProjectNameAsc(projectDirectoryId, userId)
+                .stream()
                 .map(this::toDTO)
                 .toList();
     }
@@ -142,6 +191,94 @@ public class WorkingDirectoryService {
 
         syncGitInfoInternal(entity, worker);
         return toDTO(entity);
+    }
+
+    /**
+     * 通过 git worktree 创建临时工作目录
+     */
+    @Transactional
+    public WorkingDirectoryDTO createWorktree(String userId, String tenantId,
+                                               String sourceDirectoryId, String branch) {
+        WorkingDirectoryEntity source = directoryRepository.findByDirectoryIdAndUserId(sourceDirectoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Source directory not found: " + sourceDirectoryId));
+
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(source.getWorkerId());
+        if (!worker.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Worker not found: " + source.getWorkerId());
+        }
+
+        // 调用 Worker API 创建 worktree
+        ClaudeWorkerClient client = workerService.createClient(worker);
+        Map<String, Object> result;
+        try {
+            result = client.createWorktree(source.getPath(), branch, null)
+                    .block(Duration.ofSeconds(30));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create worktree: " + e.getMessage());
+        }
+        if (result == null) {
+            throw new RuntimeException("Failed to create worktree: empty response");
+        }
+
+        String worktreePath = (String) result.get("path");
+        String actualBranch = (String) result.get("branch");
+
+        // 创建 WorkingDirectoryEntity
+        WorkingDirectoryEntity entity = new WorkingDirectoryEntity();
+        entity.setDirectoryId(UUID.randomUUID().toString().substring(0, 8));
+        entity.setWorkerId(source.getWorkerId());
+        entity.setUserId(userId);
+        entity.setTenantId(tenantId);
+        entity.setProjectName(source.getProjectName() + " [" + actualBranch + "]");
+        entity.setPath(worktreePath);
+        entity.setDirectoryType("STANDARD");
+        entity.setParentProjectId(source.getParentProjectId());
+        entity.setWorktree(true);
+        entity.setSourceDirectoryId(sourceDirectoryId);
+        entity.setGitBranch(actualBranch);
+
+        directoryRepository.save(entity);
+        log.info("Worktree created: directoryId={}, branch={}, path={}",
+                entity.getDirectoryId(), actualBranch, worktreePath);
+
+        // 同步 Git 信息
+        try {
+            syncGitInfoInternal(entity, worker);
+        } catch (Exception e) {
+            log.warn("Auto-sync git info failed for worktree directoryId={}: {}", entity.getDirectoryId(), e.getMessage());
+        }
+
+        return toDTO(entity);
+    }
+
+    /**
+     * 清理 worktree 目录
+     */
+    @Transactional
+    public void removeWorktree(String userId, String directoryId) {
+        WorkingDirectoryEntity entity = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+
+        if (!Boolean.TRUE.equals(entity.getWorktree())) {
+            throw new IllegalArgumentException("Directory is not a worktree: " + directoryId);
+        }
+
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
+        if (!worker.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Worker not found: " + entity.getWorkerId());
+        }
+
+        // 调用 Worker API 删除 worktree
+        ClaudeWorkerClient client = workerService.createClient(worker);
+        try {
+            client.removeWorktree(entity.getPath()).block(Duration.ofSeconds(30));
+        } catch (Exception e) {
+            log.warn("Failed to remove worktree on worker: {}", e.getMessage());
+            // Continue to remove DB record even if remote removal fails
+        }
+
+        directoryRepository.delete(entity);
+        log.info("Worktree removed: directoryId={}, path={}", directoryId, entity.getPath());
     }
 
     private void syncGitInfoInternal(WorkingDirectoryEntity entity, ClaudeWorkerEntity worker) {
@@ -184,6 +321,11 @@ public class WorkingDirectoryService {
                 .gitProvider(entity.getGitProvider())
                 .gitStatus(entity.getGitStatus())
                 .agentTeamsConfig(entity.getAgentTeamsConfig())
+                .directoryType(entity.getDirectoryType())
+                .parentProjectId(entity.getParentProjectId())
+                .projectTaskPrompt(entity.getProjectTaskPrompt())
+                .worktree(entity.getWorktree())
+                .sourceDirectoryId(entity.getSourceDirectoryId())
                 .lastSyncedAt(entity.getLastSyncedAt())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())

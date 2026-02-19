@@ -75,4 +75,41 @@ public class WorkingDirectoryController {
                 .block(Duration.ofSeconds(10));
         return RX.ok(skills != null ? skills : List.of());
     }
+
+    @GetMapping("/{directoryId}/children")
+    public RX<List<WorkingDirectoryDTO>> listChildren(@PathVariable String directoryId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(directoryService.listChildDirectories(userId, directoryId));
+    }
+
+    @PostMapping("/{directoryId}/worktree")
+    public RX<WorkingDirectoryDTO> createWorktree(
+            @PathVariable String directoryId,
+            @RequestBody Map<String, String> body) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        String branch = body.get("branch");
+        if (branch == null || branch.isBlank()) {
+            throw new IllegalArgumentException("branch is required");
+        }
+        return RX.ok(directoryService.createWorktree(userId, tenantId, directoryId, branch));
+    }
+
+    @DeleteMapping("/{directoryId}/worktree")
+    public RX<Void> removeWorktree(@PathVariable String directoryId) {
+        String userId = UserContext.getCurrentUserId();
+        directoryService.removeWorktree(userId, directoryId);
+        return RX.ok(null);
+    }
+
+    @GetMapping("/{directoryId}/worktrees")
+    public RX<List<Map<String, Object>>> listWorktrees(@PathVariable String directoryId) {
+        String userId = UserContext.getCurrentUserId();
+        WorkingDirectoryEntity entity = directoryService.getDirectoryEntity(userId, directoryId);
+        ClaudeWorkerClient client = workerService.createClient(
+                workerService.getWorkerEntity(entity.getWorkerId()));
+        List<Map<String, Object>> worktrees = client.listWorktrees(entity.getPath())
+                .block(Duration.ofSeconds(10));
+        return RX.ok(worktrees != null ? worktrees : List.of());
+    }
 }
