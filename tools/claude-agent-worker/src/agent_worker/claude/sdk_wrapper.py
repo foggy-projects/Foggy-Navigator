@@ -1,4 +1,4 @@
-"""Wraps the ``claude-code-sdk`` (or ``claude-agent-sdk``) package.
+"""Wraps the ``claude-agent-sdk`` (or legacy ``claude-code-sdk``) package.
 
 The wrapper gracefully handles the case where the SDK package is not
 installed -- calls to :meth:`SdkWrapper.run_query` will yield a single
@@ -8,6 +8,7 @@ error event instead of crashing the service.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -21,12 +22,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # SDK availability detection
 # ---------------------------------------------------------------------------
-# The package was originally published as ``claude-code-sdk`` and later
-# renamed to ``claude-agent-sdk``.  We try both import names so that the
-# worker can run with whichever the user has installed.
+# Prefer ``claude-agent-sdk`` (actively maintained, bundles its own CLI).
+# Fall back to the deprecated ``claude-code-sdk`` for backwards compat.
 # ---------------------------------------------------------------------------
 
 _sdk_available = False
+_use_agent_sdk = False  # True when the newer claude-agent-sdk is loaded
 _query_fn = None
 _options_cls = None
 
@@ -45,9 +46,13 @@ _CLIConnectionError = None
 _CLIJSONDecodeError = None
 _CLINotFoundError = None
 
+# Agent Teams type -- only available in claude-agent-sdk.
+_AgentDefinition = None
+
+# --- Try claude-agent-sdk first (recommended) ---
 try:
-    from claude_code_sdk import query as _q, ClaudeCodeOptions as _opts  # type: ignore[import-untyped]
-    from claude_code_sdk import (  # type: ignore[import-untyped]
+    from claude_agent_sdk import query as _q, ClaudeAgentOptions as _opts  # type: ignore[import-untyped]
+    from claude_agent_sdk import (  # type: ignore[import-untyped]
         AssistantMessage as _AM,
         UserMessage as _UM,
         SystemMessage as _SM,
@@ -56,7 +61,7 @@ try:
         ToolUseBlock as _TUB,
         ToolResultBlock as _TRB,
     )
-    from claude_code_sdk import (  # type: ignore[import-untyped]
+    from claude_agent_sdk import (  # type: ignore[import-untyped]
         ProcessError as _PE,
         CLIConnectionError as _CCE,
         CLIJSONDecodeError as _CJDE,
@@ -77,11 +82,21 @@ try:
     _CLIJSONDecodeError = _CJDE
     _CLINotFoundError = _CNFE
     _sdk_available = True
-    logger.info("Loaded claude-code-sdk successfully")
-except ImportError:
+    _use_agent_sdk = True
+
+    # AgentDefinition for first-class Agent Teams support
     try:
-        from claude_agent_sdk import query as _q2, ClaudeAgentOptions as _opts2  # type: ignore[import-untyped]
-        from claude_agent_sdk import (  # type: ignore[import-untyped]
+        from claude_agent_sdk import AgentDefinition as _AD  # type: ignore[import-untyped]
+        _AgentDefinition = _AD
+    except ImportError:
+        pass
+
+    logger.info("Loaded claude-agent-sdk successfully")
+except ImportError:
+    # --- Fall back to deprecated claude-code-sdk ---
+    try:
+        from claude_code_sdk import query as _q2, ClaudeCodeOptions as _opts2  # type: ignore[import-untyped]
+        from claude_code_sdk import (  # type: ignore[import-untyped]
             AssistantMessage as _AM2,
             UserMessage as _UM2,
             SystemMessage as _SM2,
@@ -90,7 +105,7 @@ except ImportError:
             ToolUseBlock as _TUB2,
             ToolResultBlock as _TRB2,
         )
-        from claude_agent_sdk import (  # type: ignore[import-untyped]
+        from claude_code_sdk import (  # type: ignore[import-untyped]
             ProcessError as _PE2,
             CLIConnectionError as _CCE2,
             CLIJSONDecodeError as _CJDE2,
@@ -111,10 +126,13 @@ except ImportError:
         _CLIJSONDecodeError = _CJDE2
         _CLINotFoundError = _CNFE2
         _sdk_available = True
-        logger.info("Loaded claude-agent-sdk successfully")
+        logger.info(
+            "Loaded claude-code-sdk (deprecated). "
+            "Consider upgrading: pip install claude-agent-sdk"
+        )
     except ImportError:
         logger.warning(
-            "Neither claude-code-sdk nor claude-agent-sdk is installed. "
+            "Neither claude-agent-sdk nor claude-code-sdk is installed. "
             "The /api/v1/query endpoint will return an error until the SDK is available."
         )
 
@@ -246,6 +264,12 @@ class SdkWrapper:
         """
 
         env: dict[str, str] = {}
+
+        # Prevent "nested session" detection when the Worker itself runs
+        # inside a Claude Code terminal (CLAUDECODE env var inherited).
+        if os.environ.get("CLAUDECODE"):
+            env["CLAUDECODE"] = ""
+
         key = api_key or settings.anthropic_api_key
         token = auth_token or settings.anthropic_auth_token
         url = base_url or settings.anthropic_base_url
@@ -256,6 +280,53 @@ class SdkWrapper:
         if url:
             env["ANTHROPIC_BASE_URL"] = url
         return env
+
+    # -- Agent Teams ---------------------------------------------------------
+
+    @staticmethod
+    def _apply_agents_config(
+        extra_args: dict | None,
+        options_kwargs: dict[str, Any],
+    ) -> None:
+        """Extract Agent Teams config from *extra_args* and set the
+        first-class ``agents`` parameter on *options_kwargs*.
+
+        The new ``claude-agent-sdk`` accepts ``agents`` as a
+        ``dict[str, AgentDefinition]`` directly, which is more robust
+        than passing a JSON string via ``extra_args``.
+
+        If parsing fails, the raw value is kept in ``extra_args`` as a
+        fallback so the CLI can still attempt to interpret it.
+        """
+
+        if not extra_args or "agents" not in extra_args:
+            if extra_args:
+                options_kwargs["extra_args"] = extra_args
+            return
+
+        agents_value = extra_args.pop("agents")
+
+        if _AgentDefinition is not None and agents_value:
+            try:
+                # agents_value is a JSON string from the Java backend
+                agents_raw: dict = json.loads(agents_value) if isinstance(agents_value, str) else agents_value
+                valid_fields = {"description", "prompt", "tools", "model"}
+                agents = {
+                    name: _AgentDefinition(**{k: v for k, v in defn.items() if k in valid_fields})
+                    for name, defn in agents_raw.items()
+                }
+                options_kwargs["agents"] = agents
+                logger.info("Agent Teams configured: %s", list(agents.keys()))
+            except (json.JSONDecodeError, TypeError, KeyError) as exc:
+                logger.warning("Failed to parse agents config, using extra_args fallback: %s", exc)
+                extra_args["agents"] = agents_value
+        else:
+            # Old SDK or no AgentDefinition — keep in extra_args
+            extra_args["agents"] = agents_value
+
+        # Pass remaining extra_args (if any) through
+        if extra_args:
+            options_kwargs["extra_args"] = extra_args
 
     # -- Query ---------------------------------------------------------------
 
@@ -284,7 +355,7 @@ class SdkWrapper:
                 task_id=task_id,
                 error=(
                     "Claude Code SDK is not installed. "
-                    "Install claude-code-sdk or claude-agent-sdk to enable queries."
+                    "Install claude-agent-sdk to enable queries."
                 ),
             )
             return
@@ -304,7 +375,7 @@ class SdkWrapper:
             env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url)
 
             # Build SDK options.  We use keyword arguments so that the call
-            # works with both ``ClaudeCodeOptions`` and ``ClaudeAgentOptions``.
+            # works with both ``ClaudeAgentOptions`` and ``ClaudeCodeOptions``.
             options_kwargs: dict[str, Any] = {
                 "cwd": cwd,
             }
@@ -314,10 +385,28 @@ class SdkWrapper:
                 options_kwargs["max_turns"] = max_turns
             if model is not None:
                 options_kwargs["model"] = model
-            if extra_args:
-                options_kwargs["extra_args"] = extra_args
             if session_id is not None:
                 options_kwargs["resume"] = session_id
+
+            # claude-agent-sdk: load filesystem settings (CLAUDE.md, etc.)
+            # and use first-class agents parameter instead of extra_args.
+            if _use_agent_sdk:
+                options_kwargs["setting_sources"] = ["user", "project", "local"]
+                self._apply_agents_config(extra_args, options_kwargs)
+            elif extra_args:
+                options_kwargs["extra_args"] = extra_args
+
+            logger.info(
+                "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s, "
+                "has_agents=%s, has_env=%s",
+                task_id,
+                repr(prompt[:80]) if prompt else None,
+                cwd,
+                session_id,
+                model,
+                "agents" in options_kwargs,
+                bool(env),
+            )
 
             options = _options_cls(**options_kwargs)
 
