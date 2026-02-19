@@ -89,6 +89,39 @@ class GitInfoResponse(BaseModel):
     provider: str = "OTHER"      # GITHUB | GITLAB | GITEE | OTHER
 ```
 
+### CreateWorktreeRequest
+
+```python
+class CreateWorktreeRequest(BaseModel):
+    repo_path: str                    # 主仓库路径
+    branch: str                       # 要检出的分支
+    worktree_path: str | None = None  # 可选自定义路径，默认自动生成
+```
+
+### WorktreeInfo
+
+```python
+class WorktreeInfo(BaseModel):
+    path: str
+    branch: str
+    is_main: bool
+```
+
+### CreateWorktreeResponse
+
+```python
+class CreateWorktreeResponse(BaseModel):
+    path: str
+    branch: str
+```
+
+### RemoveWorktreeRequest
+
+```python
+class RemoveWorktreeRequest(BaseModel):
+    worktree_path: str
+```
+
 ---
 
 ## Java Entity
@@ -160,6 +193,12 @@ public class WorkingDirectoryEntity {
     String gitProvider;      // GITHUB | GITLAB | GITEE | OTHER
     String gitStatus;        // clean | dirty | unknown
     String agentTeamsConfig; // JSON string
+    // --- PROJECT & Worktree 字段 ---
+    String directoryType = "STANDARD";  // STANDARD | PROJECT
+    String parentProjectId;  // nullable, 指向 PROJECT 的 directoryId
+    String projectTaskPrompt; // nullable, TEXT, PROJECT 专用任务分配 prompt
+    Boolean worktree = false; // 是否 git worktree 创建的临时目录
+    String sourceDirectoryId; // nullable, worktree 来源目录
     LocalDateTime lastSyncedAt;
     LocalDateTime createdAt;
     LocalDateTime updatedAt;
@@ -402,6 +441,12 @@ interface WorkingDirectory {
   gitProvider?: 'GITHUB' | 'GITLAB' | 'GITEE' | 'OTHER'
   gitStatus?: 'clean' | 'dirty' | 'unknown'
   agentTeamsConfig?: string
+  // --- PROJECT & Worktree 字段 ---
+  directoryType?: 'STANDARD' | 'PROJECT'
+  parentProjectId?: string
+  projectTaskPrompt?: string
+  worktree?: boolean
+  sourceDirectoryId?: string
   lastSyncedAt?: string
   createdAt: string
   updatedAt: string
@@ -445,11 +490,16 @@ triggerHealthCheck(workerId): Promise<ClaudeWorker>
 
 // Directory
 listDirectoriesByWorker(workerId): Promise<WorkingDirectory[]>
-createDirectory(form): Promise<WorkingDirectory>
-updateDirectory(directoryId, form): Promise<WorkingDirectory>
+createDirectory(form): Promise<WorkingDirectory>        // form 含 directoryType?, parentProjectId?
+updateDirectory(directoryId, form): Promise<WorkingDirectory>  // form 含 projectTaskPrompt?, parentProjectId?
 deleteDirectory(directoryId): Promise<void>
 syncDirectoryGitInfo(directoryId): Promise<WorkingDirectory>
+listChildDirectories(directoryId): Promise<WorkingDirectory[]>  // PROJECT 子目录
 listSkills(directoryId): Promise<SkillInfo[]>
+
+// Worktree
+createWorktree(directoryId, branch): Promise<WorkingDirectory>
+removeWorktree(directoryId): Promise<void>
 
 // Task
 createTask(form): Promise<ClaudeTask>
@@ -497,7 +547,7 @@ const {
   // Task 操作
   loadTasks, loadTasksPage, createTask, resumeTask, abortTask, deleteTask,
 
-  // Directory 操作
+  // Directory 操作 (createDirectory form 含 directoryType?, parentProjectId?)
   loadDirectories, createDirectory, deleteDirectory, syncGitInfo, syncSessions,
 
   // Conversation Config 操作

@@ -16,6 +16,8 @@ description: Claude Worker Agent 全栈开发指导（Java 后端 + Python Worke
 - 修改 per-conversation Auth 绑定逻辑
 - 添加新的 Worker 端点或 Java 端 API
 - 升级 Claude Agent SDK 或修改 SDK 包装层
+- 管理 PROJECT 目录和子目录层级
+- 创建/清理 Git Worktree 临时分支
 - 调试任务执行失败、Auth 不匹配、SSE 断流等问题
 
 ## 架构概览
@@ -70,15 +72,17 @@ addons/claude-worker-agent/
 │   │   ├── entity/
 │   │   │   ├── ClaudeWorkerEntity.java
 │   │   │   ├── ClaudeTaskEntity.java
-│   │   │   ├── WorkingDirectoryEntity.java
+│   │   │   ├── WorkingDirectoryEntity.java  # +directoryType, parentProjectId, worktree 等
 │   │   │   └── ConversationConfigEntity.java
 │   │   ├── dto/
 │   │   │   ├── WorkerDTO.java
 │   │   │   ├── TaskDTO.java
-│   │   │   ├── WorkingDirectoryDTO.java
+│   │   │   ├── WorkingDirectoryDTO.java     # +children, directoryType, worktree 等
 │   │   │   └── ConversationConfigDTO.java
 │   │   ├── form/
 │   │   │   ├── CreateTaskForm.java
+│   │   │   ├── CreateWorkingDirectoryForm.java  # +directoryType, parentProjectId
+│   │   │   ├── UpdateWorkingDirectoryForm.java  # +projectTaskPrompt, parentProjectId
 │   │   │   ├── ResumeTaskForm.java
 │   │   │   ├── UpdatePinForm.java
 │   │   │   ├── UpdateTitleForm.java
@@ -117,6 +121,7 @@ tools/claude-agent-worker/
 │       ├── auth.py              # GET /api/v1/auth-config
 │       ├── git_info.py          # GET /api/v1/git-info
 │       ├── skills.py            # GET /api/v1/skills
+│       ├── worktree.py          # Git Worktree CRUD（list/create/remove）
 │       └── health.py            # GET /health
 ├── pyproject.toml               # 依赖：claude-agent-sdk>=0.1.37
 └── start.ps1 / stop.ps1         # 启停脚本
@@ -321,6 +326,82 @@ if (taskForm.value.useTeams && selectedDirectory.value?.agentTeamsConfig) {
   agentTeamsJson = selectedDirectory.value.agentTeamsConfig
 }
 ```
+
+## PROJECT 目录 & Git Worktree
+
+### 目录类型
+
+WorkingDirectory 有两种 `directoryType`：
+- **STANDARD**（默认）— 普通工作目录，指向一个 Git 仓库
+- **PROJECT** — 项目编排目录，包含多个子目录，实现两层编排
+
+### 层级关系
+
+```
+Worker (福安-PC-win)
+├── 📦 Foggy-Microservices [PROJECT]    ← directoryType=PROJECT
+│   ├── Foggy-Navigator [STANDARD]      ← parentProjectId 指向 PROJECT
+│   └── Foggy-Dataset [STANDARD]        ← parentProjectId 指向 PROJECT
+├── fleetsync [STANDARD]                ← 孤立目录，无 parentProjectId
+└── semantic-test [STANDARD]
+```
+
+### 关键字段
+
+| Entity 字段 | 说明 |
+|-------------|------|
+| `directoryType` | `STANDARD` / `PROJECT`，默认 STANDARD |
+| `parentProjectId` | 指向 PROJECT 目录的 directoryId（STANDARD 专用） |
+| `projectTaskPrompt` | PROJECT 类型的任务分配 system prompt |
+| `worktree` | Boolean，是否为 git worktree 创建的临时目录 |
+| `sourceDirectoryId` | worktree 来源目录的 directoryId |
+
+### 验证规则
+
+- PROJECT 目录的 `parentProjectId` 必须为 null
+- 指定 `parentProjectId` 时，目标必须存在且为 PROJECT 类型
+- `projectTaskPrompt` 仅 PROJECT 类型可编辑
+
+### Git Worktree 工作流
+
+```
+1. 用户点击 STANDARD 目录的 "创建 Worktree" 按钮
+2. 输入分支名（如 hotfix/prod-issue-123）
+3. Java → Python Worker POST /api/v1/worktrees
+4. Worker 执行 git worktree add <sibling-dir> <branch>
+5. Java 创建 WorkingDirectoryEntity（worktree=true, sourceDirectoryId=原目录）
+6. 前端刷新目录列表，worktree 目录显示灰色 tag
+
+清理 Worktree:
+1. Java → Python Worker DELETE /api/v1/worktrees
+2. Worker 执行 git worktree remove --force <path>
+3. Java 删除 WorkingDirectoryEntity
+```
+
+### Worktree API（Python Worker）
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/api/v1/worktrees?path=` | 列出 repo 的所有 worktree |
+| POST | `/api/v1/worktrees` | 创建 worktree（body: repo_path, branch） |
+| DELETE | `/api/v1/worktrees` | 删除 worktree（body: worktree_path） |
+
+### Worktree API（Java 后端）
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/{directoryId}/children` | 列出 PROJECT 的子目录 |
+| POST | `/{directoryId}/worktree` | 基于目录创建 worktree（body: branch） |
+| DELETE | `/{directoryId}/worktree` | 清理 worktree 目录 |
+| GET | `/{directoryId}/worktrees` | 列出 repo 的所有 worktree |
+
+### 前端三级树结构
+
+`ClaudeWorkerView.vue` 侧边栏使用以下 computed 函数实现树结构：
+- `projectDirectoriesForWorker(workerId)` — Worker 下的 PROJECT 目录
+- `orphanDirectoriesForWorker(workerId)` — 无 parentProjectId 的 STANDARD 目录
+- `childrenForProject(projectDirectoryId)` — 某 PROJECT 下的子目录
+- `expandedProjectIds` (reactive Set) — 控制 PROJECT 展开/折叠
 
 ## Worker 配置
 
