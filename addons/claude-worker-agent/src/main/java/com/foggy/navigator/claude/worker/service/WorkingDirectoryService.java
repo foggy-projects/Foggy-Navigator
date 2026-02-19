@@ -7,6 +7,7 @@ import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -28,6 +29,34 @@ public class WorkingDirectoryService {
 
     private final WorkingDirectoryRepository directoryRepository;
     private final ClaudeWorkerService workerService;
+
+    /**
+     * 启动时修复旧数据：补全 directoryType 和 worktree 默认值
+     */
+    @PostConstruct
+    @Transactional
+    void migrateOldRecords() {
+        List<WorkingDirectoryEntity> all = directoryRepository.findAll();
+        int fixed = 0;
+        for (WorkingDirectoryEntity e : all) {
+            boolean dirty = false;
+            if (e.getDirectoryType() == null || e.getDirectoryType().isBlank()) {
+                e.setDirectoryType("STANDARD");
+                dirty = true;
+            }
+            if (e.getWorktree() == null) {
+                e.setWorktree(false);
+                dirty = true;
+            }
+            if (dirty) {
+                directoryRepository.save(e);
+                fixed++;
+            }
+        }
+        if (fixed > 0) {
+            log.info("Migrated {} working directory records (set default directoryType/worktree)", fixed);
+        }
+    }
 
     /**
      * 创建工作目录
