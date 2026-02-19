@@ -37,8 +37,45 @@
               <text class="loading-text">加载目录...</text>
             </view>
             <view v-if="!loadingDirs">
+              <!-- PROJECT 目录 -->
               <view
-                v-for="dir in getDirectories(worker.workerId)"
+                v-for="project in workerStore.getProjectDirectories(worker.workerId)"
+                :key="project.directoryId"
+                class="project-group"
+              >
+                <view class="project-header" @tap="toggleProject(project.directoryId)">
+                  <view class="dir-info">
+                    <text class="project-arrow">{{ expandedProjects.has(project.directoryId) ? '▼' : '▶' }}</text>
+                    <text class="project-icon">📦</text>
+                    <text class="dir-name">{{ project.projectName }}</text>
+                    <text
+                      v-if="workerStore.getChildDirectories(worker.workerId, project.directoryId).length > 0"
+                      class="child-count"
+                    >{{ workerStore.getChildDirectories(worker.workerId, project.directoryId).length }}</text>
+                  </view>
+                  <text class="dir-path">{{ project.path }}</text>
+                </view>
+                <!-- PROJECT 子目录 -->
+                <view v-if="expandedProjects.has(project.directoryId)">
+                  <view
+                    v-for="child in workerStore.getChildDirectories(worker.workerId, project.directoryId)"
+                    :key="child.directoryId"
+                    class="directory-item child-item"
+                    @tap="openTasks(worker.workerId, child)"
+                  >
+                    <view class="dir-info">
+                      <text class="dir-name">{{ child.projectName }}</text>
+                      <text v-if="child.gitBranch" class="dir-branch">{{ child.gitBranch }}</text>
+                      <text v-if="child.worktree" class="worktree-tag">worktree</text>
+                    </view>
+                    <text class="dir-path">{{ child.path }}</text>
+                  </view>
+                </view>
+              </view>
+
+              <!-- 独立目录（不属于任何 PROJECT） -->
+              <view
+                v-for="dir in workerStore.getOrphanDirectories(worker.workerId)"
                 :key="dir.directoryId"
                 class="directory-item"
                 @tap="openTasks(worker.workerId, dir)"
@@ -46,10 +83,15 @@
                 <view class="dir-info">
                   <text class="dir-name">{{ dir.projectName }}</text>
                   <text v-if="dir.gitBranch" class="dir-branch">{{ dir.gitBranch }}</text>
+                  <text v-if="dir.worktree" class="worktree-tag">worktree</text>
                 </view>
                 <text class="dir-path">{{ dir.path }}</text>
               </view>
-              <view v-if="getDirectories(worker.workerId).length === 0" class="dir-empty">
+
+              <view
+                v-if="workerStore.getProjectDirectories(worker.workerId).length === 0 && workerStore.getOrphanDirectories(worker.workerId).length === 0"
+                class="dir-empty"
+              >
                 <text class="empty-text">暂无工作目录</text>
               </view>
             </view>
@@ -61,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { useWorkerStore } from '@/stores/worker'
 import type { WorkingDirectory } from '@/api/types'
@@ -70,6 +112,7 @@ import EmptyState from '@/components/EmptyState.vue'
 
 const workerStore = useWorkerStore()
 const expandedWorker = ref<string | null>(null)
+const expandedProjects = reactive(new Set<string>())
 const loadingDirs = ref(false)
 const refreshing = ref(false)
 
@@ -96,8 +139,12 @@ async function toggleWorker(workerId: string) {
   loadingDirs.value = false
 }
 
-function getDirectories(workerId: string): WorkingDirectory[] {
-  return workerStore.getDirectories(workerId)
+function toggleProject(directoryId: string) {
+  if (expandedProjects.has(directoryId)) {
+    expandedProjects.delete(directoryId)
+  } else {
+    expandedProjects.add(directoryId)
+  }
 }
 
 async function doHealthCheck(workerId: string) {
@@ -158,6 +205,38 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
   margin-bottom: 20rpx;
   overflow: hidden;
 }
+.project-group {
+  border-bottom: 2rpx solid #f0f0f0;
+}
+.project-header {
+  padding: 24rpx 28rpx;
+  background: #fafafa;
+}
+.project-arrow {
+  font-size: 20rpx;
+  color: #909399;
+  margin-right: 8rpx;
+}
+.project-icon {
+  font-size: 28rpx;
+  margin-right: 8rpx;
+}
+.child-count {
+  font-size: 20rpx;
+  color: #ffffff;
+  background: #909399;
+  min-width: 32rpx;
+  height: 32rpx;
+  line-height: 32rpx;
+  text-align: center;
+  border-radius: 16rpx;
+  padding: 0 8rpx;
+  margin-left: 8rpx;
+}
+.child-item {
+  padding-left: 80rpx;
+  background: #ffffff;
+}
 .directory-item {
   padding: 24rpx 28rpx;
   border-bottom: 2rpx solid #f5f5f5;
@@ -179,6 +258,13 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
   background: #ecf0ff;
   padding: 2rpx 12rpx;
   border-radius: 8rpx;
+}
+.worktree-tag {
+  font-size: 20rpx;
+  color: #909399;
+  background: #f0f0f0;
+  padding: 2rpx 10rpx;
+  border-radius: 6rpx;
 }
 .dir-path {
   font-size: 24rpx;

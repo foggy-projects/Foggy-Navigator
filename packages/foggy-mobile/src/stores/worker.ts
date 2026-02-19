@@ -32,6 +32,23 @@ export const useWorkerStore = defineStore('worker', () => {
     return directories.value.get(workerId) ?? []
   }
 
+  /** PROJECT 类型目录 */
+  function getProjectDirectories(workerId: string): WorkingDirectory[] {
+    return getDirectories(workerId).filter((d) => d.directoryType === 'PROJECT')
+  }
+
+  /** 某 PROJECT 下的子目录 */
+  function getChildDirectories(workerId: string, projectDirectoryId: string): WorkingDirectory[] {
+    return getDirectories(workerId).filter((d) => d.parentProjectId === projectDirectoryId)
+  }
+
+  /** 不属于任何 PROJECT 的普通目录 */
+  function getOrphanDirectories(workerId: string): WorkingDirectory[] {
+    return getDirectories(workerId).filter(
+      (d) => d.directoryType !== 'PROJECT' && !d.parentProjectId,
+    )
+  }
+
   async function healthCheck(workerId: string) {
     try {
       const updated = await workerApi.triggerHealthCheck(workerId)
@@ -59,6 +76,9 @@ export const useWorkerStore = defineStore('worker', () => {
     loadWorkers,
     loadDirectories,
     getDirectories,
+    getProjectDirectories,
+    getChildDirectories,
+    getOrphanDirectories,
     healthCheck,
     loadTasksByDirectory,
   }

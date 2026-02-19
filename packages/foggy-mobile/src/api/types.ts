@@ -88,6 +88,11 @@ export interface WorkingDirectory {
   gitProvider?: 'GITHUB' | 'GITLAB' | 'GITEE' | 'OTHER'
   gitStatus?: 'clean' | 'dirty' | 'unknown'
   agentTeamsConfig?: string
+  directoryType?: 'STANDARD' | 'PROJECT'
+  parentProjectId?: string
+  projectTaskPrompt?: string
+  worktree?: boolean
+  sourceDirectoryId?: string
   lastSyncedAt?: string
   createdAt: string
   updatedAt: string
