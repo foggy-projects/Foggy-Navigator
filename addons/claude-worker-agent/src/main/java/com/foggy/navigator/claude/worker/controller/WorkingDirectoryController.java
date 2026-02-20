@@ -71,9 +71,14 @@ public class WorkingDirectoryController {
         WorkingDirectoryEntity entity = directoryService.getDirectoryEntity(userId, directoryId);
         ClaudeWorkerClient client = workerService.createClient(
                 workerService.getWorkerEntity(entity.getWorkerId()));
-        List<Map<String, Object>> skills = client.listSkills(entity.getPath())
-                .block(Duration.ofSeconds(10));
-        return RX.ok(skills != null ? skills : List.of());
+        try {
+            List<Map<String, Object>> skills = client.listSkills(entity.getPath())
+                    .block(Duration.ofSeconds(10));
+            return RX.ok(skills != null ? skills : List.of());
+        } catch (Exception e) {
+            log.warn("Failed to list skills for directory {}: {}", directoryId, e.getMessage());
+            return RX.ok(List.of());
+        }
     }
 
     @GetMapping("/{directoryId}/children")
@@ -108,8 +113,13 @@ public class WorkingDirectoryController {
         WorkingDirectoryEntity entity = directoryService.getDirectoryEntity(userId, directoryId);
         ClaudeWorkerClient client = workerService.createClient(
                 workerService.getWorkerEntity(entity.getWorkerId()));
-        List<Map<String, Object>> worktrees = client.listWorktrees(entity.getPath())
-                .block(Duration.ofSeconds(10));
-        return RX.ok(worktrees != null ? worktrees : List.of());
+        try {
+            List<Map<String, Object>> worktrees = client.listWorktrees(entity.getPath())
+                    .block(Duration.ofSeconds(10));
+            return RX.ok(worktrees != null ? worktrees : List.of());
+        } catch (Exception e) {
+            log.warn("Failed to list worktrees for directory {}: {}", directoryId, e.getMessage());
+            return RX.ok(List.of());
+        }
     }
 }
