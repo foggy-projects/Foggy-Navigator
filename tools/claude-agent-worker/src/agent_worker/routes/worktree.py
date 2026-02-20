@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 
@@ -11,53 +10,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from ..auth import verify_token
 from ..config import settings
 from ..models import CreateWorktreeRequest, CreateWorktreeResponse, RemoveWorktreeRequest, WorktreeInfo
+from .utils import validate_path, run_git
 
 logger = logging.getLogger(__name__)
-
-router = APIRouter(prefix="/api/v1", tags=["worktree"], dependencies=[Depends(verify_token)])
-
-
-def _validate_path(path: str) -> str:
-    """Ensure *path* is inside one of the ``allowed_cwds``."""
-    resolved = os.path.realpath(path)
-
-    if not settings.allowed_cwds:
-        return resolved
-
-    for allowed in settings.allowed_cwds:
-        allowed_resolved = os.path.realpath(allowed)
-        if resolved == allowed_resolved or resolved.startswith(allowed_resolved + os.sep):
-            return resolved
-
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=f"Path '{path}' is not in the allowed list",
-    )
-
-
-async def _run_git(cwd: str, *args: str) -> tuple[int, str]:
-    """Run a git command and return ``(returncode, stdout)``."""
-    proc = await asyncio.create_subprocess_exec(
-        "git", *args,
-        cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=settings.git_timeout_seconds,
-        )
-    except asyncio.TimeoutError:
-        proc.kill()
-        logger.warning("git %s timed out after %ss in %s", args[0] if args else "?", settings.git_timeout_seconds, cwd)
-        return -1, f"git command timed out after {settings.git_timeout_seconds}s"
-    return proc.returncode, stdout.decode("utf-8", errors="replace").strip()
 
 
 @router.get("/worktrees", response_model=list[WorktreeInfo])
 async def list_worktrees(path: str = Query(..., description="Absolute path to the repo")) -> list[WorktreeInfo]:
     """List all git worktrees for the given repository."""
-    resolved = _validate_path(path)
+    resolved = validate_path(path)
 
     if not os.path.isdir(resolved):
         raise HTTPException(
@@ -65,7 +26,7 @@ async def list_worktrees(path: str = Query(..., description="Absolute path to th
             detail=f"Path is not a directory: {path}",
         )
 
-    rc, output = await _run_git(resolved, "worktree", "list", "--porcelain")
+    rc, output = await run_git(resolved, "worktree", "list", "--porcelain")
     if rc != 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -106,7 +67,7 @@ async def list_worktrees(path: str = Query(..., description="Absolute path to th
 @router.post("/worktrees", response_model=CreateWorktreeResponse)
 async def create_worktree(request: CreateWorktreeRequest) -> CreateWorktreeResponse:
     """Create a new git worktree."""
-    resolved = _validate_path(request.repo_path)
+    resolved = validate_path(request.repo_path)
 
     if not os.path.isdir(resolved):
         raise HTTPException(
@@ -130,7 +91,7 @@ async def create_worktree(request: CreateWorktreeRequest) -> CreateWorktreeRespo
             detail=f"Worktree path already exists: {wt_path}",
         )
 
-    rc, output = await _run_git(resolved, "worktree", "add", wt_path, request.branch)
+    rc, output = await run_git(resolved, "worktree", "add", wt_path, request.branch)
     if rc != 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -172,7 +133,7 @@ async def remove_worktree(request: RemoveWorktreeRequest) -> dict[str, str]:
         )
 
     # Find the main repo to run git worktree remove from
-    rc, main_repo = await _run_git(resolved, "rev-parse", "--git-common-dir")
+    rc, main_repo = await run_git(resolved, "rev-parse", "--git-common-dir")
     if rc != 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -185,7 +146,7 @@ async def remove_worktree(request: RemoveWorktreeRequest) -> dict[str, str]:
     if os.path.basename(main_repo_path) == ".git":
         main_repo_path = os.path.dirname(main_repo_path)
 
-    rc, output = await _run_git(main_repo_path, "worktree", "remove", "--force", resolved)
+    rc, output = await run_git(main_repo_path, "worktree", "remove", "--force", resolved)
     if rc != 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

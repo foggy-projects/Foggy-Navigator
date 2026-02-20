@@ -159,3 +159,66 @@ class RemoveWorktreeRequest(BaseModel):
     """Payload for ``DELETE /api/v1/worktrees``."""
 
     worktree_path: str = Field(..., description="Absolute path to the worktree to remove")
+
+
+# ---------------------------------------------------------------------------
+# File browser
+# ---------------------------------------------------------------------------
+
+class FileEntry(BaseModel):
+    """A single file/directory entry."""
+
+    name: str
+    path: str
+    is_dir: bool
+    size: int = 0
+    modified: str = ""
+
+
+class DirectoryListingResponse(BaseModel):
+    """Response for ``GET /api/v1/files``."""
+
+    path: str
+    entries: list[FileEntry]
+    total: int
+
+
+class FileContentResponse(BaseModel):
+    """Response for ``GET /api/v1/files/content``."""
+
+    path: str
+    content: str | None = None
+    language: str = "plaintext"
+    size: int = 0
+    line_count: int = 0
+    is_binary: bool = False
+    too_large: bool = False
+
+
+class DiffFileEntry(BaseModel):
+    """A single changed file in a git diff summary."""
+
+    file: str
+    status: str
+    insertions: int = 0
+    deletions: int = 0
+
+
+class GitDiffSummaryResponse(BaseModel):
+    """Response for ``GET /api/v1/git-diff``."""
+
+    path: str
+    branch: str | None = None
+    files: list[DiffFileEntry]
+    total_insertions: int = 0
+    total_deletions: int = 0
+
+
+class FileDiffResponse(BaseModel):
+    """Response for ``GET /api/v1/git-diff/file``."""
+
+    file: str
+    status: str
+    original: str | None = None
+    modified: str | None = None
+    language: str = "plaintext"
