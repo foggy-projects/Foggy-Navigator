@@ -162,6 +162,18 @@ def map_user_question(
     }
 
 
+def map_checkpoint(task_id: str, checkpoint_id: str,
+                   session_id: str | None = None) -> dict[str, Any]:
+    """Map a UserMessage.uuid checkpoint to an SSE dict."""
+
+    return {
+        "type": "checkpoint",
+        "checkpoint_id": checkpoint_id,
+        "task_id": task_id,
+        "session_id": session_id,
+    }
+
+
 def map_error(task_id: str, error: str, session_id: str | None = None) -> dict[str, Any]:
     """Map an error condition to an SSE dict."""
 

@@ -32,6 +32,7 @@ export enum AipMessageType {
 
   // 任务通知
   TASK_COMPLETED = 'TASK_COMPLETED',
+  CHECKPOINT = 'CHECKPOINT',
 
   // 生命周期
   SESSION_START = 'SESSION_START',
@@ -99,6 +100,11 @@ export interface TaskCompletedPayload {
   taskType: string
   status: string
   resultSummary?: string
+}
+
+export interface CheckpointPayload {
+  checkpointId: string
+  taskId: string
 }
 
 export interface ConfirmationRequestPayload {

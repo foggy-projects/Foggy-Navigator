@@ -96,6 +96,8 @@ export interface ClaudeTask {
   numTurns?: number
   model?: string
   errorMessage?: string
+  /** JSON array of checkpoint objects: [{id, turnIndex, timestamp}] */
+  checkpoints?: string
   createdAt: string
   updatedAt: string
 }

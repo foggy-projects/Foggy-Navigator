@@ -27,6 +27,8 @@ public class TaskDTO {
     private Integer numTurns;
     private String model;
     private String errorMessage;
+    /** JSON array of checkpoint objects */
+    private String checkpoints;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

@@ -67,6 +67,10 @@ public class ClaudeTaskEntity {
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
 
+    /** JSON array of checkpoint objects: [{"id":"uuid","turnIndex":1,"timestamp":"..."}] */
+    @Column(columnDefinition = "TEXT")
+    private String checkpoints;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

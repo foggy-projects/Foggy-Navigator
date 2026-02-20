@@ -113,6 +113,14 @@ class PermissionResponse(BaseModel):
     answers: dict[str, str] | None = Field(None, description="Answers for AskUserQuestion (question text -> selected label)")
 
 
+class RewindRequest(BaseModel):
+    """Payload for ``POST /api/v1/query/rewind``."""
+
+    claude_session_id: str = Field(..., description="Claude Code session ID to rewind")
+    checkpoint_id: str = Field(..., description="UserMessage UUID to rewind files to")
+    cwd: str | None = Field(None, description="Working directory for the Claude Code session")
+
+
 # ---------------------------------------------------------------------------
 # Git info
 # ---------------------------------------------------------------------------

@@ -37,4 +37,6 @@ public class WorkerEvent {
     @JsonProperty("permission_id")
     private String permissionId;
     private java.util.List<Map<String, Object>> questions;
+    @JsonProperty("checkpoint_id")
+    private String checkpointId;
 }

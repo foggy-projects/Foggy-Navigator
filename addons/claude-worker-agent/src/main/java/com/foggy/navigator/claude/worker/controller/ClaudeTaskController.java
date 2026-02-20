@@ -124,6 +124,43 @@ public class ClaudeTaskController {
         }
     }
 
+    @PostMapping("/{taskId}/rewind")
+    public RX<Map<String, Object>> rewindToCheckpoint(
+            @PathVariable String taskId,
+            @RequestBody Map<String, String> body) {
+        String userId = UserContext.getCurrentUserId();
+        var task = taskService.getTaskEntity(taskId);
+        if (!task.getUserId().equals(userId)) {
+            throw RX.throwB("Task not found");
+        }
+
+        // Only allow rewind on completed/failed tasks
+        if ("RUNNING".equals(task.getStatus()) || "AWAITING_PERMISSION".equals(task.getStatus())) {
+            throw RX.throwB("Cannot rewind a running task");
+        }
+
+        String checkpointId = body.get("checkpointId");
+        if (checkpointId == null || checkpointId.isEmpty()) {
+            throw RX.throwB("checkpointId is required");
+        }
+
+        String claudeSessionId = task.getClaudeSessionId();
+        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
+            throw RX.throwB("Task has no Claude session ID");
+        }
+
+        try {
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            Map<String, Object> result = client.rewindFiles(claudeSessionId, checkpointId, task.getCwd())
+                    .block(java.time.Duration.ofSeconds(30));
+            return RX.ok(result != null ? result : Map.of("status", "rewound", "checkpointId", checkpointId));
+        } catch (Exception e) {
+            log.warn("Failed to rewind files: taskId={}, error={}", taskId, e.getMessage());
+            return RX.failB("回退失败: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/directory/{directoryId}")
     public RX<List<TaskDTO>> listTasksByDirectory(@PathVariable String directoryId) {
         String userId = UserContext.getCurrentUserId();

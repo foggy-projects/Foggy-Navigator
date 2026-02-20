@@ -39,6 +39,7 @@ public enum MessageType {
 
     // ===== 任务通知 =====
     TASK_COMPLETED,         // 子任务完成通知
+    CHECKPOINT,             // 文件快照点（Claude Code file checkpointing）
 
     // ===== 生命周期 =====
     SESSION_START,          // 会话开始

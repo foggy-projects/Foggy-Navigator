@@ -495,6 +495,11 @@ class SdkWrapper:
             # and use first-class agents parameter instead of extra_args.
             if _use_agent_sdk:
                 options_kwargs["setting_sources"] = ["user", "project", "local"]
+                # File checkpointing — always enable when using agent SDK
+                options_kwargs["enable_file_checkpointing"] = True
+                base_env = options_kwargs.get("env") or env or {}
+                base_env["CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"] = "1"
+                options_kwargs["env"] = base_env
                 self._apply_agents_config(extra_args, options_kwargs)
 
                 # Permission mode: set SDK permission_mode and can_use_tool callback
@@ -785,6 +790,15 @@ class SdkWrapper:
                         num_turns=num_turns,
                         model=current_model,
                     ))
+
+                elif _UserMessage is not None and isinstance(message, _UserMessage):
+                    msg_uuid = getattr(message, "uuid", None)
+                    if msg_uuid:
+                        events.append(event_mapper.map_checkpoint(
+                            task_id=task_id,
+                            checkpoint_id=msg_uuid,
+                            session_id=current_session_id,
+                        ))
 
                 elif _SystemMessage is not None and isinstance(message, _SystemMessage):
                     data = getattr(message, "data", {}) or {}

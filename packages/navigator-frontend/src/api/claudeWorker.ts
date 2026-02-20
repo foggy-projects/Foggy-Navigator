@@ -207,6 +207,16 @@ export async function abortTask(
   return rx.data
 }
 
+export async function rewindTask(
+  taskId: string,
+  checkpointId: string,
+): Promise<{ status: string; checkpointId: string }> {
+  const rx = (await client.post(`/claude-tasks/${taskId}/rewind`, {
+    checkpointId,
+  })) as unknown as RX<{ status: string; checkpointId: string }>
+  return rx.data
+}
+
 export async function deleteTask(taskId: string): Promise<{ taskId: string; deleted: boolean }> {
   const rx = (await client.delete(`/claude-tasks/${taskId}`)) as unknown as RX<{
     taskId: string

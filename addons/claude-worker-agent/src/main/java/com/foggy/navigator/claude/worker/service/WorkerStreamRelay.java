@@ -220,6 +220,16 @@ public class WorkerStreamRelay {
                 publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
                 taskService.setAwaitingPermission(taskId);
             }
+            case "checkpoint" -> {
+                String checkpointId = event.getCheckpointId();
+                if (checkpointId != null && !checkpointId.isEmpty()) {
+                    taskService.addCheckpoint(taskId, checkpointId);
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("checkpointId", checkpointId);
+                    payload.put("taskId", taskId);
+                    publishMessage(sessionId, MessageType.CHECKPOINT, payload);
+                }
+            }
             case "error" -> {
                 // 错误事件也可能携带 session_id
                 if (event.getSessionId() != null) {

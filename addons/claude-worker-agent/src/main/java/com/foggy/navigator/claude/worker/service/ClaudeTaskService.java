@@ -238,6 +238,40 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 追加 checkpoint 到任务
+     */
+    @Transactional
+    public void addCheckpoint(String taskId, String checkpointId) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String existing = entity.getCheckpoints();
+            java.util.List<Map<String, Object>> list;
+            if (existing != null && !existing.isEmpty()) {
+                try {
+                    list = new com.fasterxml.jackson.databind.ObjectMapper()
+                            .readValue(existing, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+                } catch (Exception e) {
+                    log.warn("Failed to parse existing checkpoints for task {}: {}", taskId, e.getMessage());
+                    list = new java.util.ArrayList<>();
+                }
+            } else {
+                list = new java.util.ArrayList<>();
+            }
+            Map<String, Object> cp = new java.util.LinkedHashMap<>();
+            cp.put("id", checkpointId);
+            cp.put("turnIndex", list.size() + 1);
+            cp.put("timestamp", java.time.LocalDateTime.now().toString());
+            list.add(cp);
+            try {
+                entity.setCheckpoints(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(list));
+            } catch (Exception e) {
+                log.warn("Failed to serialize checkpoints for task {}: {}", taskId, e.getMessage());
+            }
+            taskRepository.save(entity);
+            log.debug("Checkpoint added: taskId={}, checkpointId={}, total={}", taskId, checkpointId, list.size());
+        });
+    }
+
+    /**
      * 更新任务状态为完成
      */
     @Transactional
@@ -567,6 +601,7 @@ public class ClaudeTaskService {
                 .numTurns(entity.getNumTurns())
                 .model(entity.getModel())
                 .errorMessage(entity.getErrorMessage())
+                .checkpoints(entity.getCheckpoints())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

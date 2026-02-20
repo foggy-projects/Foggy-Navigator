@@ -155,6 +155,27 @@ public class ClaudeWorkerClient {
     }
 
     /**
+     * 回退文件到指定 checkpoint
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> rewindFiles(String claudeSessionId, String checkpointId, String cwd) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("claude_session_id", claudeSessionId);
+        body.put("checkpoint_id", checkpointId);
+        if (cwd != null) {
+            body.put("cwd", cwd);
+        }
+        return webClient.post()
+                .uri("/api/v1/query/rewind")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Rewind files failed for worker {}: {}", workerId, e.getMessage()));
+    }
+
+    /**
      * 中止任务
      */
     @SuppressWarnings("unchecked")

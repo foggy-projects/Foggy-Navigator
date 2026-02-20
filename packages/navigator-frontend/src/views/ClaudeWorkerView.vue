@@ -546,6 +546,15 @@
                   继续
                 </el-button>
                 <el-button
+                  v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
+                  type="info"
+                  size="small"
+                  text
+                  @click.stop="showRewindDialog(conv.latestTask)"
+                >
+                  回退
+                </el-button>
+                <el-button
                   v-if="conv.latestTask.status !== 'RUNNING'"
                   size="small"
                   text
@@ -877,6 +886,28 @@
         <el-button @click="showDetailDialog = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- Rewind Dialog -->
+    <el-dialog v-model="showRewind" title="回退文件" width="480px">
+      <p style="margin-bottom: 12px">选择回退到的 Checkpoint（文件将还原到该时间点）：</p>
+      <el-radio-group v-model="rewindSelectedId" style="display: flex; flex-direction: column; gap: 8px">
+        <el-radio
+          v-for="cp in rewindCheckpoints"
+          :key="cp.id"
+          :value="cp.id"
+          style="height: auto; padding: 6px 0"
+        >
+          <span>Turn {{ cp.turnIndex }}</span>
+          <span style="margin-left: 12px; color: #909399; font-size: 12px">{{ cp.timestamp }}</span>
+        </el-radio>
+      </el-radio-group>
+      <template #footer>
+        <el-button @click="showRewind = false">取消</el-button>
+        <el-button type="warning" :disabled="!rewindSelectedId" :loading="rewindLoading" @click="handleRewind">
+          确认回退
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -945,6 +976,13 @@ const detailAuthModeLabel = computed(() => {
   if (mode === 'CUSTOM_ENDPOINT') return '自定义端点'
   return mode || '-'
 })
+
+// Rewind dialog state
+const showRewind = ref(false)
+const rewindTaskId = ref('')
+const rewindSelectedId = ref('')
+const rewindLoading = ref(false)
+const rewindCheckpoints = ref<{ id: string; turnIndex: number; timestamp: string }[]>([])
 
 // Directory task pagination (separate from global task pagination)
 const directoryTasks = ref<ClaudeTask[]>([])
@@ -1949,6 +1987,42 @@ async function handleAbortTask(taskId: string) {
     if (e !== 'cancel') {
       ElMessage.error('中止失败')
     }
+  }
+}
+
+function hasCheckpoints(task: ClaudeTask): boolean {
+  if (!task.checkpoints) return false
+  try {
+    const arr = JSON.parse(task.checkpoints)
+    return Array.isArray(arr) && arr.length > 0
+  } catch {
+    return false
+  }
+}
+
+function showRewindDialog(task: ClaudeTask) {
+  rewindTaskId.value = task.taskId
+  rewindSelectedId.value = ''
+  try {
+    rewindCheckpoints.value = task.checkpoints ? JSON.parse(task.checkpoints) : []
+  } catch {
+    rewindCheckpoints.value = []
+  }
+  showRewind.value = true
+}
+
+async function handleRewind() {
+  if (!rewindSelectedId.value || !rewindTaskId.value) return
+  rewindLoading.value = true
+  try {
+    await dirApi.rewindTask(rewindTaskId.value, rewindSelectedId.value)
+    ElMessage.success('文件已回退')
+    showRewind.value = false
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '回退失败'
+    ElMessage.error(msg)
+  } finally {
+    rewindLoading.value = false
   }
 }
 

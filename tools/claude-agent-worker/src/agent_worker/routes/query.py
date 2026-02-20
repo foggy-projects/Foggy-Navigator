@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import uuid
 from typing import AsyncGenerator
 
@@ -11,9 +12,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
 from ..auth import verify_token
-from ..claude.sdk_wrapper import SdkWrapper, task_registry, permission_pending
+from ..claude.sdk_wrapper import SdkWrapper, task_registry, permission_pending, _sdk_available, _use_agent_sdk
 from ..config import settings
-from ..models import AbortResponse, PermissionResponse, QueryEvent, QueryRequest
+from ..models import AbortResponse, PermissionResponse, QueryEvent, QueryRequest, RewindRequest
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,72 @@ async def respond_to_permission(task_id: str, body: PermissionResponse):
     )
 
     return {"task_id": task_id, "permission_id": body.permission_id, "status": "responded"}
+
+
+@router.post("/query/rewind")
+async def rewind_files(body: RewindRequest):
+    """Rewind file changes to a specific checkpoint (UserMessage UUID).
+
+    Uses the Claude Agent SDK ``rewind_files`` method when available,
+    falling back to the CLI ``--rewind-files`` flag otherwise.
+    """
+
+    if not _sdk_available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Claude Code SDK is not installed",
+        )
+
+    cwd = _validate_cwd(body.cwd)
+
+    # Use CLI --rewind-files flag (works with both SDK versions)
+    if _use_agent_sdk:
+        try:
+            env = _wrapper._build_env()
+            result = subprocess.run(
+                ["claude", "--resume", body.claude_session_id,
+                 "--rewind-files", body.checkpoint_id,
+                 "--output-format", "json"],
+                capture_output=True, text=True, timeout=30,
+                cwd=cwd,
+                env={**os.environ, **(env or {}),
+                     "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING": "1"},
+            )
+
+            if result.returncode != 0:
+                logger.error("Rewind CLI failed: returncode=%d, stderr=%s",
+                             result.returncode, result.stderr[:500] if result.stderr else None)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Rewind failed: {result.stderr or 'unknown error'}",
+                )
+
+            logger.info("Rewind successful: session=%s, checkpoint=%s",
+                         body.claude_session_id, body.checkpoint_id)
+            return {
+                "status": "rewound",
+                "checkpoint_id": body.checkpoint_id,
+                "claude_session_id": body.claude_session_id,
+            }
+
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Rewind timed out (30s)",
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Rewind error: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Rewind failed: {exc}",
+            )
+
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Rewind requires claude-agent-sdk",
+    )
 
 
 @router.post("/query/{task_id}/abort", response_model=AbortResponse)

@@ -10,6 +10,7 @@ export type {
   StateSyncPayload,
   ErrorPayload,
   TaskCompletedPayload,
+  CheckpointPayload,
   ConfirmationRequestPayload,
   UserQuestionItem,
   UserQuestionOption,

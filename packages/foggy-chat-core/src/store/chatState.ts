@@ -217,6 +217,10 @@ export function createChatState(): ChatState {
         })
         break
       }
+      case AipMessageType.CHECKPOINT: {
+        // Checkpoint events are stored silently — not rendered as chat messages
+        break
+      }
       case AipMessageType.CONFIRMATION_REQUEST: {
         const p = aip.payload as ConfirmationRequestPayload
         messages.value.push({
