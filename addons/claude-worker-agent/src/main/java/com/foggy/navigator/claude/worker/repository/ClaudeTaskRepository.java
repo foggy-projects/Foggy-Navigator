@@ -32,4 +32,6 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
     List<ClaudeTaskEntity> findByStatusAndCreatedAtBefore(String status, LocalDateTime before);
 
     boolean existsByClaudeSessionIdAndWorkerId(String claudeSessionId, String workerId);
+
+    List<ClaudeTaskEntity> findByWorkerIdAndUserIdAndDirectoryIdIsNull(String workerId, String userId);
 }

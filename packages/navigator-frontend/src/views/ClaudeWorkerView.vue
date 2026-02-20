@@ -417,15 +417,25 @@
     <aside v-if="selectedWorkerId" class="worker-history">
       <div class="history-header">
         <h3>历史会话</h3>
-        <el-button
-          v-if="activeConversations.length > 0"
-          size="small"
-          text
-          title="批量配置 Auth"
-          @click="handleBatchAuthConfig"
-        >
-          &#128273; 批量
-        </el-button>
+        <div class="history-header-actions">
+          <el-button
+            size="small"
+            text
+            title="刷新会话列表"
+            @click="handleRefreshConversations"
+          >
+            &#8635;
+          </el-button>
+          <el-button
+            v-if="activeConversations.length > 0"
+            size="small"
+            text
+            title="批量配置 Auth"
+            @click="handleBatchAuthConfig"
+          >
+            &#128273; 批量
+          </el-button>
+        </div>
       </div>
       <div class="history-content">
         <!-- Conversation list (shared template for directory / worker-level) -->
@@ -1546,6 +1556,14 @@ async function handleBindAuth() {
   }
 }
 
+async function handleRefreshConversations() {
+  if (selectedDirectoryId.value) {
+    await loadDirectoryTasks()
+  } else {
+    await workerState.loadTasks()
+  }
+}
+
 function handleBatchAuthConfig() {
   const convs = activeConversations.value
   batchAuthSessionIds.value = convs.map((c) => c.sessionId)
@@ -2129,12 +2147,21 @@ function formatTime(dateStr: string): string {
   padding: 12px 16px;
   border-bottom: 1px solid #e4e7ed;
   background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .history-header h3 {
   margin: 0;
   font-size: 16px;
   color: #303133;
+}
+
+.history-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .history-content {

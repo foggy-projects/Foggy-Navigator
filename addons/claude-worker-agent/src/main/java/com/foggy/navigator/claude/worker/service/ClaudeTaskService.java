@@ -328,9 +328,15 @@ public class ClaudeTaskService {
             String slug = (String) session.get("slug");
 
             // Match cwd to a WorkingDirectory for directoryId
+            // Try exact match first, then try with normalized path separators
+            // (Worker may return backslashes on Windows, but directory may store forward slashes or vice versa)
             String directoryId = null;
             if (cwd != null && !cwd.isEmpty()) {
                 var dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, cwd, userId);
+                if (dirOpt.isEmpty()) {
+                    String altCwd = cwd.contains("\\") ? cwd.replace('\\', '/') : cwd.replace('/', '\\');
+                    dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, altCwd, userId);
+                }
                 if (dirOpt.isPresent()) {
                     directoryId = dirOpt.get().getDirectoryId();
                 }
@@ -375,8 +381,39 @@ public class ClaudeTaskService {
             created++;
         }
 
+        // Backfill: patch existing tasks that have null directoryId
+        int backfilled = backfillDirectoryIds(workerId, userId);
+        if (backfilled > 0) {
+            log.info("Backfilled directoryId for {} existing tasks on worker {}", backfilled, workerId);
+        }
+
         log.info("Synced {} local sessions as tasks for worker {}", created, workerId);
         return created;
+    }
+
+    /**
+     * Backfill directoryId for tasks that have a cwd but null directoryId.
+     * Handles path separator differences (backslash vs forward slash).
+     */
+    private int backfillDirectoryIds(String workerId, String userId) {
+        List<ClaudeTaskEntity> orphans = taskRepository.findByWorkerIdAndUserIdAndDirectoryIdIsNull(workerId, userId);
+        int fixed = 0;
+        for (ClaudeTaskEntity task : orphans) {
+            String cwd = task.getCwd();
+            if (cwd == null || cwd.isEmpty()) continue;
+
+            var dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, cwd, userId);
+            if (dirOpt.isEmpty()) {
+                String altCwd = cwd.contains("\\") ? cwd.replace('\\', '/') : cwd.replace('/', '\\');
+                dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, altCwd, userId);
+            }
+            if (dirOpt.isPresent()) {
+                task.setDirectoryId(dirOpt.get().getDirectoryId());
+                taskRepository.save(task);
+                fixed++;
+            }
+        }
+        return fixed;
     }
 
     /**
