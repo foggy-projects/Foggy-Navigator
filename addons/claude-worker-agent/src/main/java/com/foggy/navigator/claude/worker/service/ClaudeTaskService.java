@@ -113,6 +113,7 @@ public class ClaudeTaskService {
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
                 form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
+                form.getImages(),
                 authParams[0], authParams[1], authParams[2]));
 
         return toDTO(entity);

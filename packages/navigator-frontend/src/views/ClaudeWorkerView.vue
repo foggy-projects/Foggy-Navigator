@@ -127,7 +127,9 @@
     </aside>
 
     <!-- Middle Panel: Main Content Area -->
-    <main :class="['worker-main', { 'has-panes': panes.length > 0 }]">
+    <main :class="['worker-main', { 'has-panes': panes.length > 0 }]" @paste="handlePaste" @drop="handleDrop" @dragover="handleDragOver">
+      <!-- Hidden file input for image picker -->
+      <input ref="fileInputRef" type="file" multiple accept="image/*" style="display: none" @change="handleFileSelect">
       <!-- Directory selected: show git info + task form scoped to directory -->
       <template v-if="selectedDirectory">
         <!-- Compact directory header -->
@@ -202,12 +204,19 @@
               <SlashCommandInput
                 v-model="taskForm.prompt"
                 :rows="3"
-                placeholder="输入任务描述... (输入 / 触发命令)"
+                placeholder="输入任务描述... (可粘贴截图或拖拽图片)"
                 :skills="directorySkills"
                 @submit="handleCreateTask"
                 @command="handleSlashCommand"
               />
             </el-form-item>
+            <!-- Image preview strip -->
+            <div v-if="attachedImages.length > 0" class="image-preview-strip">
+              <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item">
+                <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
+                <span class="image-remove" @click="removeImage(idx)">&times;</span>
+              </div>
+            </div>
             <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
               <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
                 模型: {{ shortModel(taskForm.model) }}
@@ -224,6 +233,7 @@
               >
                 运行任务
               </el-button>
+              <el-button text @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -232,12 +242,13 @@
             v-model="taskForm.prompt"
             :rows="1"
             size="small"
-            placeholder="新建任务..."
+            placeholder="新建任务... (可粘贴截图)"
             :skills="directorySkills"
             @submit="handleCreateTask"
             @command="handleSlashCommand"
           >
             <template #append>
+              <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
               <el-button
                 :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE' || panes.length >= MAX_PANES"
                 @click="handleCreateTask"
@@ -246,6 +257,12 @@
               </el-button>
             </template>
           </SlashCommandInput>
+          <div v-if="attachedImages.length > 0" class="image-preview-strip compact">
+            <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item small">
+              <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
+              <span class="image-remove" @click="removeImage(idx)">&times;</span>
+            </div>
+          </div>
           <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
             <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
               模型: {{ shortModel(taskForm.model) }}
@@ -299,12 +316,19 @@
               <SlashCommandInput
                 v-model="taskForm.prompt"
                 :rows="3"
-                placeholder="输入任务描述... (输入 / 触发命令)"
+                placeholder="输入任务描述... (可粘贴截图或拖拽图片)"
                 :skills="directorySkills"
                 @submit="handleCreateTask"
                 @command="handleSlashCommand"
               />
             </el-form-item>
+            <!-- Image preview strip -->
+            <div v-if="attachedImages.length > 0" class="image-preview-strip">
+              <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item">
+                <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
+                <span class="image-remove" @click="removeImage(idx)">&times;</span>
+              </div>
+            </div>
             <el-form-item label="工作目录 (cwd)">
               <el-input v-model="taskForm.cwd" placeholder="可选，如 /home/user/project" />
             </el-form-item>
@@ -324,6 +348,7 @@
               >
                 运行任务
               </el-button>
+              <el-button text @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -332,12 +357,13 @@
             v-model="taskForm.prompt"
             :rows="1"
             size="small"
-            placeholder="新建任务..."
+            placeholder="新建任务... (可粘贴截图)"
             :skills="directorySkills"
             @submit="handleCreateTask"
             @command="handleSlashCommand"
           >
             <template #append>
+              <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
               <el-button
                 :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE' || panes.length >= MAX_PANES"
                 @click="handleCreateTask"
@@ -346,6 +372,12 @@
               </el-button>
             </template>
           </SlashCommandInput>
+          <div v-if="attachedImages.length > 0" class="image-preview-strip compact">
+            <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item small">
+              <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
+              <span class="image-remove" @click="removeImage(idx)">&times;</span>
+            </div>
+          </div>
           <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
             <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
               模型: {{ shortModel(taskForm.model) }}
@@ -890,6 +922,134 @@ const taskForm = ref({
   maxTurns: null as number | null,
   useTeams: true,
 })
+
+// --- Image attachment state ---
+interface ImageAttachment {
+  name: string
+  base64: string
+  mimeType: string
+  previewUrl: string
+  size: number  // original file size in bytes
+}
+const attachedImages = ref<ImageAttachment[]>([])
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const MAX_IMAGES = 10
+const MAX_SINGLE_SIZE = 10 * 1024 * 1024 // 10MB per image before compression
+
+async function compressImage(file: File): Promise<ImageAttachment> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    const objectUrl = URL.createObjectURL(file)
+    img.onload = () => {
+      const MAX_DIM = 1920
+      let { width, height } = img
+      if (width > MAX_DIM || height > MAX_DIM) {
+        const ratio = Math.min(MAX_DIM / width, MAX_DIM / height)
+        width = Math.round(width * ratio)
+        height = Math.round(height * ratio)
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')!
+      ctx.drawImage(img, 0, 0, width, height)
+      canvas.toBlob(
+        (blob) => {
+          URL.revokeObjectURL(objectUrl)
+          if (!blob) { reject(new Error('Compression failed')); return }
+          const reader = new FileReader()
+          reader.onload = () => {
+            const base64 = (reader.result as string).split(',')[1]!
+            resolve({
+              name: file.name.replace(/\.\w+$/, '.webp'),
+              base64,
+              mimeType: 'image/webp',
+              previewUrl: URL.createObjectURL(blob),
+              size: file.size,
+            })
+          }
+          reader.onerror = reject
+          reader.readAsDataURL(blob)
+        },
+        'image/webp',
+        0.85,
+      )
+    }
+    img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('Image load failed')) }
+    img.src = objectUrl
+  })
+}
+
+async function addImageFiles(files: FileList | File[]) {
+  for (const file of Array.from(files)) {
+    if (!file.type.startsWith('image/')) continue
+    if (attachedImages.value.length >= MAX_IMAGES) {
+      ElMessage.warning(`最多附加 ${MAX_IMAGES} 张图片`)
+      break
+    }
+    if (file.size > MAX_SINGLE_SIZE) {
+      ElMessage.warning(`图片 "${file.name}" 超过 10MB，已跳过`)
+      continue
+    }
+    try {
+      const attachment = await compressImage(file)
+      attachedImages.value.push(attachment)
+    } catch {
+      ElMessage.warning(`图片 "${file.name}" 处理失败`)
+    }
+  }
+}
+
+function removeImage(index: number) {
+  const removed = attachedImages.value.splice(index, 1)
+  removed.forEach((img) => URL.revokeObjectURL(img.previewUrl))
+}
+
+function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  const imageFiles: File[] = []
+  for (const item of Array.from(items)) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) {
+        // Generate a meaningful name for clipboard images
+        const ext = file.type.split('/')[1] || 'png'
+        const named = new File([file], `screenshot-${Date.now()}.${ext}`, { type: file.type })
+        imageFiles.push(named)
+      }
+    }
+  }
+  if (imageFiles.length > 0) {
+    e.preventDefault()
+    addImageFiles(imageFiles)
+  }
+}
+
+function handleDrop(e: DragEvent) {
+  e.preventDefault()
+  const files = e.dataTransfer?.files
+  if (files && files.length > 0) {
+    addImageFiles(files)
+  }
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault()
+}
+
+function handleFileSelect(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files && input.files.length > 0) {
+    addImageFiles(input.files)
+    input.value = '' // reset so same file can be selected again
+  }
+}
+
+function clearAttachedImages() {
+  attachedImages.value.forEach((img) => URL.revokeObjectURL(img.previewUrl))
+  attachedImages.value = []
+}
 
 const selectedWorkerEntity = computed(() =>
   workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value),
@@ -1463,7 +1623,7 @@ async function handleCreateTask() {
   try {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
-      model?: string; maxTurns?: number; agentTeamsJson?: string
+      model?: string; maxTurns?: number; agentTeamsJson?: string; images?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
@@ -1483,9 +1643,20 @@ async function handleCreateTask() {
     if (taskForm.value.useTeams && selectedDirectory.value?.agentTeamsConfig) {
       form.agentTeamsJson = selectedDirectory.value.agentTeamsConfig
     }
+    // Attach images as JSON string
+    if (attachedImages.value.length > 0) {
+      form.images = JSON.stringify(
+        attachedImages.value.map((img) => ({
+          name: img.name,
+          data: img.base64,
+          mime_type: img.mimeType,
+        })),
+      )
+    }
 
     const task = await workerState.createTask(form)
     taskForm.value.prompt = ''
+    clearAttachedImages()
 
     const pane = createPane(task)
     await pane.connect(task.sessionId)
@@ -2244,5 +2415,67 @@ function formatTime(dateStr: string): string {
   font-size: 24px;
   color: #606266;
   margin-bottom: 8px;
+}
+
+/* Image preview strip */
+.image-preview-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  border: 1px dashed #dcdfe6;
+}
+
+.image-preview-strip.compact {
+  margin-bottom: 6px;
+  padding: 4px 6px;
+  gap: 4px;
+}
+
+.image-preview-item {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+
+.image-preview-item.small {
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+}
+
+.image-preview-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.image-preview-item:hover .image-remove {
+  opacity: 1;
 }
 </style>

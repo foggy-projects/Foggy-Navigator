@@ -48,15 +48,15 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson) {
-        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null);
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null);
     }
 
     /**
-     * 流式查询（含 per-request auth 覆盖）
+     * 流式查询（含 per-request auth 覆盖和图片附件）
      */
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
-                                                       String agentTeamsJson,
+                                                       String agentTeamsJson, String images,
                                                        String apiKey, String authToken, String baseUrl) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
@@ -76,6 +76,15 @@ public class ClaudeWorkerClient {
             Map<String, Object> extraArgs = new java.util.HashMap<>();
             extraArgs.put("agents", agentTeamsJson);
             body.put("extra_args", extraArgs);
+        }
+        // Image attachments (JSON array string → parsed list)
+        if (images != null && !images.isEmpty()) {
+            try {
+                Object parsed = new com.fasterxml.jackson.databind.ObjectMapper().readValue(images, java.util.List.class);
+                body.put("images", parsed);
+            } catch (Exception e) {
+                log.warn("Failed to parse images JSON, skipping: {}", e.getMessage());
+            }
         }
         // Per-request auth overrides
         if (apiKey != null) {

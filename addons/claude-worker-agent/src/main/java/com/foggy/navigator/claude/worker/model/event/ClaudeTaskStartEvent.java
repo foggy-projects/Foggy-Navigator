@@ -20,6 +20,8 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
     private final String model;
     private final Integer maxTurns;
     private final String agentTeamsJson;
+    /** Base64-encoded image attachments JSON: [{name, data, mimeType}] */
+    private final String images;
     // Per-conversation auth (decrypted, from ConversationConfig)
     private final String apiKey;
     private final String authToken;
@@ -29,29 +31,23 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String workerId, String userId, String prompt,
                                  String cwd, String claudeSessionId) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                null, null, null, null, null, null);
-    }
-
-    public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
-                                 String workerId, String userId, String prompt,
-                                 String cwd, String claudeSessionId,
-                                 String model, Integer maxTurns) {
-        this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                model, maxTurns, null, null, null, null);
-    }
-
-    public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
-                                 String workerId, String userId, String prompt,
-                                 String cwd, String claudeSessionId,
-                                 String model, Integer maxTurns, String agentTeamsJson) {
-        this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                model, maxTurns, agentTeamsJson, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
                                  String workerId, String userId, String prompt,
                                  String cwd, String claudeSessionId,
                                  String model, Integer maxTurns, String agentTeamsJson,
+                                 String apiKey, String authToken, String baseUrl) {
+        this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
+                model, maxTurns, agentTeamsJson, null, apiKey, authToken, baseUrl);
+    }
+
+    public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
+                                 String workerId, String userId, String prompt,
+                                 String cwd, String claudeSessionId,
+                                 String model, Integer maxTurns, String agentTeamsJson,
+                                 String images,
                                  String apiKey, String authToken, String baseUrl) {
         super(source);
         this.taskId = taskId;
@@ -64,6 +60,7 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
         this.model = model;
         this.maxTurns = maxTurns;
         this.agentTeamsJson = agentTeamsJson;
+        this.images = images;
         this.apiKey = apiKey;
         this.authToken = authToken;
         this.baseUrl = baseUrl;

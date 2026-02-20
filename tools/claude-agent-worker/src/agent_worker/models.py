@@ -10,6 +10,14 @@ from pydantic import BaseModel, Field
 # Request models
 # ---------------------------------------------------------------------------
 
+class ImageAttachment(BaseModel):
+    """A single image attachment sent from the frontend."""
+
+    name: str = Field(..., description="File name (e.g. screenshot-1.png)")
+    data: str = Field(..., description="Base64-encoded image data")
+    mime_type: str = Field("image/png", description="MIME type (e.g. image/png, image/webp)")
+
+
 class QueryRequest(BaseModel):
     """Payload for ``POST /api/v1/query``."""
 
@@ -20,6 +28,9 @@ class QueryRequest(BaseModel):
     model: str | None = Field(None, description="Model to use (e.g. claude-sonnet-4-20250514)")
     extra_args: dict[str, str | None] | None = Field(
         None, description="Additional CLI args passed to ClaudeCodeOptions.extra_args"
+    )
+    images: list[ImageAttachment] | None = Field(
+        None, description="Base64-encoded images to save to cwd before query"
     )
     # Per-request auth overrides (from bound conversation config)
     api_key: str | None = Field(None, description="Per-request Anthropic API key override")

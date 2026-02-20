@@ -15,4 +15,6 @@ public class CreateTaskForm {
     private Integer maxTurns;
     /** Agent Teams JSON (直接传入或由 directoryId 解析) */
     private String agentTeamsJson;
+    /** Base64-encoded image attachments JSON: [{name, data, mimeType}] */
+    private String images;
 }

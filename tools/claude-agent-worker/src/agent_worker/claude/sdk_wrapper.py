@@ -8,10 +8,12 @@ error event instead of crashing the service.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from ..config import settings
@@ -328,6 +330,49 @@ class SdkWrapper:
         if extra_args:
             options_kwargs["extra_args"] = extra_args
 
+    # -- Image attachments ---------------------------------------------------
+
+    @staticmethod
+    def _save_images(
+        cwd: str,
+        images: list[dict[str, str]],
+    ) -> list[str]:
+        """Save base64-encoded images to ``cwd/.foggy-attachments/``.
+
+        Returns relative paths (from *cwd*) of the saved files.
+        """
+
+        attach_dir = Path(cwd) / ".foggy-attachments"
+        attach_dir.mkdir(parents=True, exist_ok=True)
+
+        saved: list[str] = []
+        for img in images:
+            name = img.get("name", "image.png")
+            data_b64 = img.get("data", "")
+            if not data_b64:
+                continue
+
+            file_path = attach_dir / name
+            file_path.write_bytes(base64.b64decode(data_b64))
+            saved.append(f".foggy-attachments/{name}")
+            logger.info("Saved image attachment: %s (%d bytes)", file_path, file_path.stat().st_size)
+
+        return saved
+
+    @staticmethod
+    def _augment_prompt_with_images(prompt: str, image_paths: list[str]) -> str:
+        """Prepend image reading instructions to the user prompt."""
+
+        if not image_paths:
+            return prompt
+
+        paths_list = "\n".join(f"- {p}" for p in image_paths)
+        return (
+            f"[Attached images — use the Read tool to view them before responding]\n"
+            f"{paths_list}\n\n"
+            f"{prompt}"
+        )
+
     # -- Query ---------------------------------------------------------------
 
     async def run_query(
@@ -339,6 +384,7 @@ class SdkWrapper:
         max_turns: int | None = None,
         model: str | None = None,
         extra_args: dict | None = None,
+        images: list[dict[str, str]] | None = None,
         api_key: str | None = None,
         auth_token: str | None = None,
         base_url: str | None = None,
@@ -359,6 +405,16 @@ class SdkWrapper:
                 ),
             )
             return
+
+        # Save attached images and augment prompt with file paths.
+        if images:
+            try:
+                saved_paths = self._save_images(cwd, images)
+                if saved_paths:
+                    prompt = self._augment_prompt_with_images(prompt, saved_paths)
+                    logger.info("Task %s: saved %d image(s), prompt augmented", task_id, len(saved_paths))
+            except Exception as exc:
+                logger.warning("Task %s: failed to save images: %s", task_id, exc)
 
         # Register the task so that it can be observed / cancelled.
         task_registry[task_id] = {

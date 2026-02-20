@@ -57,6 +57,7 @@ async def _event_generator(
     max_turns: int | None,
     model: str | None = None,
     extra_args: dict | None = None,
+    images: list[dict] | None = None,
     api_key: str | None = None,
     auth_token: str | None = None,
     base_url: str | None = None,
@@ -72,6 +73,7 @@ async def _event_generator(
             max_turns=max_turns,
             model=model,
             extra_args=extra_args,
+            images=images,
             api_key=api_key,
             auth_token=auth_token,
             base_url=base_url,
@@ -111,6 +113,9 @@ async def query(body: QueryRequest):
     cwd = _validate_cwd(body.cwd)
     task_id = str(uuid.uuid4())
 
+    # Convert Pydantic ImageAttachment list to plain dicts for the wrapper.
+    images_raw = [img.model_dump() for img in body.images] if body.images else None
+
     return EventSourceResponse(
         _event_generator(
             task_id=task_id,
@@ -120,6 +125,7 @@ async def query(body: QueryRequest):
             max_turns=body.max_turns,
             model=body.model,
             extra_args=body.extra_args,
+            images=images_raw,
             api_key=body.api_key,
             auth_token=body.auth_token,
             base_url=body.base_url,
