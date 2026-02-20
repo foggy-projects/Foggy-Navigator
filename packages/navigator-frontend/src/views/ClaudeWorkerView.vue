@@ -170,6 +170,7 @@
             >
               创建 Worktree
             </el-button>
+            <el-button size="small" @click="openFileBrowser">浏览文件</el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
             <el-button
               v-if="selectedDirectory.worktree"
@@ -1499,6 +1500,12 @@ async function handleRemoveWorktree() {
       ElMessage.error('清理失败')
     }
   }
+}
+
+function openFileBrowser() {
+  if (!selectedDirectoryId.value) return
+  const url = `${window.location.origin}/#/files?directoryId=${selectedDirectoryId.value}`
+  window.open(url, '_blank', 'width=1400,height=900')
 }
 
 async function handleSyncGitInfo() {

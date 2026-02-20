@@ -246,6 +246,70 @@ public class ClaudeWorkerClient {
                 .doOnError(e -> log.warn("Remove worktree failed for worker {}, path {}: {}", workerId, worktreePath, e.getMessage()));
     }
 
+    // ---- File browser --------------------------------------------------------
+
+    /**
+     * 列出目录内容
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> listFiles(String path, boolean showHidden) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/files")
+                        .queryParam("path", path)
+                        .queryParam("show_hidden", showHidden)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("List files failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
+     * 读取文件内容
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> readFileContent(String path) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/files/content")
+                        .queryParam("path", path)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Read file content failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
+     * 获取 Git diff 摘要
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getGitDiffSummary(String path) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/git-diff")
+                        .queryParam("path", path)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Git diff summary failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
+     * 获取单文件 diff (HEAD vs 工作区)
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getFileDiff(String path, String file) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/git-diff/file")
+                        .queryParam("path", path)
+                        .queryParam("file", file)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("File diff failed for worker {}, path {}, file {}: {}", workerId, path, file, e.getMessage()));
+    }
+
     public String getWorkerId() {
         return workerId;
     }

@@ -34,6 +34,12 @@ const routes = [
     meta: { requireAuth: true },
   },
   {
+    path: '/files',
+    name: 'FileBrowser',
+    component: () => import('@/views/FileBrowserView.vue'),
+    meta: { requireAuth: true, skipSetupCheck: true },
+  },
+  {
     path: '/setup',
     name: 'Setup',
     component: () => import('@/views/SetupView.vue'),

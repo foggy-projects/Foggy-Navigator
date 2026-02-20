@@ -14,6 +14,8 @@ from .utils import validate_path, run_git
 
 logger = logging.getLogger(__name__)
 
+router = APIRouter(prefix="/api/v1", tags=["worktree"], dependencies=[Depends(verify_token)])
+
 
 @router.get("/worktrees", response_model=list[WorktreeInfo])
 async def list_worktrees(path: str = Query(..., description="Absolute path to the repo")) -> list[WorktreeInfo]:
