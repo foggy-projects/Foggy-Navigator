@@ -147,6 +147,14 @@
               {{ selectedDirectory.gitStatus }}
             </el-tag>
             <code class="dir-path-inline">{{ selectedDirectory.path }}</code>
+            <el-tag
+              v-if="selectedDirectory.defaultAuthMode"
+              :type="selectedDirectory.defaultAuthConfigured ? 'success' : 'info'"
+              size="small"
+            >
+              {{ authModeLabel(selectedDirectory.defaultAuthMode) }}
+            </el-tag>
+            <el-tag v-else size="small" type="warning">Auth 未配置</el-tag>
           </div>
           <div class="header-actions">
             <el-button size="small" :loading="syncing" @click="handleSyncGitInfo">
@@ -681,6 +689,37 @@
             />
           </el-select>
         </el-form-item>
+        <el-divider content-position="left">Auth 默认配置</el-divider>
+        <el-form-item label="认证模式">
+          <el-radio-group v-model="editDirForm.defaultAuthMode">
+            <el-radio value="">未配置</el-radio>
+            <el-radio value="SUBSCRIPTION">Subscription</el-radio>
+            <el-radio value="API_KEY">API Key</el-radio>
+            <el-radio value="CUSTOM_ENDPOINT">自定义端点</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="editDirForm.defaultAuthMode === 'API_KEY'" label="API Key">
+          <el-input
+            v-model="editDirForm.defaultAuthToken"
+            type="password"
+            show-password
+            :placeholder="selectedDirectory?.maskedDefaultAuthToken || '留空保持不变'"
+          />
+        </el-form-item>
+        <el-form-item v-if="editDirForm.defaultAuthMode === 'CUSTOM_ENDPOINT'" label="Auth Token">
+          <el-input
+            v-model="editDirForm.defaultAuthToken"
+            type="password"
+            show-password
+            :placeholder="selectedDirectory?.maskedDefaultAuthToken || '自定义端点的认证 token'"
+          />
+        </el-form-item>
+        <el-form-item v-if="editDirForm.defaultAuthMode === 'CUSTOM_ENDPOINT'" label="Base URL">
+          <el-input v-model="editDirForm.defaultBaseUrl" placeholder="https://aiproxy.example.com/api/v1/anthropic" />
+        </el-form-item>
+        <div v-if="editDirForm.defaultAuthMode === 'SUBSCRIPTION'" class="form-tip">
+          使用 Worker 端 claude login 凭据，无需配置 Token
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="showEditDirectoryDialog = false">取消</el-button>
@@ -923,6 +962,9 @@ const editDirForm = ref({
   agentTeamsConfig: '',
   projectTaskPrompt: '',
   parentProjectId: '' as string,
+  defaultAuthMode: '' as string,
+  defaultAuthToken: '' as string,
+  defaultBaseUrl: '' as string,
 })
 
 const taskForm = ref({
@@ -1378,6 +1420,14 @@ async function handleEditDirectory() {
     }
     if (selectedDirectory.value?.directoryType === 'STANDARD') {
       form.parentProjectId = editDirForm.value.parentProjectId || ''
+    }
+    // Auth config
+    form.defaultAuthMode = editDirForm.value.defaultAuthMode
+    if (editDirForm.value.defaultAuthToken) {
+      form.defaultAuthToken = editDirForm.value.defaultAuthToken
+    }
+    if (editDirForm.value.defaultAuthMode === 'CUSTOM_ENDPOINT') {
+      form.defaultBaseUrl = editDirForm.value.defaultBaseUrl
     }
     const updated = await dirApi.updateDirectory(selectedDirectoryId.value, form)
     const idx = workerState.directories.value.findIndex(
@@ -1899,6 +1949,9 @@ watch(showEditDirectoryDialog, (val) => {
       agentTeamsConfig: selectedDirectory.value.agentTeamsConfig || '',
       projectTaskPrompt: selectedDirectory.value.projectTaskPrompt || '',
       parentProjectId: selectedDirectory.value.parentProjectId || '',
+      defaultAuthMode: selectedDirectory.value.defaultAuthMode || '',
+      defaultAuthToken: '',
+      defaultBaseUrl: selectedDirectory.value.defaultBaseUrl || '',
     }
   }
 })
@@ -1911,6 +1964,13 @@ function statusTagType(status: string) {
 
 function truncate(text: string, maxLen: number) {
   return text.length > maxLen ? text.substring(0, maxLen) + '...' : text
+}
+
+function authModeLabel(mode: string): string {
+  if (mode === 'API_KEY') return 'API Key'
+  if (mode === 'CUSTOM_ENDPOINT') return 'Custom'
+  if (mode === 'SUBSCRIPTION') return 'Subscription'
+  return mode
 }
 
 function shortModel(model: string): string {
@@ -2167,6 +2227,7 @@ function formatTime(dateStr: string): string {
 .history-content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px;
 }
 
@@ -2305,6 +2366,7 @@ function formatTime(dateStr: string): string {
   border-radius: 6px;
   cursor: pointer;
   transition: background-color 0.15s;
+  overflow: hidden;
 }
 
 .conv-item:hover {
@@ -2352,15 +2414,19 @@ function formatTime(dateStr: string): string {
 .conv-row-2 {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-top: 2px;
   font-size: 12px;
   color: #909399;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .conv-rounds {
   color: #409eff;
   font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .conv-model {
@@ -2370,10 +2436,15 @@ function formatTime(dateStr: string): string {
   padding: 0 4px;
   border-radius: 3px;
   font-family: 'Cascadia Code', 'Fira Code', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .conv-cost {
   color: #67c23a;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .conv-time {
@@ -2386,6 +2457,7 @@ function formatTime(dateStr: string): string {
   transition: opacity 0.15s;
   display: flex;
   gap: 0;
+  flex-shrink: 0;
 }
 
 .conv-pinned {
@@ -2407,6 +2479,7 @@ function formatTime(dateStr: string): string {
 .conv-auth-badge {
   font-size: 11px;
   cursor: default;
+  flex-shrink: 0;
 }
 
 .delete-btn {

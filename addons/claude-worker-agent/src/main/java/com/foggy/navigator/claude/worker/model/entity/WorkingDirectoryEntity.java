@@ -74,6 +74,18 @@ public class WorkingDirectoryEntity {
     @Column(length = 64)
     private String sourceDirectoryId;
 
+    /** 默认认证模式: API_KEY | CUSTOM_ENDPOINT | SUBSCRIPTION | null(未配置) */
+    @Column(length = 32)
+    private String defaultAuthMode;
+
+    /** 默认认证 Token（加密存储） */
+    @Column(columnDefinition = "TEXT")
+    private String defaultAuthToken;
+
+    /** 默认自定义端点 URL */
+    @Column(length = 512)
+    private String defaultBaseUrl;
+
     private LocalDateTime lastSyncedAt;
 
     @Column(nullable = false, updatable = false)

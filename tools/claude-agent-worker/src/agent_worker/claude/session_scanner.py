@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -251,16 +252,98 @@ def scan_all_sessions(allowed_cwds: list[str]) -> dict[str, dict]:
 
     Returns ``{session_id: {cwd, created_at, updated_at, slug, git_branch}}``.
     If *allowed_cwds* is empty, returns an empty dict (no auto-discovery).
+
+    In addition to scanning exact allowed_cwds, also discovers Claude Code
+    project directories whose path is a subdirectory of any allowed_cwd.
+    This handles the case where a user adds a parent directory (e.g.
+    ``D:\\foggy-projects``) and sessions exist in child directories (e.g.
+    ``D:\\foggy-projects\\student-analytics``).
     """
     if not allowed_cwds:
         return {}
 
     store: dict[str, dict] = {}
 
+    # Phase 1: scan exact allowed_cwds
+    scanned_dirs: set[str] = set()
     for cwd in allowed_cwds:
         sessions = scan_sessions_for_cwd(cwd)
+        scanned_dirs.add(encode_path_to_project_dir(cwd))
         for s in sessions:
             sid = s.pop("session_id")
             store[sid] = s
 
+    # Phase 2: discover child project directories under allowed_cwds
+    # Claude Code stores sessions in ~/.claude/projects/{encoded-path}/
+    # We scan all project directories and check if their decoded path
+    # is a subdirectory of any allowed_cwd.
+    projects_dir = _claude_projects_dir()
+    if projects_dir.is_dir():
+        # Normalize allowed_cwds for prefix matching
+        normalized_prefixes = []
+        for cwd in allowed_cwds:
+            norm = os.path.normpath(cwd).lower()
+            normalized_prefixes.append(norm)
+
+        for child in projects_dir.iterdir():
+            if not child.is_dir():
+                continue
+            if child.name in scanned_dirs:
+                continue  # already scanned in Phase 1
+
+            # Try to match this project directory against allowed_cwds
+            # The encoded name uses '-' for ':', '\', '/' — we can't fully decode,
+            # but we can check if the encoded name starts with an allowed prefix.
+            for cwd, norm_prefix in zip(allowed_cwds, normalized_prefixes):
+                encoded_prefix = encode_path_to_project_dir(cwd) + "-"
+                if child.name.startswith(encoded_prefix):
+                    sessions = _scan_project_dir(child)
+                    for s in sessions:
+                        # Validate the actual cwd from the JSONL is under allowed_cwd
+                        actual_cwd = s.get("cwd", "")
+                        actual_norm = os.path.normpath(actual_cwd).lower()
+                        if actual_norm.startswith(norm_prefix + os.sep) or actual_norm == norm_prefix:
+                            sid = s.pop("session_id")
+                            store[sid] = s
+                    break
+
     return store
+
+
+def _scan_project_dir(project_dir: Path) -> list[dict]:
+    """Scan a single Claude project directory for session JSONL files."""
+    results: list[dict] = []
+    for entry in project_dir.iterdir():
+        if not entry.is_file():
+            continue
+        if not _SESSION_FILE_RE.match(entry.name):
+            continue
+        meta = _parse_jsonl_head(entry)
+        if meta is None:
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+            updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc)
+        except OSError:
+            updated_at = datetime.now(timezone.utc)
+
+        created_at: datetime
+        if meta["timestamp"]:
+            try:
+                created_at = datetime.fromisoformat(
+                    meta["timestamp"].replace("Z", "+00:00")
+                )
+            except (ValueError, TypeError):
+                created_at = updated_at
+        else:
+            created_at = updated_at
+
+        results.append({
+            "session_id": meta["session_id"],
+            "cwd": meta["cwd"],
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "slug": meta["slug"],
+            "git_branch": meta["git_branch"],
+        })
+    return results

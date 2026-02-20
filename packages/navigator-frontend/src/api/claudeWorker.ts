@@ -57,6 +57,9 @@ export async function createDirectory(form: {
   path: string
   directoryType?: string
   parentProjectId?: string
+  defaultAuthMode?: string
+  defaultAuthToken?: string
+  defaultBaseUrl?: string
 }): Promise<WorkingDirectory> {
   const rx = (await client.post('/working-directories', form)) as unknown as RX<WorkingDirectory>
   return rx.data
@@ -64,7 +67,7 @@ export async function createDirectory(form: {
 
 export async function updateDirectory(
   directoryId: string,
-  form: { projectName?: string; path?: string; agentTeamsConfig?: string; projectTaskPrompt?: string; parentProjectId?: string },
+  form: { projectName?: string; path?: string; agentTeamsConfig?: string; projectTaskPrompt?: string; parentProjectId?: string; defaultAuthMode?: string; defaultAuthToken?: string; defaultBaseUrl?: string },
 ): Promise<WorkingDirectory> {
   const rx = (await client.put(
     `/working-directories/${directoryId}`,

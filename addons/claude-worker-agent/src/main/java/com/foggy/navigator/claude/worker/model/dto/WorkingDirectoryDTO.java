@@ -26,6 +26,10 @@ public class WorkingDirectoryDTO {
     private String projectTaskPrompt;
     private Boolean worktree;
     private String sourceDirectoryId;
+    private String defaultAuthMode;
+    private boolean defaultAuthConfigured;
+    private String defaultBaseUrl;
+    private String maskedDefaultAuthToken;
     private List<WorkingDirectoryDTO> children;
     private LocalDateTime lastSyncedAt;
     private LocalDateTime createdAt;

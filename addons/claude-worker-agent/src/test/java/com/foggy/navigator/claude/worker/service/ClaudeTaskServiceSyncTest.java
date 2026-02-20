@@ -80,7 +80,7 @@ class ClaudeTaskServiceSyncTest {
                 Map.of("session_id", "sess-aaa", "cwd", "D:/foggy-projects/student-analytics", "slug", "test task")
         );
 
-        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions, null);
+        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
 
         assertEquals(1, created);
         ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
@@ -107,7 +107,7 @@ class ClaudeTaskServiceSyncTest {
                 Map.of("session_id", "sess-bbb", "cwd", "D:\\foggy-projects\\student-analytics", "slug", "fix bug")
         );
 
-        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions, null);
+        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
 
         assertEquals(1, created);
         ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
@@ -134,7 +134,7 @@ class ClaudeTaskServiceSyncTest {
                 Map.of("session_id", "sess-ccc", "cwd", "D:/foggy-projects/student-analytics", "slug", "add feature")
         );
 
-        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions, null);
+        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
 
         assertEquals(1, created);
         ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
@@ -153,7 +153,7 @@ class ClaudeTaskServiceSyncTest {
                 Map.of("session_id", "sess-ddd", "cwd", "C:\\other\\path", "slug", "unrelated")
         );
 
-        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions, null);
+        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
 
         assertEquals(1, created);
         ArgumentCaptor<ClaudeTaskEntity> captor = ArgumentCaptor.forClass(ClaudeTaskEntity.class);
@@ -172,7 +172,7 @@ class ClaudeTaskServiceSyncTest {
                 Map.of("session_id", "sess-eee", "slug", "no cwd")
         );
 
-        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions, null);
+        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
 
         assertEquals(1, created);
         // save called twice: once for new task, once checked by backfill (but no orphans)
@@ -211,7 +211,7 @@ class ClaudeTaskServiceSyncTest {
                 Map.of("session_id", "sess-existing", "cwd", "D:\\foggy-projects\\student-analytics")
         );
 
-        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions, null);
+        int created = service.syncLocalSessions(USER_ID, TENANT_ID, WORKER_ID, sessions);
 
         assertEquals(0, created, "No new tasks created (dedup)");
         // But the orphan should have been backfilled

@@ -7,6 +7,7 @@ import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.security.CredentialEncryptor;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +30,7 @@ public class WorkingDirectoryService {
 
     private final WorkingDirectoryRepository directoryRepository;
     private final ClaudeWorkerService workerService;
+    private final CredentialEncryptor credentialEncryptor;
 
     /**
      * 启动时修复旧数据：补全 directoryType 和 worktree 默认值
@@ -102,6 +104,17 @@ public class WorkingDirectoryService {
         entity.setDirectoryType(directoryType);
         entity.setParentProjectId(form.getParentProjectId());
 
+        // Auth 默认配置
+        if (form.getDefaultAuthMode() != null && !form.getDefaultAuthMode().isEmpty()) {
+            entity.setDefaultAuthMode(form.getDefaultAuthMode());
+            if (form.getDefaultAuthToken() != null && !form.getDefaultAuthToken().isEmpty()) {
+                entity.setDefaultAuthToken(credentialEncryptor.encrypt(form.getDefaultAuthToken()));
+            }
+            if (form.getDefaultBaseUrl() != null && !form.getDefaultBaseUrl().isEmpty()) {
+                entity.setDefaultBaseUrl(form.getDefaultBaseUrl());
+            }
+        }
+
         directoryRepository.save(entity);
         log.info("Working directory created: directoryId={}, workerId={}, path={}, type={}",
                 entity.getDirectoryId(), form.getWorkerId(), form.getPath(), directoryType);
@@ -150,6 +163,24 @@ public class WorkingDirectoryService {
                     throw new IllegalArgumentException("Parent directory is not a PROJECT: " + form.getParentProjectId());
                 }
                 entity.setParentProjectId(form.getParentProjectId());
+            }
+        }
+
+        // Auth 默认配置
+        if (form.getDefaultAuthMode() != null) {
+            if (form.getDefaultAuthMode().isEmpty()) {
+                // 清空 auth
+                entity.setDefaultAuthMode(null);
+                entity.setDefaultAuthToken(null);
+                entity.setDefaultBaseUrl(null);
+            } else {
+                entity.setDefaultAuthMode(form.getDefaultAuthMode());
+                if (form.getDefaultAuthToken() != null && !form.getDefaultAuthToken().isEmpty()) {
+                    entity.setDefaultAuthToken(credentialEncryptor.encrypt(form.getDefaultAuthToken()));
+                }
+                if (form.getDefaultBaseUrl() != null) {
+                    entity.setDefaultBaseUrl(form.getDefaultBaseUrl().isEmpty() ? null : form.getDefaultBaseUrl());
+                }
             }
         }
 
@@ -265,6 +296,10 @@ public class WorkingDirectoryService {
         entity.setWorktree(true);
         entity.setSourceDirectoryId(sourceDirectoryId);
         entity.setGitBranch(actualBranch);
+        // 继承源目录的 auth 配置
+        entity.setDefaultAuthMode(source.getDefaultAuthMode());
+        entity.setDefaultAuthToken(source.getDefaultAuthToken());
+        entity.setDefaultBaseUrl(source.getDefaultBaseUrl());
 
         directoryRepository.save(entity);
         log.info("Worktree created: directoryId={}, branch={}, path={}",
@@ -308,6 +343,21 @@ public class WorkingDirectoryService {
 
         directoryRepository.delete(entity);
         log.info("Worktree removed: directoryId={}, path={}", directoryId, entity.getPath());
+    }
+
+    /**
+     * 解密目录默认 auth 配置
+     * @return [authMode, plainToken, baseUrl]
+     */
+    public String[] getDecryptedDefaultAuth(WorkingDirectoryEntity entity) {
+        if (entity.getDefaultAuthMode() == null || entity.getDefaultAuthToken() == null) {
+            return new String[]{entity.getDefaultAuthMode(), null, entity.getDefaultBaseUrl()};
+        }
+        return new String[]{
+                entity.getDefaultAuthMode(),
+                credentialEncryptor.decrypt(entity.getDefaultAuthToken()),
+                entity.getDefaultBaseUrl()
+        };
     }
 
     private void syncGitInfoInternal(WorkingDirectoryEntity entity, ClaudeWorkerEntity worker) {
@@ -355,9 +405,27 @@ public class WorkingDirectoryService {
                 .projectTaskPrompt(entity.getProjectTaskPrompt())
                 .worktree(entity.getWorktree())
                 .sourceDirectoryId(entity.getSourceDirectoryId())
+                .defaultAuthMode(entity.getDefaultAuthMode())
+                .defaultAuthConfigured(entity.getDefaultAuthToken() != null)
+                .defaultBaseUrl(entity.getDefaultBaseUrl())
+                .maskedDefaultAuthToken(maskToken(entity))
                 .lastSyncedAt(entity.getLastSyncedAt())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();
+    }
+
+    private String maskToken(WorkingDirectoryEntity entity) {
+        if (entity.getDefaultAuthToken() == null) return null;
+        try {
+            String plain = credentialEncryptor.decrypt(entity.getDefaultAuthToken());
+            if (plain == null || plain.isEmpty()) return null;
+            if (plain.length() <= 10) {
+                return plain.substring(0, 2) + "****" + plain.substring(plain.length() - 2);
+            }
+            return plain.substring(0, 6) + "****" + plain.substring(plain.length() - 4);
+        } catch (Exception e) {
+            return "***";
+        }
     }
 }

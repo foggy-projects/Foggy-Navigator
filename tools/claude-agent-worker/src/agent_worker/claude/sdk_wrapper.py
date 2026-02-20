@@ -452,14 +452,32 @@ class SdkWrapper:
             elif extra_args:
                 options_kwargs["extra_args"] = extra_args
 
+            # Determine auth mode for logging
+            eff_key = api_key or settings.anthropic_api_key
+            eff_token = auth_token or settings.anthropic_auth_token
+            eff_url = base_url or settings.anthropic_base_url
+            if eff_key:
+                auth_mode = "API_KEY"
+                auth_hint = eff_key[:8] + "..." + eff_key[-4:] if len(eff_key) > 12 else "***"
+            elif eff_token:
+                auth_mode = "CUSTOM_ENDPOINT"
+                auth_hint = eff_token[:8] + "..." + eff_token[-4:] if len(eff_token) > 12 else "***"
+            else:
+                auth_mode = "SUBSCRIPTION"
+                auth_hint = "(claude login)"
+
             logger.info(
                 "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s, "
+                "auth_mode=%s, auth_hint=%s, base_url=%s, "
                 "has_agents=%s, has_env=%s",
                 task_id,
                 repr(prompt[:80]) if prompt else None,
                 cwd,
                 session_id,
                 model,
+                auth_mode,
+                auth_hint,
+                eff_url or "(default)",
                 "agents" in options_kwargs,
                 bool(env),
             )

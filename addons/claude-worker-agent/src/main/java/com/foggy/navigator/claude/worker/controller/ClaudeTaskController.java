@@ -171,17 +171,8 @@ public class ClaudeTaskController {
                     .block(java.time.Duration.ofSeconds(10));
             if (sessions == null) sessions = java.util.List.of();
 
-            // 2.5. Get Worker auth config (for auto-binding)
-            Map<String, Object> workerAuthConfig = null;
-            try {
-                workerAuthConfig = client.getAuthConfig()
-                        .block(java.time.Duration.ofSeconds(5));
-            } catch (Exception e) {
-                log.warn("Failed to get auth config from worker {}: {}", workerId, e.getMessage());
-            }
-
-            // 3. Create ClaudeTask entities for new sessions (with auth binding)
-            int created = taskService.syncLocalSessions(userId, tenantId, workerId, sessions, workerAuthConfig);
+            // 3. Create ClaudeTask entities for new sessions (with directory auth binding)
+            int created = taskService.syncLocalSessions(userId, tenantId, workerId, sessions);
 
             return RX.ok(Map.of("synced", created, "total", sessions.size()));
         } catch (Exception e) {

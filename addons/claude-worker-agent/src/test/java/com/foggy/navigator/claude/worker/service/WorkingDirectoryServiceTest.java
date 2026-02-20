@@ -7,6 +7,7 @@ import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.security.CredentialEncryptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,7 @@ class WorkingDirectoryServiceTest {
 
     private WorkingDirectoryRepository repository;
     private ClaudeWorkerService workerService;
+    private CredentialEncryptor credentialEncryptor;
     private WorkingDirectoryService service;
 
     private static final String USER_ID = "user-1";
@@ -33,7 +35,13 @@ class WorkingDirectoryServiceTest {
     void setUp() {
         repository = mock(WorkingDirectoryRepository.class);
         workerService = mock(ClaudeWorkerService.class);
-        service = new WorkingDirectoryService(repository, workerService);
+        credentialEncryptor = mock(CredentialEncryptor.class);
+        when(credentialEncryptor.encrypt(anyString())).thenAnswer(inv -> "enc:" + inv.getArgument(0));
+        when(credentialEncryptor.decrypt(anyString())).thenAnswer(inv -> {
+            String val = inv.getArgument(0);
+            return val.startsWith("enc:") ? val.substring(4) : val;
+        });
+        service = new WorkingDirectoryService(repository, workerService, credentialEncryptor);
 
         // Default: worker belongs to user
         ClaudeWorkerEntity worker = createWorker();

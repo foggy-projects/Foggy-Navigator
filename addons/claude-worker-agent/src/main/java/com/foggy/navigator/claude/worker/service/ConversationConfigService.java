@@ -171,6 +171,26 @@ public class ConversationConfigService {
     }
 
     /**
+     * 从 WorkingDirectory 默认配置自动绑定 Auth（仅当尚未绑定时）
+     */
+    @Transactional
+    public void bindAuthFromDirectory(String sessionId, String workerId, String userId,
+                                       String authMode, String plainToken, String baseUrl) {
+        ConversationConfigEntity entity = getOrCreate(sessionId, workerId, userId);
+        if (entity.getAuthBoundAt() != null) {
+            return; // already bound, don't override
+        }
+        entity.setAuthMode(authMode);
+        if (plainToken != null && !plainToken.isEmpty()) {
+            entity.setAuthToken(credentialEncryptor.encrypt(plainToken));
+        }
+        entity.setBaseUrl(baseUrl);
+        entity.setAuthBoundAt(LocalDateTime.now());
+        configRepository.save(entity);
+        log.info("Auth auto-bound from directory for session {}: mode={}", sessionId, authMode);
+    }
+
+    /**
      * 批量获取配置（供前端合并）
      */
     public List<ConversationConfigDTO> listBySessionIds(List<String> sessionIds) {

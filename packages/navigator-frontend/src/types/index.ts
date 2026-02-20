@@ -116,6 +116,10 @@ export interface WorkingDirectory {
   projectTaskPrompt?: string
   worktree?: boolean
   sourceDirectoryId?: string
+  defaultAuthMode?: 'API_KEY' | 'CUSTOM_ENDPOINT' | 'SUBSCRIPTION'
+  defaultAuthConfigured?: boolean
+  defaultBaseUrl?: string
+  maskedDefaultAuthToken?: string
   lastSyncedAt?: string
   createdAt: string
   updatedAt: string

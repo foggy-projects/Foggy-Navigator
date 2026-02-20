@@ -3,7 +3,6 @@ package com.foggy.navigator.claude.worker.service;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
-import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
@@ -107,7 +106,7 @@ public class ClaudeTaskService {
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}", taskId, sessionId, form.getWorkerId(), userId);
 
         // 5. 解析 per-conversation auth
-        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId);
+        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId);
 
         // 6. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
@@ -184,7 +183,7 @@ public class ClaudeTaskService {
         log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}", taskId, form.getClaudeSessionId(), directoryId);
 
         // 解析 per-conversation auth
-        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId);
+        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId);
 
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
@@ -310,8 +309,7 @@ public class ClaudeTaskService {
      */
     @Transactional
     public int syncLocalSessions(String userId, String tenantId, String workerId,
-                                 List<Map<String, Object>> sessions,
-                                 Map<String, Object> workerAuthConfig) {
+                                 List<Map<String, Object>> sessions) {
         if (sessions == null || sessions.isEmpty()) return 0;
 
         int created = 0;
@@ -328,9 +326,8 @@ public class ClaudeTaskService {
             String slug = (String) session.get("slug");
 
             // Match cwd to a WorkingDirectory for directoryId
-            // Try exact match first, then try with normalized path separators
-            // (Worker may return backslashes on Windows, but directory may store forward slashes or vice versa)
             String directoryId = null;
+            WorkingDirectoryEntity matchedDir = null;
             if (cwd != null && !cwd.isEmpty()) {
                 var dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, cwd, userId);
                 if (dirOpt.isEmpty()) {
@@ -338,7 +335,8 @@ public class ClaudeTaskService {
                     dirOpt = workingDirectoryRepository.findByWorkerIdAndPathAndUserId(workerId, altCwd, userId);
                 }
                 if (dirOpt.isPresent()) {
-                    directoryId = dirOpt.get().getDirectoryId();
+                    matchedDir = dirOpt.get();
+                    directoryId = matchedDir.getDirectoryId();
                 }
             }
 
@@ -373,9 +371,11 @@ public class ClaudeTaskService {
 
             taskRepository.save(entity);
 
-            // Auto-bind auth from Worker config for synced sessions
-            if (workerAuthConfig != null) {
-                conversationConfigService.bindAuthFromWorker(sessionId, workerId, userId, workerAuthConfig);
+            // Auto-bind auth from WorkingDirectory default config
+            if (matchedDir != null && matchedDir.getDefaultAuthMode() != null) {
+                String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(matchedDir);
+                conversationConfigService.bindAuthFromDirectory(
+                        sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
             }
 
             created++;
@@ -418,12 +418,12 @@ public class ClaudeTaskService {
 
     /**
      * 解析 per-conversation auth 配置
-     * 1. 查询 ConversationConfigEntity
-     * 2. 如果已绑定 auth → 解密 token 返回
-     * 3. 如果未绑定 → 调用 Worker getAuthConfig() 自动绑定，再返回
+     * 1. 查询 ConversationConfigEntity，如果已绑定 auth → 解密 token 返回
+     * 2. 未绑定 → 从 WorkingDirectory 默认 auth 继承
+     * 3. 无目录 auth → 全 null（SUBSCRIPTION, Worker 用 .env 或 claude login）
      * 返回 [apiKey, authToken, baseUrl]（可能全 null 表示使用 Worker 全局默认）
      */
-    private String[] resolveAuth(String sessionId, String workerId, String userId) {
+    private String[] resolveAuth(String sessionId, String workerId, String userId, String directoryId) {
         ConversationConfigEntity config = conversationConfigService.getOrCreate(sessionId, workerId, userId);
 
         if (config.getAuthBoundAt() != null) {
@@ -440,22 +440,24 @@ public class ClaudeTaskService {
             return new String[]{apiKey, authToken, config.getBaseUrl()};
         }
 
-        // Not bound yet — auto-bind from Worker
-        try {
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            Map<String, Object> workerAuth = client.getAuthConfig()
-                    .block(java.time.Duration.ofSeconds(5));
-            if (workerAuth != null) {
-                conversationConfigService.bindAuthFromWorker(sessionId, workerId, userId, workerAuth);
-                // Return the raw values (not re-encrypted)
-                String apiKey = (String) workerAuth.get("api_key");
-                String authToken = (String) workerAuth.get("auth_token");
-                String baseUrl = (String) workerAuth.get("base_url");
-                return new String[]{apiKey, authToken, baseUrl};
+        // Not bound yet — auto-bind from WorkingDirectory default auth
+        if (directoryId != null && !directoryId.isEmpty()) {
+            WorkingDirectoryEntity dir = workingDirectoryRepository
+                    .findByDirectoryIdAndUserId(directoryId, userId).orElse(null);
+            if (dir != null && dir.getDefaultAuthMode() != null) {
+                String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(dir);
+                conversationConfigService.bindAuthFromDirectory(
+                        sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
+                // Return decrypted values
+                String apiKey = null;
+                String authToken = null;
+                if ("API_KEY".equals(dirAuth[0]) || "CUSTOM_ENDPOINT".equals(dirAuth[0])) {
+                    apiKey = dirAuth[1];
+                } else {
+                    authToken = dirAuth[1];
+                }
+                return new String[]{apiKey, authToken, dirAuth[2]};
             }
-        } catch (Exception e) {
-            log.warn("Failed to auto-bind auth from worker for session {}: {}", sessionId, e.getMessage());
         }
 
         return new String[]{null, null, null};

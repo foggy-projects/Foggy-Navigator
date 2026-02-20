@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,10 +15,24 @@ from .routes import auth, git_info, health, query, sessions, skills, worktree
 
 import sys
 
+# -- Logging ----------------------------------------------------------------
+_LOG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+
+_fmt = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+_console = logging.StreamHandler(
+    stream=open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False),
+)
+_file = logging.handlers.RotatingFileHandler(
+    _LOG_DIR / "worker.log",
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=3,
+    encoding="utf-8",
+)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    handlers=[logging.StreamHandler(stream=open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False))],
+    format=_fmt,
+    handlers=[_console, _file],
 )
 logger = logging.getLogger(__name__)
 
@@ -37,9 +53,21 @@ async def lifespan(app: FastAPI):
         "configured" if settings.anthropic_api_key else "(not set)",
     )
     logger.info(
+        "  anthropic_token= %s",
+        "configured" if settings.anthropic_auth_token else "(not set)",
+    )
+    logger.info(
         "  anthropic_url  = %s",
         settings.anthropic_base_url or "(default)",
     )
+    # Determine default auth mode
+    if settings.anthropic_api_key:
+        default_auth = "API_KEY"
+    elif settings.anthropic_auth_token:
+        default_auth = "CUSTOM_ENDPOINT"
+    else:
+        default_auth = "SUBSCRIPTION (claude login)"
+    logger.info("  default_auth   = %s", default_auth)
 
     yield
     logger.info("Claude Agent Worker stopped")

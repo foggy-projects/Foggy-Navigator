@@ -14,4 +14,10 @@ public class UpdateWorkingDirectoryForm {
     private String projectTaskPrompt;
     /** 可修改归属 PROJECT */
     private String parentProjectId;
+    /** 默认认证模式, "" 清除, null 不改 */
+    private String defaultAuthMode;
+    /** 默认认证 Token（明文提交, "" 清除, null 不改） */
+    private String defaultAuthToken;
+    /** 默认 Base URL */
+    private String defaultBaseUrl;
 }
