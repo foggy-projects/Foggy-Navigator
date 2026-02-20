@@ -103,7 +103,21 @@ export interface TaskCompletedPayload {
 
 export interface ConfirmationRequestPayload {
   permissionId: string
-  toolName: string
+  toolName?: string
   toolInput?: Record<string, unknown>
   taskId: string
+  /** Present when this is an AskUserQuestion (user_question event) */
+  questions?: UserQuestionItem[]
+}
+
+export interface UserQuestionItem {
+  question: string
+  header: string
+  options: UserQuestionOption[]
+  multiSelect: boolean
+}
+
+export interface UserQuestionOption {
+  label: string
+  description: string
 }

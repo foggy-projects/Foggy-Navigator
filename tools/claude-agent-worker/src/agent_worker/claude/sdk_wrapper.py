@@ -564,6 +564,8 @@ class SdkWrapper:
                     import uuid as _uuid
                     pid = str(_uuid.uuid4())[:12]
 
+                    is_question = (tool_name == "AskUserQuestion")
+
                     # Extract suggestions from ToolPermissionContext
                     suggestions = getattr(ctx, "suggestions", None) or []
 
@@ -575,22 +577,37 @@ class SdkWrapper:
                         "scope": "once",
                         "task_id": task_id,
                         "suggestions": suggestions,
+                        "is_question": is_question,
+                        "answers": None,
+                        "questions": tool_input.get("questions") if is_question else None,
                     }
 
-                    # Push permission_request event into the queue
-                    await queue.put(event_mapper.map_permission_request(
-                        task_id=task_id,
-                        permission_id=pid,
-                        tool_name=tool_name,
-                        tool_input=tool_input,
-                        session_id=current_session_id,
-                        has_suggestions=len(suggestions) > 0,
-                    ))
-
-                    logger.info(
-                        "Task %s awaiting permission: pid=%s, tool=%s, suggestions=%d",
-                        task_id, pid, tool_name, len(suggestions),
-                    )
+                    if is_question:
+                        # Push user_question event with structured questions
+                        await queue.put(event_mapper.map_user_question(
+                            task_id=task_id,
+                            permission_id=pid,
+                            questions=tool_input.get("questions", []),
+                            session_id=current_session_id,
+                        ))
+                        logger.info(
+                            "Task %s awaiting user question: pid=%s, questions=%d",
+                            task_id, pid, len(tool_input.get("questions", [])),
+                        )
+                    else:
+                        # Push permission_request event into the queue
+                        await queue.put(event_mapper.map_permission_request(
+                            task_id=task_id,
+                            permission_id=pid,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                            session_id=current_session_id,
+                            has_suggestions=len(suggestions) > 0,
+                        ))
+                        logger.info(
+                            "Task %s awaiting permission: pid=%s, tool=%s, suggestions=%d",
+                            task_id, pid, tool_name, len(suggestions),
+                        )
 
                     try:
                         await asyncio.wait_for(evt.wait(), timeout=PERMISSION_TIMEOUT_SECONDS)
@@ -601,6 +618,20 @@ class SdkWrapper:
 
                     entry = permission_pending.pop(pid, None)
                     if entry and entry["result"] == "allow":
+                        # AskUserQuestion: return PermissionResultAllow with answers in updated_input
+                        if entry.get("is_question"):
+                            answers = entry.get("answers") or {}
+                            logger.info(
+                                "Task %s question answered: pid=%s, answers=%d",
+                                task_id, pid, len(answers),
+                            )
+                            return _PermissionResultAllow(
+                                updated_input={
+                                    "questions": entry.get("questions") or [],
+                                    "answers": answers,
+                                },
+                            )
+
                         scope = entry.get("scope", "once")
                         updated_permissions = None
 

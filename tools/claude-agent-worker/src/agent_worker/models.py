@@ -110,6 +110,7 @@ class PermissionResponse(BaseModel):
     decision: str = Field(..., description="allow or deny")
     deny_message: str | None = Field(None, description="Optional message when denying")
     scope: str = Field("once", description="once | session | always")
+    answers: dict[str, str] | None = Field(None, description="Answers for AskUserQuestion (question text -> selected label)")
 
 
 # ---------------------------------------------------------------------------

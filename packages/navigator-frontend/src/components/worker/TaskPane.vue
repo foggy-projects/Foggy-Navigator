@@ -44,6 +44,7 @@
         placeholder="输入后续指令... (Ctrl+Enter 发送)"
         @send="handleSend"
         @permission-respond="handlePermissionRespond"
+        @question-respond="handleQuestionRespond"
       >
         <template #empty>
           <div class="waiting-hint">等待 Worker 响应...</div>
@@ -91,6 +92,7 @@ const emit = defineEmits<{
   (e: 'send', paneId: string, content: string): void
   (e: 'command', payload: { command: string; value: string | number }): void
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
+  (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
 }>()
 
 const paneInput = ref('')
@@ -124,6 +126,10 @@ function handleSend(content?: string) {
 
 function handlePermissionRespond(permissionId: string, decision: string, scope: string) {
   emit('permissionRespond', props.paneState.paneId, permissionId, decision, scope)
+}
+
+function handleQuestionRespond(permissionId: string, answers: Record<string, string>) {
+  emit('questionRespond', props.paneState.paneId, permissionId, answers)
 }
 
 function handleCommand(payload: { command: string; value: string | number }) {

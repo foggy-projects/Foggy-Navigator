@@ -109,7 +109,8 @@ public class ClaudeTaskController {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
             ClaudeWorkerClient client = workerService.createClient(worker);
             client.respondToPermission(taskId, form.getPermissionId(),
-                    form.getDecision(), form.getDenyMessage(), form.getScope())
+                    form.getDecision(), form.getDenyMessage(), form.getScope(),
+                    form.getAnswers())
                     .block(java.time.Duration.ofSeconds(10));
 
             // Resume task from AWAITING_PERMISSION to RUNNING

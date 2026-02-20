@@ -11,6 +11,8 @@ export type {
   ErrorPayload,
   TaskCompletedPayload,
   ConfirmationRequestPayload,
+  UserQuestionItem,
+  UserQuestionOption,
 } from './types/aip'
 export type { EventAdapter } from './types/adapter'
 export type { ChatMessage, ConnectionStatus } from './types/chat'

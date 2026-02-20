@@ -159,10 +159,12 @@ async def respond_to_permission(task_id: str, body: PermissionResponse):
             detail="Permission request does not belong to this task",
         )
 
-    # Deliver the decision, scope, and signal the waiting callback
+    # Deliver the decision, scope, answers, and signal the waiting callback
     entry["result"] = body.decision
     entry["deny_message"] = body.deny_message
     entry["scope"] = body.scope
+    if body.answers is not None:
+        entry["answers"] = body.answers
     entry["event"].set()
 
     logger.info(

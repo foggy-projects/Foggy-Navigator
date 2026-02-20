@@ -15,4 +15,6 @@ public class PermissionResponseForm {
     private String denyMessage;
     /** 范围: once / session / always */
     private String scope;
+    /** AskUserQuestion 回答（question text -> selected label） */
+    private java.util.Map<String, String> answers;
 }

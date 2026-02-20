@@ -36,4 +36,5 @@ public class WorkerEvent {
     private String error;
     @JsonProperty("permission_id")
     private String permissionId;
+    private java.util.List<Map<String, Object>> questions;
 }

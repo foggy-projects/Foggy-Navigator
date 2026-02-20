@@ -11,6 +11,7 @@
       @send="(id, content) => emit('send', id, content)"
       @command="(payload) => emit('command', payload)"
       @permission-respond="(paneId, pid, decision, scope) => emit('permissionRespond', paneId, pid, decision, scope)"
+      @question-respond="(paneId, pid, answers) => emit('questionRespond', paneId, pid, answers)"
     />
   </div>
 </template>
@@ -31,6 +32,7 @@ const emit = defineEmits<{
   (e: 'send', paneId: string, content: string): void
   (e: 'command', payload: { command: string; value: string | number }): void
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
+  (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
 }>()
 </script>
 

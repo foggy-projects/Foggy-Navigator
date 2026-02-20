@@ -303,6 +303,7 @@
           @send="handlePaneSend"
           @command="handleSlashCommand"
           @permission-respond="handlePermissionRespond"
+          @question-respond="handleQuestionRespond"
         />
       </template>
 
@@ -425,6 +426,7 @@
           @send="handlePaneSend"
           @command="handleSlashCommand"
           @permission-respond="handlePermissionRespond"
+          @question-respond="handleQuestionRespond"
         />
       </template>
 
@@ -1694,6 +1696,24 @@ async function handlePermissionRespond(paneId: string, permissionId: string, dec
     triggerRef(panes)
   } catch {
     ElMessage.error('Permission response failed')
+  }
+}
+
+async function handleQuestionRespond(paneId: string, permissionId: string, answers: Record<string, string>) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  if (!pane?.task.value) return
+
+  try {
+    await workerState.respondToPermission(pane.task.value.taskId, {
+      permissionId,
+      decision: 'allow',
+      answers,
+    })
+    pane.chatState.resolvePermission(permissionId, 'approved')
+    pane.task.value.status = 'RUNNING'
+    triggerRef(panes)
+  } catch {
+    ElMessage.error('Question response failed')
   }
 }
 

@@ -1,4 +1,4 @@
-import type { AipMessageType } from './aip'
+import type { AipMessageType, UserQuestionItem } from './aip'
 
 export interface ChatMessage {
   id: string
@@ -14,6 +14,8 @@ export interface ChatMessage {
   raw?: unknown
   permissionId?: string
   permissionStatus?: 'pending' | 'approved' | 'denied'
+  /** Present when this is an AskUserQuestion interaction */
+  questions?: UserQuestionItem[]
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

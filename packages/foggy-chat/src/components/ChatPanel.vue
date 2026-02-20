@@ -15,6 +15,7 @@
       :messages="messages"
       :is-thinking="isThinking"
       @permission-respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
+      @question-respond="(pid, answers) => emit('questionRespond', pid, answers)"
     >
       <template #empty>
         <slot name="empty">
@@ -60,6 +61,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   (e: 'send', content: string): void
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
+  (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
 }>()
 
 const connectionLabel = computed(() => {

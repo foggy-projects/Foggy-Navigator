@@ -128,6 +128,23 @@ def map_permission_request(
     }
 
 
+def map_user_question(
+    task_id: str,
+    permission_id: str,
+    questions: list[dict[str, Any]],
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Map an AskUserQuestion tool call to an SSE dict."""
+
+    return {
+        "type": "user_question",
+        "permission_id": permission_id,
+        "questions": questions,
+        "task_id": task_id,
+        "session_id": session_id,
+    }
+
+
 def map_error(task_id: str, error: str, session_id: str | None = None) -> dict[str, Any]:
     """Map an error condition to an SSE dict."""
 
