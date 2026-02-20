@@ -266,6 +266,148 @@ describe('createChatState', () => {
     })
   })
 
+  // ========== CONFIRMATION_REQUEST ==========
+
+  describe('CONFIRMATION_REQUEST', () => {
+    it('adds permission request message', () => {
+      const payload = {
+        permissionId: 'perm-1',
+        toolName: 'Bash',
+        toolInput: { command: 'rm -rf /tmp/old' },
+        taskId: 'task-1',
+      }
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, payload))
+
+      expect(state.messages.value).toHaveLength(1)
+      const msg = state.messages.value[0]
+      expect(msg.sender).toBe('system')
+      expect(msg.type).toBe(AipMessageType.CONFIRMATION_REQUEST)
+      expect(msg.permissionId).toBe('perm-1')
+      expect(msg.permissionStatus).toBe('pending')
+      expect(msg.toolName).toBe('Bash')
+      expect(msg.raw).toEqual(payload)
+    })
+
+    it('adds user question message with questions array', () => {
+      const payload = {
+        permissionId: 'perm-q',
+        taskId: 'task-2',
+        questions: [
+          {
+            question: 'Which library?',
+            header: 'Library',
+            options: [
+              { label: 'React', description: 'Popular UI lib' },
+              { label: 'Vue', description: 'Progressive framework' },
+            ],
+            multiSelect: false,
+          },
+        ],
+      }
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, payload))
+
+      expect(state.messages.value).toHaveLength(1)
+      const msg = state.messages.value[0]
+      expect(msg.permissionId).toBe('perm-q')
+      expect(msg.permissionStatus).toBe('pending')
+      expect(msg.questions).toHaveLength(1)
+      expect(msg.questions![0].question).toBe('Which library?')
+      expect(msg.questions![0].options).toHaveLength(2)
+      expect(msg.planReview).toBeUndefined()
+    })
+
+    it('adds plan review message with planReview flag', () => {
+      const payload = {
+        permissionId: 'perm-plan',
+        taskId: 'task-3',
+        planReview: true,
+      }
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, payload))
+
+      expect(state.messages.value).toHaveLength(1)
+      const msg = state.messages.value[0]
+      expect(msg.permissionId).toBe('perm-plan')
+      expect(msg.permissionStatus).toBe('pending')
+      expect(msg.planReview).toBe(true)
+      expect(msg.questions).toBeUndefined()
+    })
+
+    it('handles empty questions array', () => {
+      const payload = {
+        permissionId: 'perm-empty',
+        taskId: 'task-4',
+        questions: [],
+      }
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, payload))
+
+      const msg = state.messages.value[0]
+      expect(msg.questions).toEqual([])
+    })
+  })
+
+  // ========== resolvePermission ==========
+
+  describe('resolvePermission', () => {
+    it('resolves permission to approved', () => {
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+        permissionId: 'perm-1',
+        taskId: 'task-1',
+        toolName: 'Bash',
+      }))
+
+      state.resolvePermission('perm-1', 'approved')
+
+      expect(state.messages.value[0].permissionStatus).toBe('approved')
+    })
+
+    it('resolves permission to denied', () => {
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+        permissionId: 'perm-2',
+        taskId: 'task-2',
+        toolName: 'Write',
+      }))
+
+      state.resolvePermission('perm-2', 'denied')
+
+      expect(state.messages.value[0].permissionStatus).toBe('denied')
+    })
+
+    it('does nothing for unknown permissionId', () => {
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+        permissionId: 'perm-3',
+        taskId: 'task-3',
+      }))
+
+      state.resolvePermission('unknown-id', 'approved')
+
+      expect(state.messages.value[0].permissionStatus).toBe('pending')
+    })
+
+    it('resolves question permission', () => {
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+        permissionId: 'perm-q',
+        taskId: 'task-q',
+        questions: [{ question: 'Q?', header: 'H', options: [], multiSelect: false }],
+      }))
+
+      state.resolvePermission('perm-q', 'approved')
+
+      expect(state.messages.value[0].permissionStatus).toBe('approved')
+    })
+
+    it('resolves plan review permission', () => {
+      state.processAipMessage(makeAip(AipMessageType.CONFIRMATION_REQUEST, {
+        permissionId: 'perm-plan',
+        taskId: 'task-plan',
+        planReview: true,
+      }))
+
+      state.resolvePermission('perm-plan', 'denied')
+
+      expect(state.messages.value[0].permissionStatus).toBe('denied')
+    })
+  })
+
   // ========== addUserMessage ==========
 
   describe('addUserMessage', () => {

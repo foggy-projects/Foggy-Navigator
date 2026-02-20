@@ -26,6 +26,11 @@
         v-else-if="msg.type === AipMessageType.TASK_COMPLETED"
         :message="msg"
       />
+      <PlanReviewCard
+        v-else-if="msg.type === AipMessageType.CONFIRMATION_REQUEST && msg.planReview"
+        :message="msg"
+        @respond="(pid, decision, denyMsg) => emit('planRespond', pid, decision, denyMsg)"
+      />
       <UserQuestionCard
         v-else-if="msg.type === AipMessageType.CONFIRMATION_REQUEST && msg.questions?.length"
         :message="msg"
@@ -56,6 +61,7 @@ import ErrorBlock from './ErrorBlock.vue'
 import TaskCompletionCard from './TaskCompletionCard.vue'
 import PermissionRequestCard from './PermissionRequestCard.vue'
 import UserQuestionCard from './UserQuestionCard.vue'
+import PlanReviewCard from './PlanReviewCard.vue'
 
 const props = defineProps<{
   messages: ChatMessage[]
@@ -65,6 +71,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
+  (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string): void
 }>()
 
 const listRef = ref<HTMLElement>()

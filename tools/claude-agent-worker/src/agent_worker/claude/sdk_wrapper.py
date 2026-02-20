@@ -565,6 +565,7 @@ class SdkWrapper:
                     pid = str(_uuid.uuid4())[:12]
 
                     is_question = (tool_name == "AskUserQuestion")
+                    is_plan_review = (tool_name == "ExitPlanMode")
 
                     # Extract suggestions from ToolPermissionContext
                     suggestions = getattr(ctx, "suggestions", None) or []
@@ -578,8 +579,10 @@ class SdkWrapper:
                         "task_id": task_id,
                         "suggestions": suggestions,
                         "is_question": is_question,
+                        "is_plan_review": is_plan_review,
                         "answers": None,
                         "questions": tool_input.get("questions") if is_question else None,
+                        "tool_input": tool_input,
                     }
 
                     if is_question:
@@ -593,6 +596,18 @@ class SdkWrapper:
                         logger.info(
                             "Task %s awaiting user question: pid=%s, questions=%d",
                             task_id, pid, len(tool_input.get("questions", [])),
+                        )
+                    elif is_plan_review:
+                        # Push plan_review event for ExitPlanMode
+                        await queue.put(event_mapper.map_plan_review(
+                            task_id=task_id,
+                            permission_id=pid,
+                            allowed_prompts=tool_input.get("allowedPrompts"),
+                            session_id=current_session_id,
+                        ))
+                        logger.info(
+                            "Task %s awaiting plan review: pid=%s",
+                            task_id, pid,
                         )
                     else:
                         # Push permission_request event into the queue
@@ -630,6 +645,13 @@ class SdkWrapper:
                                     "questions": entry.get("questions") or [],
                                     "answers": answers,
                                 },
+                            )
+
+                        # ExitPlanMode: just allow with original input
+                        if entry.get("is_plan_review"):
+                            logger.info("Task %s plan approved: pid=%s", task_id, pid)
+                            return _PermissionResultAllow(
+                                updated_input=entry.get("tool_input") or tool_input,
                             )
 
                         scope = entry.get("scope", "once")

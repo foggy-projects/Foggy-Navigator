@@ -45,6 +45,7 @@
         @send="handleSend"
         @permission-respond="handlePermissionRespond"
         @question-respond="handleQuestionRespond"
+        @plan-respond="handlePlanRespond"
       >
         <template #empty>
           <div class="waiting-hint">等待 Worker 响应...</div>
@@ -93,6 +94,7 @@ const emit = defineEmits<{
   (e: 'command', payload: { command: string; value: string | number }): void
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
+  (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string): void
 }>()
 
 const paneInput = ref('')
@@ -130,6 +132,10 @@ function handlePermissionRespond(permissionId: string, decision: string, scope: 
 
 function handleQuestionRespond(permissionId: string, answers: Record<string, string>) {
   emit('questionRespond', props.paneState.paneId, permissionId, answers)
+}
+
+function handlePlanRespond(permissionId: string, decision: string, denyMessage?: string) {
+  emit('planRespond', props.paneState.paneId, permissionId, decision, denyMessage)
 }
 
 function handleCommand(payload: { command: string; value: string | number }) {

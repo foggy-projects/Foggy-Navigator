@@ -108,6 +108,8 @@ export interface ConfirmationRequestPayload {
   taskId: string
   /** Present when this is an AskUserQuestion (user_question event) */
   questions?: UserQuestionItem[]
+  /** Present when this is an ExitPlanMode (plan_review event) */
+  planReview?: boolean
 }
 
 export interface UserQuestionItem {

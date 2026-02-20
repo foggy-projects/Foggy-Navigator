@@ -212,6 +212,14 @@ public class WorkerStreamRelay {
                 publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
                 taskService.setAwaitingPermission(taskId);
             }
+            case "plan_review" -> {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("permissionId", event.getPermissionId());
+                payload.put("planReview", true);
+                payload.put("taskId", taskId);
+                publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
+                taskService.setAwaitingPermission(taskId);
+            }
             case "error" -> {
                 // 错误事件也可能携带 session_id
                 if (event.getSessionId() != null) {

@@ -16,6 +16,7 @@
       :is-thinking="isThinking"
       @permission-respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
       @question-respond="(pid, answers) => emit('questionRespond', pid, answers)"
+      @plan-respond="(pid, decision, denyMsg) => emit('planRespond', pid, decision, denyMsg)"
     >
       <template #empty>
         <slot name="empty">
@@ -62,6 +63,7 @@ const emit = defineEmits<{
   (e: 'send', content: string): void
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
+  (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string): void
 }>()
 
 const connectionLabel = computed(() => {

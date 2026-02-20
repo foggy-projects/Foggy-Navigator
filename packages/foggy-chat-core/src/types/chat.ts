@@ -16,6 +16,8 @@ export interface ChatMessage {
   permissionStatus?: 'pending' | 'approved' | 'denied'
   /** Present when this is an AskUserQuestion interaction */
   questions?: UserQuestionItem[]
+  /** Present when this is an ExitPlanMode plan review */
+  planReview?: boolean
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

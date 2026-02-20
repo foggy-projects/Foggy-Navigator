@@ -228,6 +228,7 @@ export function createChatState(): ChatState {
           permissionId: p.permissionId,
           permissionStatus: 'pending',
           questions: p.questions,
+          planReview: p.planReview,
           raw: p,
           timestamp: aip.timestamp,
         })
