@@ -115,12 +115,16 @@ public class ClaudeWorkerClient {
      */
     @SuppressWarnings("unchecked")
     public Mono<Map<String, Object>> respondToPermission(String taskId, String permissionId,
-                                                          String decision, String denyMessage) {
+                                                          String decision, String denyMessage,
+                                                          String scope) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("permission_id", permissionId);
         body.put("decision", decision);
         if (denyMessage != null) {
             body.put("deny_message", denyMessage);
+        }
+        if (scope != null) {
+            body.put("scope", scope);
         }
         return webClient.post()
                 .uri("/api/v1/query/{taskId}/respond", taskId)

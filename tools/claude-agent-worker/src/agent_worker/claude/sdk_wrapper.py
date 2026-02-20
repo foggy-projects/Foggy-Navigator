@@ -91,13 +91,16 @@ try:
     _use_agent_sdk = True
 
     # Permission result types for can_use_tool callback
+    _PermissionUpdate = None
     try:
         from claude_agent_sdk import (  # type: ignore[import-untyped]
             PermissionResultAllow as _PRA,
             PermissionResultDeny as _PRD,
+            PermissionUpdate as _PU,
         )
         _PermissionResultAllow = _PRA
         _PermissionResultDeny = _PRD
+        _PermissionUpdate = _PU
     except ImportError:
         pass
 
@@ -555,18 +558,23 @@ class SdkWrapper:
                 async def _can_use_tool(
                     tool_name: str,
                     tool_input: dict[str, Any],
-                    _ctx: Any,
+                    ctx: Any,
                 ) -> Any:
                     """Callback invoked by the SDK when a tool needs permission."""
                     import uuid as _uuid
                     pid = str(_uuid.uuid4())[:12]
+
+                    # Extract suggestions from ToolPermissionContext
+                    suggestions = getattr(ctx, "suggestions", None) or []
 
                     evt = asyncio.Event()
                     permission_pending[pid] = {
                         "event": evt,
                         "result": None,
                         "deny_message": None,
+                        "scope": "once",
                         "task_id": task_id,
+                        "suggestions": suggestions,
                     }
 
                     # Push permission_request event into the queue
@@ -576,11 +584,12 @@ class SdkWrapper:
                         tool_name=tool_name,
                         tool_input=tool_input,
                         session_id=current_session_id,
+                        has_suggestions=len(suggestions) > 0,
                     ))
 
                     logger.info(
-                        "Task %s awaiting permission: pid=%s, tool=%s",
-                        task_id, pid, tool_name,
+                        "Task %s awaiting permission: pid=%s, tool=%s, suggestions=%d",
+                        task_id, pid, tool_name, len(suggestions),
                     )
 
                     try:
@@ -592,7 +601,42 @@ class SdkWrapper:
 
                     entry = permission_pending.pop(pid, None)
                     if entry and entry["result"] == "allow":
-                        return _PermissionResultAllow()
+                        scope = entry.get("scope", "once")
+                        updated_permissions = None
+
+                        # Build updated_permissions based on scope
+                        if scope in ("session", "always") and _PermissionUpdate is not None:
+                            dest = "session" if scope == "session" else "userSettings"
+                            raw_suggestions = entry.get("suggestions") or []
+                            if raw_suggestions:
+                                # Use SDK's suggested rules, override destination
+                                updated_permissions = []
+                                for s in raw_suggestions:
+                                    updated_permissions.append(_PermissionUpdate(
+                                        type=getattr(s, "type", "addRules"),
+                                        rules=getattr(s, "rules", None),
+                                        behavior=getattr(s, "behavior", "allow"),
+                                        destination=dest,
+                                    ))
+                            else:
+                                # No suggestions: create a generic rule for this tool
+                                try:
+                                    from claude_agent_sdk.types import PermissionRuleValue  # type: ignore
+                                    updated_permissions = [_PermissionUpdate(
+                                        type="addRules",
+                                        rules=[PermissionRuleValue(tool_name=tool_name)],
+                                        behavior="allow",
+                                        destination=dest,
+                                    )]
+                                except ImportError:
+                                    pass
+
+                        logger.info(
+                            "Task %s permission allowed: pid=%s, scope=%s, rules=%d",
+                            task_id, pid, scope,
+                            len(updated_permissions) if updated_permissions else 0,
+                        )
+                        return _PermissionResultAllow(updated_permissions=updated_permissions)
                     else:
                         msg = (entry or {}).get("deny_message") or "Permission denied by user"
                         return _PermissionResultDeny(message=msg)

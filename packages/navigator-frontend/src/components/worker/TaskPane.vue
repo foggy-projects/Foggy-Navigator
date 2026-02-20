@@ -90,7 +90,7 @@ const emit = defineEmits<{
   (e: 'abort', paneId: string): void
   (e: 'send', paneId: string, content: string): void
   (e: 'command', payload: { command: string; value: string | number }): void
-  (e: 'permissionRespond', paneId: string, permissionId: string, decision: string): void
+  (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
 }>()
 
 const paneInput = ref('')
@@ -122,8 +122,8 @@ function handleSend(content?: string) {
   paneInput.value = ''
 }
 
-function handlePermissionRespond(permissionId: string, decision: string) {
-  emit('permissionRespond', props.paneState.paneId, permissionId, decision)
+function handlePermissionRespond(permissionId: string, decision: string, scope: string) {
+  emit('permissionRespond', props.paneState.paneId, permissionId, decision, scope)
 }
 
 function handleCommand(payload: { command: string; value: string | number }) {

@@ -106,7 +106,7 @@ export function useClaudeWorker() {
     return task
   }
 
-  async function respondToPermission(taskId: string, form: { permissionId: string; decision: string; denyMessage?: string }) {
+  async function respondToPermission(taskId: string, form: { permissionId: string; decision: string; denyMessage?: string; scope?: string }) {
     return api.respondToPermission(taskId, form)
   }
 

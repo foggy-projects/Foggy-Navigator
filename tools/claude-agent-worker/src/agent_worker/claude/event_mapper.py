@@ -113,6 +113,7 @@ def map_permission_request(
     tool_name: str,
     tool_input: dict[str, Any] | None = None,
     session_id: str | None = None,
+    has_suggestions: bool = False,
 ) -> dict[str, Any]:
     """Map a permission request (can_use_tool callback) to an SSE dict."""
 
@@ -123,6 +124,7 @@ def map_permission_request(
         "input": tool_input,
         "task_id": task_id,
         "session_id": session_id,
+        "has_suggestions": has_suggestions,
     }
 
 

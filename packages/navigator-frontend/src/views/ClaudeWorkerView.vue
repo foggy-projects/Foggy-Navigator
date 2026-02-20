@@ -246,6 +246,7 @@
               <el-select v-model="taskForm.permissionMode" size="small" style="width: 150px; margin-left: 8px">
                 <el-option value="bypassPermissions" label="跳过权限" />
                 <el-option value="acceptEdits" label="自动接受编辑" />
+                <el-option value="plan" label="只读(Plan)" />
                 <el-option value="default" label="交互式审批" />
               </el-select>
             </el-form-item>
@@ -367,6 +368,7 @@
               <el-select v-model="taskForm.permissionMode" size="small" style="width: 150px; margin-left: 8px">
                 <el-option value="bypassPermissions" label="跳过权限" />
                 <el-option value="acceptEdits" label="自动接受编辑" />
+                <el-option value="plan" label="只读(Plan)" />
                 <el-option value="default" label="交互式审批" />
               </el-select>
             </el-form-item>
@@ -1674,7 +1676,7 @@ function handleShowDetail(conv: ConversationGroup) {
   showDetailDialog.value = true
 }
 
-async function handlePermissionRespond(paneId: string, permissionId: string, decision: string) {
+async function handlePermissionRespond(paneId: string, permissionId: string, decision: string, scope: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane?.task.value) return
 
@@ -1683,6 +1685,7 @@ async function handlePermissionRespond(paneId: string, permissionId: string, dec
       permissionId,
       decision,
       denyMessage: decision === 'deny' ? 'Denied by user' : undefined,
+      scope,
     })
     pane.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
     if (decision === 'allow') {

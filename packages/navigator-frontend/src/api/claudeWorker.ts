@@ -188,7 +188,7 @@ export async function listTasksByDirectoryPaged(
 
 export async function respondToPermission(
   taskId: string,
-  form: { permissionId: string; decision: string; denyMessage?: string },
+  form: { permissionId: string; decision: string; denyMessage?: string; scope?: string },
 ): Promise<{ taskId: string; permissionId: string; decision: string }> {
   const rx = (await client.post(
     `/claude-tasks/${taskId}/respond`,

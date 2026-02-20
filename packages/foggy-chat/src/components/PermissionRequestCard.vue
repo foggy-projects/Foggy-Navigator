@@ -9,10 +9,16 @@
       <code class="tool-input">{{ inputSummary }}</code>
     </div>
     <div v-if="isPending" class="card-actions">
-      <button class="btn btn-approve" @click="emit('respond', message.permissionId!, 'allow')">
-        Approve
+      <button class="btn btn-approve" @click="emit('respond', message.permissionId!, 'allow', 'once')">
+        Allow
       </button>
-      <button class="btn btn-deny" @click="emit('respond', message.permissionId!, 'deny')">
+      <button class="btn btn-approve-session" @click="emit('respond', message.permissionId!, 'allow', 'session')">
+        Allow (Session)
+      </button>
+      <button class="btn btn-approve-always" @click="emit('respond', message.permissionId!, 'allow', 'always')">
+        Always Allow
+      </button>
+      <button class="btn btn-deny" @click="emit('respond', message.permissionId!, 'deny', 'once')">
         Deny
       </button>
     </div>
@@ -29,7 +35,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'respond', permissionId: string, decision: string): void
+  (e: 'respond', permissionId: string, decision: string, scope: string): void
 }>()
 
 const payload = computed(() => props.message.raw as ConfirmationRequestPayload | undefined)
@@ -156,13 +162,14 @@ const statusIcon = computed(() => {
 .card-actions {
   margin-top: 10px;
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .btn {
-  padding: 5px 16px;
+  padding: 5px 12px;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   border: 1px solid transparent;
@@ -178,6 +185,26 @@ const statusIcon = computed(() => {
 .btn-approve:hover {
   background: #85ce61;
   border-color: #85ce61;
+}
+
+.btn-approve-session {
+  background: #fff;
+  color: #67c23a;
+  border-color: #67c23a;
+}
+
+.btn-approve-session:hover {
+  background: #f0f9eb;
+}
+
+.btn-approve-always {
+  background: #fff;
+  color: #409eff;
+  border-color: #409eff;
+}
+
+.btn-approve-always:hover {
+  background: #ecf5ff;
 }
 
 .btn-deny {

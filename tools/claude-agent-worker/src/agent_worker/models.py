@@ -109,6 +109,7 @@ class PermissionResponse(BaseModel):
     permission_id: str = Field(..., description="The permission request ID to respond to")
     decision: str = Field(..., description="allow or deny")
     deny_message: str | None = Field(None, description="Optional message when denying")
+    scope: str = Field("once", description="once | session | always")
 
 
 # ---------------------------------------------------------------------------

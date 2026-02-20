@@ -13,4 +13,6 @@ public class PermissionResponseForm {
     private String decision;
     /** 拒绝原因（可选） */
     private String denyMessage;
+    /** 范围: once / session / always */
+    private String scope;
 }

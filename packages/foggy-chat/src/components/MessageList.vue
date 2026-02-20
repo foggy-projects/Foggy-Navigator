@@ -29,7 +29,7 @@
       <PermissionRequestCard
         v-else-if="msg.type === AipMessageType.CONFIRMATION_REQUEST"
         :message="msg"
-        @respond="(pid, decision) => emit('permissionRespond', pid, decision)"
+        @respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
       />
       <MessageBubble
         v-else-if="msg.type === AipMessageType.STATE_SYNC"
@@ -57,7 +57,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'permissionRespond', permissionId: string, decision: string): void
+  (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
 }>()
 
 const listRef = ref<HTMLElement>()
