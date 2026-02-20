@@ -10,6 +10,7 @@
       @abort="(id) => emit('abort', id)"
       @send="(id, content) => emit('send', id, content)"
       @command="(payload) => emit('command', payload)"
+      @permission-respond="(paneId, pid, decision) => emit('permissionRespond', paneId, pid, decision)"
     />
   </div>
 </template>
@@ -29,6 +30,7 @@ const emit = defineEmits<{
   (e: 'abort', paneId: string): void
   (e: 'send', paneId: string, content: string): void
   (e: 'command', payload: { command: string; value: string | number }): void
+  (e: 'permissionRespond', paneId: string, permissionId: string, decision: string): void
 }>()
 </script>
 

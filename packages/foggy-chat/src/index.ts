@@ -10,6 +10,7 @@ export type {
   StateSyncPayload,
   ErrorPayload,
   TaskCompletedPayload,
+  ConfirmationRequestPayload,
 } from './types/aip'
 export type { EventAdapter } from './types/adapter'
 export type { ChatMessage, ConnectionStatus } from './types/chat'
@@ -33,3 +34,4 @@ export { default as ThinkingIndicator } from './components/ThinkingIndicator.vue
 export { default as ErrorBlock } from './components/ErrorBlock.vue'
 export { default as StatusBadge } from './components/StatusBadge.vue'
 export { default as TaskCompletionCard } from './components/TaskCompletionCard.vue'
+export { default as PermissionRequestCard } from './components/PermissionRequestCard.vue'

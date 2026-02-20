@@ -12,6 +12,8 @@ export interface ChatMessage {
   thought?: string
   error?: string
   raw?: unknown
+  permissionId?: string
+  permissionStatus?: 'pending' | 'approved' | 'denied'
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

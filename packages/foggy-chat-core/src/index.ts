@@ -10,6 +10,7 @@ export type {
   StateSyncPayload,
   ErrorPayload,
   TaskCompletedPayload,
+  ConfirmationRequestPayload,
 } from './types/aip'
 export type { EventAdapter } from './types/adapter'
 export type { ChatMessage, ConnectionStatus } from './types/chat'

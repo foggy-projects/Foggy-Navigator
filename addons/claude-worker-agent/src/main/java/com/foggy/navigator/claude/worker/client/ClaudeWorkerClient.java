@@ -48,16 +48,17 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson) {
-        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null);
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null);
     }
 
     /**
-     * 流式查询（含 per-request auth 覆盖和图片附件）
+     * 流式查询（含 per-request auth 覆盖、图片附件和权限模式）
      */
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson, String images,
-                                                       String apiKey, String authToken, String baseUrl) {
+                                                       String apiKey, String authToken, String baseUrl,
+                                                       String permissionMode) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) {
@@ -96,6 +97,10 @@ public class ClaudeWorkerClient {
         if (baseUrl != null) {
             body.put("base_url", baseUrl);
         }
+        // Permission mode
+        if (permissionMode != null && !permissionMode.isEmpty()) {
+            body.put("permission_mode", permissionMode);
+        }
 
         return webClient.post()
                 .uri("/api/v1/query")
@@ -103,6 +108,29 @@ public class ClaudeWorkerClient {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {});
+    }
+
+    /**
+     * 响应权限请求
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> respondToPermission(String taskId, String permissionId,
+                                                          String decision, String denyMessage) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("permission_id", permissionId);
+        body.put("decision", decision);
+        if (denyMessage != null) {
+            body.put("deny_message", denyMessage);
+        }
+        return webClient.post()
+                .uri("/api/v1/query/{taskId}/respond", taskId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Respond to permission failed for worker {}, task {}: {}",
+                        workerId, taskId, e.getMessage()));
     }
 
     /**

@@ -82,6 +82,7 @@ export function useClaudeWorker() {
     model?: string
     maxTurns?: number
     agentTeamsJson?: string
+    permissionMode?: string
   }) {
     const task = await api.createTask(form)
     tasks.value.unshift(task)
@@ -98,10 +99,15 @@ export function useClaudeWorker() {
     model?: string
     maxTurns?: number
     agentTeamsJson?: string
+    permissionMode?: string
   }) {
     const task = await api.resumeTask(form)
     tasks.value.unshift(task)
     return task
+  }
+
+  async function respondToPermission(taskId: string, form: { permissionId: string; decision: string; denyMessage?: string }) {
+    return api.respondToPermission(taskId, form)
   }
 
   async function abortTask(taskId: string) {
@@ -211,6 +217,7 @@ export function useClaudeWorker() {
     refreshWorkerStatus,
     createTask,
     resumeTask,
+    respondToPermission,
     abortTask,
     deleteTask,
     loadDirectories,

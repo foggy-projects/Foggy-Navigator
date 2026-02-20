@@ -107,6 +107,25 @@ def map_system(
     }
 
 
+def map_permission_request(
+    task_id: str,
+    permission_id: str,
+    tool_name: str,
+    tool_input: dict[str, Any] | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Map a permission request (can_use_tool callback) to an SSE dict."""
+
+    return {
+        "type": "permission_request",
+        "permission_id": permission_id,
+        "tool": tool_name,
+        "input": tool_input,
+        "task_id": task_id,
+        "session_id": session_id,
+    }
+
+
 def map_error(task_id: str, error: str, session_id: str | None = None) -> dict[str, Any]:
     """Map an error condition to an SSE dict."""
 

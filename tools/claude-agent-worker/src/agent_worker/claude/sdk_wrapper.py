@@ -48,6 +48,10 @@ _CLIConnectionError = None
 _CLIJSONDecodeError = None
 _CLINotFoundError = None
 
+# Permission result types -- only available in claude-agent-sdk.
+_PermissionResultAllow = None
+_PermissionResultDeny = None
+
 # Agent Teams type -- only available in claude-agent-sdk.
 _AgentDefinition = None
 
@@ -85,6 +89,17 @@ try:
     _CLINotFoundError = _CNFE
     _sdk_available = True
     _use_agent_sdk = True
+
+    # Permission result types for can_use_tool callback
+    try:
+        from claude_agent_sdk import (  # type: ignore[import-untyped]
+            PermissionResultAllow as _PRA,
+            PermissionResultDeny as _PRD,
+        )
+        _PermissionResultAllow = _PRA
+        _PermissionResultDeny = _PRD
+    except ImportError:
+        pass
 
     # AgentDefinition for first-class Agent Teams support
     try:
@@ -147,6 +162,15 @@ task_registry: dict[str, dict[str, Any]] = {}
 
 session_store: dict[str, dict[str, Any]] = {}
 """Mapping of *session_id* -> metadata dict for tracked sessions."""
+
+permission_pending: dict[str, dict[str, Any]] = {}
+"""Mapping of *permission_id* -> {event: asyncio.Event, result: str, deny_message: str | None, task_id: str}.
+
+Used by the ``can_use_tool`` callback to await user approval, and by
+the ``/respond`` endpoint to deliver the decision.
+"""
+
+PERMISSION_TIMEOUT_SECONDS = 300  # 5 minutes
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +424,7 @@ class SdkWrapper:
         api_key: str | None = None,
         auth_token: str | None = None,
         base_url: str | None = None,
+        permission_mode: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
@@ -468,6 +493,12 @@ class SdkWrapper:
             if _use_agent_sdk:
                 options_kwargs["setting_sources"] = ["user", "project", "local"]
                 self._apply_agents_config(extra_args, options_kwargs)
+
+                # Permission mode: set SDK permission_mode and can_use_tool callback
+                if permission_mode and permission_mode != "bypassPermissions":
+                    options_kwargs["permission_mode"] = permission_mode
+                elif permission_mode == "bypassPermissions":
+                    options_kwargs["permission_mode"] = "bypassPermissions"
             elif extra_args:
                 options_kwargs["extra_args"] = extra_args
 
@@ -503,70 +534,108 @@ class SdkWrapper:
                 heartbeat_timeout,
             )
 
+            # -- can_use_tool callback (Producer/Queue pattern) -----------------
+            # When permission_mode is interactive ("default" or "acceptEdits"),
+            # we install a can_use_tool callback that pushes permission_request
+            # events into the Queue and awaits user response.
+            #
+            # The Producer/Queue architecture:
+            #   Producer task: iterates SDK query(), pushes events into Queue
+            #   Consumer: run_query() reads from Queue and yields (SSE stream)
+            # This lets the SSE stream stay alive while can_use_tool blocks.
+
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            use_queue = (
+                _use_agent_sdk
+                and _PermissionResultAllow is not None
+                and permission_mode in ("default", "acceptEdits")
+            )
+
+            if use_queue:
+                async def _can_use_tool(
+                    tool_name: str,
+                    tool_input: dict[str, Any],
+                    _ctx: Any,
+                ) -> Any:
+                    """Callback invoked by the SDK when a tool needs permission."""
+                    import uuid as _uuid
+                    pid = str(_uuid.uuid4())[:12]
+
+                    evt = asyncio.Event()
+                    permission_pending[pid] = {
+                        "event": evt,
+                        "result": None,
+                        "deny_message": None,
+                        "task_id": task_id,
+                    }
+
+                    # Push permission_request event into the queue
+                    await queue.put(event_mapper.map_permission_request(
+                        task_id=task_id,
+                        permission_id=pid,
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                        session_id=current_session_id,
+                    ))
+
+                    logger.info(
+                        "Task %s awaiting permission: pid=%s, tool=%s",
+                        task_id, pid, tool_name,
+                    )
+
+                    try:
+                        await asyncio.wait_for(evt.wait(), timeout=PERMISSION_TIMEOUT_SECONDS)
+                    except asyncio.TimeoutError:
+                        logger.warning("Task %s permission timeout: pid=%s", task_id, pid)
+                        permission_pending.pop(pid, None)
+                        return _PermissionResultDeny(message="Permission request timed out (5 minutes)")
+
+                    entry = permission_pending.pop(pid, None)
+                    if entry and entry["result"] == "allow":
+                        return _PermissionResultAllow()
+                    else:
+                        msg = (entry or {}).get("deny_message") or "Permission denied by user"
+                        return _PermissionResultDeny(message=msg)
+
+                options_kwargs["can_use_tool"] = _can_use_tool
+
             options = _options_cls(**options_kwargs)
 
             current_model: str | None = None
             started_at = asyncio.get_event_loop().time()
             last_event_at = started_at
 
-            async for message in _query_fn(prompt=prompt, options=options):
-                now = asyncio.get_event_loop().time()
+            # -- Helper: process a single SDK message into event dicts --------
 
-                # Hard timeout check
-                if now - started_at > hard_timeout:
-                    logger.warning(
-                        "Task %s exceeded hard timeout (%ss), cancelling",
-                        task_id, hard_timeout,
-                    )
-                    yield event_mapper.map_error(
-                        task_id=task_id,
-                        error=f"Task exceeded maximum duration ({hard_timeout // 3600}h)",
-                        session_id=current_session_id,
-                    )
-                    return
+            def _process_message(message: Any) -> list[dict[str, Any]]:
+                nonlocal current_model, current_session_id, last_event_at
+                events: list[dict[str, Any]] = []
 
-                # Heartbeat timeout check
-                if now - last_event_at > heartbeat_timeout:
-                    logger.warning(
-                        "Task %s no events for %ss (heartbeat timeout), cancelling",
-                        task_id, heartbeat_timeout,
-                    )
-                    yield event_mapper.map_error(
-                        task_id=task_id,
-                        error=f"Task stalled (no events for {heartbeat_timeout // 60}min)",
-                        session_id=current_session_id,
-                    )
-                    return
-
-                last_event_at = now
-                # -- AssistantMessage (may contain text, tool_use, tool_result blocks)
                 if _AssistantMessage is not None and isinstance(message, _AssistantMessage):
-                    # Extract model from AssistantMessage
                     msg_model = getattr(message, "model", None)
                     if msg_model:
                         current_model = msg_model
 
                     for block in message.content:
                         if _TextBlock is not None and isinstance(block, _TextBlock):
-                            yield event_mapper.map_assistant_text(
+                            events.append(event_mapper.map_assistant_text(
                                 task_id=task_id,
                                 text=block.text,
                                 session_id=current_session_id,
                                 model=current_model,
-                            )
+                            ))
                         elif _ToolUseBlock is not None and isinstance(block, _ToolUseBlock):
-                            yield event_mapper.map_tool_use(
+                            events.append(event_mapper.map_tool_use(
                                 task_id=task_id,
                                 tool_name=block.name,
                                 tool_input=block.input,
                                 session_id=current_session_id,
-                            )
+                            ))
                         elif _ToolResultBlock is not None and isinstance(block, _ToolResultBlock):
                             content_str: str | None = None
                             if isinstance(block.content, str):
                                 content_str = block.content
                             elif isinstance(block.content, list):
-                                # Flatten list of content dicts to a single string.
                                 parts = []
                                 for item in block.content:
                                     if isinstance(item, dict):
@@ -575,33 +644,30 @@ class SdkWrapper:
                                         parts.append(str(item))
                                 content_str = "\n".join(parts)
 
-                            yield event_mapper.map_tool_result(
+                            events.append(event_mapper.map_tool_result(
                                 task_id=task_id,
                                 tool_use_id=block.tool_use_id,
                                 content=content_str,
                                 is_error=bool(block.is_error),
                                 session_id=current_session_id,
-                            )
+                            ))
 
-                # -- ResultMessage
                 elif _ResultMessage is not None and isinstance(message, _ResultMessage):
                     current_session_id = getattr(message, "session_id", current_session_id)
 
-                    # Record / update session tracking store.
                     if current_session_id:
-                        now = datetime.now(timezone.utc)
+                        now_dt = datetime.now(timezone.utc)
                         if current_session_id in session_store:
-                            session_store[current_session_id]["updated_at"] = now
+                            session_store[current_session_id]["updated_at"] = now_dt
                         else:
                             session_store[current_session_id] = {
                                 "cwd": cwd,
-                                "created_at": now,
-                                "updated_at": now,
+                                "created_at": now_dt,
+                                "updated_at": now_dt,
                                 "slug": None,
                                 "git_branch": None,
                             }
 
-                    # Extract usage (token counts) and num_turns
                     input_tokens: int | None = None
                     output_tokens: int | None = None
                     usage = getattr(message, "usage", None)
@@ -611,7 +677,7 @@ class SdkWrapper:
 
                     num_turns = getattr(message, "num_turns", None)
 
-                    yield event_mapper.map_result(
+                    events.append(event_mapper.map_result(
                         task_id=task_id,
                         result_text=getattr(message, "result", None),
                         cost_usd=getattr(message, "total_cost_usd", None),
@@ -621,29 +687,121 @@ class SdkWrapper:
                         output_tokens=output_tokens,
                         num_turns=num_turns,
                         model=current_model,
-                    )
+                    ))
 
-                # -- SystemMessage
                 elif _SystemMessage is not None and isinstance(message, _SystemMessage):
                     data = getattr(message, "data", {}) or {}
                     subtype = getattr(message, "subtype", "system")
 
-                    # Extract session_id from init event and propagate to all subsequent events
                     if subtype == "init" and isinstance(data, dict):
                         init_session_id = data.get("session_id")
                         if init_session_id:
                             current_session_id = init_session_id
 
-                    # Skip verbose hook events (hook_started, hook_response)
                     if subtype in ("hook_started", "hook_response"):
-                        continue
+                        return events
 
-                    yield event_mapper.map_system(
+                    events.append(event_mapper.map_system(
                         task_id=task_id,
                         subtype=subtype,
                         data=data if subtype == "init" else None,
                         session_id=current_session_id,
-                    )
+                    ))
+
+                return events
+
+            # -- Main iteration: Queue-based (interactive) or direct ----------
+
+            if use_queue:
+                # Producer task: iterate SDK query() and push events into Queue
+                async def _producer() -> None:
+                    try:
+                        async for message in _query_fn(prompt=prompt, options=options):
+                            for evt in _process_message(message):
+                                await queue.put(evt)
+                    except asyncio.CancelledError:
+                        await queue.put(event_mapper.map_error(
+                            task_id=task_id,
+                            error="Task was cancelled",
+                            session_id=current_session_id,
+                        ))
+                    except Exception as exc:
+                        error_detail = _extract_error_detail(exc, task_id)
+                        await queue.put(event_mapper.map_error(
+                            task_id=task_id,
+                            error=error_detail,
+                            session_id=current_session_id,
+                        ))
+                    finally:
+                        await queue.put(None)  # Sentinel: stream is done
+
+                producer_task = asyncio.create_task(_producer())
+
+                try:
+                    while True:
+                        now = asyncio.get_event_loop().time()
+                        if now - started_at > hard_timeout:
+                            logger.warning("Task %s exceeded hard timeout (%ss)", task_id, hard_timeout)
+                            yield event_mapper.map_error(
+                                task_id=task_id,
+                                error=f"Task exceeded maximum duration ({hard_timeout // 3600}h)",
+                                session_id=current_session_id,
+                            )
+                            producer_task.cancel()
+                            return
+
+                        try:
+                            evt = await asyncio.wait_for(queue.get(), timeout=heartbeat_timeout)
+                        except asyncio.TimeoutError:
+                            logger.warning("Task %s no events for %ss (heartbeat timeout)", task_id, heartbeat_timeout)
+                            yield event_mapper.map_error(
+                                task_id=task_id,
+                                error=f"Task stalled (no events for {heartbeat_timeout // 60}min)",
+                                session_id=current_session_id,
+                            )
+                            producer_task.cancel()
+                            return
+
+                        if evt is None:
+                            break  # Producer finished
+
+                        last_event_at = asyncio.get_event_loop().time()
+                        yield evt
+                finally:
+                    if not producer_task.done():
+                        producer_task.cancel()
+                        try:
+                            await producer_task
+                        except asyncio.CancelledError:
+                            pass
+
+            else:
+                # Direct iteration (no can_use_tool callback needed)
+                async for message in _query_fn(prompt=prompt, options=options):
+                    now = asyncio.get_event_loop().time()
+
+                    if now - started_at > hard_timeout:
+                        logger.warning("Task %s exceeded hard timeout (%ss)", task_id, hard_timeout)
+                        yield event_mapper.map_error(
+                            task_id=task_id,
+                            error=f"Task exceeded maximum duration ({hard_timeout // 3600}h)",
+                            session_id=current_session_id,
+                        )
+                        return
+
+                    if now - last_event_at > heartbeat_timeout:
+                        logger.warning("Task %s no events for %ss (heartbeat timeout)", task_id, heartbeat_timeout)
+                        yield event_mapper.map_error(
+                            task_id=task_id,
+                            error=f"Task stalled (no events for {heartbeat_timeout // 60}min)",
+                            session_id=current_session_id,
+                        )
+                        return
+
+                    last_event_at = now
+
+                    for evt in _process_message(message):
+                        yield evt
 
         except asyncio.CancelledError:
             logger.info("Task %s was cancelled", task_id)
@@ -663,3 +821,7 @@ class SdkWrapper:
 
         finally:
             task_registry.pop(task_id, None)
+            # Clean up any pending permissions for this task
+            for pid in list(permission_pending):
+                if permission_pending[pid].get("task_id") == task_id:
+                    permission_pending.pop(pid, None)

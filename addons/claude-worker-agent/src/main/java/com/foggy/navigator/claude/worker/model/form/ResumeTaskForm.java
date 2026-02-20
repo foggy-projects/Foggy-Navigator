@@ -18,4 +18,6 @@ public class ResumeTaskForm {
     private Integer maxTurns;
     /** Agent Teams JSON (直接传入或由 directoryId 解析) */
     private String agentTeamsJson;
+    /** Permission mode: bypassPermissions | acceptEdits | default */
+    private String permissionMode;
 }

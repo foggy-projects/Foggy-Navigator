@@ -26,6 +26,11 @@
         v-else-if="msg.type === AipMessageType.TASK_COMPLETED"
         :message="msg"
       />
+      <PermissionRequestCard
+        v-else-if="msg.type === AipMessageType.CONFIRMATION_REQUEST"
+        :message="msg"
+        @respond="(pid, decision) => emit('permissionRespond', pid, decision)"
+      />
       <MessageBubble
         v-else-if="msg.type === AipMessageType.STATE_SYNC"
         :message="msg"
@@ -44,10 +49,15 @@ import ToolCallBlock from './ToolCallBlock.vue'
 import ThinkingIndicator from './ThinkingIndicator.vue'
 import ErrorBlock from './ErrorBlock.vue'
 import TaskCompletionCard from './TaskCompletionCard.vue'
+import PermissionRequestCard from './PermissionRequestCard.vue'
 
 const props = defineProps<{
   messages: ChatMessage[]
   isThinking?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'permissionRespond', permissionId: string, decision: string): void
 }>()
 
 const listRef = ref<HTMLElement>()

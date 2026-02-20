@@ -243,6 +243,11 @@
                 运行任务
               </el-button>
               <el-button text @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
+              <el-select v-model="taskForm.permissionMode" size="small" style="width: 150px; margin-left: 8px">
+                <el-option value="bypassPermissions" label="跳过权限" />
+                <el-option value="acceptEdits" label="自动接受编辑" />
+                <el-option value="default" label="交互式审批" />
+              </el-select>
             </el-form-item>
           </el-form>
         </div>
@@ -296,6 +301,7 @@
           @abort="abortPane"
           @send="handlePaneSend"
           @command="handleSlashCommand"
+          @permission-respond="handlePermissionRespond"
         />
       </template>
 
@@ -358,6 +364,11 @@
                 运行任务
               </el-button>
               <el-button text @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
+              <el-select v-model="taskForm.permissionMode" size="small" style="width: 150px; margin-left: 8px">
+                <el-option value="bypassPermissions" label="跳过权限" />
+                <el-option value="acceptEdits" label="自动接受编辑" />
+                <el-option value="default" label="交互式审批" />
+              </el-select>
             </el-form-item>
           </el-form>
         </div>
@@ -411,6 +422,7 @@
           @abort="abortPane"
           @send="handlePaneSend"
           @command="handleSlashCommand"
+          @permission-respond="handlePermissionRespond"
         />
       </template>
 
@@ -974,6 +986,7 @@ const taskForm = ref({
   model: '' as string,
   maxTurns: null as number | null,
   useTeams: true,
+  permissionMode: 'bypassPermissions' as string,
 })
 
 // --- Image attachment state ---
@@ -1661,6 +1674,26 @@ function handleShowDetail(conv: ConversationGroup) {
   showDetailDialog.value = true
 }
 
+async function handlePermissionRespond(paneId: string, permissionId: string, decision: string) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  if (!pane?.task.value) return
+
+  try {
+    await workerState.respondToPermission(pane.task.value.taskId, {
+      permissionId,
+      decision,
+      denyMessage: decision === 'deny' ? 'Denied by user' : undefined,
+    })
+    pane.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
+    if (decision === 'allow') {
+      pane.task.value.status = 'RUNNING'
+    }
+    triggerRef(panes)
+  } catch {
+    ElMessage.error('Permission response failed')
+  }
+}
+
 function handleSlashCommand(payload: { command: string; value: string | number }) {
   if (payload.command === 'model') {
     taskForm.value.model = payload.value as string
@@ -1699,6 +1732,7 @@ async function handleCreateTask() {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
       model?: string; maxTurns?: number; agentTeamsJson?: string; images?: string
+      permissionMode?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
@@ -1717,6 +1751,9 @@ async function handleCreateTask() {
     }
     if (taskForm.value.useTeams && selectedDirectory.value?.agentTeamsConfig) {
       form.agentTeamsJson = selectedDirectory.value.agentTeamsConfig
+    }
+    if (taskForm.value.permissionMode) {
+      form.permissionMode = taskForm.value.permissionMode
     }
     // Attach images as JSON string
     if (attachedImages.value.length > 0) {
@@ -1789,6 +1826,9 @@ async function handlePaneSend(paneId: string, content: string) {
     }
     if (taskForm.value.maxTurns != null) {
       resumeForm.maxTurns = taskForm.value.maxTurns
+    }
+    if (taskForm.value.permissionMode) {
+      (resumeForm as Record<string, unknown>).permissionMode = taskForm.value.permissionMode
     }
     const newTask = await workerState.resumeTask(resumeForm)
 

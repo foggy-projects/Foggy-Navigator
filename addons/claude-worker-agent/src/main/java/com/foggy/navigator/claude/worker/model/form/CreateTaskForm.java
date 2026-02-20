@@ -17,4 +17,6 @@ public class CreateTaskForm {
     private String agentTeamsJson;
     /** Base64-encoded image attachments JSON: [{name, data, mimeType}] */
     private String images;
+    /** Permission mode: bypassPermissions | acceptEdits | default */
+    private String permissionMode;
 }

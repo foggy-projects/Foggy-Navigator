@@ -10,6 +10,7 @@ import type {
   StateSyncPayload,
   ErrorPayload,
   TaskCompletedPayload,
+  ConfirmationRequestPayload,
 } from '../types/aip'
 import type { ChatMessage, ConnectionStatus } from '../types/chat'
 
@@ -28,6 +29,7 @@ export interface ChatState {
   addUserMessage: (content: string, sessionId?: string) => void
   setConnectionStatus: (status: ConnectionStatus) => void
   clearMessages: () => void
+  resolvePermission: (permissionId: string, status: 'approved' | 'denied') => void
 }
 
 function formatArguments(args: unknown): string {
@@ -215,6 +217,21 @@ export function createChatState(): ChatState {
         })
         break
       }
+      case AipMessageType.CONFIRMATION_REQUEST: {
+        const p = aip.payload as ConfirmationRequestPayload
+        messages.value.push({
+          id: aip.messageId,
+          type: aip.type,
+          sender: 'system',
+          content: '',
+          toolName: p.toolName,
+          permissionId: p.permissionId,
+          permissionStatus: 'pending',
+          raw: p,
+          timestamp: aip.timestamp,
+        })
+        break
+      }
     }
   }
 
@@ -230,6 +247,15 @@ export function createChatState(): ChatState {
 
   function setConnectionStatus(status: ConnectionStatus) {
     connectionStatus.value = status
+  }
+
+  function resolvePermission(permissionId: string, status: 'approved' | 'denied') {
+    const msg = messages.value.find(
+      (m) => m.permissionId === permissionId && m.type === AipMessageType.CONFIRMATION_REQUEST,
+    )
+    if (msg) {
+      msg.permissionStatus = status
+    }
   }
 
   function clearMessages() {
@@ -248,5 +274,6 @@ export function createChatState(): ChatState {
     addUserMessage,
     setConnectionStatus,
     clearMessages,
+    resolvePermission,
   }
 }

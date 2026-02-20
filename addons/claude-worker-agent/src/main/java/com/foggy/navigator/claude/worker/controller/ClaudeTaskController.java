@@ -95,6 +95,34 @@ public class ClaudeTaskController {
         return RX.ok(Map.of("taskId", taskId, "status", "ABORTED"));
     }
 
+    @PostMapping("/{taskId}/respond")
+    public RX<Map<String, Object>> respondToPermission(
+            @PathVariable String taskId,
+            @RequestBody PermissionResponseForm form) {
+        String userId = UserContext.getCurrentUserId();
+        var task = taskService.getTaskEntity(taskId);
+        if (!task.getUserId().equals(userId)) {
+            throw RX.throwB("Task not found");
+        }
+
+        try {
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            client.respondToPermission(taskId, form.getPermissionId(),
+                    form.getDecision(), form.getDenyMessage())
+                    .block(java.time.Duration.ofSeconds(10));
+
+            // Resume task from AWAITING_PERMISSION to RUNNING
+            taskService.resumeFromPermission(taskId);
+
+            return RX.ok(Map.of("taskId", taskId, "permissionId", form.getPermissionId(),
+                    "decision", form.getDecision()));
+        } catch (Exception e) {
+            log.warn("Failed to respond to permission: taskId={}, error={}", taskId, e.getMessage());
+            return RX.failB("响应权限请求失败: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/directory/{directoryId}")
     public RX<List<TaskDTO>> listTasksByDirectory(@PathVariable String directoryId) {
         String userId = UserContext.getCurrentUserId();

@@ -67,7 +67,9 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
           task.value.claudeSessionId = payload.claudeSessionId
         }
 
-        if (raw.type === 'TEXT_COMPLETE') {
+        if (raw.type === 'CONFIRMATION_REQUEST') {
+          task.value.status = 'AWAITING_PERMISSION' as ClaudeTask['status']
+        } else if (raw.type === 'TEXT_COMPLETE') {
           task.value.status = 'COMPLETED'
           if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
           if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs

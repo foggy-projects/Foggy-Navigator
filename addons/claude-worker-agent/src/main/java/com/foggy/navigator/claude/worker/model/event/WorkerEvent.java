@@ -34,4 +34,6 @@ public class WorkerEvent {
     private Integer numTurns;
     private String model;
     private String error;
+    @JsonProperty("permission_id")
+    private String permissionId;
 }

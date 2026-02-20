@@ -36,6 +36,8 @@ class QueryRequest(BaseModel):
     api_key: str | None = Field(None, description="Per-request Anthropic API key override")
     auth_token: str | None = Field(None, description="Per-request Anthropic auth token override")
     base_url: str | None = Field(None, description="Per-request Anthropic base URL override")
+    # Permission mode: "bypassPermissions" | "acceptEdits" | "default" (interactive)
+    permission_mode: str | None = Field(None, description="Permission mode for tool authorization")
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +101,14 @@ class AbortResponse(BaseModel):
 
     task_id: str
     status: str
+
+
+class PermissionResponse(BaseModel):
+    """Payload for ``POST /api/v1/query/{task_id}/respond``."""
+
+    permission_id: str = Field(..., description="The permission request ID to respond to")
+    decision: str = Field(..., description="allow or deny")
+    deny_message: str | None = Field(None, description="Optional message when denying")
 
 
 # ---------------------------------------------------------------------------

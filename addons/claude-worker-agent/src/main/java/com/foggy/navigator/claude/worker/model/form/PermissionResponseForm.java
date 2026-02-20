@@ -1,0 +1,16 @@
+package com.foggy.navigator.claude.worker.model.form;
+
+import lombok.Data;
+
+/**
+ * 权限响应表单
+ */
+@Data
+public class PermissionResponseForm {
+    /** 权限请求ID */
+    private String permissionId;
+    /** 决策: allow / deny */
+    private String decision;
+    /** 拒绝原因（可选） */
+    private String denyMessage;
+}

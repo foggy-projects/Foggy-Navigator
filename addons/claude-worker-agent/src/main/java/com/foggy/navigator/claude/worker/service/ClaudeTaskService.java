@@ -113,7 +113,7 @@ public class ClaudeTaskService {
                 this, taskId, sessionId, form.getWorkerId(), userId,
                 form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(),
-                authParams[0], authParams[1], authParams[2]));
+                authParams[0], authParams[1], authParams[2], form.getPermissionMode()));
 
         return toDTO(entity);
     }
@@ -189,7 +189,7 @@ public class ClaudeTaskService {
                 this, taskId, sessionId, form.getWorkerId(), userId,
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
                 form.getModel(), form.getMaxTurns(), agentTeamsJson,
-                authParams[0], authParams[1], authParams[2]));
+                null, authParams[0], authParams[1], authParams[2], form.getPermissionMode()));
 
         return toDTO(entity);
     }
@@ -271,6 +271,32 @@ public class ClaudeTaskService {
             }
             taskRepository.save(entity);
             log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
+        });
+    }
+
+    /**
+     * 标记任务为等待权限审批
+     */
+    @Transactional
+    public void setAwaitingPermission(String taskId) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setStatus("AWAITING_PERMISSION");
+            taskRepository.save(entity);
+            log.info("Task awaiting permission: taskId={}", taskId);
+        });
+    }
+
+    /**
+     * 从等待权限恢复为运行中
+     */
+    @Transactional
+    public void resumeFromPermission(String taskId) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            if ("AWAITING_PERMISSION".equals(entity.getStatus())) {
+                entity.setStatus("RUNNING");
+                taskRepository.save(entity);
+                log.info("Task resumed from permission: taskId={}", taskId);
+            }
         });
     }
 
@@ -485,16 +511,29 @@ public class ClaudeTaskService {
     @Scheduled(fixedDelay = 300000)
     @Transactional
     public void checkTimeoutTasks() {
-        LocalDateTime cutoff = LocalDateTime.now().minusHours(4);
-        List<ClaudeTaskEntity> timedOut = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", cutoff);
+        // RUNNING tasks: 4 hour timeout
+        LocalDateTime runningCutoff = LocalDateTime.now().minusHours(4);
+        List<ClaudeTaskEntity> timedOut = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", runningCutoff);
         for (ClaudeTaskEntity entity : timedOut) {
             entity.setStatus("FAILED");
             entity.setErrorMessage("Task timed out (exceeded 4 hours)");
             taskRepository.save(entity);
             log.warn("Task timed out: taskId={}, createdAt={}", entity.getTaskId(), entity.getCreatedAt());
         }
-        if (!timedOut.isEmpty()) {
-            log.info("Marked {} timed-out tasks as FAILED", timedOut.size());
+
+        // AWAITING_PERMISSION tasks: 30 minute timeout
+        LocalDateTime permissionCutoff = LocalDateTime.now().minusMinutes(30);
+        List<ClaudeTaskEntity> permissionTimedOut = taskRepository.findByStatusAndCreatedAtBefore("AWAITING_PERMISSION", permissionCutoff);
+        for (ClaudeTaskEntity entity : permissionTimedOut) {
+            entity.setStatus("FAILED");
+            entity.setErrorMessage("Permission request timed out (exceeded 30 minutes)");
+            taskRepository.save(entity);
+            log.warn("Permission timed out: taskId={}, createdAt={}", entity.getTaskId(), entity.getCreatedAt());
+        }
+
+        int total = timedOut.size() + permissionTimedOut.size();
+        if (total > 0) {
+            log.info("Marked {} timed-out tasks as FAILED", total);
         }
     }
 

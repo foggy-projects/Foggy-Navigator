@@ -9,4 +9,5 @@ export {
   type StateSyncPayload,
   type ErrorPayload,
   type TaskCompletedPayload,
+  type ConfirmationRequestPayload,
 } from '@foggy/chat-core'

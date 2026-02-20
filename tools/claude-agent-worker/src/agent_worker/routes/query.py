@@ -11,9 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
 from ..auth import verify_token
-from ..claude.sdk_wrapper import SdkWrapper, task_registry
+from ..claude.sdk_wrapper import SdkWrapper, task_registry, permission_pending
 from ..config import settings
-from ..models import AbortResponse, QueryEvent, QueryRequest
+from ..models import AbortResponse, PermissionResponse, QueryEvent, QueryRequest
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ async def _event_generator(
     api_key: str | None = None,
     auth_token: str | None = None,
     base_url: str | None = None,
+    permission_mode: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield SSE-compatible ``dict`` payloads from the SDK wrapper stream."""
 
@@ -77,6 +78,7 @@ async def _event_generator(
             api_key=api_key,
             auth_token=auth_token,
             base_url=base_url,
+            permission_mode=permission_mode,
         ):
             yield {"event": "message", "data": json.dumps(event)}
     except asyncio.CancelledError:
@@ -129,9 +131,45 @@ async def query(body: QueryRequest):
             api_key=body.api_key,
             auth_token=body.auth_token,
             base_url=body.base_url,
+            permission_mode=body.permission_mode,
         ),
         media_type="text/event-stream",
     )
+
+
+@router.post("/query/{task_id}/respond")
+async def respond_to_permission(task_id: str, body: PermissionResponse):
+    """Respond to a pending permission request for a running task.
+
+    The ``permission_id`` must match an active permission request
+    created by the ``can_use_tool`` callback.
+    """
+
+    entry = permission_pending.get(body.permission_id)
+
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Permission request '{body.permission_id}' not found or already resolved",
+        )
+
+    if entry.get("task_id") != task_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Permission request does not belong to this task",
+        )
+
+    # Deliver the decision and signal the waiting callback
+    entry["result"] = body.decision
+    entry["deny_message"] = body.deny_message
+    entry["event"].set()
+
+    logger.info(
+        "Permission responded: task_id=%s, permission_id=%s, decision=%s",
+        task_id, body.permission_id, body.decision,
+    )
+
+    return {"task_id": task_id, "permission_id": body.permission_id, "status": "responded"}
 
 
 @router.post("/query/{task_id}/abort", response_model=AbortResponse)

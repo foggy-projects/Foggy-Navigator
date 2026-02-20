@@ -14,6 +14,7 @@
     <MessageList
       :messages="messages"
       :is-thinking="isThinking"
+      @permission-respond="(pid, decision) => emit('permissionRespond', pid, decision)"
     >
       <template #empty>
         <slot name="empty">
@@ -58,6 +59,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'send', content: string): void
+  (e: 'permissionRespond', permissionId: string, decision: string): void
 }>()
 
 const connectionLabel = computed(() => {

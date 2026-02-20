@@ -124,6 +124,7 @@ export async function createTask(form: {
   maxTurns?: number
   agentTeamsJson?: string
   images?: string
+  permissionMode?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks', form)) as unknown as RX<ClaudeTask>
   return rx.data
@@ -139,6 +140,7 @@ export async function resumeTask(form: {
   model?: string
   maxTurns?: number
   agentTeamsJson?: string
+  permissionMode?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks/resume', form)) as unknown as RX<ClaudeTask>
   return rx.data
@@ -181,6 +183,17 @@ export async function listTasksByDirectoryPaged(
   const rx = (await client.get(`/claude-tasks/directory/${directoryId}/page`, {
     params: { page, size },
   })) as unknown as RX<{ content: ClaudeTask[]; totalElements: number; totalPages: number }>
+  return rx.data
+}
+
+export async function respondToPermission(
+  taskId: string,
+  form: { permissionId: string; decision: string; denyMessage?: string },
+): Promise<{ taskId: string; permissionId: string; decision: string }> {
+  const rx = (await client.post(
+    `/claude-tasks/${taskId}/respond`,
+    form,
+  )) as unknown as RX<{ taskId: string; permissionId: string; decision: string }>
   return rx.data
 }
 

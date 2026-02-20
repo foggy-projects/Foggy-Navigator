@@ -67,7 +67,8 @@ public class WorkerStreamRelay {
             Disposable subscription = client.streamQuery(event.getPrompt(), event.getCwd(),
                             event.getClaudeSessionId(), event.getModel(), event.getMaxTurns(),
                             event.getAgentTeamsJson(), event.getImages(),
-                            event.getApiKey(), event.getAuthToken(), event.getBaseUrl())
+                            event.getApiKey(), event.getAuthToken(), event.getBaseUrl(),
+                            event.getPermissionMode())
                     .doOnNext(sse -> {
                         String data = sse.data();
                         if (data == null || data.isEmpty()) {
@@ -193,6 +194,15 @@ public class WorkerStreamRelay {
                         .status("COMPLETED")
                         .resultSummary(truncateResult(event.getResult()))
                         .build());
+            }
+            case "permission_request" -> {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("permissionId", event.getPermissionId());
+                payload.put("toolName", event.getTool());
+                payload.put("toolInput", event.getInput());
+                payload.put("taskId", taskId);
+                publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
+                taskService.setAwaitingPermission(taskId);
             }
             case "error" -> {
                 // 错误事件也可能携带 session_id

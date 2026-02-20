@@ -100,3 +100,10 @@ export interface TaskCompletedPayload {
   status: string
   resultSummary?: string
 }
+
+export interface ConfirmationRequestPayload {
+  permissionId: string
+  toolName: string
+  toolInput?: Record<string, unknown>
+  taskId: string
+}

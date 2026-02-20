@@ -43,6 +43,7 @@
         :input-disabled="inputDisabled"
         placeholder="输入后续指令... (Ctrl+Enter 发送)"
         @send="handleSend"
+        @permission-respond="handlePermissionRespond"
       >
         <template #empty>
           <div class="waiting-hint">等待 Worker 响应...</div>
@@ -89,6 +90,7 @@ const emit = defineEmits<{
   (e: 'abort', paneId: string): void
   (e: 'send', paneId: string, content: string): void
   (e: 'command', payload: { command: string; value: string | number }): void
+  (e: 'permissionRespond', paneId: string, permissionId: string, decision: string): void
 }>()
 
 const paneInput = ref('')
@@ -118,6 +120,10 @@ function handleSend(content?: string) {
   if (!safeText.trim()) return
   emit('send', props.paneState.paneId, safeText)
   paneInput.value = ''
+}
+
+function handlePermissionRespond(permissionId: string, decision: string) {
+  emit('permissionRespond', props.paneState.paneId, permissionId, decision)
 }
 
 function handleCommand(payload: { command: string; value: string | number }) {
@@ -168,6 +174,7 @@ function truncate(text: string, maxLen: number) {
 .pane-status-dot.running { background: #409eff; animation: pulse 1.5s infinite; }
 .pane-status-dot.failed { background: #f56c6c; }
 .pane-status-dot.aborted { background: #e6a23c; }
+.pane-status-dot.awaiting_permission { background: #e6a23c; animation: pulse 1.5s infinite; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
