@@ -346,10 +346,22 @@ class SdkWrapper:
         attach_dir.mkdir(parents=True, exist_ok=True)
 
         saved: list[str] = []
+        max_image_bytes = 20 * 1024 * 1024  # 20MB decoded limit per image
+
         for img in images:
             name = img.get("name", "image.png")
             data_b64 = img.get("data", "")
             if not data_b64:
+                continue
+
+            # Sanitize filename: strip path components to prevent traversal
+            name = Path(name).name
+            if not name or name.startswith("."):
+                name = "image.png"
+
+            # Size check on base64 payload (decoded ~= len*3/4)
+            if len(data_b64) > max_image_bytes * 4 // 3:
+                logger.warning("Image %s exceeds size limit (%d bytes b64), skipping", name, len(data_b64))
                 continue
 
             file_path = attach_dir / name
@@ -394,6 +406,11 @@ class SdkWrapper:
         The generator registers itself in :data:`task_registry` on entry and
         removes itself on exit so that other endpoints (health, abort) can
         inspect and cancel running tasks.
+
+        Timeout strategy:
+        - **Hard timeout**: absolute max duration (default 4h, configurable)
+        - **Heartbeat timeout**: if no SDK event arrives within N seconds
+          (default 10min), the task is considered hung and cancelled
         """
 
         if not _sdk_available:
@@ -426,6 +443,8 @@ class SdkWrapper:
         }
 
         current_session_id: str | None = session_id
+        hard_timeout = settings.task_hard_timeout_seconds
+        heartbeat_timeout = settings.task_heartbeat_timeout_seconds
 
         try:
             env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url)
@@ -469,7 +488,7 @@ class SdkWrapper:
             logger.info(
                 "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s, "
                 "auth_mode=%s, auth_hint=%s, base_url=%s, "
-                "has_agents=%s, has_env=%s",
+                "has_agents=%s, has_env=%s, hard_timeout=%ss, heartbeat_timeout=%ss",
                 task_id,
                 repr(prompt[:80]) if prompt else None,
                 cwd,
@@ -480,13 +499,46 @@ class SdkWrapper:
                 eff_url or "(default)",
                 "agents" in options_kwargs,
                 bool(env),
+                hard_timeout,
+                heartbeat_timeout,
             )
 
             options = _options_cls(**options_kwargs)
 
             current_model: str | None = None
+            started_at = asyncio.get_event_loop().time()
+            last_event_at = started_at
 
             async for message in _query_fn(prompt=prompt, options=options):
+                now = asyncio.get_event_loop().time()
+
+                # Hard timeout check
+                if now - started_at > hard_timeout:
+                    logger.warning(
+                        "Task %s exceeded hard timeout (%ss), cancelling",
+                        task_id, hard_timeout,
+                    )
+                    yield event_mapper.map_error(
+                        task_id=task_id,
+                        error=f"Task exceeded maximum duration ({hard_timeout // 3600}h)",
+                        session_id=current_session_id,
+                    )
+                    return
+
+                # Heartbeat timeout check
+                if now - last_event_at > heartbeat_timeout:
+                    logger.warning(
+                        "Task %s no events for %ss (heartbeat timeout), cancelling",
+                        task_id, heartbeat_timeout,
+                    )
+                    yield event_mapper.map_error(
+                        task_id=task_id,
+                        error=f"Task stalled (no events for {heartbeat_timeout // 60}min)",
+                        session_id=current_session_id,
+                    )
+                    return
+
+                last_event_at = now
                 # -- AssistantMessage (may contain text, tool_use, tool_result blocks)
                 if _AssistantMessage is not None and isinstance(message, _AssistantMessage):
                     # Extract model from AssistantMessage

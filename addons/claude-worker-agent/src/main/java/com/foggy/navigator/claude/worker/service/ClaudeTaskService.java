@@ -480,16 +480,16 @@ public class ClaudeTaskService {
 
     /**
      * 定时检查超时任务（每5分钟）
-     * RUNNING 超过 2 小时的任务标记为 FAILED
+     * RUNNING 超过 4 小时的任务标记为 FAILED（与 Worker 端 hard timeout 对齐）
      */
     @Scheduled(fixedDelay = 300000)
     @Transactional
     public void checkTimeoutTasks() {
-        LocalDateTime cutoff = LocalDateTime.now().minusHours(2);
+        LocalDateTime cutoff = LocalDateTime.now().minusHours(4);
         List<ClaudeTaskEntity> timedOut = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", cutoff);
         for (ClaudeTaskEntity entity : timedOut) {
             entity.setStatus("FAILED");
-            entity.setErrorMessage("Task timed out (exceeded 2 hours)");
+            entity.setErrorMessage("Task timed out (exceeded 4 hours)");
             taskRepository.save(entity);
             log.warn("Task timed out: taskId={}, createdAt={}", entity.getTaskId(), entity.getCreatedAt());
         }

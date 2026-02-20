@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     allowed_cwds: list[str] = []
     max_concurrent_tasks: int = 3
 
+    # Timeout settings
+    task_hard_timeout_seconds: int = 14400     # 4 hours — absolute max task duration
+    task_heartbeat_timeout_seconds: int = 600  # 10 minutes — no events → kill
+    git_timeout_seconds: int = 60              # git subprocess timeout
+
     # LLM config -- injected into Claude Code CLI subprocess via env
     # 二选一：api_key 或 auth_token（取决于你平时用哪个）
     anthropic_api_key: str = ""

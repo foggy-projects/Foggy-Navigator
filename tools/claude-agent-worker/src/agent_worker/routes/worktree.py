@@ -43,7 +43,14 @@ async def _run_git(cwd: str, *args: str) -> tuple[int, str]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=settings.git_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        logger.warning("git %s timed out after %ss in %s", args[0] if args else "?", settings.git_timeout_seconds, cwd)
+        return -1, f"git command timed out after {settings.git_timeout_seconds}s"
     return proc.returncode, stdout.decode("utf-8", errors="replace").strip()
 
 
