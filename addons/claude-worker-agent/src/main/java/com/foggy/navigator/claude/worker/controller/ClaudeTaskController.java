@@ -141,9 +141,6 @@ public class ClaudeTaskController {
         }
 
         String checkpointId = (String) body.get("checkpointId");
-        if (checkpointId == null || checkpointId.isEmpty()) {
-            throw RX.throwB("checkpointId is required");
-        }
 
         String claudeSessionId = task.getClaudeSessionId();
         if (claudeSessionId == null || claudeSessionId.isEmpty()) {
@@ -151,28 +148,48 @@ public class ClaudeTaskController {
         }
 
         String mode = body.get("mode") != null ? body.get("mode").toString() : "file_rewind";
+        Integer turnIndex = body.get("turnIndex") != null ? ((Number) body.get("turnIndex")).intValue() : null;
 
         if ("conversation_fork".equals(mode)) {
-            // Conversation fork: create a new task that resumes from the checkpoint turn
-            Integer turnIndex = body.get("turnIndex") != null ? ((Number) body.get("turnIndex")).intValue() : null;
-            String prompt = "Continue from checkpoint at turn " + (turnIndex != null ? turnIndex : "?")
-                    + ". Disregard any work done after that point.";
+            // Conversation fork: create a NEW session with conversation context up to turnIndex.
+            // Fetches messages from the old session and rebuilds context, so the new session
+            // only sees turns 1..X (no leftover context from later turns).
 
-            com.foggy.navigator.claude.worker.model.form.ResumeTaskForm resumeForm =
-                    new com.foggy.navigator.claude.worker.model.form.ResumeTaskForm();
-            resumeForm.setWorkerId(task.getWorkerId());
-            resumeForm.setClaudeSessionId(claudeSessionId);
-            resumeForm.setPrompt(prompt);
-            resumeForm.setCwd(task.getCwd());
-            resumeForm.setDirectoryId(task.getDirectoryId());
-            resumeForm.setSessionId(task.getSessionId());
+            String forkPrompt;
+            try {
+                ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+                ClaudeWorkerClient client = workerService.createClient(worker);
+                List<Map<String, Object>> messages = client.getSessionMessages(claudeSessionId)
+                        .block(java.time.Duration.ofSeconds(15));
 
-            TaskDTO newTask = taskService.resumeTask(userId, tenantId, resumeForm);
-            return RX.ok(Map.of("status", "forked", "checkpointId", checkpointId,
-                    "taskId", newTask.getTaskId(), "sessionId", newTask.getSessionId()));
+                forkPrompt = buildForkPrompt(messages, turnIndex);
+            } catch (Exception e) {
+                log.warn("Failed to fetch session messages for fork, falling back to simple prompt: {}", e.getMessage());
+                forkPrompt = "Continue from turn " + (turnIndex != null ? turnIndex : "?")
+                        + ". Disregard any work done after that point.";
+            }
+
+            // Create a brand-new task (not resume) so the new session has clean context
+            CreateTaskForm createForm = new CreateTaskForm();
+            createForm.setWorkerId(task.getWorkerId());
+            createForm.setPrompt(forkPrompt);
+            createForm.setCwd(task.getCwd());
+            createForm.setDirectoryId(task.getDirectoryId());
+
+            TaskDTO newTask = taskService.createTask(userId, tenantId, createForm);
+            var result = new java.util.HashMap<String, Object>();
+            result.put("status", "forked");
+            result.put("taskId", newTask.getTaskId());
+            result.put("sessionId", newTask.getSessionId());
+            if (checkpointId != null) result.put("checkpointId", checkpointId);
+            return RX.ok(result);
         }
 
-        // Default: file_rewind — rewind files via Worker
+        // file_rewind mode — requires checkpointId
+        if (checkpointId == null || checkpointId.isEmpty()) {
+            throw RX.throwB("checkpointId is required for file_rewind mode");
+        }
+
         try {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
             ClaudeWorkerClient client = workerService.createClient(worker);
@@ -372,5 +389,70 @@ public class ClaudeTaskController {
         String userId = UserContext.getCurrentUserId();
         taskService.deleteTask(userId, taskId);
         return RX.ok(Map.of("taskId", taskId, "deleted", true));
+    }
+
+    // ===== Private helpers =====
+
+    /**
+     * Build a fork prompt from session messages.
+     * <p>
+     * Extracts conversations up to {@code turnIndex} (1-based user turn count)
+     * and constructs a prompt that includes prior context + the target user prompt.
+     * This gives the new session clean context without leftover later turns.
+     */
+    private String buildForkPrompt(List<Map<String, Object>> messages, Integer turnIndex) {
+        if (messages == null || messages.isEmpty()) {
+            return "Please continue the previous task.";
+        }
+
+        // Separate messages into turns by counting user messages (1-based)
+        int userTurn = 0;
+        int targetTurn = turnIndex != null ? turnIndex : 1;
+
+        // Collect conversation up to the target turn
+        StringBuilder context = new StringBuilder();
+        String targetUserPrompt = null;
+
+        for (Map<String, Object> msg : messages) {
+            String role = (String) msg.get("role");
+            String content = (String) msg.get("content");
+            if (role == null || content == null || content.isBlank()) continue;
+
+            if ("user".equals(role)) {
+                userTurn++;
+                if (userTurn == targetTurn) {
+                    targetUserPrompt = content;
+                    break; // Stop here — don't include anything after this turn
+                }
+                // Prior user turn — add to context
+                context.append("[User Turn ").append(userTurn).append("]\n")
+                        .append(content).append("\n\n");
+            } else if ("assistant".equals(role) && userTurn < targetTurn) {
+                // Prior assistant response — add to context (truncate long responses)
+                String truncated = content.length() > 2000
+                        ? content.substring(0, 2000) + "\n... (truncated)"
+                        : content;
+                context.append("[Assistant Response ").append(userTurn).append("]\n")
+                        .append(truncated).append("\n\n");
+            }
+        }
+
+        if (targetUserPrompt == null) {
+            // Couldn't find the target turn — fall back
+            return "Please continue the previous task.";
+        }
+
+        // If this is turn 1, just use the original prompt directly
+        if (targetTurn == 1 || context.isEmpty()) {
+            return targetUserPrompt;
+        }
+
+        // Multi-turn: include prior context as a preamble
+        return "Below is the conversation history so far. "
+                + "Please respond to the last user request.\n\n"
+                + "--- Conversation History ---\n"
+                + context
+                + "--- Current Request ---\n"
+                + targetUserPrompt;
     }
 }

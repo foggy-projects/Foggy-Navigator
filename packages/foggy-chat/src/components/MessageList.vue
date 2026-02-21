@@ -9,6 +9,8 @@
       <MessageBubble
         v-if="isBubble(msg)"
         :message="msg"
+        :rewindable="isRewindable(msg)"
+        @rewind="handleRewind(msg)"
       />
       <ToolCallBlock
         v-else-if="isToolCall(msg)"
@@ -66,12 +68,14 @@ import PlanReviewCard from './PlanReviewCard.vue'
 const props = defineProps<{
   messages: ChatMessage[]
   isThinking?: boolean
+  rewindEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string): void
+  (e: 'rewind', turnIndex: number): void
 }>()
 
 const listRef = ref<HTMLElement>()
@@ -89,6 +93,28 @@ function isToolCall(msg: ChatMessage) {
 function isError(msg: ChatMessage) {
   return (msg.type === AipMessageType.ERROR || msg.type === AipMessageType.TOOL_CALL_ERROR)
     && (msg.error || msg.content)
+}
+
+// Map each user message ID → turn index (1-based)
+const userTurnMap = computed(() => {
+  const map = new Map<string, number>()
+  let turn = 0
+  for (const msg of props.messages) {
+    if (msg.sender === 'user') {
+      turn++
+      map.set(msg.id, turn)
+    }
+  }
+  return map
+})
+
+function isRewindable(msg: ChatMessage): boolean {
+  return !!props.rewindEnabled && msg.sender === 'user'
+}
+
+function handleRewind(msg: ChatMessage) {
+  const turn = userTurnMap.value.get(msg.id)
+  if (turn !== undefined) emit('rewind', turn)
 }
 
 const hasTrailingThinking = computed(() => {

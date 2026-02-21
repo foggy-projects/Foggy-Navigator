@@ -5,11 +5,22 @@
       <span class="timestamp">{{ formattedTime }}</span>
     </div>
     <div class="bubble-content markdown-body" v-html="renderedContent"></div>
+    <div class="bubble-actions">
+      <span class="action-btn" title="复制" @click.stop="handleCopy">
+        {{ copied ? '&#10003; 已复制' : '&#128203; 复制' }}
+      </span>
+      <span
+        v-if="rewindable"
+        class="action-btn"
+        title="回退到此"
+        @click.stop="emit('rewind')"
+      >&#8617; 回退到此</span>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -64,6 +75,11 @@ const md = new MarkdownIt({
 
 const props = defineProps<{
   message: ChatMessage
+  rewindable?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'rewind'): void
 }>()
 
 const senderLabel = computed(() => {
@@ -94,6 +110,15 @@ function cleanContent(content: string): string {
 const renderedContent = computed(() => {
   return md.render(cleanContent(props.message.content || ''))
 })
+
+const copied = ref(false)
+function handleCopy() {
+  const text = props.message.content || ''
+  navigator.clipboard.writeText(text).then(() => {
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 1500)
+  })
+}
 </script>
 
 <style scoped>
@@ -206,6 +231,35 @@ const renderedContent = computed(() => {
   border-left: 3px solid #dcdfe6;
   padding-left: 12px;
   margin: 8px 0;
+  color: #606266;
+}
+
+/* Hover action bar */
+.bubble-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  user-select: none;
+}
+
+.message-bubble:hover .bubble-actions {
+  opacity: 1;
+}
+
+.action-btn {
+  font-size: 11px;
+  color: #909399;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.action-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
   color: #606266;
 }
 </style>

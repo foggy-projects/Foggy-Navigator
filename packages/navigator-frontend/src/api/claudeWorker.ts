@@ -209,15 +209,16 @@ export async function abortTask(
 
 export async function rewindTask(
   taskId: string,
-  checkpointId: string,
+  checkpointId: string | null,
   mode: 'file_rewind' | 'conversation_fork' = 'file_rewind',
   turnIndex?: number,
-): Promise<{ status: string; checkpointId: string; taskId?: string }> {
-  const rx = (await client.post(`/claude-tasks/${taskId}/rewind`, {
-    checkpointId,
-    mode,
-    turnIndex,
-  })) as unknown as RX<{ status: string; checkpointId: string; taskId?: string }>
+): Promise<{ status: string; checkpointId?: string; taskId?: string }> {
+  const body: Record<string, unknown> = { mode }
+  if (checkpointId) body.checkpointId = checkpointId
+  if (turnIndex != null) body.turnIndex = turnIndex
+  const rx = (await client.post(`/claude-tasks/${taskId}/rewind`, body)) as unknown as RX<{
+    status: string; checkpointId?: string; taskId?: string
+  }>
   return rx.data
 }
 

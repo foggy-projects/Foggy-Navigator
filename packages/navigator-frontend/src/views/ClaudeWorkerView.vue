@@ -129,7 +129,7 @@
     <!-- Middle Panel: Main Content Area -->
     <main :class="['worker-main', { 'has-panes': panes.length > 0 }]" @paste="handlePaste" @drop="handleDrop" @dragover="handleDragOver">
       <!-- Hidden file input for image picker -->
-      <input ref="fileInputRef" type="file" multiple accept="image/*" style="display: none" @change="handleFileSelect">
+      <input ref="fileInputRef" type="file" multiple accept="image/*" class="sr-only" @change="handleFileSelect">
       <!-- Directory selected: show git info + task form scoped to directory -->
       <template v-if="selectedDirectory">
         <!-- Compact directory header -->
@@ -305,6 +305,7 @@
           @permission-respond="handlePermissionRespond"
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
+          @rewind="handlePaneRewind"
         />
       </template>
 
@@ -429,6 +430,7 @@
           @permission-respond="handlePermissionRespond"
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
+          @rewind="handlePaneRewind"
         />
       </template>
 
@@ -494,84 +496,68 @@
               <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(2) }}</span>
               <span v-if="conv.config?.authBound" class="conv-auth-badge" :title="'Auth: ' + (conv.config.authMode || 'bound')">&#128273;</span>
               <span class="conv-time">{{ formatTime(conv.latestTask.createdAt) }}</span>
-              <span class="conv-hover-actions" @click.stop>
+              <!-- Visible action buttons -->
+              <span class="conv-actions" @click.stop>
                 <el-button
+                  v-if="conv.latestTask.status !== 'RUNNING' && conv.claudeSessionId"
+                  type="primary"
                   size="small"
                   text
-                  :title="conv.config?.pinned ? '取消置顶' : '置顶'"
-                  @click="handleTogglePin(conv)"
+                  title="继续对话"
+                  @click="handleResumeFromHistory(conv.latestTask)"
                 >
-                  {{ conv.config?.pinned ? '&#128204;' : '&#128392;' }}
-                </el-button>
-                <el-button
-                  size="small"
-                  text
-                  title="编辑标题"
-                  @click="handleEditTitle(conv)"
-                >
-                  &#9998;
-                </el-button>
-                <el-button
-                  size="small"
-                  text
-                  title="Auth 配置"
-                  @click="handleAuthConfig(conv)"
-                >
-                  &#128273;
-                </el-button>
-                <el-button
-                  size="small"
-                  text
-                  title="详情"
-                  @click="handleShowDetail(conv)"
-                >
-                  &#8505;
+                  继续
                 </el-button>
                 <el-button
                   v-if="conv.latestTask.status === 'RUNNING'"
                   type="warning"
                   size="small"
                   text
+                  title="中止任务"
                   @click="handleAbortTask(conv.latestTask.taskId)"
                 >
                   中止
                 </el-button>
-                <el-button
-                  v-if="conv.latestTask.status !== 'RUNNING' && conv.claudeSessionId"
-                  type="primary"
-                  size="small"
-                  text
-                  @click="handleResumeFromHistory(conv.latestTask)"
-                >
-                  继续
-                </el-button>
-                <el-button
-                  v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
-                  type="info"
-                  size="small"
-                  text
-                  @click.stop="showRewindDialog(conv.latestTask)"
-                >
-                  回退
-                </el-button>
-                <el-button
-                  v-if="canScanCheckpoints(conv.latestTask)"
-                  size="small"
-                  text
-                  :loading="scanningTaskId === conv.latestTask.taskId"
-                  @click.stop="handleScanCheckpoints(conv.latestTask)"
-                >
-                  扫描
-                </el-button>
-                <el-button
-                  v-if="conv.latestTask.status !== 'RUNNING'"
-                  size="small"
-                  text
-                  class="delete-btn"
-                  @click="handleDeleteConversation(conv)"
-                >
-                  删除
-                </el-button>
+                <el-dropdown trigger="click" @click.stop>
+                  <span class="conv-more-trigger" @click.stop>&#8943;</span>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item @click="handleTogglePin(conv)">
+                        {{ conv.config?.pinned ? '取消置顶' : '置顶' }}
+                      </el-dropdown-item>
+                      <el-dropdown-item @click="handleEditTitle(conv)">
+                        编辑标题
+                      </el-dropdown-item>
+                      <el-dropdown-item @click="handleAuthConfig(conv)">
+                        Auth 配置
+                      </el-dropdown-item>
+                      <el-dropdown-item @click="handleShowDetail(conv)">
+                        详情
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
+                        @click="showRewindDialog(conv.latestTask)"
+                      >
+                        回退
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="canScanCheckpoints(conv.latestTask)"
+                        :disabled="scanningTaskId === conv.latestTask.taskId"
+                        @click="handleScanCheckpoints(conv.latestTask)"
+                      >
+                        {{ scanningTaskId === conv.latestTask.taskId ? '扫描中...' : '扫描' }}
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="conv.latestTask.status !== 'RUNNING'"
+                        divided
+                        class="delete-dropdown-item"
+                        @click="handleDeleteConversation(conv)"
+                      >
+                        删除
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </span>
             </div>
           </div>
@@ -929,6 +915,43 @@
       <template #footer>
         <el-button @click="showRewind = false">取消</el-button>
         <el-button type="warning" :disabled="!rewindSelectedId" :loading="rewindLoading" @click="handleRewind">
+          确认回退
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- In-pane Rewind Dialog (from message-level "回退到此") -->
+    <el-dialog v-model="paneRewindVisible" title="回退到此" width="440px">
+      <p style="margin-bottom: 8px">
+        回退到第 <strong>{{ paneRewindTurnIndex }}</strong> 轮用户消息
+        <span v-if="paneRewindCheckpoint" style="color: #909399; font-size: 12px; margin-left: 8px">
+          ({{ paneRewindCheckpoint.timestamp }})
+        </span>
+      </p>
+      <div style="margin-top: 12px">
+        <p style="margin-bottom: 8px; font-weight: 500">回退模式：</p>
+        <el-radio-group v-model="paneRewindMode">
+          <el-radio value="conversation_fork">
+            仅回退会话
+            <span style="color: #909399; font-size: 12px; margin-left: 4px">(从该轮继续新对话)</span>
+          </el-radio>
+          <el-radio value="file_rewind" :disabled="!paneRewindCheckpoint || !paneRewindFileEnabled">
+            回退会话 + 文件
+            <template v-if="!paneRewindCheckpoint">
+              <span style="color: #F56C6C; font-size: 12px; margin-left: 4px">(该轮次无 Checkpoint)</span>
+            </template>
+            <template v-else-if="!paneRewindFileEnabled">
+              <span style="color: #F56C6C; font-size: 12px; margin-left: 4px">(未启用文件快照)</span>
+            </template>
+            <template v-else>
+              <span style="color: #909399; font-size: 12px; margin-left: 4px">(文件还原到该时间点)</span>
+            </template>
+          </el-radio>
+        </el-radio-group>
+      </div>
+      <template #footer>
+        <el-button @click="paneRewindVisible = false">取消</el-button>
+        <el-button type="warning" :loading="paneRewindLoading" @click="executePaneRewind">
           确认回退
         </el-button>
       </template>
@@ -1807,6 +1830,74 @@ async function handlePlanRespond(paneId: string, permissionId: string, decision:
   }
 }
 
+// In-pane rewind state
+const paneRewindVisible = ref(false)
+const paneRewindPaneId = ref('')
+const paneRewindTurnIndex = ref(0)
+const paneRewindTask = ref<ClaudeTask | null>(null)
+const paneRewindMode = ref<'conversation_fork' | 'file_rewind'>('conversation_fork')
+const paneRewindCheckpoint = ref<{ id: string; turnIndex: number; timestamp: string } | null>(null)
+const paneRewindFileEnabled = ref(false)
+const paneRewindLoading = ref(false)
+
+function handlePaneRewind(paneId: string, turnIndex: number) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  if (!pane?.task.value) return
+
+  const task = pane.task.value
+  paneRewindPaneId.value = paneId
+  paneRewindTurnIndex.value = turnIndex
+  paneRewindTask.value = task
+  paneRewindMode.value = 'conversation_fork'
+  paneRewindFileEnabled.value = task.fileCheckpointingEnabled === true
+  paneRewindLoading.value = false
+
+  // Try to find a matching checkpoint for this turn
+  let cp: { id: string; turnIndex: number; timestamp: string } | null = null
+  if (task.checkpoints) {
+    try {
+      const cps = JSON.parse(task.checkpoints) as { id: string; turnIndex: number; timestamp: string }[]
+      cp = cps.find((c) => c.turnIndex === turnIndex) || null
+    } catch { /* ignore */ }
+  }
+  paneRewindCheckpoint.value = cp
+
+  paneRewindVisible.value = true
+}
+
+async function executePaneRewind() {
+  if (!paneRewindTask.value) return
+  paneRewindLoading.value = true
+
+  const task = paneRewindTask.value
+  const mode = paneRewindMode.value
+  const cpId = paneRewindCheckpoint.value?.id || null
+
+  // file_rewind requires a checkpoint
+  if (mode === 'file_rewind' && !cpId) {
+    ElMessage.error('该轮次无 Checkpoint，无法回退文件')
+    paneRewindLoading.value = false
+    return
+  }
+
+  try {
+    await dirApi.rewindTask(task.taskId, cpId, mode, paneRewindTurnIndex.value)
+    if (mode === 'conversation_fork') {
+      ElMessage.success('会话已 fork，新任务已创建')
+    } else {
+      ElMessage.success('文件已回退')
+    }
+    workerState.loadTasks()
+    if (selectedDirectoryId.value) loadDirectoryTasks()
+    paneRewindVisible.value = false
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '回退失败'
+    ElMessage.error(msg)
+  } finally {
+    paneRewindLoading.value = false
+  }
+}
+
 function handleSlashCommand(payload: { command: string; value: string | number }) {
   if (payload.command === 'model') {
     taskForm.value.model = payload.value as string
@@ -2606,7 +2697,7 @@ function formatTime(dateStr: string): string {
   background: #ebeef5;
 }
 
-.conv-item:hover .conv-hover-actions {
+.conv-item:hover .conv-actions {
   opacity: 1;
 }
 
@@ -2651,7 +2742,6 @@ function formatTime(dateStr: string): string {
   margin-top: 2px;
   font-size: 12px;
   color: #909399;
-  overflow: hidden;
   min-width: 0;
 }
 
@@ -2684,13 +2774,35 @@ function formatTime(dateStr: string): string {
   flex-shrink: 0;
 }
 
-.conv-hover-actions {
+.conv-actions {
   margin-left: auto;
-  opacity: 0;
-  transition: opacity 0.15s;
   display: flex;
-  gap: 0;
+  align-items: center;
+  gap: 2px;
   flex-shrink: 0;
+}
+
+.conv-more-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #909399;
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.conv-more-trigger:hover {
+  background: #dcdfe6;
+  color: #303133;
+}
+
+:deep(.delete-dropdown-item) {
+  color: #f56c6c !important;
 }
 
 .conv-pinned {
@@ -2715,13 +2827,7 @@ function formatTime(dateStr: string): string {
   flex-shrink: 0;
 }
 
-.delete-btn {
-  color: #c0c4cc !important;
-}
-
-.delete-btn:hover {
-  color: #f56c6c !important;
-}
+/* Kept for backward compat — now primarily using dropdown */
 
 .task-pagination {
   margin-top: 12px;
@@ -2810,5 +2916,17 @@ function formatTime(dateStr: string): string {
 
 .image-preview-item:hover .image-remove {
   opacity: 1;
+}
+
+/* Visually hidden but accessible (for file input) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
 }
 </style>

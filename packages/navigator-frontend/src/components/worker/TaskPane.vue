@@ -41,11 +41,13 @@
         :show-header="false"
         :show-input="canInput"
         :input-disabled="inputDisabled"
+        :rewind-enabled="rewindEnabled"
         placeholder="输入后续指令... (Ctrl+Enter 发送)"
         @send="handleSend"
         @permission-respond="handlePermissionRespond"
         @question-respond="handleQuestionRespond"
         @plan-respond="handlePlanRespond"
+        @rewind="handleRewind"
       >
         <template #empty>
           <div class="waiting-hint">等待 Worker 响应...</div>
@@ -95,6 +97,7 @@ const emit = defineEmits<{
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string): void
+  (e: 'rewind', paneId: string, turnIndex: number): void
 }>()
 
 const paneInput = ref('')
@@ -141,6 +144,16 @@ function handlePlanRespond(permissionId: string, decision: string, denyMessage?:
 function handleCommand(payload: { command: string; value: string | number }) {
   emit('command', payload)
 }
+
+function handleRewind(turnIndex: number) {
+  emit('rewind', props.paneState.paneId, turnIndex)
+}
+
+// Rewind is enabled when task has a Claude session and is not running
+const rewindEnabled = computed(() => {
+  const t = props.paneState.task.value
+  return !!t?.claudeSessionId && t.status !== 'RUNNING' && t.status !== 'PENDING'
+})
 
 function truncate(text: string, maxLen: number) {
   return text.length > maxLen ? text.substring(0, maxLen) + '...' : text

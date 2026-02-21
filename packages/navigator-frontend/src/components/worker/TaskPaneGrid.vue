@@ -13,6 +13,7 @@
       @permission-respond="(paneId, pid, decision, scope) => emit('permissionRespond', paneId, pid, decision, scope)"
       @question-respond="(paneId, pid, answers) => emit('questionRespond', paneId, pid, answers)"
       @plan-respond="(paneId, pid, decision, denyMsg) => emit('planRespond', paneId, pid, decision, denyMsg)"
+      @rewind="(paneId, turnIndex) => emit('rewind', paneId, turnIndex)"
     />
   </div>
 </template>
@@ -35,6 +36,7 @@ const emit = defineEmits<{
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string): void
+  (e: 'rewind', paneId: string, turnIndex: number): void
 }>()
 </script>
 

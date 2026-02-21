@@ -14,9 +14,11 @@
     <MessageList
       :messages="messages"
       :is-thinking="isThinking"
+      :rewind-enabled="rewindEnabled"
       @permission-respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
       @question-respond="(pid, answers) => emit('questionRespond', pid, answers)"
       @plan-respond="(pid, decision, denyMsg) => emit('planRespond', pid, decision, denyMsg)"
+      @rewind="(turnIndex) => emit('rewind', turnIndex)"
     >
       <template #empty>
         <slot name="empty">
@@ -50,6 +52,7 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   showHeader?: boolean
   showInput?: boolean
+  rewindEnabled?: boolean
 }>(), {
   isThinking: false,
   connectionStatus: 'disconnected',
@@ -64,6 +67,7 @@ const emit = defineEmits<{
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string): void
+  (e: 'rewind', turnIndex: number): void
 }>()
 
 const connectionLabel = computed(() => {
