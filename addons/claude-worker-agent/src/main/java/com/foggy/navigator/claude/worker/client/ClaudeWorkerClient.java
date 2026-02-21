@@ -244,6 +244,21 @@ public class ClaudeWorkerClient {
     }
 
     /**
+     * 回退会话到指定轮次（标记后续消息为 sidechain）
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> rewindConversation(String sessionId, int turnIndex) {
+        return webClient.post()
+                .uri("/api/v1/sessions/{sessionId}/rewind-conversation", sessionId)
+                .bodyValue(Map.of("turnIndex", turnIndex))
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Rewind conversation failed for worker {}, session {}: {}",
+                        workerId, sessionId, e.getMessage()));
+    }
+
+    /**
      * 触发 Worker 重新扫描 Claude Code 本地会话
      */
     @SuppressWarnings("unchecked")

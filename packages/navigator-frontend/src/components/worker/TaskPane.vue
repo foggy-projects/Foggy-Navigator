@@ -78,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import type { SkillInfo } from '@/types'
@@ -101,6 +101,14 @@ const emit = defineEmits<{
 }>()
 
 const paneInput = ref('')
+
+// Sync pendingInput from parent (e.g. after rewind fills the original prompt)
+watch(() => props.paneState.pendingInput.value, (val) => {
+  if (val) {
+    paneInput.value = val
+    props.paneState.pendingInput.value = '' // consume it
+  }
+})
 
 const modelShort = computed(() => {
   const m = props.paneState.task.value?.model

@@ -11,6 +11,8 @@ export interface TaskPaneState {
   paneId: string
   task: Ref<ClaudeTask | null>
   chatState: ChatState
+  /** Pre-fill the input field (e.g. after rewind with original prompt) */
+  pendingInput: Ref<string>
   connect(sessionId: string): Promise<void>
   /** Resume in-place: keep messages, update task, reconnect SSE */
   resumeInPlace(newTask: ClaudeTask): void
@@ -26,6 +28,7 @@ export interface UseTaskPaneOptions {
 export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskPaneState {
   const task = ref<ClaudeTask | null>(null)
   const chatState = createChatState()
+  const pendingInput = ref('')
   let sseController: SseController | null = null
 
   /** Create SSE connection for a given sessionId (shared by connect and resumeInPlace) */
@@ -203,6 +206,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     paneId,
     task,
     chatState,
+    pendingInput,
     connect,
     resumeInPlace,
     disconnect,

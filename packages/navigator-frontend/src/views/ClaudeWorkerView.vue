@@ -1881,14 +1881,20 @@ async function executePaneRewind() {
   }
 
   try {
-    await dirApi.rewindTask(task.taskId, cpId, mode, paneRewindTurnIndex.value)
+    const result = await dirApi.rewindTask(task.taskId, cpId, mode, paneRewindTurnIndex.value)
     if (mode === 'conversation_fork') {
-      ElMessage.success('会话已 fork，新任务已创建')
+      // Conversation rewind: no new task created. Fill the pane input with original prompt.
+      const userPrompt = (result as Record<string, unknown>)?.userPrompt as string || ''
+      const pane = panes.value.find((p) => p.paneId === paneRewindPaneId.value)
+      if (pane && userPrompt) {
+        pane.pendingInput.value = userPrompt
+      }
+      ElMessage.success('会话已回退，请编辑提示词后发送')
     } else {
       ElMessage.success('文件已回退')
+      workerState.loadTasks()
+      if (selectedDirectoryId.value) loadDirectoryTasks()
     }
-    workerState.loadTasks()
-    if (selectedDirectoryId.value) loadDirectoryTasks()
     paneRewindVisible.value = false
   } catch (e) {
     const msg = e instanceof Error ? e.message : '回退失败'

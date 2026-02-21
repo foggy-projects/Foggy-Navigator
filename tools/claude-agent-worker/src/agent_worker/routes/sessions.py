@@ -10,6 +10,7 @@ from ..claude.sdk_wrapper import session_store
 from ..claude.session_scanner import (
     count_session_messages,
     read_session_messages,
+    rewind_session_conversation,
     scan_all_sessions,
     scan_session_checkpoints,
 )
@@ -86,6 +87,33 @@ async def get_session_messages(session_id: str) -> list[dict]:
         # Still return 200 with empty list - the session may exist but have no displayable messages
         return []
     return messages
+
+
+@router.post("/sessions/{session_id}/rewind-conversation")
+async def rewind_conversation(session_id: str, body: dict) -> dict:
+    """Rewind a session's conversation to a specific user turn.
+
+    Marks all JSONL lines after the target turn as ``isSidechain: true``,
+    so that resuming the session will only see messages up to that turn.
+
+    Body: ``{"turnIndex": N}`` (1-based user turn count).
+    Returns the user's original prompt at that turn for use as the resume prompt.
+    """
+    turn_index = body.get("turnIndex")
+    if turn_index is None or not isinstance(turn_index, int) or turn_index < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="turnIndex is required and must be a positive integer",
+        )
+
+    result = rewind_session_conversation(session_id, turn_index)
+    if result["status"] == "error":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND if "not found" in result.get("message", "") else status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result["message"],
+        )
+
+    return result
 
 
 @router.post("/sessions/sync")

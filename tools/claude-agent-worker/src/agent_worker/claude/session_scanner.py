@@ -330,6 +330,124 @@ def count_session_messages(session_id: str) -> dict:
     return {"user_count": user_count, "assistant_count": assistant_count, "total": user_count + assistant_count}
 
 
+def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
+    """Mark the target user turn and all subsequent lines as sidechain.
+
+    After rewind, the JSONL contains:
+    - turns 1..X-1 (user + assistant): preserved
+    - turn X user message + everything after: marked ``isSidechain: true``
+
+    When the session is then resumed with the original prompt, Claude sees
+    only turns 1..X-1 plus the fresh user message — no duplicates.
+
+    Returns ``{"status": "rewound", "user_prompt": str, "turn_index": int}``
+    on success, or ``{"status": "error", "message": str}`` on failure.
+    """
+    filepath = _find_session_file(session_id)
+    if filepath is None:
+        return {"status": "error", "message": f"Session file not found: {session_id}"}
+
+    lines: list[str] = []
+    try:
+        with open(filepath, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError as exc:
+        return {"status": "error", "message": f"Failed to read session: {exc}"}
+
+    # Find the target user turn line — cutoff starts AT this line (inclusive)
+    user_turn = 0
+    cutoff_line = -1
+    user_prompt = ""
+
+    for i, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+
+        if obj.get("type") != "user":
+            continue
+        if obj.get("isSidechain"):
+            continue
+
+        user_turn += 1
+        if user_turn == turn_index:
+            # Found the target turn — extract prompt and set cutoff AT this line
+            msg = obj.get("message", {})
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                user_prompt = content
+            cutoff_line = i  # mark FROM this line (inclusive)
+            break
+
+    if cutoff_line == -1:
+        return {"status": "error", "message": f"Turn {turn_index} not found (only {user_turn} user turns)"}
+
+    # Second pass: rewrite lines after cutoff to add isSidechain: true
+    modified = False
+    new_lines: list[str] = []
+    for i, raw_line in enumerate(lines):
+        if i < cutoff_line:
+            new_lines.append(raw_line)
+            continue
+
+        stripped = raw_line.strip()
+        if not stripped:
+            new_lines.append(raw_line)
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            new_lines.append(raw_line)
+            continue
+
+        if not obj.get("isSidechain"):
+            obj["isSidechain"] = True
+            modified = True
+            new_lines.append(json.dumps(obj, ensure_ascii=False) + "\n")
+        else:
+            new_lines.append(raw_line)
+
+    if not modified:
+        return {"status": "noop", "user_prompt": user_prompt, "turn_index": turn_index,
+                "message": "No messages to mark as sidechain"}
+
+    # Write back atomically (write to temp file then rename)
+    tmp_path = filepath.with_suffix(".jsonl.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            fh.writelines(new_lines)
+        tmp_path.replace(filepath)
+    except OSError as exc:
+        # Clean up temp file on failure
+        tmp_path.unlink(missing_ok=True)
+        return {"status": "error", "message": f"Failed to write session file: {exc}"}
+
+    # Count how many lines were newly marked as sidechain
+    marked_count = sum(1 for line in new_lines[cutoff_line:]
+                       if line.strip() and '"isSidechain": true' in line)
+
+    logger.info(
+        "Rewound session %s to turn %d: cutoff_line=%d, total_lines=%d, "
+        "marked_as_sidechain=%d, user_prompt=%s",
+        session_id, turn_index, cutoff_line, len(lines),
+        marked_count, repr(user_prompt[:80]) if user_prompt else None,
+    )
+
+    return {"status": "rewound", "user_prompt": user_prompt, "turn_index": turn_index}
+
+
+def _safe_json_parse(s: str) -> dict | None:
+    """Parse JSON string, return None on failure."""
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def scan_all_sessions(allowed_cwds: list[str]) -> dict[str, dict]:
     """Scan all *allowed_cwds* and return a ``session_store``-compatible dict.
 
