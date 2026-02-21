@@ -7,7 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..auth import verify_token
 from ..claude.sdk_wrapper import session_store
-from ..claude.session_scanner import read_session_messages, scan_all_sessions
+from ..claude.session_scanner import (
+    count_session_messages,
+    read_session_messages,
+    scan_all_sessions,
+    scan_session_checkpoints,
+)
 from ..config import settings
 from ..models import SessionInfo
 
@@ -56,6 +61,18 @@ async def get_session(session_id: str) -> SessionInfo:
         slug=info.get("slug"),
         git_branch=info.get("git_branch"),
     )
+
+
+@router.get("/sessions/{session_id}/checkpoints")
+async def get_session_checkpoints(session_id: str) -> list[dict]:
+    """Scan a Claude Code local JSONL file for UserMessage UUIDs as checkpoints."""
+    return scan_session_checkpoints(session_id)
+
+
+@router.get("/sessions/{session_id}/message-count")
+async def get_session_message_count(session_id: str) -> dict:
+    """Count user/assistant messages in a Claude Code local JSONL file."""
+    return count_session_messages(session_id)
 
 
 @router.get("/sessions/{session_id}/messages")

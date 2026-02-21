@@ -202,6 +202,34 @@ public class ClaudeWorkerClient {
     }
 
     /**
+     * 扫描会话 JSONL 提取 checkpoint（UserMessage UUID）
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<java.util.List<Map<String, Object>>> scanSessionCheckpoints(String sessionId) {
+        return webClient.get()
+                .uri("/api/v1/sessions/{sessionId}/checkpoints", sessionId)
+                .retrieve()
+                .bodyToMono(java.util.List.class)
+                .map(list -> (java.util.List<Map<String, Object>>) list)
+                .doOnError(e -> log.warn("Scan session checkpoints failed for worker {}, session {}: {}",
+                        workerId, sessionId, e.getMessage()));
+    }
+
+    /**
+     * 统计会话 JSONL 中的消息数量
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getSessionMessageCount(String sessionId) {
+        return webClient.get()
+                .uri("/api/v1/sessions/{sessionId}/message-count", sessionId)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Get session message count failed for worker {}, session {}: {}",
+                        workerId, sessionId, e.getMessage()));
+    }
+
+    /**
      * 读取 Claude Code 本地会话的对话历史
      */
     @SuppressWarnings("unchecked")

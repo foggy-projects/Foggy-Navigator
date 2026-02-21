@@ -29,6 +29,8 @@ public class TaskDTO {
     private String errorMessage;
     /** JSON array of checkpoint objects */
     private String checkpoints;
+    /** Whether file checkpointing was enabled for this task */
+    private Boolean fileCheckpointingEnabled;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

@@ -71,6 +71,10 @@ public class ClaudeTaskEntity {
     @Column(columnDefinition = "TEXT")
     private String checkpoints;
 
+    /** Whether file checkpointing was enabled for this task (Navigator-created tasks = true, synced = false) */
+    @Column
+    private Boolean fileCheckpointingEnabled;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

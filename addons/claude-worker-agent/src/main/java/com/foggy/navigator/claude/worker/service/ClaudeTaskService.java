@@ -100,6 +100,7 @@ public class ClaudeTaskService {
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
+        entity.setFileCheckpointingEnabled(true);
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
 
@@ -177,6 +178,7 @@ public class ClaudeTaskService {
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
         entity.setClaudeSessionId(form.getClaudeSessionId());
+        entity.setFileCheckpointingEnabled(true);
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
 
@@ -235,6 +237,25 @@ public class ClaudeTaskService {
     public Page<TaskDTO> listTasksByDirectory(String userId, String directoryId, int page, int size) {
         return taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId, PageRequest.of(page, size))
                 .map(this::toDTO);
+    }
+
+    /**
+     * 扫描并填充 checkpoints（用于旧/同步会话无 checkpoint 数据时从 JSONL 补齐）
+     */
+    @Transactional
+    public String scanAndPopulateCheckpoints(String taskId, List<Map<String, Object>> scannedCheckpoints) {
+        ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        try {
+            String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(scannedCheckpoints);
+            entity.setCheckpoints(json);
+            taskRepository.save(entity);
+            log.info("Checkpoints populated from scan: taskId={}, count={}", taskId, scannedCheckpoints.size());
+            return json;
+        } catch (Exception e) {
+            log.warn("Failed to serialize scanned checkpoints for task {}: {}", taskId, e.getMessage());
+            throw new IllegalStateException("Failed to save checkpoints");
+        }
     }
 
     /**
@@ -421,6 +442,7 @@ public class ClaudeTaskService {
             entity.setCwd(cwd);
             entity.setDirectoryId(directoryId);
             entity.setClaudeSessionId(claudeSessionId);
+            entity.setFileCheckpointingEnabled(false);
             entity.setStatus("COMPLETED");
 
             // Preserve original timestamps from JSONL
@@ -602,6 +624,7 @@ public class ClaudeTaskService {
                 .model(entity.getModel())
                 .errorMessage(entity.getErrorMessage())
                 .checkpoints(entity.getCheckpoints())
+                .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

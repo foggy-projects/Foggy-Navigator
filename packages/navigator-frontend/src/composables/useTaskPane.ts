@@ -3,6 +3,7 @@ import { createChatState, createSseClient, AipMessageType } from '@foggy/chat'
 import type { ChatState, SseController, ChatMessage } from '@foggy/chat'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'
+import * as workerApi from '@/api/claudeWorker'
 import { getToken } from '@/utils/auth'
 import type { AgentMessage, ClaudeTask } from '@/types'
 
@@ -94,9 +95,14 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     chatState.setConnectionStatus('connecting')
 
     // Load history messages
+    let dbMessageCount = 0
     try {
       const messages = await sessionApi.getMessages(sessionId)
       for (const msg of messages) {
+        // Count USER/ASSISTANT messages (same口径 as JSONL count)
+        if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
+          dbMessageCount++
+        }
         const chatMsg: ChatMessage = {
           id: msg.id,
           type: AipMessageType.TEXT_COMPLETE,
@@ -111,6 +117,57 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     }
 
     createSseConnection(sessionId)
+
+    // Non-blocking: detect and load JSONL delta messages
+    if (task.value?.claudeSessionId && task.value?.workerId) {
+      detectAndLoadDelta(task.value.workerId, task.value.claudeSessionId, dbMessageCount)
+    }
+  }
+
+  /** Detect new messages in JSONL that are not in the DB and append them to chat */
+  async function detectAndLoadDelta(workerId: string, claudeSessionId: string, dbMsgCount: number) {
+    try {
+      // 1. Get JSONL message count from Worker
+      const countResult = await workerApi.getWorkerSessionMessageCount(workerId, claudeSessionId)
+      const jsonlTotal = countResult.total
+
+      // 2. If JSONL has more messages than DB and DB has at least some messages
+      if (jsonlTotal > dbMsgCount && dbMsgCount > 0) {
+        // 3. Fetch all JSONL messages
+        const allMessages = await workerApi.getWorkerSessionMessages(workerId, claudeSessionId)
+
+        // 4. Take the delta (messages after DB count)
+        const delta = allMessages.slice(dbMsgCount)
+        if (delta.length === 0) return
+
+        // 5. Insert separator
+        const separatorMsg: ChatMessage = {
+          id: `delta-separator-${Date.now()}`,
+          type: AipMessageType.TEXT_COMPLETE,
+          sender: 'assistant',
+          content: `--- 检测到 ${delta.length} 条外部对话 ---`,
+          timestamp: Date.now(),
+        }
+        chatState.messages.value.push(separatorMsg)
+
+        // 6. Append delta messages
+        for (const msg of delta) {
+          const chatMsg: ChatMessage = {
+            id: `delta-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            type: AipMessageType.TEXT_COMPLETE,
+            sender: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.content,
+            timestamp: msg.timestamp ? new Date(msg.timestamp).getTime() : Date.now(),
+          }
+          chatState.messages.value.push(chatMsg)
+        }
+
+        console.log(`[TaskPane ${paneId}] Loaded ${delta.length} delta messages from JSONL`)
+      }
+    } catch (e) {
+      // Best-effort: fail silently
+      console.debug(`[TaskPane ${paneId}] Delta detection failed (non-critical):`, e)
+    }
   }
 
   /** Resume in the same pane without clearing messages */

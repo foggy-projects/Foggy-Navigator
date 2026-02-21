@@ -247,6 +247,89 @@ def read_session_messages(session_id: str) -> list[dict]:
     return messages
 
 
+def scan_session_checkpoints(session_id: str) -> list[dict]:
+    """Scan a session JSONL to extract UserMessage UUIDs as checkpoints.
+
+    Returns a list of ``{"id": uuid, "turnIndex": N, "timestamp": "..."}``.
+    Only non-sidechain user messages with a UUID are included.
+    """
+    filepath = _find_session_file(session_id)
+    if filepath is None:
+        return []
+
+    checkpoints: list[dict] = []
+    turn_index = 0
+    try:
+        with open(filepath, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if obj.get("type") != "user":
+                    continue
+                if obj.get("isSidechain"):
+                    continue
+
+                uuid = obj.get("uuid")
+                if not uuid:
+                    continue
+
+                turn_index += 1
+                checkpoints.append({
+                    "id": uuid,
+                    "turnIndex": turn_index,
+                    "timestamp": obj.get("timestamp", ""),
+                })
+    except OSError as exc:
+        logger.warning("Failed to scan checkpoints for session %s: %s", session_id, exc)
+        return []
+
+    return checkpoints
+
+
+def count_session_messages(session_id: str) -> dict:
+    """Count user/assistant messages in a session JSONL.
+
+    Returns ``{"user_count": N, "assistant_count": N, "total": N}``.
+    Only non-sidechain messages are counted.
+    """
+    filepath = _find_session_file(session_id)
+    if filepath is None:
+        return {"user_count": 0, "assistant_count": 0, "total": 0}
+
+    user_count = 0
+    assistant_count = 0
+    try:
+        with open(filepath, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if obj.get("isSidechain"):
+                    continue
+
+                msg_type = obj.get("type")
+                if msg_type == "user":
+                    user_count += 1
+                elif msg_type == "assistant":
+                    assistant_count += 1
+    except OSError as exc:
+        logger.warning("Failed to count messages for session %s: %s", session_id, exc)
+        return {"user_count": 0, "assistant_count": 0, "total": 0}
+
+    return {"user_count": user_count, "assistant_count": assistant_count, "total": user_count + assistant_count}
+
+
 def scan_all_sessions(allowed_cwds: list[str]) -> dict[str, dict]:
     """Scan all *allowed_cwds* and return a ``session_store``-compatible dict.
 

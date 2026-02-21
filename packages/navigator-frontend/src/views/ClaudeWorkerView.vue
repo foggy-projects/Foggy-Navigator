@@ -555,6 +555,15 @@
                   回退
                 </el-button>
                 <el-button
+                  v-if="canScanCheckpoints(conv.latestTask)"
+                  size="small"
+                  text
+                  :loading="scanningTaskId === conv.latestTask.taskId"
+                  @click.stop="handleScanCheckpoints(conv.latestTask)"
+                >
+                  扫描
+                </el-button>
+                <el-button
                   v-if="conv.latestTask.status !== 'RUNNING'"
                   size="small"
                   text
@@ -887,9 +896,9 @@
       </template>
     </el-dialog>
 
-    <!-- Rewind Dialog -->
-    <el-dialog v-model="showRewind" title="回退文件" width="480px">
-      <p style="margin-bottom: 12px">选择回退到的 Checkpoint（文件将还原到该时间点）：</p>
+    <!-- Rewind Dialog (dual-mode) -->
+    <el-dialog v-model="showRewind" title="回退" width="520px">
+      <p style="margin-bottom: 12px">选择回退到的 Checkpoint：</p>
       <el-radio-group v-model="rewindSelectedId" style="display: flex; flex-direction: column; gap: 8px">
         <el-radio
           v-for="cp in rewindCheckpoints"
@@ -901,6 +910,22 @@
           <span style="margin-left: 12px; color: #909399; font-size: 12px">{{ cp.timestamp }}</span>
         </el-radio>
       </el-radio-group>
+      <div style="margin-top: 16px">
+        <p style="margin-bottom: 8px; font-weight: 500">回退模式：</p>
+        <el-radio-group v-model="rewindMode">
+          <el-radio value="conversation_fork">
+            仅回退会话
+            <span style="color: #909399; font-size: 12px; margin-left: 4px">(从该 turn 继续新对话)</span>
+          </el-radio>
+          <el-radio value="file_rewind" :disabled="!rewindFileEnabled">
+            回退会话 + 文件
+            <span v-if="!rewindFileEnabled" style="color: #F56C6C; font-size: 12px; margin-left: 4px">
+              (该会话未启用文件快照)
+            </span>
+            <span v-else style="color: #909399; font-size: 12px; margin-left: 4px">(文件还原到该时间点)</span>
+          </el-radio>
+        </el-radio-group>
+      </div>
       <template #footer>
         <el-button @click="showRewind = false">取消</el-button>
         <el-button type="warning" :disabled="!rewindSelectedId" :loading="rewindLoading" @click="handleRewind">
@@ -981,8 +1006,13 @@ const detailAuthModeLabel = computed(() => {
 const showRewind = ref(false)
 const rewindTaskId = ref('')
 const rewindSelectedId = ref('')
+const rewindMode = ref<'file_rewind' | 'conversation_fork'>('conversation_fork')
+const rewindFileEnabled = ref(false)
 const rewindLoading = ref(false)
 const rewindCheckpoints = ref<{ id: string; turnIndex: number; timestamp: string }[]>([])
+
+// Scan checkpoints state
+const scanningTaskId = ref('')
 
 // Directory task pagination (separate from global task pagination)
 const directoryTasks = ref<ClaudeTask[]>([])
@@ -2003,6 +2033,8 @@ function hasCheckpoints(task: ClaudeTask): boolean {
 function showRewindDialog(task: ClaudeTask) {
   rewindTaskId.value = task.taskId
   rewindSelectedId.value = ''
+  rewindFileEnabled.value = task.fileCheckpointingEnabled === true
+  rewindMode.value = 'conversation_fork'
   try {
     rewindCheckpoints.value = task.checkpoints ? JSON.parse(task.checkpoints) : []
   } catch {
@@ -2015,14 +2047,49 @@ async function handleRewind() {
   if (!rewindSelectedId.value || !rewindTaskId.value) return
   rewindLoading.value = true
   try {
-    await dirApi.rewindTask(rewindTaskId.value, rewindSelectedId.value)
-    ElMessage.success('文件已回退')
+    const selectedCp = rewindCheckpoints.value.find(cp => cp.id === rewindSelectedId.value)
+    await dirApi.rewindTask(
+      rewindTaskId.value,
+      rewindSelectedId.value,
+      rewindMode.value,
+      selectedCp?.turnIndex,
+    )
+    if (rewindMode.value === 'conversation_fork') {
+      ElMessage.success('会话已 fork，新任务已创建')
+      // Refresh task list to show new task
+      workerState.loadTasks()
+      if (selectedDirectoryId.value) loadDirectoryTasks()
+    } else {
+      ElMessage.success('文件已回退')
+    }
     showRewind.value = false
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : '回退失败'
     ElMessage.error(msg)
   } finally {
     rewindLoading.value = false
+  }
+}
+
+function canScanCheckpoints(task: ClaudeTask): boolean {
+  return !!task.claudeSessionId && !hasCheckpoints(task) && task.status !== 'RUNNING'
+}
+
+async function handleScanCheckpoints(task: ClaudeTask) {
+  scanningTaskId.value = task.taskId
+  try {
+    const result = await dirApi.scanCheckpoints(task.taskId)
+    if (result.count > 0) {
+      task.checkpoints = result.checkpoints
+      ElMessage.success(`扫描到 ${result.count} 个 Checkpoint`)
+    } else {
+      ElMessage.info('未发现 Checkpoint')
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '扫描失败'
+    ElMessage.error(msg)
+  } finally {
+    scanningTaskId.value = ''
   }
 }
 

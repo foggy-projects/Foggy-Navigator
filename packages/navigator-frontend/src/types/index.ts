@@ -98,6 +98,8 @@ export interface ClaudeTask {
   errorMessage?: string
   /** JSON array of checkpoint objects: [{id, turnIndex, timestamp}] */
   checkpoints?: string
+  /** Whether file checkpointing was enabled for this task */
+  fileCheckpointingEnabled?: boolean
   createdAt: string
   updatedAt: string
 }

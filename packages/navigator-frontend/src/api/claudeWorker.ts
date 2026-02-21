@@ -210,10 +210,33 @@ export async function abortTask(
 export async function rewindTask(
   taskId: string,
   checkpointId: string,
-): Promise<{ status: string; checkpointId: string }> {
+  mode: 'file_rewind' | 'conversation_fork' = 'file_rewind',
+  turnIndex?: number,
+): Promise<{ status: string; checkpointId: string; taskId?: string }> {
   const rx = (await client.post(`/claude-tasks/${taskId}/rewind`, {
     checkpointId,
-  })) as unknown as RX<{ status: string; checkpointId: string }>
+    mode,
+    turnIndex,
+  })) as unknown as RX<{ status: string; checkpointId: string; taskId?: string }>
+  return rx.data
+}
+
+export async function scanCheckpoints(
+  taskId: string,
+): Promise<{ taskId: string; checkpoints: string; count: number }> {
+  const rx = (await client.post(
+    `/claude-tasks/${taskId}/scan-checkpoints`,
+  )) as unknown as RX<{ taskId: string; checkpoints: string; count: number }>
+  return rx.data
+}
+
+export async function getWorkerSessionMessageCount(
+  workerId: string,
+  sessionId: string,
+): Promise<{ user_count: number; assistant_count: number; total: number }> {
+  const rx = (await client.get(
+    `/claude-tasks/worker/${workerId}/sessions/${sessionId}/message-count`,
+  )) as unknown as RX<{ user_count: number; assistant_count: number; total: number }>
   return rx.data
 }
 

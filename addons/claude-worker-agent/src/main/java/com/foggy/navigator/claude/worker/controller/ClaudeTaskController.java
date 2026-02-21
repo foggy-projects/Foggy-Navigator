@@ -127,8 +127,9 @@ public class ClaudeTaskController {
     @PostMapping("/{taskId}/rewind")
     public RX<Map<String, Object>> rewindToCheckpoint(
             @PathVariable String taskId,
-            @RequestBody Map<String, String> body) {
+            @RequestBody Map<String, Object> body) {
         String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
         var task = taskService.getTaskEntity(taskId);
         if (!task.getUserId().equals(userId)) {
             throw RX.throwB("Task not found");
@@ -139,7 +140,7 @@ public class ClaudeTaskController {
             throw RX.throwB("Cannot rewind a running task");
         }
 
-        String checkpointId = body.get("checkpointId");
+        String checkpointId = (String) body.get("checkpointId");
         if (checkpointId == null || checkpointId.isEmpty()) {
             throw RX.throwB("checkpointId is required");
         }
@@ -149,6 +150,29 @@ public class ClaudeTaskController {
             throw RX.throwB("Task has no Claude session ID");
         }
 
+        String mode = body.get("mode") != null ? body.get("mode").toString() : "file_rewind";
+
+        if ("conversation_fork".equals(mode)) {
+            // Conversation fork: create a new task that resumes from the checkpoint turn
+            Integer turnIndex = body.get("turnIndex") != null ? ((Number) body.get("turnIndex")).intValue() : null;
+            String prompt = "Continue from checkpoint at turn " + (turnIndex != null ? turnIndex : "?")
+                    + ". Disregard any work done after that point.";
+
+            com.foggy.navigator.claude.worker.model.form.ResumeTaskForm resumeForm =
+                    new com.foggy.navigator.claude.worker.model.form.ResumeTaskForm();
+            resumeForm.setWorkerId(task.getWorkerId());
+            resumeForm.setClaudeSessionId(claudeSessionId);
+            resumeForm.setPrompt(prompt);
+            resumeForm.setCwd(task.getCwd());
+            resumeForm.setDirectoryId(task.getDirectoryId());
+            resumeForm.setSessionId(task.getSessionId());
+
+            TaskDTO newTask = taskService.resumeTask(userId, tenantId, resumeForm);
+            return RX.ok(Map.of("status", "forked", "checkpointId", checkpointId,
+                    "taskId", newTask.getTaskId(), "sessionId", newTask.getSessionId()));
+        }
+
+        // Default: file_rewind — rewind files via Worker
         try {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
             ClaudeWorkerClient client = workerService.createClient(worker);
@@ -158,6 +182,56 @@ public class ClaudeTaskController {
         } catch (Exception e) {
             log.warn("Failed to rewind files: taskId={}, error={}", taskId, e.getMessage());
             return RX.failB("回退失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/{taskId}/scan-checkpoints")
+    public RX<Map<String, Object>> scanCheckpoints(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        var task = taskService.getTaskEntity(taskId);
+        if (!task.getUserId().equals(userId)) {
+            throw RX.throwB("Task not found");
+        }
+        String claudeSessionId = task.getClaudeSessionId();
+        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
+            throw RX.throwB("Task has no Claude session ID");
+        }
+
+        try {
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            List<Map<String, Object>> scanned = client.scanSessionCheckpoints(claudeSessionId)
+                    .block(java.time.Duration.ofSeconds(30));
+            if (scanned == null || scanned.isEmpty()) {
+                return RX.ok(Map.of("taskId", taskId, "checkpoints", "[]", "count", 0));
+            }
+            String json = taskService.scanAndPopulateCheckpoints(taskId, scanned);
+            return RX.ok(Map.of("taskId", taskId, "checkpoints", json, "count", scanned.size()));
+        } catch (Exception e) {
+            log.warn("Failed to scan checkpoints: taskId={}, error={}", taskId, e.getMessage());
+            return RX.failB("扫描 Checkpoint 失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/worker/{workerId}/sessions/{sessionId}/message-count")
+    public RX<Map<String, Object>> getWorkerSessionMessageCount(
+            @PathVariable String workerId,
+            @PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw RX.throwB("Worker not found");
+        }
+
+        try {
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            Map<String, Object> result = client.getSessionMessageCount(sessionId)
+                    .block(java.time.Duration.ofSeconds(10));
+            return RX.ok(result != null ? result : Map.of("user_count", 0, "assistant_count", 0, "total", 0));
+        } catch (Exception e) {
+            log.warn("Failed to get message count: workerId={}, sessionId={}, error={}",
+                    workerId, sessionId, e.getMessage());
+            return RX.ok(Map.of("user_count", 0, "assistant_count", 0, "total", 0));
         }
     }
 
