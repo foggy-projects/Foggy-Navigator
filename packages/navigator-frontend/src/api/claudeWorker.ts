@@ -212,12 +212,12 @@ export async function rewindTask(
   checkpointId: string | null,
   mode: 'file_rewind' | 'conversation_fork' = 'file_rewind',
   turnIndex?: number,
-): Promise<{ status: string; checkpointId?: string; taskId?: string }> {
+): Promise<{ status: string; checkpointId?: string; taskId?: string; userPrompt?: string }> {
   const body: Record<string, unknown> = { mode }
   if (checkpointId) body.checkpointId = checkpointId
   if (turnIndex != null) body.turnIndex = turnIndex
   const rx = (await client.post(`/claude-tasks/${taskId}/rewind`, body)) as unknown as RX<{
-    status: string; checkpointId?: string; taskId?: string
+    status: string; checkpointId?: string; taskId?: string; userPrompt?: string
   }>
   return rx.data
 }

@@ -1883,11 +1883,31 @@ async function executePaneRewind() {
   try {
     const result = await dirApi.rewindTask(task.taskId, cpId, mode, paneRewindTurnIndex.value)
     if (mode === 'conversation_fork') {
-      // Conversation rewind: no new task created. Fill the pane input with original prompt.
-      const userPrompt = (result as Record<string, unknown>)?.userPrompt as string || ''
+      // Conversation rewind: no new task created.
+      // 1. Remove messages from turn X onwards in the chat UI
+      // 2. Fill the pane input with the original prompt
+      const userPrompt = result.userPrompt || ''
       const pane = panes.value.find((p) => p.paneId === paneRewindPaneId.value)
-      if (pane && userPrompt) {
-        pane.pendingInput.value = userPrompt
+      if (pane) {
+        // Remove messages: find the Nth user message and truncate from there
+        const msgs = pane.chatState.messages.value
+        let userCount = 0
+        let cutIndex = -1
+        for (let i = 0; i < msgs.length; i++) {
+          if (msgs[i].sender === 'user') {
+            userCount++
+            if (userCount === paneRewindTurnIndex.value) {
+              cutIndex = i
+              break
+            }
+          }
+        }
+        if (cutIndex >= 0) {
+          pane.chatState.messages.value = msgs.slice(0, cutIndex)
+        }
+        if (userPrompt) {
+          pane.pendingInput.value = userPrompt
+        }
       }
       ElMessage.success('会话已回退，请编辑提示词后发送')
     } else {
