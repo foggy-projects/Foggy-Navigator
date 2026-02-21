@@ -594,6 +594,18 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 截断会话消息：删除第 N 个 USER 消息及之后的所有消息（用于回退场景）
+     */
+    @Transactional
+    public int truncateSessionMessages(String sessionId, int fromUserTurnIndex) {
+        int deleted = sessionManager.truncateMessagesFromTurn(sessionId, fromUserTurnIndex);
+        if (deleted > 0) {
+            log.info("Truncated {} messages from session {} at user turn {}", deleted, sessionId, fromUserTurnIndex);
+        }
+        return deleted;
+    }
+
+    /**
      * 获取任务实体（内部使用）
      */
     public ClaudeTaskEntity getTaskEntity(String taskId) {

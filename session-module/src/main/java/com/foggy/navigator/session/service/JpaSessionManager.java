@@ -122,6 +122,36 @@ public class JpaSessionManager implements SessionManager {
     }
 
     @Override
+    @Transactional
+    public int truncateMessagesFromTurn(String sessionId, int fromUserTurnIndex) {
+        List<SessionMessageEntity> all = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        int userTurn = 0;
+        List<String> toDelete = new java.util.ArrayList<>();
+        boolean cutting = false;
+
+        for (SessionMessageEntity msg : all) {
+            if (cutting) {
+                toDelete.add(msg.getId());
+                continue;
+            }
+            if ("USER".equals(msg.getRole())) {
+                userTurn++;
+                if (userTurn >= fromUserTurnIndex) {
+                    cutting = true;
+                    toDelete.add(msg.getId());
+                }
+            }
+        }
+
+        if (!toDelete.isEmpty()) {
+            messageRepository.deleteAllById(toDelete);
+            log.info("Truncated session {} from user turn {}: deleted {} messages",
+                    sessionId, fromUserTurnIndex, toDelete.size());
+        }
+        return toDelete.size();
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public List<Session> findPendingByUser(String userId) {
         List<String> statuses = List.of(SessionStatus.ACTIVE.name(), SessionStatus.PAUSED.name());

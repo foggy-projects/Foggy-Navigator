@@ -170,6 +170,14 @@ public class ClaudeTaskController {
 
                 String userPrompt = rewindResult != null ? (String) rewindResult.get("user_prompt") : "";
 
+                // Clean up Navigator DB messages (3rd layer: JSONL done, UI done by frontend, now DB)
+                int effectiveTurn = turnIndex != null ? turnIndex : 1;
+                try {
+                    taskService.truncateSessionMessages(task.getSessionId(), effectiveTurn);
+                } catch (Exception dbEx) {
+                    log.warn("Failed to truncate DB messages for session {}: {}", task.getSessionId(), dbEx.getMessage());
+                }
+
                 var result = new java.util.HashMap<String, Object>();
                 result.put("status", "rewound");
                 result.put("taskId", taskId);
