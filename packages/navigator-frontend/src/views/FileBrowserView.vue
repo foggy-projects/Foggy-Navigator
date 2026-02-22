@@ -393,6 +393,10 @@ async function handleDiffFileClick(f: DiffFileEntry) {
   currentLineCount.value = 0
 
   try {
+    // Ensure diff editor is created while API is in flight
+    await nextTick()
+    ensureDiffEditor()
+
     const result = await getFileDiff(directoryId.value, f.file)
     currentLanguage.value = result.language
 
@@ -406,19 +410,35 @@ async function handleDiffFileClick(f: DiffFileEntry) {
   }
 }
 
+function ensureDiffEditor() {
+  if (diffEditorInstance || !monaco || !diffEditorEl.value) return
+  diffEditorInstance = monaco.editor.createDiffEditor(diffEditorEl.value, {
+    readOnly: true,
+    automaticLayout: true,
+    renderSideBySide: true,
+    scrollBeyondLastLine: false,
+    fontSize: 13,
+    originalEditable: false,
+  })
+}
+
 function setDiffContent(original: string, modified: string, language: string) {
   if (!monaco || !diffEditorInstance) return
+
+  // Save old models before replacing
+  const prev = diffEditorInstance.getModel()
+
   const originalModel = monaco.editor.createModel(original, language)
   const modifiedModel = monaco.editor.createModel(modified, language)
 
-  // Dispose old models
-  const prev = diffEditorInstance.getModel()
+  // Set new models FIRST — widget must release old models before we dispose them
+  diffEditorInstance.setModel({ original: originalModel, modified: modifiedModel })
+
+  // Now safe to dispose old models
   if (prev) {
     prev.original?.dispose()
     prev.modified?.dispose()
   }
-
-  diffEditorInstance.setModel({ original: originalModel, modified: modifiedModel })
 }
 
 // ---- Size formatting ------------------------------------------------------
@@ -455,18 +475,6 @@ onMounted(async () => {
       lineNumbers: 'on',
       renderWhitespace: 'selection',
       wordWrap: 'off',
-    })
-  }
-
-  // Create diff editor
-  if (diffEditorEl.value) {
-    diffEditorInstance = monaco.editor.createDiffEditor(diffEditorEl.value, {
-      readOnly: true,
-      automaticLayout: true,
-      renderSideBySide: true,
-      scrollBeyondLastLine: false,
-      fontSize: 13,
-      originalEditable: false,
     })
   }
 
