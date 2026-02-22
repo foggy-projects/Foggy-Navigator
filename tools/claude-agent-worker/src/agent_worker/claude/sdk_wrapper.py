@@ -709,6 +709,9 @@ class SdkWrapper:
 
             # -- Helper: process a single SDK message into event dicts --------
 
+            # Lookup table: tool_use_id → tool name (for correlating results)
+            tool_id_to_name: dict[str, str] = {}
+
             def _process_message(message: Any) -> list[dict[str, Any]]:
                 nonlocal current_model, current_session_id, last_event_at
                 events: list[dict[str, Any]] = []
@@ -727,11 +730,15 @@ class SdkWrapper:
                                 model=current_model,
                             ))
                         elif _ToolUseBlock is not None and isinstance(block, _ToolUseBlock):
+                            block_id = getattr(block, "id", None)
+                            if block_id:
+                                tool_id_to_name[block_id] = block.name
                             events.append(event_mapper.map_tool_use(
                                 task_id=task_id,
                                 tool_name=block.name,
                                 tool_input=block.input,
                                 session_id=current_session_id,
+                                tool_use_id=block_id,
                             ))
                         elif _ToolResultBlock is not None and isinstance(block, _ToolResultBlock):
                             content_str: str | None = None
@@ -746,12 +753,14 @@ class SdkWrapper:
                                         parts.append(str(item))
                                 content_str = "\n".join(parts)
 
+                            resolved_name = tool_id_to_name.get(block.tool_use_id)
                             events.append(event_mapper.map_tool_result(
                                 task_id=task_id,
                                 tool_use_id=block.tool_use_id,
                                 content=content_str,
                                 is_error=bool(block.is_error),
                                 session_id=current_session_id,
+                                tool_name=resolved_name,
                             ))
 
                 elif _ResultMessage is not None and isinstance(message, _ResultMessage):

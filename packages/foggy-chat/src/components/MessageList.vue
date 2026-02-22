@@ -5,48 +5,66 @@
         <div class="empty-hint">暂无消息</div>
       </slot>
     </div>
-    <template v-for="msg in messages" :key="msg.id">
-      <MessageBubble
-        v-if="isBubble(msg)"
-        :message="msg"
-        :rewindable="isRewindable(msg)"
-        @rewind="handleRewind(msg)"
+    <template v-for="(item, idx) in groupedItems" :key="item.key">
+      <!-- Tool call group (2+ consecutive tool messages) -->
+      <ToolCallGroup
+        v-if="item.kind === 'tool-group'"
+        :items="item.messages"
+        :is-last-group="idx === groupedItems.length - 1 || isLastToolGroup(idx)"
       />
-      <ToolCallBlock
-        v-else-if="isToolCall(msg)"
-        :message="msg"
-      />
-      <ThinkingIndicator
-        v-else-if="msg.type === AipMessageType.THINKING"
-        :thought="msg.thought"
-      />
-      <ErrorBlock
-        v-else-if="isError(msg)"
-        :error="msg.error || msg.content"
-      />
-      <TaskCompletionCard
-        v-else-if="msg.type === AipMessageType.TASK_COMPLETED"
-        :message="msg"
-      />
-      <PlanReviewCard
-        v-else-if="msg.type === AipMessageType.CONFIRMATION_REQUEST && msg.planReview"
-        :message="msg"
-        @respond="(pid, decision, denyMsg) => emit('planRespond', pid, decision, denyMsg)"
-      />
-      <UserQuestionCard
-        v-else-if="msg.type === AipMessageType.CONFIRMATION_REQUEST && msg.questions?.length"
-        :message="msg"
-        @respond="(pid, answers) => emit('questionRespond', pid, answers)"
-      />
-      <PermissionRequestCard
-        v-else-if="msg.type === AipMessageType.CONFIRMATION_REQUEST"
-        :message="msg"
-        @respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
-      />
-      <MessageBubble
-        v-else-if="msg.type === AipMessageType.STATE_SYNC"
-        :message="msg"
-      />
+      <!-- Context compression hint -->
+      <div
+        v-else-if="item.kind === 'compression'"
+        class="compression-hint"
+      >
+        <span class="compression-line"></span>
+        <span class="compression-text">{{ item.msg.content }}</span>
+        <span class="compression-line"></span>
+      </div>
+      <!-- Single messages -->
+      <template v-else>
+        <MessageBubble
+          v-if="isBubble(item.msg)"
+          :message="item.msg"
+          :rewindable="isRewindable(item.msg)"
+          @rewind="handleRewind(item.msg)"
+        />
+        <ToolCallBlock
+          v-else-if="isToolCall(item.msg)"
+          :message="item.msg"
+        />
+        <ThinkingIndicator
+          v-else-if="item.msg.type === AipMessageType.THINKING"
+          :thought="item.msg.thought"
+        />
+        <ErrorBlock
+          v-else-if="isError(item.msg)"
+          :error="item.msg.error || item.msg.content"
+        />
+        <TaskCompletionCard
+          v-else-if="item.msg.type === AipMessageType.TASK_COMPLETED"
+          :message="item.msg"
+        />
+        <PlanReviewCard
+          v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST && item.msg.planReview"
+          :message="item.msg"
+          @respond="(pid, decision, denyMsg) => emit('planRespond', pid, decision, denyMsg)"
+        />
+        <UserQuestionCard
+          v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST && item.msg.questions?.length"
+          :message="item.msg"
+          @respond="(pid, answers) => emit('questionRespond', pid, answers)"
+        />
+        <PermissionRequestCard
+          v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST"
+          :message="item.msg"
+          @respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
+        />
+        <MessageBubble
+          v-else-if="item.msg.type === AipMessageType.STATE_SYNC"
+          :message="item.msg"
+        />
+      </template>
     </template>
     <ThinkingIndicator v-if="isThinking && !hasTrailingThinking" />
   </div>
@@ -58,12 +76,33 @@ import { AipMessageType } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
 import MessageBubble from './MessageBubble.vue'
 import ToolCallBlock from './ToolCallBlock.vue'
+import ToolCallGroup from './ToolCallGroup.vue'
 import ThinkingIndicator from './ThinkingIndicator.vue'
 import ErrorBlock from './ErrorBlock.vue'
 import TaskCompletionCard from './TaskCompletionCard.vue'
 import PermissionRequestCard from './PermissionRequestCard.vue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import PlanReviewCard from './PlanReviewCard.vue'
+
+interface GroupedSingle {
+  kind: 'single'
+  key: string
+  msg: ChatMessage
+}
+
+interface GroupedToolGroup {
+  kind: 'tool-group'
+  key: string
+  messages: ChatMessage[]
+}
+
+interface GroupedCompression {
+  kind: 'compression'
+  key: string
+  msg: ChatMessage
+}
+
+type GroupedItem = GroupedSingle | GroupedToolGroup | GroupedCompression
 
 const props = defineProps<{
   messages: ChatMessage[]
@@ -93,6 +132,57 @@ function isToolCall(msg: ChatMessage) {
 function isError(msg: ChatMessage) {
   return (msg.type === AipMessageType.ERROR || msg.type === AipMessageType.TOOL_CALL_ERROR)
     && (msg.error || msg.content)
+}
+
+function isCompressionHint(msg: ChatMessage) {
+  if (msg.type !== AipMessageType.STATE_SYNC) return false
+  const raw = msg.raw as Record<string, unknown> | undefined
+  const subtype = raw?.subtype as string | undefined
+  return subtype === 'auto_compact' || subtype === 'context_compression'
+}
+
+// Group consecutive tool call messages together
+const groupedItems = computed<GroupedItem[]>(() => {
+  const result: GroupedItem[] = []
+  let toolBuf: ChatMessage[] = []
+
+  function flushToolBuf() {
+    if (toolBuf.length === 0) return
+    if (toolBuf.length >= 2) {
+      result.push({
+        kind: 'tool-group',
+        key: `tg-${toolBuf[0].id}`,
+        messages: toolBuf,
+      })
+    } else {
+      // Single tool call — don't group, render directly
+      result.push({ kind: 'single', key: toolBuf[0].id, msg: toolBuf[0] })
+    }
+    toolBuf = []
+  }
+
+  for (const msg of props.messages) {
+    if (isCompressionHint(msg)) {
+      flushToolBuf()
+      result.push({ kind: 'compression', key: msg.id, msg })
+    } else if (isToolCall(msg)) {
+      toolBuf.push(msg)
+    } else {
+      flushToolBuf()
+      result.push({ kind: 'single', key: msg.id, msg })
+    }
+  }
+  flushToolBuf()
+
+  return result
+})
+
+function isLastToolGroup(idx: number): boolean {
+  // Check if this is the last tool-group in the list
+  for (let i = idx + 1; i < groupedItems.value.length; i++) {
+    if (groupedItems.value[i].kind === 'tool-group') return false
+  }
+  return true
 }
 
 // Map each user message ID → turn index (1-based)
@@ -168,5 +258,26 @@ onMounted(scrollToBottom)
   text-align: center;
   color: #c0c4cc;
   font-size: 14px;
+}
+
+.compression-hint {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+  padding: 0 8px;
+}
+
+.compression-line {
+  flex: 1;
+  height: 1px;
+  background-color: #dcdfe6;
+}
+
+.compression-text {
+  font-size: 11px;
+  color: #909399;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 </style>

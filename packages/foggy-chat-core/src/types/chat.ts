@@ -9,6 +9,7 @@ export interface ChatMessage {
   toolCallId?: string
   toolName?: string
   toolOutput?: string
+  toolSuccess?: boolean
   thought?: string
   error?: string
   raw?: unknown

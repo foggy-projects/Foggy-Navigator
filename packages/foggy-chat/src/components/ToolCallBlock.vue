@@ -40,35 +40,46 @@
       </div>
     </template>
 
-    <!-- Default: standard tool call -->
+    <!-- Default: standard tool call with collapse/expand -->
     <template v-else>
-      <div class="tool-header">
+      <div class="tool-header tool-header-clickable" @click="toggleCollapse">
+        <span class="tool-toggle">{{ collapsed ? '\u25B6' : '\u25BC' }}</span>
         <span class="tool-icon">&#9881;</span>
-        <span class="tool-name">{{ props.message.toolName || '工具调用' }}</span>
+        <span class="tool-name">{{ props.message.toolName || 'Tool' }}</span>
+        <span v-if="collapsed && commandSummary" class="tool-summary">{{ commandSummary }}</span>
         <span v-if="props.message.thought" class="tool-thought">{{ props.message.thought }}</span>
+        <span class="tool-status-indicator">
+          <span v-if="isRunning" class="status-dot running"></span>
+          <span v-else-if="props.message.error" class="status-dot failure"></span>
+          <span v-else-if="props.message.toolSuccess === false" class="status-dot failure"></span>
+          <span v-else-if="hasResult" class="status-dot success"></span>
+        </span>
       </div>
-      <div v-if="props.message.content" class="tool-command">
-        <div class="code-label">命令</div>
-        <pre class="code-block"><code>{{ props.message.content }}</code></pre>
-      </div>
-      <div v-if="props.message.toolOutput" class="tool-output">
-        <div class="code-label">输出</div>
-        <pre class="code-block output"><code>{{ props.message.toolOutput }}</code></pre>
-      </div>
-      <div v-if="props.message.error" class="tool-error">
-        <div class="code-label">错误</div>
-        <pre class="code-block error"><code>{{ props.message.error }}</code></pre>
-      </div>
+      <template v-if="!collapsed">
+        <div v-if="props.message.content" class="tool-command">
+          <div class="code-label">command</div>
+          <pre class="code-block"><code>{{ props.message.content }}</code></pre>
+        </div>
+        <div v-if="props.message.toolOutput" class="tool-output">
+          <div class="code-label">output</div>
+          <pre class="code-block output"><code>{{ props.message.toolOutput }}</code></pre>
+        </div>
+        <div v-if="props.message.error" class="tool-error">
+          <div class="code-label">error</div>
+          <pre class="code-block error"><code>{{ props.message.error }}</code></pre>
+        </div>
+      </template>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { ChatMessage } from '../types/chat'
 
 const props = defineProps<{
   message: ChatMessage
+  defaultCollapsed?: boolean
 }>()
 
 const isTodoWrite = computed(() => props.message.toolName === 'TodoWrite')
@@ -78,6 +89,28 @@ const specialClass = computed(() => {
   if (isTodoWrite.value) return 'todo-block'
   if (isSubagent.value) return 'subagent-block'
   return ''
+})
+
+// Collapse state: completed tools default collapsed, running default expanded
+const hasResult = computed(() =>
+  props.message.toolOutput !== undefined || props.message.error !== undefined
+)
+const isRunning = computed(() => !hasResult.value)
+
+const collapsed = ref(
+  props.defaultCollapsed !== undefined ? props.defaultCollapsed : hasResult.value
+)
+
+function toggleCollapse() {
+  collapsed.value = !collapsed.value
+}
+
+// Short summary for collapsed state
+const commandSummary = computed(() => {
+  const content = props.message.content
+  if (!content) return ''
+  // Truncate to ~60 chars for collapsed header
+  return content.length > 60 ? content.substring(0, 60) + '...' : content
 })
 
 // Parse TodoWrite items from tool input (content field is JSON-stringified arguments)
@@ -164,11 +197,40 @@ function truncate(text: string, max: number) {
   font-size: 13px;
 }
 
+.tool-header-clickable {
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s;
+}
+
+.tool-header-clickable:hover {
+  background-color: #f0f2f5;
+}
+
+.tool-toggle {
+  font-size: 10px;
+  color: #909399;
+  width: 12px;
+  flex-shrink: 0;
+}
+
 .tool-icon { font-size: 14px; }
 
 .tool-name {
   font-weight: 600;
   color: #303133;
+  flex-shrink: 0;
+}
+
+.tool-summary {
+  color: #909399;
+  font-size: 12px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .tool-thought {
@@ -176,6 +238,32 @@ function truncate(text: string, max: number) {
   font-style: italic;
   font-size: 12px;
   margin-left: auto;
+}
+
+.tool-status-indicator {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.success { background-color: #67c23a; }
+.status-dot.failure { background-color: #f56c6c; }
+.status-dot.running {
+  background-color: #409eff;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .code-label {

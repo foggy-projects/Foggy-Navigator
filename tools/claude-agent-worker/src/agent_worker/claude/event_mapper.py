@@ -32,6 +32,7 @@ def map_tool_use(
     tool_name: str,
     tool_input: dict[str, Any],
     session_id: str | None = None,
+    tool_use_id: str | None = None,
 ) -> dict[str, Any]:
     """Map a ``ToolUseBlock`` to an SSE dict."""
 
@@ -39,6 +40,7 @@ def map_tool_use(
         "type": "tool_use",
         "tool": tool_name,
         "input": tool_input,
+        "tool_use_id": tool_use_id,
         "task_id": task_id,
         "session_id": session_id,
     }
@@ -50,13 +52,16 @@ def map_tool_result(
     content: str | None,
     is_error: bool = False,
     session_id: str | None = None,
+    tool_name: str | None = None,
 ) -> dict[str, Any]:
     """Map a ``ToolResultBlock`` to an SSE dict."""
 
     return {
         "type": "tool_result",
-        "tool": tool_use_id,
+        "tool": tool_name or "unknown",
+        "tool_use_id": tool_use_id,
         "output": content,
+        "is_error": is_error,
         "error": content if is_error else None,
         "task_id": task_id,
         "session_id": session_id,

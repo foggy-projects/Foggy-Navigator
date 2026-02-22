@@ -131,6 +131,7 @@ export function createChatState(): ChatState {
             toolCallId: p.toolCallId,
             toolName: p.toolName,
             thought: p.thought,
+            raw: aip.payload,
             timestamp: aip.timestamp,
           })
         }
@@ -140,11 +141,13 @@ export function createChatState(): ChatState {
         const p = aip.payload as ToolCallResultPayload
         // Map backend fields: data → output fallback
         const output = p.output ?? p.data ?? ''
+        const success = p.success !== false
         const existing = messages.value.find(
           (m) => m.toolCallId === p.toolCallId && m.type === AipMessageType.TOOL_CALL_START,
         )
         if (existing) {
           existing.toolOutput = output
+          existing.toolSuccess = success
         } else {
           messages.value.push({
             id: aip.messageId,
@@ -154,6 +157,7 @@ export function createChatState(): ChatState {
             toolCallId: p.toolCallId,
             toolName: p.toolName,
             toolOutput: output,
+            toolSuccess: success,
             timestamp: aip.timestamp,
           })
         }
@@ -182,6 +186,20 @@ export function createChatState(): ChatState {
       }
       case AipMessageType.STATE_SYNC: {
         const p = aip.payload as StateSyncPayload
+        const raw = aip.payload as unknown as Record<string, unknown>
+        const subtype = raw.subtype as string | undefined
+        if (subtype === 'auto_compact' || subtype === 'context_compression') {
+          // Context compression hint — render as lightweight divider
+          messages.value.push({
+            id: aip.messageId,
+            type: aip.type,
+            sender: 'system',
+            content: (raw.content as string) || 'Context compressed',
+            raw: { subtype },
+            timestamp: aip.timestamp,
+          })
+          break
+        }
         if (conversationStatus.value === p.status) break
         conversationStatus.value = p.status
         messages.value.push({

@@ -39,4 +39,9 @@ public class WorkerEvent {
     private java.util.List<Map<String, Object>> questions;
     @JsonProperty("checkpoint_id")
     private String checkpointId;
+    @JsonProperty("tool_use_id")
+    private String toolUseId;
+    @JsonProperty("is_error")
+    private Boolean isError;
+    private String subtype;
 }

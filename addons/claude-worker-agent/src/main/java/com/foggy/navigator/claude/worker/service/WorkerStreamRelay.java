@@ -133,9 +133,19 @@ public class WorkerStreamRelay {
                 if (event.getSessionId() != null) {
                     detectedClaudeSessionId.set(event.getSessionId());
                 }
-                publishMessage(sessionId, MessageType.SESSION_START,
-                        Map.of("content", "Task started", "taskId", taskId,
-                                "claudeSessionId", nullSafe(event.getSessionId())));
+                String subtype = event.getSubtype();
+                if ("auto_compact".equals(subtype) || "context_compression".equals(subtype)) {
+                    // Context compression event — push as STATE_SYNC hint
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("content", "Context compressed");
+                    payload.put("subtype", subtype);
+                    payload.put("taskId", taskId);
+                    publishMessage(sessionId, MessageType.STATE_SYNC, payload);
+                } else {
+                    publishMessage(sessionId, MessageType.SESSION_START,
+                            Map.of("content", "Task started", "taskId", taskId,
+                                    "claudeSessionId", nullSafe(event.getSessionId())));
+                }
             }
             case "assistant_text" -> {
                 // Track model from assistant_text events
@@ -148,17 +158,21 @@ public class WorkerStreamRelay {
                 publishMessage(sessionId, MessageType.TEXT_CHUNK, payload);
             }
             case "tool_use" -> {
+                String toolCallId = event.getToolUseId() != null
+                        ? event.getToolUseId() : "tc-" + System.nanoTime();
                 Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("content", "Tool: " + event.getTool());
+                payload.put("toolCallId", toolCallId);
                 payload.put("toolName", event.getTool());
-                payload.put("toolInput", event.getInput());
+                payload.put("arguments", event.getInput());
                 payload.put("taskId", taskId);
                 publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
             }
             case "tool_result" -> {
                 Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("content", event.getOutput());
+                payload.put("toolCallId", event.getToolUseId());
                 payload.put("toolName", event.getTool());
+                payload.put("data", event.getOutput());
+                payload.put("success", !Boolean.TRUE.equals(event.getIsError()));
                 payload.put("taskId", taskId);
                 publishMessage(sessionId, MessageType.TOOL_CALL_RESULT, payload);
             }
