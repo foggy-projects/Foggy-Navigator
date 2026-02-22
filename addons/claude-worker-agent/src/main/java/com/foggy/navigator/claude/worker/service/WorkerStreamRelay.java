@@ -141,6 +141,16 @@ public class WorkerStreamRelay {
                     payload.put("subtype", subtype);
                     payload.put("taskId", taskId);
                     publishMessage(sessionId, MessageType.STATE_SYNC, payload);
+                } else if ("waiting".equals(subtype)) {
+                    // Waiting hint — CLI is likely retrying internally
+                    Map<String, Object> data = event.getData() != null ? event.getData() : Map.of();
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("content", "Waiting for response...");
+                    payload.put("subtype", "waiting");
+                    payload.put("elapsedSeconds", data.getOrDefault("elapsed_seconds", 0));
+                    payload.put("timeoutSeconds", data.getOrDefault("timeout_seconds", 600));
+                    payload.put("taskId", taskId);
+                    publishMessage(sessionId, MessageType.STATE_SYNC, payload);
                 } else {
                     publishMessage(sessionId, MessageType.SESSION_START,
                             Map.of("content", "Task started", "taskId", taskId,

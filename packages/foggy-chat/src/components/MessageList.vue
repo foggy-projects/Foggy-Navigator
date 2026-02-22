@@ -21,6 +21,14 @@
         <span class="compression-text">{{ item.msg.content }}</span>
         <span class="compression-line"></span>
       </div>
+      <!-- Waiting for response hint -->
+      <div
+        v-else-if="item.kind === 'waiting'"
+        class="waiting-hint"
+      >
+        <span class="waiting-dot"></span>
+        <span class="waiting-text">{{ item.msg.content }}</span>
+      </div>
       <!-- Single messages -->
       <template v-else>
         <MessageBubble
@@ -102,7 +110,13 @@ interface GroupedCompression {
   msg: ChatMessage
 }
 
-type GroupedItem = GroupedSingle | GroupedToolGroup | GroupedCompression
+interface GroupedWaiting {
+  kind: 'waiting'
+  key: string
+  msg: ChatMessage
+}
+
+type GroupedItem = GroupedSingle | GroupedToolGroup | GroupedCompression | GroupedWaiting
 
 const props = defineProps<{
   messages: ChatMessage[]
@@ -141,6 +155,12 @@ function isCompressionHint(msg: ChatMessage) {
   return subtype === 'auto_compact' || subtype === 'context_compression'
 }
 
+function isWaitingHint(msg: ChatMessage) {
+  if (msg.type !== AipMessageType.STATE_SYNC) return false
+  const raw = msg.raw as Record<string, unknown> | undefined
+  return raw?.subtype === 'waiting'
+}
+
 // Group consecutive tool call messages together
 const groupedItems = computed<GroupedItem[]>(() => {
   const result: GroupedItem[] = []
@@ -165,6 +185,9 @@ const groupedItems = computed<GroupedItem[]>(() => {
     if (isCompressionHint(msg)) {
       flushToolBuf()
       result.push({ kind: 'compression', key: msg.id, msg })
+    } else if (isWaitingHint(msg)) {
+      flushToolBuf()
+      result.push({ kind: 'waiting', key: msg.id, msg })
     } else if (isToolCall(msg)) {
       toolBuf.push(msg)
     } else {
@@ -279,5 +302,33 @@ onMounted(scrollToBottom)
   color: #909399;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.waiting-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 6px 12px;
+}
+
+.waiting-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #e6a23c;
+  animation: waiting-pulse 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.waiting-text {
+  font-size: 12px;
+  color: #909399;
+  white-space: nowrap;
+}
+
+@keyframes waiting-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 </style>

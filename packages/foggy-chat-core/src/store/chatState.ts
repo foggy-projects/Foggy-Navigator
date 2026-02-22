@@ -54,7 +54,20 @@ export function createChatState(): ChatState {
     [...messages.value].sort((a, b) => a.timestamp - b.timestamp),
   )
 
+  function removeWaitingHint() {
+    const idx = messages.value.findIndex(
+      (m) => m.type === AipMessageType.STATE_SYNC && (m.raw as Record<string, unknown>)?.subtype === 'waiting',
+    )
+    if (idx >= 0) messages.value.splice(idx, 1)
+  }
+
   function processAipMessage(aip: AipMessage) {
+    // Clear waiting hint when a real event arrives (except STATE_SYNC/waiting itself)
+    const raw = aip.payload as Record<string, unknown> | undefined
+    if (!(aip.type === AipMessageType.STATE_SYNC && raw?.subtype === 'waiting')) {
+      removeWaitingHint()
+    }
+
     switch (aip.type) {
       case AipMessageType.TEXT_CHUNK: {
         const p = aip.payload as TextPayload
@@ -198,6 +211,32 @@ export function createChatState(): ChatState {
             raw: { subtype },
             timestamp: aip.timestamp,
           })
+          break
+        }
+        if (subtype === 'waiting') {
+          // "Waiting for response" hint — replace previous waiting msg to avoid stacking
+          const existingIdx = messages.value.findIndex(
+            (m) => m.type === AipMessageType.STATE_SYNC && (m.raw as Record<string, unknown>)?.subtype === 'waiting',
+          )
+          const elapsed = (raw.elapsedSeconds as number) || 0
+          const timeout = (raw.timeoutSeconds as number) || 600
+          const mins = Math.floor(elapsed / 60)
+          const content = mins > 0
+            ? `Waiting for response... (${mins}min elapsed)`
+            : `Waiting for response...`
+          const msg: ChatMessage = {
+            id: aip.messageId,
+            type: aip.type,
+            sender: 'system',
+            content,
+            raw: { subtype, elapsedSeconds: elapsed, timeoutSeconds: timeout },
+            timestamp: aip.timestamp,
+          }
+          if (existingIdx >= 0) {
+            messages.value[existingIdx] = msg
+          } else {
+            messages.value.push(msg)
+          }
           break
         }
         if (conversationStatus.value === p.status) break

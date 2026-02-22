@@ -946,6 +946,9 @@ class SdkWrapper:
                 producer_task = asyncio.create_task(_producer())
 
                 try:
+                    # Use shorter polling interval so we can emit "waiting" hints
+                    poll_interval = 60  # seconds
+                    silence_elapsed = 0
                     while True:
                         now = asyncio.get_event_loop().time()
                         if now - started_at > hard_timeout:
@@ -959,20 +962,33 @@ class SdkWrapper:
                             return
 
                         try:
-                            evt = await asyncio.wait_for(queue.get(), timeout=heartbeat_timeout)
+                            evt = await asyncio.wait_for(queue.get(), timeout=poll_interval)
                         except asyncio.TimeoutError:
-                            logger.warning("Task %s no events for %ss (heartbeat timeout)", task_id, heartbeat_timeout)
-                            yield event_mapper.map_error(
+                            silence_elapsed += poll_interval
+                            if silence_elapsed >= heartbeat_timeout:
+                                logger.warning("Task %s no events for %ss (heartbeat timeout)", task_id, heartbeat_timeout)
+                                yield event_mapper.map_error(
+                                    task_id=task_id,
+                                    error=f"Task stalled (no events for {heartbeat_timeout // 60}min)",
+                                    session_id=current_session_id,
+                                )
+                                producer_task.cancel()
+                                return
+                            # Emit a "waiting" hint so the UI knows we're still alive
+                            logger.info("Task %s no events for %ss, emitting waiting hint", task_id, silence_elapsed)
+                            yield event_mapper.map_system(
                                 task_id=task_id,
-                                error=f"Task stalled (no events for {heartbeat_timeout // 60}min)",
+                                subtype="waiting",
+                                data={"elapsed_seconds": silence_elapsed,
+                                      "timeout_seconds": heartbeat_timeout},
                                 session_id=current_session_id,
                             )
-                            producer_task.cancel()
-                            return
+                            continue
 
                         if evt is None:
                             break  # Producer finished
 
+                        silence_elapsed = 0  # Reset on any real event
                         last_event_at = asyncio.get_event_loop().time()
                         yield evt
                 finally:

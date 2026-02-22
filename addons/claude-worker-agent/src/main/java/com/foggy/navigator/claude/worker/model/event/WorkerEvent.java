@@ -44,4 +44,5 @@ public class WorkerEvent {
     @JsonProperty("is_error")
     private Boolean isError;
     private String subtype;
+    private Map<String, Object> data;
 }
