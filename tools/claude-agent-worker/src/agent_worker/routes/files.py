@@ -347,7 +347,7 @@ async def get_file_diff(
                 with open(abs_file, "rb") as f:
                     raw = f.read()
                 if not _is_binary(raw):
-                    modified = raw.decode("utf-8", errors="replace")
+                    modified = raw.decode("utf-8", errors="replace").rstrip()
         except OSError:
             pass
 
