@@ -18,7 +18,7 @@
           @node-click="handleNodeClick"
         >
           <template #default="{ node, data }">
-            <span class="tree-node">
+            <span class="tree-node" @contextmenu.prevent="handleContextMenu($event, data)">
               <span class="tree-icon">{{ data.isDir ? '📁' : '📄' }}</span>
               <span class="tree-label">{{ data.label }}</span>
             </span>
@@ -80,6 +80,19 @@
         <div ref="diffEditorEl" class="monaco-mount" :class="{ hidden: !diffMode }"></div>
       </div>
     </main>
+
+    <!-- Context menu -->
+    <Teleport to="body">
+      <div
+        v-if="ctxMenu.visible"
+        class="ctx-menu"
+        :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+      >
+        <div class="ctx-item" @click="copyPath('name')">复制文件名</div>
+        <div class="ctx-item" @click="copyPath('relative')">复制相对路径</div>
+        <div class="ctx-item" @click="copyPath('absolute')">复制绝对路径</div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -205,10 +218,25 @@ function normalizePath(p: string): string {
 
 async function handleNodeClick(data: TreeNode) {
   if (data.isDir) {
-    // Load children if empty
-    if (!data.children || data.children.length === 0) {
+    // Capture current expansion state before any rebuild
+    const expanded = new Set<string>(treeRef.value?.getExpandedKeys?.() as string[] || [])
+    const key = data.fullPath
+
+    const needsLoad = !data.children || data.children.length === 0
+    if (needsLoad) {
       await loadDirectoryForNode(data)
+      // Force tree to rebuild — el-tree-v2 only watches top-level data ref
+      treeData.value = [...treeData.value]
+      await nextTick()
     }
+
+    // Toggle expansion
+    if (expanded.has(key)) {
+      expanded.delete(key)
+    } else {
+      expanded.add(key)
+    }
+    treeRef.value?.setExpandedKeys?.([...expanded])
   } else {
     await loadFile(data.fullPath)
   }
@@ -247,6 +275,39 @@ function getSubPath(fullPath: string): string {
     }
   }
   return fullPath
+}
+
+// ---- Context menu ---------------------------------------------------------
+const ctxMenu = ref<{ visible: boolean; x: number; y: number; node: TreeNode | null }>({
+  visible: false, x: 0, y: 0, node: null,
+})
+
+function handleContextMenu(e: MouseEvent, data: TreeNode) {
+  ctxMenu.value = { visible: true, x: e.clientX, y: e.clientY, node: data }
+}
+
+function closeContextMenu() {
+  ctxMenu.value.visible = false
+}
+
+async function copyPath(type: 'name' | 'relative' | 'absolute') {
+  const node = ctxMenu.value.node
+  if (!node) return
+  let text = ''
+  if (type === 'name') {
+    text = node.label
+  } else if (type === 'relative') {
+    text = getSubPath(node.fullPath)
+  } else {
+    text = node.fullPath
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success(`已复制: ${text}`)
+  } catch {
+    ElMessage.error('复制失败')
+  }
+  closeContextMenu()
 }
 
 // ---- File loading ---------------------------------------------------------
@@ -375,6 +436,7 @@ function updateTreeHeight() {
 onMounted(async () => {
   updateTreeHeight()
   window.addEventListener('resize', updateTreeHeight)
+  document.addEventListener('click', closeContextMenu)
 
   // Lazy load monaco
   const mod = await import('@/utils/monacoSetup')
@@ -416,6 +478,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateTreeHeight)
+  document.removeEventListener('click', closeContextMenu)
   if (diffEditorInstance) {
     const model = diffEditorInstance.getModel()
     if (model) {
@@ -644,8 +707,7 @@ watch(() => route.query.directoryId, () => {
 }
 
 .monaco-mount.hidden {
-  visibility: hidden;
-  pointer-events: none;
+  display: none;
 }
 
 .center-hint {
@@ -659,5 +721,33 @@ watch(() => route.query.directoryId, () => {
 
 .git-list .center-hint {
   padding-top: 40px;
+}
+</style>
+
+<style>
+/* Context menu — unscoped because it's teleported to body */
+.ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  background: #2d2d2d;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  padding: 4px 0;
+  min-width: 160px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+  color: #cccccc;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.ctx-item {
+  padding: 6px 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ctx-item:hover {
+  background: #094771;
+  color: #fff;
 }
 </style>
