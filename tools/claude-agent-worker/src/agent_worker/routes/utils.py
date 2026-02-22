@@ -54,4 +54,4 @@ async def run_git(cwd: str, *args: str) -> tuple[int, str]:
             args[0] if args else "?", settings.git_timeout_seconds, cwd,
         )
         return -1, f"git command timed out after {settings.git_timeout_seconds}s"
-    return proc.returncode, stdout.decode("utf-8", errors="replace").strip()
+    return proc.returncode, stdout.decode("utf-8", errors="replace").rstrip()
