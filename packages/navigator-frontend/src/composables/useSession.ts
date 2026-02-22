@@ -31,18 +31,42 @@ export function useSession() {
     chatStore.setConnectionStatus('connecting')
     connectedSessionId.value = sessionId
 
-    // 加载历史消息
+    // 加载历史消息 — 从 metadata 还原原始类型，走 processAipMessage 统一路径
     try {
       const messages = await sessionApi.getMessages(sessionId)
       for (const msg of messages) {
-        const chatMsg: ChatMessage = {
-          id: msg.id,
-          type: AipMessageType.TEXT_COMPLETE,
-          sender: msg.role === 'USER' ? 'user' : 'assistant',
-          content: msg.content,
-          timestamp: new Date(msg.createdAt).getTime(),
+        const meta = msg.metadata
+        const msgType = meta?.type as string | undefined
+        const ts = new Date(msg.createdAt).getTime()
+
+        if (msg.role === 'USER') {
+          // User messages — push directly
+          chatStore.messages.push({
+            id: msg.id,
+            type: AipMessageType.TEXT_COMPLETE,
+            sender: 'user',
+            content: msg.content || '',
+            timestamp: ts,
+          })
+        } else if (msgType && msgType in AipMessageType) {
+          // Structured messages — reconstruct AipMessage from metadata and process
+          chatStore.processAipMessage({
+            messageId: msg.id,
+            sessionId: msg.sessionId,
+            timestamp: ts,
+            type: msgType as AipMessageType,
+            payload: meta,
+          })
+        } else {
+          // Fallback — render as plain text
+          chatStore.messages.push({
+            id: msg.id,
+            type: AipMessageType.TEXT_COMPLETE,
+            sender: 'assistant',
+            content: msg.content || '',
+            timestamp: ts,
+          })
         }
-        chatStore.messages.push(chatMsg)
       }
     } catch (e) {
       console.error('Failed to load history messages:', e)

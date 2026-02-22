@@ -24,8 +24,9 @@ export interface Session {
 export interface Message {
   id: string
   sessionId: string
-  role: 'USER' | 'ASSISTANT'
+  role: 'USER' | 'ASSISTANT' | 'TOOL' | 'SYSTEM'
   content: string
+  metadata?: Record<string, unknown>
   createdAt: string
 }
 

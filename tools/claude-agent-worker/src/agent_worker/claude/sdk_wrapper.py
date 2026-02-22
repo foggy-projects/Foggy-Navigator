@@ -12,6 +12,8 @@ import base64
 import json
 import logging
 import os
+import signal
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -274,6 +276,65 @@ def _extract_error_detail(exc: Exception, task_id: str) -> str:
 # Wrapper
 # ---------------------------------------------------------------------------
 
+def _find_sdk_cli_pids() -> set[int]:
+    """Return PIDs of Claude CLI processes spawned by the SDK.
+
+    The SDK always launches the CLI with the ``--print`` flag (JSON
+    streaming protocol).  User-interactive terminals (``claude`` or
+    ``claude --dangerously-skip-permissions``) never use ``--print``,
+    so this is a safe discriminator that avoids false positives.
+
+    Uses ``wmic`` on Windows, ``pgrep`` on Unix.  Returns an empty set
+    if detection fails — this is best-effort.
+    """
+
+    pids: set[int] = set()
+    try:
+        if os.name == "nt":
+            out = subprocess.check_output(
+                ["wmic", "process", "where",
+                 "commandline like '%claude-code%cli.js%--print%' and name='node.exe'",
+                 "get", "processid"],
+                text=True, timeout=5, stderr=subprocess.DEVNULL,
+            )
+            for line in out.strip().splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pids.add(int(line))
+        else:
+            out = subprocess.check_output(
+                ["pgrep", "-f", r"claude-code.*cli\.js.*--print"],
+                text=True, timeout=5, stderr=subprocess.DEVNULL,
+            )
+            for line in out.strip().splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pids.add(int(line))
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+    return pids
+
+
+def _kill_orphan_cli_processes(before: set[int], label: str) -> None:
+    """Kill Claude CLI processes spawned *after* the ``before`` snapshot.
+
+    Any PID present now but absent from *before* is considered an orphan
+    spawned by the SDK for the task identified by *label*.
+    """
+
+    after = _find_sdk_cli_pids()
+    orphans = after - before
+    for pid in orphans:
+        try:
+            if os.name == "nt":
+                os.kill(pid, signal.SIGTERM)
+            else:
+                os.kill(pid, signal.SIGTERM)
+            logger.info("Killed orphan Claude CLI process: pid=%d (task %s)", pid, label)
+        except OSError as exc:
+            logger.debug("Failed to kill pid %d: %s", pid, exc)
+
+
 class SdkWrapper:
     """Thin facade around the Claude Code SDK ``query()`` function."""
 
@@ -460,6 +521,9 @@ class SdkWrapper:
                     logger.info("Task %s: saved %d image(s), prompt augmented", task_id, len(saved_paths))
             except Exception as exc:
                 logger.warning("Task %s: failed to save images: %s", task_id, exc)
+
+        # Snapshot existing CLI processes so we can detect orphans on cleanup.
+        cli_pids_before = _find_sdk_cli_pids()
 
         # Register the task so that it can be observed / cancelled.
         task_registry[task_id] = {
@@ -834,6 +898,16 @@ class SdkWrapper:
 
             if use_queue:
                 # Producer task: iterate SDK query() and push events into Queue
+                #
+                # NOTE: producer_task.cancel() causes CancelledError inside
+                # ``async for``.  The generator cleanup triggers
+                # ``athrow(GeneratorExit)`` → SDK ``query.close()`` →
+                # anyio ``_tg.__aexit__``.  Because the athrow runs in a
+                # different internal task context, anyio raises RuntimeError
+                # ("cancel scope in a different task").  We must catch
+                # *both* CancelledError and RuntimeError to prevent
+                # "Task exception was never retrieved" log spam and ensure
+                # the sentinel is always pushed.
                 async def _producer() -> None:
                     try:
                         async for message in _query_fn(prompt=prompt, options=options):
@@ -845,6 +919,20 @@ class SdkWrapper:
                             error="Task was cancelled",
                             session_id=current_session_id,
                         ))
+                    except RuntimeError as exc:
+                        # anyio cancel-scope mismatch during generator cleanup
+                        if "cancel scope" in str(exc):
+                            logger.debug(
+                                "Task %s suppressed anyio cancel-scope error "
+                                "during SDK generator cleanup", task_id,
+                            )
+                        else:
+                            error_detail = _extract_error_detail(exc, task_id)
+                            await queue.put(event_mapper.map_error(
+                                task_id=task_id,
+                                error=error_detail,
+                                session_id=current_session_id,
+                            ))
                     except Exception as exc:
                         error_detail = _extract_error_detail(exc, task_id)
                         await queue.put(event_mapper.map_error(
@@ -890,10 +978,13 @@ class SdkWrapper:
                 finally:
                     if not producer_task.done():
                         producer_task.cancel()
-                        try:
-                            await producer_task
-                        except asyncio.CancelledError:
-                            pass
+                    try:
+                        await producer_task
+                    except (asyncio.CancelledError, RuntimeError, Exception):
+                        # CancelledError: normal cancel
+                        # RuntimeError: anyio cancel-scope mismatch (SDK limitation)
+                        # Exception: any other cleanup error
+                        pass
 
             else:
                 # Direct iteration (no can_use_tool callback needed)
@@ -945,3 +1036,6 @@ class SdkWrapper:
             for pid in list(permission_pending):
                 if permission_pending[pid].get("task_id") == task_id:
                     permission_pending.pop(pid, None)
+            # Kill orphan CLI subprocesses that the SDK failed to clean up
+            # (e.g. due to anyio cancel-scope mismatch on task cancellation).
+            _kill_orphan_cli_processes(cli_pids_before, task_id)
