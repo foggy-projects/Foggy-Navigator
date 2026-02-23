@@ -26,17 +26,21 @@
 
     <!-- 底部输入栏 -->
     <ChatInput
+      v-model="chatInput"
       :disabled="!isConnected"
+      :history-items="historyItems"
       @send="handleSend"
+      @sent="onSent"
     />
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { useChatStore } from '@/stores/chat'
 import { useSession } from '@/composables/useSession'
+import { useInputMemory } from '@/composables/useInputMemory'
 import * as sessionApi from '@/api/session'
 import type { GuideCard } from '@/api/types'
 import MessageList from '@/components/MessageList.vue'
@@ -48,6 +52,17 @@ const { connectToSession, sendMessage, disconnectSession } = useSession()
 
 const sessionId = ref('')
 const guideCards = ref<GuideCard[]>([])
+const chatInput = ref('')
+
+// Draft & history
+const memoryScope = computed(() => sessionId.value ? 'chat-' + sessionId.value : '')
+const { saveDraft, loadDraft, clearDraft, addToHistory, recentItems } = useInputMemory(memoryScope)
+
+const historyItems = computed(() => recentItems(10))
+
+watch(chatInput, (val) => {
+  saveDraft(val)
+})
 
 const sortedMessages = computed(() => chatStore.sortedMessages)
 const isThinking = computed(() => chatStore.isThinking)
@@ -58,6 +73,9 @@ onLoad((options) => {
   if (sessionId.value) {
     connectToSession(sessionId.value)
     loadGuideCards()
+    // Restore draft
+    const draft = loadDraft()
+    if (draft) chatInput.value = draft
   }
 })
 
@@ -78,8 +96,15 @@ function handleSend(content: string) {
   sendMessage(sessionId.value, content)
 }
 
+function onSent(content: string) {
+  addToHistory(content)
+  clearDraft()
+  chatInput.value = ''
+}
+
 function sendGuideMessage(content: string) {
   handleSend(content)
+  addToHistory(content)
 }
 </script>
 

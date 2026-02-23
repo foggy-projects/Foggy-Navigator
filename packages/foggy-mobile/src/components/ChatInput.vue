@@ -1,8 +1,15 @@
 <template>
   <view class="chat-input-wrap">
     <view class="chat-input-inner">
+      <view
+        v-if="historyItems.length > 0"
+        class="history-btn"
+        @tap="showHistory"
+      >
+        <text class="history-icon">⏱</text>
+      </view>
       <textarea
-        v-model="inputText"
+        :value="currentText"
         class="chat-textarea"
         :placeholder="placeholder"
         :auto-height="true"
@@ -10,6 +17,7 @@
         :cursor-spacing="12"
         :adjust-position="true"
         :confirm-type="'send'"
+        @input="onInput"
         @confirm="handleSend"
       />
       <view
@@ -24,29 +32,70 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
   placeholder?: string
   disabled?: boolean
   sendLabel?: string
+  modelValue?: string
+  historyItems?: string[]
 }>(), {
   placeholder: '输入消息...',
   disabled: false,
   sendLabel: '发送',
+  modelValue: undefined,
+  historyItems: () => [],
 })
 
 const emit = defineEmits<{
   send: [content: string]
+  sent: [content: string]
+  'update:modelValue': [value: string]
 }>()
 
-const inputText = ref('')
-const canSend = computed(() => inputText.value.trim().length > 0 && !props.disabled)
+// Internal state (used when modelValue not provided)
+const internalText = ref('')
+
+const isControlled = computed(() => props.modelValue !== undefined)
+const currentText = computed(() => isControlled.value ? props.modelValue! : internalText.value)
+const canSend = computed(() => currentText.value.trim().length > 0 && !props.disabled)
+
+function onInput(e: any) {
+  const val = e.detail.value ?? ''
+  if (isControlled.value) {
+    emit('update:modelValue', val)
+  } else {
+    internalText.value = val
+  }
+}
+
+function setText(val: string) {
+  if (isControlled.value) {
+    emit('update:modelValue', val)
+  } else {
+    internalText.value = val
+  }
+}
 
 function handleSend() {
   if (!canSend.value) return
-  emit('send', inputText.value.trim())
-  inputText.value = ''
+  const content = currentText.value.trim()
+  emit('send', content)
+  emit('sent', content)
+  setText('')
+}
+
+function showHistory() {
+  const items = props.historyItems
+  if (items.length === 0) return
+  const truncated = items.map(s => s.length > 40 ? s.slice(0, 40) + '...' : s)
+  uni.showActionSheet({
+    itemList: truncated,
+    success: (res) => {
+      setText(items[res.tapIndex])
+    },
+  })
 }
 </script>
 
@@ -61,6 +110,17 @@ function handleSend() {
   display: flex;
   align-items: flex-end;
   gap: 16rpx;
+}
+.history-btn {
+  width: 64rpx;
+  height: 64rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.history-icon {
+  font-size: 36rpx;
 }
 .chat-textarea {
   flex: 1;

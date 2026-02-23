@@ -54,7 +54,7 @@ packages/foggy-mobile/
 |------|------|------|------|
 | 会话列表 | `pages/chat/index.vue` | Tab | 会话 CRUD + 下拉刷新 |
 | 对话详情 | `pages/chat/detail.vue` | 子页 | SSE 流式 + 消息列表 |
-| Worker 列表 | `pages/worker/index.vue` | Tab | Worker 卡片 + 目录展开 |
+| Worker 列表 | `pages/worker/index.vue` | Tab | Worker 卡片 + 目录展开（PROJECT → 子目录 → 独立目录） |
 | 任务列表 | `pages/worker/tasks.vue` | 子页 | 按目录分页 + 创建任务 |
 | 任务详情 | `pages/worker/task-detail.vue` | 子页 | SSE 流式 + 中止/续对 |
 | 设置 | `pages/settings/index.vue` | Tab | 账号 + 服务器 + 退出 |
@@ -66,7 +66,7 @@ packages/foggy-mobile/
 |------|------|
 | `MessageBubble.vue` | 聊天气泡（用户蓝/助手白），Markdown 渲染，工具/系统/任务消息 |
 | `MessageList.vue` | scroll-view 消息列表，自动滚底，思考动画 |
-| `ChatInput.vue` | 底部固定输入栏，safe-area 适配，confirm 发送 |
+| `ChatInput.vue` | 底部固定输入栏，safe-area 适配，confirm 发送，auto-height textarea |
 | `ThinkingDots.vue` | 三点弹跳动画 |
 | `ToolCallCard.vue` | 工具调用折叠卡片，点击展开详情 |
 | `SessionItem.vue` | 会话列表项（标题 + 时间 + 状态点） |
@@ -81,14 +81,29 @@ packages/foggy-mobile/
 |------|------|
 | `api/client.ts` | axios + `@uni-helper/axios-adapter`，401 自动跳登录 |
 | `api/types.ts` | 所有后端类型定义（镜像 navigator-frontend/types） |
-| `sse/UniSseClient.ts` | 跨平台 SSE（条件编译选择 transport） |
+| `sse/UniSseClient.ts` | 跨平台 SSE（条件编译选择 transport），指数退避重试 |
 | `sse/fetchSseTransport.ts` | H5: fetch + ReadableStream |
 | `sse/wxSseTransport.ts` | 微信: uni.request + onChunkReceived |
 | `stores/chat.ts` | Pinia 包装 `createChatState()`（来自 chat-core） |
-| `composables/useSession.ts` | 会话 SSE 生命周期 |
-| `composables/useTaskStream.ts` | 任务 SSE 流式输出 |
+| `stores/worker.ts` | Worker + 目录缓存（PROJECT/child/orphan 分类） |
+| `composables/useSession.ts` | 会话 SSE 生命周期（chat/detail 用） |
+| `composables/useTaskStream.ts` | 任务 SSE 流式输出（task-detail 用），跟踪 cost/duration/tokens |
 | `utils/config.ts` | 服务器地址管理 + 条件编译 baseURL |
 | `adapters/TutorAgentAdapter.ts` | SSE raw → AipMessage 转换 |
+
+## PC 端已有、移动端待对齐的功能
+
+> **参考对象**：`navigator-frontend` 的 ClaudeWorkerView、SlashCommandInput、TaskPane
+
+| PC 功能 | 移动端现状 | 差距 |
+|---------|-----------|------|
+| **草稿持久化** — `useInputMemory` composable，按目录/会话 scope 存 localStorage | 无 | 刷新页面输入内容丢失 |
+| **历史消息翻阅** — ArrowUp/Down 翻历史，发送后自动记录 | 无 | 需适配移动端交互（非箭头键） |
+| **输入框自动伸缩** — SlashCommandInput `autoGrow` + el-input `autosize` | ChatInput 已有 `auto-height`; tasks.vue 原生 textarea 有 `auto-height` | 基本已对齐 |
+| **SlashCommand 面板** — 输入 `/` 弹出命令/技能面板 | 无 | 移动端可简化为 ActionSheet 选模型/轮次 |
+| **TaskPane 多面板** — 同时查看多个任务，Grid 布局 | 单任务详情页（task-detail） | 移动端屏幕小，单任务页面更合适 |
+| **图片附加** — 粘贴/拖拽截图，压缩上传 | 无 | 可用 uni.chooseImage 选图 |
+| **Rewind** — 回退到指定 turn | 无 | 可后续添加 |
 
 ## 开发命令
 
@@ -118,6 +133,18 @@ pnpm test
 6. **存储用 `uni.setStorageSync` / `uni.getStorageSync`**，不用 localStorage
 7. **页面生命周期用 `onLoad` / `onShow` / `onUnload`**（从 `@dcloudio/uni-app` 导入）
 8. **TabBar 页面必须用 `uni.switchTab` 跳转**，不能用 `navigateTo`
+
+### 存储 API 差异
+
+移动端不能用 `localStorage`，必须用 `uni.setStorageSync` / `uni.getStorageSync`：
+```typescript
+// PC 端: localStorage.setItem('key', value)
+// 移动端: uni.setStorageSync('key', value)
+// PC 端: localStorage.getItem('key')
+// 移动端: uni.getStorageSync('key')
+// PC 端: localStorage.removeItem('key')
+// 移动端: uni.removeStorageSync('key')
+```
 
 ### 添加新页面
 
@@ -155,6 +182,8 @@ pnpm test
 - 服务器地址变更 → `utils/config.ts` 的 `getApiBaseUrl()` 已处理 H5 proxy vs 非 H5 完整 URL
 - 新增 Pinia store → 在 `stores/` 下创建，`defineStore` + Composition API 风格
 - Markdown 渲染 → 使用 `utils/markdown.ts` 的 `renderMarkdown()`，输出给 `<rich-text :nodes="">`
+- 移植 PC 功能到移动端 → 注意存储 API 差异（`uni.*Storage*` 替代 `localStorage`）
+- 输入增强 → 移动端无箭头键，历史选择应用列表/弹窗交互替代
 
 ## 已知约束
 

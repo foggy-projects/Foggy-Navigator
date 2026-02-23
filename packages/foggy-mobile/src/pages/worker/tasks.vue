@@ -7,21 +7,41 @@
 
     <!-- 创建任务输入栏 -->
     <view class="task-input-bar">
-      <textarea
-        v-model="promptInput"
-        class="task-textarea"
-        placeholder="输入任务描述..."
-        :auto-height="true"
-        :maxlength="-1"
-      />
-      <button
-        class="run-btn"
-        :disabled="!promptInput.trim() || creating"
-        :loading="creating"
-        @tap="handleCreateTask"
-      >
-        运行
-      </button>
+      <view class="input-row">
+        <view
+          v-if="historyItems.length > 0"
+          class="history-btn"
+          @tap="showHistory"
+        >
+          <text class="history-icon">⏱</text>
+        </view>
+        <textarea
+          v-model="promptInput"
+          class="task-textarea"
+          placeholder="输入任务描述..."
+          :auto-height="true"
+          :maxlength="-1"
+        />
+        <button
+          class="run-btn"
+          :disabled="!promptInput.trim() || creating"
+          :loading="creating"
+          @tap="handleCreateTask"
+        >
+          运行
+        </button>
+      </view>
+      <!-- 模型 / 轮次 选择行 -->
+      <view class="option-row">
+        <view class="option-tag" @tap="showModelPicker">
+          <text class="option-label">{{ selectedModel || '默认模型' }}</text>
+          <text v-if="selectedModel" class="option-clear" @tap.stop="selectedModel = ''">✕</text>
+        </view>
+        <view class="option-tag" @tap="showTurnsPicker">
+          <text class="option-label">{{ selectedTurns ? selectedTurns + ' 轮' : '默认轮次' }}</text>
+          <text v-if="selectedTurns" class="option-clear" @tap.stop="selectedTurns = 0">✕</text>
+        </view>
+      </view>
     </view>
 
     <!-- 任务列表 -->
@@ -51,10 +71,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import * as workerApi from '@/api/claudeWorker'
 import type { ClaudeTask } from '@/api/types'
+import { useInputMemory } from '@/composables/useInputMemory'
 import TaskCard from '@/components/TaskCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 
@@ -68,12 +89,31 @@ const tasks = ref<ClaudeTask[]>([])
 const page = ref(0)
 const totalPages = ref(0)
 
+// Model / turns
+const MODEL_OPTIONS = ['Sonnet 4', 'Opus 4', 'Haiku 4', 'Sonnet 3.5']
+const TURNS_OPTIONS = [10, 25, 50, 200, 999]
+const selectedModel = ref('')
+const selectedTurns = ref(0)
+
+// Draft & history
+const memoryScope = computed(() => directoryId.value ? 'task-' + directoryId.value : '')
+const { saveDraft, loadDraft, clearDraft, addToHistory, recentItems } = useInputMemory(memoryScope)
+
+const historyItems = computed(() => recentItems(10))
 const hasMore = computed(() => page.value + 1 < totalPages.value)
+
+// Auto-save draft on input change
+watch(promptInput, (val) => {
+  saveDraft(val)
+})
 
 onLoad((options) => {
   workerId.value = options?.workerId || ''
   directoryId.value = options?.directoryId || ''
   projectName.value = decodeURIComponent(options?.projectName || '')
+  // Restore draft
+  const draft = loadDraft()
+  if (draft) promptInput.value = draft
   loadTasks()
 })
 
@@ -112,11 +152,17 @@ async function handleCreateTask() {
   if (!promptInput.value.trim() || !workerId.value) return
   creating.value = true
   try {
-    const task = await workerApi.createTask({
+    const form: Parameters<typeof workerApi.createTask>[0] = {
       workerId: workerId.value,
       prompt: promptInput.value.trim(),
       directoryId: directoryId.value,
-    })
+    }
+    if (selectedModel.value) form.model = selectedModel.value
+    if (selectedTurns.value) form.maxTurns = selectedTurns.value
+
+    const task = await workerApi.createTask(form)
+    addToHistory(promptInput.value.trim())
+    clearDraft()
     promptInput.value = ''
     // Navigate to task detail
     uni.navigateTo({
@@ -135,6 +181,37 @@ async function handleCreateTask() {
 function openTask(task: ClaudeTask) {
   uni.navigateTo({
     url: `/pages/worker/task-detail?taskId=${task.taskId}&sessionId=${task.sessionId}`,
+  })
+}
+
+function showHistory() {
+  const items = historyItems.value
+  if (items.length === 0) return
+  const truncated = items.map(s => s.length > 40 ? s.slice(0, 40) + '...' : s)
+  uni.showActionSheet({
+    itemList: truncated,
+    success: (res) => {
+      promptInput.value = items[res.tapIndex]
+    },
+  })
+}
+
+function showModelPicker() {
+  uni.showActionSheet({
+    itemList: MODEL_OPTIONS,
+    success: (res) => {
+      selectedModel.value = MODEL_OPTIONS[res.tapIndex]
+    },
+  })
+}
+
+function showTurnsPicker() {
+  const labels = TURNS_OPTIONS.map(n => n + ' 轮')
+  uni.showActionSheet({
+    itemList: labels,
+    success: (res) => {
+      selectedTurns.value = TURNS_OPTIONS[res.tapIndex]
+    },
   })
 }
 </script>
@@ -157,12 +234,25 @@ function openTask(task: ClaudeTask) {
   font-weight: 600;
 }
 .task-input-bar {
-  display: flex;
-  align-items: flex-end;
-  gap: 16rpx;
   padding: 20rpx 24rpx;
   background: #ffffff;
   border-bottom: 2rpx solid #f0f0f0;
+}
+.input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16rpx;
+}
+.history-btn {
+  width: 64rpx;
+  height: 64rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.history-icon {
+  font-size: 36rpx;
 }
 .task-textarea {
   flex: 1;
@@ -189,6 +279,29 @@ function openTask(task: ClaudeTask) {
 }
 .run-btn[disabled] {
   opacity: 0.5;
+}
+.option-row {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 16rpx;
+  flex-wrap: wrap;
+}
+.option-tag {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  padding: 8rpx 20rpx;
+  background: #f0f2f5;
+  border-radius: 24rpx;
+}
+.option-label {
+  font-size: 24rpx;
+  color: #606266;
+}
+.option-clear {
+  font-size: 22rpx;
+  color: #909399;
+  padding: 0 4rpx;
 }
 .task-list {
   flex: 1;

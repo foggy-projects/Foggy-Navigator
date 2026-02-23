@@ -32,9 +32,12 @@
       <!-- 已完成/失败: 续对输入 -->
       <view v-else-if="canResume">
         <ChatInput
+          v-model="resumeInput"
           placeholder="输入续对消息..."
           send-label="继续"
+          :history-items="historyItems"
           @send="handleResume"
+          @sent="onSent"
         />
       </view>
     </view>
@@ -42,9 +45,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { useTaskStream } from '@/composables/useTaskStream'
+import { useInputMemory } from '@/composables/useInputMemory'
 import * as workerApi from '@/api/claudeWorker'
 import StatusBadge from '@/components/StatusBadge.vue'
 import MessageList from '@/components/MessageList.vue'
@@ -53,6 +57,17 @@ import ChatInput from '@/components/ChatInput.vue'
 const taskId = ref('')
 const sessionId = ref('')
 const aborting = ref(false)
+const resumeInput = ref('')
+
+// Draft & history
+const memoryScope = computed(() => sessionId.value ? 'pane-' + sessionId.value : '')
+const { saveDraft, loadDraft, clearDraft, addToHistory, recentItems } = useInputMemory(memoryScope)
+
+const historyItems = computed(() => recentItems(10))
+
+watch(resumeInput, (val) => {
+  saveDraft(val)
+})
 
 const taskStream = useTaskStream(() => {
   // 任务完成时刷新任务状态
@@ -78,6 +93,10 @@ const canResume = computed(() => {
 onLoad(async (options) => {
   taskId.value = options?.taskId || ''
   sessionId.value = options?.sessionId || ''
+
+  // Restore draft
+  const draft = loadDraft()
+  if (draft) resumeInput.value = draft
 
   if (taskId.value) {
     try {
@@ -131,6 +150,12 @@ async function handleResume(prompt: string) {
     console.error('Failed to resume task:', e)
     uni.showToast({ title: '续对失败', icon: 'error' })
   }
+}
+
+function onSent(content: string) {
+  addToHistory(content)
+  clearDraft()
+  resumeInput.value = ''
 }
 
 function formatDuration(ms: number): string {
