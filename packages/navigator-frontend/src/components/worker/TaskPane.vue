@@ -62,6 +62,8 @@
               :skills="skills || []"
               @submit="handleSend()"
               @command="handleCommand"
+              @history-prev="handlePaneHistoryPrev"
+              @history-next="handlePaneHistoryNext"
             />
             <el-button
               type="primary"
@@ -81,6 +83,7 @@
 import { computed, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
+import { useInputMemory } from '@/composables/useInputMemory'
 import type { SkillInfo } from '@/types'
 import SlashCommandInput from './SlashCommandInput.vue'
 
@@ -101,6 +104,29 @@ const emit = defineEmits<{
 }>()
 
 const paneInput = ref('')
+
+// --- Input memory: draft persistence + history for pane input ---
+const paneInputScope = computed(() => {
+  const sid = props.paneState.task.value?.sessionId
+  return sid ? 'pane-' + sid : ''
+})
+const paneMemory = useInputMemory(paneInputScope)
+
+// Restore draft on mount / scope change
+watch(paneInputScope, () => {
+  paneInput.value = paneMemory.loadDraft()
+})
+// Save draft on every keystroke
+watch(paneInput, (val) => paneMemory.saveDraft(val))
+
+function handlePaneHistoryPrev() {
+  const text = paneMemory.historyPrev(paneInput.value)
+  if (text != null) paneInput.value = text
+}
+function handlePaneHistoryNext() {
+  const text = paneMemory.historyNext()
+  if (text != null) paneInput.value = text
+}
 
 // Sync pendingInput from parent (e.g. after rewind fills the original prompt)
 watch(() => props.paneState.pendingInput.value, (val) => {
@@ -134,6 +160,8 @@ function handleSend(content?: string) {
   const safeText = text.startsWith('/') ? text.slice(1) : text
   if (!safeText.trim()) return
   emit('send', props.paneState.paneId, safeText)
+  paneMemory.addToHistory(text)
+  paneMemory.clearDraft()
   paneInput.value = ''
 }
 

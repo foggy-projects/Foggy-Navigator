@@ -217,6 +217,8 @@
                 :skills="directorySkills"
                 @submit="handleCreateTask"
                 @command="handleSlashCommand"
+                @history-prev="handleTaskHistoryPrev"
+                @history-next="handleTaskHistoryNext"
               />
             </el-form-item>
             <!-- Image preview strip -->
@@ -261,6 +263,8 @@
             :skills="directorySkills"
             @submit="handleCreateTask"
             @command="handleSlashCommand"
+            @history-prev="handleTaskHistoryPrev"
+            @history-next="handleTaskHistoryNext"
           >
             <template #append>
               <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
@@ -339,6 +343,8 @@
                 :skills="directorySkills"
                 @submit="handleCreateTask"
                 @command="handleSlashCommand"
+                @history-prev="handleTaskHistoryPrev"
+                @history-next="handleTaskHistoryNext"
               />
             </el-form-item>
             <!-- Image preview strip -->
@@ -386,6 +392,8 @@
             :skills="directorySkills"
             @submit="handleCreateTask"
             @command="handleSlashCommand"
+            @history-prev="handleTaskHistoryPrev"
+            @history-next="handleTaskHistoryNext"
           >
             <template #append>
               <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
@@ -965,6 +973,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
 import { useClaudeWorker } from '@/composables/useClaudeWorker'
+import { useInputMemory } from '@/composables/useInputMemory'
 import { useTaskPane } from '@/composables/useTaskPane'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
@@ -1085,6 +1094,31 @@ const taskForm = ref({
   useTeams: true,
   permissionMode: 'bypassPermissions' as string,
 })
+
+// --- Input memory: draft persistence + history for top task input ---
+const taskInputScope = computed(() => {
+  if (selectedDirectoryId.value) return 'task-' + selectedDirectoryId.value
+  if (selectedWorkerId.value) return 'task-worker-' + selectedWorkerId.value
+  return ''
+})
+const taskMemory = useInputMemory(taskInputScope)
+
+// Save draft on every keystroke
+watch(() => taskForm.value.prompt, (val) => taskMemory.saveDraft(val))
+
+// Restore draft when scope changes (directory/worker switch)
+watch(taskInputScope, () => {
+  taskForm.value.prompt = taskMemory.loadDraft()
+})
+
+function handleTaskHistoryPrev() {
+  const text = taskMemory.historyPrev(taskForm.value.prompt)
+  if (text != null) taskForm.value.prompt = text
+}
+function handleTaskHistoryNext() {
+  const text = taskMemory.historyNext()
+  if (text != null) taskForm.value.prompt = text
+}
 
 // --- Image attachment state ---
 interface ImageAttachment {
@@ -1997,6 +2031,8 @@ async function handleCreateTask() {
     }
 
     const task = await workerState.createTask(form)
+    taskMemory.addToHistory(prompt)
+    taskMemory.clearDraft()
     taskForm.value.prompt = ''
     clearAttachedImages()
 

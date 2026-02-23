@@ -152,6 +152,8 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   submit: []
   command: [payload: { command: string; value: string | number }]
+  'history-prev': []
+  'history-next': []
 }>()
 
 const inputRef = ref()
@@ -277,11 +279,32 @@ function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && e.ctrlKey && props.rows > 1) {
       e.preventDefault()
       emit('submit')
+      return
     }
     // Enter → submit (for single-line mode)
     if (e.key === 'Enter' && !e.ctrlKey && props.rows <= 1) {
       e.preventDefault()
       emit('submit')
+      return
+    }
+    // ArrowUp/Down → history navigation (only when cursor is at boundary)
+    if (e.key === 'ArrowUp') {
+      const el = inputRef.value?.$el || inputRef.value
+      const textarea = el?.querySelector?.('textarea') || el?.querySelector?.('input')
+      if (textarea && textarea.selectionStart === 0) {
+        e.preventDefault()
+        emit('history-prev')
+      }
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      const el = inputRef.value?.$el || inputRef.value
+      const textarea = el?.querySelector?.('textarea') || el?.querySelector?.('input')
+      if (textarea && textarea.selectionStart === textarea.value.length) {
+        e.preventDefault()
+        emit('history-next')
+      }
+      return
     }
     return
   }
