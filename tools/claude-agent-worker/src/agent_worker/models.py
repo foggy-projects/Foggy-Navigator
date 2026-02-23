@@ -242,3 +242,43 @@ class FileDiffResponse(BaseModel):
     original: str | None = None
     modified: str | None = None
     language: str = "plaintext"
+
+
+# ---------------------------------------------------------------------------
+# File search
+# ---------------------------------------------------------------------------
+
+class FileSearchResult(BaseModel):
+    """A single file matching the search query."""
+
+    name: str
+    relative_path: str
+    size: int = 0
+    modified: str = ""
+
+
+class FileSearchResponse(BaseModel):
+    """Response for ``GET /api/v1/files/search``."""
+
+    query: str
+    results: list[FileSearchResult]
+    total: int
+
+
+class ContentMatch(BaseModel):
+    """A single content match from git grep."""
+
+    file: str
+    line_number: int
+    line_content: str
+    context_before: list[str] = []
+    context_after: list[str] = []
+
+
+class ContentSearchResponse(BaseModel):
+    """Response for ``GET /api/v1/files/search-content``."""
+
+    query: str
+    matches: list[ContentMatch]
+    total_matches: int
+    total_files: int

@@ -395,6 +395,43 @@ public class ClaudeWorkerClient {
     }
 
     /**
+     * 搜索文件名
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> searchFiles(String path, String query, int maxResults) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/files/search")
+                        .queryParam("path", path)
+                        .queryParam("query", query)
+                        .queryParam("max_results", maxResults)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Search files failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
+     * 搜索文件内容
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> searchContent(String path, String query, int maxResults,
+                                                     int contextLines, boolean caseSensitive) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/files/search-content")
+                        .queryParam("path", path)
+                        .queryParam("query", query)
+                        .queryParam("max_results", maxResults)
+                        .queryParam("context_lines", contextLines)
+                        .queryParam("case_sensitive", caseSensitive)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Search content failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
      * 获取单文件 diff (HEAD vs 工作区)
      */
     @SuppressWarnings("unchecked")

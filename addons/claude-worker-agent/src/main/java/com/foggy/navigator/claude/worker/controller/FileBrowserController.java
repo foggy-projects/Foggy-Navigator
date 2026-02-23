@@ -106,6 +106,47 @@ public class FileBrowserController {
         }
     }
 
+    /**
+     * 搜索文件名
+     */
+    @GetMapping("/search")
+    public RX<Map<String, Object>> searchFiles(
+            @RequestParam String directoryId,
+            @RequestParam String query,
+            @RequestParam(required = false, defaultValue = "50") int maxResults) {
+        ClaudeWorkerClient client = resolveClient(directoryId);
+        WorkingDirectoryEntity entity = getEntity(directoryId);
+        try {
+            Map<String, Object> result = client.searchFiles(entity.getPath(), query, maxResults).block(TIMEOUT);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to search files for directory {}: {}", directoryId, e.getMessage());
+            return RX.failA("搜索文件失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 搜索文件内容
+     */
+    @GetMapping("/search-content")
+    public RX<Map<String, Object>> searchContent(
+            @RequestParam String directoryId,
+            @RequestParam String query,
+            @RequestParam(required = false, defaultValue = "50") int maxResults,
+            @RequestParam(required = false, defaultValue = "2") int contextLines,
+            @RequestParam(required = false, defaultValue = "false") boolean caseSensitive) {
+        ClaudeWorkerClient client = resolveClient(directoryId);
+        WorkingDirectoryEntity entity = getEntity(directoryId);
+        try {
+            Map<String, Object> result = client.searchContent(
+                    entity.getPath(), query, maxResults, contextLines, caseSensitive).block(TIMEOUT);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to search content for directory {}: {}", directoryId, e.getMessage());
+            return RX.failA("搜索内容失败: " + e.getMessage());
+        }
+    }
+
     // ---- Helpers -----------------------------------------------------------
 
     private WorkingDirectoryEntity getEntity(String directoryId) {

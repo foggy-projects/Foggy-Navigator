@@ -50,6 +50,34 @@ export interface FileDiff {
   language: string
 }
 
+export interface FileSearchResult {
+  name: string
+  relative_path: string
+  size: number
+  modified: string
+}
+
+export interface FileSearchResponse {
+  query: string
+  results: FileSearchResult[]
+  total: number
+}
+
+export interface ContentMatch {
+  file: string
+  line_number: number
+  line_content: string
+  context_before: string[]
+  context_after: string[]
+}
+
+export interface ContentSearchResponse {
+  query: string
+  matches: ContentMatch[]
+  total_matches: number
+  total_files: number
+}
+
 // ---- API ------------------------------------------------------------------
 
 export async function listDirectory(
@@ -85,5 +113,29 @@ export async function getFileDiff(directoryId: string, file: string): Promise<Fi
   const rx = (await client.get('/file-browser/git-diff/file', {
     params: { directoryId, file },
   })) as unknown as RX<FileDiff>
+  return rx.data
+}
+
+export async function searchFiles(
+  directoryId: string,
+  query: string,
+  maxResults = 50,
+): Promise<FileSearchResponse> {
+  const rx = (await client.get('/file-browser/search', {
+    params: { directoryId, query, maxResults },
+  })) as unknown as RX<FileSearchResponse>
+  return rx.data
+}
+
+export async function searchContent(
+  directoryId: string,
+  query: string,
+  maxResults = 50,
+  contextLines = 2,
+  caseSensitive = false,
+): Promise<ContentSearchResponse> {
+  const rx = (await client.get('/file-browser/search-content', {
+    params: { directoryId, query, maxResults, contextLines, caseSensitive },
+  })) as unknown as RX<ContentSearchResponse>
   return rx.data
 }

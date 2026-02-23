@@ -17,7 +17,7 @@
           :item-size="28"
           @node-click="handleNodeClick"
         >
-          <template #default="{ node, data }">
+          <template #default="{ data }">
             <span class="tree-node" @contextmenu.prevent="handleContextMenu($event, data)">
               <span class="tree-icon">{{ data.isDir ? '📁' : '📄' }}</span>
               <span class="tree-label">{{ data.label }}</span>
@@ -63,7 +63,13 @@
             {{ seg }}<span v-if="i < breadcrumbs.length - 1" class="sep">/</span>
           </span>
         </div>
-        <div class="toolbar-meta">
+        <div class="toolbar-actions">
+          <button class="toolbar-btn" title="搜索文件 (Ctrl+P)" @click="openSearch('file')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M6 1a5 5 0 0 1 3.88 8.17l3.47 3.47-.7.71-3.48-3.47A5 5 0 1 1 6 1zm0 1a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/></svg>
+          </button>
+          <button class="toolbar-btn" title="搜索内容 (Ctrl+Shift+F)" @click="openSearch('content')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M11.7 8.3l3 3-.7.7-3-3c-.8.6-1.8 1-2.9 1C5.5 10 3.5 8 3.5 5.5S5.5 1 8 1s4.5 2 4.5 4.5c0 1-.3 2-.8 2.8zM8 9c1.9 0 3.5-1.6 3.5-3.5S9.9 2 8 2 4.5 3.6 4.5 5.5 6.1 9 8 9zM6 5h4v1H6V5z"/></svg>
+          </button>
           <el-tag v-if="currentLanguage !== 'plaintext'" size="small" type="info">{{ currentLanguage }}</el-tag>
           <span v-if="currentFileSize" class="file-size">{{ formatSize(currentFileSize) }}</span>
           <span v-if="currentLineCount" class="line-count">{{ currentLineCount }} 行</span>
@@ -93,6 +99,16 @@
         <div class="ctx-item" @click="copyPath('absolute')">复制绝对路径</div>
       </div>
     </Teleport>
+
+    <!-- Search dialog -->
+    <FileSearchDialog
+      :visible="searchDialogVisible"
+      :mode="searchMode"
+      :directory-id="directoryId"
+      @close="searchDialogVisible = false"
+      @select-file="handleSearchSelectFile"
+      @select-content="handleSearchSelectContent"
+    />
   </div>
 </template>
 
@@ -107,6 +123,7 @@ import {
   getFileDiff,
 } from '@/api/fileBrowser'
 import type { FileEntry, DiffFileEntry } from '@/api/fileBrowser'
+import FileSearchDialog from '@/components/file-browser/FileSearchDialog.vue'
 
 // ---- Route params ---------------------------------------------------------
 const route = useRoute()
@@ -259,16 +276,11 @@ async function loadDirectoryForNode(node: TreeNode) {
 }
 
 function getSubPath(fullPath: string): string {
-  // fullPath is absolute from worker; pass it directly
-  // The backend will use it directly since listFiles sends full path
-  // But our API goes through the Java proxy which uses directoryId + subPath
-  // We need to compute the relative path from the root dir
-  const root = normalizePath(currentDirPath.value.split('/').slice(0, -1).join('/') || currentDirPath.value)
   const normalized = normalizePath(fullPath)
 
   // Find the root directory path from the initial listing
   if (treeData.value.length > 0) {
-    const firstEntry = normalizePath(treeData.value[0].fullPath)
+    const firstEntry = normalizePath(treeData.value[0]!.fullPath)
     const rootDir = firstEntry.substring(0, firstEntry.lastIndexOf('/'))
     if (normalized.startsWith(rootDir)) {
       return normalized.substring(rootDir.length + 1)
@@ -308,6 +320,65 @@ async function copyPath(type: 'name' | 'relative' | 'absolute') {
     ElMessage.error('复制失败')
   }
   closeContextMenu()
+}
+
+// ---- Search dialog --------------------------------------------------------
+const searchDialogVisible = ref(false)
+const searchMode = ref<'file' | 'content'>('file')
+
+function openSearch(mode: 'file' | 'content') {
+  searchMode.value = mode
+  searchDialogVisible.value = true
+}
+
+function getRootDir(): string | null {
+  if (treeData.value.length > 0) {
+    const firstEntry = normalizePath(treeData.value[0]!.fullPath)
+    return firstEntry.substring(0, firstEntry.lastIndexOf('/'))
+  }
+  return null
+}
+
+function handleSearchSelectFile(relativePath: string) {
+  if (!directoryId.value) return
+  const rootDir = getRootDir()
+  if (rootDir) {
+    loadFile(rootDir + '/' + relativePath)
+  }
+}
+
+function handleSearchSelectContent(file: string, lineNumber: number) {
+  if (!directoryId.value) return
+  const rootDir = getRootDir()
+  if (rootDir) {
+    loadFile(rootDir + '/' + file).then(() => {
+      // Reveal the line in the editor
+      if (editorInstance) {
+        editorInstance.revealLineInCenter(lineNumber)
+        editorInstance.setSelection({
+          startLineNumber: lineNumber,
+          startColumn: 1,
+          endLineNumber: lineNumber,
+          endColumn: 1000,
+        })
+      }
+    })
+  }
+}
+
+function handleGlobalKeydown(e: KeyboardEvent) {
+  // Ctrl+P → file search
+  if ((e.ctrlKey || e.metaKey) && e.key === 'p' && !e.shiftKey) {
+    e.preventDefault()
+    openSearch('file')
+    return
+  }
+  // Ctrl+Shift+F → content search
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
+    e.preventDefault()
+    openSearch('content')
+    return
+  }
 }
 
 // ---- File loading ---------------------------------------------------------
@@ -457,6 +528,7 @@ onMounted(async () => {
   updateTreeHeight()
   window.addEventListener('resize', updateTreeHeight)
   document.addEventListener('click', closeContextMenu)
+  document.addEventListener('keydown', handleGlobalKeydown)
 
   // Lazy load monaco
   const mod = await import('@/utils/monacoSetup')
@@ -487,6 +559,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateTreeHeight)
   document.removeEventListener('click', closeContextMenu)
+  document.removeEventListener('keydown', handleGlobalKeydown)
   if (diffEditorInstance) {
     const model = diffEditorInstance.getModel()
     if (model) {
@@ -692,12 +765,30 @@ watch(() => route.query.directoryId, () => {
   color: #666;
 }
 
-.toolbar-meta {
+.toolbar-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
   color: #888;
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #aaa;
+  cursor: pointer;
+}
+
+.toolbar-btn:hover {
+  background: #3c3c3c;
+  color: #fff;
 }
 
 .editor-container {

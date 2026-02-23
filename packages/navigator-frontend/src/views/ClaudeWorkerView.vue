@@ -1934,7 +1934,7 @@ async function executePaneRewind() {
         let userCount = 0
         let cutIndex = -1
         for (let i = 0; i < msgs.length; i++) {
-          if (msgs[i].sender === 'user') {
+          if (msgs[i]!.sender === 'user') {
             userCount++
             if (userCount === paneRewindTurnIndex.value) {
               cutIndex = i

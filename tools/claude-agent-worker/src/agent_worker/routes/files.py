@@ -10,11 +10,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth import verify_token
 from ..models import (
+    ContentMatch,
+    ContentSearchResponse,
     DiffFileEntry,
     DirectoryListingResponse,
     FileContentResponse,
     FileEntry,
     FileDiffResponse,
+    FileSearchResponse,
+    FileSearchResult,
     GitDiffSummaryResponse,
 )
 from .utils import run_git, validate_path
@@ -213,6 +217,240 @@ async def read_file_content(
         language=language,
         size=file_size,
         line_count=line_count,
+    )
+
+
+_MAX_SEARCH_RESULTS = 200
+_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "target", "build", "dist"}
+
+
+@router.get("/files/search", response_model=FileSearchResponse)
+async def search_files(
+    path: str = Query(..., description="Absolute path to a git repo (or directory)"),
+    query: str = Query(..., min_length=1, max_length=200, description="Filename substring to search for"),
+    max_results: int = Query(50, ge=1, le=_MAX_SEARCH_RESULTS),
+) -> FileSearchResponse:
+    """Search for files by name. Uses ``git ls-files`` in git repos, falls back to os.walk."""
+    resolved = validate_path(path)
+
+    if not os.path.isdir(resolved):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path is not a directory: {path}",
+        )
+
+    # Try git ls-files first
+    rc, output = await run_git(resolved, "ls-files", "--cached", "--others", "--exclude-standard")
+    if rc == 0 and output:
+        all_files = output.splitlines()
+    else:
+        # Fallback: os.walk (limited to 10k files to avoid hanging)
+        all_files = []
+        for root, dirs, files in os.walk(resolved):
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith('.')]
+            for fname in files:
+                rel = os.path.relpath(os.path.join(root, fname), resolved).replace("\\", "/")
+                all_files.append(rel)
+                if len(all_files) >= 10000:
+                    break
+            if len(all_files) >= 10000:
+                break
+
+    q_lower = query.lower()
+    results: list[FileSearchResult] = []
+    for rel_path in all_files:
+        name = rel_path.rsplit("/", 1)[-1] if "/" in rel_path else rel_path
+        if q_lower in name.lower():
+            # Try to get size and mtime
+            abs_path = os.path.join(resolved, rel_path.replace("/", os.sep))
+            size = 0
+            modified = ""
+            try:
+                stat = os.stat(abs_path)
+                size = stat.st_size
+                modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+            except OSError:
+                pass
+            results.append(FileSearchResult(
+                name=name,
+                relative_path=rel_path,
+                size=size,
+                modified=modified,
+            ))
+            if len(results) >= max_results:
+                break
+
+    return FileSearchResponse(query=query, results=results, total=len(results))
+
+
+@router.get("/files/search-content", response_model=ContentSearchResponse)
+async def search_content(
+    path: str = Query(..., description="Absolute path to a git repo (or directory)"),
+    query: str = Query(..., min_length=1, max_length=200, description="Text to search for"),
+    max_results: int = Query(50, ge=1, le=_MAX_SEARCH_RESULTS),
+    context_lines: int = Query(2, ge=0, le=5),
+    case_sensitive: bool = Query(False),
+) -> ContentSearchResponse:
+    """Full-text search in file contents. Uses ``git grep`` in git repos, falls back to Python."""
+    resolved = validate_path(path)
+
+    if not os.path.isdir(resolved):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path is not a directory: {path}",
+        )
+
+    # Try git grep
+    git_args = ["grep", "-n", "--no-color", "-F", f"-C{context_lines}"]
+    if not case_sensitive:
+        git_args.append("-i")
+    git_args.append("--")
+    git_args.append(query)
+
+    rc, output = await run_git(resolved, *git_args)
+
+    if rc not in (0, 1):
+        # rc==1 means no matches in git grep, which is fine
+        # Non-git repo or other error — fallback
+        return _fallback_content_search(resolved, query, max_results, context_lines, case_sensitive)
+
+    if rc == 1 or not output:
+        return ContentSearchResponse(query=query, matches=[], total_matches=0, total_files=0)
+
+    return _parse_git_grep_output(query, output, max_results, context_lines)
+
+
+def _parse_git_grep_output(
+    query: str, output: str, max_results: int, context_lines: int,
+) -> ContentSearchResponse:
+    """Parse ``git grep -n -C<N>`` output into structured matches."""
+    matches: list[ContentMatch] = []
+    files_seen: set[str] = set()
+
+    # git grep -C output uses "--" as separator between groups
+    # Each line: file:linenum:content  OR  file-linenum-content (context)
+    current_before: list[str] = []
+    current_match: ContentMatch | None = None
+
+    for line in output.splitlines():
+        if line == "--":
+            # Group separator — flush pending match
+            if current_match is not None:
+                matches.append(current_match)
+                current_match = None
+                current_before = []
+                if len(matches) >= max_results:
+                    break
+            continue
+
+        # Try to parse as match line (file:num:content) or context line (file-num-content)
+        # Use a careful split — filename may contain colons on Windows (C:\...)
+        # git grep output on Windows still uses forward-slash paths for tracked files
+        parts = line.split(":", 2) if ":" in line else None
+        parts_ctx = line.split("-", 2) if parts is None or len(parts) < 3 else None
+
+        is_match_line = False
+        file_path = ""
+        line_num = 0
+        content = ""
+
+        if parts and len(parts) >= 3:
+            try:
+                line_num = int(parts[1])
+                file_path = parts[0]
+                content = parts[2]
+                is_match_line = True
+            except ValueError:
+                pass
+
+        if not is_match_line and parts_ctx and len(parts_ctx) >= 3:
+            try:
+                line_num = int(parts_ctx[1])
+                file_path = parts_ctx[0]
+                content = parts_ctx[2]
+            except ValueError:
+                continue
+
+        if not file_path:
+            continue
+
+        files_seen.add(file_path)
+
+        if is_match_line:
+            if current_match is not None:
+                matches.append(current_match)
+                if len(matches) >= max_results:
+                    break
+            current_match = ContentMatch(
+                file=file_path,
+                line_number=line_num,
+                line_content=content,
+                context_before=list(current_before),
+            )
+            current_before = []
+        else:
+            # Context line
+            if current_match is not None:
+                current_match.context_after.append(content)
+            else:
+                current_before.append(content)
+                if len(current_before) > context_lines:
+                    current_before.pop(0)
+
+    # Flush last match
+    if current_match is not None and len(matches) < max_results:
+        matches.append(current_match)
+
+    return ContentSearchResponse(
+        query=query,
+        matches=matches,
+        total_matches=len(matches),
+        total_files=len(files_seen),
+    )
+
+
+def _fallback_content_search(
+    base_dir: str, query: str, max_results: int, context_lines: int, case_sensitive: bool,
+) -> ContentSearchResponse:
+    """Pure-Python fallback for non-git repos."""
+    matches: list[ContentMatch] = []
+    files_seen: set[str] = set()
+    q = query if case_sensitive else query.lower()
+
+    for root, dirs, files in os.walk(base_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith('.')]
+        for fname in files:
+            abs_path = os.path.join(root, fname)
+            rel_path = os.path.relpath(abs_path, base_dir).replace("\\", "/")
+
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="ignore") as fh:
+                    lines = fh.readlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            for i, line in enumerate(lines):
+                cmp_line = line if case_sensitive else line.lower()
+                if q in cmp_line:
+                    files_seen.add(rel_path)
+                    before = [l.rstrip("\n\r") for l in lines[max(0, i - context_lines):i]]
+                    after = [l.rstrip("\n\r") for l in lines[i + 1:i + 1 + context_lines]]
+                    matches.append(ContentMatch(
+                        file=rel_path,
+                        line_number=i + 1,
+                        line_content=line.rstrip("\n\r"),
+                        context_before=before,
+                        context_after=after,
+                    ))
+                    if len(matches) >= max_results:
+                        return ContentSearchResponse(
+                            query=query, matches=matches,
+                            total_matches=len(matches), total_files=len(files_seen),
+                        )
+
+    return ContentSearchResponse(
+        query=query, matches=matches,
+        total_matches=len(matches), total_files=len(files_seen),
     )
 
 
