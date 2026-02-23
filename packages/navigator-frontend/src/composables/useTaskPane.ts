@@ -97,7 +97,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     chatState.clearMessages()
     chatState.setConnectionStatus('connecting')
 
-    // Load history messages
+    // Load history messages — reconstruct typed messages from metadata
     let dbMessageCount = 0
     try {
       const messages = await sessionApi.getMessages(sessionId)
@@ -106,14 +106,37 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
           dbMessageCount++
         }
-        const chatMsg: ChatMessage = {
-          id: msg.id,
-          type: AipMessageType.TEXT_COMPLETE,
-          sender: msg.role === 'USER' ? 'user' : 'assistant',
-          content: msg.content,
-          timestamp: new Date(msg.createdAt).getTime(),
+        const meta = msg.metadata
+        const msgType = meta?.type as string | undefined
+        const ts = new Date(msg.createdAt).getTime()
+
+        if (msg.role === 'USER') {
+          chatState.messages.value.push({
+            id: msg.id,
+            type: AipMessageType.TEXT_COMPLETE,
+            sender: 'user',
+            content: msg.content || '',
+            timestamp: ts,
+          })
+        } else if (msgType && msgType in AipMessageType) {
+          // Structured messages — reconstruct from metadata via processAipMessage
+          chatState.processAipMessage({
+            messageId: msg.id,
+            sessionId: msg.sessionId,
+            timestamp: ts,
+            type: msgType as AipMessageType,
+            payload: meta,
+          })
+        } else {
+          // Fallback — render as plain text
+          chatState.messages.value.push({
+            id: msg.id,
+            type: AipMessageType.TEXT_COMPLETE,
+            sender: 'assistant',
+            content: msg.content || '',
+            timestamp: ts,
+          })
         }
-        chatState.messages.value.push(chatMsg)
       }
     } catch (e) {
       console.error(`[TaskPane ${paneId}] Failed to load history:`, e)

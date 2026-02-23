@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { useChatStore, createSseClient, AipMessageType } from '@foggy/chat'
-import type { ChatMessage, SseController } from '@foggy/chat'
+import type { SseController } from '@foggy/chat'
 import { ElMessage, ElNotification } from 'element-plus'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'

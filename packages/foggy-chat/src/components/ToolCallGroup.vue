@@ -1,7 +1,7 @@
 <template>
   <div class="tool-call-group">
     <div class="group-header" @click="toggle">
-      <span class="group-toggle">{{ expanded ? '\u25BC' : '\u25B6' }}</span>
+      <span class="group-toggle">{{ toggleIcon }}</span>
       <span class="group-icon">&#9881;</span>
       <span class="group-summary">
         {{ items.length }} tool call{{ items.length > 1 ? 's' : '' }}:
@@ -15,7 +15,7 @@
         <span class="status-dot running"></span>
       </span>
     </div>
-    <div v-if="expanded" class="group-body">
+    <div v-if="mode !== 'collapsed'" :class="['group-body', { 'group-body-compact': mode === 'compact' }]">
       <ToolCallBlock
         v-for="item in items"
         :key="item.id"
@@ -31,13 +31,21 @@ import { ref, computed } from 'vue'
 import type { ChatMessage } from '../types/chat'
 import ToolCallBlock from './ToolCallBlock.vue'
 
+type DisplayMode = 'expanded' | 'compact' | 'collapsed'
+
 const props = defineProps<{
   items: ChatMessage[]
   isLastGroup?: boolean
 }>()
 
-// Last group defaults to expanded, others collapsed
-const expanded = ref(!!props.isLastGroup)
+// Last group defaults to compact (visible but capped), others fully collapsed
+const mode = ref<DisplayMode>(props.isLastGroup ? 'compact' : 'collapsed')
+
+const toggleIcon = computed(() => {
+  if (mode.value === 'expanded') return '\u25BC'   // ▼
+  if (mode.value === 'compact') return '\u25BD'     // ▽
+  return '\u25B6'                                    // ▶
+})
 
 const toolNamesSummary = computed(() => {
   const names = props.items
@@ -59,8 +67,11 @@ function hasOutput(msg: ChatMessage): boolean {
   return msg.toolOutput !== undefined || msg.error !== undefined
 }
 
+// Cycle: expanded → compact → collapsed → expanded
 function toggle() {
-  expanded.value = !expanded.value
+  if (mode.value === 'expanded') mode.value = 'compact'
+  else if (mode.value === 'compact') mode.value = 'collapsed'
+  else mode.value = 'expanded'
 }
 </script>
 
@@ -143,6 +154,11 @@ function toggle() {
   margin-top: 4px;
   padding-left: 8px;
   border-left: 2px solid #e4e7ed;
+}
+
+.group-body-compact {
+  max-height: 180px;
+  overflow-y: auto;
 }
 
 .group-body :deep(.tool-call-block) {

@@ -274,6 +274,20 @@ export function createChatState(): ChatState {
         })
         break
       }
+      case AipMessageType.SESSION_START: {
+        const p = aip.payload as TextPayload
+        const content = p?.content
+        if (content) {
+          messages.value.push({
+            id: aip.messageId,
+            type: AipMessageType.TEXT_COMPLETE,
+            sender: 'assistant',
+            content,
+            timestamp: aip.timestamp,
+          })
+        }
+        break
+      }
       case AipMessageType.CHECKPOINT: {
         // Checkpoint events are stored silently — not rendered as chat messages
         break
