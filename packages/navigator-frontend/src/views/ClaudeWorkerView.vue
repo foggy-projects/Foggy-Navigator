@@ -213,6 +213,7 @@
               <SlashCommandInput
                 v-model="taskForm.prompt"
                 :rows="3"
+                auto-grow
                 placeholder="输入任务描述... (可粘贴截图或拖拽图片)"
                 :skills="directorySkills"
                 @submit="handleCreateTask"
@@ -255,27 +256,29 @@
           </el-form>
         </div>
         <div v-else class="new-task-mini">
-          <SlashCommandInput
-            v-model="taskForm.prompt"
-            :rows="1"
-            size="small"
-            placeholder="新建任务... (可粘贴截图)"
-            :skills="directorySkills"
-            @submit="handleCreateTask"
-            @command="handleSlashCommand"
-            @history-prev="handleTaskHistoryPrev"
-            @history-next="handleTaskHistoryNext"
-          >
-            <template #append>
-              <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
-              <el-button
-                :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE' || panes.length >= MAX_PANES"
-                @click="handleCreateTask"
-              >
-                运行
-              </el-button>
-            </template>
-          </SlashCommandInput>
+          <div class="mini-input-row">
+            <SlashCommandInput
+              v-model="taskForm.prompt"
+              :rows="1"
+              auto-grow
+              :max-rows="4"
+              size="small"
+              placeholder="新建任务... (Shift+Enter 换行，可粘贴截图)"
+              :skills="directorySkills"
+              @submit="handleCreateTask"
+              @command="handleSlashCommand"
+              @history-prev="handleTaskHistoryPrev"
+              @history-next="handleTaskHistoryNext"
+            />
+            <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
+            <el-button
+              size="small"
+              :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE' || panes.length >= MAX_PANES"
+              @click="handleCreateTask"
+            >
+              运行
+            </el-button>
+          </div>
           <div v-if="attachedImages.length > 0" class="image-preview-strip compact">
             <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item small">
               <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
@@ -339,6 +342,7 @@
               <SlashCommandInput
                 v-model="taskForm.prompt"
                 :rows="3"
+                auto-grow
                 placeholder="输入任务描述... (可粘贴截图或拖拽图片)"
                 :skills="directorySkills"
                 @submit="handleCreateTask"
@@ -384,27 +388,29 @@
           </el-form>
         </div>
         <div v-else class="new-task-mini">
-          <SlashCommandInput
-            v-model="taskForm.prompt"
-            :rows="1"
-            size="small"
-            placeholder="新建任务... (可粘贴截图)"
-            :skills="directorySkills"
-            @submit="handleCreateTask"
-            @command="handleSlashCommand"
-            @history-prev="handleTaskHistoryPrev"
-            @history-next="handleTaskHistoryNext"
-          >
-            <template #append>
-              <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
-              <el-button
-                :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE' || panes.length >= MAX_PANES"
-                @click="handleCreateTask"
-              >
-                运行
-              </el-button>
-            </template>
-          </SlashCommandInput>
+          <div class="mini-input-row">
+            <SlashCommandInput
+              v-model="taskForm.prompt"
+              :rows="1"
+              auto-grow
+              :max-rows="4"
+              size="small"
+              placeholder="新建任务... (Shift+Enter 换行，可粘贴截图)"
+              :skills="directorySkills"
+              @submit="handleCreateTask"
+              @command="handleSlashCommand"
+              @history-prev="handleTaskHistoryPrev"
+              @history-next="handleTaskHistoryNext"
+            />
+            <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
+            <el-button
+              size="small"
+              :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE' || panes.length >= MAX_PANES"
+              @click="handleCreateTask"
+            >
+              运行
+            </el-button>
+          </div>
           <div v-if="attachedImages.length > 0" class="image-preview-strip compact">
             <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item small">
               <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
@@ -2728,6 +2734,17 @@ function formatTime(dateStr: string): string {
 .new-task-mini {
   flex-shrink: 0;
   margin-bottom: 8px;
+}
+
+.mini-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.mini-input-row .slash-input-wrap {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Empty pane hint */

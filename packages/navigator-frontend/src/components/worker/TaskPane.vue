@@ -57,8 +57,10 @@
             <SlashCommandInput
               v-model="paneInput"
               :rows="1"
+              auto-grow
+              :max-rows="4"
               :disabled="inputDisabled"
-              placeholder="输入后续指令... (输入 / 触发命令)"
+              placeholder="输入后续指令... (Shift+Enter 换行, / 触发命令)"
               :skills="skills || []"
               @submit="handleSend()"
               @command="handleCommand"

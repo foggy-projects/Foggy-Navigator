@@ -3,8 +3,9 @@
     <el-input
       ref="inputRef"
       :model-value="modelValue"
-      :type="rows > 1 ? 'textarea' : undefined"
-      :rows="rows"
+      :type="isTextarea ? 'textarea' : undefined"
+      :rows="autoGrow ? undefined : rows"
+      :autosize="autoGrow ? { minRows: Math.max(rows, 1), maxRows: maxRows } : false"
       :placeholder="placeholder"
       :disabled="disabled"
       :size="size"
@@ -12,7 +13,7 @@
       @keydown="handleKeydown"
       @focus="handleFocus"
     >
-      <template v-if="rows <= 1 && $slots.append" #append>
+      <template v-if="!isTextarea && $slots.append" #append>
         <slot name="append" />
       </template>
     </el-input>
@@ -138,6 +139,8 @@ const props = withDefaults(
     disabled?: boolean
     size?: '' | 'small' | 'large' | 'default'
     skills?: SkillInfo[]
+    autoGrow?: boolean
+    maxRows?: number
   }>(),
   {
     rows: 3,
@@ -145,8 +148,12 @@ const props = withDefaults(
     disabled: false,
     size: '',
     skills: () => [],
+    autoGrow: false,
+    maxRows: 6,
   },
 )
+
+const isTextarea = computed(() => props.rows > 1 || props.autoGrow)
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
@@ -281,8 +288,8 @@ function handleKeydown(e: KeyboardEvent) {
       emit('submit')
       return
     }
-    // Enter → submit (for single-line mode)
-    if (e.key === 'Enter' && !e.ctrlKey && props.rows <= 1) {
+    // Enter → submit (for single-line / autoGrow mode; Shift+Enter inserts newline)
+    if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && props.rows <= 1) {
       e.preventDefault()
       emit('submit')
       return
