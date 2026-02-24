@@ -570,9 +570,11 @@ class SdkWrapper:
                 options_kwargs["resume"] = session_id
 
             # claude-agent-sdk: load filesystem settings (CLAUDE.md, etc.)
-            # and use first-class agents parameter instead of extra_args.
+            # Note: Environment variables have higher priority than filesystem settings
             if _use_agent_sdk:
-                options_kwargs["setting_sources"] = ["user", "project", "local"]
+                # Only load user settings, skip project/local to avoid conflicts
+                # Environment variables (ANTHROPIC_*) will override any filesystem settings
+                options_kwargs["setting_sources"] = ["user"]
                 # File checkpointing — always enable when using agent SDK
                 options_kwargs["enable_file_checkpointing"] = True
                 base_env = options_kwargs.get("env") or env or {}

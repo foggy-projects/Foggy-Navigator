@@ -6,7 +6,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * 会话级配置（置顶、自定义标题、Auth 绑定）
+ * 会话级配置（置顶、自定义标题、Auth 绑定、模型映射）
  */
 @Data
 @Entity
@@ -47,6 +47,18 @@ public class ConversationConfigEntity {
     private String baseUrl;
 
     private LocalDateTime authBoundAt;
+
+    /**
+     * 模型映射配置
+     */
+    @Column(length = 128)
+    private String haikuModelName;
+
+    @Column(length = 128)
+    private String sonnetModelName;
+
+    @Column(length = 128)
+    private String opusModelName;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
