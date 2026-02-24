@@ -36,6 +36,8 @@ public class WorkerEvent {
     private String error;
     @JsonProperty("permission_id")
     private String permissionId;
+    @JsonProperty("allowed_prompts")
+    private java.util.List<Map<String, Object>> allowedPrompts;
     private java.util.List<Map<String, Object>> questions;
     @JsonProperty("checkpoint_id")
     private String checkpointId;

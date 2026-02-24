@@ -17,7 +17,7 @@
       :rewind-enabled="rewindEnabled"
       @permission-respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
       @question-respond="(pid, answers) => emit('questionRespond', pid, answers)"
-      @plan-respond="(pid, decision, denyMsg) => emit('planRespond', pid, decision, denyMsg)"
+      @plan-respond="(pid, decision, denyMsg, planAction) => emit('planRespond', pid, decision, denyMsg, planAction)"
       @rewind="(turnIndex) => emit('rewind', turnIndex)"
     >
       <template #empty>
@@ -66,7 +66,7 @@ const emit = defineEmits<{
   (e: 'send', content: string): void
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
-  (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string): void
+  (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', turnIndex: number): void
 }>()
 

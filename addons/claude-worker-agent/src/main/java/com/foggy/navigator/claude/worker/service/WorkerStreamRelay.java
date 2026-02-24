@@ -44,6 +44,9 @@ public class WorkerStreamRelay {
     /** 活跃的流订阅，用于 abort */
     private final ConcurrentHashMap<String, Disposable> activeStreams = new ConcurrentHashMap<>();
 
+    /** Java taskId → Worker 内部 taskId 映射 (worker 生成的 UUID) */
+    private final ConcurrentHashMap<String, String> workerTaskIdMap = new ConcurrentHashMap<>();
+
     @Async("sessionEventExecutor")
     @EventListener
     public void onTaskStart(ClaudeTaskStartEvent event) {
@@ -80,6 +83,11 @@ public class WorkerStreamRelay {
                             log.debug("Task {} received SSE data: {}", taskId, data.substring(0, Math.min(200, data.length())));
                             WorkerEvent workerEvent = objectMapper.readValue(data, WorkerEvent.class);
                             log.debug("Task {} parsed event type: {}", taskId, workerEvent.getType());
+                            // Capture worker's internal task ID for abort/respond calls
+                            if (workerEvent.getTaskId() != null && !workerTaskIdMap.containsKey(taskId)) {
+                                workerTaskIdMap.put(taskId, workerEvent.getTaskId());
+                                log.debug("Task {} mapped to worker task: {}", taskId, workerEvent.getTaskId());
+                            }
                             relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
                         } catch (Exception e) {
                             log.warn("Failed to parse worker event for task {}: {}", taskId, data, e);
@@ -109,10 +117,20 @@ public class WorkerStreamRelay {
     }
 
     /**
+     * 获取 Worker 内部 task ID (用于 abort/respond 调用)
+     * @param javaTaskId Java 侧的 task ID
+     * @return Worker 生成的 UUID task ID, 如果未映射则返回 javaTaskId
+     */
+    public String getWorkerTaskId(String javaTaskId) {
+        return workerTaskIdMap.getOrDefault(javaTaskId, javaTaskId);
+    }
+
+    /**
      * 中止任务的流
      */
     public void abortStream(String taskId) {
         Disposable subscription = activeStreams.remove(taskId);
+        workerTaskIdMap.remove(taskId);
         if (subscription != null && !subscription.isDisposed()) {
             subscription.dispose();
             log.info("Stream aborted: taskId={}", taskId);
@@ -209,6 +227,7 @@ public class WorkerStreamRelay {
                         event.getOutputTokens(), event.getDurationMs(),
                         event.getNumTurns(), resolvedModel);
                 activeStreams.remove(taskId);
+                workerTaskIdMap.remove(taskId);
 
                 // 发布跨 Agent 任务完成事件
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
@@ -240,6 +259,9 @@ public class WorkerStreamRelay {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("permissionId", event.getPermissionId());
                 payload.put("planReview", true);
+                if (event.getAllowedPrompts() != null) {
+                    payload.put("allowedPrompts", event.getAllowedPrompts());
+                }
                 payload.put("taskId", taskId);
                 publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
                 taskService.setAwaitingPermission(taskId);
@@ -268,6 +290,7 @@ public class WorkerStreamRelay {
 
                 taskService.failTask(taskId, errorClaudeSessionId, event.getError());
                 activeStreams.remove(taskId);
+                workerTaskIdMap.remove(taskId);
 
                 // 发布跨 Agent 任务失败事件
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()

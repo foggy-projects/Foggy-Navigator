@@ -72,6 +72,8 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
           if (typeof payload.errorMessage === 'string')
             task.value.errorMessage = payload.errorMessage
           onTaskFinished?.()
+        } else if (raw.type === 'CONFIRMATION_REQUEST') {
+          task.value.status = 'AWAITING_PERMISSION'
         }
       },
     })

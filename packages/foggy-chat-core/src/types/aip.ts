@@ -116,6 +116,13 @@ export interface ConfirmationRequestPayload {
   questions?: UserQuestionItem[]
   /** Present when this is an ExitPlanMode (plan_review event) */
   planReview?: boolean
+  /** Allowed tool prompts from ExitPlanMode */
+  allowedPrompts?: AllowedPrompt[]
+}
+
+export interface AllowedPrompt {
+  tool: string
+  prompt: string
 }
 
 export interface UserQuestionItem {

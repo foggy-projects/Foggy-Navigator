@@ -17,4 +17,6 @@ public class PermissionResponseForm {
     private String scope;
     /** AskUserQuestion 回答（question text -> selected label） */
     private java.util.Map<String, String> answers;
+    /** Plan 审批后的执行选项: bypass / acceptEdits / clearAndBypass */
+    private String planAction;
 }

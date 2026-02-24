@@ -17,6 +17,9 @@
       <MessageList
         :messages="sortedMessages"
         :is-thinking="taskStream.chatState.isThinking.value"
+        @plan-respond="handlePlanRespond"
+        @question-respond="handleQuestionRespond"
+        @permission-respond="handlePermissionRespond"
       />
     </view>
 
@@ -82,7 +85,7 @@ const sortedMessages = computed(() => taskStream.chatState.sortedMessages.value)
 
 const isRunning = computed(() => {
   const status = taskStream.task.value?.status
-  return status === 'RUNNING' || status === 'PENDING'
+  return status === 'RUNNING' || status === 'PENDING' || status === 'AWAITING_PERMISSION'
 })
 
 const canResume = computed(() => {
@@ -149,6 +152,61 @@ async function handleResume(prompt: string) {
   } catch (e) {
     console.error('Failed to resume task:', e)
     uni.showToast({ title: '续对失败', icon: 'error' })
+  }
+}
+
+async function handlePlanRespond(permissionId: string, decision: string, denyMessage?: string, planAction?: string) {
+  if (!taskId.value) return
+  try {
+    await workerApi.respondToPermission(taskId.value, {
+      permissionId,
+      decision,
+      denyMessage: denyMessage || (decision === 'deny' ? 'Plan rejected by user' : undefined),
+      planAction,
+    })
+    taskStream.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
+    if (decision === 'allow' && taskStream.task.value) {
+      taskStream.task.value.status = 'RUNNING'
+    }
+  } catch (e) {
+    console.error('Failed to respond to plan review:', e)
+    uni.showToast({ title: '响应失败', icon: 'error' })
+  }
+}
+
+async function handleQuestionRespond(permissionId: string, answers: Record<string, string>) {
+  if (!taskId.value) return
+  try {
+    await workerApi.respondToPermission(taskId.value, {
+      permissionId,
+      decision: 'allow',
+      answers,
+    })
+    taskStream.chatState.resolvePermission(permissionId, 'approved')
+    if (taskStream.task.value) {
+      taskStream.task.value.status = 'RUNNING'
+    }
+  } catch (e) {
+    console.error('Failed to respond to question:', e)
+    uni.showToast({ title: '响应失败', icon: 'error' })
+  }
+}
+
+async function handlePermissionRespond(permissionId: string, decision: string, scope: string) {
+  if (!taskId.value) return
+  try {
+    await workerApi.respondToPermission(taskId.value, {
+      permissionId,
+      decision,
+      scope,
+    })
+    taskStream.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
+    if (decision === 'allow' && taskStream.task.value) {
+      taskStream.task.value.status = 'RUNNING'
+    }
+  } catch (e) {
+    console.error('Failed to respond to permission:', e)
+    uni.showToast({ title: '响应失败', icon: 'error' })
   }
 }
 

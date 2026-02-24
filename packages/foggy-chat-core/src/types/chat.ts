@@ -1,4 +1,4 @@
-import type { AipMessageType, UserQuestionItem } from './aip'
+import type { AipMessageType, UserQuestionItem, AllowedPrompt } from './aip'
 
 export interface ChatMessage {
   id: string
@@ -19,6 +19,8 @@ export interface ChatMessage {
   questions?: UserQuestionItem[]
   /** Present when this is an ExitPlanMode plan review */
   planReview?: boolean
+  /** Allowed tool prompts from ExitPlanMode */
+  allowedPrompts?: AllowedPrompt[]
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

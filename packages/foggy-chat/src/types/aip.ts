@@ -12,4 +12,5 @@ export {
   type ConfirmationRequestPayload,
   type UserQuestionItem,
   type UserQuestionOption,
+  type AllowedPrompt,
 } from '@foggy/chat-core'

@@ -34,6 +34,7 @@ export async function createTask(form: {
   directoryId?: string
   model?: string
   maxTurns?: number
+  permissionMode?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks', form)) as unknown as RX<ClaudeTask>
   return rx.data
@@ -48,6 +49,7 @@ export async function resumeTask(form: {
   sessionId?: string
   model?: string
   maxTurns?: number
+  permissionMode?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks/resume', form)) as unknown as RX<ClaudeTask>
   return rx.data
@@ -76,5 +78,16 @@ export async function abortTask(taskId: string): Promise<{ taskId: string; statu
 
 export async function deleteTask(taskId: string): Promise<{ taskId: string; deleted: boolean }> {
   const rx = (await client.delete(`/claude-tasks/${taskId}`)) as unknown as RX<{ taskId: string; deleted: boolean }>
+  return rx.data
+}
+
+export async function respondToPermission(
+  taskId: string,
+  form: { permissionId: string; decision: string; denyMessage?: string; scope?: string; answers?: Record<string, string>; planAction?: string },
+): Promise<{ taskId: string; permissionId: string; decision: string }> {
+  const rx = (await client.post(
+    `/claude-tasks/${taskId}/respond`,
+    form,
+  )) as unknown as RX<{ taskId: string; permissionId: string; decision: string }>
   return rx.data
 }

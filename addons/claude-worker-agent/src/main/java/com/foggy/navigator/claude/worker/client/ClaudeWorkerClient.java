@@ -117,7 +117,8 @@ public class ClaudeWorkerClient {
     public Mono<Map<String, Object>> respondToPermission(String taskId, String permissionId,
                                                           String decision, String denyMessage,
                                                           String scope,
-                                                          java.util.Map<String, String> answers) {
+                                                          java.util.Map<String, String> answers,
+                                                          String planAction) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("permission_id", permissionId);
         body.put("decision", decision);
@@ -129,6 +130,9 @@ public class ClaudeWorkerClient {
         }
         if (answers != null && !answers.isEmpty()) {
             body.put("answers", answers);
+        }
+        if (planAction != null) {
+            body.put("plan_action", planAction);
         }
         return webClient.post()
                 .uri("/api/v1/query/{taskId}/respond", taskId)

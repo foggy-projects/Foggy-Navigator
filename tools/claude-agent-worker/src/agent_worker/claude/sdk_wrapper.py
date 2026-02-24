@@ -175,7 +175,8 @@ Used by the ``can_use_tool`` callback to await user approval, and by
 the ``/respond`` endpoint to deliver the decision.
 """
 
-PERMISSION_TIMEOUT_SECONDS = 300  # 5 minutes
+PERMISSION_TIMEOUT_SECONDS = 300  # 5 minutes (regular tool permissions)
+INTERACTIVE_TIMEOUT_SECONDS = 1800  # 30 minutes (plan review & user questions)
 
 
 # ---------------------------------------------------------------------------
@@ -563,14 +564,11 @@ class SdkWrapper:
                 options_kwargs["enable_file_checkpointing"] = True
                 base_env = options_kwargs.get("env") or env or {}
                 base_env["CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"] = "1"
+                # Extend stream-close timeout so stdin stays open for long
+                # interactive sessions (matches reference implementation).
+                base_env["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = "300000"
                 options_kwargs["env"] = base_env
                 self._apply_agents_config(extra_args, options_kwargs)
-
-                # Permission mode: set SDK permission_mode and can_use_tool callback
-                if permission_mode and permission_mode != "bypassPermissions":
-                    options_kwargs["permission_mode"] = permission_mode
-                elif permission_mode == "bypassPermissions":
-                    options_kwargs["permission_mode"] = "bypassPermissions"
             elif extra_args:
                 options_kwargs["extra_args"] = extra_args
 
@@ -620,21 +618,45 @@ class SdkWrapper:
             use_queue = (
                 _use_agent_sdk
                 and _PermissionResultAllow is not None
-                and permission_mode in ("default", "acceptEdits")
             )
 
             if use_queue:
+                # Track effective permission mode — may change after plan review
+                effective_permission_mode = permission_mode or "bypassPermissions"
+
                 async def _can_use_tool(
                     tool_name: str,
                     tool_input: dict[str, Any],
                     ctx: Any,
                 ) -> Any:
                     """Callback invoked by the SDK when a tool needs permission."""
+                    nonlocal effective_permission_mode
                     import uuid as _uuid
                     pid = str(_uuid.uuid4())[:12]
 
+                    logger.info(
+                        "Task %s can_use_tool called: tool=%s, mode=%s, pid=%s, input_keys=%s",
+                        task_id, tool_name, effective_permission_mode, pid,
+                        list(tool_input.keys()) if tool_input else [],
+                    )
+
                     is_question = (tool_name == "AskUserQuestion")
                     is_plan_review = (tool_name == "ExitPlanMode")
+
+                    # Fast path: auto-allow ordinary tools based on permission mode
+                    if not is_question and not is_plan_review:
+                        if effective_permission_mode == "bypassPermissions":
+                            logger.info(
+                                "Task %s auto-approve (bypass): tool=%s, pid=%s",
+                                task_id, tool_name, pid,
+                            )
+                            return _PermissionResultAllow()
+                        if effective_permission_mode == "acceptEdits" and tool_name != "Bash":
+                            logger.info(
+                                "Task %s auto-approve (acceptEdits): tool=%s, pid=%s",
+                                task_id, tool_name, pid,
+                            )
+                            return _PermissionResultAllow()
 
                     # Extract suggestions from ToolPermissionContext
                     suggestions = getattr(ctx, "suggestions", None) or []
@@ -693,12 +715,14 @@ class SdkWrapper:
                             task_id, pid, tool_name, len(suggestions),
                         )
 
+                    # Use longer timeout for interactive events (plan review, user questions)
+                    timeout = INTERACTIVE_TIMEOUT_SECONDS if (is_plan_review or is_question) else PERMISSION_TIMEOUT_SECONDS
                     try:
-                        await asyncio.wait_for(evt.wait(), timeout=PERMISSION_TIMEOUT_SECONDS)
+                        await asyncio.wait_for(evt.wait(), timeout=timeout)
                     except asyncio.TimeoutError:
-                        logger.warning("Task %s permission timeout: pid=%s", task_id, pid)
+                        logger.warning("Task %s permission timeout (%ds): pid=%s", task_id, timeout, pid)
                         permission_pending.pop(pid, None)
-                        return _PermissionResultDeny(message="Permission request timed out (5 minutes)")
+                        return _PermissionResultDeny(message=f"Permission request timed out ({timeout // 60} minutes)")
 
                     entry = permission_pending.pop(pid, None)
                     if entry and entry["result"] == "allow":
@@ -716,9 +740,16 @@ class SdkWrapper:
                                 },
                             )
 
-                        # ExitPlanMode: just allow with original input
+                        # ExitPlanMode: allow with original input, update permission mode
                         if entry.get("is_plan_review"):
-                            logger.info("Task %s plan approved: pid=%s", task_id, pid)
+                            plan_action = entry.get("plan_action")
+                            if plan_action == "acceptEdits":
+                                effective_permission_mode = "acceptEdits"
+                            # "bypass" / "clearAndBypass" → keep bypassPermissions
+                            logger.info(
+                                "Task %s plan approved: pid=%s, plan_action=%s, new_mode=%s",
+                                task_id, pid, plan_action, effective_permission_mode,
+                            )
                             return _PermissionResultAllow(
                                 updated_input=entry.get("tool_input") or tool_input,
                             )
@@ -764,7 +795,32 @@ class SdkWrapper:
                         return _PermissionResultDeny(message=msg)
 
                 options_kwargs["can_use_tool"] = _can_use_tool
+                # Force "default" mode on the CLI so ALL tool calls route
+                # through the control protocol (can_use_tool callback).
+                # With "bypassPermissions" the CLI auto-approves internally
+                # and never sends control requests — our callback would be
+                # useless.  Our callback handles auto-approval based on
+                # effective_permission_mode, so regular tools are still
+                # instant while ExitPlanMode / AskUserQuestion are blocked.
+                options_kwargs["permission_mode"] = "default"
 
+                # Capture CLI stderr so we can diagnose startup/runtime
+                # issues that are invisible without it.
+                def _stderr_handler(line: str, _tid: str = task_id) -> None:
+                    logger.info("Task %s CLI stderr: %s", _tid, line.rstrip())
+                options_kwargs["stderr"] = _stderr_handler
+            else:
+                # No can_use_tool — set permission_mode directly on CLI
+                if permission_mode:
+                    options_kwargs["permission_mode"] = permission_mode
+
+            logger.info(
+                "Task %s SDK options: use_queue=%s, permission_mode=%s, "
+                "has_can_use_tool=%s",
+                task_id, use_queue,
+                options_kwargs.get("permission_mode", "(not set)"),
+                "can_use_tool" in options_kwargs,
+            )
             options = _options_cls(**options_kwargs)
 
             current_model: str | None = None
@@ -897,6 +953,27 @@ class SdkWrapper:
             # -- Main iteration: Queue-based (interactive) or direct ----------
 
             if use_queue:
+                # can_use_tool requires streaming mode (AsyncIterable prompt).
+                # IMPORTANT: The SDK's stream_input() calls end_input() (closes
+                # stdin) when the async iterable exhausts. But the control
+                # protocol (can_use_tool responses) is sent via stdin. If stdin
+                # closes, the CLI never receives our permission responses →
+                # "connection error". Solution: keep the generator alive by
+                # blocking on an Event that only fires when the task completes.
+                stream_done_event = asyncio.Event()
+
+                async def _wrap_prompt_as_stream(text: str):
+                    yield {
+                        "type": "user",
+                        "session_id": session_id or "",
+                        "message": {"role": "user", "content": text},
+                        "parent_tool_use_id": None,
+                    }
+                    # Block here to keep stdin open for control protocol
+                    await stream_done_event.wait()
+
+                streaming_prompt = _wrap_prompt_as_stream(prompt)
+
                 # Producer task: iterate SDK query() and push events into Queue
                 #
                 # NOTE: producer_task.cancel() causes CancelledError inside
@@ -909,11 +986,26 @@ class SdkWrapper:
                 # "Task exception was never retrieved" log spam and ensure
                 # the sentinel is always pushed.
                 async def _producer() -> None:
+                    _msg_count = 0
                     try:
-                        async for message in _query_fn(prompt=prompt, options=options):
+                        logger.info("Task %s producer: starting SDK iteration", task_id)
+                        async for message in _query_fn(prompt=streaming_prompt, options=options):
+                            _msg_count += 1
+                            msg_type = type(message).__name__
+                            logger.info(
+                                "Task %s producer msg #%d: %s",
+                                task_id, _msg_count, msg_type,
+                            )
                             for evt in _process_message(message):
                                 await queue.put(evt)
+                            # When ResultMessage arrives the query is complete.
+                            # Release the prompt stream so stdin closes and the
+                            # CLI can exit cleanly (otherwise it waits for more
+                            # input in stream-json mode).
+                            if _ResultMessage is not None and isinstance(message, _ResultMessage):
+                                stream_done_event.set()
                     except asyncio.CancelledError:
+                        logger.info("Task %s producer: cancelled after %d msgs", task_id, _msg_count)
                         await queue.put(event_mapper.map_error(
                             task_id=task_id,
                             error="Task was cancelled",
@@ -927,6 +1019,7 @@ class SdkWrapper:
                                 "during SDK generator cleanup", task_id,
                             )
                         else:
+                            logger.error("Task %s producer RuntimeError after %d msgs: %s", task_id, _msg_count, exc)
                             error_detail = _extract_error_detail(exc, task_id)
                             await queue.put(event_mapper.map_error(
                                 task_id=task_id,
@@ -934,6 +1027,7 @@ class SdkWrapper:
                                 session_id=current_session_id,
                             ))
                     except Exception as exc:
+                        logger.error("Task %s producer %s after %d msgs: %s", task_id, type(exc).__name__, _msg_count, exc)
                         error_detail = _extract_error_detail(exc, task_id)
                         await queue.put(event_mapper.map_error(
                             task_id=task_id,
@@ -941,6 +1035,8 @@ class SdkWrapper:
                             session_id=current_session_id,
                         ))
                     finally:
+                        logger.info("Task %s producer: finished (%d msgs total)", task_id, _msg_count)
+                        stream_done_event.set()  # Release prompt stream → stdin closes
                         await queue.put(None)  # Sentinel: stream is done
 
                 producer_task = asyncio.create_task(_producer())

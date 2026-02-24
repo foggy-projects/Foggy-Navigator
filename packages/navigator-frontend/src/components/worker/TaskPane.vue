@@ -46,7 +46,7 @@
         @send="handleSend"
         @permission-respond="handlePermissionRespond"
         @question-respond="handleQuestionRespond"
-        @plan-respond="handlePlanRespond"
+        @plan-respond="(pid: string, decision: string, denyMsg?: string, planAction?: string) => handlePlanRespond(pid, decision, denyMsg, planAction)"
         @rewind="handleRewind"
       >
         <template #empty>
@@ -101,7 +101,7 @@ const emit = defineEmits<{
   (e: 'command', payload: { command: string; value: string | number }): void
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
-  (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string): void
+  (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', paneId: string, turnIndex: number): void
 }>()
 
@@ -175,8 +175,8 @@ function handleQuestionRespond(permissionId: string, answers: Record<string, str
   emit('questionRespond', props.paneState.paneId, permissionId, answers)
 }
 
-function handlePlanRespond(permissionId: string, decision: string, denyMessage?: string) {
-  emit('planRespond', props.paneState.paneId, permissionId, decision, denyMessage)
+function handlePlanRespond(permissionId: string, decision: string, denyMessage?: string, planAction?: string) {
+  emit('planRespond', props.paneState.paneId, permissionId, decision, denyMessage, planAction)
 }
 
 function handleCommand(payload: { command: string; value: string | number }) {

@@ -80,11 +80,12 @@ public class ClaudeTaskController {
         // 1. 中止本地流订阅
         streamRelay.abortStream(taskId);
 
-        // 2. 通知 Worker 中止
+        // 2. 通知 Worker 中止 (使用 worker 内部 task ID)
         try {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
             ClaudeWorkerClient client = workerService.createClient(worker);
-            client.abortTask(taskId).block(java.time.Duration.ofSeconds(5));
+            String workerTaskId = streamRelay.getWorkerTaskId(taskId);
+            client.abortTask(workerTaskId).block(java.time.Duration.ofSeconds(5));
         } catch (Exception e) {
             log.warn("Failed to send abort to worker: taskId={}, error={}", taskId, e.getMessage());
         }
@@ -108,9 +109,10 @@ public class ClaudeTaskController {
         try {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
             ClaudeWorkerClient client = workerService.createClient(worker);
-            client.respondToPermission(taskId, form.getPermissionId(),
+            String workerTaskId = streamRelay.getWorkerTaskId(taskId);
+            client.respondToPermission(workerTaskId, form.getPermissionId(),
                     form.getDecision(), form.getDenyMessage(), form.getScope(),
-                    form.getAnswers())
+                    form.getAnswers(), form.getPlanAction())
                     .block(java.time.Duration.ofSeconds(10));
 
             // Resume task from AWAITING_PERMISSION to RUNNING

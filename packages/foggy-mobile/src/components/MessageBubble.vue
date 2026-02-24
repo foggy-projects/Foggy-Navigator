@@ -27,6 +27,21 @@
         <text class="task-card-title">{{ taskStatus === 'FAILED' ? '任务失败' : '任务完成' }}</text>
         <text class="task-card-desc">{{ message.content }}</text>
       </view>
+      <PlanReviewCard
+        v-else-if="isConfirmation && isPlanReview"
+        :message="message"
+        @plan-respond="(pid, decision, denyMsg, planAction) => $emit('plan-respond', pid, decision, denyMsg, planAction)"
+      />
+      <UserQuestionCard
+        v-else-if="isConfirmation && hasQuestions"
+        :message="message"
+        @question-respond="(pid, answers) => $emit('question-respond', pid, answers)"
+      />
+      <PermissionRequestCard
+        v-else-if="isConfirmation"
+        :message="message"
+        @permission-respond="(pid, decision, scope) => $emit('permission-respond', pid, decision, scope)"
+      />
       <view v-else-if="message.error" class="error-block">
         <text class="error-text">{{ message.error }}</text>
       </view>
@@ -40,10 +55,19 @@ import { computed } from 'vue'
 import { AipMessageType } from '@foggy/chat-core'
 import type { ChatMessage } from '@foggy/chat-core'
 import ToolCallCard from './ToolCallCard.vue'
+import PlanReviewCard from './PlanReviewCard.vue'
+import PermissionRequestCard from './PermissionRequestCard.vue'
+import UserQuestionCard from './UserQuestionCard.vue'
 import { renderMarkdown } from '@/utils/markdown'
 
 const props = defineProps<{
   message: ChatMessage
+}>()
+
+defineEmits<{
+  (e: 'plan-respond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
+  (e: 'question-respond', permissionId: string, answers: Record<string, string>): void
+  (e: 'permission-respond', permissionId: string, decision: string, scope: string): void
 }>()
 
 const senderClass = computed(() => `sender-${props.message.sender}`)
@@ -54,6 +78,9 @@ const renderedContent = computed(() => {
 })
 
 const isTaskCompleted = computed(() => props.message.type === AipMessageType.TASK_COMPLETED)
+const isConfirmation = computed(() => props.message.type === AipMessageType.CONFIRMATION_REQUEST)
+const isPlanReview = computed(() => !!props.message.planReview)
+const hasQuestions = computed(() => (props.message.questions?.length ?? 0) > 0)
 
 const taskStatus = computed(() => {
   const raw = props.message.raw as Record<string, string> | undefined

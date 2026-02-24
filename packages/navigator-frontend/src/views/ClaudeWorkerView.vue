@@ -1850,7 +1850,7 @@ async function handleQuestionRespond(paneId: string, permissionId: string, answe
   }
 }
 
-async function handlePlanRespond(paneId: string, permissionId: string, decision: string, denyMessage?: string) {
+async function handlePlanRespond(paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane?.task.value) return
 
@@ -1859,6 +1859,7 @@ async function handlePlanRespond(paneId: string, permissionId: string, decision:
       permissionId,
       decision,
       denyMessage: denyMessage || (decision === 'deny' ? 'Plan rejected by user' : undefined),
+      planAction,
     })
     pane.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
     if (decision === 'allow') {

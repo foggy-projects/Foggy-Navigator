@@ -7,24 +7,40 @@
     </div>
     <div class="card-body">
       <p class="plan-hint">
-        {{ isPending ? 'Claude 已完成方案设计，请审批后继续执行。' : resolvedHint }}
+        {{ isPending ? 'Claude 已完成方案设计，请选择执行方式：' : resolvedHint }}
       </p>
+      <!-- allowedPrompts list -->
+      <div v-if="isPending && allowedPrompts.length" class="prompts-list">
+        <div v-for="(p, i) in allowedPrompts" :key="i" class="prompt-item">
+          <code class="prompt-tool">{{ p.tool }}</code>
+          <span class="prompt-text">{{ p.prompt }}</span>
+        </div>
+      </div>
+      <!-- 4 action buttons -->
+      <div v-if="isPending" class="plan-options">
+        <button class="btn btn-option btn-bypass" @click="handleApprove('clearAndBypass')">
+          清空上下文，跳过权限执行
+        </button>
+        <button class="btn btn-option btn-bypass" @click="handleApprove('bypass')">
+          跳过权限执行
+        </button>
+        <button class="btn btn-option btn-approve" @click="handleApprove('acceptEdits')">
+          手动审批编辑
+        </button>
+      </div>
+      <!-- Reject with feedback -->
       <div v-if="isPending" class="reject-input-wrap">
         <input
           v-model="rejectReason"
           type="text"
           class="reject-input"
-          placeholder="拒绝原因（可选，如需修改方案请说明）"
+          placeholder="修改方案（输入反馈后点击右侧按钮）"
+          @keyup.enter="handleReject"
         />
+        <button class="btn btn-deny" @click="handleReject">
+          修改方案
+        </button>
       </div>
-    </div>
-    <div v-if="isPending" class="card-actions">
-      <button class="btn btn-approve" @click="handleApprove">
-        批准执行
-      </button>
-      <button class="btn btn-deny" @click="handleReject">
-        拒绝
-      </button>
     </div>
   </div>
 </template>
@@ -32,17 +48,22 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { ChatMessage } from '../types/chat'
+import type { AllowedPrompt } from '../types/aip'
 
 const props = defineProps<{
   message: ChatMessage
 }>()
 
 const emit = defineEmits<{
-  (e: 'respond', permissionId: string, decision: string, denyMessage?: string): void
+  (e: 'respond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
 }>()
 
 const rejectReason = ref('')
 const isPending = computed(() => props.message.permissionStatus === 'pending')
+
+const allowedPrompts = computed<AllowedPrompt[]>(() =>
+  props.message.allowedPrompts || [],
+)
 
 const statusClass = computed(() => {
   switch (props.message.permissionStatus) {
@@ -74,14 +95,14 @@ const resolvedHint = computed(() => {
     : '方案已拒绝，Claude 将重新规划。'
 })
 
-function handleApprove() {
+function handleApprove(planAction: string) {
   if (!props.message.permissionId) return
-  emit('respond', props.message.permissionId, 'allow')
+  emit('respond', props.message.permissionId, 'allow', undefined, planAction)
 }
 
 function handleReject() {
   if (!props.message.permissionId) return
-  emit('respond', props.message.permissionId, 'deny', rejectReason.value.trim() || undefined)
+  emit('respond', props.message.permissionId, 'deny', rejectReason.value.trim() || 'Plan rejected by user')
 }
 </script>
 
@@ -139,24 +160,40 @@ function handleReject() {
   margin: 0;
 }
 
-.reject-input-wrap { margin-top: 8px; }
-
-.reject-input {
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid #dcdfe6;
+.prompts-list {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(155, 89, 182, 0.06);
   border-radius: 4px;
-  font-size: 13px;
-  outline: none;
-  box-sizing: border-box;
 }
 
-.reject-input:focus { border-color: #9b59b6; }
+.prompt-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.6;
+}
 
-.card-actions {
+.prompt-tool {
+  font-size: 11px;
+  background: #e8daef;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #9b59b6;
+  flex-shrink: 0;
+}
+
+.prompt-text {
+  font-size: 12px;
+}
+
+.plan-options {
   margin-top: 10px;
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .btn {
@@ -169,6 +206,19 @@ function handleReject() {
   transition: all 0.2s;
 }
 
+.btn-option {
+  text-align: left;
+  padding: 6px 12px;
+}
+
+.btn-bypass {
+  background: #f5eef8;
+  color: #9b59b6;
+  border-color: #d2b4de;
+}
+
+.btn-bypass:hover { background: #e8daef; }
+
 .btn-approve {
   background: #9b59b6;
   color: #fff;
@@ -177,10 +227,29 @@ function handleReject() {
 
 .btn-approve:hover { background: #af7ac5; border-color: #af7ac5; }
 
+.reject-input-wrap {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+}
+
+.reject-input {
+  flex: 1;
+  padding: 5px 10px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.reject-input:focus { border-color: #9b59b6; }
+
 .btn-deny {
   background: #fff;
   color: #f56c6c;
   border-color: #f56c6c;
+  flex-shrink: 0;
 }
 
 .btn-deny:hover { background: #fef0f0; }

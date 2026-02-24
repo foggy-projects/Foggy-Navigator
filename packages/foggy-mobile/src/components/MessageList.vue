@@ -12,7 +12,12 @@
       </slot>
     </view>
     <view v-for="msg in messages" :key="msg.id" :id="`msg-${msg.id}`">
-      <MessageBubble :message="msg" />
+      <MessageBubble
+        :message="msg"
+        @plan-respond="(pid, decision, denyMsg, planAction) => $emit('plan-respond', pid, decision, denyMsg, planAction)"
+        @question-respond="(pid, answers) => $emit('question-respond', pid, answers)"
+        @permission-respond="(pid, decision, scope) => $emit('permission-respond', pid, decision, scope)"
+      />
     </view>
     <view v-if="isThinking" class="thinking-wrap">
       <ThinkingDots />
@@ -34,7 +39,10 @@ const props = defineProps<{
 }>()
 
 defineEmits<{
-  loadMore: []
+  (e: 'loadMore'): void
+  (e: 'plan-respond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
+  (e: 'question-respond', permissionId: string, answers: Record<string, string>): void
+  (e: 'permission-respond', permissionId: string, decision: string, scope: string): void
 }>()
 
 const scrollTarget = ref('scroll-bottom')

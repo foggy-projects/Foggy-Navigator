@@ -41,6 +41,9 @@
           <text class="option-label">{{ selectedTurns ? selectedTurns + ' 轮' : '默认轮次' }}</text>
           <text v-if="selectedTurns" class="option-clear" @tap.stop="selectedTurns = 0">✕</text>
         </view>
+        <view class="option-tag" @tap="showPermissionPicker">
+          <text class="option-label">{{ PERMISSION_LABELS[selectedPermission] }}</text>
+        </view>
       </view>
     </view>
 
@@ -92,8 +95,15 @@ const totalPages = ref(0)
 // Model / turns
 const MODEL_OPTIONS = ['Sonnet 4', 'Opus 4', 'Haiku 4', 'Sonnet 3.5']
 const TURNS_OPTIONS = [10, 25, 50, 200, 999]
+const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'] as const
+const PERMISSION_LABELS: Record<string, string> = {
+  bypassPermissions: '跳过权限',
+  acceptEdits: '审批编辑',
+  default: '全部审批',
+}
 const selectedModel = ref('')
 const selectedTurns = ref(0)
+const selectedPermission = ref<string>('bypassPermissions')
 
 // Draft & history
 const memoryScope = computed(() => directoryId.value ? 'task-' + directoryId.value : '')
@@ -159,6 +169,7 @@ async function handleCreateTask() {
     }
     if (selectedModel.value) form.model = selectedModel.value
     if (selectedTurns.value) form.maxTurns = selectedTurns.value
+    if (selectedPermission.value) form.permissionMode = selectedPermission.value
 
     const task = await workerApi.createTask(form)
     addToHistory(promptInput.value.trim())
@@ -211,6 +222,16 @@ function showTurnsPicker() {
     itemList: labels,
     success: (res) => {
       selectedTurns.value = TURNS_OPTIONS[res.tapIndex]
+    },
+  })
+}
+
+function showPermissionPicker() {
+  const labels = PERMISSION_MODES.map(m => PERMISSION_LABELS[m])
+  uni.showActionSheet({
+    itemList: labels,
+    success: (res) => {
+      selectedPermission.value = PERMISSION_MODES[res.tapIndex]
     },
   })
 }

@@ -56,7 +56,7 @@
         <PlanReviewCard
           v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST && item.msg.planReview"
           :message="item.msg"
-          @respond="(pid, decision, denyMsg) => emit('planRespond', pid, decision, denyMsg)"
+          @respond="(pid, decision, denyMsg, planAction) => emit('planRespond', pid, decision, denyMsg, planAction)"
         />
         <UserQuestionCard
           v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST && item.msg.questions?.length"
@@ -127,7 +127,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
-  (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string): void
+  (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', turnIndex: number): void
 }>()
 
