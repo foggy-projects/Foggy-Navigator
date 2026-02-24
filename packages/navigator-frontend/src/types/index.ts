@@ -216,6 +216,9 @@ export interface LlmModelConfig {
   category: LlmModelCategory
   baseUrl: string
   modelName: string
+  haikuModelName?: string
+  sonnetModelName?: string
+  opusModelName?: string
   isDefault: boolean
   hasApiKey: boolean
   createdAt: string
@@ -228,6 +231,9 @@ export interface LlmModelConfigForm {
   category: LlmModelCategory
   baseUrl: string
   modelName: string
+  haikuModelName?: string
+  sonnetModelName?: string
+  opusModelName?: string
   apiKey: string
   isDefault?: boolean
 }

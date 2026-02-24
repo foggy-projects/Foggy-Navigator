@@ -55,6 +55,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setCategory(form.getCategory());
         entity.setBaseUrl(form.getBaseUrl());
         entity.setModelName(form.getModelName());
+        entity.setHaikuModelName(form.getHaikuModelName());
+        entity.setSonnetModelName(form.getSonnetModelName());
+        entity.setOpusModelName(form.getOpusModelName());
         entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
         entity.setIsDefault(form.getIsDefault() != null ? form.getIsDefault() : false);
 
@@ -80,6 +83,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
         if (form.getCategory() != null) entity.setCategory(form.getCategory());
         if (form.getBaseUrl() != null) entity.setBaseUrl(form.getBaseUrl());
         if (form.getModelName() != null) entity.setModelName(form.getModelName());
+        if (form.getHaikuModelName() != null) entity.setHaikuModelName(form.getHaikuModelName());
+        if (form.getSonnetModelName() != null) entity.setSonnetModelName(form.getSonnetModelName());
+        if (form.getOpusModelName() != null) entity.setOpusModelName(form.getOpusModelName());
         if (form.getApiKey() != null) {
             entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
         }
@@ -212,6 +218,18 @@ public class LlmModelManagerImpl implements LlmModelManager {
     public String testConnection(String baseUrl, String apiKey, String modelName) {
         log.info("Testing LLM connection: baseUrl={}, model={}", baseUrl, modelName);
 
+        // 如果没有提供模型名称，只验证 Base URL 和 API Key 的格式
+        if (modelName == null || modelName.trim().isEmpty()) {
+            if (baseUrl == null || baseUrl.trim().isEmpty()) {
+                throw RX.throwB("Base URL 不能为空");
+            }
+            if (apiKey == null || apiKey.trim().isEmpty()) {
+                throw RX.throwB("API Key 不能为空");
+            }
+            log.info("LLM connection test skipped (no model name): baseUrl={}", baseUrl);
+            return "连接成功（未指定模型）";
+        }
+
         String url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
 
         HttpHeaders headers = new HttpHeaders();
@@ -305,6 +323,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
         dto.setCategory(entity.getCategory());
         dto.setBaseUrl(entity.getBaseUrl());
         dto.setModelName(entity.getModelName());
+        dto.setHaikuModelName(entity.getHaikuModelName());
+        dto.setSonnetModelName(entity.getSonnetModelName());
+        dto.setOpusModelName(entity.getOpusModelName());
         dto.setIsDefault(entity.getIsDefault());
         dto.setHasApiKey(entity.getApiKey() != null && !entity.getApiKey().isEmpty());
         dto.setCreatedAt(entity.getCreatedAt());

@@ -6,6 +6,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -22,7 +23,7 @@ import static org.mockito.Mockito.*;
  * Tests for ClaudeTaskService.syncLocalSessions — path normalization.
  *
  * Root cause: Worker returns cwd with backslashes (D:\foo\bar) on Windows,
- * but WorkingDirectory may store the path with forward slashes (D:/foo/bar).
+ * but WorkingDirectory may store of path with forward slashes (D:/foo/bar).
  * The exact DB match fails, so synced tasks get directoryId=null and don't
  * appear in any directory's task list.
  */
@@ -47,10 +48,11 @@ class ClaudeTaskServiceSyncTest {
         ConversationConfigService configService = mock(ConversationConfigService.class);
         WorkingDirectoryService dirService = mock(WorkingDirectoryService.class);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        LlmModelManager llmModelManager = mock(LlmModelManager.class);
 
         service = new ClaudeTaskService(
                 taskRepository, workerService, configService,
-                dirService, directoryRepository, sessionManager, publisher);
+                dirService, directoryRepository, sessionManager, publisher, llmModelManager);
 
         // Session creation returns a predictable ID
         when(sessionManager.createSession(any(SessionCreateRequest.class)))

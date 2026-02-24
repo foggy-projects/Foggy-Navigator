@@ -25,9 +25,24 @@ public class LlmModelConfigForm {
     private String baseUrl;
 
     /**
-     * 模型名称，如 qwen-max
+     * 模型名称，如 qwen-max（主模型，默认为 opus）
      */
     private String modelName;
+
+    /**
+     * Haiku 级别模型名称（用于简单任务）
+     */
+    private String haikuModelName;
+
+    /**
+     * Sonnet 级别模型名称（用于中等复杂度任务）
+     */
+    private String sonnetModelName;
+
+    /**
+     * Opus 级别模型名称（用于复杂任务，默认使用 modelName）
+     */
+    private String opusModelName;
 
     /**
      * API Key

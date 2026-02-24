@@ -4,6 +4,13 @@ $BACKEND_PORT = 8112
 $LOG_DIR = "logs"
 $JAR_PATH = "launcher\target\launcher-1.0.0-SNAPSHOT.jar"
 
+# Check if Java exists
+if (-not (Test-Path $JAVA_PATH)) {
+    Write-Host "ERROR: Java not found at $JAVA_PATH" -ForegroundColor Red
+    Write-Host "Please update JAVA_PATH in this script" -ForegroundColor Yellow
+    exit 1
+}
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Coding Agent Launcher" -ForegroundColor Cyan

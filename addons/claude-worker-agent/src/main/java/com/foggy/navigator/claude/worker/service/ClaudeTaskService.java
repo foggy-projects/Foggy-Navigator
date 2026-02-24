@@ -13,6 +13,8 @@ import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -45,6 +47,7 @@ public class ClaudeTaskService {
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final SessionManager sessionManager;
     private final ApplicationEventPublisher eventPublisher;
+    private final LlmModelManager llmModelManager;
 
     /**
      * 创建任务
@@ -90,7 +93,27 @@ public class ClaudeTaskService {
                 .content(form.getPrompt())
                 .build());
 
-        // 4. 持久化任务
+        // 4. 解析模型配置（如果指定了 modelConfigId）
+        String modelName = null;
+        String haikuModelName = null;
+        String sonnetModelName = null;
+        String opusModelName = null;
+        String modelApiKey = null;
+        String modelBaseUrl = null;
+        if (form.getModelConfigId() != null && !form.getModelConfigId().isEmpty()) {
+            LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(form.getModelConfigId())
+                    .orElseThrow(() -> new IllegalArgumentException("Model config not found: " + form.getModelConfigId()));
+            modelName = modelConfig.getModelName();
+            haikuModelName = modelConfig.getHaikuModelName();
+            sonnetModelName = modelConfig.getSonnetModelName();
+            opusModelName = modelConfig.getOpusModelName();
+            modelApiKey = llmModelManager.getDecryptedApiKey(form.getModelConfigId());
+            modelBaseUrl = modelConfig.getBaseUrl();
+            log.info("Using custom model: modelConfigId={}, modelName={}, haiku={}, sonnet={}, opus={}, baseUrl={}", 
+                    form.getModelConfigId(), modelName, haikuModelName, sonnetModelName, opusModelName, modelBaseUrl);
+        }
+
+        // 5. 持久化任务
         String taskId = UUID.randomUUID().toString().substring(0, 12);
         ClaudeTaskEntity entity = new ClaudeTaskEntity();
         entity.setTaskId(taskId);
@@ -102,19 +125,47 @@ public class ClaudeTaskService {
         entity.setDirectoryId(directoryId);
         entity.setFileCheckpointingEnabled(true);
         entity.setStatus("RUNNING");
+        entity.setModel(modelName);
         taskRepository.save(entity);
 
-        log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}", taskId, sessionId, form.getWorkerId(), userId);
+        log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}, model={}", taskId, sessionId, form.getWorkerId(), userId, modelName);
 
-        // 5. 解析 per-conversation auth
-        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId);
+        // 6. 解析 auth 参数
+        // 优先级：1. 模型配置（如果指定了 model） 2. 工作目录配置 3. 抛出异常
+        String finalApiKey = null;
+        String finalAuthToken = null;
+        String finalBaseUrl = null;
 
-        // 6. 发布任务启动事件 → WorkerStreamRelay 监听
+        if (modelApiKey != null) {
+            // 优先使用模型配置
+            finalApiKey = modelApiKey;
+            finalBaseUrl = modelBaseUrl;
+            log.info("Using auth from model config: baseUrl={}", modelBaseUrl);
+        } else {
+            // 使用工作目录配置
+            String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId);
+            if (authParams[0] != null || authParams[1] != null) {
+                finalApiKey = authParams[0];
+                finalAuthToken = authParams[1];
+                finalBaseUrl = authParams[2];
+                log.info("Using auth from working directory: baseUrl={}", authParams[2]);
+            } else {
+                throw new IllegalArgumentException("No authentication configuration found. Please either select a model or configure authentication in the working directory.");
+            }
+        }
+
+        // 7. 绑定模型映射到会话（不管使用哪种配置，都绑定到会话）
+        conversationConfigService.bindModelMapping(sessionId, form.getWorkerId(), userId,
+                haikuModelName, sonnetModelName, opusModelName);
+
+        // 8. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
-                form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
+                form.getPrompt(), cwd, null, 
+                modelName, haikuModelName, sonnetModelName, opusModelName,
+                form.getMaxTurns(), agentTeamsJson,
                 form.getImages(),
-                authParams[0], authParams[1], authParams[2], form.getPermissionMode()));
+                finalApiKey, finalAuthToken, finalBaseUrl, form.getPermissionMode()));
 
         return toDTO(entity);
     }
@@ -168,6 +219,26 @@ public class ClaudeTaskService {
                 .content(form.getPrompt())
                 .build());
 
+        // 解析模型配置（如果指定了 modelConfigId）
+        String modelName = null;
+        String haikuModelName = null;
+        String sonnetModelName = null;
+        String opusModelName = null;
+        String modelApiKey = null;
+        String modelBaseUrl = null;
+//        if (form.getModel() != null && !form.getModel().isEmpty()) {
+//            LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(form.getModel())
+//                    .orElseThrow(() -> new IllegalArgumentException("Model config not found: " + form.getModel()));
+//            modelName = modelConfig.getModelName();
+//            haikuModelName = modelConfig.getHaikuModelName();
+//            sonnetModelName = modelConfig.getSonnetModelName();
+//            opusModelName = modelConfig.getOpusModelName();
+//            modelApiKey = llmModelManager.getDecryptedApiKey(form.getModel());
+//            modelBaseUrl = modelConfig.getBaseUrl();
+//            log.info("Using custom model (resume): modelConfigId={}, modelName={}, haiku={}, sonnet={}, opus={}, baseUrl={}",
+//                    form.getModel(), modelName, haikuModelName, sonnetModelName, opusModelName, modelBaseUrl);
+//        }
+
         String taskId = UUID.randomUUID().toString().substring(0, 12);
         ClaudeTaskEntity entity = new ClaudeTaskEntity();
         entity.setTaskId(taskId);
@@ -180,18 +251,48 @@ public class ClaudeTaskService {
         entity.setClaudeSessionId(form.getClaudeSessionId());
         entity.setFileCheckpointingEnabled(true);
         entity.setStatus("RUNNING");
+        entity.setModel(modelName);
         taskRepository.save(entity);
 
-        log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}", taskId, form.getClaudeSessionId(), directoryId);
+        log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}, model={}", taskId, form.getClaudeSessionId(), directoryId, modelName);
 
-        // 解析 per-conversation auth
-        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId);
+        // resumeTask 永远使用 session 中保存的 auth 信息
+        ConversationConfigEntity config = conversationConfigService.getOrCreate(sessionId, form.getWorkerId(), userId);
+        if (config.getAuthBoundAt() == null) {
+            throw new IllegalArgumentException("Session has no authentication configuration. Please configure authentication first.");
+        }
+
+        String decryptedToken = conversationConfigService.getDecryptedToken(config);
+        String authMode = config.getAuthMode();
+        String finalApiKey = null;
+        String finalAuthToken = null;
+        String finalBaseUrl = config.getBaseUrl();
+
+        if ("API_KEY".equals(authMode) || "CUSTOM_ENDPOINT".equals(authMode)) {
+            finalApiKey = decryptedToken;
+        } else {
+            finalAuthToken = decryptedToken;
+        }
+
+        log.info("Using auth from session (resume): authMode={}, baseUrl={}", authMode, finalBaseUrl);
+
+        // 获取 session 中保存的模型映射
+        String[] modelMapping = conversationConfigService.getModelMapping(config);
+        if (modelMapping != null && (modelMapping[0] != null || modelMapping[1] != null || modelMapping[2] != null)) {
+            haikuModelName = modelMapping[0];
+            sonnetModelName = modelMapping[1];
+            opusModelName = modelMapping[2];
+            log.info("Using model mapping from session (resume): haiku={}, sonnet={}, opus={}", 
+                    haikuModelName, sonnetModelName, opusModelName);
+        }
 
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
-                form.getModel(), form.getMaxTurns(), agentTeamsJson,
-                null, authParams[0], authParams[1], authParams[2], form.getPermissionMode()));
+                modelName, haikuModelName, sonnetModelName, opusModelName,
+                form.getMaxTurns(), agentTeamsJson,
+                null,
+                finalApiKey, finalAuthToken, finalBaseUrl, form.getPermissionMode()));
 
         return toDTO(entity);
     }
