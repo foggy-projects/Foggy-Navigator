@@ -8,9 +8,11 @@ import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,11 +35,12 @@ public class WorkingDirectoryService {
     private final CredentialEncryptor credentialEncryptor;
 
     /**
-     * 启动时修复旧数据：补全 directoryType 和 worktree 默认值
+     * 应用就绪后异步修复旧数据：补全 directoryType 和 worktree 默认值
      */
-    @PostConstruct
+    @Async
+    @EventListener(ApplicationReadyEvent.class)
     @Transactional
-    void migrateOldRecords() {
+    public void migrateOldRecords() {
         List<WorkingDirectoryEntity> all = directoryRepository.findAll();
         int fixed = 0;
         for (WorkingDirectoryEntity e : all) {

@@ -20,4 +20,6 @@ public class ResumeTaskForm {
     private String agentTeamsJson;
     /** Permission mode: bypassPermissions | acceptEdits | default */
     private String permissionMode;
+    /** 平台 LLM 模型配置 ID，用于从平台配置中获取 apiKey + baseUrl */
+    private String modelConfigId;
 }

@@ -22,7 +22,7 @@ public class WorkerHealthChecker {
     private final ClaudeWorkerRepository workerRepository;
     private final ClaudeWorkerService workerService;
 
-    @Scheduled(fixedDelay = 30000, initialDelay = 10000)
+    @Scheduled(fixedDelay = 30000, initialDelay = 60000)
     public void checkAll() {
         List<ClaudeWorkerEntity> workers = workerRepository.findAll();
         for (ClaudeWorkerEntity worker : workers) {

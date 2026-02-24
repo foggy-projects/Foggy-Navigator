@@ -125,6 +125,7 @@ export async function createTask(form: {
   agentTeamsJson?: string
   images?: string
   permissionMode?: string
+  modelConfigId?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks', form)) as unknown as RX<ClaudeTask>
   return rx.data
@@ -141,6 +142,7 @@ export async function resumeTask(form: {
   maxTurns?: number
   agentTeamsJson?: string
   permissionMode?: string
+  modelConfigId?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks/resume', form)) as unknown as RX<ClaudeTask>
   return rx.data

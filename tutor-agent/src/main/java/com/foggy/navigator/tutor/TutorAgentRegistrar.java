@@ -7,9 +7,10 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.foggy.navigator.agent.framework.core.AgentInfo;
 import com.foggy.navigator.agent.framework.core.AgentRegistry;
 import com.foggy.navigator.agent.framework.core.model.AgentConfig;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
@@ -21,7 +22,7 @@ public class TutorAgentRegistrar {
 
     private final AgentRegistry agentRegistry;
 
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent.class)
     public void register() {
         // 仅当 DB 中不存在时从 YAML 初始化（YAML 作为种子，DB 为 source of truth）
         seedAgentIfAbsent("/agent-config/tutor-agent.yml");

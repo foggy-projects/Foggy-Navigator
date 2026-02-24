@@ -13,6 +13,8 @@ import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -45,6 +47,7 @@ public class ClaudeTaskService {
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final SessionManager sessionManager;
     private final ApplicationEventPublisher eventPublisher;
+    private final LlmModelManager llmModelManager;
 
     /**
      * 创建任务
@@ -106,8 +109,8 @@ public class ClaudeTaskService {
 
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}", taskId, sessionId, form.getWorkerId(), userId);
 
-        // 5. 解析 per-conversation auth
-        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId);
+        // 5. 解析 per-conversation auth（含平台模型配置 fallback）
+        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
 
         // 6. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
@@ -184,8 +187,8 @@ public class ClaudeTaskService {
 
         log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}", taskId, form.getClaudeSessionId(), directoryId);
 
-        // 解析 per-conversation auth
-        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId);
+        // 解析 per-conversation auth（含平台模型配置 fallback）
+        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
 
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
@@ -500,12 +503,15 @@ public class ClaudeTaskService {
 
     /**
      * 解析 per-conversation auth 配置
-     * 1. 查询 ConversationConfigEntity，如果已绑定 auth → 解密 token 返回
-     * 2. 未绑定 → 从 WorkingDirectory 默认 auth 继承
-     * 3. 无目录 auth → 全 null（SUBSCRIPTION, Worker 用 .env 或 claude login）
+     * 优先级：
+     * 1. ConversationConfig 已绑定 auth → 解密 token 返回
+     * 2. 用户选择的平台 LLM 模型配置（modelConfigId）→ 覆盖目录配置
+     * 3. WorkingDirectory 默认 auth 继承
+     * 4. 全 null（Worker 用 .env 或 claude login）
      * 返回 [apiKey, authToken, baseUrl]（可能全 null 表示使用 Worker 全局默认）
      */
-    private String[] resolveAuth(String sessionId, String workerId, String userId, String directoryId) {
+    private String[] resolveAuth(String sessionId, String workerId, String userId,
+                                 String directoryId, String modelConfigId) {
         ConversationConfigEntity config = conversationConfigService.getOrCreate(sessionId, workerId, userId);
 
         if (config.getAuthBoundAt() != null) {
@@ -522,7 +528,17 @@ public class ClaudeTaskService {
             return new String[]{apiKey, authToken, config.getBaseUrl()};
         }
 
-        // Not bound yet — auto-bind from WorkingDirectory default auth
+        // 用户选择的平台模型配置 → 优先于目录默认 auth
+        if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
+            if (modelConfig != null && Boolean.TRUE.equals(modelConfig.getHasApiKey())) {
+                String decryptedApiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
+                log.info("Auth resolved from platform model config: {}", modelConfig.getName());
+                return new String[]{decryptedApiKey, null, modelConfig.getBaseUrl()};
+            }
+        }
+
+        // Fallback: auto-bind from WorkingDirectory default auth
         if (directoryId != null && !directoryId.isEmpty()) {
             WorkingDirectoryEntity dir = workingDirectoryRepository
                     .findByDirectoryIdAndUserId(directoryId, userId).orElse(null);

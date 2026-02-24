@@ -42,7 +42,7 @@ public class ConversationCleanupService {
     private int cleanedIdleCount = 0;
     private int cleanedExpiredCount = 0;
 
-    @Scheduled(fixedDelayString = "${foggy.coding-agent.cleanup.interval:300000}", initialDelay = 60000)
+    @Scheduled(fixedDelayString = "${foggy.coding-agent.cleanup.interval:300000}", initialDelay = 180000)
     @Transactional
     public void cleanupIdleSessions() {
         log.debug("开始清理空闲会话");
@@ -75,7 +75,7 @@ public class ConversationCleanupService {
         }
     }
 
-    @Scheduled(fixedDelayString = "${foggy.coding-agent.cleanup.max-age-check-interval:3600000}", initialDelay = 120000)
+    @Scheduled(fixedDelayString = "${foggy.coding-agent.cleanup.max-age-check-interval:3600000}", initialDelay = 300000)
     @Transactional
     public void cleanupExpiredSessions() {
         log.debug("开始清理过期会话");
@@ -105,7 +105,7 @@ public class ConversationCleanupService {
         }
     }
 
-    @Scheduled(fixedDelayString = "${foggy.coding-agent.health.check-interval:60000}", initialDelay = 30000)
+    @Scheduled(fixedDelayString = "${foggy.coding-agent.health.check-interval:60000}", initialDelay = 120000)
     @Transactional
     public void performHealthChecks() {
         log.debug("开始执行健康检查");

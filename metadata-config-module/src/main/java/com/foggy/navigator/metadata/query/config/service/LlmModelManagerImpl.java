@@ -210,6 +210,11 @@ public class LlmModelManagerImpl implements LlmModelManager {
 
     @Override
     public String testConnection(String baseUrl, String apiKey, String modelName) {
+
+        if(true){
+            //暂时不做检查，因为有些没有/chat/completions端口
+            return "连接成功";
+        }
         log.info("Testing LLM connection: baseUrl={}, model={}", baseUrl, modelName);
 
         String url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";

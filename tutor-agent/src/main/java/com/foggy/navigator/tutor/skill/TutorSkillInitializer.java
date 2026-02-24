@@ -2,14 +2,16 @@ package com.foggy.navigator.tutor.skill;
 
 import com.foggy.navigator.agent.framework.skill.SkillManager;
 import com.foggy.navigator.tutor.config.TutorAgentProperties;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 /**
  * Tutor Skill 初始化器
- * 在启动时加载并注册 Tutor Agent 的 Skill
+ * 应用就绪后异步加载并注册 Tutor Agent 的 Skill，不阻塞启动
  */
 @Slf4j
 @Component
@@ -19,7 +21,8 @@ public class TutorSkillInitializer {
     private final TutorAgentProperties properties;
     private final SkillManager skillManager;
 
-    @PostConstruct
+    @Async
+    @EventListener(ApplicationReadyEvent.class)
     public void init() {
         if (!properties.isInitSkillsOnStartup()) {
             log.info("Skill initialization on startup is disabled");

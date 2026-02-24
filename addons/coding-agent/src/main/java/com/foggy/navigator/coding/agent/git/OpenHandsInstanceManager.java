@@ -12,7 +12,6 @@ import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientBuilder;
 import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
 import com.github.dockerjava.api.model.Container;
-import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.Builder;
 import lombok.Data;
@@ -38,7 +37,8 @@ public class OpenHandsInstanceManager {
     private final Map<String, UserInstance> userInstances = new ConcurrentHashMap<>();
     private final Set<Integer> usedPorts = ConcurrentHashMap.newKeySet();
 
-    private DockerClient dockerClient;
+    private volatile DockerClient dockerClient;
+    private volatile boolean dockerInitialized = false;
     private boolean useMock = false;
 
     @Value("${foggy.coding-agent.openhands.image:ghcr.io/all-hands-ai/openhands:main}")
@@ -74,8 +74,15 @@ public class OpenHandsInstanceManager {
     @Value("${foggy.coding-agent.test-mode:false}")
     private boolean testMode;
 
-    public OpenHandsInstanceManager() {
-        this.useMock = false;
+    /**
+     * 懒加载 DockerClient：首次调用时才连接 Docker daemon 并恢复已有容器端口
+     */
+    private synchronized DockerClient ensureDockerClient() {
+        if (dockerInitialized) {
+            return dockerClient;
+        }
+        dockerInitialized = true;
+
         try {
             String dockerHost = System.getenv("DOCKER_HOST");
             if (dockerHost == null || dockerHost.isEmpty()) {
@@ -98,17 +105,21 @@ public class OpenHandsInstanceManager {
             this.dockerClient = DockerClientBuilder.getInstance(config)
                     .withDockerHttpClient(httpClient)
                     .build();
+
+            // 首次连接成功后，恢复已有容器端口
+            recoverExistingContainerPorts();
         } catch (Exception e) {
             log.warn("无法连接到 Docker，使用模拟模式: {}", e.getMessage());
             this.useMock = true;
         }
+
+        return dockerClient;
     }
 
     /**
-     * 启动时扫描已存在的 openhands-user-* 容器，将其端口注册到 usedPorts，避免端口冲突
+     * 扫描已存在的 openhands-user-* 容器，将其端口注册到 usedPorts，避免端口冲突
      */
-    @PostConstruct
-    public void recoverExistingContainerPorts() {
+    private void recoverExistingContainerPorts() {
         if (useMock || dockerClient == null) return;
         try {
             List<Container> containers = dockerClient.listContainersCmd()
@@ -233,6 +244,11 @@ public class OpenHandsInstanceManager {
             return mockInstance;
         }
 
+        DockerClient client = ensureDockerClient();
+        if (client == null) {
+            throw new RuntimeException("Docker 不可用，无法创建用户实例");
+        }
+
         int hostPort = allocatePort();
         if (hostPort == -1) {
             throw new RuntimeException("无法分配端口，端口范围已满: " + portRangeStart + "-" + portRangeEnd);
@@ -244,7 +260,7 @@ public class OpenHandsInstanceManager {
         try {
             // Check if container already exists
             try {
-                InspectContainerResponse inspect = dockerClient.inspectContainerCmd(containerName).exec();
+                InspectContainerResponse inspect = client.inspectContainerCmd(containerName).exec();
                 String existingId = inspect.getId();
                 Boolean running = inspect.getState().getRunning();
 
@@ -270,8 +286,8 @@ public class OpenHandsInstanceManager {
 
                 // Container exists but not running, remove it
                 log.info("移除已停止的用户容器: userId={}, containerId={}", userId, existingId);
-                try { dockerClient.stopContainerCmd(existingId).withTimeout(5).exec(); } catch (Exception ignored) {}
-                dockerClient.removeContainerCmd(existingId).withForce(true).exec();
+                try { client.stopContainerCmd(existingId).withTimeout(5).exec(); } catch (Exception ignored) {}
+                client.removeContainerCmd(existingId).withForce(true).exec();
             } catch (com.github.dockerjava.api.exception.NotFoundException e) {
                 // Container doesn't exist, will create new
             }
@@ -282,7 +298,7 @@ public class OpenHandsInstanceManager {
             Ports portBindings = new Ports();
             portBindings.bind(containerPort, Ports.Binding.bindPort(hostPort));
 
-            CreateContainerResponse container = dockerClient.createContainerCmd(openHandsImage)
+            CreateContainerResponse container = client.createContainerCmd(openHandsImage)
                     .withName(containerName)
                     .withEnv(env)
                     .withExposedPorts(containerPort)
@@ -297,7 +313,7 @@ public class OpenHandsInstanceManager {
                     )
                     .exec();
 
-            dockerClient.startContainerCmd(container.getId()).exec();
+            client.startContainerCmd(container.getId()).exec();
 
             // Wait for OH server to become HTTP-ready
             String baseUrl = "http://localhost:" + hostPort;
@@ -395,7 +411,7 @@ public class OpenHandsInstanceManager {
 
         usedPorts.remove(instance.getPort());
 
-        if (!useMock && !testMode && instance.getContainerId() != null) {
+        if (!useMock && !testMode && instance.getContainerId() != null && dockerClient != null) {
             try {
                 dockerClient.stopContainerCmd(instance.getContainerId()).withTimeout(10).exec();
                 dockerClient.removeContainerCmd(instance.getContainerId()).withForce(true).exec();
@@ -408,6 +424,7 @@ public class OpenHandsInstanceManager {
 
     private boolean isContainerAlive(String containerId) {
         if (useMock || testMode) return true;
+        if (dockerClient == null) return false;
         try {
             InspectContainerResponse response = dockerClient.inspectContainerCmd(containerId).exec();
             Boolean running = response.getState().getRunning();

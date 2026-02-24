@@ -83,6 +83,7 @@ export function useClaudeWorker() {
     maxTurns?: number
     agentTeamsJson?: string
     permissionMode?: string
+    modelConfigId?: string
   }) {
     const task = await api.createTask(form)
     tasks.value.unshift(task)
@@ -100,6 +101,7 @@ export function useClaudeWorker() {
     maxTurns?: number
     agentTeamsJson?: string
     permissionMode?: string
+    modelConfigId?: string
   }) {
     const task = await api.resumeTask(form)
     tasks.value.unshift(task)

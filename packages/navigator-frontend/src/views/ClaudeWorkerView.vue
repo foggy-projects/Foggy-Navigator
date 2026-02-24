@@ -229,7 +229,10 @@
                 <span class="image-remove" @click="removeImage(idx)">&times;</span>
               </div>
             </div>
-            <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
+            <div v-if="taskForm.model || taskForm.maxTurns || platformModelConfig" class="active-overrides">
+              <el-tag v-if="platformModelConfig" size="small" type="success">
+                API: {{ platformModelConfig.name }}
+              </el-tag>
               <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
                 模型: {{ shortModel(taskForm.model) }}
               </el-tag>
@@ -251,6 +254,21 @@
                 <el-option value="acceptEdits" label="自动接受编辑" />
                 <el-option value="plan" label="只读(Plan)" />
                 <el-option value="default" label="交互式审批" />
+              </el-select>
+              <el-select
+                v-if="platformModels.length > 0"
+                v-model="platformModelConfigId"
+                size="small"
+                style="width: 180px; margin-left: 8px"
+                placeholder="API 凭证"
+                clearable
+              >
+                <el-option
+                  v-for="m in platformModels"
+                  :key="m.id"
+                  :value="m.id"
+                  :label="m.name"
+                />
               </el-select>
             </el-form-item>
           </el-form>
@@ -285,7 +303,10 @@
               <span class="image-remove" @click="removeImage(idx)">&times;</span>
             </div>
           </div>
-          <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
+          <div v-if="taskForm.model || taskForm.maxTurns || platformModelConfig" class="active-overrides">
+            <el-tag v-if="platformModelConfig" size="small" type="success">
+              API: {{ platformModelConfig.name }}
+            </el-tag>
             <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
               模型: {{ shortModel(taskForm.model) }}
             </el-tag>
@@ -361,7 +382,10 @@
             <el-form-item label="工作目录 (cwd)">
               <el-input v-model="taskForm.cwd" placeholder="可选，如 /home/user/project" />
             </el-form-item>
-            <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
+            <div v-if="taskForm.model || taskForm.maxTurns || platformModelConfig" class="active-overrides">
+              <el-tag v-if="platformModelConfig" size="small" type="success">
+                API: {{ platformModelConfig.name }}
+              </el-tag>
               <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
                 模型: {{ shortModel(taskForm.model) }}
               </el-tag>
@@ -383,6 +407,21 @@
                 <el-option value="acceptEdits" label="自动接受编辑" />
                 <el-option value="plan" label="只读(Plan)" />
                 <el-option value="default" label="交互式审批" />
+              </el-select>
+              <el-select
+                v-if="platformModels.length > 0"
+                v-model="platformModelConfigId"
+                size="small"
+                style="width: 180px; margin-left: 8px"
+                placeholder="API 凭证"
+                clearable
+              >
+                <el-option
+                  v-for="m in platformModels"
+                  :key="m.id"
+                  :value="m.id"
+                  :label="m.name"
+                />
               </el-select>
             </el-form-item>
           </el-form>
@@ -417,7 +456,10 @@
               <span class="image-remove" @click="removeImage(idx)">&times;</span>
             </div>
           </div>
-          <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
+          <div v-if="taskForm.model || taskForm.maxTurns || platformModelConfig" class="active-overrides">
+            <el-tag v-if="platformModelConfig" size="small" type="success">
+              API: {{ platformModelConfig.name }}
+            </el-tag>
             <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
               模型: {{ shortModel(taskForm.model) }}
             </el-tag>
@@ -985,7 +1027,8 @@ import type { TaskPaneState } from '@/composables/useTaskPane'
 import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
 import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import * as dirApi from '@/api/claudeWorker'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig } from '@/types'
+import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig } from '@/types'
 
 const MAX_PANES = 4
 
@@ -1100,6 +1143,32 @@ const taskForm = ref({
   useTeams: true,
   permissionMode: 'bypassPermissions' as string,
 })
+
+// --- 平台模型配置（供任务创建时选择 API 凭证） ---
+const platformModels = ref<LlmModelConfig[]>([])
+const platformModelConfigId = ref('')
+const platformModelConfig = computed(() =>
+  platformModels.value.find((m) => m.id === platformModelConfigId.value) || null,
+)
+
+async function loadPlatformModelConfig() {
+  try {
+    const [overrides, models] = await Promise.all([
+      listAgentModelOverrides(),
+      listModelConfigs(),
+    ])
+    platformModels.value = models.filter((m) => m.hasApiKey)
+    // 自动选择 claude-worker 的 agent-model override（如有）
+    const override = overrides.find((o) => o.agentId === 'claude-worker')
+    if (override && models.some((m) => m.id === override.modelConfigId)) {
+      platformModelConfigId.value = override.modelConfigId
+    } else if (platformModels.value.length > 0) {
+      platformModelConfigId.value = platformModels.value[0].id
+    }
+  } catch {
+    // best-effort
+  }
+}
 
 // --- Input memory: draft persistence + history for top task input ---
 const taskInputScope = computed(() => {
@@ -1363,7 +1432,7 @@ function toggleProjectExpand(projectId: string) {
 }
 
 onMounted(async () => {
-  await Promise.all([workerState.loadWorkers(), workerState.loadTasks()])
+  await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), loadPlatformModelConfig()])
   // Load conversation configs for all loaded tasks
   const sessionIds = [...new Set(workerState.tasks.value.map((t) => t.sessionId))]
   if (sessionIds.length > 0) {
@@ -2003,7 +2072,7 @@ async function handleCreateTask() {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
       model?: string; maxTurns?: number; agentTeamsJson?: string; images?: string
-      permissionMode?: string
+      permissionMode?: string; modelConfigId?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
@@ -2025,6 +2094,9 @@ async function handleCreateTask() {
     }
     if (taskForm.value.permissionMode) {
       form.permissionMode = taskForm.value.permissionMode
+    }
+    if (platformModelConfigId.value) {
+      form.modelConfigId = platformModelConfigId.value
     }
     // Attach images as JSON string
     if (attachedImages.value.length > 0) {
@@ -2102,6 +2174,9 @@ async function handlePaneSend(paneId: string, content: string) {
     }
     if (taskForm.value.permissionMode) {
       (resumeForm as Record<string, unknown>).permissionMode = taskForm.value.permissionMode
+    }
+    if (platformModelConfigId.value) {
+      resumeForm.modelConfigId = platformModelConfigId.value
     }
     const newTask = await workerState.resumeTask(resumeForm)
 
