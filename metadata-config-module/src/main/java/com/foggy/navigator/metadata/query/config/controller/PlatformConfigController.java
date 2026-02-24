@@ -3,11 +3,14 @@ package com.foggy.navigator.metadata.query.config.controller;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.*;
+import com.foggy.navigator.common.enums.AuthType;
 import com.foggy.navigator.common.enums.UserMemorySource;
 import com.foggy.navigator.common.form.AgentModelOverrideForm;
+import com.foggy.navigator.common.form.ApiCredentialForm;
 import com.foggy.navigator.common.form.GitProviderConfigForm;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.common.form.UserMemoryForm;
+import com.foggy.navigator.spi.config.ApiCredentialManager;
 import com.foggy.navigator.spi.config.GitProviderManager;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.memory.UserMemoryManager;
@@ -32,6 +35,7 @@ public class PlatformConfigController {
     private final GitProviderManager gitProviderManager;
     private final LlmModelManager llmModelManager;
     private final UserMemoryManager userMemoryManager;
+    private final ApiCredentialManager apiCredentialManager;
 
     /**
      * 获取当前用户的 tenantId，SUPER_ADMIN 无 tenantId 时用 userId 兜底
@@ -52,6 +56,7 @@ public class PlatformConfigController {
         SetupStatusDTO status = new SetupStatusDTO();
         status.setGitConfigured(gitProviderManager.hasAnyProvider(tenantId));
         status.setLlmConfigured(llmModelManager.hasAnyModel(tenantId));
+        status.setCredentialConfigured(apiCredentialManager.hasAnyCredential(tenantId));
         status.setSetupComplete(status.isGitConfigured() && status.isLlmConfigured());
         return RX.ok(status);
     }
@@ -151,6 +156,76 @@ public class PlatformConfigController {
         LlmModelConfigDTO dto = llmModelManager.getModelConfig(id)
                 .orElseThrow(() -> RX.throwB("LLM model config not found: " + id));
         return RX.ok(dto);
+    }
+
+    // ========== API 凭证配置 ==========
+
+    @PostMapping("/credentials/test-connection")
+    public RX<String> testCredentialConnection(@RequestBody ApiCredentialForm form) {
+        log.info("Test credential connection: baseUrl={}, authType={}", form.getBaseUrl(), form.getAuthType());
+        String authType = form.getAuthType() != null ? form.getAuthType().name() : AuthType.API_KEY.name();
+        String reply = apiCredentialManager.testConnection(
+                form.getBaseUrl(), form.getApiKey(), authType, form.getAuthHeaderName()
+        );
+        return RX.ok(reply);
+    }
+
+    @PostMapping("/credentials/{id}/test-connection")
+    public RX<String> testSavedCredentialConnection(@PathVariable String id) {
+        log.info("Test saved credential connection: id={}", id);
+        ApiCredentialDTO dto = apiCredentialManager.getCredential(id)
+                .orElseThrow(() -> RX.throwB("API credential not found: " + id));
+        String apiKey = apiCredentialManager.getDecryptedApiKey(id);
+        String reply = apiCredentialManager.testConnection(
+                dto.getBaseUrl(), apiKey, dto.getAuthType().name(), dto.getAuthHeaderName()
+        );
+        return RX.ok(reply);
+    }
+
+    @PostMapping("/credentials")
+    public RX<String> saveCredential(@RequestBody ApiCredentialForm form) {
+        CurrentUser user = UserContext.getCurrentUser();
+        log.info("Save API credential: name={}, operator={}", form.getName(), user.getUsername());
+        String id = apiCredentialManager.saveCredential(resolveTenantId(), form);
+        return RX.ok(id);
+    }
+
+    @PutMapping("/credentials/{id}")
+    public RX<Void> updateCredential(@PathVariable String id, @RequestBody ApiCredentialForm form) {
+        log.info("Update API credential: id={}", id);
+        apiCredentialManager.updateCredential(id, form);
+        return RX.ok();
+    }
+
+    @DeleteMapping("/credentials/{id}")
+    public RX<Void> deleteCredential(@PathVariable String id) {
+        log.info("Delete API credential: id={}", id);
+        apiCredentialManager.deleteCredential(id);
+        return RX.ok();
+    }
+
+    @GetMapping("/credentials")
+    public RX<List<ApiCredentialDTO>> listCredentials() {
+        String tenantId = resolveTenantId();
+        log.info("List API credentials: tenantId={}", tenantId);
+        List<ApiCredentialDTO> list = apiCredentialManager.listCredentials(tenantId);
+        return RX.ok(list);
+    }
+
+    @GetMapping("/credentials/{id}")
+    public RX<ApiCredentialDTO> getCredential(@PathVariable String id) {
+        log.info("Get API credential: id={}", id);
+        ApiCredentialDTO dto = apiCredentialManager.getCredential(id)
+                .orElseThrow(() -> RX.throwB("API credential not found: " + id));
+        return RX.ok(dto);
+    }
+
+    @GetMapping("/credentials/category/{category}")
+    public RX<List<ApiCredentialDTO>> listCredentialsByCategory(@PathVariable String category) {
+        String tenantId = resolveTenantId();
+        log.info("List API credentials by category: tenantId={}, category={}", tenantId, category);
+        List<ApiCredentialDTO> list = apiCredentialManager.listCredentialsByCategory(tenantId, category);
+        return RX.ok(list);
     }
 
     // ========== Agent 模型覆盖 ==========

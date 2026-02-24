@@ -19,6 +19,11 @@ public class SetupStatusDTO {
     private boolean llmConfigured;
 
     /**
+     * 是否已配置 API 凭证
+     */
+    private boolean credentialConfigured;
+
+    /**
      * 初始化是否完成（git + llm 都配好）
      */
     private boolean setupComplete;
