@@ -229,21 +229,6 @@
                 <span class="image-remove" @click="removeImage(idx)">&times;</span>
               </div>
             </div>
-            <el-form-item label="AI 模型">
-              <el-select v-model="taskForm.model" placeholder="使用默认模型" clearable filterable style="width: 100%" :loading="loadingModels">
-                <el-option
-                  v-for="model in llmModels"
-                  :key="model.id"
-                  :label="`${model.name} (${model.modelName})`"
-                  :value="model.id"
-                >
-                  <div style="display: flex; justify-content: space-between; align-items: center">
-                    <span>{{ model.name }} ({{ model.modelName }})</span>
-                    <el-tag v-if="model.isDefault" size="small" type="success">默认</el-tag>
-                  </div>
-                </el-option>
-              </el-select>
-            </el-form-item>
             <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
               <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
                 模型: {{ shortModel(taskForm.model) }}
@@ -285,19 +270,6 @@
               @history-prev="handleTaskHistoryPrev"
               @history-next="handleTaskHistoryNext"
             />
-            <el-select v-model="taskForm.model" placeholder="模型" clearable filterable size="small" style="width: 180px" :loading="loadingModels">
-              <el-option
-                v-for="model in llmModels"
-                :key="model.id"
-                :label="`${model.name} (${model.modelName})`"
-                :value="model.id"
-              >
-                <div style="display: flex; justify-content: space-between; align-items: center">
-                  <span>{{ model.name }} ({{ model.modelName }})</span>
-                  <el-tag v-if="model.isDefault" size="small" type="success">默认</el-tag>
-                </div>
-              </el-option>
-            </el-select>
             <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
             <el-button
               size="small"
@@ -389,21 +361,6 @@
             <el-form-item label="工作目录 (cwd)">
               <el-input v-model="taskForm.cwd" placeholder="可选，如 /home/user/project" />
             </el-form-item>
-            <el-form-item label="AI 模型">
-              <el-select v-model="taskForm.model" placeholder="使用默认模型" clearable filterable style="width: 100%" :loading="loadingModels">
-                <el-option
-                  v-for="model in llmModels"
-                  :key="model.id"
-                  :label="`${model.name} (${model.modelName})`"
-                  :value="model.id"
-                >
-                  <div style="display: flex; justify-content: space-between; align-items: center">
-                    <span>{{ model.name }} ({{ model.modelName }})</span>
-                    <el-tag v-if="model.isDefault" size="small" type="success">默认</el-tag>
-                  </div>
-                </el-option>
-              </el-select>
-            </el-form-item>
             <div v-if="taskForm.model || taskForm.maxTurns" class="active-overrides">
               <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
                 模型: {{ shortModel(taskForm.model) }}
@@ -445,19 +402,6 @@
               @history-prev="handleTaskHistoryPrev"
               @history-next="handleTaskHistoryNext"
             />
-            <el-select v-model="taskForm.model" placeholder="模型" clearable filterable size="small" style="width: 180px" :loading="loadingModels">
-              <el-option
-                v-for="model in llmModels"
-                :key="model.id"
-                :label="`${model.name} (${model.modelName})`"
-                :value="model.id"
-              >
-                <div style="display: flex; justify-content: space-between; align-items: center">
-                  <span>{{ model.name }} ({{ model.modelName }})</span>
-                  <el-tag v-if="model.isDefault" size="small" type="success">默认</el-tag>
-                </div>
-              </el-option>
-            </el-select>
             <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
             <el-button
               size="small"
@@ -1041,8 +985,7 @@ import type { TaskPaneState } from '@/composables/useTaskPane'
 import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
 import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import * as dirApi from '@/api/claudeWorker'
-import { listModelConfigs } from '@/api/platform'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig } from '@/types'
 
 const MAX_PANES = 4
 
@@ -1062,10 +1005,6 @@ const saving = ref(false)
 const syncing = ref(false)
 const syncingSessions = ref(false)
 const directorySkills = ref<SkillInfo[]>([])
-
-// Model list state
-const llmModels = ref<LlmModelConfig[]>([])
-const loadingModels = ref(false)
 
 // Worktree dialog state
 const showWorktreeDialog = ref(false)
@@ -1425,7 +1364,6 @@ function toggleProjectExpand(projectId: string) {
 
 onMounted(async () => {
   await Promise.all([workerState.loadWorkers(), workerState.loadTasks()])
-  await loadModels()
   // Load conversation configs for all loaded tasks
   const sessionIds = [...new Set(workerState.tasks.value.map((t) => t.sessionId))]
   if (sessionIds.length > 0) {
@@ -1507,17 +1445,6 @@ async function loadDirectoryTasks() {
   const sessionIds = [...new Set(directoryTasks.value.map((t) => t.sessionId))]
   if (sessionIds.length > 0) {
     workerState.loadConversationConfigs(sessionIds)
-  }
-}
-
-async function loadModels() {
-  loadingModels.value = true
-  try {
-    llmModels.value = await listModelConfigs()
-  } catch {
-    llmModels.value = []
-  } finally {
-    loadingModels.value = false
   }
 }
 
@@ -2440,11 +2367,6 @@ function authModeLabel(mode: string): string {
 }
 
 function shortModel(model: string): string {
-  if (!model) return ''
-  const modelConfig = llmModels.value.find(m => m.id === model)
-  if (modelConfig) {
-    return `${modelConfig.name} (${modelConfig.modelName})`
-  }
   const match = model.match(/(sonnet|opus|haiku)[\w-]*/i)
   return match ? match[0] : model.split('-').slice(1, 3).join('-')
 }
