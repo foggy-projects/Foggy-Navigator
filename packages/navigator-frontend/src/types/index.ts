@@ -242,6 +242,7 @@ export interface AgentModelOverride {
 export interface SetupStatus {
   gitConfigured: boolean
   llmConfigured: boolean
+  credentialConfigured: boolean
   setupComplete: boolean
 }
 
@@ -266,4 +267,36 @@ export interface UserMemory {
 export interface UserMemoryForm {
   category?: UserMemoryCategory
   content: string
+}
+
+// ===== API 凭证类型 =====
+
+export type AuthType = 'API_KEY' | 'BEARER_TOKEN' | 'BASIC_AUTH' | 'CUSTOM_HEADER'
+
+/** API 凭证配置 */
+export interface ApiCredential {
+  id: string
+  tenantId: string
+  name: string
+  category: string
+  baseUrl?: string
+  authType: AuthType
+  authHeaderName?: string
+  description?: string
+  isActive: boolean
+  hasApiKey: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+/** API 凭证配置表单 */
+export interface ApiCredentialForm {
+  name: string
+  category: string
+  baseUrl?: string
+  apiKey: string
+  authType: AuthType
+  authHeaderName?: string
+  extraHeaders?: Record<string, string>
+  description?: string
 }

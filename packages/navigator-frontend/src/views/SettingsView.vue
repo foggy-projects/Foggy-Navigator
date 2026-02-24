@@ -152,6 +152,50 @@
         </el-table>
       </el-tab-pane>
 
+      <!-- Tab 6: API Credentials -->
+      <el-tab-pane label="API 凭证" name="credentials">
+        <div class="tab-toolbar">
+          <el-button type="primary" size="small" @click="showCredentialDialog('add')">+ 添加凭证</el-button>
+        </div>
+
+        <el-table :data="credentials" v-loading="loadingCredentials" stripe>
+          <el-table-column prop="name" label="名称" min-width="140" />
+          <el-table-column prop="category" label="分类" width="120">
+            <template #default="{ row }">
+              <el-tag size="small">{{ row.category || 'default' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="baseUrl" label="API 地址" min-width="200" show-overflow-tooltip />
+          <el-table-column prop="authType" label="认证类型" width="120">
+            <template #default="{ row }">
+              <el-tag size="small">{{ authTypeLabel(row.authType) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="description" label="描述" min-width="150" show-overflow-tooltip />
+          <el-table-column label="状态" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.isActive ? 'success' : 'info'" size="small">
+                {{ row.isActive ? '启用' : '停用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="API Key" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.hasApiKey ? 'success' : 'danger'" size="small">
+                {{ row.hasApiKey ? '已配置' : '未配置' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="200" align="center">
+            <template #default="{ row }">
+              <el-button text size="small" :loading="row._testing" @click="handleTestCredential(row)">测试</el-button>
+              <el-button text size="small" @click="editCredential(row)">编辑</el-button>
+              <el-button text type="danger" size="small" @click="deleteCredentialById(row.id)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
       <!-- Tab 4: Claude Workers -->
       <el-tab-pane label="Claude Workers" name="workers">
         <div class="tab-toolbar">
@@ -317,6 +361,55 @@
         <el-button type="primary" :loading="saving" @click="saveMemoryForm">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- API Credential Add/Edit Dialog -->
+    <el-dialog v-model="showCredentialDialog_" :title="credentialDialogMode === 'add' ? '添加 API 凭证' : '编辑 API 凭证'" width="560px">
+      <el-form :model="credentialForm" label-position="top">
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="名称" required>
+              <el-input v-model="credentialForm.name" placeholder="如：阿里云天气API" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="分类">
+              <el-input v-model="credentialForm.category" placeholder="如：weather, payment" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="API Base URL">
+          <el-input v-model="credentialForm.baseUrl" placeholder="如：https://api.example.com" />
+        </el-form-item>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="认证类型" required>
+              <el-select v-model="credentialForm.authType" style="width: 100%">
+                <el-option label="API Key" value="API_KEY" />
+                <el-option label="Bearer Token" value="BEARER_TOKEN" />
+                <el-option label="Basic Auth" value="BASIC_AUTH" />
+                <el-option label="自定义 Header" value="CUSTOM_HEADER" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12" v-if="credentialForm.authType === 'CUSTOM_HEADER'">
+            <el-form-item label="Header 名称">
+              <el-input v-model="credentialForm.authHeaderName" placeholder="如：X-API-Key" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="API Key / Token" :required="credentialDialogMode === 'add'">
+          <el-input v-model="credentialForm.apiKey" type="password" show-password :placeholder="credentialDialogMode === 'edit' ? '留空保持不变' : 'API Key 或 Token'" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="credentialForm.description" type="textarea" :rows="2" placeholder="凭证用途说明" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showCredentialDialog_ = false">取消</el-button>
+        <el-button :loading="testingCredential" @click="handleTestCredentialForm">测试连接</el-button>
+        <el-button type="primary" :loading="saving" @click="saveCredentialForm">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -344,6 +437,13 @@ import {
   saveMemory as apiSaveMemory,
   updateMemory as apiUpdateMemory,
   deleteMemory as apiDeleteMemory,
+  listCredentials as apiListCredentials,
+  getCredential as apiGetCredential,
+  saveCredential as apiSaveCredential,
+  updateCredential as apiUpdateCredential,
+  deleteCredential as apiDeleteCredential,
+  testCredentialConnection as apiTestCredential,
+  testSavedCredentialConnection as apiTestSavedCredential,
 } from '@/api/platform'
 import {
   listWorkers as apiListWorkers,
@@ -352,7 +452,7 @@ import {
   deleteWorker as apiDeleteWorker,
   triggerHealthCheck as apiHealthCheck,
 } from '@/api/claudeWorker'
-import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, UserMemory, UserMemoryCategory } from '@/types'
+import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, UserMemory, UserMemoryCategory, ApiCredential, AuthType } from '@/types'
 
 const router = useRouter()
 const activeTab = ref('git')
@@ -364,6 +464,7 @@ const loadingLlm = ref(false)
 const loadingOverrides = ref(false)
 const loadingWorkers = ref(false)
 const loadingMemories = ref(false)
+const loadingCredentials = ref(false)
 
 // ===== Data =====
 const gitProviders = ref<GitProviderConfig[]>([])
@@ -371,6 +472,7 @@ const llmModels = ref<LlmModelConfig[]>([])
 const agentOverrides = ref<AgentModelOverride[]>([])
 const workers = ref<ClaudeWorker[]>([])
 const memories = ref<UserMemory[]>([])
+const credentials = ref<ApiCredential[]>([])
 
 // ===== Git Dialog =====
 const showGitDialog = ref(false)
@@ -762,6 +864,128 @@ function formatTime(t: string): string {
   return t.replace('T', ' ').substring(0, 19)
 }
 
+// ===== Credentials =====
+const showCredentialDialog_ = ref(false)
+const credentialDialogMode = ref<'add' | 'edit'>('add')
+const editingCredentialId = ref('')
+const credentialForm = ref({
+  name: '',
+  category: '',
+  baseUrl: '',
+  apiKey: '',
+  authType: 'API_KEY' as AuthType,
+  authHeaderName: '',
+  description: '',
+})
+const testingCredential = ref(false)
+
+function showCredentialDialog(mode: 'add' | 'edit') {
+  credentialDialogMode.value = mode
+  if (mode === 'add') {
+    editingCredentialId.value = ''
+    credentialForm.value = { name: '', category: '', baseUrl: '', apiKey: '', authType: 'API_KEY', authHeaderName: '', description: '' }
+  }
+  showCredentialDialog_.value = true
+}
+
+function editCredential(row: ApiCredential) {
+  credentialDialogMode.value = 'edit'
+  editingCredentialId.value = row.id
+  credentialForm.value = {
+    name: row.name,
+    category: row.category,
+    baseUrl: row.baseUrl || '',
+    apiKey: '',
+    authType: row.authType,
+    authHeaderName: row.authHeaderName || '',
+    description: row.description || '',
+  }
+  showCredentialDialog_.value = true
+}
+
+async function saveCredentialForm() {
+  if (!credentialForm.value.name) {
+    ElMessage.warning('请填写名称')
+    return
+  }
+  if (!credentialForm.value.apiKey && credentialDialogMode.value === 'add') {
+    ElMessage.warning('请填写 API Key')
+    return
+  }
+  saving.value = true
+  try {
+    if (credentialDialogMode.value === 'add') {
+      await apiSaveCredential(credentialForm.value)
+    } else {
+      const form: Record<string, unknown> = {
+        name: credentialForm.value.name,
+        category: credentialForm.value.category,
+        baseUrl: credentialForm.value.baseUrl,
+        authType: credentialForm.value.authType,
+        authHeaderName: credentialForm.value.authHeaderName,
+        description: credentialForm.value.description,
+      }
+      if (credentialForm.value.apiKey) form.apiKey = credentialForm.value.apiKey
+      await apiUpdateCredential(editingCredentialId.value, form)
+    }
+    showCredentialDialog_.value = false
+    ElMessage.success('保存成功')
+    await loadCredentials()
+  } catch {
+    ElMessage.error('保存失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleTestCredentialForm() {
+  if (!credentialForm.value.baseUrl || !credentialForm.value.apiKey) {
+    ElMessage.warning('请先填写 Base URL 和 API Key')
+    return
+  }
+  testingCredential.value = true
+  try {
+    const reply = await apiTestCredential({
+      baseUrl: credentialForm.value.baseUrl,
+      apiKey: credentialForm.value.apiKey,
+      authType: credentialForm.value.authType,
+      authHeaderName: credentialForm.value.authHeaderName,
+    })
+    ElMessage.success('连接成功: ' + (reply || 'OK'))
+  } catch (e: any) {
+    ElMessage.error('连接失败: ' + (e?.response?.data?.msg || e?.message || '未知错误'))
+  } finally {
+    testingCredential.value = false
+  }
+}
+
+async function handleTestCredential(row: ApiCredential & { _testing?: boolean }) {
+  row._testing = true
+  try {
+    const reply = await apiTestSavedCredential(row.id)
+    ElMessage.success('连接成功: ' + (reply || 'OK'))
+  } catch (e: any) {
+    ElMessage.error('连接失败: ' + (e?.response?.data?.msg || e?.message || '未知错误'))
+  } finally {
+    row._testing = false
+  }
+}
+
+async function deleteCredentialById(id: string) {
+  try {
+    await ElMessageBox.confirm('确认删除该凭证？', '提示', { type: 'warning' })
+    await apiDeleteCredential(id)
+    resetSetupStatus()
+    ElMessage.success('已删除')
+    await loadCredentials()
+  } catch { /* cancelled */ }
+}
+
+function authTypeLabel(t: string): string {
+  const map: Record<string, string> = { API_KEY: 'API Key', BEARER_TOKEN: 'Bearer Token', BASIC_AUTH: 'Basic Auth', CUSTOM_HEADER: '自定义 Header' }
+  return map[t] || t
+}
+
 // ===== Data Loading =====
 async function loadGitProviders() {
   loadingGit.value = true
@@ -793,12 +1017,19 @@ async function loadMemories() {
   finally { loadingMemories.value = false }
 }
 
+async function loadCredentials() {
+  loadingCredentials.value = true
+  try { credentials.value = await apiListCredentials() } catch { /* handled by interceptor */ }
+  finally { loadingCredentials.value = false }
+}
+
 onMounted(() => {
   loadGitProviders()
   loadLlmModels()
   loadOverrides()
   loadWorkers()
   loadMemories()
+  loadCredentials()
 })
 </script>
 

@@ -9,6 +9,8 @@ import type {
   AgentModelOverride,
   UserMemory,
   UserMemoryForm,
+  ApiCredential,
+  ApiCredentialForm,
 } from '@/types'
 
 const BASE = '/config/platform'
@@ -113,4 +115,44 @@ export async function updateMemory(id: string, form: Partial<UserMemoryForm>): P
 
 export async function deleteMemory(id: string): Promise<void> {
   await client.delete(`${BASE}/memories/${id}`)
+}
+
+// ===== API 凭证 =====
+
+export async function listCredentials(): Promise<ApiCredential[]> {
+  const rx = (await client.get(`${BASE}/credentials`)) as unknown as RX<ApiCredential[]>
+  return rx.data
+}
+
+export async function getCredential(id: string): Promise<ApiCredential> {
+  const rx = (await client.get(`${BASE}/credentials/${id}`)) as unknown as RX<ApiCredential>
+  return rx.data
+}
+
+export async function listCredentialsByCategory(category: string): Promise<ApiCredential[]> {
+  const rx = (await client.get(`${BASE}/credentials/category/${category}`)) as unknown as RX<ApiCredential[]>
+  return rx.data
+}
+
+export async function testCredentialConnection(form: Pick<ApiCredentialForm, 'baseUrl' | 'apiKey' | 'authType' | 'authHeaderName'>): Promise<string> {
+  const rx = (await client.post(`${BASE}/credentials/test-connection`, form)) as unknown as RX<string>
+  return rx.data
+}
+
+export async function testSavedCredentialConnection(id: string): Promise<string> {
+  const rx = (await client.post(`${BASE}/credentials/${id}/test-connection`)) as unknown as RX<string>
+  return rx.data
+}
+
+export async function saveCredential(form: ApiCredentialForm): Promise<string> {
+  const rx = (await client.post(`${BASE}/credentials`, form)) as unknown as RX<string>
+  return rx.data
+}
+
+export async function updateCredential(id: string, form: Partial<ApiCredentialForm>): Promise<void> {
+  await client.put(`${BASE}/credentials/${id}`, form)
+}
+
+export async function deleteCredential(id: string): Promise<void> {
+  await client.delete(`${BASE}/credentials/${id}`)
 }
