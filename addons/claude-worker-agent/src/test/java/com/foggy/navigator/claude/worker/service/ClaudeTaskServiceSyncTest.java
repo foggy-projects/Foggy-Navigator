@@ -9,6 +9,7 @@ import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
@@ -48,9 +49,10 @@ class ClaudeTaskServiceSyncTest {
         WorkingDirectoryService dirService = mock(WorkingDirectoryService.class);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
 
+        LlmModelManager llmModelManager = mock(LlmModelManager.class);
         service = new ClaudeTaskService(
                 taskRepository, workerService, configService,
-                dirService, directoryRepository, sessionManager, publisher);
+                dirService, directoryRepository, sessionManager, publisher, llmModelManager);
 
         // Session creation returns a predictable ID
         when(sessionManager.createSession(any(SessionCreateRequest.class)))

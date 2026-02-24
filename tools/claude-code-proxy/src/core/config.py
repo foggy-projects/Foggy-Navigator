@@ -9,7 +9,9 @@ class Config:
             raise ValueError("OPENAI_API_KEY not found in environment variables")
         
         # Add Anthropic API key for client validation
-        self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+        # Strip quotes that may be included literally by Docker --env-file
+        raw_anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip().strip('"').strip("'")
+        self.anthropic_api_key = raw_anthropic_key if raw_anthropic_key else None
         if not self.anthropic_api_key:
             print("Warning: ANTHROPIC_API_KEY not set. Client API key validation will be disabled.")
         
