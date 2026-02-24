@@ -59,19 +59,6 @@ public class ClaudeWorkerClient {
                                                        String agentTeamsJson, String images,
                                                        String apiKey, String authToken, String baseUrl,
                                                        String permissionMode) {
-        return streamQuery(prompt, cwd, sessionId, model, null, null, null, maxTurns,
-                agentTeamsJson, images, apiKey, authToken, baseUrl, permissionMode);
-    }
-
-    /**
-     * 流式查询（含完整模型映射和环境变量）
-     */
-    public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
-                                                       String model, String haikuModel, String sonnetModel, String opusModel,
-                                                       Integer maxTurns,
-                                                       String agentTeamsJson, String images,
-                                                       String apiKey, String authToken, String baseUrl,
-                                                       String permissionMode) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) {
@@ -82,15 +69,6 @@ public class ClaudeWorkerClient {
         }
         if (model != null) {
             body.put("model", model);
-        }
-        if (haikuModel != null) {
-            body.put("haiku_model", haikuModel);
-        }
-        if (sonnetModel != null) {
-            body.put("sonnet_model", sonnetModel);
-        }
-        if (opusModel != null) {
-            body.put("opus_model", opusModel);
         }
         if (maxTurns != null) {
             body.put("max_turns", maxTurns);

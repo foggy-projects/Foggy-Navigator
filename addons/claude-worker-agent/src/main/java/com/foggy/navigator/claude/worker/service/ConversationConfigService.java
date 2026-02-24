@@ -1,7 +1,5 @@
 package com.foggy.navigator.claude.worker.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.claude.worker.model.dto.ConversationConfigDTO;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
@@ -19,7 +17,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * 会话级配置服务（置顶、自定义标题、Auth 绑定、模型映射）
+ * 会话级配置服务（置顶、自定义标题、Auth 绑定）
  */
 @Slf4j
 @Service
@@ -29,7 +27,6 @@ public class ConversationConfigService {
     private final ConversationConfigRepository configRepository;
     private final ClaudeTaskRepository taskRepository;
     private final CredentialEncryptor credentialEncryptor;
-    private final ObjectMapper objectMapper;
 
     /**
      * 获取或创建会话配置
@@ -100,8 +97,7 @@ public class ConversationConfigService {
      */
     @Transactional
     public ConversationConfigDTO bindAuth(String sessionId, String userId,
-                                           String authMode, String authToken, String baseUrl,
-                                           String haikuModelName, String sonnetModelName, String opusModelName) {
+                                           String authMode, String authToken, String baseUrl) {
         ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
         if (!entity.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Access denied");
@@ -115,14 +111,6 @@ public class ConversationConfigService {
         }
         entity.setBaseUrl(baseUrl);
         entity.setAuthBoundAt(LocalDateTime.now());
-        
-        // 绑定模型映射
-        if (haikuModelName != null || sonnetModelName != null || opusModelName != null) {
-            entity.setHaikuModelName(haikuModelName);
-            entity.setSonnetModelName(sonnetModelName);
-            entity.setOpusModelName(opusModelName);
-        }
-        
         configRepository.save(entity);
         log.info("Auth bound for session {}: mode={}", sessionId, authMode);
         return toDTO(entity);
@@ -134,8 +122,7 @@ public class ConversationConfigService {
     @Transactional
     public int batchBindAuth(List<String> sessionIds, String userId,
                               String authMode, String authToken, String baseUrl,
-                              boolean skipExisting,
-                              String haikuModelName, String sonnetModelName, String opusModelName) {
+                              boolean skipExisting) {
         int bound = 0;
         for (String sessionId : sessionIds) {
             ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
@@ -149,14 +136,6 @@ public class ConversationConfigService {
             }
             entity.setBaseUrl(baseUrl);
             entity.setAuthBoundAt(LocalDateTime.now());
-            
-            // 绑定模型映射
-            if (haikuModelName != null || sonnetModelName != null || opusModelName != null) {
-                entity.setHaikuModelName(haikuModelName);
-                entity.setSonnetModelName(sonnetModelName);
-                entity.setOpusModelName(opusModelName);
-            }
-            
             configRepository.save(entity);
             bound++;
         }
@@ -274,45 +253,5 @@ public class ConversationConfigService {
             return token.substring(0, 2) + "****" + token.substring(token.length() - 2);
         }
         return token.substring(0, 6) + "****" + token.substring(token.length() - 4);
-    }
-
-    /**
-     * 绑定模型映射到会话（仅在会话创建时绑定，之后除非主动修改否则不变）
-     */
-    @Transactional
-    public void bindModelMapping(String sessionId, String workerId, String userId,
-                                   String haikuModelName, String sonnetModelName, String opusModelName) {
-        ConversationConfigEntity entity = getOrCreate(sessionId, workerId, userId);
-        
-        // 如果已经绑定了模型映射，则不再更新（除非主动修改）
-        if (entity.getHaikuModelName() != null || entity.getSonnetModelName() != null || entity.getOpusModelName() != null) {
-            log.debug("Model mapping already exists for session {}, skipping", sessionId);
-            return;
-        }
-        
-        if ((haikuModelName == null || haikuModelName.isEmpty())
-                && (sonnetModelName == null || sonnetModelName.isEmpty())
-                && (opusModelName == null || opusModelName.isEmpty())) {
-            log.debug("Model mapping is empty, skipping for session {}", sessionId);
-            return;
-        }
-
-        entity.setHaikuModelName(haikuModelName);
-        entity.setSonnetModelName(sonnetModelName);
-        entity.setOpusModelName(opusModelName);
-        configRepository.save(entity);
-        log.info("Model mapping bound for session {}: haiku={}, sonnet={}, opus={}", 
-                sessionId, haikuModelName, sonnetModelName, opusModelName);
-    }
-
-    /**
-     * 获取会话的模型映射
-     */
-    public String[] getModelMapping(ConversationConfigEntity entity) {
-        return new String[] {
-            entity.getHaikuModelName(),
-            entity.getSonnetModelName(),
-            entity.getOpusModelName()
-        };
     }
 }

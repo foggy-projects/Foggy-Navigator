@@ -11,7 +11,4 @@ public class BatchBindAuthForm {
     private String authToken;
     private String baseUrl;
     private boolean skipExisting = true;
-    private String haikuModelName;
-    private String sonnetModelName;
-    private String opusModelName;
 }

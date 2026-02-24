@@ -373,8 +373,7 @@ public class ClaudeTaskController {
         String userId = UserContext.getCurrentUserId();
         try {
             return RX.ok(configService.bindAuth(sessionId, userId,
-                    form.getAuthMode(), form.getAuthToken(), form.getBaseUrl(),
-                    form.getHaikuModelName(), form.getSonnetModelName(), form.getOpusModelName()));
+                    form.getAuthMode(), form.getAuthToken(), form.getBaseUrl()));
         } catch (IllegalStateException e) {
             throw RX.throwB(e.getMessage());
         }
@@ -391,8 +390,7 @@ public class ClaudeTaskController {
         String userId = UserContext.getCurrentUserId();
         int bound = configService.batchBindAuth(form.getSessionIds(), userId,
                 form.getAuthMode(), form.getAuthToken(), form.getBaseUrl(),
-                form.isSkipExisting(),
-                form.getHaikuModelName(), form.getSonnetModelName(), form.getOpusModelName());
+                form.isSkipExisting());
         return RX.ok(Map.of("bound", bound, "total", form.getSessionIds().size()));
     }
 

@@ -346,9 +346,6 @@ class SdkWrapper:
         api_key: str | None = None,
         auth_token: str | None = None,
         base_url: str | None = None,
-        haiku_model: str | None = None,
-        sonnet_model: str | None = None,
-        opus_model: str | None = None,
     ) -> dict[str, str]:
         """Build an environment-variable dict to inject into the CLI subprocess.
 
@@ -373,12 +370,6 @@ class SdkWrapper:
             env["ANTHROPIC_AUTH_TOKEN"] = token
         if url:
             env["ANTHROPIC_BASE_URL"] = url
-        if haiku_model:
-            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = haiku_model
-        if sonnet_model:
-            env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = sonnet_model
-        if opus_model:
-            env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = opus_model
         return env
 
     # -- Agent Teams ---------------------------------------------------------
@@ -493,9 +484,6 @@ class SdkWrapper:
         session_id: str | None = None,
         max_turns: int | None = None,
         model: str | None = None,
-        haiku_model: str | None = None,
-        sonnet_model: str | None = None,
-        opus_model: str | None = None,
         extra_args: dict | None = None,
         images: list[dict[str, str]] | None = None,
         api_key: str | None = None,
@@ -552,8 +540,7 @@ class SdkWrapper:
         heartbeat_timeout = settings.task_heartbeat_timeout_seconds
 
         try:
-            env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url,
-                                haiku_model=haiku_model, sonnet_model=sonnet_model, opus_model=opus_model)
+            env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url)
 
             # Build SDK options.  We use keyword arguments so that the call
             # works with both ``ClaudeAgentOptions`` and ``ClaudeCodeOptions``.
@@ -570,11 +557,9 @@ class SdkWrapper:
                 options_kwargs["resume"] = session_id
 
             # claude-agent-sdk: load filesystem settings (CLAUDE.md, etc.)
-            # Note: Environment variables have higher priority than filesystem settings
+            # and use first-class agents parameter instead of extra_args.
             if _use_agent_sdk:
-                # Only load user settings, skip project/local to avoid conflicts
-                # Environment variables (ANTHROPIC_*) will override any filesystem settings
-                options_kwargs["setting_sources"] = ["user"]
+                options_kwargs["setting_sources"] = ["user", "project", "local"]
                 # File checkpointing — always enable when using agent SDK
                 options_kwargs["enable_file_checkpointing"] = True
                 base_env = options_kwargs.get("env") or env or {}
@@ -601,17 +586,8 @@ class SdkWrapper:
                 auth_mode = "SUBSCRIPTION"
                 auth_hint = "(claude login)"
 
-            # Get model mapping from environment for logging
-            base_env = options_kwargs.get("env") or env or {}
-            haiku_model = base_env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
-            sonnet_model = base_env.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
-            opus_model = base_env.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
-            model_mapping_str = ""
-            if haiku_model or sonnet_model or opus_model:
-                model_mapping_str = f", haiku={haiku_model}, sonnet={sonnet_model}, opus={opus_model}"
-
             logger.info(
-                "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s%s, "
+                "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s, "
                 "auth_mode=%s, auth_hint=%s, base_url=%s, "
                 "has_agents=%s, has_env=%s, hard_timeout=%ss, heartbeat_timeout=%ss",
                 task_id,
@@ -619,7 +595,6 @@ class SdkWrapper:
                 cwd,
                 session_id,
                 model,
-                model_mapping_str,
                 auth_mode,
                 auth_hint,
                 eff_url or "(default)",

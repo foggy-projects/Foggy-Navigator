@@ -79,7 +79,7 @@ export function useClaudeWorker() {
     prompt: string
     cwd?: string
     directoryId?: string
-    modelConfigId?: string
+    model?: string
     maxTurns?: number
     agentTeamsJson?: string
     permissionMode?: string

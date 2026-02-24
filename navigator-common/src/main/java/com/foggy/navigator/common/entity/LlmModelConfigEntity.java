@@ -48,28 +48,10 @@ public class LlmModelConfigEntity {
     private String baseUrl;
 
     /**
-     * 模型名称，如 qwen-max（主模型，默认为 opus）
+     * 模型名称，如 qwen-max
      */
-    @Column(length = 100)
+    @Column(length = 100, nullable = false)
     private String modelName;
-
-    /**
-     * Haiku 级别模型名称（用于简单任务）
-     */
-    @Column(length = 100)
-    private String haikuModelName;
-
-    /**
-     * Sonnet 级别模型名称（用于中等复杂度任务）
-     */
-    @Column(length = 100)
-    private String sonnetModelName;
-
-    /**
-     * Opus 级别模型名称（用于复杂任务，默认使用 modelName）
-     */
-    @Column(length = 100)
-    private String opusModelName;
 
     /**
      * API Key（CredentialEncryptor 加密存储）

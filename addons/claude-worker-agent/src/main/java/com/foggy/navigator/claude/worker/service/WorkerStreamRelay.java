@@ -68,9 +68,7 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(event.getClaudeSessionId());
 
             Disposable subscription = client.streamQuery(event.getPrompt(), event.getCwd(),
-                            event.getClaudeSessionId(),
-                            event.getModel(), event.getHaikuModel(), event.getSonnetModel(), event.getOpusModel(),
-                            event.getMaxTurns(),
+                            event.getClaudeSessionId(), event.getModel(), event.getMaxTurns(),
                             event.getAgentTeamsJson(), event.getImages(),
                             event.getApiKey(), event.getAuthToken(), event.getBaseUrl(),
                             event.getPermissionMode())

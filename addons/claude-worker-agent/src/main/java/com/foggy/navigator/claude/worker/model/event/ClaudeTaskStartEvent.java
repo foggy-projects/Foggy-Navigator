@@ -18,9 +18,6 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
     private final String cwd;
     private final String claudeSessionId;
     private final String model;
-    private final String haikuModel;
-    private final String sonnetModel;
-    private final String opusModel;
     private final Integer maxTurns;
     private final String agentTeamsJson;
     /** Base64-encoded image attachments JSON: [{name, data, mimeType}] */
@@ -36,7 +33,7 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String workerId, String userId, String prompt,
                                  String cwd, String claudeSessionId) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -45,7 +42,7 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String model, Integer maxTurns, String agentTeamsJson,
                                  String apiKey, String authToken, String baseUrl) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                model, null, null, null, maxTurns, agentTeamsJson, null, apiKey, authToken, baseUrl, null);
+                model, maxTurns, agentTeamsJson, null, apiKey, authToken, baseUrl, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -55,25 +52,13 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String images,
                                  String apiKey, String authToken, String baseUrl) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                model, null, null, null, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl, null);
+                model, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
                                  String workerId, String userId, String prompt,
                                  String cwd, String claudeSessionId,
                                  String model, Integer maxTurns, String agentTeamsJson,
-                                 String images,
-                                 String apiKey, String authToken, String baseUrl,
-                                 String permissionMode) {
-        this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                model, null, null, null, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl, permissionMode);
-    }
-
-    public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
-                                 String workerId, String userId, String prompt,
-                                 String cwd, String claudeSessionId,
-                                 String model, String haikuModel, String sonnetModel, String opusModel,
-                                 Integer maxTurns, String agentTeamsJson,
                                  String images,
                                  String apiKey, String authToken, String baseUrl,
                                  String permissionMode) {
@@ -86,9 +71,6 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
         this.cwd = cwd;
         this.claudeSessionId = claudeSessionId;
         this.model = model;
-        this.haikuModel = haikuModel;
-        this.sonnetModel = sonnetModel;
-        this.opusModel = opusModel;
         this.maxTurns = maxTurns;
         this.agentTeamsJson = agentTeamsJson;
         this.images = images;
