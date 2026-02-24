@@ -601,8 +601,17 @@ class SdkWrapper:
                 auth_mode = "SUBSCRIPTION"
                 auth_hint = "(claude login)"
 
+            # Get model mapping from environment for logging
+            base_env = options_kwargs.get("env") or env or {}
+            haiku_model = base_env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+            sonnet_model = base_env.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
+            opus_model = base_env.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
+            model_mapping_str = ""
+            if haiku_model or sonnet_model or opus_model:
+                model_mapping_str = f", haiku={haiku_model}, sonnet={sonnet_model}, opus={opus_model}"
+
             logger.info(
-                "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s, "
+                "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s%s, "
                 "auth_mode=%s, auth_hint=%s, base_url=%s, "
                 "has_agents=%s, has_env=%s, hard_timeout=%ss, heartbeat_timeout=%ss",
                 task_id,
@@ -610,6 +619,7 @@ class SdkWrapper:
                 cwd,
                 session_id,
                 model,
+                model_mapping_str,
                 auth_mode,
                 auth_hint,
                 eff_url or "(default)",

@@ -273,7 +273,7 @@
         </el-form-item>
         <el-row :gutter="12">
           <el-col :span="12">
-            <el-form-item label="模型名称" required>
+            <el-form-item label="模型名称">
               <el-input v-model="llmForm.modelName" placeholder="如：qwen-max（主模型，默认为 Opus）" />
             </el-form-item>
           </el-col>
@@ -630,7 +630,7 @@ function editLlmModel(row: LlmModelConfig) {
 }
 
 async function saveLlm() {
-  if (!llmForm.value.name || !llmForm.value.baseUrl || !llmForm.value.modelName) {
+  if (!llmForm.value.name || !llmForm.value.baseUrl) {
     ElMessage.warning('请填写必填项')
     return
   }
@@ -679,8 +679,8 @@ async function saveLlm() {
 const testingLlm = ref(false)
 
 async function handleTestLlm() {
-  if (!llmForm.value.baseUrl || !llmForm.value.modelName || !llmForm.value.apiKey) {
-    ElMessage.warning('请先填写 Base URL、模型名称和 API Key')
+  if (!llmForm.value.baseUrl || !llmForm.value.apiKey) {
+    ElMessage.warning('请先填写 Base URL 和 API Key')
     return
   }
   testingLlm.value = true

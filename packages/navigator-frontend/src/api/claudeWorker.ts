@@ -120,7 +120,7 @@ export async function createTask(form: {
   prompt: string
   cwd?: string
   directoryId?: string
-  model?: string
+  modelConfigId?: string
   maxTurns?: number
   agentTeamsJson?: string
   images?: string

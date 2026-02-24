@@ -100,17 +100,17 @@ public class ClaudeTaskService {
         String opusModelName = null;
         String modelApiKey = null;
         String modelBaseUrl = null;
-        if (form.getModel() != null && !form.getModel().isEmpty()) {
-            LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(form.getModel())
-                    .orElseThrow(() -> new IllegalArgumentException("Model config not found: " + form.getModel()));
+        if (form.getModelConfigId() != null && !form.getModelConfigId().isEmpty()) {
+            LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(form.getModelConfigId())
+                    .orElseThrow(() -> new IllegalArgumentException("Model config not found: " + form.getModelConfigId()));
             modelName = modelConfig.getModelName();
             haikuModelName = modelConfig.getHaikuModelName();
             sonnetModelName = modelConfig.getSonnetModelName();
             opusModelName = modelConfig.getOpusModelName();
-            modelApiKey = llmModelManager.getDecryptedApiKey(form.getModel());
+            modelApiKey = llmModelManager.getDecryptedApiKey(form.getModelConfigId());
             modelBaseUrl = modelConfig.getBaseUrl();
             log.info("Using custom model: modelConfigId={}, modelName={}, haiku={}, sonnet={}, opus={}, baseUrl={}", 
-                    form.getModel(), modelName, haikuModelName, sonnetModelName, opusModelName, modelBaseUrl);
+                    form.getModelConfigId(), modelName, haikuModelName, sonnetModelName, opusModelName, modelBaseUrl);
         }
 
         // 5. 持久化任务
@@ -226,18 +226,18 @@ public class ClaudeTaskService {
         String opusModelName = null;
         String modelApiKey = null;
         String modelBaseUrl = null;
-        if (form.getModel() != null && !form.getModel().isEmpty()) {
-            LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(form.getModel())
-                    .orElseThrow(() -> new IllegalArgumentException("Model config not found: " + form.getModel()));
-            modelName = modelConfig.getModelName();
-            haikuModelName = modelConfig.getHaikuModelName();
-            sonnetModelName = modelConfig.getSonnetModelName();
-            opusModelName = modelConfig.getOpusModelName();
-            modelApiKey = llmModelManager.getDecryptedApiKey(form.getModel());
-            modelBaseUrl = modelConfig.getBaseUrl();
-            log.info("Using custom model (resume): modelConfigId={}, modelName={}, haiku={}, sonnet={}, opus={}, baseUrl={}", 
-                    form.getModel(), modelName, haikuModelName, sonnetModelName, opusModelName, modelBaseUrl);
-        }
+//        if (form.getModel() != null && !form.getModel().isEmpty()) {
+//            LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(form.getModel())
+//                    .orElseThrow(() -> new IllegalArgumentException("Model config not found: " + form.getModel()));
+//            modelName = modelConfig.getModelName();
+//            haikuModelName = modelConfig.getHaikuModelName();
+//            sonnetModelName = modelConfig.getSonnetModelName();
+//            opusModelName = modelConfig.getOpusModelName();
+//            modelApiKey = llmModelManager.getDecryptedApiKey(form.getModel());
+//            modelBaseUrl = modelConfig.getBaseUrl();
+//            log.info("Using custom model (resume): modelConfigId={}, modelName={}, haiku={}, sonnet={}, opus={}, baseUrl={}",
+//                    form.getModel(), modelName, haikuModelName, sonnetModelName, opusModelName, modelBaseUrl);
+//        }
 
         String taskId = UUID.randomUUID().toString().substring(0, 12);
         ClaudeTaskEntity entity = new ClaudeTaskEntity();

@@ -50,7 +50,7 @@ public class LlmModelConfigEntity {
     /**
      * 模型名称，如 qwen-max（主模型，默认为 opus）
      */
-    @Column(length = 100, nullable = false)
+    @Column(length = 100)
     private String modelName;
 
     /**

@@ -11,7 +11,8 @@ public class CreateTaskForm {
     private String prompt;
     private String cwd;
     private String directoryId;
-    private String model;
+    /** 模型配置 ID（可选） */
+    private String modelConfigId;
     private Integer maxTurns;
     /** Agent Teams JSON (直接传入或由 directoryId 解析) */
     private String agentTeamsJson;

@@ -218,6 +218,18 @@ public class LlmModelManagerImpl implements LlmModelManager {
     public String testConnection(String baseUrl, String apiKey, String modelName) {
         log.info("Testing LLM connection: baseUrl={}, model={}", baseUrl, modelName);
 
+        // 如果没有提供模型名称，只验证 Base URL 和 API Key 的格式
+        if (modelName == null || modelName.trim().isEmpty()) {
+            if (baseUrl == null || baseUrl.trim().isEmpty()) {
+                throw RX.throwB("Base URL 不能为空");
+            }
+            if (apiKey == null || apiKey.trim().isEmpty()) {
+                throw RX.throwB("API Key 不能为空");
+            }
+            log.info("LLM connection test skipped (no model name): baseUrl={}", baseUrl);
+            return "连接成功（未指定模型）";
+        }
+
         String url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
 
         HttpHeaders headers = new HttpHeaders();
