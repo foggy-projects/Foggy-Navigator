@@ -274,12 +274,30 @@
         <el-row :gutter="12">
           <el-col :span="12">
             <el-form-item label="模型名称" required>
-              <el-input v-model="llmForm.modelName" placeholder="如：qwen-max" />
+              <el-input v-model="llmForm.modelName" placeholder="如：qwen-max（主模型，默认为 Opus）" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item label="API Key" :required="llmDialogMode === 'add'">
               <el-input v-model="llmForm.apiKey" type="password" show-password :placeholder="llmDialogMode === 'edit' ? '留空保持不变' : 'API Key'" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-divider content-position="left">模型映射（可选，用于 Claude Code 自动选择）</el-divider>
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="Haiku 模型">
+              <el-input v-model="llmForm.haikuModelName" placeholder="如：glm-4.5-air（简单任务）" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="Sonnet 模型">
+              <el-input v-model="llmForm.sonnetModelName" placeholder="如：glm-4.7（中等复杂度）" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="Opus 模型">
+              <el-input v-model="llmForm.opusModelName" placeholder="如：glm-5（复杂任务）" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -554,6 +572,9 @@ const llmForm = ref({
   category: 'GENERAL' as LlmModelCategory,
   baseUrl: '',
   modelName: '',
+  haikuModelName: '',
+  sonnetModelName: '',
+  opusModelName: '',
   apiKey: '',
   isDefault: false,
 })
@@ -562,6 +583,7 @@ const llmPresets = [
   { name: '阿里通义', displayName: '通义千问-Max', category: 'GENERAL' as LlmModelCategory, baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', modelName: 'qwen-max' },
   { name: 'DeepSeek', displayName: 'DeepSeek-R1', category: 'REASONING' as LlmModelCategory, baseUrl: 'https://api.deepseek.com/v1', modelName: 'deepseek-reasoner' },
   { name: 'OpenAI', displayName: 'GPT-4o', category: 'GENERAL' as LlmModelCategory, baseUrl: 'https://api.openai.com/v1', modelName: 'gpt-4o' },
+  { name: 'GLM', displayName: 'GLM-4', category: 'GENERAL' as LlmModelCategory, baseUrl: 'https://open.bigmodel.cn/api/paas/v4', modelName: 'glm-4', haikuModelName: 'glm-4.5-air', sonnetModelName: 'glm-4.7', opusModelName: 'glm-5' },
 ]
 
 function showLlmDialog(mode: 'add' | 'edit') {
@@ -581,6 +603,9 @@ function applyPreset(preset: (typeof llmPresets)[number]) {
     category: preset.category,
     baseUrl: preset.baseUrl,
     modelName: preset.modelName,
+    haikuModelName: preset.haikuModelName || '',
+    sonnetModelName: preset.sonnetModelName || '',
+    opusModelName: preset.opusModelName || '',
     apiKey: '',
     isDefault: false,
   }
@@ -595,6 +620,9 @@ function editLlmModel(row: LlmModelConfig) {
     category: row.category,
     baseUrl: row.baseUrl,
     modelName: row.modelName,
+    haikuModelName: row.haikuModelName || '',
+    sonnetModelName: row.sonnetModelName || '',
+    opusModelName: row.opusModelName || '',
     apiKey: '',
     isDefault: row.isDefault,
   }

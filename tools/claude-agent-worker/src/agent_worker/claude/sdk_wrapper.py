@@ -346,6 +346,9 @@ class SdkWrapper:
         api_key: str | None = None,
         auth_token: str | None = None,
         base_url: str | None = None,
+        haiku_model: str | None = None,
+        sonnet_model: str | None = None,
+        opus_model: str | None = None,
     ) -> dict[str, str]:
         """Build an environment-variable dict to inject into the CLI subprocess.
 
@@ -370,6 +373,12 @@ class SdkWrapper:
             env["ANTHROPIC_AUTH_TOKEN"] = token
         if url:
             env["ANTHROPIC_BASE_URL"] = url
+        if haiku_model:
+            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = haiku_model
+        if sonnet_model:
+            env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = sonnet_model
+        if opus_model:
+            env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = opus_model
         return env
 
     # -- Agent Teams ---------------------------------------------------------
@@ -484,6 +493,9 @@ class SdkWrapper:
         session_id: str | None = None,
         max_turns: int | None = None,
         model: str | None = None,
+        haiku_model: str | None = None,
+        sonnet_model: str | None = None,
+        opus_model: str | None = None,
         extra_args: dict | None = None,
         images: list[dict[str, str]] | None = None,
         api_key: str | None = None,
@@ -540,7 +552,8 @@ class SdkWrapper:
         heartbeat_timeout = settings.task_heartbeat_timeout_seconds
 
         try:
-            env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url)
+            env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url,
+                                haiku_model=haiku_model, sonnet_model=sonnet_model, opus_model=opus_model)
 
             # Build SDK options.  We use keyword arguments so that the call
             # works with both ``ClaudeAgentOptions`` and ``ClaudeCodeOptions``.

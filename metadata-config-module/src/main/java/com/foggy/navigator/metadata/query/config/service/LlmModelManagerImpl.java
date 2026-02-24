@@ -55,6 +55,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setCategory(form.getCategory());
         entity.setBaseUrl(form.getBaseUrl());
         entity.setModelName(form.getModelName());
+        entity.setHaikuModelName(form.getHaikuModelName());
+        entity.setSonnetModelName(form.getSonnetModelName());
+        entity.setOpusModelName(form.getOpusModelName());
         entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
         entity.setIsDefault(form.getIsDefault() != null ? form.getIsDefault() : false);
 
@@ -80,6 +83,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
         if (form.getCategory() != null) entity.setCategory(form.getCategory());
         if (form.getBaseUrl() != null) entity.setBaseUrl(form.getBaseUrl());
         if (form.getModelName() != null) entity.setModelName(form.getModelName());
+        if (form.getHaikuModelName() != null) entity.setHaikuModelName(form.getHaikuModelName());
+        if (form.getSonnetModelName() != null) entity.setSonnetModelName(form.getSonnetModelName());
+        if (form.getOpusModelName() != null) entity.setOpusModelName(form.getOpusModelName());
         if (form.getApiKey() != null) {
             entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
         }
@@ -305,6 +311,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
         dto.setCategory(entity.getCategory());
         dto.setBaseUrl(entity.getBaseUrl());
         dto.setModelName(entity.getModelName());
+        dto.setHaikuModelName(entity.getHaikuModelName());
+        dto.setSonnetModelName(entity.getSonnetModelName());
+        dto.setOpusModelName(entity.getOpusModelName());
         dto.setIsDefault(entity.getIsDefault());
         dto.setHasApiKey(entity.getApiKey() != null && !entity.getApiKey().isEmpty());
         dto.setCreatedAt(entity.getCreatedAt());

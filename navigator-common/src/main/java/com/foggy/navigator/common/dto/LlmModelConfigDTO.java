@@ -17,6 +17,9 @@ public class LlmModelConfigDTO {
     private LlmModelCategory category;
     private String baseUrl;
     private String modelName;
+    private String haikuModelName;
+    private String sonnetModelName;
+    private String opusModelName;
     private Boolean isDefault;
     private Boolean hasApiKey;
     private LocalDateTime createdAt;
