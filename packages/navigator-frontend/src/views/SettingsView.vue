@@ -646,9 +646,6 @@ async function saveLlm() {
         category: llmForm.value.category,
         baseUrl: llmForm.value.baseUrl,
         modelName: llmForm.value.modelName,
-        haikuModelName: llmForm.value.haikuModelName,
-        sonnetModelName: llmForm.value.sonnetModelName,
-        opusModelName: llmForm.value.opusModelName,
         apiKey: llmForm.value.apiKey,
         isDefault: llmForm.value.isDefault,
       })
@@ -658,9 +655,6 @@ async function saveLlm() {
         category: llmForm.value.category,
         baseUrl: llmForm.value.baseUrl,
         modelName: llmForm.value.modelName,
-        haikuModelName: llmForm.value.haikuModelName,
-        sonnetModelName: llmForm.value.sonnetModelName,
-        opusModelName: llmForm.value.opusModelName,
         isDefault: llmForm.value.isDefault,
       }
       if (llmForm.value.apiKey) form.apiKey = llmForm.value.apiKey
