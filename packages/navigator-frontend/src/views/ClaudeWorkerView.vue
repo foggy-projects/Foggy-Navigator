@@ -1713,7 +1713,11 @@ async function handleDelete() {
     const dirs = workerState.directories.value.filter(d => d.workerId === selectedWorkerId.value)
     for (const dir of dirs) {
       disposeWorkspace(dir.directoryId)
+      // Clean up drafts for directories under this worker
+      taskMemory.deleteDraft('task-' + dir.directoryId)
     }
+    // Clean up draft for this worker
+    taskMemory.deleteDraft('task-worker-' + selectedWorkerId.value)
     await workerState.deleteWorker(selectedWorkerId.value)
     selectedWorkerId.value = null
     selectedDirectoryId.value = null
@@ -1813,6 +1817,8 @@ async function handleDeleteDirectory() {
       cancelButtonText: '取消',
     })
     disposeWorkspace(selectedDirectoryId.value)
+    // Clean up draft for this directory
+    taskMemory.deleteDraft('task-' + selectedDirectoryId.value)
     await workerState.deleteDirectory(selectedDirectoryId.value)
     selectedDirectoryId.value = null
     ElMessage.success('已删除')
@@ -2033,6 +2039,8 @@ async function handleBatchDelete() {
           deleted++
         }
       }
+      // Clean up draft for this conversation
+      taskMemory.deleteDraft('pane-' + conv.sessionId)
     }
     ElMessage.success(`已删除 ${deleted} 个任务`)
     exitBatchSelectMode()
@@ -2549,6 +2557,8 @@ async function handleDeleteConversation(conv: ConversationGroup) {
         await workerState.deleteTask(task.taskId)
       }
     }
+    // Clean up draft for this conversation (session)
+    taskMemory.deleteDraft('pane-' + conv.sessionId)
     ElMessage.success('会话已删除')
     workerState.loadTasks()
     if (selectedDirectoryId.value) {

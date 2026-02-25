@@ -1,6 +1,7 @@
 import { ref, watch, type Ref } from 'vue'
 
 const MAX_HISTORY = 50
+const DRAFT_EXPIRE_DAYS = 30 // 30 days to expire drafts
 
 function storageKey(prefix: string, scope: string) {
   return `nav-${prefix}-${scope}`
@@ -36,7 +37,8 @@ export function useInputMemory(scope: Ref<string>) {
     if (!s) return
     const key = storageKey('draft', s)
     if (text) {
-      localStorage.setItem(key, text)
+      const data = { text, updatedAt: Date.now() }
+      localStorage.setItem(key, JSON.stringify(data))
     } else {
       localStorage.removeItem(key)
     }
@@ -45,13 +47,58 @@ export function useInputMemory(scope: Ref<string>) {
   function loadDraft(): string {
     const s = scope.value
     if (!s) return ''
-    return localStorage.getItem(storageKey('draft', s)) ?? ''
+    const raw = localStorage.getItem(storageKey('draft', s))
+    if (!raw) return ''
+    try {
+      const data = JSON.parse(raw) as { text: string; updatedAt?: number }
+      return data.text ?? raw // fallback to raw for backward compatibility
+    } catch {
+      return raw // fallback to raw for backward compatibility
+    }
   }
 
   function clearDraft() {
     const s = scope.value
     if (!s) return
     localStorage.removeItem(storageKey('draft', s))
+  }
+
+  /**
+   * Delete draft by scope (e.g., when a session is deleted)
+   */
+  function deleteDraft(scopeKey: string) {
+    const key = storageKey('draft', scopeKey)
+    localStorage.removeItem(key)
+  }
+
+  /**
+   * Clean up expired drafts and history older than DRAFT_EXPIRE_DAYS
+   */
+  function cleanupExpiredDrafts() {
+    const now = Date.now()
+    const expireThreshold = now - DRAFT_EXPIRE_DAYS * 24 * 60 * 60 * 1000
+
+    // Clean up drafts
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key?.startsWith('nav-draft-')) {
+        try {
+          const raw = localStorage.getItem(key)
+          if (raw) {
+            const data = JSON.parse(raw) as { text?: string; updatedAt?: number }
+            if (data.updatedAt && data.updatedAt < expireThreshold) {
+              localStorage.removeItem(key)
+            }
+          }
+        } catch {
+          // Skip invalid entries
+        }
+      }
+    }
+
+    // Clean up history (no timestamp, just remove all - simpler approach)
+    // Or we could track last used time, but for now just keep history cleanup simple
+    // History is less of a concern since it's capped at 50 entries per scope
   }
 
   // ---- History --------------------------------------------------------------
@@ -140,9 +187,32 @@ export function useInputMemory(scope: Ref<string>) {
     saveDraft,
     loadDraft,
     clearDraft,
+    deleteDraft,
+    cleanupExpiredDrafts,
     addToHistory,
     historyPrev,
     historyNext,
     resetNavigation,
+  }
+}
+
+/**
+ * Cleanup expired drafts on app initialization.
+ * Call this once when the app starts (e.g., in main.ts or App.vue onMounted)
+ */
+export function initDraftCleanup() {
+  const DRAFT_STORAGE_KEY = 'nav-draft-last-cleanup'
+  const CLEANUP_INTERVAL_DAYS = 1 // Clean up once per day
+
+  const now = Date.now()
+  const lastCleanup = parseInt(localStorage.getItem(DRAFT_STORAGE_KEY) || '0', 10)
+  const daysSinceCleanup = (now - lastCleanup) / (24 * 60 * 60 * 1000)
+
+  if (daysSinceCleanup >= CLEANUP_INTERVAL_DAYS) {
+    // Use a temporary scope to call cleanup
+    const tempScope = ref('cleanup-temp')
+    const memory = useInputMemory(tempScope)
+    memory.cleanupExpiredDrafts()
+    localStorage.setItem(DRAFT_STORAGE_KEY, now.toString())
   }
 }
