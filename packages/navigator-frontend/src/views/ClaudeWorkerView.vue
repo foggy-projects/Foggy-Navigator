@@ -904,7 +904,7 @@
             <el-option
               v-for="m in platformModels"
               :key="m.id"
-              :label="m.name + ' (' + m.provider + ')'"
+              :label="m.name"
               :value="m.id"
             />
           </el-select>
@@ -1974,6 +1974,10 @@ async function handleBatchBindAuth() {
       baseUrl: mode === 'CUSTOM_ENDPOINT' ? batchAuthForm.value.baseUrl : undefined,
       skipExisting: batchAuthForm.value.skipExisting,
     })
+    // Apply model config selection if provided
+    if (batchAuthForm.value.modelConfigId) {
+      platformModelConfigId.value = batchAuthForm.value.modelConfigId
+    }
     showBatchAuthDialog.value = false
     ElMessage.success(`已绑定 ${result.bound} / ${result.total} 个会话`)
   } catch {
@@ -3071,6 +3075,15 @@ function formatTime(dateStr: string): string {
 .conv-pinned {
   background: #fdf6ec;
   border-left: 2px solid #e6a23c;
+}
+
+.conv-selected {
+  background: #ecf5ff;
+}
+
+.conv-checkbox {
+  flex-shrink: 0;
+  margin-right: 4px;
 }
 
 .conv-pin-icon {

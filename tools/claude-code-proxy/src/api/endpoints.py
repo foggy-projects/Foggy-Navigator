@@ -232,21 +232,35 @@ async def _forward_passthrough(
 
 @router.post("/v1/messages")
 async def create_message(
-    request: ClaudeMessagesRequest,
     http_request: Request,
     client_api_key: Optional[str] = Depends(validate_api_key),
 ):
     # Select backend for this request
     backend_key, openai_client = _select_backend(client_api_key)
+    raw_body = await http_request.body()
 
-    # Passthrough mode: forward raw request without format conversion
+    # Passthrough mode: bypass Pydantic validation entirely, forward raw request
     if backend_key.passthrough:
-        mapped = model_manager.map_claude_model_to_openai(request.model, backend_key)
+        try:
+            body_json = json.loads(raw_body)
+            model = body_json.get("model", "unknown")
+            stream = body_json.get("stream", False)
+        except (json.JSONDecodeError, TypeError):
+            model, stream = "unknown", False
+        mapped = model_manager.map_claude_model_to_openai(model, backend_key)
         logger.info(
-            f"Request: model={request.model} -> {backend_key.name}({mapped}) [PASSTHROUGH], stream={request.stream}"
+            f"Request: model={model} -> {backend_key.name}({mapped}) [PASSTHROUGH], stream={stream}"
         )
-        raw_body = await http_request.body()
-        return await _forward_passthrough(raw_body, backend_key, request.stream, http_request)
+        return await _forward_passthrough(raw_body, backend_key, stream, http_request)
+
+    # Non-passthrough: validate request body with Pydantic
+    try:
+        body_json = json.loads(raw_body)
+        request = ClaudeMessagesRequest.model_validate(body_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     logger.info(
         f"Request: model={request.model} -> {backend_key.name}({model_manager.map_claude_model_to_openai(request.model, backend_key)}), stream={request.stream}"
@@ -319,19 +333,28 @@ async def create_message(
 
 @router.post("/v1/messages/count_tokens")
 async def count_tokens(
-    request: ClaudeTokenCountRequest,
     http_request: Request,
     client_api_key: Optional[str] = Depends(validate_api_key),
 ):
-    # Passthrough mode: forward count_tokens to backend
+    # Passthrough mode: forward count_tokens to backend (bypass Pydantic)
     backend_key = config.key_pool.get_next_key(client_api_key)
+    raw_body = await http_request.body()
+
     if backend_key.passthrough:
         logger.info(f"count_tokens -> {backend_key.name} [PASSTHROUGH]")
-        raw_body = await http_request.body()
         return await _forward_passthrough(
             raw_body, backend_key, stream=False, http_request=http_request,
             target_path="/v1/messages/count_tokens",
         )
+
+    # Non-passthrough: validate with Pydantic
+    try:
+        body_json = json.loads(raw_body)
+        request = ClaudeTokenCountRequest.model_validate(body_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     try:
         total_chars = 0

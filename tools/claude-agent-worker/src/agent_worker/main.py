@@ -11,7 +11,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routes import auth, files, git_info, health, query, sessions, skills, worktree
+from .routes import auth, files, git_info, health, query, sessions, skills, ssh, worktree
+from .ssh.session_manager import start_cleanup_task, stop_cleanup_and_close_all
 
 import sys
 
@@ -69,7 +70,13 @@ async def lifespan(app: FastAPI):
         default_auth = "SUBSCRIPTION (claude login)"
     logger.info("  default_auth   = %s", default_auth)
 
+    # SSH idle-cleanup background task
+    start_cleanup_task()
+
     yield
+
+    # Shutdown: close all SSH sessions
+    await stop_cleanup_and_close_all()
     logger.info("Claude Agent Worker stopped")
 
 
@@ -98,6 +105,7 @@ app.include_router(skills.router)
 app.include_router(auth.router)
 app.include_router(worktree.router)
 app.include_router(files.router)
+app.include_router(ssh.router)
 
 
 if __name__ == "__main__":

@@ -529,14 +529,19 @@ packages/navigator-frontend/
 │   ├── api/
 │   │   ├── client.ts            # Axios 实例（JWT 认证）
 │   │   ├── claudeWorker.ts      # Claude Worker API（任务/目录/会话配置）
+│   │   ├── fileBrowser.ts       # 文件浏览器 API（目录/文件/搜索/diff）
 │   │   ├── session.ts           # 通用会话 API
 │   │   ├── platform.ts          # 平台配置 API（Git/LLM/Agent Model）
 │   │   ├── memory.ts            # 用户记忆 API
 │   │   └── auth.ts              # 认证 API
+│   ├── components/
+│   │   └── file-browser/
+│   │       └── FileSearchDialog.vue  # 文件搜索弹窗（文件名/内容搜索）
 │   ├── composables/
 │   │   └── useClaudeWorker.ts   # Claude Worker 组合函数
 │   ├── views/
 │   │   ├── ClaudeWorkerView.vue # Claude Worker 主页面（核心）
+│   │   ├── FileBrowserView.vue  # 文件浏览器（目录树 + Monaco 编辑器 + 搜索）
 │   │   ├── HomeView.vue         # 首页
 │   │   ├── SetupView.vue        # 初始化向导
 │   │   └── ...
@@ -594,6 +599,38 @@ const taskForm = ref({
 
 **显示优先级**：
 - 标题：`config.customTitle` > `firstPrompt`（截断）
+
+### FileBrowserView.vue — 文件浏览器
+
+路由 `/#/files?directoryId=xxx`，从 ClaudeWorkerView 的「浏览文件」按钮跳转。
+
+**架构**：三层透传
+```
+Vue (fileBrowser.ts) → Java (FileBrowserController) → Python Worker (files.py)
+```
+
+**功能模块**：
+- **目录树**（左侧）：el-tree-v2 虚拟滚动，懒加载子目录
+- **Monaco 编辑器**（右侧）：只读代码查看 + diff 视图
+- **Git 改动**：侧边栏 tab 切换，显示变更文件列表 + diff 预览
+- **文件搜索**（Ctrl+P）：`git ls-files` → 文件名模糊匹配，选中后 `loadFile()`
+- **内容搜索**（Ctrl+Shift+F）：`git grep -F` → 全文检索，选中后跳转到对应行
+
+**API 端点** (`fileBrowser.ts`)：
+
+| 函数 | 端点 | 用途 |
+|------|------|------|
+| `listDirectory(id, sub)` | GET `/file-browser/list` | 列出目录 |
+| `readFileContent(id, sub)` | GET `/file-browser/content` | 读取文件 |
+| `searchFiles(id, q)` | GET `/file-browser/search` | 文件名搜索 |
+| `searchContent(id, q)` | GET `/file-browser/search-content` | 内容全文搜索 |
+| `getGitDiffSummary(id)` | GET `/file-browser/git-diff` | Git 变更摘要 |
+| `getFileDiff(id, file)` | GET `/file-browser/git-diff/file` | 单文件 diff |
+
+**搜索组件** (`FileSearchDialog.vue`)：
+- `Teleport` 到 body 的模态弹窗，`mode` prop 控制文件/内容模式
+- 300ms debounce 输入，↑↓ 键盘导航，Enter 选中，Esc 关闭
+- 内容模式额外显示「区分大小写」复选框和上下文行
 
 ### Claude Worker API (api/claudeWorker.ts)
 

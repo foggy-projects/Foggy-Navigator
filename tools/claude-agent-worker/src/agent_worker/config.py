@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     task_heartbeat_timeout_seconds: int = 600  # 10 minutes — no events → kill
     git_timeout_seconds: int = 60              # git subprocess timeout
 
+    # SSH settings
+    max_ssh_sessions: int = 5
+    ssh_idle_timeout_seconds: int = 1800  # 30 min
+
     # LLM config -- injected into Claude Code CLI subprocess via env
     # 二选一：api_key 或 auth_token（取决于你平时用哪个）
     anthropic_api_key: str = ""

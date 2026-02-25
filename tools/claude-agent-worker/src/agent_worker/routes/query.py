@@ -252,18 +252,15 @@ async def abort_query(task_id: str) -> AbortResponse:
     and cleaned up.
     """
 
-    entry = task_registry.get(task_id)
+    entry = task_registry.pop(task_id, None)
 
     if entry is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Task '{task_id}' not found or already finished",
-        )
+        # Task already finished or was never registered — treat as idempotent success
+        logger.info("Abort called for task '%s' but already gone from registry", task_id)
+        return AbortResponse(task_id=task_id, status="cancelled")
 
     asyncio_task: asyncio.Task | None = entry.get("asyncio_task")
     if asyncio_task is not None and not asyncio_task.done():
         asyncio_task.cancel()
-
-    task_registry.pop(task_id, None)
 
     return AbortResponse(task_id=task_id, status="cancelled")

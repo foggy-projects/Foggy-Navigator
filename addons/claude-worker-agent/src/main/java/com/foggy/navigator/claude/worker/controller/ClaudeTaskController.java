@@ -77,20 +77,22 @@ public class ClaudeTaskController {
             throw RX.throwB("Task not found");
         }
 
-        // 1. 中止本地流订阅
-        streamRelay.abortStream(taskId);
+        // 1. 先获取 worker 内部 task ID（必须在 abortStream 之前，否则映射会被清除）
+        String workerTaskId = streamRelay.getWorkerTaskId(taskId);
 
-        // 2. 通知 Worker 中止 (使用 worker 内部 task ID)
+        // 2. 通知 Worker 中止（在 dispose 本地流之前，确保 worker 端 task 还在 registry 中）
         try {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
             ClaudeWorkerClient client = workerService.createClient(worker);
-            String workerTaskId = streamRelay.getWorkerTaskId(taskId);
             client.abortTask(workerTaskId).block(java.time.Duration.ofSeconds(5));
         } catch (Exception e) {
             log.warn("Failed to send abort to worker: taskId={}, error={}", taskId, e.getMessage());
         }
 
-        // 3. 更新任务状态
+        // 3. 中止本地流订阅
+        streamRelay.abortStream(taskId);
+
+        // 4. 更新任务状态
         taskService.abortTask(taskId);
 
         return RX.ok(Map.of("taskId", taskId, "status", "ABORTED"));
