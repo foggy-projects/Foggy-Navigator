@@ -44,8 +44,9 @@ public class SshProxyController {
         int port = form.getPort();
         String username = form.getUsername();
         String password = form.getPassword();
+        String cwd = null;
 
-        // 从目录配置自动填充 SSH 凭证
+        // 从目录配置自动填充 SSH 凭证 + cwd
         if (form.getDirectoryId() != null && !form.getDirectoryId().isEmpty()) {
             String userId = UserContext.getCurrentUserId();
             try {
@@ -59,6 +60,7 @@ public class SshProxyController {
                 if (port == 22 && dir.getSshPort() != null) {
                     port = dir.getSshPort();
                 }
+                cwd = dir.getPath();
             } catch (Exception e) {
                 log.debug("Directory SSH credential lookup failed: {}", e.getMessage());
             }
@@ -82,6 +84,9 @@ public class SshProxyController {
         body.put("password", password);
         body.put("cols", form.getCols());
         body.put("rows", form.getRows());
+        if (cwd != null) {
+            body.put("cwd", cwd);
+        }
 
         Map<String, Object> result;
         try {

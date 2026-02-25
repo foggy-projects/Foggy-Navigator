@@ -299,6 +299,7 @@ class SshConnectRequest(BaseModel):
     private_key: str | None = Field(None, description="PEM-encoded private key")
     cols: int = Field(80, ge=1, le=500, description="Terminal columns")
     rows: int = Field(24, ge=1, le=500, description="Terminal rows")
+    cwd: str | None = Field(None, description="Working directory to cd into after connect")
 
 
 class SshConnectResponse(BaseModel):

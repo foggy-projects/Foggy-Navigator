@@ -55,6 +55,7 @@ async def connect(req: SshConnectRequest):
             private_key=req.private_key,
             cols=req.cols,
             rows=req.rows,
+            cwd=req.cwd,
         )
     except Exception as exc:
         logger.warning("SSH connect failed: %s", exc)

@@ -79,6 +79,7 @@ async def create_ssh_session(
     private_key: str | None = None,
     cols: int = 80,
     rows: int = 24,
+    cwd: str | None = None,
 ) -> SshSession:
     """Open an SSH connection + PTY process and register it."""
 
@@ -122,7 +123,12 @@ async def create_ssh_session(
         rows=rows,
     )
     ssh_sessions[session_id] = session
-    logger.info("SSH session %s created → %s@%s:%d", session_id, username, host, port)
+
+    # Auto cd into working directory if provided
+    if cwd:
+        process.stdin.write(f"cd {cwd!r} && clear\n".encode("utf-8"))
+
+    logger.info("SSH session %s created → %s@%s:%d (cwd=%s)", session_id, username, host, port, cwd)
     return session
 
 

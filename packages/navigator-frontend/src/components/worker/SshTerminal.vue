@@ -122,6 +122,15 @@ function setupWsHandler() {
     }
   }
   ws.addEventListener('message', wsMessageHandler)
+
+  // If WS was just reconnected (e.g. page refresh), send an empty line
+  // after open to trigger a shell prompt refresh
+  if (ws.readyState === WebSocket.CONNECTING) {
+    ws.addEventListener('open', () => {
+      ws.send('\n')
+      sendResize()
+    }, { once: true })
+  }
 }
 
 function teardownWsHandler() {
