@@ -383,7 +383,17 @@ public class ClaudeTaskService {
             throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
         }
 
+        // 同时删除关联的 Session 及其消息
+        String sessionId = entity.getSessionId();
         taskRepository.delete(entity);
+        if (sessionId != null) {
+            try {
+                sessionManager.deleteSession(sessionId);
+                log.info("Associated session deleted: sessionId={}", sessionId);
+            } catch (Exception e) {
+                log.warn("Failed to delete associated session: sessionId={}", sessionId, e);
+            }
+        }
         log.info("Task deleted: taskId={}, userId={}", taskId, userId);
     }
 

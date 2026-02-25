@@ -503,23 +503,48 @@
       <div class="history-header">
         <h3>历史会话</h3>
         <div class="history-header-actions">
-          <el-button
-            size="small"
-            text
-            title="刷新会话列表"
-            @click="handleRefreshConversations"
-          >
-            &#8635;
-          </el-button>
-          <el-button
-            v-if="activeConversations.length > 0"
-            size="small"
-            text
-            title="批量配置 Auth"
-            @click="handleBatchAuthConfig"
-          >
-            &#128273; 批量
-          </el-button>
+          <template v-if="batchSelectMode">
+            <el-button size="small" text @click="handleBatchSelectAll">
+              {{ selectedConvIds.size === activeConversations.length ? '取消全选' : '全选' }}
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              text
+              :disabled="selectedConvIds.size === 0"
+              @click="handleBatchDelete"
+            >
+              删除({{ selectedConvIds.size }})
+            </el-button>
+            <el-button
+              size="small"
+              text
+              :disabled="selectedConvIds.size === 0"
+              @click="handleBatchAuthConfig"
+            >
+              &#128273; Auth
+            </el-button>
+            <el-button size="small" text @click="exitBatchSelectMode">取消</el-button>
+          </template>
+          <template v-else>
+            <el-button
+              size="small"
+              text
+              title="刷新会话列表"
+              @click="handleRefreshConversations"
+            >
+              &#8635;
+            </el-button>
+            <el-button
+              v-if="activeConversations.length > 0"
+              size="small"
+              text
+              title="批量选择"
+              @click="batchSelectMode = true"
+            >
+              选择
+            </el-button>
+          </template>
         </div>
       </div>
       <div class="history-content">
@@ -531,10 +556,17 @@
           <div
             v-for="conv in activeConversations"
             :key="conv.sessionId"
-            :class="['conv-item', { 'conv-pinned': conv.config?.pinned }]"
-            @click="viewTask(conv.latestTask)"
+            :class="['conv-item', { 'conv-pinned': conv.config?.pinned, 'conv-selected': batchSelectMode && selectedConvIds.has(conv.sessionId) }]"
+            @click="batchSelectMode ? toggleConvSelection(conv.sessionId) : viewTask(conv.latestTask)"
           >
             <div class="conv-row-1">
+              <el-checkbox
+                v-if="batchSelectMode"
+                :model-value="selectedConvIds.has(conv.sessionId)"
+                @click.stop
+                @change="toggleConvSelection(conv.sessionId)"
+                class="conv-checkbox"
+              />
               <span
                 v-if="conv.config?.pinned"
                 class="conv-pin-icon active"
@@ -867,11 +899,22 @@
         <el-form-item v-if="batchAuthForm.authMode === 'CUSTOM_ENDPOINT'" label="Base URL" required>
           <el-input v-model="batchAuthForm.baseUrl" placeholder="https://aiproxy.example.com/api/v1/anthropic" />
         </el-form-item>
+        <el-form-item v-if="platformModels.length > 0" label="平台模型配置">
+          <el-select v-model="batchAuthForm.modelConfigId" clearable placeholder="不覆盖模型配置" style="width: 100%">
+            <el-option
+              v-for="m in platformModels"
+              :key="m.id"
+              :label="m.name + ' (' + m.provider + ')'"
+              :value="m.id"
+            />
+          </el-select>
+          <div class="form-tip" style="margin-top: 4px">选择后将作为后续任务的默认 API 配置</div>
+        </el-form-item>
         <el-form-item>
           <el-checkbox v-model="batchAuthForm.skipExisting">跳过已有 Auth 配置的会话</el-checkbox>
         </el-form-item>
         <div class="form-tip">
-          将为当前 {{ selectedDirectoryId ? '目录' : 'Worker' }} 下的 {{ batchAuthSessionIds.length }} 个会话批量配置 Auth
+          将为{{ selectedConvIds.size > 0 ? '选中的' : '当前 ' + (selectedDirectoryId ? '目录' : 'Worker') + ' 下的' }} {{ batchAuthSessionIds.length }} 个会话批量配置 Auth
         </div>
       </el-form>
       <template #footer>
@@ -1061,8 +1104,12 @@ const authForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '' })
 
 // Batch auth dialog state
 const showBatchAuthDialog = ref(false)
-const batchAuthForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', skipExisting: true })
+const batchAuthForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', skipExisting: true, modelConfigId: '' })
 const batchAuthSessionIds = ref<string[]>([])
+
+// Batch selection state
+const batchSelectMode = ref(false)
+const selectedConvIds = ref<Set<string>>(new Set())
 
 // Detail dialog state
 const showDetailDialog = ref(false)
@@ -1472,6 +1519,7 @@ function selectWorker(workerId: string) {
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = null
   directorySkills.value = []
+  exitBatchSelectMode()
   disposeAllPanes()
   // Auto-expand
   if (!expandedWorkerIds.has(workerId)) {
@@ -1483,6 +1531,7 @@ function selectWorker(workerId: string) {
 function selectDirectory(workerId: string, directoryId: string) {
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = directoryId
+  exitBatchSelectMode()
   disposeAllPanes()
   taskForm.value.prompt = ''
   taskForm.value.cwd = ''
@@ -1841,10 +1890,69 @@ async function handleRefreshConversations() {
 }
 
 function handleBatchAuthConfig() {
-  const convs = activeConversations.value
-  batchAuthSessionIds.value = convs.map((c) => c.sessionId)
-  batchAuthForm.value = { authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', skipExisting: true }
+  // If in batch select mode, use selected conversations; otherwise all
+  if (batchSelectMode.value && selectedConvIds.value.size > 0) {
+    batchAuthSessionIds.value = [...selectedConvIds.value]
+  } else {
+    batchAuthSessionIds.value = activeConversations.value.map((c) => c.sessionId)
+  }
+  batchAuthForm.value = { authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', skipExisting: true, modelConfigId: platformModelConfigId.value }
   showBatchAuthDialog.value = true
+}
+
+function toggleConvSelection(sessionId: string) {
+  const next = new Set(selectedConvIds.value)
+  if (next.has(sessionId)) {
+    next.delete(sessionId)
+  } else {
+    next.add(sessionId)
+  }
+  selectedConvIds.value = next
+}
+
+function handleBatchSelectAll() {
+  if (selectedConvIds.value.size === activeConversations.value.length) {
+    selectedConvIds.value = new Set()
+  } else {
+    selectedConvIds.value = new Set(activeConversations.value.map((c) => c.sessionId))
+  }
+}
+
+function exitBatchSelectMode() {
+  batchSelectMode.value = false
+  selectedConvIds.value = new Set()
+}
+
+async function handleBatchDelete() {
+  const count = selectedConvIds.value.size
+  if (count === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除选中的 ${count} 个会话？此操作不可恢复。`,
+      '提示',
+      { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
+    )
+    const convs = activeConversations.value.filter((c) => selectedConvIds.value.has(c.sessionId))
+    let deleted = 0
+    for (const conv of convs) {
+      for (const task of conv.tasks) {
+        if (task.status !== 'RUNNING') {
+          await workerState.deleteTask(task.taskId)
+          deleted++
+        }
+      }
+    }
+    ElMessage.success(`已删除 ${deleted} 个任务`)
+    exitBatchSelectMode()
+    workerState.loadTasks()
+    if (selectedDirectoryId.value) {
+      loadDirectoryTasks()
+    }
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('删除失败')
+    }
+  }
 }
 
 async function handleBatchBindAuth() {

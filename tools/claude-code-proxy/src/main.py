@@ -28,6 +28,7 @@ def main():
         print("  BIG_MODEL_<NAME>        - Per-key opus model (optional)")
         print("  MIDDLE_MODEL_<NAME>     - Per-key sonnet model (optional)")
         print("  SMALL_MODEL_<NAME>      - Per-key haiku model (optional)")
+        print("  PASSTHROUGH_<NAME>      - Enable passthrough mode (skip format conversion)")
         print("  KEY_MAPPING             - Client-to-backend mapping (optional)")
         print("    Format: client_key:A,B;client_key2:B")
         print("")
@@ -46,8 +47,12 @@ def main():
     print(f"Configuration loaded successfully")
     print(f"   Backend Keys: {len(key_pool.keys)} [{', '.join(key_pool.all_key_names())}]")
     for name, bk in key_pool.keys.items():
-        print(f"   [{name}] base_url={bk.base_url}")
-        print(f"         opus={bk.big_model}, sonnet={bk.middle_model}, haiku={bk.small_model}")
+        pt_tag = " [PASSTHROUGH]" if bk.passthrough else ""
+        print(f"   [{name}] base_url={bk.base_url}{pt_tag}")
+        if bk.passthrough:
+            print(f"         (native Anthropic-compatible backend, no format conversion)")
+        else:
+            print(f"         opus={bk.big_model}, sonnet={bk.middle_model}, haiku={bk.small_model}")
     if key_pool.has_mapping:
         print(f"   KEY_MAPPING: {len(key_pool.mapping)} client key(s)")
         for ck, backends in key_pool.mapping.items():

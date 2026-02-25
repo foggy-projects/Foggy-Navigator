@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from datetime import datetime
+import json
 import uuid
 from typing import Dict, Optional, Tuple
 
@@ -23,16 +24,17 @@ router = APIRouter()
 # Get custom headers from config
 custom_headers = config.get_custom_headers()
 
-# Build one OpenAIClient per backend key
+# Build one OpenAIClient per non-passthrough backend key
 openai_clients: Dict[str, OpenAIClient] = {}
 for key_name, backend_key in config.key_pool.keys.items():
-    openai_clients[key_name] = OpenAIClient(
-        backend_key.api_key,
-        backend_key.base_url,
-        config.request_timeout,
-        api_version=config.azure_api_version,
-        custom_headers=custom_headers,
-    )
+    if not backend_key.passthrough:
+        openai_clients[key_name] = OpenAIClient(
+            backend_key.api_key,
+            backend_key.base_url,
+            config.request_timeout,
+            api_version=config.azure_api_version,
+            custom_headers=custom_headers,
+        )
 
 
 def _extract_client_key(x_api_key: Optional[str], authorization: Optional[str]) -> Optional[str]:
@@ -73,11 +75,40 @@ async def validate_api_key(
     return client_api_key
 
 
-def _select_backend(client_api_key: Optional[str]) -> Tuple[BackendKey, OpenAIClient]:
-    """Select the next backend key + client via round-robin."""
+def _select_backend(client_api_key: Optional[str]) -> Tuple[BackendKey, Optional[OpenAIClient]]:
+    """Select the next backend key + client via round-robin.
+
+    Returns (backend_key, None) for passthrough backends.
+    """
     backend_key = config.key_pool.get_next_key(client_api_key)
-    client = openai_clients[backend_key.name]
+    client = openai_clients.get(backend_key.name)
     return backend_key, client
+
+
+def _strip_thinking_blocks(body_json: dict):
+    """Strip 'thinking' type content blocks from messages.
+
+    Some Anthropic-compatible backends (e.g. DashScope) don't support thinking
+    blocks in message content. This removes them to avoid 422 errors.
+    """
+    messages = body_json.get("messages")
+    if not isinstance(messages, list):
+        return
+    stripped = 0
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            original_len = len(content)
+            msg["content"] = [
+                block for block in content
+                if not (isinstance(block, dict) and block.get("type") == "thinking")
+            ]
+            stripped += original_len - len(msg["content"])
+            # If all blocks were stripped, replace with empty text to avoid empty content
+            if not msg["content"] and original_len > 0:
+                msg["content"] = [{"type": "text", "text": ""}]
+    if stripped:
+        logger.info(f"Passthrough stripped {stripped} thinking block(s) from messages")
 
 
 async def _forward_passthrough(
@@ -87,8 +118,42 @@ async def _forward_passthrough(
     http_request: Request,
     target_path: str = "/v1/messages",
 ):
-    """Forward raw request to an Anthropic-compatible backend without format conversion."""
+    """Forward raw request to an Anthropic-compatible backend without format conversion.
+
+    Model name mapping is still applied (e.g. claude-opus-4-6 -> glm-5) based on
+    per-key BIG_MODEL/MIDDLE_MODEL/SMALL_MODEL config.
+    """
     url = f"{backend_key.base_url.rstrip('/')}{target_path}"
+
+    # Parse body for model mapping and stripping unsupported fields
+    # Standard Anthropic Messages API fields that backends should accept
+    _ANTHROPIC_KNOWN_FIELDS = {
+        "model", "messages", "system", "max_tokens", "stream",
+        "temperature", "top_p", "top_k", "stop_sequences",
+        "tools", "tool_choice", "metadata",
+    }
+    try:
+        body_json = json.loads(raw_body)
+        # Model name mapping (e.g. claude-opus-4-6 -> glm-5)
+        if "model" in body_json:
+            original_model = body_json["model"]
+            mapped_model = model_manager.map_claude_model_to_openai(original_model, backend_key)
+            if mapped_model != original_model:
+                body_json["model"] = mapped_model
+                logger.info(f"Passthrough model mapping: {original_model} -> {mapped_model}")
+        # Strip fields not in standard Anthropic API (e.g. thinking, context_management)
+        unknown_fields = set(body_json.keys()) - _ANTHROPIC_KNOWN_FIELDS
+        if unknown_fields:
+            for field in unknown_fields:
+                del body_json[field]
+            logger.info(f"Passthrough stripped unsupported fields: {unknown_fields}")
+        # Strip thinking blocks from message content arrays
+        # (assistant messages may contain {"type":"thinking",...} from previous turns)
+        _strip_thinking_blocks(body_json)
+        logger.debug(f"Passthrough body keys: {list(body_json.keys())}")
+        raw_body = json.dumps(body_json, ensure_ascii=False).encode("utf-8")
+    except (json.JSONDecodeError, TypeError):
+        pass  # Forward as-is if body is not valid JSON
 
     # Build headers: auth + content-type + passthrough relevant client headers
     headers = {
@@ -103,22 +168,44 @@ async def _forward_passthrough(
     if anthropic_beta:
         headers["anthropic-beta"] = anthropic_beta
 
-    timeout = httpx.Timeout(config.request_timeout, connect=10.0)
-
     if stream:
+        # Streaming: no read timeout (responses can take minutes with extended thinking)
+        timeout = httpx.Timeout(None, connect=10.0)
+
         async def _stream_passthrough():
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream("POST", url, content=raw_body, headers=headers) as resp:
-                    if resp.status_code != 200:
-                        error_body = await resp.aread()
-                        logger.error(f"Passthrough stream error {resp.status_code}: {error_body.decode()}")
-                        yield f"event: error\ndata: {error_body.decode()}\n\n"
-                        return
-                    async for line in resp.aiter_lines():
-                        if await http_request.is_disconnected():
-                            logger.info("Passthrough: client disconnected")
-                            break
-                        yield f"{line}\n"
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", url, content=raw_body, headers=headers) as resp:
+                        if resp.status_code != 200:
+                            error_body = await resp.aread()
+                            error_text = error_body.decode(errors="replace")
+                            logger.error(f"Passthrough stream error {resp.status_code}: {error_text}")
+                            error_payload = json.dumps({
+                                "type": "error",
+                                "error": {"type": "api_error", "message": f"Backend returned {resp.status_code}"},
+                            })
+                            yield f"event: error\ndata: {error_payload}\n\n"
+                            return
+                        # Forward raw bytes to preserve SSE framing exactly
+                        async for chunk in resp.aiter_bytes():
+                            if await http_request.is_disconnected():
+                                logger.info("Passthrough: client disconnected")
+                                break
+                            yield chunk
+            except httpx.TimeoutException as e:
+                logger.error(f"Passthrough timeout: {e}")
+                error_payload = json.dumps({
+                    "type": "error",
+                    "error": {"type": "timeout", "message": "Backend request timed out"},
+                })
+                yield f"event: error\ndata: {error_payload}\n\n"
+            except httpx.HTTPError as e:
+                logger.error(f"Passthrough HTTP error: {e}")
+                error_payload = json.dumps({
+                    "type": "error",
+                    "error": {"type": "api_error", "message": "Backend connection failed"},
+                })
+                yield f"event: error\ndata: {error_payload}\n\n"
 
         return StreamingResponse(
             _stream_passthrough(),
@@ -131,9 +218,16 @@ async def _forward_passthrough(
             },
         )
     else:
+        timeout = httpx.Timeout(config.request_timeout, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, content=raw_body, headers=headers)
-            return JSONResponse(status_code=resp.status_code, content=resp.json())
+            try:
+                body = resp.json()
+            except Exception:
+                error_text = resp.text[:500]
+                logger.error(f"Passthrough non-JSON response {resp.status_code}: {error_text}")
+                body = {"type": "error", "error": {"type": "api_error", "message": error_text}}
+            return JSONResponse(status_code=resp.status_code, content=body)
 
 
 @router.post("/v1/messages")
@@ -147,8 +241,9 @@ async def create_message(
 
     # Passthrough mode: forward raw request without format conversion
     if backend_key.passthrough:
+        mapped = model_manager.map_claude_model_to_openai(request.model, backend_key)
         logger.info(
-            f"Request: model={request.model} -> {backend_key.name} [PASSTHROUGH], stream={request.stream}"
+            f"Request: model={request.model} -> {backend_key.name}({mapped}) [PASSTHROUGH], stream={request.stream}"
         )
         raw_body = await http_request.body()
         return await _forward_passthrough(raw_body, backend_key, request.stream, http_request)
@@ -290,6 +385,13 @@ async def test_connection():
     """Test API connectivity to each backend"""
     results = []
     for key_name, backend_key in config.key_pool.keys.items():
+        if backend_key.passthrough:
+            results.append({
+                "backend": key_name,
+                "status": "skipped",
+                "reason": "passthrough (test via /v1/messages directly)",
+            })
+            continue
         client = openai_clients[key_name]
         try:
             test_response = await client.create_chat_completion(
@@ -312,7 +414,7 @@ async def test_connection():
                 "error": str(e),
             })
 
-    all_ok = all(r["status"] == "success" for r in results)
+    all_ok = all(r["status"] in ("success", "skipped") for r in results)
     status_code = 200 if all_ok else 503
     return JSONResponse(
         status_code=status_code,
@@ -330,12 +432,14 @@ async def root():
     key_pool = config.key_pool
     backends_info = {}
     for name, bk in key_pool.keys.items():
-        backends_info[name] = {
-            "base_url": bk.base_url,
-            "big_model": bk.big_model,
-            "middle_model": bk.middle_model,
-            "small_model": bk.small_model,
-        }
+        info = {"base_url": bk.base_url, "passthrough": bk.passthrough}
+        if not bk.passthrough:
+            info.update({
+                "big_model": bk.big_model,
+                "middle_model": bk.middle_model,
+                "small_model": bk.small_model,
+            })
+        backends_info[name] = info
 
     return {
         "message": "Claude-to-OpenAI API Proxy v1.0.0",
