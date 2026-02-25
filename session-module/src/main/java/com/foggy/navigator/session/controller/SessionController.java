@@ -98,6 +98,11 @@ public class SessionController {
             sessions = sessionManager.findByUser(user.getUserId());
         }
 
+        // claude-worker 会话由 /claude-tasks 页面独立管理，不在聊天列表中显示
+        sessions = sessions.stream()
+                .filter(s -> !"claude-worker".equals(s.getAgentId()))
+                .collect(Collectors.toList());
+
         // 转换为 UnifiedSessionDTO 并补充 coding-agent 扩展信息
         List<UnifiedSessionDTO> result = sessions.stream()
                 .map(UnifiedSessionDTO::fromSession)

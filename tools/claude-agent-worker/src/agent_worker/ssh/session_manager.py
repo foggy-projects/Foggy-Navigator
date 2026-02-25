@@ -42,16 +42,17 @@ class SshSession:
         self.last_activity = datetime.now(timezone.utc)
 
     async def close(self) -> None:
+        for label, action in [
+            ("write_eof", lambda: self.process.stdin.write_eof()),
+            ("process.close", lambda: self.process.close()),
+            ("conn.close", lambda: self.conn.close()),
+        ]:
+            try:
+                action()
+            except Exception as exc:
+                logger.debug("SSH session %s close '%s' failed: %s", self.session_id, label, exc)
         try:
-            self.process.stdin.write_eof()
-        except Exception:
-            pass
-        try:
-            self.process.close()
-        except Exception:
-            pass
-        try:
-            self.conn.close()
+            await self.conn.wait_closed()
         except Exception:
             pass
 
@@ -99,12 +100,15 @@ async def create_ssh_session(
         raise ValueError("Either password or private_key must be provided")
 
     conn = await asyncssh.connect(**connect_kwargs)
-
-    process = await conn.create_process(
-        term_type="xterm-256color",
-        term_size=(cols, rows),
-        encoding=None,  # raw bytes I/O
-    )
+    try:
+        process = await conn.create_process(
+            term_type="xterm-256color",
+            term_size=(cols, rows),
+            encoding=None,  # raw bytes I/O
+        )
+    except Exception:
+        conn.close()
+        raise
 
     session_id = uuid.uuid4().hex[:12]
     session = SshSession(

@@ -293,12 +293,12 @@ class SshConnectRequest(BaseModel):
     """Payload for ``POST /api/v1/ssh/connect``."""
 
     host: str = Field(..., description="SSH host to connect to")
-    port: int = Field(22, description="SSH port")
+    port: int = Field(22, ge=1, le=65535, description="SSH port")
     username: str = Field(..., description="SSH username")
     password: str | None = Field(None, description="SSH password (mutually exclusive with private_key)")
     private_key: str | None = Field(None, description="PEM-encoded private key")
-    cols: int = Field(80, description="Terminal columns")
-    rows: int = Field(24, description="Terminal rows")
+    cols: int = Field(80, ge=1, le=500, description="Terminal columns")
+    rows: int = Field(24, ge=1, le=500, description="Terminal rows")
 
 
 class SshConnectResponse(BaseModel):
@@ -311,8 +311,8 @@ class SshConnectResponse(BaseModel):
 class SshResizeRequest(BaseModel):
     """Payload for ``POST /api/v1/ssh/{session_id}/resize``."""
 
-    cols: int = Field(..., description="New terminal columns")
-    rows: int = Field(..., description="New terminal rows")
+    cols: int = Field(..., ge=1, le=500, description="New terminal columns")
+    rows: int = Field(..., ge=1, le=500, description="New terminal rows")
 
 
 class SshSessionInfo(BaseModel):

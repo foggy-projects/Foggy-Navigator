@@ -451,6 +451,49 @@ public class ClaudeWorkerClient {
                 .doOnError(e -> log.warn("File diff failed for worker {}, path {}, file {}: {}", workerId, path, file, e.getMessage()));
     }
 
+    // ===== SSH Proxy Methods =====
+
+    /**
+     * 建立 SSH 连接
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> sshConnect(Map<String, Object> body) {
+        return webClient.post()
+                .uri("/api/v1/ssh/connect")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("SSH connect failed for worker {}: {}", workerId, e.getMessage()));
+    }
+
+    /**
+     * 关闭 SSH 会话
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> sshClose(String sessionId) {
+        return webClient.post()
+                .uri("/api/v1/ssh/" + sessionId + "/close")
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("SSH close failed for worker {}, session {}: {}", workerId, sessionId, e.getMessage()));
+    }
+
+    /**
+     * 调整 SSH 终端尺寸
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> sshResize(String sessionId, Map<String, Integer> body) {
+        return webClient.post()
+                .uri("/api/v1/ssh/" + sessionId + "/resize")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("SSH resize failed for worker {}, session {}: {}", workerId, sessionId, e.getMessage()));
+    }
+
     public String getWorkerId() {
         return workerId;
     }

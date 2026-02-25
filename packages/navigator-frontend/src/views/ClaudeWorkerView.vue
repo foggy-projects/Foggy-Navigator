@@ -171,6 +171,7 @@
               创建 Worktree
             </el-button>
             <el-button size="small" @click="openFileBrowser">浏览文件</el-button>
+            <el-button size="small" @click="handleToggleTerminal">终端</el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
             <el-button
               v-if="selectedDirectory.worktree"
@@ -496,6 +497,31 @@
           <p>选择一个 Worker 或添加新的 Worker 开始使用</p>
         </div>
       </template>
+
+      <!-- SSH Terminal Panel -->
+      <SshTerminalPanel
+        v-if="activeWorkspace"
+        :visible="activeWorkspace.terminalVisible.value"
+        :maximized="activeWorkspace.terminalMaximized.value"
+        :height="activeWorkspace.terminalHeight.value"
+        :tabs="activeWorkspace.terminalTabs.value"
+        :active-tab-id="activeWorkspace.activeTermTabId.value"
+        @add-tab="handleAddTerminalTab"
+        @close-tab="handleCloseTerminalTab"
+        @activate-tab="(id) => activeWorkspace!.activeTermTabId.value = id"
+        @toggle-maximize="activeWorkspace.terminalMaximized.value = !activeWorkspace.terminalMaximized.value"
+        @close-panel="activeWorkspace.terminalVisible.value = false"
+        @resize="(h) => activeWorkspace!.terminalHeight.value = h"
+        @pop-out="handlePopOutTerminal"
+      >
+        <SshTerminal
+          v-for="tab in activeWorkspace.terminalTabs.value"
+          :key="tab.tabId"
+          :tab="tab"
+          :active="tab.tabId === activeWorkspace.activeTermTabId.value"
+          :worker-id="selectedWorkerId!"
+        />
+      </SshTerminalPanel>
     </main>
 
     <!-- Right Panel: Task History -->
@@ -1055,11 +1081,33 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- SSH Connect Dialog -->
+    <el-dialog v-model="showSshDialog" title="SSH 连接" width="420px">
+      <el-form :model="sshForm" label-position="top">
+        <el-form-item label="主机" required>
+          <el-input v-model="sshForm.host" placeholder="192.168.1.100" />
+        </el-form-item>
+        <el-form-item label="端口">
+          <el-input-number v-model="sshForm.port" :min="1" :max="65535" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="用户名" required>
+          <el-input v-model="sshForm.username" placeholder="root" />
+        </el-form-item>
+        <el-form-item label="密码" required>
+          <el-input v-model="sshForm.password" type="password" show-password placeholder="SSH 密码" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showSshDialog = false">取消</el-button>
+        <el-button type="primary" :loading="sshConnecting" @click="handleSshConnect">连接</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, shallowRef, triggerRef, computed, reactive, onMounted, onUnmounted, watch } from 'vue'
+import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
@@ -1067,9 +1115,18 @@ import { useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useInputMemory } from '@/composables/useInputMemory'
 import { useTaskPane } from '@/composables/useTaskPane'
 import type { TaskPaneState } from '@/composables/useTaskPane'
+import {
+  getOrCreateWorkspace,
+  disposeWorkspace,
+  disposeAllWorkspaces,
+} from '@/composables/useWorkspaceContext'
+import type { WorkspaceContext, SshTerminalTab } from '@/composables/useWorkspaceContext'
 import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
+import SshTerminalPanel from '@/components/worker/SshTerminalPanel.vue'
+import SshTerminal from '@/components/worker/SshTerminal.vue'
 import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import * as dirApi from '@/api/claudeWorker'
+import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig } from '@/types'
 
@@ -1082,7 +1139,6 @@ const selectedWorkerId = ref<string | null>(null)
 const selectedDirectoryId = ref<string | null>(null)
 const expandedWorkerIds = reactive(new Set<string>())
 const expandedProjectIds = reactive(new Set<string>())
-const panes = shallowRef<TaskPaneState[]>([])
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
 const showAddDirectoryDialog = ref(false)
@@ -1148,7 +1204,20 @@ const dirTaskPage = ref(0)
 const dirTaskSize = ref(20)
 const dirTaskTotal = ref(0)
 
-let paneCounter = 0
+// --- Workspace context: panes + terminal per directory/worker ---
+const activeWorkspaceKey = computed<string | null>(() =>
+  selectedDirectoryId.value ?? (selectedWorkerId.value ? `worker:${selectedWorkerId.value}` : null),
+)
+const activeWorkspace = computed<WorkspaceContext | null>(() => {
+  const key = activeWorkspaceKey.value
+  return key ? getOrCreateWorkspace(key) : null
+})
+const panes = computed<TaskPaneState[]>(() => activeWorkspace.value?.panes.value ?? [])
+
+// SSH connect dialog state
+const showSshDialog = ref(false)
+const sshForm = ref({ host: '', port: 22, username: '', password: '' })
+const sshConnecting = ref(false)
 
 const addForm = ref({
   name: '',
@@ -1488,7 +1557,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  disposeAllPanes()
+  disposeAllWorkspaces()
 })
 
 /** Called when any pane's task reaches a terminal state */
@@ -1497,13 +1566,6 @@ function handleTaskFinished(_paneId: string) {
   if (selectedDirectoryId.value) {
     loadDirectoryTasks()
   }
-}
-
-function disposeAllPanes() {
-  for (const pane of panes.value) {
-    pane.dispose()
-  }
-  panes.value = []
 }
 
 function toggleExpand(workerId: string) {
@@ -1520,7 +1582,7 @@ function selectWorker(workerId: string) {
   selectedDirectoryId.value = null
   directorySkills.value = []
   exitBatchSelectMode()
-  disposeAllPanes()
+  // No disposeAllPanes — workspace context preserves panes per directory
   // Auto-expand
   if (!expandedWorkerIds.has(workerId)) {
     expandedWorkerIds.add(workerId)
@@ -1532,7 +1594,7 @@ function selectDirectory(workerId: string, directoryId: string) {
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = directoryId
   exitBatchSelectMode()
-  disposeAllPanes()
+  // No disposeAllPanes — workspace context preserves panes per directory
   taskForm.value.prompt = ''
   taskForm.value.cwd = ''
   dirTaskPage.value = 0
@@ -1627,7 +1689,13 @@ async function handleDelete() {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
-    disposeAllPanes()
+    // Dispose workspace for this worker
+    disposeWorkspace(`worker:${selectedWorkerId.value}`)
+    // Also dispose all directory workspaces under this worker
+    const dirs = workerState.directories.value.filter(d => d.workerId === selectedWorkerId.value)
+    for (const dir of dirs) {
+      disposeWorkspace(dir.directoryId)
+    }
     await workerState.deleteWorker(selectedWorkerId.value)
     selectedWorkerId.value = null
     selectedDirectoryId.value = null
@@ -1720,7 +1788,7 @@ async function handleDeleteDirectory() {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
-    disposeAllPanes()
+    disposeWorkspace(selectedDirectoryId.value)
     await workerState.deleteDirectory(selectedDirectoryId.value)
     selectedDirectoryId.value = null
     ElMessage.success('已删除')
@@ -1760,8 +1828,8 @@ async function handleRemoveWorktree() {
     workerState.directories.value = workerState.directories.value.filter(
       (d) => d.directoryId !== selectedDirectoryId.value,
     )
+    disposeWorkspace(selectedDirectoryId.value!)
     selectedDirectoryId.value = null
-    disposeAllPanes()
     ElMessage.success('Worktree 已清理')
   } catch (e) {
     if (e !== 'cancel') {
@@ -2007,7 +2075,7 @@ async function handlePermissionRespond(paneId: string, permissionId: string, dec
     if (decision === 'allow') {
       pane.task.value.status = 'RUNNING'
     }
-    triggerRef(panes)
+    if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
   } catch {
     ElMessage.error('Permission response failed')
   }
@@ -2025,7 +2093,7 @@ async function handleQuestionRespond(paneId: string, permissionId: string, answe
     })
     pane.chatState.resolvePermission(permissionId, 'approved')
     pane.task.value.status = 'RUNNING'
-    triggerRef(panes)
+    if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
   } catch {
     ElMessage.error('Question response failed')
   }
@@ -2046,7 +2114,7 @@ async function handlePlanRespond(paneId: string, permissionId: string, decision:
     if (decision === 'allow') {
       pane.task.value.status = 'RUNNING'
     }
-    triggerRef(panes)
+    if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
   } catch {
     ElMessage.error('Plan response failed')
   }
@@ -2235,18 +2303,22 @@ async function handleCreateTask() {
 }
 
 function createPane(task: ClaudeTask): TaskPaneState {
-  const paneId = `pane-${++paneCounter}`
+  const ws = activeWorkspace.value
+  if (!ws) throw new Error('No active workspace')
+  const paneId = `pane-${++ws.paneCounter}`
   const pane = useTaskPane(paneId, { onTaskFinished: handleTaskFinished })
   pane.task.value = task
-  panes.value = [...panes.value, pane]
+  ws.panes.value = [...ws.panes.value, pane]
   return pane
 }
 
 function closePane(paneId: string) {
-  const idx = panes.value.findIndex((p) => p.paneId === paneId)
+  const ws = activeWorkspace.value
+  if (!ws) return
+  const idx = ws.panes.value.findIndex((p) => p.paneId === paneId)
   if (idx >= 0) {
-    panes.value[idx]!.dispose()
-    panes.value = panes.value.filter((_, i) => i !== idx)
+    ws.panes.value[idx]!.dispose()
+    ws.panes.value = ws.panes.value.filter((_, i) => i !== idx)
   }
 }
 
@@ -2256,7 +2328,7 @@ async function abortPane(paneId: string) {
   try {
     await workerState.abortTask(pane.task.value.taskId)
     pane.task.value.status = 'ABORTED'
-    triggerRef(panes)
+    if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
     ElMessage.info('任务已中止')
   } catch {
     ElMessage.error('中止失败')
@@ -2565,6 +2637,168 @@ function formatTime(dateStr: string): string {
     return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   }
   return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+}
+
+// ===== SSH Terminal Handlers =====
+
+function handleToggleTerminal() {
+  const ws = activeWorkspace.value
+  if (!ws) return
+  if (ws.terminalVisible.value) {
+    ws.terminalVisible.value = false
+  } else {
+    ws.terminalVisible.value = true
+    // If no tabs yet, open SSH dialog
+    if (ws.terminalTabs.value.length === 0) {
+      // Pre-fill host from worker hostname
+      const worker = selectedWorkerEntity.value
+      sshForm.value = {
+        host: worker?.hostname || '',
+        port: 22,
+        username: '',
+        password: '',
+      }
+      showSshDialog.value = true
+    }
+  }
+}
+
+function handleAddTerminalTab() {
+  // Pre-fill host from worker hostname
+  const worker = selectedWorkerEntity.value
+  sshForm.value = {
+    host: worker?.hostname || '',
+    port: 22,
+    username: '',
+    password: '',
+  }
+  showSshDialog.value = true
+}
+
+async function handleSshConnect() {
+  const ws = activeWorkspace.value
+  if (!ws || !selectedWorkerId.value) return
+  if (!sshForm.value.host || !sshForm.value.username || !sshForm.value.password) {
+    ElMessage.warning('请填写完整的 SSH 连接信息')
+    return
+  }
+  sshConnecting.value = true
+  try {
+    const result = await sshApi.sshConnect({
+      workerId: selectedWorkerId.value,
+      host: sshForm.value.host,
+      port: sshForm.value.port,
+      username: sshForm.value.username,
+      password: sshForm.value.password,
+    })
+
+    // Create WebSocket connection
+    const wsConn = new WebSocket(result.wsUrl)
+    wsConn.binaryType = 'arraybuffer'
+
+    const tabId = `term-${Date.now()}`
+    const tab: SshTerminalTab = {
+      tabId,
+      label: `${sshForm.value.username}@${sshForm.value.host}`,
+      sshSessionId: result.sessionId,
+      wsUrl: result.wsUrl,
+      ws: wsConn,
+      buffer: [],
+    }
+
+    ws.terminalTabs.value = [...ws.terminalTabs.value, tab]
+    ws.activeTermTabId.value = tabId
+    ws.terminalVisible.value = true
+    showSshDialog.value = false
+
+    // Handle WS close: update tab state
+    wsConn.onclose = () => {
+      tab.ws = null
+    }
+    wsConn.onerror = () => {
+      ElMessage.error('终端 WebSocket 连接错误')
+    }
+  } catch (e: unknown) {
+    ElMessage.error('SSH 连接失败: ' + ((e as Error).message || '未知错误'))
+  } finally {
+    sshConnecting.value = false
+  }
+}
+
+function handleCloseTerminalTab(tabId: string) {
+  const ws = activeWorkspace.value
+  if (!ws || !selectedWorkerId.value) return
+  const tab = ws.terminalTabs.value.find((t) => t.tabId === tabId)
+  if (!tab) return
+
+  // Close WS
+  if (tab.ws) {
+    tab.ws.close()
+    tab.ws = null
+  }
+
+  // Close SSH session on worker (best-effort)
+  sshApi.sshClose(tab.sshSessionId, selectedWorkerId.value).catch(() => {})
+
+  ws.terminalTabs.value = ws.terminalTabs.value.filter((t) => t.tabId !== tabId)
+
+  // Switch active tab
+  if (ws.activeTermTabId.value === tabId) {
+    ws.activeTermTabId.value = ws.terminalTabs.value[0]?.tabId ?? null
+  }
+
+  // Hide panel if no tabs left
+  if (ws.terminalTabs.value.length === 0) {
+    ws.terminalVisible.value = false
+  }
+}
+
+function handlePopOutTerminal() {
+  const ws = activeWorkspace.value
+  if (!ws) return
+  const tab = ws.terminalTabs.value.find((t) => t.tabId === ws.activeTermTabId.value)
+  if (!tab) return
+
+  const popup = window.open('', '_blank', 'width=900,height=600')
+  if (!popup) {
+    ElMessage.warning('弹出窗口被浏览器拦截')
+    return
+  }
+
+  popup.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <title>${tab.label} - SSH Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.min.css">
+  <style>body { margin: 0; background: #1e1e1e; } #terminal { width: 100vw; height: 100vh; }</style>
+</head>
+<body>
+  <div id="terminal"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/lib/xterm.min.js"><\/script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/lib/addon-fit.min.js"><\/script>
+  <script>
+    const term = new window.Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'Consolas, monospace' });
+    const fitAddon = new window.FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+    const ws = new WebSocket(${JSON.stringify(tab.wsUrl)});
+    ws.binaryType = 'arraybuffer';
+    ws.onmessage = (e) => {
+      if (typeof e.data === 'string') term.write(e.data);
+      else term.write(new Uint8Array(e.data));
+    };
+    term.onData((data) => { if (ws.readyState === 1) ws.send(data); });
+    window.addEventListener('resize', () => {
+      fitAddon.fit();
+      const dims = fitAddon.proposeDimensions();
+      if (dims && ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
+    });
+    ws.onclose = () => term.write('\\r\\n[连接已关闭]');
+  <\/script>
+</body>
+</html>`)
+  popup.document.close()
 }
 </script>
 

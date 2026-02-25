@@ -121,8 +121,8 @@ async def ws_terminal(websocket: WebSocket, session_id: str, token: str | None =
                     try:
                         ctrl = json.loads(msg["text"])
                         if ctrl.get("type") == "resize":
-                            cols = int(ctrl["cols"])
-                            rows = int(ctrl["rows"])
+                            cols = max(1, min(500, int(ctrl["cols"])))
+                            rows = max(1, min(500, int(ctrl["rows"])))
                             session.process.change_terminal_size(cols, rows)
                             session.cols = cols
                             session.rows = rows
@@ -154,6 +154,8 @@ async def ws_terminal(websocket: WebSocket, session_id: str, token: str | None =
             await websocket.close()
         except Exception:
             pass
+        # SSH session intentionally kept alive after WS disconnect to allow
+        # reconnection within the idle timeout window (ssh_idle_timeout_seconds).
 
     logger.info("WebSocket bridge closed for SSH session %s", session_id)
 

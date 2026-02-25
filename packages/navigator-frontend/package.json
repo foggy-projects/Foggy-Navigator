@@ -13,6 +13,9 @@
   },
   "dependencies": {
     "@foggy/chat": "*",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
     "axios": "^1.13.3",
     "element-plus": "^2.13.1",
     "monaco-editor": "^0.55.1",
