@@ -186,12 +186,19 @@ export function useClaudeWorker() {
     return config
   }
 
+  async function updateAuth(sessionId: string, form: { authMode: string; authToken: string; baseUrl?: string }) {
+    const config = await api.updateConversationAuth(sessionId, form)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
   async function batchBindAuth(form: {
     sessionIds: string[]
     authMode: string
     authToken: string
     baseUrl?: string
     skipExisting?: boolean
+    modelConfigId?: string
   }) {
     const result = await api.batchBindConversationAuth(form)
     // Reload configs for affected sessions
@@ -232,6 +239,7 @@ export function useClaudeWorker() {
     togglePin,
     setTitle,
     bindAuth,
+    updateAuth,
     batchBindAuth,
   }
 }

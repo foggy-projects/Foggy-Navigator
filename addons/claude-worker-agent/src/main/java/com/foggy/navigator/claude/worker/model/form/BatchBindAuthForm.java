@@ -11,4 +11,6 @@ public class BatchBindAuthForm {
     private String authToken;
     private String baseUrl;
     private boolean skipExisting = true;
+    /** 平台 LLM 模型配置 ID，用于从平台配置中获取 apiKey + baseUrl */
+    private String modelConfigId;
 }

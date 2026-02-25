@@ -5,7 +5,9 @@ import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.repository.ConversationConfigRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.security.CredentialEncryptor;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -27,6 +29,7 @@ public class ConversationConfigService {
     private final ConversationConfigRepository configRepository;
     private final ClaudeTaskRepository taskRepository;
     private final CredentialEncryptor credentialEncryptor;
+    private final LlmModelManager llmModelManager;
 
     /**
      * 获取或创建会话配置
@@ -118,24 +121,62 @@ public class ConversationConfigService {
 
     /**
      * 批量绑定 Auth（按 sessionId 列表）
+     * 优先级：
+     * 1. 如果提供了 modelConfigId，使用平台模型配置的 apiKey + baseUrl
+     * 2. 否则使用手动提供的 authToken + baseUrl
      */
     @Transactional
     public int batchBindAuth(List<String> sessionIds, String userId,
                               String authMode, String authToken, String baseUrl,
-                              boolean skipExisting) {
+                              boolean skipExisting, String modelConfigId) {
         int bound = 0;
         for (String sessionId : sessionIds) {
             ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
             if (!entity.getUserId().equals(userId)) continue;
+            // 如果跳过已有配置，且已绑定，则跳过
             if (skipExisting && entity.getAuthBoundAt() != null) continue;
-            if (entity.getAuthBoundAt() != null) continue; // immutable
 
-            entity.setAuthMode(authMode);
-            if (authToken != null && !authToken.isEmpty()) {
-                entity.setAuthToken(credentialEncryptor.encrypt(authToken));
+            // 决定使用哪个 auth 配置
+            String finalAuthMode = authMode;
+            String finalAuthToken = authToken;
+            String finalBaseUrl = baseUrl;
+
+            if (modelConfigId != null && !modelConfigId.isEmpty()) {
+                // 使用平台模型配置的 auth
+                try {
+                    // 通过 TaskRepository 获取 workerId
+                    String workerId = taskRepository.findBySessionId(sessionId).stream()
+                            .findFirst()
+                            .map(ClaudeTaskEntity::getWorkerId)
+                            .orElse(null);
+                    if (workerId != null) {
+                        var modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
+                        if (modelConfig != null && Boolean.TRUE.equals(modelConfig.getHasApiKey())) {
+                            String decryptedApiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
+                            finalAuthMode = (modelConfig.getBaseUrl() != null && !modelConfig.getBaseUrl().isEmpty())
+                                    ? "CUSTOM_ENDPOINT" : "API_KEY";
+                            finalAuthToken = decryptedApiKey;
+                            finalBaseUrl = modelConfig.getBaseUrl();
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to resolve model config {}: {}", modelConfigId, e.getMessage());
+                }
             }
-            entity.setBaseUrl(baseUrl);
-            entity.setAuthBoundAt(LocalDateTime.now());
+
+            // 允许更新已绑定的配置（用户明确操作）
+            if (finalAuthMode != null && !finalAuthMode.isEmpty()) {
+                entity.setAuthMode(finalAuthMode);
+            }
+            if (finalAuthToken != null && !finalAuthToken.isEmpty()) {
+                entity.setAuthToken(credentialEncryptor.encrypt(finalAuthToken));
+            }
+            if (finalBaseUrl != null && !finalBaseUrl.isEmpty()) {
+                entity.setBaseUrl(finalBaseUrl);
+            }
+            if (entity.getAuthBoundAt() == null) {
+                entity.setAuthBoundAt(LocalDateTime.now());
+            }
             configRepository.save(entity);
             bound++;
         }
@@ -197,6 +238,34 @@ public class ConversationConfigService {
         return configRepository.findBySessionIdIn(sessionIds).stream()
                 .map(this::toDTO)
                 .toList();
+    }
+
+    /**
+     * 更新已绑定的 Auth 配置（用户明确操作，允许覆盖）
+     */
+    @Transactional
+    public ConversationConfigDTO updateAuth(String sessionId, String userId,
+                                           String authMode, String authToken, String baseUrl) {
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+        if (!entity.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Access denied");
+        }
+        // 允许更新已绑定的配置（用户明确操作）
+        if (authMode != null && !authMode.isEmpty()) {
+            entity.setAuthMode(authMode);
+        }
+        if (authToken != null && !authToken.isEmpty()) {
+            entity.setAuthToken(credentialEncryptor.encrypt(authToken));
+        }
+        if (baseUrl != null && !baseUrl.isEmpty()) {
+            entity.setBaseUrl(baseUrl);
+        }
+        if (entity.getAuthBoundAt() == null) {
+            entity.setAuthBoundAt(LocalDateTime.now());
+        }
+        configRepository.save(entity);
+        log.info("Auth updated for session {}: mode={}", sessionId, authMode);
+        return toDTO(entity);
     }
 
     /**

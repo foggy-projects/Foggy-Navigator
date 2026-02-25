@@ -381,6 +381,15 @@ public class ClaudeTaskController {
         }
     }
 
+    @PatchMapping("/conversations/{sessionId}/auth")
+    public RX<ConversationConfigDTO> updateAuth(
+            @PathVariable String sessionId,
+            @RequestBody BindAuthForm form) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.updateAuth(sessionId, userId,
+                form.getAuthMode(), form.getAuthToken(), form.getBaseUrl()));
+    }
+
     @GetMapping("/conversation-configs")
     public RX<List<ConversationConfigDTO>> listConversationConfigs(
             @RequestParam List<String> sessionIds) {
@@ -392,7 +401,7 @@ public class ClaudeTaskController {
         String userId = UserContext.getCurrentUserId();
         int bound = configService.batchBindAuth(form.getSessionIds(), userId,
                 form.getAuthMode(), form.getAuthToken(), form.getBaseUrl(),
-                form.isSkipExisting());
+                form.isSkipExisting(), form.getModelConfigId());
         return RX.ok(Map.of("bound", bound, "total", form.getSessionIds().size()));
     }
 

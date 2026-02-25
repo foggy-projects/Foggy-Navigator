@@ -312,6 +312,17 @@ export async function bindConversationAuth(
   return rx.data
 }
 
+export async function updateConversationAuth(
+  sessionId: string,
+  form: { authMode: string; authToken: string; baseUrl?: string },
+): Promise<ConversationConfig> {
+  const rx = (await client.patch(
+    `/claude-tasks/conversations/${sessionId}/auth`,
+    form,
+  )) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
 export async function listConversationConfigs(
   sessionIds: string[],
 ): Promise<ConversationConfig[]> {
@@ -327,6 +338,7 @@ export async function batchBindConversationAuth(form: {
   authToken: string
   baseUrl?: string
   skipExisting?: boolean
+  modelConfigId?: string
 }): Promise<{ bound: number; total: number }> {
   const rx = (await client.post(
     '/claude-tasks/conversations/batch-bind-auth',

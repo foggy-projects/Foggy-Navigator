@@ -931,14 +931,17 @@
         <el-form-item v-if="batchAuthForm.authMode === 'SUBSCRIPTION'" label="Auth Token">
           <el-input v-model="batchAuthForm.authToken" type="password" show-password placeholder="留空则使用订阅凭据" />
         </el-form-item>
-        <el-form-item v-if="batchAuthForm.authMode === 'API_KEY'" label="API Key" required>
+        <el-form-item v-if="batchAuthForm.authMode === 'API_KEY'" label="API Key">
           <el-input v-model="batchAuthForm.authToken" type="password" show-password placeholder="sk-ant-xxx" />
+          <div v-if="batchAuthForm.modelConfigId" class="form-tip">留空将使用所选平台模型配置</div>
         </el-form-item>
-        <el-form-item v-if="batchAuthForm.authMode === 'CUSTOM_ENDPOINT'" label="Auth Token" required>
+        <el-form-item v-if="batchAuthForm.authMode === 'CUSTOM_ENDPOINT'" label="Auth Token">
           <el-input v-model="batchAuthForm.authToken" type="password" show-password placeholder="自定义端点的认证 token" />
+          <div v-if="batchAuthForm.modelConfigId" class="form-tip">留空将使用所选平台模型配置</div>
         </el-form-item>
-        <el-form-item v-if="batchAuthForm.authMode === 'CUSTOM_ENDPOINT'" label="Base URL" required>
+        <el-form-item v-if="batchAuthForm.authMode === 'CUSTOM_ENDPOINT'" label="Base URL">
           <el-input v-model="batchAuthForm.baseUrl" placeholder="https://aiproxy.example.com/api/v1/anthropic" />
+          <div v-if="batchAuthForm.modelConfigId" class="form-tip">留空将使用所选平台模型配置</div>
         </el-form-item>
         <el-form-item v-if="platformModels.length > 0" label="平台模型配置">
           <el-select v-model="batchAuthForm.modelConfigId" clearable placeholder="不覆盖模型配置" style="width: 100%">
@@ -2057,12 +2060,18 @@ async function handleBatchDelete() {
 
 async function handleBatchBindAuth() {
   const mode = batchAuthForm.value.authMode
-  if (mode === 'API_KEY' && !batchAuthForm.value.authToken) {
+  // 如果选择了平台模型配置，token 和 baseUrl 可以不填
+  const hasModelConfig = !!batchAuthForm.value.modelConfigId
+  if (mode === 'API_KEY' && !batchAuthForm.value.authToken && !hasModelConfig) {
     ElMessage.warning('请填写 API Key')
     return
   }
-  if (mode === 'CUSTOM_ENDPOINT' && (!batchAuthForm.value.authToken || !batchAuthForm.value.baseUrl)) {
-    ElMessage.warning('请填写 Token 和 Base URL')
+  if (mode === 'CUSTOM_ENDPOINT' && !batchAuthForm.value.baseUrl && !hasModelConfig) {
+    ElMessage.warning('请填写 Base URL 或选择平台模型配置')
+    return
+  }
+  if (mode === 'CUSTOM_ENDPOINT' && !batchAuthForm.value.authToken && !hasModelConfig) {
+    ElMessage.warning('请填写 Token 或选择平台模型配置')
     return
   }
   saving.value = true
@@ -2073,11 +2082,8 @@ async function handleBatchBindAuth() {
       authToken: batchAuthForm.value.authToken,
       baseUrl: mode === 'CUSTOM_ENDPOINT' ? batchAuthForm.value.baseUrl : undefined,
       skipExisting: batchAuthForm.value.skipExisting,
+      modelConfigId: batchAuthForm.value.modelConfigId,
     })
-    // Apply model config selection if provided
-    if (batchAuthForm.value.modelConfigId) {
-      platformModelConfigId.value = batchAuthForm.value.modelConfigId
-    }
     showBatchAuthDialog.value = false
     ElMessage.success(`已绑定 ${result.bound} / ${result.total} 个会话`)
   } catch {
