@@ -1,5 +1,6 @@
-import { ref, shallowRef, watch, type Ref, type ShallowRef } from 'vue'
+import { ref, shallowRef, type Ref, type ShallowRef } from 'vue'
 import type { TaskPaneState } from './useTaskPane'
+import type { SshSessionDTO } from '@/api/ssh'
 
 /**
  * SSH terminal tab state — WS lifecycle managed here, not in components.
@@ -31,109 +32,81 @@ export interface WorkspaceContext {
 }
 
 // ---------------------------------------------------------------------------
-// sessionStorage persistence for terminal tabs
-// ---------------------------------------------------------------------------
-
-const STORAGE_KEY = 'foggy_workspace_terminals'
-
-interface PersistedTab {
-  tabId: string
-  label: string
-  sshSessionId: string
-  wsUrl: string
-}
-
-interface PersistedWorkspace {
-  terminalVisible: boolean
-  terminalHeight: number
-  tabs: PersistedTab[]
-  activeTermTabId: string | null
-}
-
-function loadPersistedMap(): Record<string, PersistedWorkspace> {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY)
-    return raw ? JSON.parse(raw) : {}
-  } catch {
-    return {}
-  }
-}
-
-function savePersistedMap(map: Record<string, PersistedWorkspace>): void {
-  try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(map))
-  } catch {
-    // quota exceeded — ignore
-  }
-}
-
-/** Persist terminal state for a single workspace. */
-function persistWorkspace(ctx: WorkspaceContext): void {
-  const map = loadPersistedMap()
-  const tabs = ctx.terminalTabs.value
-  if (tabs.length === 0) {
-    delete map[ctx.workspaceKey]
-  } else {
-    map[ctx.workspaceKey] = {
-      terminalVisible: ctx.terminalVisible.value,
-      terminalHeight: ctx.terminalHeight.value,
-      tabs: tabs.map((t) => ({
-        tabId: t.tabId,
-        label: t.label,
-        sshSessionId: t.sshSessionId,
-        wsUrl: t.wsUrl,
-      })),
-      activeTermTabId: ctx.activeTermTabId.value,
-    }
-  }
-  savePersistedMap(map)
-}
-
-/** Remove persisted data for a workspace. */
-function removePersistedWorkspace(key: string): void {
-  const map = loadPersistedMap()
-  delete map[key]
-  savePersistedMap(map)
-}
-
-// ---------------------------------------------------------------------------
-// Module-level map
+// Module-level state
 // ---------------------------------------------------------------------------
 
 /** Module-level map: workspaceKey → WorkspaceContext */
 const workspaceMap = new Map<string, WorkspaceContext>()
 
-/**
- * Reconnect a persisted terminal tab by creating a new WebSocket.
- * Returns the SshTerminalTab if WS opens successfully, null on failure.
- */
-function reconnectTab(pt: PersistedTab): SshTerminalTab {
-  const tab: SshTerminalTab = {
-    tabId: pt.tabId,
-    label: pt.label,
-    sshSessionId: pt.sshSessionId,
-    wsUrl: pt.wsUrl,
-    ws: null,
-    buffer: [],
-  }
+/** Tracks which directories have already been auto-synced (resets on page refresh) */
+const syncedDirectories = new Set<string>()
 
-  try {
-    const ws = new WebSocket(pt.wsUrl)
-    ws.binaryType = 'arraybuffer'
-    tab.ws = ws
-
-    ws.onclose = () => {
-      tab.ws = null
-    }
-    ws.onerror = () => {
-      tab.ws = null
-    }
-  } catch {
-    // WS creation failed — tab stays with ws=null
-  }
-
-  return tab
+export function isDirectorySynced(directoryId: string): boolean {
+  return syncedDirectories.has(directoryId)
 }
+
+export function markDirectorySynced(directoryId: string): void {
+  syncedDirectories.add(directoryId)
+}
+
+// ---------------------------------------------------------------------------
+// Restore terminal tabs from backend session list
+// ---------------------------------------------------------------------------
+
+/**
+ * Restore terminal tabs into a workspace from backend SSH session data.
+ * Skips sessions whose sshSessionId already exists as a tab (avoids duplicates).
+ */
+export function restoreTerminalTabs(
+  ctx: WorkspaceContext,
+  sessions: SshSessionDTO[],
+): void {
+  const existingIds = new Set(ctx.terminalTabs.value.map((t) => t.sshSessionId))
+  const newTabs: SshTerminalTab[] = []
+
+  for (const s of sessions) {
+    if (existingIds.has(s.sessionId)) continue
+
+    const tab: SshTerminalTab = {
+      tabId: `term-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      label: s.label,
+      sshSessionId: s.sessionId,
+      wsUrl: s.wsUrl,
+      ws: null,
+      buffer: [],
+    }
+
+    try {
+      const ws = new WebSocket(s.wsUrl)
+      ws.binaryType = 'arraybuffer'
+      tab.ws = ws
+
+      ws.onclose = () => {
+        tab.ws = null
+      }
+      ws.onerror = () => {
+        tab.ws = null
+      }
+    } catch {
+      // WS creation failed — tab stays with ws=null
+    }
+
+    newTabs.push(tab)
+  }
+
+  if (newTabs.length > 0) {
+    ctx.terminalTabs.value = [...ctx.terminalTabs.value, ...newTabs]
+    // Activate first restored tab if none active
+    if (!ctx.activeTermTabId.value) {
+      ctx.activeTermTabId.value = newTabs[0]!.tabId
+    }
+    ctx.terminalVisible.value = true
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workspace CRUD
+// ---------------------------------------------------------------------------
 
 /**
  * Get or lazily create a workspace context for the given key.
@@ -152,24 +125,6 @@ export function getOrCreateWorkspace(key: string): WorkspaceContext {
       terminalTabs: ref<SshTerminalTab[]>([]),
       activeTermTabId: ref<string | null>(null),
     }
-
-    // Restore persisted terminal tabs
-    const persisted = loadPersistedMap()[key]
-    if (persisted && persisted.tabs.length > 0) {
-      const restoredTabs: SshTerminalTab[] = persisted.tabs.map(reconnectTab)
-      ctx.terminalTabs.value = restoredTabs
-      ctx.activeTermTabId.value = persisted.activeTermTabId
-      ctx.terminalVisible.value = persisted.terminalVisible
-      ctx.terminalHeight.value = persisted.terminalHeight || 250
-    }
-
-    // Watch terminal changes and persist
-    const ctxRef = ctx
-    watch(
-      [ctx.terminalTabs, ctx.activeTermTabId, ctx.terminalVisible, ctx.terminalHeight],
-      () => persistWorkspace(ctxRef),
-      { deep: true },
-    )
 
     workspaceMap.set(key, ctx)
   }
@@ -198,7 +153,6 @@ export function disposeWorkspace(key: string): void {
   }
   ctx.terminalTabs.value = []
 
-  removePersistedWorkspace(key)
   workspaceMap.delete(key)
 }
 

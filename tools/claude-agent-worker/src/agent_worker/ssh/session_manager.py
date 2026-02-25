@@ -37,6 +37,7 @@ class SshSession:
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     cols: int = 80
     rows: int = 24
+    directory_id: str | None = None
 
     def touch(self) -> None:
         self.last_activity = datetime.now(timezone.utc)
@@ -80,6 +81,7 @@ async def create_ssh_session(
     cols: int = 80,
     rows: int = 24,
     cwd: str | None = None,
+    directory_id: str | None = None,
 ) -> SshSession:
     """Open an SSH connection + PTY process and register it."""
 
@@ -121,6 +123,7 @@ async def create_ssh_session(
         process=process,
         cols=cols,
         rows=rows,
+        directory_id=directory_id,
     )
     ssh_sessions[session_id] = session
 

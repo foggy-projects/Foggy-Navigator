@@ -451,7 +451,73 @@ public class ClaudeWorkerClient {
                 .doOnError(e -> log.warn("File diff failed for worker {}, path {}, file {}: {}", workerId, path, file, e.getMessage()));
     }
 
+    // ===== Foggy Ignore Methods =====
+
+    /**
+     * 获取 .foggy-ignore 中的自定义排除模式
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getFoggyIgnore(String path) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/files/ignore")
+                        .queryParam("path", path)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Get foggy ignore failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
+     * 添加一个排除模式到 .foggy-ignore
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> addFoggyIgnore(String path, String pattern) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("path", path);
+        body.put("pattern", pattern);
+        return webClient.post()
+                .uri("/api/v1/files/ignore")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Add foggy ignore failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
+     * 从 .foggy-ignore 移除一个排除模式
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> removeFoggyIgnore(String path, String pattern) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("path", path);
+        body.put("pattern", pattern);
+        return webClient.method(org.springframework.http.HttpMethod.DELETE)
+                .uri("/api/v1/files/ignore")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Remove foggy ignore failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
     // ===== SSH Proxy Methods =====
+
+    /**
+     * 列出 Worker 上的活跃 SSH 会话
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<java.util.List<Map<String, Object>>> listSshSessions() {
+        return webClient.get()
+                .uri("/api/v1/ssh/sessions")
+                .retrieve()
+                .bodyToMono(java.util.List.class)
+                .map(list -> (java.util.List<Map<String, Object>>) list)
+                .doOnError(e -> log.warn("List SSH sessions failed for worker {}: {}", workerId, e.getMessage()));
+    }
 
     /**
      * 建立 SSH 连接

@@ -513,6 +513,7 @@
         @close-panel="activeWorkspace.terminalVisible.value = false"
         @resize="(h) => activeWorkspace!.terminalHeight.value = h"
         @pop-out="handlePopOutTerminal"
+        @sync="syncSshSessions(true)"
       >
         <SshTerminal
           v-for="tab in activeWorkspace.terminalTabs.value"
@@ -1137,6 +1138,9 @@ import {
   getOrCreateWorkspace,
   disposeWorkspace,
   disposeAllWorkspaces,
+  isDirectorySynced,
+  markDirectorySynced,
+  restoreTerminalTabs,
 } from '@/composables/useWorkspaceContext'
 import type { WorkspaceContext, SshTerminalTab } from '@/composables/useWorkspaceContext'
 import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
@@ -1621,6 +1625,8 @@ function selectDirectory(workerId: string, directoryId: string) {
   dirTaskPage.value = 0
   loadDirectoryTasks()
   loadDirectorySkills()
+  // Auto-sync SSH sessions from backend (once per directory per page load)
+  syncSshSessions()
 }
 
 async function loadDirectoryTasks() {
@@ -2699,6 +2705,32 @@ function prefillSshForm() {
 function dirHasSshCredentials(): boolean {
   const dir = selectedDirectory.value
   return !!(dir?.sshUsername && dir?.sshPasswordConfigured)
+}
+
+/**
+ * 从后端同步 SSH 会话列表，恢复当前目录的终端 tab。
+ */
+async function syncSshSessions(force = false) {
+  const wId = selectedWorkerId.value
+  const dId = selectedDirectoryId.value
+  if (!wId || !dId) return
+  if (!force && isDirectorySynced(dId)) return
+
+  try {
+    const sessions = await sshApi.listSshSessions(wId)
+    // Filter sessions belonging to the current directory
+    const dirSessions = sessions.filter((s) => s.directoryId === dId)
+    if (dirSessions.length > 0) {
+      const ws = activeWorkspace.value
+      if (ws) {
+        restoreTerminalTabs(ws, dirSessions)
+      }
+    }
+  } catch (e) {
+    console.warn('SSH session sync failed:', e)
+  } finally {
+    markDirectorySynced(dId)
+  }
 }
 
 function handleToggleTerminal() {

@@ -1,6 +1,7 @@
 package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
+import com.foggy.navigator.claude.worker.model.dto.SshSessionDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.SshConnectForm;
@@ -13,6 +14,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -87,6 +90,9 @@ public class SshProxyController {
         if (cwd != null) {
             body.put("cwd", cwd);
         }
+        if (form.getDirectoryId() != null && !form.getDirectoryId().isEmpty()) {
+            body.put("directory_id", form.getDirectoryId());
+        }
 
         Map<String, Object> result;
         try {
@@ -119,6 +125,69 @@ public class SshProxyController {
         String wsUrl = wsBase + "/api/v1/ssh/" + sessionId + "/ws?token=" + token;
 
         return RX.ok(Map.of("sessionId", sessionId, "wsUrl", wsUrl));
+    }
+
+    /**
+     * 列出 Worker 上属于当前用户的活跃 SSH 会话，返回完整重连信息（含 wsUrl）。
+     */
+    @GetMapping("/sessions")
+    public RX<List<SshSessionDTO>> listSessions(@RequestParam String workerId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (worker == null) {
+            return RX.failB("Worker not found: " + workerId);
+        }
+
+        String userId = UserContext.getCurrentUserId();
+        ClaudeWorkerClient client = workerService.createClient(worker);
+
+        List<Map<String, Object>> workerSessions;
+        try {
+            workerSessions = client.listSshSessions()
+                    .block(java.time.Duration.ofSeconds(10));
+        } catch (Exception e) {
+            log.warn("List SSH sessions from Worker failed: {}", e.getMessage());
+            return RX.ok(List.of());
+        }
+        if (workerSessions == null) {
+            return RX.ok(List.of());
+        }
+
+        String wsBase = worker.getBaseUrl().replaceFirst("^http", "ws");
+        String token = workerService.getDecryptedToken(worker);
+
+        List<SshSessionDTO> result = new ArrayList<>();
+        for (Map<String, Object> ws : workerSessions) {
+            String dirId = (String) ws.get("directory_id");
+            if (dirId == null || dirId.isEmpty()) {
+                continue; // skip sessions without directory binding
+            }
+
+            // Verify directory belongs to current user
+            try {
+                directoryService.getDirectoryEntity(userId, dirId);
+            } catch (Exception e) {
+                continue; // not this user's directory
+            }
+
+            String sessionId = (String) ws.get("session_id");
+            String username = (String) ws.get("username");
+            String host = (String) ws.get("host");
+            int cols = ws.get("cols") instanceof Number ? ((Number) ws.get("cols")).intValue() : 80;
+            int rows = ws.get("rows") instanceof Number ? ((Number) ws.get("rows")).intValue() : 24;
+
+            SshSessionDTO dto = new SshSessionDTO();
+            dto.setSessionId(sessionId);
+            dto.setDirectoryId(dirId);
+            dto.setLabel(username + "@" + host);
+            dto.setWsUrl(wsBase + "/api/v1/ssh/" + sessionId + "/ws?token=" + token);
+            dto.setCols(cols);
+            dto.setRows(rows);
+            dto.setConnectedAt(ws.get("connected_at") != null ? ws.get("connected_at").toString() : null);
+            dto.setLastActivity(ws.get("last_activity") != null ? ws.get("last_activity").toString() : null);
+            result.add(dto);
+        }
+
+        return RX.ok(result);
     }
 
     /**

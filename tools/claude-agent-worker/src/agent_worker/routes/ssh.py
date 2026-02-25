@@ -56,6 +56,7 @@ async def connect(req: SshConnectRequest):
             cols=req.cols,
             rows=req.rows,
             cwd=req.cwd,
+            directory_id=req.directory_id,
         )
     except Exception as exc:
         logger.warning("SSH connect failed: %s", exc)
@@ -215,6 +216,7 @@ async def list_sessions():
             last_activity=s.last_activity,
             cols=s.cols,
             rows=s.rows,
+            directory_id=s.directory_id,
         )
         for s in ssh_sessions.values()
     ]

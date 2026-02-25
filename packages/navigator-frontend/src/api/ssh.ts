@@ -6,6 +6,17 @@ export interface SshConnectResult {
   wsUrl: string
 }
 
+export interface SshSessionDTO {
+  sessionId: string
+  directoryId: string
+  label: string
+  wsUrl: string
+  cols: number
+  rows: number
+  connectedAt: string
+  lastActivity: string
+}
+
 export async function sshConnect(form: {
   workerId: string
   directoryId?: string
@@ -34,4 +45,11 @@ export async function sshResize(
     cols,
     rows,
   })
+}
+
+export async function listSshSessions(workerId: string): Promise<SshSessionDTO[]> {
+  const rx = (await client.get(
+    `/ssh/sessions?workerId=${encodeURIComponent(workerId)}`,
+  )) as unknown as RX<SshSessionDTO[]>
+  return rx.data ?? []
 }

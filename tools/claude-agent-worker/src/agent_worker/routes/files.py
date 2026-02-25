@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import os
 from datetime import datetime, timezone
@@ -19,6 +20,8 @@ from ..models import (
     FileDiffResponse,
     FileSearchResponse,
     FileSearchResult,
+    FoggyIgnoreRequest,
+    FoggyIgnoreResponse,
     GitDiffSummaryResponse,
 )
 from .utils import run_git, validate_path
@@ -221,7 +224,67 @@ async def read_file_content(
 
 
 _MAX_SEARCH_RESULTS = 200
-_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "target", "build", "dist"}
+
+# Default exclude patterns applied to all projects
+_DEFAULT_EXCLUDES: list[str] = [
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "target",
+    "build",
+    "dist",
+    ".git",
+    ".idea",
+    ".vscode",
+    "*.min.js",
+    "*.min.css",
+    "*.map",
+]
+
+
+def _load_foggy_ignore(cwd: str) -> list[str]:
+    """Read .foggy-ignore from the project root and return exclude patterns."""
+    ignore_path = os.path.join(cwd, ".foggy-ignore")
+    if not os.path.isfile(ignore_path):
+        return []
+    patterns: list[str] = []
+    with open(ignore_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                patterns.append(line)
+    return patterns
+
+
+def _get_exclude_patterns(cwd: str) -> list[str]:
+    """Merge default excludes with project .foggy-ignore rules."""
+    return _DEFAULT_EXCLUDES + _load_foggy_ignore(cwd)
+
+
+def _build_pathspec_excludes(patterns: list[str]) -> list[str]:
+    """Convert exclude patterns to git pathspec format ':!pattern'."""
+    return [f":!{p}" for p in patterns]
+
+
+def _should_skip_file(filename: str, patterns: list[str]) -> bool:
+    """Check if a filename matches any glob-style exclude pattern (e.g. *.min.js)."""
+    for p in patterns:
+        if "*" in p or "?" in p:
+            if fnmatch.fnmatch(filename, p):
+                return True
+    return False
+
+
+def _skip_dirs_from_patterns(patterns: list[str]) -> set[str]:
+    """Extract plain directory names (no glob chars) from patterns for os.walk pruning."""
+    dirs: set[str] = set()
+    for p in patterns:
+        # Strip trailing slash
+        name = p.rstrip("/")
+        if "*" not in name and "?" not in name and "/" not in name:
+            dirs.add(name)
+    return dirs
 
 
 @router.get("/files/search", response_model=FileSearchResponse)
@@ -240,15 +303,21 @@ async def search_files(
         )
 
     # Try git ls-files first
-    rc, output = await run_git(resolved, "ls-files", "--cached", "--others", "--exclude-standard")
+    excludes = _get_exclude_patterns(resolved)
+    git_args = ["ls-files", "--cached", "--others", "--exclude-standard", "--"]
+    git_args.extend(_build_pathspec_excludes(excludes))
+    rc, output = await run_git(resolved, *git_args)
     if rc == 0 and output:
         all_files = output.splitlines()
     else:
         # Fallback: os.walk (limited to 10k files to avoid hanging)
+        skip_dirs = _skip_dirs_from_patterns(excludes)
         all_files = []
         for root, dirs, files in os.walk(resolved):
-            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith('.')]
+            dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
             for fname in files:
+                if _should_skip_file(fname, excludes):
+                    continue
                 rel = os.path.relpath(os.path.join(root, fname), resolved).replace("\\", "/")
                 all_files.append(rel)
                 if len(all_files) >= 10000:
@@ -301,11 +370,13 @@ async def search_content(
         )
 
     # Try git grep
+    excludes = _get_exclude_patterns(resolved)
     git_args = ["grep", "-n", "--no-color", "-F", f"-C{context_lines}"]
     if not case_sensitive:
         git_args.append("-i")
     git_args.append("--")
     git_args.append(query)
+    git_args.extend(_build_pathspec_excludes(excludes))
 
     rc, output = await run_git(resolved, *git_args)
 
@@ -416,10 +487,14 @@ def _fallback_content_search(
     matches: list[ContentMatch] = []
     files_seen: set[str] = set()
     q = query if case_sensitive else query.lower()
+    excludes = _get_exclude_patterns(base_dir)
+    skip_dirs = _skip_dirs_from_patterns(excludes)
 
     for root, dirs, files in os.walk(base_dir):
-        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith('.')]
+        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
         for fname in files:
+            if _should_skip_file(fname, excludes):
+                continue
             abs_path = os.path.join(root, fname)
             rel_path = os.path.relpath(abs_path, base_dir).replace("\\", "/")
 
@@ -452,6 +527,67 @@ def _fallback_content_search(
         query=query, matches=matches,
         total_matches=len(matches), total_files=len(files_seen),
     )
+
+
+@router.get("/files/ignore", response_model=FoggyIgnoreResponse)
+async def get_foggy_ignore(
+    path: str = Query(..., description="Absolute path to the project root"),
+) -> FoggyIgnoreResponse:
+    """Return current custom patterns from .foggy-ignore."""
+    resolved = validate_path(path)
+    patterns = _load_foggy_ignore(resolved)
+    return FoggyIgnoreResponse(patterns=patterns)
+
+
+@router.post("/files/ignore", response_model=FoggyIgnoreResponse)
+async def add_foggy_ignore(req: FoggyIgnoreRequest) -> FoggyIgnoreResponse:
+    """Add a pattern to .foggy-ignore."""
+    resolved = validate_path(req.path)
+    ignore_path = os.path.join(resolved, ".foggy-ignore")
+
+    existing = _load_foggy_ignore(resolved)
+    if req.pattern in existing:
+        return FoggyIgnoreResponse(patterns=existing)
+
+    # Append the new pattern
+    with open(ignore_path, "a", encoding="utf-8") as f:
+        # Ensure we start on a new line
+        if os.path.isfile(ignore_path) and os.path.getsize(ignore_path) > 0:
+            with open(ignore_path, "rb") as check:
+                check.seek(-1, 2)
+                if check.read(1) != b"\n":
+                    f.write("\n")
+        f.write(req.pattern + "\n")
+
+    return FoggyIgnoreResponse(patterns=_load_foggy_ignore(resolved))
+
+
+@router.delete("/files/ignore", response_model=FoggyIgnoreResponse)
+async def remove_foggy_ignore(req: FoggyIgnoreRequest) -> FoggyIgnoreResponse:
+    """Remove a pattern from .foggy-ignore."""
+    resolved = validate_path(req.path)
+    ignore_path = os.path.join(resolved, ".foggy-ignore")
+
+    if not os.path.isfile(ignore_path):
+        return FoggyIgnoreResponse(patterns=[])
+
+    # Read all lines, preserving comments and blanks
+    with open(ignore_path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+
+    # Filter out the matching pattern
+    new_lines = [line for line in lines if line.strip() != req.pattern]
+
+    # Check if there are any non-blank, non-comment lines left
+    has_patterns = any(l.strip() and not l.strip().startswith("#") for l in new_lines)
+    if not has_patterns:
+        os.remove(ignore_path)
+        return FoggyIgnoreResponse(patterns=[])
+
+    with open(ignore_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    return FoggyIgnoreResponse(patterns=_load_foggy_ignore(resolved))
 
 
 @router.get("/git-diff", response_model=GitDiffSummaryResponse)

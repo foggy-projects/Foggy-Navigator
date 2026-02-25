@@ -26,6 +26,7 @@
         <button class="tab-add" @click="$emit('add-tab')" title="新建终端">+</button>
       </div>
       <div class="tab-actions">
+        <button @click="$emit('sync')" title="同步会话">&#8635;</button>
         <button @click="$emit('toggle-maximize')" :title="maximized ? '还原' : '最大化'">
           {{ maximized ? '&#9724;' : '&#9723;' }}
         </button>
@@ -60,6 +61,7 @@ const emit = defineEmits<{
   'pop-out': []
   'close-panel': []
   'resize': [height: number]
+  'sync': []
 }>()
 
 function startResize(e: MouseEvent) {

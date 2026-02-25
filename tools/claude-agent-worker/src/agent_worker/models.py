@@ -300,6 +300,7 @@ class SshConnectRequest(BaseModel):
     cols: int = Field(80, ge=1, le=500, description="Terminal columns")
     rows: int = Field(24, ge=1, le=500, description="Terminal rows")
     cwd: str | None = Field(None, description="Working directory to cd into after connect")
+    directory_id: str | None = Field(None, description="Bound working directory ID")
 
 
 class SshConnectResponse(BaseModel):
@@ -327,3 +328,21 @@ class SshSessionInfo(BaseModel):
     last_activity: datetime
     cols: int
     rows: int
+    directory_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Foggy ignore
+# ---------------------------------------------------------------------------
+
+class FoggyIgnoreRequest(BaseModel):
+    """Payload for POST/DELETE ``/api/v1/files/ignore``."""
+
+    path: str = Field(..., description="Absolute path to the project root")
+    pattern: str = Field(..., description="Pattern to add/remove")
+
+
+class FoggyIgnoreResponse(BaseModel):
+    """Response for foggy-ignore endpoints."""
+
+    patterns: list[str] = Field(default_factory=list, description="Current custom patterns")
