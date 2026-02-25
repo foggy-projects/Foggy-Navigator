@@ -27,6 +27,7 @@ public class WorkingDirectoryDTO {
     private Boolean worktree;
     private String sourceDirectoryId;
     private String sshUsername;
+    private Integer sshPort;
     private boolean sshPasswordConfigured;
     private String defaultAuthMode;
     private boolean defaultAuthConfigured;

@@ -830,6 +830,9 @@
         <el-form-item label="SSH 用户名">
           <el-input v-model="editDirForm.sshUsername" placeholder="如 root" />
         </el-form-item>
+        <el-form-item label="SSH 端口">
+          <el-input-number v-model="editDirForm.sshPort" :min="1" :max="65535" style="width: 100%" />
+        </el-form-item>
         <el-form-item label="SSH 密码">
           <el-input
             v-model="editDirForm.sshPassword"
@@ -1259,6 +1262,7 @@ const editDirForm = ref({
   projectTaskPrompt: '',
   parentProjectId: '' as string,
   sshUsername: '' as string,
+  sshPort: 22 as number,
   sshPassword: '' as string,
   defaultAuthMode: '' as string,
   defaultAuthToken: '' as string,
@@ -1774,6 +1778,7 @@ async function handleEditDirectory() {
     }
     // SSH config
     form.sshUsername = editDirForm.value.sshUsername
+    form.sshPort = String(editDirForm.value.sshPort || 22)
     if (editDirForm.value.sshPassword) {
       form.sshPassword = editDirForm.value.sshPassword
     }
@@ -2621,6 +2626,7 @@ watch(showEditDirectoryDialog, (val) => {
       projectTaskPrompt: selectedDirectory.value.projectTaskPrompt || '',
       parentProjectId: selectedDirectory.value.parentProjectId || '',
       sshUsername: selectedDirectory.value.sshUsername || '',
+      sshPort: selectedDirectory.value.sshPort || 22,
       sshPassword: '',
       defaultAuthMode: selectedDirectory.value.defaultAuthMode || '',
       defaultAuthToken: '',
@@ -2667,7 +2673,7 @@ function prefillSshForm() {
   const dir = selectedDirectory.value
   sshForm.value = {
     host: worker?.hostname || '',
-    port: 22,
+    port: dir?.sshPort || 22,
     username: dir?.sshUsername || '',
     password: '',
   }

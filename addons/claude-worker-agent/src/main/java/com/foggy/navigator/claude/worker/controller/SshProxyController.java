@@ -41,6 +41,7 @@ public class SshProxyController {
         }
 
         String host = form.getHost();
+        int port = form.getPort();
         String username = form.getUsername();
         String password = form.getPassword();
 
@@ -54,6 +55,9 @@ public class SshProxyController {
                 }
                 if (password == null || password.isEmpty()) {
                     password = directoryService.getDecryptedSshPassword(dir);
+                }
+                if (port == 22 && dir.getSshPort() != null) {
+                    port = dir.getSshPort();
                 }
             } catch (Exception e) {
                 log.debug("Directory SSH credential lookup failed: {}", e.getMessage());
@@ -73,15 +77,32 @@ public class SshProxyController {
 
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("host", host);
-        body.put("port", form.getPort());
+        body.put("port", port);
         body.put("username", username);
         body.put("password", password);
         body.put("cols", form.getCols());
         body.put("rows", form.getRows());
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> result = client.sshConnect(body)
-                .block(java.time.Duration.ofSeconds(15));
+        Map<String, Object> result;
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> r = client.sshConnect(body)
+                    .block(java.time.Duration.ofSeconds(15));
+            result = r;
+        } catch (Exception e) {
+            String msg = e.getMessage();
+            // Extract detail from Worker JSON error response
+            if (msg != null && msg.contains("\"detail\"")) {
+                int start = msg.indexOf("\"detail\":\"");
+                if (start >= 0) {
+                    start += 10;
+                    int end = msg.indexOf("\"", start);
+                    if (end > start) msg = msg.substring(start, end);
+                }
+            }
+            log.warn("SSH connect via Worker failed: {}", msg);
+            return RX.failB("SSH 连接失败: " + msg);
+        }
         if (result == null) {
             return RX.failB("SSH connect failed: no response");
         }

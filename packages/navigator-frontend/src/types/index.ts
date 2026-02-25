@@ -122,6 +122,7 @@ export interface WorkingDirectory {
   worktree?: boolean
   sourceDirectoryId?: string
   sshUsername?: string
+  sshPort?: number
   sshPasswordConfigured?: boolean
   defaultAuthMode?: 'API_KEY' | 'CUSTOM_ENDPOINT' | 'SUBSCRIPTION'
   defaultAuthConfigured?: boolean

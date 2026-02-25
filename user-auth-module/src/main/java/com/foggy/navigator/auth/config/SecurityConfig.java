@@ -80,6 +80,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/claude-workers", "/api/v1/claude-workers/**").permitAll()
                         .requestMatchers("/api/v1/claude-tasks", "/api/v1/claude-tasks/**").permitAll()
                         .requestMatchers("/api/v1/working-directories", "/api/v1/working-directories/**").permitAll()
+                        .requestMatchers("/api/v1/ssh/connect", "/api/v1/ssh/connect/**").permitAll()
                         .requestMatchers("/api/v1/file-browser", "/api/v1/file-browser/**").permitAll()
                         // 开放 Spring Boot 错误端点（避免异常转发时被拦截返回 403）
                         .requestMatchers("/error").permitAll()

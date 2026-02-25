@@ -180,6 +180,9 @@ public class WorkingDirectoryService {
                 entity.setSshPassword(credentialEncryptor.encrypt(form.getSshPassword()));
             }
         }
+        if (form.getSshPort() != null) {
+            entity.setSshPort(form.getSshPort());
+        }
 
         // Auth 默认配置
         if (form.getDefaultAuthMode() != null) {
@@ -429,6 +432,7 @@ public class WorkingDirectoryService {
                 .worktree(entity.getWorktree())
                 .sourceDirectoryId(entity.getSourceDirectoryId())
                 .sshUsername(entity.getSshUsername())
+                .sshPort(entity.getSshPort())
                 .sshPasswordConfigured(entity.getSshPassword() != null)
                 .defaultAuthMode(entity.getDefaultAuthMode())
                 .defaultAuthConfigured(entity.getDefaultAuthToken() != null)
