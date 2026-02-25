@@ -57,7 +57,9 @@ addons/claude-worker-agent/
 │   ├── controller/
 │   │   ├── ClaudeWorkerController.java     # Worker CRUD API
 │   │   ├── ClaudeTaskController.java       # 任务 + 会话配置 API
-│   │   └── WorkingDirectoryController.java # 工作目录 API
+│   │   ├── WorkingDirectoryController.java # 工作目录 API
+│   │   ├── FileBrowserController.java      # 文件浏览代理（目录/文件/搜索/diff/ignore）
+│   │   └── SshProxyController.java         # SSH 终端代理
 │   ├── service/
 │   │   ├── ClaudeWorkerService.java        # Worker 管理
 │   │   ├── ClaudeTaskService.java          # 任务生命周期（核心）
@@ -122,6 +124,8 @@ tools/claude-agent-worker/
 │       ├── git_info.py          # GET /api/v1/git-info
 │       ├── skills.py            # GET /api/v1/skills
 │       ├── worktree.py          # Git Worktree CRUD（list/create/remove）
+│       ├── files.py             # 文件浏览/搜索/diff/.foggy-ignore 管理
+│       ├── ssh.py               # SSH 终端 REST + WebSocket
 │       └── health.py            # GET /health
 ├── pyproject.toml               # 依赖：claude-agent-sdk>=0.1.37
 └── start.ps1 / stop.ps1         # 启停脚本
@@ -248,6 +252,15 @@ WebClient-based HTTP/SSE 客户端，与 Python Worker 通信。
 | `getAuthConfig()` | GET /api/v1/auth-config | 获取 Worker auth 配置 |
 | `getGitInfo()` | GET /api/v1/git-info | 查询 Git 信息 |
 | `listSkills()` | GET /api/v1/skills | 获取项目技能列表 |
+| `listFiles()` | GET /api/v1/files | 列出目录 |
+| `readFileContent()` | GET /api/v1/files/content | 读取文件 |
+| `searchFiles()` | GET /api/v1/files/search | 文件名搜索 |
+| `searchContent()` | GET /api/v1/files/search-content | 内容全文搜索 |
+| `getFoggyIgnore()` | GET /api/v1/files/ignore | 获取排除模式 |
+| `addFoggyIgnore()` | POST /api/v1/files/ignore | 添加排除模式 |
+| `removeFoggyIgnore()` | DELETE /api/v1/files/ignore | 移除排除模式 |
+| `getGitDiffSummary()` | GET /api/v1/git-diff | Git 变更摘要 |
+| `getFileDiff()` | GET /api/v1/git-diff/file | 单文件 diff |
 
 **streamQuery 请求体**：
 ```json
@@ -474,6 +487,15 @@ Worker (福安-PC-win)
 | GET | `/api/v1/auth-config` | 获取当前 auth 配置 |
 | GET | `/api/v1/git-info?path=` | 查询 Git 仓库信息 |
 | GET | `/api/v1/skills?cwd=` | 获取项目技能列表 |
+| GET | `/api/v1/files?path=` | 列出目录内容 |
+| GET | `/api/v1/files/content?path=` | 读取文件内容 |
+| GET | `/api/v1/files/search?path=&query=` | 文件名搜索 |
+| GET | `/api/v1/files/search-content?path=&query=` | 全文内容搜索 |
+| GET | `/api/v1/files/ignore?path=` | 获取 .foggy-ignore 排除模式 |
+| POST | `/api/v1/files/ignore` | 添加排除模式 |
+| DELETE | `/api/v1/files/ignore` | 移除排除模式 |
+| GET | `/api/v1/git-diff?path=` | Git 变更摘要 |
+| GET | `/api/v1/git-diff/file?path=&file=` | 单文件 diff |
 | GET | `/health` | 健康检查 |
 
 ## 常见问题与踩坑

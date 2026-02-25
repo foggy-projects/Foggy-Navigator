@@ -78,6 +78,10 @@ export interface ContentSearchResponse {
   total_files: number
 }
 
+export interface FoggyIgnoreResponse {
+  patterns: string[]
+}
+
 // ---- API ------------------------------------------------------------------
 
 export async function listDirectory(
@@ -137,5 +141,27 @@ export async function searchContent(
   const rx = (await client.get('/file-browser/search-content', {
     params: { directoryId, query, maxResults, contextLines, caseSensitive },
   })) as unknown as RX<ContentSearchResponse>
+  return rx.data
+}
+
+export async function getFoggyIgnore(directoryId: string): Promise<FoggyIgnoreResponse> {
+  const rx = (await client.get('/file-browser/ignore', {
+    params: { directoryId },
+  })) as unknown as RX<FoggyIgnoreResponse>
+  return rx.data
+}
+
+export async function addFoggyIgnore(directoryId: string, pattern: string): Promise<FoggyIgnoreResponse> {
+  const rx = (await client.post('/file-browser/ignore', {
+    directoryId,
+    pattern,
+  })) as unknown as RX<FoggyIgnoreResponse>
+  return rx.data
+}
+
+export async function removeFoggyIgnore(directoryId: string, pattern: string): Promise<FoggyIgnoreResponse> {
+  const rx = (await client.delete('/file-browser/ignore', {
+    data: { directoryId, pattern },
+  })) as unknown as RX<FoggyIgnoreResponse>
   return rx.data
 }

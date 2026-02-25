@@ -147,6 +147,64 @@ public class FileBrowserController {
         }
     }
 
+    /**
+     * 获取 .foggy-ignore 排除模式
+     */
+    @GetMapping("/ignore")
+    public RX<Map<String, Object>> getFoggyIgnore(@RequestParam String directoryId) {
+        ClaudeWorkerClient client = resolveClient(directoryId);
+        WorkingDirectoryEntity entity = getEntity(directoryId);
+        try {
+            Map<String, Object> result = client.getFoggyIgnore(entity.getPath()).block(TIMEOUT);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to get foggy ignore for directory {}: {}", directoryId, e.getMessage());
+            return RX.failA("获取排除规则失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 添加排除模式到 .foggy-ignore
+     */
+    @PostMapping("/ignore")
+    public RX<Map<String, Object>> addFoggyIgnore(@RequestBody Map<String, String> body) {
+        String directoryId = body.get("directoryId");
+        String pattern = body.get("pattern");
+        if (directoryId == null || pattern == null) {
+            return RX.failA("directoryId 和 pattern 不能为空");
+        }
+        ClaudeWorkerClient client = resolveClient(directoryId);
+        WorkingDirectoryEntity entity = getEntity(directoryId);
+        try {
+            Map<String, Object> result = client.addFoggyIgnore(entity.getPath(), pattern).block(TIMEOUT);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to add foggy ignore for directory {}: {}", directoryId, e.getMessage());
+            return RX.failA("添加排除规则失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 从 .foggy-ignore 移除排除模式
+     */
+    @DeleteMapping("/ignore")
+    public RX<Map<String, Object>> removeFoggyIgnore(@RequestBody Map<String, String> body) {
+        String directoryId = body.get("directoryId");
+        String pattern = body.get("pattern");
+        if (directoryId == null || pattern == null) {
+            return RX.failA("directoryId 和 pattern 不能为空");
+        }
+        ClaudeWorkerClient client = resolveClient(directoryId);
+        WorkingDirectoryEntity entity = getEntity(directoryId);
+        try {
+            Map<String, Object> result = client.removeFoggyIgnore(entity.getPath(), pattern).block(TIMEOUT);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to remove foggy ignore for directory {}: {}", directoryId, e.getMessage());
+            return RX.failA("移除排除规则失败: " + e.getMessage());
+        }
+    }
+
     // ---- Helpers -----------------------------------------------------------
 
     private WorkingDirectoryEntity getEntity(String directoryId) {

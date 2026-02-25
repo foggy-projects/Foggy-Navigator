@@ -103,6 +103,10 @@
         <div class="ctx-item" @click="copyPath('name')">复制文件名</div>
         <div class="ctx-item" @click="copyPath('relative')">复制相对路径</div>
         <div class="ctx-item" @click="copyPath('absolute')">复制绝对路径</div>
+        <div class="ctx-divider"></div>
+        <div class="ctx-item" @click="toggleIgnore()">
+          {{ isNodeIgnored ? '从搜索排除移除' : '添加到搜索排除' }}
+        </div>
       </div>
     </Teleport>
 
@@ -127,6 +131,9 @@ import {
   readFileContent,
   getGitDiffSummary,
   getFileDiff,
+  getFoggyIgnore,
+  addFoggyIgnore,
+  removeFoggyIgnore,
 } from '@/api/fileBrowser'
 import type { FileEntry, DiffFileEntry } from '@/api/fileBrowser'
 import FileSearchDialog from '@/components/file-browser/FileSearchDialog.vue'
@@ -326,6 +333,50 @@ async function copyPath(type: 'name' | 'relative' | 'absolute') {
     ElMessage.success(`已复制: ${text}`)
   } catch {
     ElMessage.error('复制失败')
+  }
+  closeContextMenu()
+}
+
+// ---- Foggy ignore (search exclude) ----------------------------------------
+const ignoredPatterns = ref<Set<string>>(new Set())
+
+async function loadIgnoredPatterns() {
+  if (!directoryId.value) return
+  try {
+    const resp = await getFoggyIgnore(directoryId.value)
+    ignoredPatterns.value = new Set(resp.patterns)
+  } catch {
+    // Non-fatal — ignore list may not exist yet
+  }
+}
+
+function getNodePattern(node: TreeNode): string {
+  const rel = getSubPath(node.fullPath)
+  return node.isDir ? rel + '/' : rel
+}
+
+const isNodeIgnored = computed(() => {
+  const node = ctxMenu.value.node
+  if (!node) return false
+  return ignoredPatterns.value.has(getNodePattern(node))
+})
+
+async function toggleIgnore() {
+  const node = ctxMenu.value.node
+  if (!node || !directoryId.value) return
+  const pattern = getNodePattern(node)
+  try {
+    let resp
+    if (ignoredPatterns.value.has(pattern)) {
+      resp = await removeFoggyIgnore(directoryId.value, pattern)
+      ElMessage.success(`已移除搜索排除: ${pattern}`)
+    } else {
+      resp = await addFoggyIgnore(directoryId.value, pattern)
+      ElMessage.success(`已添加搜索排除: ${pattern}`)
+    }
+    ignoredPatterns.value = new Set(resp.patterns)
+  } catch {
+    ElMessage.error('操作失败')
   }
   closeContextMenu()
 }
@@ -565,9 +616,10 @@ onMounted(async () => {
     })
   }
 
-  // Load initial tree
+  // Load initial tree + ignored patterns
   if (directoryId.value) {
     loadDirectory()
+    loadIgnoredPatterns()
   }
 })
 
@@ -598,6 +650,7 @@ watch(() => route.query.directoryId, () => {
     currentFilePath.value = ''
     diffMode.value = false
     loadDirectory()
+    loadIgnoredPatterns()
   }
 })
 </script>
@@ -866,6 +919,12 @@ watch(() => route.query.directoryId, () => {
   font-size: 13px;
   color: #cccccc;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.ctx-divider {
+  height: 1px;
+  background: #454545;
+  margin: 4px 0;
 }
 
 .ctx-item {

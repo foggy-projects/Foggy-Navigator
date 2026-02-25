@@ -615,6 +615,8 @@ Vue (fileBrowser.ts) → Java (FileBrowserController) → Python Worker (files.p
 - **Git 改动**：侧边栏 tab 切换，显示变更文件列表 + diff 预览
 - **文件搜索**（Ctrl+P）：`git ls-files` → 文件名模糊匹配，选中后 `loadFile()`
 - **内容搜索**（Ctrl+Shift+F）：`git grep -F` → 全文检索，选中后跳转到对应行
+- **右键菜单**：复制文件名/相对路径/绝对路径 + `.foggy-ignore` 排除管理
+- **.foggy-ignore 管理**：右键 → "添加到搜索排除"/"从搜索排除移除"，维护 `ignoredPatterns` Set
 
 **API 端点** (`fileBrowser.ts`)：
 
@@ -624,6 +626,9 @@ Vue (fileBrowser.ts) → Java (FileBrowserController) → Python Worker (files.p
 | `readFileContent(id, sub)` | GET `/file-browser/content` | 读取文件 |
 | `searchFiles(id, q)` | GET `/file-browser/search` | 文件名搜索 |
 | `searchContent(id, q)` | GET `/file-browser/search-content` | 内容全文搜索 |
+| `getFoggyIgnore(id)` | GET `/file-browser/ignore` | 获取 .foggy-ignore 排除模式 |
+| `addFoggyIgnore(id, pattern)` | POST `/file-browser/ignore` | 添加排除模式 |
+| `removeFoggyIgnore(id, pattern)` | DELETE `/file-browser/ignore` | 移除排除模式 |
 | `getGitDiffSummary(id)` | GET `/file-browser/git-diff` | Git 变更摘要 |
 | `getFileDiff(id, file)` | GET `/file-browser/git-diff/file` | 单文件 diff |
 
