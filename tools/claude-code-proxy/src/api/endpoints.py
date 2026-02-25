@@ -2,11 +2,14 @@ from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from datetime import datetime
 import uuid
-from typing import Optional
+from typing import Dict, Optional, Tuple
+
+import httpx
 
 from src.core.config import config
 from src.core.logging import logger
 from src.core.client import OpenAIClient
+from src.core.key_pool import BackendKey
 from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
 from src.conversion.request_converter import convert_claude_to_openai
 from src.conversion.response_converter import (
@@ -20,55 +23,153 @@ router = APIRouter()
 # Get custom headers from config
 custom_headers = config.get_custom_headers()
 
-openai_client = OpenAIClient(
-    config.openai_api_key,
-    config.openai_base_url,
-    config.request_timeout,
-    api_version=config.azure_api_version,
-    custom_headers=custom_headers,
-)
+# Build one OpenAIClient per backend key
+openai_clients: Dict[str, OpenAIClient] = {}
+for key_name, backend_key in config.key_pool.keys.items():
+    openai_clients[key_name] = OpenAIClient(
+        backend_key.api_key,
+        backend_key.base_url,
+        config.request_timeout,
+        api_version=config.azure_api_version,
+        custom_headers=custom_headers,
+    )
 
-async def validate_api_key(x_api_key: Optional[str] = Header(None), authorization: Optional[str] = Header(None)):
-    """Validate the client's API key from either x-api-key header or Authorization header."""
-    client_api_key = None
-    
-    # Extract API key from headers
+
+def _extract_client_key(x_api_key: Optional[str], authorization: Optional[str]) -> Optional[str]:
+    """Extract client API key from request headers."""
     if x_api_key:
-        client_api_key = x_api_key
-    elif authorization and authorization.startswith("Bearer "):
-        client_api_key = authorization.replace("Bearer ", "")
-    
-    # Skip validation if ANTHROPIC_API_KEY is not set in the environment
-    if not config.anthropic_api_key:
-        return
-        
-    # Validate the client API key
-    if not client_api_key or not config.validate_client_api_key(client_api_key):
-        logger.warning(f"Invalid API key provided by client")
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key. Please provide a valid Anthropic API key."
+        return x_api_key
+    if authorization and authorization.startswith("Bearer "):
+        return authorization[7:]
+    return None
+
+
+async def validate_api_key(
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+) -> Optional[str]:
+    """Validate the client's API key. Returns the client key for downstream use."""
+    client_api_key = _extract_client_key(x_api_key, authorization)
+
+    # If KEY_MAPPING is configured, validate via key pool
+    if config.key_pool.has_mapping:
+        if not client_api_key or not config.key_pool.validate_client_key(client_api_key):
+            logger.warning("Invalid or unmapped client API key")
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API key. Your key is not mapped to any backend.",
+            )
+        return client_api_key
+
+    # Legacy: validate against ANTHROPIC_API_KEY if set
+    if config.anthropic_api_key:
+        if not client_api_key or not config.validate_client_api_key(client_api_key):
+            logger.warning("Invalid API key provided by client")
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API key. Please provide a valid Anthropic API key.",
+            )
+
+    return client_api_key
+
+
+def _select_backend(client_api_key: Optional[str]) -> Tuple[BackendKey, OpenAIClient]:
+    """Select the next backend key + client via round-robin."""
+    backend_key = config.key_pool.get_next_key(client_api_key)
+    client = openai_clients[backend_key.name]
+    return backend_key, client
+
+
+async def _forward_passthrough(
+    raw_body: bytes,
+    backend_key: BackendKey,
+    stream: bool,
+    http_request: Request,
+    target_path: str = "/v1/messages",
+):
+    """Forward raw request to an Anthropic-compatible backend without format conversion."""
+    url = f"{backend_key.base_url.rstrip('/')}{target_path}"
+
+    # Build headers: auth + content-type + passthrough relevant client headers
+    headers = {
+        "x-api-key": backend_key.api_key,
+        "content-type": "application/json",
+    }
+    # Forward anthropic-version from client, or use default
+    anthropic_version = http_request.headers.get("anthropic-version", "2023-06-01")
+    headers["anthropic-version"] = anthropic_version
+    # Forward anthropic-beta if present
+    anthropic_beta = http_request.headers.get("anthropic-beta")
+    if anthropic_beta:
+        headers["anthropic-beta"] = anthropic_beta
+
+    timeout = httpx.Timeout(config.request_timeout, connect=10.0)
+
+    if stream:
+        async def _stream_passthrough():
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, content=raw_body, headers=headers) as resp:
+                    if resp.status_code != 200:
+                        error_body = await resp.aread()
+                        logger.error(f"Passthrough stream error {resp.status_code}: {error_body.decode()}")
+                        yield f"event: error\ndata: {error_body.decode()}\n\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if await http_request.is_disconnected():
+                            logger.info("Passthrough: client disconnected")
+                            break
+                        yield f"{line}\n"
+
+        return StreamingResponse(
+            _stream_passthrough(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+            },
         )
+    else:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, content=raw_body, headers=headers)
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+
 
 @router.post("/v1/messages")
-async def create_message(request: ClaudeMessagesRequest, http_request: Request, _: None = Depends(validate_api_key)):
-    try:
-        logger.debug(
-            f"Processing Claude request: model={request.model}, stream={request.stream}"
-        )
+async def create_message(
+    request: ClaudeMessagesRequest,
+    http_request: Request,
+    client_api_key: Optional[str] = Depends(validate_api_key),
+):
+    # Select backend for this request
+    backend_key, openai_client = _select_backend(client_api_key)
 
+    # Passthrough mode: forward raw request without format conversion
+    if backend_key.passthrough:
+        logger.info(
+            f"Request: model={request.model} -> {backend_key.name} [PASSTHROUGH], stream={request.stream}"
+        )
+        raw_body = await http_request.body()
+        return await _forward_passthrough(raw_body, backend_key, request.stream, http_request)
+
+    logger.info(
+        f"Request: model={request.model} -> {backend_key.name}({model_manager.map_claude_model_to_openai(request.model, backend_key)}), stream={request.stream}"
+    )
+
+    try:
         # Generate unique request ID for cancellation tracking
         request_id = str(uuid.uuid4())
 
-        # Convert Claude request to OpenAI format
-        openai_request = convert_claude_to_openai(request, model_manager)
+        # Convert Claude request to OpenAI format (with per-key model mapping)
+        openai_request = convert_claude_to_openai(request, model_manager, backend_key)
 
         # Check if client disconnected before processing
         if await http_request.is_disconnected():
             raise HTTPException(status_code=499, detail="Client disconnected")
 
         if request.stream:
-            # Streaming response - wrap in error handling
+            # Streaming response
             try:
                 openai_stream = openai_client.create_chat_completion_stream(
                     openai_request, request_id
@@ -91,7 +192,6 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                     },
                 )
             except HTTPException as e:
-                # Convert to proper error response for streaming
                 logger.error(f"Streaming error: {e.detail}")
                 import traceback
 
@@ -123,11 +223,22 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
 
 
 @router.post("/v1/messages/count_tokens")
-async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)):
-    try:
-        # For token counting, we'll use a simple estimation
-        # In a real implementation, you might want to use tiktoken or similar
+async def count_tokens(
+    request: ClaudeTokenCountRequest,
+    http_request: Request,
+    client_api_key: Optional[str] = Depends(validate_api_key),
+):
+    # Passthrough mode: forward count_tokens to backend
+    backend_key = config.key_pool.get_next_key(client_api_key)
+    if backend_key.passthrough:
+        logger.info(f"count_tokens -> {backend_key.name} [PASSTHROUGH]")
+        raw_body = await http_request.body()
+        return await _forward_passthrough(
+            raw_body, backend_key, stream=False, http_request=http_request,
+            target_path="/v1/messages/count_tokens",
+        )
 
+    try:
         total_chars = 0
 
         # Count system message characters
@@ -163,67 +274,77 @@ async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(valid
 @router.get("/health")
 async def health_check():
     """Health check endpoint"""
+    key_pool = config.key_pool
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "openai_api_configured": bool(config.openai_api_key),
-        "api_key_valid": config.validate_api_key(),
-        "client_api_key_validation": bool(config.anthropic_api_key),
+        "backend_keys": key_pool.all_key_names(),
+        "backend_count": len(key_pool.keys),
+        "key_mapping_enabled": key_pool.has_mapping,
+        "client_api_key_validation": key_pool.has_mapping or bool(config.anthropic_api_key),
     }
 
 
 @router.get("/test-connection")
 async def test_connection():
-    """Test API connectivity to OpenAI"""
-    try:
-        # Simple test request to verify API connectivity
-        test_response = await openai_client.create_chat_completion(
-            {
-                "model": config.small_model,
-                "messages": [{"role": "user", "content": "Hello"}],
-                "max_tokens": 5,
-            }
-        )
-
-        return {
-            "status": "success",
-            "message": "Successfully connected to OpenAI API",
-            "model_used": config.small_model,
-            "timestamp": datetime.now().isoformat(),
-            "response_id": test_response.get("id", "unknown"),
-        }
-
-    except Exception as e:
-        logger.error(f"API connectivity test failed: {e}")
-        return JSONResponse(
-            status_code=503,
-            content={
+    """Test API connectivity to each backend"""
+    results = []
+    for key_name, backend_key in config.key_pool.keys.items():
+        client = openai_clients[key_name]
+        try:
+            test_response = await client.create_chat_completion(
+                {
+                    "model": backend_key.small_model,
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 5,
+                }
+            )
+            results.append({
+                "backend": key_name,
+                "status": "success",
+                "model_used": backend_key.small_model,
+                "response_id": test_response.get("id", "unknown"),
+            })
+        except Exception as e:
+            results.append({
+                "backend": key_name,
                 "status": "failed",
-                "error_type": "API Error",
-                "message": str(e),
-                "timestamp": datetime.now().isoformat(),
-                "suggestions": [
-                    "Check your OPENAI_API_KEY is valid",
-                    "Verify your API key has the necessary permissions",
-                    "Check if you have reached rate limits",
-                ],
-            },
-        )
+                "error": str(e),
+            })
+
+    all_ok = all(r["status"] == "success" for r in results)
+    status_code = 200 if all_ok else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "success" if all_ok else "partial_failure",
+            "timestamp": datetime.now().isoformat(),
+            "backends": results,
+        },
+    )
 
 
 @router.get("/")
 async def root():
     """Root endpoint"""
+    key_pool = config.key_pool
+    backends_info = {}
+    for name, bk in key_pool.keys.items():
+        backends_info[name] = {
+            "base_url": bk.base_url,
+            "big_model": bk.big_model,
+            "middle_model": bk.middle_model,
+            "small_model": bk.small_model,
+        }
+
     return {
         "message": "Claude-to-OpenAI API Proxy v1.0.0",
         "status": "running",
         "config": {
-            "openai_base_url": config.openai_base_url,
+            "backend_count": len(key_pool.keys),
+            "backends": backends_info,
+            "key_mapping_enabled": key_pool.has_mapping,
             "max_tokens_limit": config.max_tokens_limit,
-            "api_key_configured": bool(config.openai_api_key),
-            "client_api_key_validation": bool(config.anthropic_api_key),
-            "big_model": config.big_model,
-            "small_model": config.small_model,
         },
         "endpoints": {
             "messages": "/v1/messages",

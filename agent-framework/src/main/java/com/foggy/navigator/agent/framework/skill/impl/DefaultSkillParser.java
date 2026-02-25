@@ -138,6 +138,14 @@ public class DefaultSkillParser implements SkillParser {
         return skill;
     }
 
+    @Override
+    public Skill parseResource(Resource skillMdResource, String sourcePath) throws IOException {
+        String content = readResource(skillMdResource);
+        Skill skill = parse(content);
+        skill.setPath(sourcePath);
+        return skill;
+    }
+
     private String readResource(Resource resource) throws IOException {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {

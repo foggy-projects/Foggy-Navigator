@@ -1,3 +1,7 @@
+param(
+    [switch]$SkipBuild
+)
+
 # Configuration
 $JAVA_PATH = "C:\Program Files\Java\jdk-17.0.1\bin\java.exe"
 $BACKEND_PORT = 8112
@@ -33,19 +37,30 @@ if ($portConnection) {
 Write-Host ""
 
 # Step 2: Build (skip clean to avoid locked jar issues)
-Write-Host "[2/4] Building project (mvn package)..." -ForegroundColor Yellow
-Write-Host "  This may take 30-60 seconds..." -ForegroundColor Gray
+if ($SkipBuild) {
+    if (-not (Test-Path $JAR_PATH)) {
+        Write-Host "[2/4] JAR not found, building anyway..." -ForegroundColor Yellow
+        $SkipBuild = $false
+    } else {
+        Write-Host "[2/4] Build skipped (-SkipBuild)" -ForegroundColor Gray
+    }
+}
 
-$buildOutput = & mvn package -pl launcher -am -DskipTests 2>&1
+if (-not $SkipBuild) {
+    Write-Host "[2/4] Building project (mvn package)..." -ForegroundColor Yellow
+    Write-Host "  This may take 30-60 seconds..." -ForegroundColor Gray
 
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "  Build successful!" -ForegroundColor Green
-} else {
-    Write-Host "  Build failed!" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Build output:" -ForegroundColor Yellow
-    Write-Host $buildOutput
-    exit 1
+    $buildOutput = & mvn package -pl launcher -am -DskipTests 2>&1
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Build successful!" -ForegroundColor Green
+    } else {
+        Write-Host "  Build failed!" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Build output:" -ForegroundColor Yellow
+        Write-Host $buildOutput
+        exit 1
+    }
 }
 
 Write-Host ""
@@ -69,7 +84,7 @@ Write-Host "  Port: $BACKEND_PORT" -ForegroundColor Gray
 Write-Host ""
 
 Start-Process $JAVA_PATH `
-    -ArgumentList '-jar', $JAR_PATH, '--spring.profiles.active=docker' `
+    -ArgumentList '-Dfile.encoding=UTF-8', '-jar', $JAR_PATH, '--spring.profiles.active=docker' `
     -RedirectStandardOutput "logs\backend.log" `
     -RedirectStandardError "logs\backend-error.log" `
     -NoNewWindow

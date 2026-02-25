@@ -1,5 +1,9 @@
 package com.foggy.navigator.agent.framework.skill;
 
+import org.springframework.core.io.Resource;
+
+import java.io.IOException;
+
 /**
  * Skill 解析器接口
  * 解析 SKILL.md 文件（Claude Code 格式）
@@ -22,4 +26,13 @@ public interface SkillParser {
      * @return 解析后的 Skill（包含 references）
      */
     Skill loadFromDirectory(String skillPath);
+
+    /**
+     * 从 Spring Resource 直接解析 Skill（用于 JAR 内资源）
+     *
+     * @param skillMdResource SKILL.md 的 Resource
+     * @param sourcePath 来源路径（仅做记录）
+     * @return 解析后的 Skill
+     */
+    Skill parseResource(Resource skillMdResource, String sourcePath) throws IOException;
 }

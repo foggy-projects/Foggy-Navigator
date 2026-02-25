@@ -65,16 +65,21 @@ public class DefaultSkillManager implements SkillManager {
                     String resourcePath = resource.getURL().toString();
                     String skillDir = resourcePath.substring(0, resourcePath.lastIndexOf("/SKILL.md"));
 
-                    // 转换为 classpath: 格式
+                    // 转换为 classpath: 格式（仅在 exploded classes 模式下有效）
                     int classpathIndex = skillDir.indexOf("classes/");
                     if (classpathIndex >= 0) {
                         skillDir = "classpath:" + skillDir.substring(classpathIndex + 8);
+                        Skill skill = skillParser.loadFromDirectory(skillDir);
+                        skill.setAgentId(agentId);
+                        registerSkill(skill);
+                        log.debug("Loaded skill: {} from {}", skill.getName(), skillDir);
+                    } else {
+                        // JAR 模式：直接读取 Resource 内容，无需转换路径
+                        Skill skill = skillParser.parseResource(resource, skillDir);
+                        skill.setAgentId(agentId);
+                        registerSkill(skill);
+                        log.debug("Loaded skill: {} from JAR: {}", skill.getName(), skillDir);
                     }
-
-                    Skill skill = skillParser.loadFromDirectory(skillDir);
-                    skill.setAgentId(agentId);
-                    registerSkill(skill);
-                    log.debug("Loaded skill: {} from {}", skill.getName(), skillDir);
                 } catch (Exception e) {
                     log.warn("Failed to load skill from: {}", resource.getURL(), e);
                 }
