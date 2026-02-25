@@ -2,9 +2,12 @@ package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
+import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.SshConnectForm;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
+import com.foggy.navigator.claude.worker.service.WorkingDirectoryService;
 import com.foggy.navigator.common.annotation.RequireAuth;
+import com.foggy.navigator.common.context.UserContext;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,9 +27,11 @@ import java.util.Map;
 public class SshProxyController {
 
     private final ClaudeWorkerService workerService;
+    private final WorkingDirectoryService directoryService;
 
     /**
      * 建立 SSH 连接 — 代理到 Worker，返回 { sessionId, wsUrl }
+     * 如果 directoryId 有值且目录已配置 SSH 凭证，则自动使用。
      */
     @PostMapping("/connect")
     public RX<Map<String, Object>> connect(@RequestBody SshConnectForm form) {
@@ -34,13 +39,43 @@ public class SshProxyController {
         if (worker == null) {
             return RX.failB("Worker not found: " + form.getWorkerId());
         }
+
+        String host = form.getHost();
+        String username = form.getUsername();
+        String password = form.getPassword();
+
+        // 从目录配置自动填充 SSH 凭证
+        if (form.getDirectoryId() != null && !form.getDirectoryId().isEmpty()) {
+            String userId = UserContext.getCurrentUserId();
+            try {
+                WorkingDirectoryEntity dir = directoryService.getDirectoryEntity(userId, form.getDirectoryId());
+                if (username == null || username.isEmpty()) {
+                    username = dir.getSshUsername();
+                }
+                if (password == null || password.isEmpty()) {
+                    password = directoryService.getDecryptedSshPassword(dir);
+                }
+            } catch (Exception e) {
+                log.debug("Directory SSH credential lookup failed: {}", e.getMessage());
+            }
+        }
+
+        // host fallback: Worker hostname
+        if (host == null || host.isEmpty()) {
+            host = worker.getHostname();
+        }
+
+        if (host == null || host.isEmpty() || username == null || username.isEmpty() || password == null || password.isEmpty()) {
+            return RX.failB("SSH 连接信息不完整：需要 host、username、password");
+        }
+
         ClaudeWorkerClient client = workerService.createClient(worker);
 
         Map<String, Object> body = new java.util.HashMap<>();
-        body.put("host", form.getHost());
+        body.put("host", host);
         body.put("port", form.getPort());
-        body.put("username", form.getUsername());
-        body.put("password", form.getPassword());
+        body.put("username", username);
+        body.put("password", password);
         body.put("cols", form.getCols());
         body.put("rows", form.getRows());
 

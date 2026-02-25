@@ -169,6 +169,18 @@ public class WorkingDirectoryService {
             }
         }
 
+        // SSH 凭证
+        if (form.getSshUsername() != null) {
+            entity.setSshUsername(form.getSshUsername().isEmpty() ? null : form.getSshUsername());
+        }
+        if (form.getSshPassword() != null) {
+            if (form.getSshPassword().isEmpty()) {
+                entity.setSshPassword(null);
+            } else {
+                entity.setSshPassword(credentialEncryptor.encrypt(form.getSshPassword()));
+            }
+        }
+
         // Auth 默认配置
         if (form.getDefaultAuthMode() != null) {
             if (form.getDefaultAuthMode().isEmpty()) {
@@ -237,6 +249,14 @@ public class WorkingDirectoryService {
     public WorkingDirectoryEntity getDirectoryEntity(String userId, String directoryId) {
         return directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+    }
+
+    /**
+     * 解密 SSH 密码
+     */
+    public String getDecryptedSshPassword(WorkingDirectoryEntity entity) {
+        if (entity.getSshPassword() == null) return null;
+        return credentialEncryptor.decrypt(entity.getSshPassword());
     }
 
     /**
@@ -408,6 +428,8 @@ public class WorkingDirectoryService {
                 .projectTaskPrompt(entity.getProjectTaskPrompt())
                 .worktree(entity.getWorktree())
                 .sourceDirectoryId(entity.getSourceDirectoryId())
+                .sshUsername(entity.getSshUsername())
+                .sshPasswordConfigured(entity.getSshPassword() != null)
                 .defaultAuthMode(entity.getDefaultAuthMode())
                 .defaultAuthConfigured(entity.getDefaultAuthToken() != null)
                 .defaultBaseUrl(entity.getDefaultBaseUrl())

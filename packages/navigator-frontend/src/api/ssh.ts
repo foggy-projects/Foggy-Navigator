@@ -8,6 +8,7 @@ export interface SshConnectResult {
 
 export async function sshConnect(form: {
   workerId: string
+  directoryId?: string
   host: string
   port: number
   username: string

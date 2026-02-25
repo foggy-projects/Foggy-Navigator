@@ -826,6 +826,18 @@
             />
           </el-select>
         </el-form-item>
+        <el-divider content-position="left">SSH 终端</el-divider>
+        <el-form-item label="SSH 用户名">
+          <el-input v-model="editDirForm.sshUsername" placeholder="如 root" />
+        </el-form-item>
+        <el-form-item label="SSH 密码">
+          <el-input
+            v-model="editDirForm.sshPassword"
+            type="password"
+            show-password
+            :placeholder="selectedDirectory?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
+          />
+        </el-form-item>
         <el-divider content-position="left">Auth 默认配置</el-divider>
         <el-form-item label="认证模式">
           <el-radio-group v-model="editDirForm.defaultAuthMode">
@@ -1246,6 +1258,8 @@ const editDirForm = ref({
   agentTeamsConfig: '',
   projectTaskPrompt: '',
   parentProjectId: '' as string,
+  sshUsername: '' as string,
+  sshPassword: '' as string,
   defaultAuthMode: '' as string,
   defaultAuthToken: '' as string,
   defaultBaseUrl: '' as string,
@@ -1279,7 +1293,7 @@ async function loadPlatformModelConfig() {
     if (override && models.some((m) => m.id === override.modelConfigId)) {
       platformModelConfigId.value = override.modelConfigId
     } else if (platformModels.value.length > 0) {
-      platformModelConfigId.value = platformModels.value[0].id
+      platformModelConfigId.value = platformModels.value[0]!.id
     }
   } catch {
     // best-effort
@@ -1757,6 +1771,11 @@ async function handleEditDirectory() {
     }
     if (selectedDirectory.value?.directoryType === 'STANDARD') {
       form.parentProjectId = editDirForm.value.parentProjectId || ''
+    }
+    // SSH config
+    form.sshUsername = editDirForm.value.sshUsername
+    if (editDirForm.value.sshPassword) {
+      form.sshPassword = editDirForm.value.sshPassword
     }
     // Auth config
     form.defaultAuthMode = editDirForm.value.defaultAuthMode
@@ -2601,6 +2620,8 @@ watch(showEditDirectoryDialog, (val) => {
       agentTeamsConfig: selectedDirectory.value.agentTeamsConfig || '',
       projectTaskPrompt: selectedDirectory.value.projectTaskPrompt || '',
       parentProjectId: selectedDirectory.value.parentProjectId || '',
+      sshUsername: selectedDirectory.value.sshUsername || '',
+      sshPassword: '',
       defaultAuthMode: selectedDirectory.value.defaultAuthMode || '',
       defaultAuthToken: '',
       defaultBaseUrl: selectedDirectory.value.defaultBaseUrl || '',
@@ -2641,6 +2662,23 @@ function formatTime(dateStr: string): string {
 
 // ===== SSH Terminal Handlers =====
 
+function prefillSshForm() {
+  const worker = selectedWorkerEntity.value
+  const dir = selectedDirectory.value
+  sshForm.value = {
+    host: worker?.hostname || '',
+    port: 22,
+    username: dir?.sshUsername || '',
+    password: '',
+  }
+}
+
+/** 目录已配置 SSH 凭证时直连（密码由后端自动填充） */
+function dirHasSshCredentials(): boolean {
+  const dir = selectedDirectory.value
+  return !!(dir?.sshUsername && dir?.sshPasswordConfigured)
+}
+
 function handleToggleTerminal() {
   const ws = activeWorkspace.value
   if (!ws) return
@@ -2648,58 +2686,78 @@ function handleToggleTerminal() {
     ws.terminalVisible.value = false
   } else {
     ws.terminalVisible.value = true
-    // If no tabs yet, open SSH dialog
+    // If no tabs yet, open new terminal
     if (ws.terminalTabs.value.length === 0) {
-      // Pre-fill host from worker hostname
-      const worker = selectedWorkerEntity.value
-      sshForm.value = {
-        host: worker?.hostname || '',
-        port: 22,
-        username: '',
-        password: '',
+      if (dirHasSshCredentials()) {
+        // 目录已保存凭证，直接连接
+        doSshConnect()
+      } else {
+        prefillSshForm()
+        showSshDialog.value = true
       }
-      showSshDialog.value = true
     }
   }
 }
 
 function handleAddTerminalTab() {
-  // Pre-fill host from worker hostname
-  const worker = selectedWorkerEntity.value
-  sshForm.value = {
-    host: worker?.hostname || '',
-    port: 22,
-    username: '',
-    password: '',
+  if (dirHasSshCredentials()) {
+    doSshConnect()
+  } else {
+    prefillSshForm()
+    showSshDialog.value = true
   }
-  showSshDialog.value = true
 }
 
 async function handleSshConnect() {
-  const ws = activeWorkspace.value
-  if (!ws || !selectedWorkerId.value) return
+  // 从对话框提交
   if (!sshForm.value.host || !sshForm.value.username || !sshForm.value.password) {
     ElMessage.warning('请填写完整的 SSH 连接信息')
     return
   }
+  await doSshConnect({
+    host: sshForm.value.host,
+    port: sshForm.value.port,
+    username: sshForm.value.username,
+    password: sshForm.value.password,
+  })
+}
+
+/**
+ * 执行 SSH 连接。
+ * overrides 为空时由后端从 directoryId 自动读取保存的凭证。
+ */
+async function doSshConnect(overrides?: { host: string; port: number; username: string; password: string }) {
+  const ws = activeWorkspace.value
+  if (!ws || !selectedWorkerId.value) return
   sshConnecting.value = true
   try {
-    const result = await sshApi.sshConnect({
+    const connectForm: Parameters<typeof sshApi.sshConnect>[0] = {
       workerId: selectedWorkerId.value,
-      host: sshForm.value.host,
-      port: sshForm.value.port,
-      username: sshForm.value.username,
-      password: sshForm.value.password,
-    })
+      host: overrides?.host || '',
+      port: overrides?.port || 22,
+      username: overrides?.username || '',
+      password: overrides?.password || '',
+    }
+    // 传 directoryId 让后端自动填充已保存的凭证
+    if (selectedDirectoryId.value) {
+      (connectForm as Record<string, unknown>).directoryId = selectedDirectoryId.value
+    }
+    const result = await sshApi.sshConnect(connectForm)
 
     // Create WebSocket connection
     const wsConn = new WebSocket(result.wsUrl)
     wsConn.binaryType = 'arraybuffer'
 
+    const dir = selectedDirectory.value
+    const worker = selectedWorkerEntity.value
+    const label = overrides?.username
+      ? `${overrides.username}@${overrides.host}`
+      : `${dir?.sshUsername || ''}@${worker?.hostname || ''}`
+
     const tabId = `term-${Date.now()}`
     const tab: SshTerminalTab = {
       tabId,
-      label: `${sshForm.value.username}@${sshForm.value.host}`,
+      label,
       sshSessionId: result.sessionId,
       wsUrl: result.wsUrl,
       ws: wsConn,

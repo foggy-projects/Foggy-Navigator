@@ -438,7 +438,6 @@ import {
   updateMemory as apiUpdateMemory,
   deleteMemory as apiDeleteMemory,
   listCredentials as apiListCredentials,
-  getCredential as apiGetCredential,
   saveCredential as apiSaveCredential,
   updateCredential as apiUpdateCredential,
   deleteCredential as apiDeleteCredential,

@@ -14,6 +14,10 @@ public class UpdateWorkingDirectoryForm {
     private String projectTaskPrompt;
     /** 可修改归属 PROJECT */
     private String parentProjectId;
+    /** SSH 用户名, "" 清除, null 不改 */
+    private String sshUsername;
+    /** SSH 密码（明文提交, "" 清除, null 不改） */
+    private String sshPassword;
     /** 默认认证模式, "" 清除, null 不改 */
     private String defaultAuthMode;
     /** 默认认证 Token（明文提交, "" 清除, null 不改） */
