@@ -82,7 +82,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import { useInputMemory } from '@/composables/useInputMemory'
@@ -114,12 +114,31 @@ const paneInputScope = computed(() => {
 })
 const paneMemory = useInputMemory(paneInputScope)
 
-// Restore draft on mount / scope change
+// Flag to prevent saving draft during initial load
+let isInitialLoad = true
+
+// Load draft on mount or when scope changes
 watch(paneInputScope, () => {
-  paneInput.value = paneMemory.loadDraft()
+  const draft = paneMemory.loadDraft()
+  if (draft) {
+    paneInput.value = draft
+  }
+  // Mark initial load as complete after the draft is loaded
+  setTimeout(() => {
+    isInitialLoad = false
+  }, 0)
+}, { immediate: true })
+
+// Save draft with debounce (only after initial load is complete)
+let saveDraftTimer: ReturnType<typeof setTimeout> | null = null
+watch(paneInput, (val) => {
+  if (isInitialLoad) return // Don't save during initial load
+  if (saveDraftTimer) clearTimeout(saveDraftTimer)
+  saveDraftTimer = setTimeout(() => {
+    paneMemory.saveDraft(val)
+    saveDraftTimer = null
+  }, 300) // Save after 300ms of no changes
 })
-// Save draft on every keystroke
-watch(paneInput, (val) => paneMemory.saveDraft(val))
 
 function handlePaneHistoryPrev() {
   const text = paneMemory.historyPrev(paneInput.value)
@@ -182,6 +201,14 @@ function handlePlanRespond(permissionId: string, decision: string, denyMessage?:
 function handleCommand(payload: { command: string; value: string | number }) {
   emit('command', payload)
 }
+
+// Cleanup debounce timer on unmount
+onUnmounted(() => {
+  if (saveDraftTimer) {
+    clearTimeout(saveDraftTimer)
+    saveDraftTimer = null
+  }
+})
 
 function handleRewind(turnIndex: number) {
   emit('rewind', props.paneState.paneId, turnIndex)
