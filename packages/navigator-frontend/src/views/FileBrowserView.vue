@@ -5,6 +5,12 @@
       <div class="sidebar-tabs">
         <button :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">文件</button>
         <button :class="{ active: activeTab === 'git' }" @click="switchToGitTab">Git 改动</button>
+        <button
+          class="toggle-hidden"
+          :class="{ on: showHidden }"
+          :title="showHidden ? '隐藏 . 文件' : '显示 . 文件'"
+          @click="toggleHidden"
+        >.*</button>
       </div>
 
       <!-- File tree tab -->
@@ -152,6 +158,8 @@ const showBinaryHint = ref(false)
 const showTooLargeHint = ref(false)
 const selectedDiffFile = ref('')
 
+const showHidden = ref(true)
+
 const showEditor = computed(
   () => !diffMode.value && currentFilePath.value && !showBinaryHint.value && !showTooLargeHint.value && !editorLoading.value,
 )
@@ -193,7 +201,7 @@ async function loadDirectory(dirPath?: string) {
   try {
     // Compute subPath relative to the root
     const subPath = dirPath || ''
-    const listing = await listDirectory(directoryId.value, subPath)
+    const listing = await listDirectory(directoryId.value, subPath, showHidden.value)
     currentDirPath.value = listing.path
 
     const nodes: TreeNode[] = listing.entries.map((e: FileEntry) => ({
@@ -262,7 +270,7 @@ async function handleNodeClick(data: TreeNode) {
 async function loadDirectoryForNode(node: TreeNode) {
   if (!directoryId.value) return
   try {
-    const listing = await listDirectory(directoryId.value, getSubPath(node.fullPath))
+    const listing = await listDirectory(directoryId.value, getSubPath(node.fullPath), showHidden.value)
     node.children = listing.entries.map((e: FileEntry) => ({
       label: e.name,
       fullPath: e.path,
@@ -329,6 +337,13 @@ const searchMode = ref<'file' | 'content'>('file')
 function openSearch(mode: 'file' | 'content') {
   searchMode.value = mode
   searchDialogVisible.value = true
+}
+
+function toggleHidden() {
+  showHidden.value = !showHidden.value
+  // Reload the entire tree with new setting
+  treeData.value = []
+  loadDirectory()
 }
 
 function getRootDir(): string | null {
@@ -629,6 +644,20 @@ watch(() => route.query.directoryId, () => {
 
 .sidebar-tabs button:hover {
   color: #ddd;
+}
+
+.toggle-hidden {
+  flex: none !important;
+  width: 32px;
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: bold;
+  color: #555 !important;
+  border-bottom-color: transparent !important;
+}
+
+.toggle-hidden.on {
+  color: #e2c08d !important;
 }
 
 .tree-container {

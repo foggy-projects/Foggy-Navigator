@@ -87,7 +87,7 @@ export async function listDirectory(
 ): Promise<DirectoryListing> {
   const params: Record<string, string> = { directoryId }
   if (subPath) params.subPath = subPath
-  if (showHidden) params.showHidden = 'true'
+  if (showHidden !== undefined) params.showHidden = String(showHidden)
   const rx = (await client.get('/file-browser/list', { params })) as unknown as RX<DirectoryListing>
   return rx.data
 }
