@@ -82,6 +82,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/working-directories", "/api/v1/working-directories/**").permitAll()
                         .requestMatchers("/api/v1/ssh/connect", "/api/v1/ssh/connect/**").permitAll()
                         .requestMatchers("/api/v1/file-browser", "/api/v1/file-browser/**").permitAll()
+                        .requestMatchers("/api/v1/ssh/", "/api/v1/ssh/**").permitAll()
                         // 开放 Spring Boot 错误端点（避免异常转发时被拦截返回 403）
                         .requestMatchers("/error").permitAll()
                         // 其他所有请求都需要认证（但具体权限检查由 @RequireAuth AOP 处理）
