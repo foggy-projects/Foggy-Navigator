@@ -539,11 +539,19 @@ public class ClaudeTaskService {
         }
 
         // 用户选择的平台模型配置 → 优先于目录默认 auth
+        // 仅当 ConversationConfig 尚未绑定时，才使用并保存 modelConfigId 的 auth
         if (modelConfigId != null && !modelConfigId.isEmpty()) {
             LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
             if (modelConfig != null && Boolean.TRUE.equals(modelConfig.getHasApiKey())) {
                 String decryptedApiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
                 log.info("Auth resolved from platform model config: {}", modelConfig.getName());
+
+                // 保存到 ConversationConfigEntity
+                String authMode = (modelConfig.getBaseUrl() != null && !modelConfig.getBaseUrl().isEmpty())
+                        ? "CUSTOM_ENDPOINT" : "API_KEY";
+                conversationConfigService.bindAuthFromDirectory(
+                        sessionId, workerId, userId, authMode, decryptedApiKey, modelConfig.getBaseUrl());
+
                 return new String[]{decryptedApiKey, null, modelConfig.getBaseUrl()};
             }
         }
