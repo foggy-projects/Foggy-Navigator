@@ -180,13 +180,27 @@ const panelStyle = ref<Record<string, string>>({})
 function updatePanelPosition() {
   if (!wrapRef.value) return
   const rect = wrapRef.value.getBoundingClientRect()
-  panelStyle.value = {
+  const panelMaxH = 280
+  const gap = 4
+  const spaceAbove = rect.top
+  const spaceBelow = window.innerHeight - rect.bottom
+
+  const style: Record<string, string> = {
     position: 'fixed',
     left: `${rect.left}px`,
     width: `${rect.width}px`,
-    bottom: `${window.innerHeight - rect.top + 4}px`,
-    maxHeight: '280px',
+    maxHeight: `${panelMaxH}px`,
   }
+
+  if (spaceAbove >= panelMaxH || spaceAbove > spaceBelow) {
+    // Enough room above (or more than below) → open upward
+    style.bottom = `${window.innerHeight - rect.top + gap}px`
+  } else {
+    // More room below → open downward
+    style.top = `${rect.bottom + gap}px`
+  }
+
+  panelStyle.value = style
 }
 
 const skillItems = computed<SkillItem[]>(() =>
