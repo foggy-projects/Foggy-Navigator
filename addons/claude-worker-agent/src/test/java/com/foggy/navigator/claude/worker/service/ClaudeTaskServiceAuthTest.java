@@ -11,6 +11,7 @@ import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,11 +55,14 @@ class ClaudeTaskServiceAuthTest {
         llmModelManager = mock(LlmModelManager.class);
         var taskRepository = mock(com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository.class);
 
+        UserAuthService userAuthService = mock(UserAuthService.class);
+        when(userAuthService.generateServiceToken(anyString())).thenReturn("mock-jwt-token");
+
         service = new ClaudeTaskService(
                 taskRepository,
                 workerService, configService, directoryService,
                 workingDirectoryRepository,
-                sessionManager, publisher, llmModelManager);
+                sessionManager, publisher, llmModelManager, userAuthService);
 
         // Default worker mock (online)
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
