@@ -71,7 +71,7 @@ public class WorkerStreamRelay {
                             event.getClaudeSessionId(), event.getModel(), event.getMaxTurns(),
                             event.getAgentTeamsJson(), event.getImages(),
                             event.getApiKey(), event.getAuthToken(), event.getBaseUrl(),
-                            event.getPermissionMode())
+                            event.getPermissionMode(), event.getNavigatorApiKey())
                     .doOnNext(sse -> {
                         String data = sse.data();
                         if (data == null || data.isEmpty()) {

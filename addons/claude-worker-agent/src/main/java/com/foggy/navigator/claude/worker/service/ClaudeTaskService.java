@@ -15,6 +15,7 @@ import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +49,7 @@ public class ClaudeTaskService {
     private final SessionManager sessionManager;
     private final ApplicationEventPublisher eventPublisher;
     private final LlmModelManager llmModelManager;
+    private final UserAuthService userAuthService;
 
     /**
      * 创建任务
@@ -112,12 +114,16 @@ public class ClaudeTaskService {
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
 
+        // 5.5. 获取用户的 Navigator API Key（用于注入 CLI 环境变量）
+        String navigatorApiKey = userAuthService.getActiveApiKey(userId).orElse(null);
+
         // 6. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
                 form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(),
-                authParams[0], authParams[1], authParams[2], form.getPermissionMode()));
+                authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
+                navigatorApiKey));
 
         return toDTO(entity);
     }
@@ -190,11 +196,15 @@ public class ClaudeTaskService {
         // 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
 
+        // 获取用户的 Navigator API Key（用于注入 CLI 环境变量）
+        String navigatorApiKey = userAuthService.getActiveApiKey(userId).orElse(null);
+
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
                 form.getModel(), form.getMaxTurns(), agentTeamsJson,
-                null, authParams[0], authParams[1], authParams[2], form.getPermissionMode()));
+                null, authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
+                navigatorApiKey));
 
         return toDTO(entity);
     }

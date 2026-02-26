@@ -69,6 +69,11 @@ public interface UserAuthService {
     List<ApiKeyDTO> listApiKeysByUser(String userId);
 
     /**
+     * 获取用户的第一个有效 API Key（明文），用于注入 CLI 环境变量
+     */
+    Optional<String> getActiveApiKey(String userId);
+
+    /**
      * 验证用户是否有指定角色
      */
     boolean hasRole(String userId, String role);

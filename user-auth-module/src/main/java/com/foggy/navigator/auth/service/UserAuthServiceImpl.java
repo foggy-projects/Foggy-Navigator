@@ -246,6 +246,15 @@ public class UserAuthServiceImpl implements UserAuthService {
     }
 
     @Override
+    public Optional<String> getActiveApiKey(String userId) {
+        return apiKeyRepository.findByUserId(userId).stream()
+                .filter(e -> e.getEnabled() &&
+                        (e.getExpiresAt() == null || e.getExpiresAt().isAfter(LocalDateTime.now())))
+                .findFirst()
+                .map(ApiKeyEntity::getApiKey);
+    }
+
+    @Override
     public boolean hasRole(String userId, String role) {
         return userRepository.findById(userId)
                 .map(user -> user.getRoles() != null && user.getRoles().contains(role))

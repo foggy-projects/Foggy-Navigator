@@ -48,7 +48,7 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson) {
-        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null);
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null);
     }
 
     /**
@@ -58,7 +58,8 @@ public class ClaudeWorkerClient {
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson, String images,
                                                        String apiKey, String authToken, String baseUrl,
-                                                       String permissionMode) {
+                                                       String permissionMode,
+                                                       String navigatorApiKey) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) {
@@ -100,6 +101,10 @@ public class ClaudeWorkerClient {
         // Permission mode
         if (permissionMode != null && !permissionMode.isEmpty()) {
             body.put("permission_mode", permissionMode);
+        }
+        // Navigator platform API Key (for CLI env injection)
+        if (navigatorApiKey != null && !navigatorApiKey.isEmpty()) {
+            body.put("navigator_api_key", navigatorApiKey);
         }
 
         return webClient.post()

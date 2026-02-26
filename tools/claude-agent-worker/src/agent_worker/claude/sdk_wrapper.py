@@ -346,6 +346,7 @@ class SdkWrapper:
         api_key: str | None = None,
         auth_token: str | None = None,
         base_url: str | None = None,
+        navigator_api_key: str | None = None,
     ) -> dict[str, str]:
         """Build an environment-variable dict to inject into the CLI subprocess.
 
@@ -370,6 +371,9 @@ class SdkWrapper:
             env["ANTHROPIC_AUTH_TOKEN"] = token
         if url:
             env["ANTHROPIC_BASE_URL"] = url
+        # Navigator platform API key — allows CLI skills to call Navigator API
+        if navigator_api_key:
+            env["NAVIGATOR_API_KEY"] = navigator_api_key
         return env
 
     # -- Agent Teams ---------------------------------------------------------
@@ -490,6 +494,7 @@ class SdkWrapper:
         auth_token: str | None = None,
         base_url: str | None = None,
         permission_mode: str | None = None,
+        navigator_api_key: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
@@ -540,7 +545,8 @@ class SdkWrapper:
         heartbeat_timeout = settings.task_heartbeat_timeout_seconds
 
         try:
-            env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url)
+            env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url,
+                                  navigator_api_key=navigator_api_key)
 
             # Build SDK options.  We use keyword arguments so that the call
             # works with both ``ClaudeAgentOptions`` and ``ClaudeCodeOptions``.
