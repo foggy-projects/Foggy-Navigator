@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     使用 HBuilderX CLI 提交云端打包任务。
-    流程: pnpm build:app-android → HBuilderX CLI import → CLI pack → 下载 APK
+    流程: pnpm build:app-android → HBuilderX CLI import → CLI pack → 下载 APK → 上传 uni-admin
 
     前提:
     1. HBuilderX 已安装且 CLI 可用（D:\work\HBuilderX\cli.exe 或配置 PATH）
@@ -92,7 +92,7 @@ if (-not (Test-Path $KeystorePath)) {
 # ==============================================
 # Step 1: 使用 pnpm 预编译 App 资源
 # ==============================================
-Write-Host "[1/4] 预编译 App Android 资源..." -ForegroundColor Cyan
+Write-Host "[1/5] 预编译 App Android 资源..." -ForegroundColor Cyan
 
 Push-Location $ProjectRoot
 try {
@@ -112,7 +112,7 @@ Write-Host "  编译完成 → $CompiledAppDir" -ForegroundColor Green
 # Step 2: 在 HBuilderX 中导入编译产物
 # ==============================================
 Write-Host ""
-Write-Host "[2/4] 导入编译产物到 HBuilderX..." -ForegroundColor Cyan
+Write-Host "[2/5] 导入编译产物到 HBuilderX..." -ForegroundColor Cyan
 
 # 关闭可能已打开的源项目（避免冲突）
 & $HBUILDERX_CLI project close --path $ProjectRoot 2>$null
@@ -128,7 +128,7 @@ Write-Host "  已导入: $CompiledAppDir" -ForegroundColor Green
 # Step 3: 提交云端打包
 # ==============================================
 Write-Host ""
-Write-Host "[3/4] 提交 DCloud 云端打包..." -ForegroundColor Cyan
+Write-Host "[3/5] 提交 DCloud 云端打包..." -ForegroundColor Cyan
 Write-Host "  平台: Android" -ForegroundColor Gray
 Write-Host "  包名: com.foggy.navigator" -ForegroundColor Gray
 Write-Host "  签名: $KeystorePath (alias: $KEY_ALIAS)" -ForegroundColor Gray
@@ -172,7 +172,7 @@ $downloadUrl = ($packResult | Select-String -Pattern 'https?://[^\s]+\.apk' | Se
 # Step 4: 下载 APK
 # ==============================================
 Write-Host ""
-Write-Host "[4/4] 下载 APK..." -ForegroundColor Cyan
+Write-Host "[4/5] 下载 APK..." -ForegroundColor Cyan
 
 if (-not (Test-Path $DistDir)) {
     New-Item -ItemType Directory -Path $DistDir | Out-Null
@@ -210,13 +210,35 @@ if ($downloadUrl) {
 & $HBUILDERX_CLI project close --path $CompiledAppDir 2>$null
 & $HBUILDERX_CLI project open --path $ProjectRoot 2>$null
 
+# ==============================================
+# Step 5: 上传到 uni-admin 升级中心
+# ==============================================
+Write-Host ""
+Write-Host "[5/5] 发布到 uni-admin 升级中心..." -ForegroundColor Cyan
+
+$apkPath = $apkDest
+if (-not (Test-Path $apkPath)) {
+    Write-Host "  APK 文件不存在，跳过自动发布" -ForegroundColor Yellow
+} else {
+    $publishTitle = Read-Host "  更新标题 (回车使用默认: v$version)"
+    if ([string]::IsNullOrWhiteSpace($publishTitle)) { $publishTitle = "v$version" }
+
+    $publishContent = Read-Host "  更新内容 (回车使用默认)"
+    if ([string]::IsNullOrWhiteSpace($publishContent)) { $publishContent = "Foggy Navigator v$version" }
+
+    $scriptDir = Join-Path $ProjectRoot "scripts"
+    $apiScript = Join-Path $scriptDir "uni-admin-api.js"
+
+    node $apiScript publish --type native_app --version $version --title $publishTitle --content $publishContent --file $apkPath
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "  自动发布未成功，请手动在 uni-admin 操作" -ForegroundColor Yellow
+    }
+}
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  APK 构建流程完成" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
-Write-Host ""
-Write-Host "后续步骤:" -ForegroundColor Cyan
-Write-Host "  1. 将 APK 上传到分发平台或自有服务器" -ForegroundColor Gray
-Write-Host "  2. 在 uni-admin 升级中心创建 native_app 类型版本记录" -ForegroundColor Gray
-Write-Host "  3. 首次安装后，后续可使用 wgt 热更新: scripts/release.ps1" -ForegroundColor Gray
 Write-Host ""
