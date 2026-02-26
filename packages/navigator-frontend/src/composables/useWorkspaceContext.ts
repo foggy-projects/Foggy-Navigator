@@ -12,6 +12,7 @@ export interface SshTerminalTab {
   wsUrl: string
   ws: WebSocket | null
   buffer: Uint8Array[]       // cached output, replay on component re-mount
+  restored?: boolean         // true if tab was restored from backend session list
 }
 
 /**
@@ -27,6 +28,7 @@ export interface WorkspaceContext {
   terminalVisible: Ref<boolean>
   terminalHeight: Ref<number>
   terminalMaximized: Ref<boolean>
+  terminalMinimized: Ref<boolean>
   terminalTabs: Ref<SshTerminalTab[]>
   activeTermTabId: Ref<string | null>
 }
@@ -74,6 +76,7 @@ export function restoreTerminalTabs(
       wsUrl: s.wsUrl,
       ws: null,
       buffer: [],
+      restored: true,
     }
 
     try {
@@ -122,6 +125,7 @@ export function getOrCreateWorkspace(key: string): WorkspaceContext {
       terminalVisible: ref(false),
       terminalHeight: ref(250),
       terminalMaximized: ref(false),
+      terminalMinimized: ref(false),
       terminalTabs: ref<SshTerminalTab[]>([]),
       activeTermTabId: ref<string | null>(null),
     }

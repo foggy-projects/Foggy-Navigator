@@ -34,7 +34,7 @@ public class SshProxyController {
 
     /**
      * 建立 SSH 连接 — 代理到 Worker，返回 { sessionId, wsUrl }
-     * 如果 directoryId 有值且目录已配置 SSH 凭证，则自动使用。
+     * SSH 凭证从 Worker 级别读取，directoryId 有值时自动设置 cwd。
      */
     @PostMapping("/connect")
     public RX<Map<String, Object>> connect(@RequestBody SshConnectForm form) {
@@ -49,23 +49,25 @@ public class SshProxyController {
         String password = form.getPassword();
         String cwd = null;
 
-        // 从目录配置自动填充 SSH 凭证 + cwd
+        // 从 Worker 读取 SSH 凭证
+        if (username == null || username.isEmpty()) {
+            username = worker.getSshUsername();
+        }
+        if (password == null || password.isEmpty()) {
+            password = workerService.getDecryptedSshPassword(worker);
+        }
+        if (port == 22 && worker.getSshPort() != null) {
+            port = worker.getSshPort();
+        }
+
+        // 从目录读取 cwd
         if (form.getDirectoryId() != null && !form.getDirectoryId().isEmpty()) {
             String userId = UserContext.getCurrentUserId();
             try {
                 WorkingDirectoryEntity dir = directoryService.getDirectoryEntity(userId, form.getDirectoryId());
-                if (username == null || username.isEmpty()) {
-                    username = dir.getSshUsername();
-                }
-                if (password == null || password.isEmpty()) {
-                    password = directoryService.getDecryptedSshPassword(dir);
-                }
-                if (port == 22 && dir.getSshPort() != null) {
-                    port = dir.getSshPort();
-                }
                 cwd = dir.getPath();
             } catch (Exception e) {
-                log.debug("Directory SSH credential lookup failed: {}", e.getMessage());
+                log.debug("Directory lookup failed: {}", e.getMessage());
             }
         }
 

@@ -1,18 +1,18 @@
 <template>
   <div
     v-if="visible"
-    :class="['ssh-panel', { maximized }]"
-    :style="!maximized ? { height: height + 'px' } : undefined"
+    :class="['ssh-panel', { maximized, minimized }]"
+    :style="!maximized && !minimized ? { height: height + 'px' } : undefined"
   >
     <!-- Drag resize handle (top edge) -->
     <div
-      v-if="!maximized"
+      v-if="!maximized && !minimized"
       class="resize-handle"
       @mousedown="startResize"
     />
 
     <!-- Tab bar -->
-    <div class="tab-bar">
+    <div class="tab-bar" @dblclick="handleTabBarDblClick">
       <div class="tab-list">
         <div
           v-for="tab in tabs"
@@ -27,16 +27,19 @@
       </div>
       <div class="tab-actions">
         <button @click="$emit('sync')" title="同步会话">&#8635;</button>
-        <button @click="$emit('toggle-maximize')" :title="maximized ? '还原' : '最大化'">
+        <button @click="$emit('toggle-minimize')" :title="minimized ? '展开' : '最小化'">
+          {{ minimized ? '&#9650;' : '&#9660;' }}
+        </button>
+        <button v-if="!minimized" @click="$emit('toggle-maximize')" :title="maximized ? '还原' : '最大化'">
           {{ maximized ? '&#9724;' : '&#9723;' }}
         </button>
-        <button @click="$emit('pop-out')" title="弹出窗口">&#8599;</button>
+        <button v-if="!minimized" @click="$emit('pop-out')" title="弹出窗口">&#8599;</button>
         <button @click="$emit('close-panel')" title="关闭面板">&times;</button>
       </div>
     </div>
 
     <!-- Terminal content area -->
-    <div class="terminal-content">
+    <div v-show="!minimized" class="terminal-content">
       <slot />
     </div>
   </div>
@@ -48,6 +51,7 @@ import type { SshTerminalTab } from '@/composables/useWorkspaceContext'
 defineProps<{
   visible: boolean
   maximized: boolean
+  minimized: boolean
   height: number
   tabs: SshTerminalTab[]
   activeTabId: string | null
@@ -58,11 +62,16 @@ const emit = defineEmits<{
   'close-tab': [tabId: string]
   'activate-tab': [tabId: string]
   'toggle-maximize': []
+  'toggle-minimize': []
   'pop-out': []
   'close-panel': []
   'resize': [height: number]
   'sync': []
 }>()
+
+function handleTabBarDblClick() {
+  emit('toggle-minimize')
+}
 
 function startResize(e: MouseEvent) {
   e.preventDefault()
@@ -105,6 +114,10 @@ function startResize(e: MouseEvent) {
   height: 100vh !important;
 }
 
+.ssh-panel.minimized {
+  height: auto !important;
+}
+
 .resize-handle {
   height: 4px;
   cursor: ns-resize;
@@ -129,6 +142,7 @@ function startResize(e: MouseEvent) {
   height: 32px;
   padding: 0 4px;
   flex-shrink: 0;
+  user-select: none;
 }
 
 .tab-list {

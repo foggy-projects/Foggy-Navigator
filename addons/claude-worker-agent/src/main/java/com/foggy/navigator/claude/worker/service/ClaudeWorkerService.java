@@ -45,6 +45,17 @@ public class ClaudeWorkerService {
         entity.setAuthToken(encrypt(form.getAuthToken()));
         entity.setAuthMode(form.getAuthMode() != null ? form.getAuthMode() : "SUBSCRIPTION");
 
+        // SSH 凭证
+        if (form.getSshUsername() != null && !form.getSshUsername().isEmpty()) {
+            entity.setSshUsername(form.getSshUsername());
+        }
+        if (form.getSshPort() != null) {
+            entity.setSshPort(form.getSshPort());
+        }
+        if (form.getSshPassword() != null && !form.getSshPassword().isEmpty()) {
+            entity.setSshPassword(encrypt(form.getSshPassword()));
+        }
+
         workerRepository.save(entity);
         log.info("Worker registered: workerId={}, name={}, userId={}", entity.getWorkerId(), entity.getName(), userId);
         return toDTO(entity);
@@ -69,6 +80,21 @@ public class ClaudeWorkerService {
         }
         if (form.getAuthMode() != null) {
             entity.setAuthMode(form.getAuthMode());
+        }
+
+        // SSH 凭证: null 不改，空串清除，有值则加密存入
+        if (form.getSshUsername() != null) {
+            entity.setSshUsername(form.getSshUsername().isEmpty() ? null : form.getSshUsername());
+        }
+        if (form.getSshPort() != null) {
+            entity.setSshPort(form.getSshPort());
+        }
+        if (form.getSshPassword() != null) {
+            if (form.getSshPassword().isEmpty()) {
+                entity.setSshPassword(null);
+            } else {
+                entity.setSshPassword(encrypt(form.getSshPassword()));
+            }
         }
 
         workerRepository.save(entity);
@@ -123,6 +149,14 @@ public class ClaudeWorkerService {
     }
 
     /**
+     * 获取解密后的 SSH 密码
+     */
+    public String getDecryptedSshPassword(ClaudeWorkerEntity entity) {
+        if (entity.getSshPassword() == null) return null;
+        return decrypt(entity.getSshPassword());
+    }
+
+    /**
      * 创建 Worker 客户端
      */
     public ClaudeWorkerClient createClient(ClaudeWorkerEntity entity) {
@@ -168,6 +202,9 @@ public class ClaudeWorkerService {
                 .workerVersion(entity.getWorkerVersion())
                 .lastHeartbeat(entity.getLastHeartbeat())
                 .createdAt(entity.getCreatedAt())
+                .sshUsername(entity.getSshUsername())
+                .sshPort(entity.getSshPort())
+                .sshPasswordConfigured(entity.getSshPassword() != null)
                 .build();
     }
 }

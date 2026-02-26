@@ -18,6 +18,9 @@ export async function registerWorker(form: {
   baseUrl: string
   authToken: string
   authMode?: string
+  sshUsername?: string
+  sshPort?: number
+  sshPassword?: string
 }): Promise<ClaudeWorker> {
   const rx = (await client.post('/claude-workers', form)) as unknown as RX<ClaudeWorker>
   return rx.data
@@ -25,7 +28,7 @@ export async function registerWorker(form: {
 
 export async function updateWorker(
   workerId: string,
-  form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string },
+  form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string },
 ): Promise<ClaudeWorker> {
   const rx = (await client.put(`/claude-workers/${workerId}`, form)) as unknown as RX<ClaudeWorker>
   return rx.data
@@ -67,7 +70,7 @@ export async function createDirectory(form: {
 
 export async function updateDirectory(
   directoryId: string,
-  form: { projectName?: string; path?: string; agentTeamsConfig?: string; projectTaskPrompt?: string; parentProjectId?: string; defaultAuthMode?: string; defaultAuthToken?: string; defaultBaseUrl?: string },
+  form: Record<string, string | undefined>,
 ): Promise<WorkingDirectory> {
   const rx = (await client.put(
     `/working-directories/${directoryId}`,

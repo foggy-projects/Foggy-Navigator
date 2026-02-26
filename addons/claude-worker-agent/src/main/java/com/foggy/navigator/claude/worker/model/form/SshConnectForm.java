@@ -4,12 +4,13 @@ import lombok.Data;
 
 /**
  * SSH 连接表单
- * 若 directoryId 有值且目录已保存 SSH 凭证，host/username/password 可省略，从目录配置自动填充。
+ * host/username/password 可省略，从 Worker 配置自动填充。
+ * directoryId 有值时自动设置 cwd。
  */
 @Data
 public class SshConnectForm {
     private String workerId;
-    /** 可选 — 传入后从目录配置读取 SSH 凭证 */
+    /** 可选 — 传入后从目录读取 cwd */
     private String directoryId;
     /** SSH 主机，留空则使用 Worker hostname */
     private String host;

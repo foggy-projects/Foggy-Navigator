@@ -11,4 +11,7 @@ public class UpdateWorkerForm {
     private String baseUrl;
     private String authToken;
     private String authMode;
+    private String sshUsername;
+    private Integer sshPort;
+    private String sshPassword;
 }

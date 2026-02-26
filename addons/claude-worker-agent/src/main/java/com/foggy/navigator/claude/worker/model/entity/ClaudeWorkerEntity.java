@@ -54,6 +54,17 @@ public class ClaudeWorkerEntity {
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    /** SSH 用户名 */
+    @Column(length = 128)
+    private String sshUsername;
+
+    /** SSH 端口，默认 22 */
+    private Integer sshPort;
+
+    /** SSH 密码（加密存储） */
+    @Column(columnDefinition = "TEXT")
+    private String sshPassword;
+
     @Column(nullable = false)
     private LocalDateTime updatedAt;
 

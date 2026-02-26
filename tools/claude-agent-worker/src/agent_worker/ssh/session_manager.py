@@ -128,8 +128,18 @@ async def create_ssh_session(
     ssh_sessions[session_id] = session
 
     # Auto cd into working directory if provided
+    # Fire-and-forget: don't block the HTTP response; let the shell fully
+    # initialize before sending commands (PowerShell can take >1s to start)
     if cwd:
-        process.stdin.write(f"cd {cwd!r} && clear\n".encode("utf-8"))
+        async def _send_cwd(proc: asyncssh.SSHClientProcess, path: str) -> None:
+            await asyncio.sleep(1.5)
+            try:
+                # Use \r (carriage return) — that's what terminal Enter key sends
+                proc.stdin.write(f"cd '{path}'; clear\r".encode("utf-8"))
+            except Exception as exc:
+                logger.debug("Failed to send cwd command: %s", exc)
+
+        asyncio.create_task(_send_cwd(process, cwd))
 
     logger.info("SSH session %s created → %s@%s:%d (cwd=%s)", session_id, username, host, port, cwd)
     return session

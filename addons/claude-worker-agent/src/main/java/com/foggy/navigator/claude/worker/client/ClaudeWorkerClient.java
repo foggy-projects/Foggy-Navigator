@@ -526,19 +526,11 @@ public class ClaudeWorkerClient {
     public Mono<Map<String, Object>> sshConnect(Map<String, Object> body) {
         return webClient.post()
                 .uri("/api/v1/ssh/connect")
+                .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
-                .exchangeToMono(response -> {
-                    if (response.statusCode().is2xxSuccessful()) {
-                        return response.bodyToMono(Map.class).map(m -> (Map<String, Object>) m);
-                    }
-                    // Extract error detail from Worker JSON response body
-                    return response.bodyToMono(Map.class).flatMap(errBody -> {
-                        String detail = errBody != null && errBody.containsKey("detail")
-                                ? String.valueOf(errBody.get("detail"))
-                                : response.statusCode().toString();
-                        return Mono.error(new RuntimeException(detail));
-                    });
-                })
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
                 .doOnError(e -> log.warn("SSH connect failed for worker {}: {}", workerId, e.getMessage()));
     }
 

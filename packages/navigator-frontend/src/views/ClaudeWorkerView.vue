@@ -503,6 +503,7 @@
         v-if="activeWorkspace"
         :visible="activeWorkspace.terminalVisible.value"
         :maximized="activeWorkspace.terminalMaximized.value"
+        :minimized="activeWorkspace.terminalMinimized.value"
         :height="activeWorkspace.terminalHeight.value"
         :tabs="activeWorkspace.terminalTabs.value"
         :active-tab-id="activeWorkspace.activeTermTabId.value"
@@ -510,6 +511,7 @@
         @close-tab="handleCloseTerminalTab"
         @activate-tab="(id) => activeWorkspace!.activeTermTabId.value = id"
         @toggle-maximize="activeWorkspace.terminalMaximized.value = !activeWorkspace.terminalMaximized.value"
+        @toggle-minimize="handleToggleMinimize"
         @close-panel="activeWorkspace.terminalVisible.value = false"
         @resize="(h) => activeWorkspace!.terminalHeight.value = h"
         @pop-out="handlePopOutTerminal"
@@ -716,6 +718,16 @@
             <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
           </el-select>
         </el-form-item>
+        <el-divider content-position="left">SSH 终端（可选）</el-divider>
+        <el-form-item label="SSH 用户名">
+          <el-input v-model="addForm.sshUsername" placeholder="如 root" />
+        </el-form-item>
+        <el-form-item label="SSH 端口">
+          <el-input-number v-model="addForm.sshPort" :min="1" :max="65535" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="SSH 密码">
+          <el-input v-model="addForm.sshPassword" type="password" show-password placeholder="SSH 登录密码" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAddDialog = false">取消</el-button>
@@ -746,6 +758,21 @@
             <el-option label="API Key 模式" value="API_KEY" />
             <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
           </el-select>
+        </el-form-item>
+        <el-divider content-position="left">SSH 终端（可选）</el-divider>
+        <el-form-item label="SSH 用户名">
+          <el-input v-model="editForm.sshUsername" placeholder="如 root" />
+        </el-form-item>
+        <el-form-item label="SSH 端口">
+          <el-input-number v-model="editForm.sshPort" :min="1" :max="65535" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="SSH 密码">
+          <el-input
+            v-model="editForm.sshPassword"
+            type="password"
+            show-password
+            :placeholder="selectedWorkerEntity?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -826,21 +853,6 @@
               :value="proj.directoryId"
             />
           </el-select>
-        </el-form-item>
-        <el-divider content-position="left">SSH 终端</el-divider>
-        <el-form-item label="SSH 用户名">
-          <el-input v-model="editDirForm.sshUsername" placeholder="如 root" />
-        </el-form-item>
-        <el-form-item label="SSH 端口">
-          <el-input-number v-model="editDirForm.sshPort" :min="1" :max="65535" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="SSH 密码">
-          <el-input
-            v-model="editDirForm.sshPassword"
-            type="password"
-            show-password
-            :placeholder="selectedDirectory?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
-          />
         </el-form-item>
         <el-divider content-position="left">Auth 默认配置</el-divider>
         <el-form-item label="认证模式">
@@ -1246,6 +1258,9 @@ const addForm = ref({
   baseUrl: '',
   authToken: '',
   authMode: 'SUBSCRIPTION',
+  sshUsername: '',
+  sshPort: 22 as number,
+  sshPassword: '',
 })
 
 const editForm = ref({
@@ -1253,6 +1268,9 @@ const editForm = ref({
   baseUrl: '',
   authToken: '',
   authMode: 'SUBSCRIPTION',
+  sshUsername: '',
+  sshPort: 22 as number,
+  sshPassword: '',
 })
 
 const addDirForm = ref({
@@ -1268,9 +1286,6 @@ const editDirForm = ref({
   agentTeamsConfig: '',
   projectTaskPrompt: '',
   parentProjectId: '' as string,
-  sshUsername: '' as string,
-  sshPort: 22 as number,
-  sshPassword: '' as string,
   defaultAuthMode: '' as string,
   defaultAuthToken: '' as string,
   defaultBaseUrl: '' as string,
@@ -1685,7 +1700,7 @@ async function handleAdd() {
   try {
     await workerState.registerWorker(addForm.value)
     showAddDialog.value = false
-    addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION' }
+    addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '' }
     ElMessage.success('Worker 添加成功')
   } catch {
     ElMessage.error('添加失败')
@@ -1698,7 +1713,21 @@ async function handleEdit() {
   if (!selectedWorkerId.value) return
   saving.value = true
   try {
-    await workerState.updateWorker(selectedWorkerId.value, editForm.value)
+    const form: Record<string, unknown> = {
+      name: editForm.value.name,
+      baseUrl: editForm.value.baseUrl,
+      authMode: editForm.value.authMode,
+      sshUsername: editForm.value.sshUsername,
+      sshPort: editForm.value.sshPort,
+    }
+    // 密码类字段：有值才发送，空串不发（避免清空已保存的密码）
+    if (editForm.value.authToken) {
+      form.authToken = editForm.value.authToken
+    }
+    if (editForm.value.sshPassword) {
+      form.sshPassword = editForm.value.sshPassword
+    }
+    await workerState.updateWorker(selectedWorkerId.value, form)
     showEditDialog.value = false
     ElMessage.success('更新成功')
   } catch {
@@ -1788,12 +1817,6 @@ async function handleEditDirectory() {
     }
     if (selectedDirectory.value?.directoryType === 'STANDARD') {
       form.parentProjectId = editDirForm.value.parentProjectId || ''
-    }
-    // SSH config
-    form.sshUsername = editDirForm.value.sshUsername
-    form.sshPort = String(editDirForm.value.sshPort || 22)
-    if (editDirForm.value.sshPassword) {
-      form.sshPassword = editDirForm.value.sshPassword
     }
     // Auth config
     form.defaultAuthMode = editDirForm.value.defaultAuthMode
@@ -2635,6 +2658,9 @@ watch(showEditDialog, (val) => {
       baseUrl: selectedWorkerEntity.value.baseUrl,
       authToken: '',
       authMode: selectedWorkerEntity.value.authMode || 'SUBSCRIPTION',
+      sshUsername: selectedWorkerEntity.value.sshUsername || '',
+      sshPort: selectedWorkerEntity.value.sshPort || 22,
+      sshPassword: '',
     }
   }
 })
@@ -2647,9 +2673,6 @@ watch(showEditDirectoryDialog, (val) => {
       agentTeamsConfig: selectedDirectory.value.agentTeamsConfig || '',
       projectTaskPrompt: selectedDirectory.value.projectTaskPrompt || '',
       parentProjectId: selectedDirectory.value.parentProjectId || '',
-      sshUsername: selectedDirectory.value.sshUsername || '',
-      sshPort: selectedDirectory.value.sshPort || 22,
-      sshPassword: '',
       defaultAuthMode: selectedDirectory.value.defaultAuthMode || '',
       defaultAuthToken: '',
       defaultBaseUrl: selectedDirectory.value.defaultBaseUrl || '',
@@ -2692,19 +2715,18 @@ function formatTime(dateStr: string): string {
 
 function prefillSshForm() {
   const worker = selectedWorkerEntity.value
-  const dir = selectedDirectory.value
   sshForm.value = {
     host: worker?.hostname || '',
-    port: dir?.sshPort || 22,
-    username: dir?.sshUsername || '',
+    port: worker?.sshPort || 22,
+    username: worker?.sshUsername || '',
     password: '',
   }
 }
 
-/** 目录已配置 SSH 凭证时直连（密码由后端自动填充） */
-function dirHasSshCredentials(): boolean {
-  const dir = selectedDirectory.value
-  return !!(dir?.sshUsername && dir?.sshPasswordConfigured)
+/** Worker 已配置 SSH 凭证时直连（密码由后端自动填充） */
+function workerHasSshCredentials(): boolean {
+  const worker = selectedWorkerEntity.value
+  return !!(worker?.sshUsername && worker?.sshPasswordConfigured)
 }
 
 /**
@@ -2734,15 +2756,23 @@ async function syncSshSessions(force = false) {
 }
 
 function handleToggleTerminal() {
+  // Blur button so pressing Enter won't toggle the terminal again
+  ;(document.activeElement as HTMLElement)?.blur()
   const ws = activeWorkspace.value
   if (!ws) return
   if (ws.terminalVisible.value) {
+    // If minimized, restore instead of closing
+    if (ws.terminalMinimized.value) {
+      ws.terminalMinimized.value = false
+      return
+    }
     ws.terminalVisible.value = false
   } else {
     ws.terminalVisible.value = true
+    ws.terminalMinimized.value = false
     // If no tabs yet, open new terminal
     if (ws.terminalTabs.value.length === 0) {
-      if (dirHasSshCredentials()) {
+      if (workerHasSshCredentials()) {
         // 目录已保存凭证，直接连接
         doSshConnect()
       } else {
@@ -2753,8 +2783,18 @@ function handleToggleTerminal() {
   }
 }
 
+function handleToggleMinimize() {
+  const ws = activeWorkspace.value
+  if (!ws) return
+  ws.terminalMinimized.value = !ws.terminalMinimized.value
+  // Exit maximized when minimizing
+  if (ws.terminalMinimized.value && ws.terminalMaximized.value) {
+    ws.terminalMaximized.value = false
+  }
+}
+
 function handleAddTerminalTab() {
-  if (dirHasSshCredentials()) {
+  if (workerHasSshCredentials()) {
     doSshConnect()
   } else {
     prefillSshForm()
@@ -2802,11 +2842,10 @@ async function doSshConnect(overrides?: { host: string; port: number; username: 
     const wsConn = new WebSocket(result.wsUrl)
     wsConn.binaryType = 'arraybuffer'
 
-    const dir = selectedDirectory.value
     const worker = selectedWorkerEntity.value
     const label = overrides?.username
       ? `${overrides.username}@${overrides.host}`
-      : `${dir?.sshUsername || ''}@${worker?.hostname || ''}`
+      : `${worker?.sshUsername || ''}@${worker?.hostname || ''}`
 
     const tabId = `term-${Date.now()}`
     const tab: SshTerminalTab = {

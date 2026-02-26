@@ -78,6 +78,9 @@ export interface ClaudeWorker {
   workerVersion?: string
   lastHeartbeat?: string
   createdAt: string
+  sshUsername?: string
+  sshPort?: number
+  sshPasswordConfigured?: boolean
 }
 
 /** Claude 任务 */
@@ -121,9 +124,6 @@ export interface WorkingDirectory {
   projectTaskPrompt?: string
   worktree?: boolean
   sourceDirectoryId?: string
-  sshUsername?: string
-  sshPort?: number
-  sshPasswordConfigured?: boolean
   defaultAuthMode?: 'API_KEY' | 'CUSTOM_ENDPOINT' | 'SUBSCRIPTION'
   defaultAuthConfigured?: boolean
   defaultBaseUrl?: string

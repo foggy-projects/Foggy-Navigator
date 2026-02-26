@@ -20,4 +20,7 @@ public class WorkerDTO {
     private String workerVersion;
     private LocalDateTime lastHeartbeat;
     private LocalDateTime createdAt;
+    private String sshUsername;
+    private Integer sshPort;
+    private boolean sshPasswordConfigured;
 }
