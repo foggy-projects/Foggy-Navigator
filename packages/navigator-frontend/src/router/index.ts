@@ -34,6 +34,12 @@ const routes = [
     meta: { requireAuth: true },
   },
   {
+    path: '/cross-tasks',
+    name: 'CrossProjectTasks',
+    component: () => import('@/views/CrossProjectTaskView.vue'),
+    meta: { requireAuth: true },
+  },
+  {
     path: '/files',
     name: 'FileBrowser',
     component: () => import('@/views/FileBrowserView.vue'),

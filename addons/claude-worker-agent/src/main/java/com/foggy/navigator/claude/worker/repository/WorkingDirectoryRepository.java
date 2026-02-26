@@ -19,4 +19,6 @@ public interface WorkingDirectoryRepository extends JpaRepository<WorkingDirecto
 
     List<WorkingDirectoryEntity> findByParentProjectIdAndUserIdOrderByProjectNameAsc(
             String parentProjectId, String userId);
+
+    Optional<WorkingDirectoryEntity> findByDirectoryId(String directoryId);
 }

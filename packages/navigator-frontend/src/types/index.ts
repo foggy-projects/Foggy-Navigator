@@ -303,3 +303,83 @@ export interface ApiCredentialForm {
   extraHeaders?: Record<string, string>
   description?: string
 }
+
+// ===== 编程 Agent 类型 =====
+
+export type CodingAgentType = 'LOCAL_CLAUDE_WORKER' | 'EXTERNAL_A2A'
+
+/** 编程 Agent */
+export interface CodingAgent {
+  agentId: string
+  name: string
+  description?: string
+  agentType: CodingAgentType
+  workerId?: string
+  workerName?: string
+  defaultDirectoryId?: string
+  skills?: string
+  defaultBranch?: string
+  defaultDirectory?: DirectorySummary
+  authorizedDirectories?: DirectorySummary[]
+  createdAt: string
+  updatedAt: string
+}
+
+/** 目录摘要 */
+export interface DirectorySummary {
+  directoryId: string
+  projectName: string
+  path?: string
+  gitBranch?: string
+}
+
+// ===== 跨项目任务类型 =====
+
+export type CrossProjectTaskStatus = 'DRAFT' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+export type CrossProjectPhaseStatus = 'PENDING' | 'RUNNING' | 'AWAITING_REVIEW' | 'COMPLETED' | 'FAILED' | 'SKIPPED'
+
+/** 跨项目任务 */
+export interface CrossProjectTask {
+  contextId: string
+  title: string
+  description?: string
+  status: CrossProjectTaskStatus
+  currentPhaseIndex?: number
+  totalPhases: number
+  executionMode?: string
+  totalCostUsd?: number
+  initialSessionId?: string
+  initialDirectoryId?: string
+  phases: CrossProjectPhase[]
+  createdAt: string
+  updatedAt: string
+  completedAt?: string
+}
+
+/** 跨项目任务阶段 */
+export interface CrossProjectPhase {
+  phaseId: string
+  phaseIndex: number
+  phaseName: string
+  prompt: string
+  agentId?: string
+  directoryId?: string
+  workerId?: string
+  status: CrossProjectPhaseStatus
+  claudeTaskId?: string
+  phaseSessionId?: string
+  claudeSessionId?: string
+  worktreeDirectoryId?: string
+  worktreeBranch?: string
+  handoffArtifact?: string
+  incomingContext?: string
+  directoryName?: string
+  workerName?: string
+  agentName?: string
+  costUsd?: number
+  durationMs?: number
+  startedAt?: string
+  completedAt?: string
+  createdAt?: string
+  updatedAt?: string
+}
