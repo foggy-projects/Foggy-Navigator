@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onLaunch } from '@dcloudio/uni-app'
+import { onLaunch, onShow } from '@dcloudio/uni-app'
 import { getToken } from './utils/auth'
+import { checkUpgrade } from './utils/upgrade'
 
 onLaunch(() => {
   // 延迟检查登录状态，避免与初始路由渲染冲突
@@ -9,6 +10,12 @@ onLaunch(() => {
       uni.reLaunch({ url: '/pages/login/index' })
     }
   }, 100)
+})
+
+onShow(() => {
+  // #ifdef APP-PLUS
+  checkUpgrade()
+  // #endif
 })
 </script>
 

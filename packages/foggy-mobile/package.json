@@ -6,7 +6,9 @@
     "dev:h5": "uni -p h5",
     "dev:mp-weixin": "uni -p mp-weixin",
     "build:h5": "uni build -p h5",
-    "build:mp-weixin": "uni build -p mp-weixin"
+    "build:mp-weixin": "uni build -p mp-weixin",
+    "build:app-android": "uni build -p app-android",
+    "build:wgt": "uni build -p app-android && node scripts/pack-wgt.js"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4060620250520001",

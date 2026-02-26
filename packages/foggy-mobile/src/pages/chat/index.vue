@@ -34,6 +34,10 @@
         />
       </view>
     </scroll-view>
+
+    <!-- #ifdef APP-PLUS -->
+    <UpgradePopup />
+    <!-- #endif -->
   </view>
 </template>
 
@@ -44,6 +48,9 @@ import { useSessionStore } from '@/stores/session'
 import type { Session } from '@/api/types'
 import SessionItem from '@/components/SessionItem.vue'
 import EmptyState from '@/components/EmptyState.vue'
+// #ifdef APP-PLUS
+import UpgradePopup from '@/components/UpgradePopup.vue'
+// #endif
 
 const sessionStore = useSessionStore()
 const refreshing = ref(false)
