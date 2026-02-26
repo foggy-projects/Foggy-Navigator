@@ -16,7 +16,7 @@
     <description>会话管理模块 - JPA持久化、SSE推送、REST API</description>
 
     <properties>
-        <foggy-model.version>8.1.4.beta</foggy-model.version>
+        <foggy-model.version>8.1.5.beta</foggy-model.version>
     </properties>
 
     <dependencies>

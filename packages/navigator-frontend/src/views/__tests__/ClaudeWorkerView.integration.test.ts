@@ -97,13 +97,13 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     vi.mocked(claudeWorkerApi.listDirectoriesByWorker).mockResolvedValue([mockDirectory])
     vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mockResolvedValue({
       content: [mockCompletedTask],
-      totalElements: 1,
-      totalPages: 1,
+      totalSessions: 1,
+      page: 0, size: 20,
     })
     vi.mocked(claudeWorkerApi.listTasksPaged).mockResolvedValue({
       content: [],
-      totalElements: 0,
-      totalPages: 0,
+      totalSessions: 0,
+      page: 0, size: 20,
     })
   })
 
@@ -120,8 +120,8 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       // After resume, return both old and new task
       vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mockResolvedValueOnce({
         content: [mockCompletedTask],
-        totalElements: 1,
-        totalPages: 1,
+        totalSessions: 1,
+        page: 0, size: 20,
       })
 
       const wrapper = mount(ClaudeWorkerView, {
@@ -154,8 +154,8 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       // Mock second call to return both tasks
       vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mockResolvedValueOnce({
         content: [mockResumedTask, mockCompletedTask],
-        totalElements: 2,
-        totalPages: 1,
+        totalSessions: 2,
+        page: 0, size: 20,
       })
 
       // Simulate clicking "继续" button on completed task
@@ -213,8 +213,8 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       // Simulate: page was refreshed, now API returns resumed task
       vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mockResolvedValue({
         content: [mockResumedTask, mockCompletedTask],
-        totalElements: 2,
-        totalPages: 1,
+        totalSessions: 2,
+        page: 0, size: 20,
       })
 
       const wrapper = mount(ClaudeWorkerView, {

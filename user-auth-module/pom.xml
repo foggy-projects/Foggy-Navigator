@@ -71,7 +71,7 @@
         <dependency>
             <groupId>com.foggysource</groupId>
             <artifactId>foggy-core</artifactId>
-            <version>8.1.4.beta</version>
+            <version>8.1.5.beta</version>
         </dependency>
 
         <!-- MySQL Driver -->

@@ -2,6 +2,7 @@ package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.ConversationConfigDTO;
+import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.*;
@@ -14,7 +15,6 @@ import com.foggy.navigator.common.context.UserContext;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Page;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -62,11 +62,11 @@ public class ClaudeTaskController {
     }
 
     @GetMapping("/page")
-    public RX<Page<TaskDTO>> listTasksPaged(
+    public RX<SessionPageDTO> listTasksPaged(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(taskService.listTasks(userId, page, size));
+        return RX.ok(taskService.listTasksBySession(userId, page, size));
     }
 
     @PostMapping("/{taskId}/abort")
@@ -271,12 +271,12 @@ public class ClaudeTaskController {
     }
 
     @GetMapping("/directory/{directoryId}/page")
-    public RX<Page<TaskDTO>> listTasksByDirectoryPaged(
+    public RX<SessionPageDTO> listTasksByDirectoryPaged(
             @PathVariable String directoryId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(taskService.listTasksByDirectory(userId, directoryId, page, size));
+        return RX.ok(taskService.listTasksByDirectorySession(userId, directoryId, page, size));
     }
 
     @GetMapping("/worker/{workerId}/sessions")

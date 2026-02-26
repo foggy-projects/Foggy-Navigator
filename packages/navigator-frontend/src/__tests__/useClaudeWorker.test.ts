@@ -124,8 +124,8 @@ describe('useClaudeWorker', () => {
     it('uses paged API', async () => {
       mockApi.listTasksPaged.mockResolvedValue({
         content: [makeTask()],
-        totalElements: 50,
-        totalPages: 3,
+        totalSessions: 50,
+        page: 0, size: 20,
       })
 
       const { loadTasks, tasks, taskTotal } = useClaudeWorker()
@@ -155,8 +155,8 @@ describe('useClaudeWorker', () => {
     it('updates page and size then loads', async () => {
       mockApi.listTasksPaged.mockResolvedValue({
         content: [],
-        totalElements: 0,
-        totalPages: 0,
+        totalSessions: 0,
+        page: 0, size: 20,
       })
 
       const { loadTasksPage, taskPage, taskSize } = useClaudeWorker()
@@ -170,8 +170,8 @@ describe('useClaudeWorker', () => {
     it('keeps existing size if not provided', async () => {
       mockApi.listTasksPaged.mockResolvedValue({
         content: [],
-        totalElements: 0,
-        totalPages: 0,
+        totalSessions: 0,
+        page: 0, size: 20,
       })
 
       const { loadTasksPage, taskSize } = useClaudeWorker()

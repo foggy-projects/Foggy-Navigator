@@ -13,6 +13,7 @@ export interface SshTerminalTab {
   ws: WebSocket | null
   buffer: Uint8Array[]       // cached output, replay on component re-mount
   restored?: boolean         // true if tab was restored from backend session list
+  initialCommand?: string    // 连接后自动执行的命令
 }
 
 /**

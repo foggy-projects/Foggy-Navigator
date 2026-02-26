@@ -1,0 +1,14 @@
+{
+  "project": "D:/foggy-projects/Foggy-Navigator/packages/foggy-mobile",
+  "platform": "android",
+  "iscustom": false,
+  "safemode": false,
+  "android": {
+    "packagename": "com.foggy.navigator",
+    "androidpacktype": 0,
+    "certalias": "foggy-navi",
+    "certfile": "D:/foggy-projects/Foggy-Navigator/packages/foggy-mobile/keystore/foggy-navigator.keystore",
+    "certpassword": "@Shundao888",
+    "storepassword": "@Shundao888"
+  }
+}

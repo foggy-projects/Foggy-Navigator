@@ -31,6 +31,9 @@
                 ],
                 "minSdkVersion" : 21,
                 "targetSdkVersion" : 30
+            },
+            "ios" : {
+                "dSYMs" : false
             }
         },
         "modules" : {}

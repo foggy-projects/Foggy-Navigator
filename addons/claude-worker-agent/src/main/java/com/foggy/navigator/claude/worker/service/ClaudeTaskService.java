@@ -3,6 +3,7 @@ package com.foggy.navigator.claude.worker.service;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
@@ -18,7 +19,6 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -218,11 +218,23 @@ public class ClaudeTaskService {
     }
 
     /**
-     * 分页列出用户的任务
+     * 按会话分页列出用户的任务。
+     * 每页包含 size 个会话（而非任务），返回这些会话的所有任务。
      */
-    public Page<TaskDTO> listTasks(String userId, int page, int size) {
-        return taskRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(page, size))
-                .map(this::toDTO);
+    public SessionPageDTO listTasksBySession(String userId, int page, int size) {
+        // 1. 获取当前页的 sessionIds（按最新任务时间排序）
+        List<String> sessionIds = taskRepository.findDistinctSessionIdsByUser(userId, PageRequest.of(page, size));
+        if (sessionIds.isEmpty()) {
+            return SessionPageDTO.builder()
+                    .content(List.of()).totalSessions(0).page(page).size(size).build();
+        }
+        // 2. 获取这些 session 的所有任务
+        List<TaskDTO> tasks = taskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
+                .stream().map(this::toDTO).toList();
+        // 3. 获取会话总数
+        long totalSessions = taskRepository.countDistinctSessionsByUser(userId);
+        return SessionPageDTO.builder()
+                .content(tasks).totalSessions(totalSessions).page(page).size(size).build();
     }
 
     /**
@@ -235,11 +247,19 @@ public class ClaudeTaskService {
     }
 
     /**
-     * 按目录分页列出任务
+     * 按目录、按会话分页列出任务
      */
-    public Page<TaskDTO> listTasksByDirectory(String userId, String directoryId, int page, int size) {
-        return taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId, PageRequest.of(page, size))
-                .map(this::toDTO);
+    public SessionPageDTO listTasksByDirectorySession(String userId, String directoryId, int page, int size) {
+        List<String> sessionIds = taskRepository.findDistinctSessionIdsByDirectory(directoryId, userId, PageRequest.of(page, size));
+        if (sessionIds.isEmpty()) {
+            return SessionPageDTO.builder()
+                    .content(List.of()).totalSessions(0).page(page).size(size).build();
+        }
+        List<TaskDTO> tasks = taskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
+                .stream().map(this::toDTO).toList();
+        long totalSessions = taskRepository.countDistinctSessionsByDirectory(directoryId, userId);
+        return SessionPageDTO.builder()
+                .content(tasks).totalSessions(totalSessions).page(page).size(size).build();
     }
 
     /**

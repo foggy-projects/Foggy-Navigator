@@ -128,6 +128,13 @@ function setupWsHandler() {
   // interfering with shell initialization and cwd auto-cd.
   if (ws.readyState === WebSocket.CONNECTING) {
     ws.addEventListener('open', () => {
+      if (props.tab.initialCommand) {
+        const cmd = props.tab.initialCommand
+        props.tab.initialCommand = undefined
+        setTimeout(() => {
+          ws.send(cmd + '\r')
+        }, 2000) // 等 shell 初始化 + cwd 切换完成（Worker 端 1.5s）
+      }
       if (props.tab.restored) {
         ws.send('\r')
       }

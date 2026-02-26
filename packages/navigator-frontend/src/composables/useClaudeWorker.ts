@@ -27,7 +27,7 @@ export function useClaudeWorker() {
     try {
       const result = await api.listTasksPaged(taskPage.value, taskSize.value)
       tasks.value = result.content
-      taskTotal.value = result.totalElements
+      taskTotal.value = result.totalSessions
     } catch {
       // Fallback to non-paged API
       tasks.value = await api.listTasks()
