@@ -371,6 +371,37 @@
           </div>
         </div>
 
+        <!-- Agent Management Section -->
+        <div class="agent-section">
+          <div class="agent-section-header">
+            <span class="agent-section-title">Coding Agents</span>
+            <el-button size="small" @click="openAgentRegisterDialog">+ 注册 Agent</el-button>
+          </div>
+          <div v-if="agentsForWorker.length === 0" class="agent-empty">
+            暂无 Agent，点击上方注册
+          </div>
+          <div v-for="agent in agentsForWorker" :key="agent.agentId" class="agent-card">
+            <div class="agent-card-info">
+              <div class="agent-card-name">{{ agent.name }}</div>
+              <div v-if="agent.description" class="agent-card-desc">{{ agent.description }}</div>
+              <div class="agent-card-meta">
+                <span v-if="agent.defaultDirectoryId" class="agent-dir-tag">
+                  &#128193; {{ dirNameById(agent.defaultDirectoryId) }}
+                  <span v-if="dirBranchById(agent.defaultDirectoryId)" class="agent-branch">({{ dirBranchById(agent.defaultDirectoryId) }})</span>
+                </span>
+                <span v-if="agent.authorizedDirectories" class="agent-dir-count">
+                  {{ agent.authorizedDirectories.length }} 个授权目录
+                </span>
+              </div>
+            </div>
+            <div class="agent-card-actions">
+              <el-button size="small" text @click="openAgentEditDialog(agent)">编辑</el-button>
+              <el-button size="small" text @click="openAgentBindingDialog(agent)">目录</el-button>
+              <el-button size="small" text type="danger" @click="handleDeleteAgent(agent)">删除</el-button>
+            </div>
+          </div>
+        </div>
+
         <!-- Task Form: collapse when panes are open -->
         <div v-if="panes.length === 0" class="task-form">
           <el-form :model="taskForm" label-position="top" size="default">
@@ -1149,6 +1180,96 @@
       </template>
     </el-dialog>
 
+    <!-- Register Agent Dialog -->
+    <el-dialog v-model="showAgentRegisterDialog" title="注册 Agent" width="480px">
+      <el-form :model="agentForm" label-position="top">
+        <el-form-item label="名称" required>
+          <el-input v-model="agentForm.name" placeholder="如：payment-agent" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="agentForm.description" placeholder="可选描述" />
+        </el-form-item>
+        <el-form-item label="默认工作目录" required>
+          <el-select v-model="agentForm.defaultDirectoryId" style="width: 100%" placeholder="选择目录">
+            <el-option
+              v-for="dir in directoriesForWorker(selectedWorkerId!)"
+              :key="dir.directoryId"
+              :label="dir.projectName + (dir.gitBranch ? ' (' + dir.gitBranch + ')' : '')"
+              :value="dir.directoryId"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="默认分支">
+          <el-input v-model="agentForm.defaultBranch" placeholder="留空则由任务决定" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAgentRegisterDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleRegisterAgent">注册</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Edit Agent Dialog -->
+    <el-dialog v-model="showAgentEditDialog" title="编辑 Agent" width="480px">
+      <el-form :model="agentForm" label-position="top">
+        <el-form-item label="名称" required>
+          <el-input v-model="agentForm.name" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="agentForm.description" />
+        </el-form-item>
+        <el-form-item label="默认工作目录">
+          <el-select v-model="agentForm.defaultDirectoryId" style="width: 100%" placeholder="选择目录">
+            <el-option
+              v-for="dir in directoriesForWorker(selectedWorkerId!)"
+              :key="dir.directoryId"
+              :label="dir.projectName + (dir.gitBranch ? ' (' + dir.gitBranch + ')' : '')"
+              :value="dir.directoryId"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="默认分支">
+          <el-input v-model="agentForm.defaultBranch" placeholder="留空则由任务决定" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAgentEditDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleUpdateAgent">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Agent Directory Binding Dialog -->
+    <el-dialog v-model="showAgentBindingDialog" :title="'目录绑定 - ' + (bindingAgent?.name || '')" width="520px">
+      <div v-if="bindingDirectories.length === 0" class="agent-empty" style="margin-bottom: 12px">
+        暂无已绑定目录
+      </div>
+      <div v-else class="agent-binding-list">
+        <div v-for="dir in bindingDirectories" :key="dir.directoryId" class="agent-binding-item">
+          <span>{{ dir.projectName }}{{ dir.gitBranch ? ' (' + dir.gitBranch + ')' : '' }}</span>
+          <el-button size="small" text type="danger" @click="handleUnbindDirectory(bindingAgent!.agentId, dir.directoryId)">
+            解绑
+          </el-button>
+        </div>
+      </div>
+      <el-divider />
+      <div class="agent-binding-add">
+        <el-select v-model="bindDirectoryId" style="flex: 1" placeholder="选择要绑定的目录">
+          <el-option
+            v-for="dir in availableBindDirectories"
+            :key="dir.directoryId"
+            :label="dir.projectName + (dir.gitBranch ? ' (' + dir.gitBranch + ')' : '')"
+            :value="dir.directoryId"
+          />
+        </el-select>
+        <el-button type="primary" size="small" :disabled="!bindDirectoryId" :loading="saving" @click="handleBindDirectory">
+          绑定
+        </el-button>
+      </div>
+      <template #footer>
+        <el-button @click="showAgentBindingDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <!-- Favorite script context menu -->
     <Teleport to="body">
       <div
@@ -1171,6 +1292,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
 import { useClaudeWorker } from '@/composables/useClaudeWorker'
+import { useCodingAgent } from '@/composables/useCodingAgent'
 import { useInputMemory } from '@/composables/useInputMemory'
 import { useFavoriteScripts, type FavoriteScript } from '@/composables/useFavoriteScripts'
 import { useTaskPane } from '@/composables/useTaskPane'
@@ -1191,12 +1313,28 @@ import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import * as dirApi from '@/api/claudeWorker'
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig } from '@/types'
+import * as agentApi from '@/api/codingAgent'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary } from '@/types'
 
 const MAX_PANES = 4
 
 const router = useRouter()
 const workerState = useClaudeWorker()
+const agentState = useCodingAgent()
+
+// --- Agent management state ---
+const showAgentRegisterDialog = ref(false)
+const showAgentEditDialog = ref(false)
+const showAgentBindingDialog = ref(false)
+const editingAgent = ref<CodingAgent | null>(null)
+const bindingAgent = ref<CodingAgent | null>(null)
+const bindingDirectories = ref<DirectorySummary[]>([])
+const agentForm = ref({ name: '', description: '', defaultDirectoryId: '', defaultBranch: '' })
+const bindDirectoryId = ref('')
+
+const agentsForWorker = computed(() =>
+  agentState.agents.value.filter(a => a.workerId === selectedWorkerId.value),
+)
 
 const selectedWorkerId = ref<string | null>(null)
 const selectedDirectoryId = ref<string | null>(null)
@@ -1352,6 +1490,133 @@ async function loadPlatformModelConfig() {
     }
   } catch {
     // best-effort
+  }
+}
+
+// --- Agent management functions ---
+function dirNameById(dirId?: string): string {
+  if (!dirId) return '-'
+  const dir = workerState.directories.value.find(d => d.directoryId === dirId)
+  return dir?.projectName || dirId.substring(0, 8)
+}
+
+function dirBranchById(dirId?: string): string | undefined {
+  if (!dirId) return undefined
+  return workerState.directories.value.find(d => d.directoryId === dirId)?.gitBranch || undefined
+}
+
+function openAgentRegisterDialog() {
+  agentForm.value = { name: '', description: '', defaultDirectoryId: '', defaultBranch: '' }
+  showAgentRegisterDialog.value = true
+}
+
+function openAgentEditDialog(agent: CodingAgent) {
+  editingAgent.value = agent
+  agentForm.value = {
+    name: agent.name,
+    description: agent.description || '',
+    defaultDirectoryId: agent.defaultDirectoryId || '',
+    defaultBranch: agent.defaultBranch || '',
+  }
+  showAgentEditDialog.value = true
+}
+
+async function handleRegisterAgent() {
+  if (!agentForm.value.name || !agentForm.value.defaultDirectoryId || !selectedWorkerId.value) return
+  saving.value = true
+  try {
+    await agentState.registerAgent({
+      name: agentForm.value.name,
+      description: agentForm.value.description || undefined,
+      workerId: selectedWorkerId.value,
+      defaultDirectoryId: agentForm.value.defaultDirectoryId,
+      defaultBranch: agentForm.value.defaultBranch || undefined,
+    })
+    showAgentRegisterDialog.value = false
+    ElMessage.success('Agent 注册成功')
+  } catch (e: any) {
+    ElMessage.error(e.message || '注册失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleUpdateAgent() {
+  if (!editingAgent.value) return
+  saving.value = true
+  try {
+    await agentState.updateAgent(editingAgent.value.agentId, {
+      name: agentForm.value.name,
+      description: agentForm.value.description || undefined,
+      defaultBranch: agentForm.value.defaultBranch || undefined,
+      defaultDirectoryId: agentForm.value.defaultDirectoryId || undefined,
+    })
+    showAgentEditDialog.value = false
+    ElMessage.success('Agent 更新成功')
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleDeleteAgent(agent: CodingAgent) {
+  try {
+    await ElMessageBox.confirm(`确认删除 Agent「${agent.name}」？`, '删除 Agent', { type: 'warning' })
+  } catch { return }
+  try {
+    await agentState.deleteAgent(agent.agentId)
+    ElMessage.success('已删除')
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除失败')
+  }
+}
+
+async function openAgentBindingDialog(agent: CodingAgent) {
+  bindingAgent.value = agent
+  bindDirectoryId.value = ''
+  try {
+    bindingDirectories.value = await agentApi.getAgentDirectories(agent.agentId)
+  } catch {
+    bindingDirectories.value = []
+  }
+  showAgentBindingDialog.value = true
+}
+
+const availableBindDirectories = computed(() => {
+  if (!selectedWorkerId.value || !bindingAgent.value) return []
+  const boundIds = new Set(bindingDirectories.value.map(d => d.directoryId))
+  return workerState.directories.value
+    .filter(d => d.workerId === selectedWorkerId.value && !boundIds.has(d.directoryId))
+})
+
+async function handleBindDirectory() {
+  if (!bindingAgent.value || !bindDirectoryId.value) return
+  saving.value = true
+  try {
+    await agentState.bindDirectory(bindingAgent.value.agentId, bindDirectoryId.value)
+    bindingDirectories.value = await agentApi.getAgentDirectories(bindingAgent.value.agentId)
+    await agentState.loadAgents()
+    bindDirectoryId.value = ''
+    ElMessage.success('已绑定')
+  } catch (e: any) {
+    ElMessage.error(e.message || '绑定失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleUnbindDirectory(agentId: string, dirId: string) {
+  saving.value = true
+  try {
+    await agentState.unbindDirectory(agentId, dirId)
+    bindingDirectories.value = bindingDirectories.value.filter(d => d.directoryId !== dirId)
+    await agentState.loadAgents()
+    ElMessage.success('已解绑')
+  } catch (e: any) {
+    ElMessage.error(e.message || '解绑失败')
+  } finally {
+    saving.value = false
   }
 }
 
@@ -1623,7 +1888,7 @@ function toggleProjectExpand(projectId: string) {
 onMounted(async () => {
   window.addEventListener('message', handleFileBrowserMessage)
   document.addEventListener('click', closeFavScriptCtx)
-  await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), loadPlatformModelConfig()])
+  await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), loadPlatformModelConfig(), agentState.loadAgents()])
   // Load conversation configs for all loaded tasks
   const sessionIds = [...new Set(workerState.tasks.value.map((t) => t.sessionId))]
   if (sessionIds.length > 0) {
@@ -3731,6 +3996,113 @@ function handlePopOutTerminal() {
 
 .pin-icon {
   margin-right: 2px;
+}
+
+/* ---- Agent management section ---- */
+.agent-section {
+  margin-bottom: 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.agent-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.agent-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+}
+
+.agent-empty {
+  padding: 16px;
+  text-align: center;
+  color: #909399;
+  font-size: 13px;
+}
+
+.agent-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.agent-card:last-child {
+  border-bottom: none;
+}
+
+.agent-card-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #303133;
+}
+
+.agent-card-desc {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+.agent-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #606266;
+}
+
+.agent-dir-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.agent-branch {
+  color: #909399;
+}
+
+.agent-dir-count {
+  color: #909399;
+}
+
+.agent-card-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.agent-binding-list {
+  margin-bottom: 8px;
+}
+
+.agent-binding-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 13px;
+}
+
+.agent-binding-item:last-child {
+  border-bottom: none;
+}
+
+.agent-binding-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 </style>
 
