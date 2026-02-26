@@ -108,7 +108,17 @@ UNICLOUD_SPACE_ID=mp-4af7054d-5a40-4315-8678-df36b44298bb
 
 ### API 工具 (`scripts/uni-admin-api.js`)
 
-自动化发布流程：登录 uni-id → 上传文件到 uniCloud 云存储 → 创建版本记录
+自动化发布流程：匿名认证 → 登录 uni-id → 上传文件到 uniCloud 云存储 → 创建版本记录（clientDB）
+
+**uniCloud 客户端 API 协议要点**（逆向自 uni-admin 前端 SDK）：
+- 所有请求发送到 `https://api.next.bspapp.com/client`
+- 签名: `HmacMD5(sortedQueryString, clientSecret)`，通过 `x-serverless-sign` 头传递
+- clientSecret: `bFl25CiSXhK7K979vXI2rA==`（从 uni-admin 前端提取）
+- 云函数调用: 先 `anonymousAuthorize` 获取 accessToken，通过 `x-basement-token` 头传递
+- uni-id 登录: 方法名 `login`（非 `loginByUsername`），params 为数组 `[{username, password}]`
+- clientDB 操作: 需同时传 accessToken（API 层）+ uniIdToken（在 functionArgs 中）
+- OSS 上传: 必须包含 `x-oss-security-token`（STS 临时凭证）
+- 版本记录必填字段: `uni_platform: 'android'`
 
 ```powershell
 # 发布原生安装包

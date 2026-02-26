@@ -1,7 +1,7 @@
 /**
  * uni-admin 升级中心 API 工具
  *
- * 功能：登录 uni-id → 上传文件到 uniCloud 云存储 → 创建/更新版本记录
+ * 功能：登录 uni-id → 上传文件到 uniCloud 云存储 → 创建版本记录
  *
  * 用法：
  *   node scripts/uni-admin-api.js publish --type native_app --version 1.0.0 \
@@ -12,29 +12,43 @@
  *
  * 环境变量（从 .env.release 读取）：
  *   UNI_ADMIN_USERNAME, UNI_ADMIN_PASSWORD, UNICLOUD_SPACE_ID
+ *
+ * uniCloud 客户端 API 协议说明：
+ *   - 所有请求发送到 https://api.next.bspapp.com/client
+ *   - 签名算法: HmacMD5(sortedQueryString, clientSecret)
+ *   - 云函数调用: 先获取匿名 accessToken, 再通过 x-basement-token 头传递
+ *   - clientDB 调用: 需在 functionArgs 中包含 uniIdToken
  */
 
+const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const { execSync } = require('child_process')
 
 const ROOT = path.resolve(__dirname, '..')
 const ENV_PATH = path.join(ROOT, '.env.release')
+const API_URL = 'https://api.next.bspapp.com/client'
 
 // --- 默认配置 ---
 const DEFAULTS = {
   UNICLOUD_SPACE_ID: 'mp-4af7054d-5a40-4315-8678-df36b44298bb',
+  UNICLOUD_CLIENT_SECRET: 'bFl25CiSXhK7K979vXI2rA==',
   DCLOUD_APPID: '__UNI__AC2B8DB',
+  // uni-admin 的 appid（用于 uni-id 登录上下文）
+  ADMIN_APPID: '__UNI__28EB4A7',
   APP_NAME: 'Foggy Navigator',
   UNI_ADMIN_USERNAME: 'root',
 }
 
-// --- 工具函数 ---
+// ============================================================
+// 工具函数
+// ============================================================
+
 function readEnvFile(filePath) {
   const env = {}
   if (fs.existsSync(filePath)) {
     const content = fs.readFileSync(filePath, 'utf-8')
-    for (const line of content.split('\n')) {
+    for (const line of content.split(/\r?\n/)) {
       const match = line.match(/^\s*([^#][^=]+?)\s*=\s*(.*)$/)
       if (match) env[match[1].trim()] = match[2].trim()
     }
@@ -46,7 +60,9 @@ function getConfig() {
   const env = readEnvFile(ENV_PATH)
   return {
     spaceId: env.UNICLOUD_SPACE_ID || DEFAULTS.UNICLOUD_SPACE_ID,
+    clientSecret: DEFAULTS.UNICLOUD_CLIENT_SECRET,
     appid: env.DCLOUD_APPID || DEFAULTS.DCLOUD_APPID,
+    adminAppid: DEFAULTS.ADMIN_APPID,
     appName: DEFAULTS.APP_NAME,
     username: env.UNI_ADMIN_USERNAME || DEFAULTS.UNI_ADMIN_USERNAME,
     password: env.UNI_ADMIN_PASSWORD || '',
@@ -70,84 +86,130 @@ function parseArgs() {
   return { command, ...opts }
 }
 
-// --- uniCloud HTTP API ---
-const API_BASE = 'https://api.next.bspapp.com'
+// ============================================================
+// uniCloud 客户端 API — 签名 & 请求
+// ============================================================
 
-async function uniCloudRequest(method, params, token, spaceId) {
-  const body = {
-    method,
-    params: params || {},
-    spaceId,
-    timestamp: Date.now(),
+function hmacMD5(data, key) {
+  return crypto.createHmac('md5', key).update(data).digest('hex')
+}
+
+function signBody(body, clientSecret) {
+  let str = ''
+  Object.keys(body).sort().forEach(k => {
+    if (body[k]) str += '&' + k + '=' + body[k]
+  })
+  return hmacMD5(str.slice(1), clientSecret)
+}
+
+/** 云函数/文件操作请求（使用匿名 accessToken） */
+async function cloudRequest(body, accessToken, clientSecret) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (accessToken) {
+    body.token = accessToken
+    headers['x-basement-token'] = accessToken
   }
-  if (token) body.token = token
-
-  const resp = await fetch(`${API_BASE}/client`, {
+  headers['x-serverless-sign'] = signBody(body, clientSecret)
+  const resp = await fetch(API_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   })
   return resp.json()
 }
 
-// --- 登录 uni-id ---
-async function login(config) {
-  console.log('  [1] 登录 uni-id...')
-  const url = `https://fc-${config.spaceId}.next.bspapp.com/uni-id-co`
-  const body = {
-    method: 'loginByUsername',
-    params: {
-      username: config.username,
-      password: config.password,
-    },
-    clientInfo: {
-      PLATFORM: 'web',
-      OS: 'web',
-      APPID: config.appid,
-    },
-  }
-
-  const resp = await fetch(url, {
+/** clientDB 请求（需同时传匿名 token 和 uni-id JWT） */
+async function clientDBRequest(body, accessToken, uniIdToken, clientSecret, adminAppid) {
+  const headers = { 'Content-Type': 'application/json' }
+  body.token = accessToken
+  headers['x-basement-token'] = accessToken
+  headers['x-serverless-sign'] = signBody(body, clientSecret)
+  headers['x-client-token'] = uniIdToken
+  headers['x-client-info'] = encodeURIComponent(JSON.stringify({
+    PLATFORM: 'web', OS: 'web', APPID: adminAppid, uniPlatform: 'web',
+  }))
+  const resp = await fetch(API_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   })
-  const result = await resp.json()
-
-  if (result.errCode === 0 && result.newToken) {
-    console.log('  [1] 登录成功')
-    return result.newToken.token
-  }
-
-  // 尝试备用格式
-  if (result.token) return result.token
-  if (result.data && result.data.token) return result.data.token
-
-  throw new Error(`登录失败: ${JSON.stringify(result)}`)
+  return resp.json()
 }
 
-// --- 上传文件到 uniCloud 云存储 ---
-async function uploadFile(filePath, token, config) {
+// ============================================================
+// Step 1: 获取匿名 accessToken
+// ============================================================
+
+async function getAccessToken(config) {
+  const result = await cloudRequest({
+    method: 'serverless.auth.user.anonymousAuthorize',
+    params: '{}',
+    spaceId: config.spaceId,
+    timestamp: Date.now(),
+  }, null, config.clientSecret)
+
+  if (!result.success || !result.data || !result.data.accessToken) {
+    throw new Error(`获取 accessToken 失败: ${JSON.stringify(result)}`)
+  }
+  return result.data.accessToken
+}
+
+// ============================================================
+// Step 2: 登录 uni-id
+// ============================================================
+
+async function login(config, accessToken) {
+  console.log('  [1] 登录 uni-id...')
+  const result = await cloudRequest({
+    method: 'serverless.function.runtime.invoke',
+    params: JSON.stringify({
+      functionTarget: 'uni-id-co',
+      functionArgs: {
+        method: 'login',
+        params: [{ username: config.username, password: config.password }],
+        clientInfo: {
+          PLATFORM: 'web', OS: 'web',
+          APPID: config.adminAppid, uniPlatform: 'web',
+        },
+      },
+    }),
+    spaceId: config.spaceId,
+    timestamp: Date.now(),
+  }, accessToken, config.clientSecret)
+
+  if (result.data && result.data.errCode === 0 && result.data.newToken) {
+    console.log('  [1] 登录成功')
+    return result.data.newToken.token
+  }
+
+  throw new Error(`登录失败: ${JSON.stringify(result.data || result.error)}`)
+}
+
+// ============================================================
+// Step 3: 上传文件到 uniCloud 云存储
+// ============================================================
+
+async function uploadFile(filePath, accessToken, config) {
   const fileName = path.basename(filePath)
   const fileSize = fs.statSync(filePath).size
   const sizeMB = (fileSize / 1024 / 1024).toFixed(2)
   console.log(`  [2] 上传文件: ${fileName} (${sizeMB} MB)...`)
 
-  // Step 1: 获取上传凭证
-  const signResult = await uniCloudRequest(
-    'serverless.file.resource.generateProximalSign',
-    { env: 'public', filename: fileName },
-    token,
-    config.spaceId,
-  )
+  // 获取上传凭证
+  const signResult = await cloudRequest({
+    method: 'serverless.file.resource.generateProximalSign',
+    params: JSON.stringify({ env: 'public', filename: fileName }),
+    spaceId: config.spaceId,
+    timestamp: Date.now(),
+  }, accessToken, config.clientSecret)
 
-  if (!signResult.data || !signResult.data.host) {
+  if (!signResult.success || !signResult.data || !signResult.data.host) {
     throw new Error(`获取上传凭证失败: ${JSON.stringify(signResult)}`)
   }
 
-  const { host, ossPath, policy, signature, accessKeyId, id } = signResult.data
+  const { host, ossPath, policy, signature, accessKeyId, securityToken, id } = signResult.data
 
-  // Step 2: 上传到 OSS
+  // 上传到 OSS
   const { FormData, File } = await importFormData()
   const fileBuffer = fs.readFileSync(filePath)
   const formData = new FormData()
@@ -155,38 +217,46 @@ async function uploadFile(filePath, token, config) {
   formData.append('policy', policy)
   formData.append('OSSAccessKeyId', accessKeyId)
   formData.append('signature', signature)
+  if (securityToken) {
+    formData.append('x-oss-security-token', securityToken)
+  }
   formData.append('success_action_status', '200')
   formData.append('file', new File([fileBuffer], fileName))
 
-  const uploadResp = await fetch(host, {
-    method: 'POST',
-    body: formData,
-  })
-
-  if (!uploadResp.ok && uploadResp.status !== 200) {
-    throw new Error(`OSS 上传失败: ${uploadResp.status} ${uploadResp.statusText}`)
+  const ossUrl = host.startsWith('http') ? host : `https://${host}`
+  console.log(`  [2] 上传到 OSS: ${ossUrl}`)
+  let uploadResp
+  try {
+    uploadResp = await fetch(ossUrl, {
+      method: 'POST',
+      body: formData,
+    })
+  } catch (fetchErr) {
+    throw new Error(`OSS fetch 失败: ${fetchErr.message} (${fetchErr.cause ? fetchErr.cause.message : 'no cause'})`)
   }
 
-  // Step 3: 上报上传完成
-  const reportResult = await uniCloudRequest(
-    'serverless.file.resource.report',
-    { id },
-    token,
-    config.spaceId,
-  )
+  if (!uploadResp.ok && uploadResp.status !== 200) {
+    const errText = await uploadResp.text().catch(() => '')
+    throw new Error(`OSS 上传失败: ${uploadResp.status} ${uploadResp.statusText} ${errText}`)
+  }
 
-  // 构造 CDN URL
+  // 上报上传完成
+  await cloudRequest({
+    method: 'serverless.file.resource.report',
+    params: JSON.stringify({ id }),
+    spaceId: config.spaceId,
+    timestamp: Date.now(),
+  }, accessToken, config.clientSecret)
+
   const cdnUrl = `https://${config.spaceId}.cdn.bspapp.com/${ossPath}`
   console.log(`  [2] 上传成功: ${cdnUrl}`)
   return cdnUrl
 }
 
 async function importFormData() {
-  // Node 18+ has native FormData and File
   if (globalThis.FormData && globalThis.File) {
     return { FormData: globalThis.FormData, File: globalThis.File }
   }
-  // Fallback: try undici (bundled with Node 18+)
   try {
     const { FormData, File } = require('undici')
     return { FormData, File }
@@ -195,8 +265,11 @@ async function importFormData() {
   }
 }
 
-// --- 创建版本记录 ---
-async function createVersion(opts, fileUrl, token, config) {
+// ============================================================
+// Step 4: 创建版本记录（通过 DCloud-clientDB）
+// ============================================================
+
+async function createVersion(opts, fileUrl, accessToken, uniIdToken, config) {
   console.log('  [3] 创建版本记录...')
 
   const versionData = {
@@ -205,45 +278,60 @@ async function createVersion(opts, fileUrl, token, config) {
     title: opts.title || `v${opts.version}`,
     contents: opts.content || '',
     platform: ['Android'],
-    type: opts.type, // 'native_app' or 'wgt'
+    type: opts.type,
     version: opts.version,
     min_uni_version: '',
     url: fileUrl,
     is_silently: opts.silent ? true : false,
     is_mandatory: opts.force ? true : false,
+    uni_platform: 'android',
     stable_publish: true,
-    create_date: Date.now(),
+    create_env: 'upgrade-center',
   }
 
-  const result = await uniCloudRequest(
-    'serverless.db.command',
-    {
-      $db: [
-        { $method: 'collection', $param: ['opendb-app-versions'] },
-        { $method: 'add', $param: [versionData] },
-      ],
-    },
-    token,
-    config.spaceId,
-  )
+  const result = await clientDBRequest({
+    method: 'serverless.function.runtime.invoke',
+    params: JSON.stringify({
+      functionTarget: 'DCloud-clientDB',
+      functionArgs: {
+        command: {
+          $db: [
+            { $method: 'collection', $param: ['opendb-app-versions'] },
+            { $method: 'add', $param: [versionData] },
+          ],
+        },
+        action: '',
+        multiCommand: false,
+        uniIdToken,
+      },
+    }),
+    spaceId: config.spaceId,
+    timestamp: Date.now(),
+  }, accessToken, uniIdToken, config.clientSecret, config.adminAppid)
 
-  if (result.data && result.data.id) {
-    console.log(`  [3] 版本记录已创建: ${result.data.id}`)
-    return result.data.id
+  if (!result.success) {
+    throw new Error(`创建版本记录失败: ${JSON.stringify(result.error || result)}`)
   }
 
-  // 检查是否有错误
-  if (result.code || result.errCode) {
-    throw new Error(`创建版本记录失败: ${JSON.stringify(result)}`)
+  const data = typeof result.data === 'string' ? JSON.parse(result.data) : result.data
+  if (data.errCode && data.errCode !== 0) {
+    throw new Error(`创建版本记录失败: ${data.errMsg || JSON.stringify(data)}`)
   }
 
-  console.log(`  [3] 创建结果: ${JSON.stringify(result)}`)
-  return null
+  const docId = data.id || (data.data && data.data.id)
+  if (docId) {
+    console.log(`  [3] 版本记录已创建: ${docId}`)
+  } else {
+    console.log(`  [3] 版本记录已创建`)
+  }
+  return docId
 }
 
-// --- 主流程: 发布 ---
+// ============================================================
+// 主流程: 发布
+// ============================================================
+
 async function publish(opts) {
-  // 验证参数
   if (!opts.type || !['native_app', 'wgt'].includes(opts.type)) {
     console.error('ERROR: --type must be native_app or wgt')
     process.exit(1)
@@ -270,14 +358,17 @@ async function publish(opts) {
   console.log('')
 
   try {
-    // 1. 登录
-    const token = await login(config)
+    // 获取匿名 accessToken
+    const accessToken = await getAccessToken(config)
+
+    // 1. 登录 uni-id
+    const uniIdToken = await login(config, accessToken)
 
     // 2. 上传文件
-    const fileUrl = await uploadFile(path.resolve(opts.file), token, config)
+    const fileUrl = await uploadFile(path.resolve(opts.file), accessToken, config)
 
     // 3. 创建版本记录
-    await createVersion(opts, fileUrl, token, config)
+    await createVersion(opts, fileUrl, accessToken, uniIdToken, config)
 
     console.log('')
     console.log('  ========================================')
@@ -302,7 +393,6 @@ async function publish(opts) {
     console.error(`  7. 开启"上线发行" → 发布`)
     console.error('')
 
-    // 尝试打开浏览器
     const adminUrl = `https://sd-uni-admin.qlfloor.com/admin/#/uni_modules/uni-upgrade-center/pages/version/add?appid=${config.appid}&name=${encodeURIComponent(config.appName)}&type=${opts.type}`
     try {
       if (process.platform === 'win32') {
@@ -315,15 +405,19 @@ async function publish(opts) {
   }
 }
 
-// --- 入口 ---
+// ============================================================
+// 入口
+// ============================================================
+
 async function main() {
   const opts = parseArgs()
 
   switch (opts.command) {
-    case 'publish':
+    case 'publish': {
       const ok = await publish(opts)
       process.exit(ok ? 0 : 1)
       break
+    }
     default:
       console.log('用法:')
       console.log('  node uni-admin-api.js publish --type native_app|wgt --version X.Y.Z \\')
