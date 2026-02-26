@@ -114,12 +114,13 @@ async def remove_worktree(request: RemoveWorktreeRequest) -> dict[str, str]:
         allowed = False
         for cwd in settings.allowed_cwds:
             allowed_resolved = os.path.realpath(cwd)
-            if resolved == allowed_resolved or resolved.startswith(allowed_resolved + os.sep):
+            # rstrip(os.sep) avoids double-sep when allowed is a drive root like "D:\"
+            if resolved == allowed_resolved or resolved.startswith(allowed_resolved.rstrip(os.sep) + os.sep):
                 allowed = True
                 break
             # Also allow sibling directories (worktrees are typically siblings)
             parent = os.path.dirname(allowed_resolved)
-            if resolved.startswith(parent + os.sep):
+            if resolved.startswith(parent.rstrip(os.sep) + os.sep):
                 allowed = True
                 break
         if not allowed:

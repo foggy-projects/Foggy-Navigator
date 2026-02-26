@@ -503,7 +503,8 @@ def scan_all_sessions(allowed_cwds: list[str]) -> dict[str, dict]:
                         # Validate the actual cwd from the JSONL is under allowed_cwd
                         actual_cwd = s.get("cwd", "")
                         actual_norm = os.path.normpath(actual_cwd).lower()
-                        if actual_norm.startswith(norm_prefix + os.sep) or actual_norm == norm_prefix:
+                        # rstrip(os.sep) avoids double-sep when prefix is a drive root
+                        if actual_norm.startswith(norm_prefix.rstrip(os.sep) + os.sep) or actual_norm == norm_prefix:
                             sid = s.pop("session_id")
                             store[sid] = s
                     break

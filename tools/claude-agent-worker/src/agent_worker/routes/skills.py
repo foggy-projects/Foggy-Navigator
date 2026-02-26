@@ -27,7 +27,8 @@ def _validate_path(path: str) -> str:
 
     for allowed in settings.allowed_cwds:
         allowed_resolved = os.path.realpath(allowed)
-        if resolved == allowed_resolved or resolved.startswith(allowed_resolved + os.sep):
+        # rstrip(os.sep) avoids double-sep when allowed is a drive root like "D:\"
+        if resolved == allowed_resolved or resolved.startswith(allowed_resolved.rstrip(os.sep) + os.sep):
             return resolved
 
     raise HTTPException(
