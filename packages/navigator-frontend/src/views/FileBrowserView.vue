@@ -103,6 +103,13 @@
         <div class="ctx-item" @click="copyPath('name')">复制文件名</div>
         <div class="ctx-item" @click="copyPath('relative')">复制相对路径</div>
         <div class="ctx-item" @click="copyPath('absolute')">复制绝对路径</div>
+        <div v-if="ctxMenu.node && !ctxMenu.node.isDir" class="ctx-divider"></div>
+        <div v-if="ctxMenu.node && !ctxMenu.node.isDir" class="ctx-item" @click="runInTerminal()">
+          在终端中运行
+        </div>
+        <div v-if="ctxMenu.node && !ctxMenu.node.isDir" class="ctx-item" @click="pinToScripts()">
+          固定到常用脚本
+        </div>
         <div class="ctx-divider"></div>
         <div class="ctx-item" @click="toggleIgnore()">
           {{ isNodeIgnored ? '从搜索排除移除' : '添加到搜索排除' }}
@@ -141,6 +148,7 @@ import FileSearchDialog from '@/components/file-browser/FileSearchDialog.vue'
 // ---- Route params ---------------------------------------------------------
 const route = useRoute()
 const directoryId = computed(() => (route.query.directoryId as string) || '')
+const workerId = computed(() => (route.query.workerId as string) || '')
 
 // ---- Monaco lazy import ---------------------------------------------------
 let monaco: typeof import('monaco-editor') | null = null
@@ -378,6 +386,40 @@ async function toggleIgnore() {
   } catch {
     ElMessage.error('操作失败')
   }
+  closeContextMenu()
+}
+
+// ---- Run in terminal (cross-window) ---------------------------------------
+function runInTerminal() {
+  const node = ctxMenu.value.node
+  if (!node || !window.opener) {
+    ElMessage.warning('请从 Worker 页面打开文件浏览器')
+    closeContextMenu()
+    return
+  }
+  window.opener.postMessage({
+    type: 'run-in-terminal',
+    directoryId: directoryId.value,
+    workerId: workerId.value,
+    filePath: getSubPath(node.fullPath),
+  }, window.location.origin)
+  closeContextMenu()
+}
+
+function pinToScripts() {
+  const node = ctxMenu.value.node
+  if (!node || !window.opener) {
+    ElMessage.warning('请从 Worker 页面打开文件浏览器')
+    closeContextMenu()
+    return
+  }
+  window.opener.postMessage({
+    type: 'pin-to-scripts',
+    directoryId: directoryId.value,
+    workerId: workerId.value,
+    filePath: getSubPath(node.fullPath),
+  }, window.location.origin)
+  ElMessage.success('已固定到常用脚本')
   closeContextMenu()
 }
 

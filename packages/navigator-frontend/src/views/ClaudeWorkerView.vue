@@ -185,6 +185,20 @@
             <el-button v-else size="small" type="danger" text @click="handleDeleteDirectory">删除</el-button>
           </div>
         </div>
+        <div v-if="favoriteScripts.length > 0" class="fav-scripts-bar">
+          <span class="fav-scripts-label">常用脚本</span>
+          <el-tag
+            v-for="s in favoriteScripts"
+            :key="s.path"
+            size="small"
+            :type="s.pinned ? '' : 'info'"
+            class="fav-script-tag"
+            @click="handleRunFavScript(s)"
+            @contextmenu.prevent="handleFavScriptCtx($event, s)"
+          >
+            <span v-if="s.pinned" class="pin-icon">&#128204;</span>{{ s.name }}
+          </el-tag>
+        </div>
         <div v-if="parsedAgentTeams.length" class="agent-teams-bar">
           <el-switch
             v-model="taskForm.useTeams"
@@ -1134,6 +1148,20 @@
         <el-button type="primary" :loading="sshConnecting" @click="handleSshConnect">连接</el-button>
       </template>
     </el-dialog>
+
+    <!-- Favorite script context menu -->
+    <Teleport to="body">
+      <div
+        v-if="favScriptCtx.visible"
+        class="fav-script-ctx"
+        :style="{ left: favScriptCtx.x + 'px', top: favScriptCtx.y + 'px' }"
+      >
+        <div class="fav-ctx-item" @click="handleTogglePinFavScript">
+          {{ favScriptCtx.script?.pinned ? '取消固定' : '固定脚本' }}
+        </div>
+        <div class="fav-ctx-item fav-ctx-danger" @click="handleRemoveFavScript">移除脚本</div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1144,6 +1172,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
 import { useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useInputMemory } from '@/composables/useInputMemory'
+import { useFavoriteScripts, type FavoriteScript } from '@/composables/useFavoriteScripts'
 import { useTaskPane } from '@/composables/useTaskPane'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import {
@@ -1325,6 +1354,10 @@ async function loadPlatformModelConfig() {
     // best-effort
   }
 }
+
+// --- Favorite scripts: per-directory ---
+const favScriptsScope = computed(() => selectedDirectoryId.value || '')
+const { scripts: favoriteScripts, recordRun: recordFavScript, pinScript, removeScript: removeFavScript } = useFavoriteScripts(favScriptsScope)
 
 // --- Input memory: draft persistence + history for top task input ---
 const taskInputScope = computed(() => {
@@ -1588,6 +1621,8 @@ function toggleProjectExpand(projectId: string) {
 }
 
 onMounted(async () => {
+  window.addEventListener('message', handleFileBrowserMessage)
+  document.addEventListener('click', closeFavScriptCtx)
   await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), loadPlatformModelConfig()])
   // Load conversation configs for all loaded tasks
   const sessionIds = [...new Set(workerState.tasks.value.map((t) => t.sessionId))]
@@ -1597,8 +1632,87 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('message', handleFileBrowserMessage)
+  document.removeEventListener('click', closeFavScriptCtx)
   disposeAllWorkspaces()
 })
+
+// ---- File browser cross-window messaging ----------------------------------
+
+function generateRunCommand(filePath: string): string {
+  const ext = filePath.substring(filePath.lastIndexOf('.')).toLowerCase()
+  switch (ext) {
+    case '.sh': return `bash ${filePath}`
+    case '.ps1': return `powershell -File ${filePath}`
+    case '.py': return `python ${filePath}`
+    case '.js': return `node ${filePath}`
+    case '.ts': return `npx ts-node ${filePath}`
+    default: return `./${filePath}`
+  }
+}
+
+function handleFileBrowserMessage(event: MessageEvent) {
+  if (event.origin !== window.location.origin) return
+  if (!event.data) return
+
+  const { type, directoryId, workerId, filePath } = event.data
+  if (!directoryId || !workerId || !filePath) return
+
+  if (type === 'run-in-terminal') {
+    // 确保对应 worker/directory 处于选中态
+    selectedWorkerId.value = workerId
+    selectedDirectoryId.value = directoryId
+
+    const command = generateRunCommand(filePath)
+    doSshConnect(undefined, command)
+    recordFavScript(filePath)
+  } else if (type === 'pin-to-scripts') {
+    selectedWorkerId.value = workerId
+    selectedDirectoryId.value = directoryId
+    pinScript(filePath)
+    ElMessage.success(`已固定: ${filePath}`)
+  }
+}
+
+// ---- Favorite scripts: tag bar interactions --------------------------------
+
+const favScriptCtx = ref<{ visible: boolean; x: number; y: number; script: FavoriteScript | null }>({
+  visible: false, x: 0, y: 0, script: null,
+})
+
+function handleFavScriptCtx(e: MouseEvent, s: FavoriteScript) {
+  favScriptCtx.value = { visible: true, x: e.clientX, y: e.clientY, script: s }
+}
+
+function closeFavScriptCtx() {
+  favScriptCtx.value.visible = false
+}
+
+function handleRemoveFavScript() {
+  if (favScriptCtx.value.script) {
+    removeFavScript(favScriptCtx.value.script.path)
+  }
+  closeFavScriptCtx()
+}
+
+function handleTogglePinFavScript() {
+  const s = favScriptCtx.value.script
+  if (!s) return
+  if (s.pinned) {
+    // Unpin: remove and re-add as auto
+    removeFavScript(s.path)
+    recordFavScript(s.path)
+  } else {
+    pinScript(s.path)
+  }
+  closeFavScriptCtx()
+}
+
+function handleRunFavScript(s: FavoriteScript) {
+  const command = generateRunCommand(s.path)
+  doSshConnect(undefined, command)
+  recordFavScript(s.path)
+}
 
 /** Called when any pane's task reaches a terminal state */
 function handleTaskFinished(_paneId: string) {
@@ -1653,7 +1767,7 @@ async function loadDirectoryTasks() {
       dirTaskSize.value,
     )
     directoryTasks.value = result.content
-    dirTaskTotal.value = result.totalElements
+    dirTaskTotal.value = result.totalSessions
   } catch {
     try {
       directoryTasks.value = await dirApi.listTasksByDirectory(selectedDirectoryId.value)
@@ -1902,7 +2016,7 @@ async function handleRemoveWorktree() {
 
 function openFileBrowser() {
   if (!selectedDirectoryId.value) return
-  const url = `${window.location.origin}/#/files?directoryId=${selectedDirectoryId.value}`
+  const url = `${window.location.origin}/#/files?directoryId=${selectedDirectoryId.value}&workerId=${selectedWorkerId.value}`
   window.open(url, '_blank', 'width=1400,height=900')
 }
 
@@ -2820,7 +2934,10 @@ async function handleSshConnect() {
  * 执行 SSH 连接。
  * overrides 为空时由后端从 directoryId 自动读取保存的凭证。
  */
-async function doSshConnect(overrides?: { host: string; port: number; username: string; password: string }) {
+async function doSshConnect(
+  overrides?: { host: string; port: number; username: string; password: string },
+  initialCommand?: string,
+) {
   const ws = activeWorkspace.value
   if (!ws || !selectedWorkerId.value) return
   sshConnecting.value = true
@@ -2855,6 +2972,7 @@ async function doSshConnect(overrides?: { host: string; port: number; username: 
       wsUrl: result.wsUrl,
       ws: wsConn,
       buffer: [],
+      initialCommand,
     }
 
     ws.terminalTabs.value = [...ws.terminalTabs.value, tab]
@@ -3589,5 +3707,60 @@ function handlePopOutTerminal() {
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   border: 0;
+}
+
+/* ---- Favorite scripts bar ---- */
+.fav-scripts-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.fav-scripts-label {
+  font-size: 12px;
+  color: #909399;
+  flex-shrink: 0;
+}
+
+.fav-script-tag {
+  cursor: pointer;
+}
+
+.pin-icon {
+  margin-right: 2px;
+}
+</style>
+
+<style>
+/* Fav-script context menu — unscoped because it's teleported to body */
+.fav-script-ctx {
+  position: fixed;
+  z-index: 9999;
+  background: #2d2d2d;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  padding: 4px 0;
+  min-width: 120px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+  color: #cccccc;
+}
+
+.fav-ctx-item {
+  padding: 6px 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fav-ctx-item:hover {
+  background: #094771;
+  color: #fff;
+}
+
+.fav-ctx-danger:hover {
+  background: #c74e39;
 }
 </style>
