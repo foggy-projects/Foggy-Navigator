@@ -28,12 +28,12 @@
       </view>
 
       <view class="form-item">
-        <text class="form-label">服务器地址</text>
-        <input
-          v-model="serverUrl"
-          class="form-input"
-          placeholder="http://localhost:8112"
-        />
+        <text class="form-label">服务器</text>
+        <view class="server-selector" @tap="showPicker = true">
+          <text class="server-selector-text">{{ activeServer.name }}</text>
+          <text class="server-selector-url">{{ activeServer.url }}</text>
+          <text class="server-selector-arrow">&#x276F;</text>
+        </view>
       </view>
 
       <button
@@ -45,6 +45,32 @@
         {{ loading ? '登录中...' : '登录' }}
       </button>
     </view>
+
+    <!-- 服务器选择弹窗 -->
+    <wd-popup v-model="showPicker" position="bottom" custom-style="border-radius: 24rpx 24rpx 0 0;">
+      <view class="picker-header">
+        <text class="picker-title">选择服务器</text>
+        <text class="picker-action" @tap="showPicker = false">完成</text>
+      </view>
+      <view class="picker-list">
+        <view
+          v-for="server in servers"
+          :key="server.id"
+          class="picker-item"
+          :class="{ active: server.id === activeServer.id }"
+          @tap="selectServer(server)"
+        >
+          <view class="picker-item-info">
+            <text class="picker-item-name">{{ server.name }}</text>
+            <text class="picker-item-url">{{ server.url }}</text>
+          </view>
+          <text v-if="server.id === activeServer.id" class="picker-check">&#x2713;</text>
+        </view>
+      </view>
+      <view class="picker-tip">
+        <text class="picker-tip-text">在设置页可添加或管理服务器</text>
+      </view>
+    </wd-popup>
   </view>
 </template>
 
@@ -52,26 +78,35 @@
 import { reactive, ref } from 'vue'
 import { login } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
-import { getServerUrl, setServerUrl } from '@/utils/config'
+import {
+  type ServerConfig,
+  getServers,
+  getActiveServer,
+  setActiveServerId,
+} from '@/utils/config'
 
 const authStore = useAuthStore()
 const loading = ref(false)
-const serverUrl = ref(getServerUrl())
+const showPicker = ref(false)
+
+const servers = ref<ServerConfig[]>(getServers())
+const activeServer = ref<ServerConfig>(getActiveServer())
 
 const form = reactive({
   username: '',
   password: '',
 })
 
+function selectServer(server: ServerConfig) {
+  setActiveServerId(server.id)
+  activeServer.value = server
+  showPicker.value = false
+}
+
 async function handleLogin() {
   if (!form.username || !form.password) {
     uni.showToast({ title: '请输入用户名和密码', icon: 'none' })
     return
-  }
-
-  // 保存服务器地址
-  if (serverUrl.value) {
-    setServerUrl(serverUrl.value.replace(/\/+$/, ''))
   }
 
   loading.value = true
@@ -152,6 +187,99 @@ async function handleLogin() {
   border-radius: 12rpx;
   box-sizing: border-box;
 }
+
+/* 服务器选择器 */
+.server-selector {
+  display: flex;
+  align-items: center;
+  height: 80rpx;
+  padding: 0 24rpx;
+  border: 2rpx solid #dcdfe6;
+  border-radius: 12rpx;
+  box-sizing: border-box;
+}
+.server-selector-text {
+  font-size: 28rpx;
+  color: #303133;
+  flex-shrink: 0;
+}
+.server-selector-url {
+  font-size: 24rpx;
+  color: #909399;
+  margin-left: 16rpx;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.server-selector-arrow {
+  font-size: 24rpx;
+  color: #c0c4cc;
+  flex-shrink: 0;
+  margin-left: 8rpx;
+}
+
+/* 服务器选择弹窗 */
+.picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28rpx 32rpx;
+  border-bottom: 2rpx solid #f0f0f0;
+}
+.picker-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #303133;
+}
+.picker-action {
+  font-size: 28rpx;
+  color: #667eea;
+}
+.picker-list {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28rpx 32rpx;
+  border-bottom: 2rpx solid #f5f5f5;
+}
+.picker-item.active {
+  background: #f0f4ff;
+}
+.picker-item-info {
+  flex: 1;
+  min-width: 0;
+}
+.picker-item-name {
+  font-size: 30rpx;
+  color: #303133;
+  display: block;
+  margin-bottom: 4rpx;
+}
+.picker-item-url {
+  font-size: 24rpx;
+  color: #909399;
+  display: block;
+}
+.picker-check {
+  font-size: 32rpx;
+  color: #667eea;
+  flex-shrink: 0;
+  margin-left: 16rpx;
+}
+.picker-tip {
+  padding: 20rpx 32rpx 40rpx;
+  text-align: center;
+}
+.picker-tip-text {
+  font-size: 24rpx;
+  color: #c0c4cc;
+}
+
 .login-btn {
   width: 100%;
   height: 88rpx;
