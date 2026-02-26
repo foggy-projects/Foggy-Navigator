@@ -17,6 +17,8 @@ function genId(): string {
 
 /** 默认服务器列表 */
 const DEFAULT_SERVERS: ServerConfig[] = [
+  { id: 'kvm', name: 'KVM 开发机', url: 'https://dev-kvm-jdk12.qlfloor.com' },
+  { id: 'fjg', name: '丰景阁', url: 'https://dev-fjg-home.qlfloor.com' },
   { id: 'local', name: '本地开发', url: 'http://localhost:8112' },
 ]
 
