@@ -114,8 +114,8 @@ public class ClaudeTaskService {
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
 
-        // 5.5. 获取用户的 Navigator API Key（用于注入 CLI 环境变量）
-        String navigatorApiKey = userAuthService.getActiveApiKey(userId).orElse(null);
+        // 5.5. 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
+        String navigatorApiKey = userAuthService.generateServiceToken(userId);
 
         // 6. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
@@ -196,8 +196,8 @@ public class ClaudeTaskService {
         // 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
 
-        // 获取用户的 Navigator API Key（用于注入 CLI 环境变量）
-        String navigatorApiKey = userAuthService.getActiveApiKey(userId).orElse(null);
+        // 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
+        String navigatorApiKey = userAuthService.generateServiceToken(userId);
 
         eventPublisher.publishEvent(new ClaudeTaskStartEvent(
                 this, taskId, sessionId, form.getWorkerId(), userId,

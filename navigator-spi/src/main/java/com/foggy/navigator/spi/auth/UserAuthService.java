@@ -69,9 +69,9 @@ public interface UserAuthService {
     List<ApiKeyDTO> listApiKeysByUser(String userId);
 
     /**
-     * 获取用户的第一个有效 API Key（明文），用于注入 CLI 环境变量
+     * 生成内部服务 Token（短期 JWT），用于 CLI 子进程回调 Navigator API
      */
-    Optional<String> getActiveApiKey(String userId);
+    String generateServiceToken(String userId);
 
     /**
      * 验证用户是否有指定角色

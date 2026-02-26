@@ -246,12 +246,10 @@ public class UserAuthServiceImpl implements UserAuthService {
     }
 
     @Override
-    public Optional<String> getActiveApiKey(String userId) {
-        return apiKeyRepository.findByUserId(userId).stream()
-                .filter(e -> e.getEnabled() &&
-                        (e.getExpiresAt() == null || e.getExpiresAt().isAfter(LocalDateTime.now())))
-                .findFirst()
-                .map(ApiKeyEntity::getApiKey);
+    public String generateServiceToken(String userId) {
+        UserEntity user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+        return jwtUtil.generateToken(user.getId(), user.getUsername(), user.getTenantId(), user.getRoles());
     }
 
     @Override

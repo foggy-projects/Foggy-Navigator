@@ -371,9 +371,9 @@ class SdkWrapper:
             env["ANTHROPIC_AUTH_TOKEN"] = token
         if url:
             env["ANTHROPIC_BASE_URL"] = url
-        # Navigator platform API key — allows CLI skills to call Navigator API
+        # Navigator service token — allows CLI skills to call Navigator API
         if navigator_api_key:
-            env["NAVIGATOR_API_KEY"] = navigator_api_key
+            env["NAVIGATOR_TOKEN"] = navigator_api_key
         return env
 
     # -- Agent Teams ---------------------------------------------------------
