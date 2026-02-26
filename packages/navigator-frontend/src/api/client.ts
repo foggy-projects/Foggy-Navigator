@@ -23,7 +23,7 @@ client.interceptors.response.use(
   (response) => response.data,
   (error) => {
     const status = error.response?.status
-    const message = error.response?.data?.message || error.message
+    const message = error.response?.data?.msg || error.response?.data?.message || error.message
 
     if (status === 401) {
       ElMessage.error('登录已过期，请重新登录')
