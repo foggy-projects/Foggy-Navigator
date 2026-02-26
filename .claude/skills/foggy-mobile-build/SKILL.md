@@ -102,7 +102,7 @@ pnpm build:wgt
 ```
 UNI_ADMIN_URL=https://sd-uni-admin.qlfloor.com
 UNI_ADMIN_USERNAME=root
-UNI_ADMIN_PASSWORD=@Foggysource888
+UNI_ADMIN_PASSWORD=<your-password>
 UNICLOUD_SPACE_ID=mp-4af7054d-5a40-4315-8678-df36b44298bb
 ```
 
@@ -203,6 +203,65 @@ node scripts/uni-admin-api.js publish --type wgt --version 1.0.1 ^
 
 **可能原因**：uniCloud HTTP API 格式变化、uni-id 登录方式变化、或网络问题。
 **解决**：脚本会自动 fallback 到手动模式，打开浏览器到升级中心页面。
+
+## 可复用经验（适用于任何 uni-app + uniCloud + uni-admin 项目）
+
+### HBuilderX CLI 打包陷阱
+
+1. **`pack` 命令编译 bug**：CLI 创建的项目执行 `pack` 时，内部 `uni.js build` 不传 `-p app`，导致编译 H5 而非 App。**必须先用 `uni build -p app-android` 预编译**，再让 `pack` 只打包编译产物。
+2. **pnpm workspace 不兼容**：HBuilderX 的 `publish --type wgt` 无法解析 pnpm 符号链接下的编译器模块。**解决**：本地 `uni build` + 脚本压缩 wgt，绕过 HBuilderX 的 wgt 发布。
+3. **公共测试证书已废弃**：DCloud 不再允许新 App 使用公共测试证书，必须用 `keytool` 生成自定义 keystore（`androidpacktype: 0`）。
+4. **CLI 需要 GUI 插件**：`amazon-corretto` 和 `launcher` 插件必须先在 HBuilderX GUI 中安装，CLI 才能执行打包。
+
+### uniCloud 客户端 API 协议（逆向总结）
+
+直接调用 uniCloud HTTP trigger（`https://fc-{spaceId}.next.bspapp.com/{functionName}`）**行不通** — uni-admin 的云函数未配置 HTTP trigger。必须通过客户端 API 协议调用：
+
+**完整调用链**：
+```
+1. anonymousAuthorize → accessToken（600s TTL）
+2. serverless.function.runtime.invoke(uni-id-co, login) → uniIdToken (JWT)
+3. serverless.file.resource.generateProximalSign → OSS 上传凭证
+4. POST OSS（含 x-oss-security-token） → 文件上传
+5. serverless.file.resource.report → 上报上传完成
+6. serverless.function.runtime.invoke(DCloud-clientDB, add) → 创建版本记录
+```
+
+**关键细节**：
+- **签名**：`HmacMD5(sortedQueryString, clientSecret)`，clientSecret 从前端 JS bundle 提取
+- **双 token 机制**：云函数调用只需 accessToken；clientDB 操作还需在 `functionArgs` 中传 `uniIdToken`
+- **uni-id 登录**：方法名是 `login`（非 `loginByUsername`），params 是**数组** `[{username, password}]`（非对象），必须传 `clientInfo.uniPlatform`
+- **OSS 上传**：STS 临时凭证要求 form 中必须包含 `x-oss-security-token` 字段
+- **clientDB 权限**：`x-client-info` 头需 `encodeURIComponent(JSON.stringify({PLATFORM, OS, APPID, uniPlatform}))`，其中 APPID 是 **uni-admin 自身的 appid**（非目标 App 的 appid）
+- **版本记录必填**：`uni_platform: 'android'`，`create_env: 'upgrade-center'`；不要手动设 `create_date`（服务端自动生成）
+
+### 客户端热更新架构
+
+- **不依赖 `uni-upgrade-center-app` 插件**：该插件要求项目内集成 uniCloud SDK。轻量方案：直接 HTTP POST 调用 `uni-upgrade-center` 云函数的 HTTP trigger URL
+- **wgt 优先策略**：日常迭代走 wgt 热更新（免安装、秒级生效），仅原生模块/SDK 变更时发 APK
+- **静默更新**：`is_silently: true` 时后台下载安装，下次启动生效；非静默弹窗带进度条
+- **强制更新**：云函数返回 `code === 2` 时隐藏"稍后"按钮
+
+### .env.release 文件模板
+
+新项目可参考此模板创建 `.env.release`（加入 `.gitignore`）：
+```
+# DCloud 账号（HBuilderX CLI 打包需要）
+DCLOUD_USERNAME=<dcloud-email>
+DCLOUD_PASSWORD=<dcloud-password>
+
+# Android 签名
+ANDROID_KEYSTORE=keystore/<app-name>.keystore
+ANDROID_CERT_ALIAS=<alias>
+ANDROID_CERT_PASSWORD=<password>
+ANDROID_STORE_PASSWORD=<password>
+
+# uni-admin 升级中心
+UNI_ADMIN_URL=<uni-admin-url>
+UNI_ADMIN_USERNAME=root
+UNI_ADMIN_PASSWORD=<password>
+UNICLOUD_SPACE_ID=<space-id>
+```
 
 ## 文件清单
 
