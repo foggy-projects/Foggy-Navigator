@@ -165,3 +165,11 @@ cache/
 # Backup files
 *.bak
 *.backup
+
+# Foggy Mobile
+packages/foggy-mobile/.env.release
+packages/foggy-mobile/keystore/
+packages/foggy-mobile/unpackage/
+packages/foggy-mobile/pack-config.json
+packages/foggy-mobile/uni_modules/
+packages/foggy-mobile/uniCloud-aliyun/
