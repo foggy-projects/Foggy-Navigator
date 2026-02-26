@@ -335,6 +335,122 @@ Phase 1 完成 → AWAITING_REVIEW, 任务 PAUSED
 推进 → 任务 COMPLETED
 ```
 
+## 测试场景 8：NAVIGATOR_API_KEY 注入 + 个人技能
+
+验证任务派发时自动注入 `NAVIGATOR_API_KEY` 环境变量，以及 Claude Code 个人技能能通过该变量调用 Navigator API。
+
+### 前置条件
+
+| 条件 | 检查方式 |
+|------|---------|
+| 用户有有效 API Key | Settings 页面查看或 `curl http://localhost:8112/api/v1/users/<userId>/api-keys -H "Authorization: Bearer <token>"` |
+| 个人技能已就位 | `ls ~/.claude/skills/cross-project-task/SKILL.md` |
+
+如果没有 API Key，先创建一个：
+```bash
+curl -X POST "http://localhost:8112/api/v1/users/<userId>/api-keys" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"claude-code-skill"}'
+```
+
+### 8.1 验证环境变量注入
+
+**步骤**：
+1. 重启后端 (`start-launcher.ps1`) 和 Worker (`tools/claude-agent-worker/start.ps1`)
+2. 在 Workers 页面创建一个新任务，prompt 为：
+   ```
+   运行命令 echo $NAVIGATOR_API_KEY | head -c 10，告诉我输出结果（只需要前 10 个字符）
+   ```
+3. 等待任务完成
+
+**预期结果**：
+- [ ] Worker 日志中可见 `navigator_api_key` 字段（非 null）
+- [ ] Claude Code 输出中显示 API Key 的前缀（如 `fnk-` 开头）
+- [ ] 证明环境变量已成功注入到 CLI 子进程
+
+### 8.2 验证技能调用 Navigator API
+
+**步骤**：
+1. 创建一个新任务，prompt 为：
+   ```
+   使用 cross-project-task 技能，列出当前可用的 Coding Agent。
+   ```
+2. 等待任务完成
+
+**预期结果**：
+- [ ] Claude Code 调用 `curl http://localhost:8112/api/v1/coding-agents -H "X-API-Key: $NAVIGATOR_API_KEY"`
+- [ ] 返回 200，得到 Agent 列表（至少包含之前注册的 Agent）
+- [ ] Claude Code 向用户展示了 Agent 名称和描述
+
+### 8.3 通过技能创建跨项目任务（端到端）
+
+**步骤**：
+1. 创建一个新任务，prompt 为：
+   ```
+   使用 cross-project-task 技能，创建一个跨项目任务：
+   - 标题：技能测试任务
+   - 描述：验证 Claude Code 个人技能能否编排跨项目任务
+   - 阶段1：让 test-api-agent 在默认目录创建一个 hello.txt 文件
+   先列出可用 Agent，然后创建并启动任务。
+   ```
+2. 等待任务完成
+
+**预期结果**：
+- [ ] Claude Code 先调用 `GET /api/v1/coding-agents` 获取 Agent 列表
+- [ ] 然后调用 `POST /api/v1/cross-project-tasks` 创建任务
+- [ ] 再调用 `POST /api/v1/cross-project-tasks/{contextId}/start` 启动任务
+- [ ] 在 `/cross-tasks` 页面可以看到新创建的任务
+
+### 8.4 API Key 缺失时的降级处理
+
+**步骤**：
+1. 临时禁用用户所有 API Key（Settings 页面或 API 撤销）
+2. 创建新任务，prompt 同 8.2
+3. 观察 Claude Code 行为
+
+**预期结果**：
+- [ ] `NAVIGATOR_API_KEY` 环境变量不存在
+- [ ] Claude Code 技能检测到环境变量缺失，给出友好提示
+- [ ] 不会因为 API 401 而崩溃
+
+---
+
+## 测试场景 9：数据流完整性验证（API 层 curl）
+
+快速验证 NAVIGATOR_API_KEY 链路各节点。
+
+### 9.1 直接调用 Worker API 验证透传
+
+```bash
+# 发送一个带 navigator_api_key 的查询请求给 Worker
+curl -N -X POST http://localhost:3031/api/v1/query \
+  -H "Authorization: Bearer <worker-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "运行命令 echo $NAVIGATOR_API_KEY 并告诉我结果",
+    "cwd": "<project-path>",
+    "navigator_api_key": "test-key-12345"
+  }'
+```
+
+**预期结果**：
+- [ ] Claude Code 输出包含 `test-key-12345`
+- [ ] 证明 Worker 正确将 `navigator_api_key` 注入到 `NAVIGATOR_API_KEY` 环境变量
+
+### 9.2 验证 API Key 认证有效
+
+```bash
+# 使用有效的 API Key 调用 Agent 列表接口
+curl -s http://localhost:8112/api/v1/coding-agents \
+  -H "X-API-Key: <your-api-key>"
+```
+
+**预期结果**：
+- [ ] 返回 200，JSON 数组包含已注册的 Agent
+
+---
+
 ## 注意事项
 
 1. **Worktree 创建**：每个阶段启动时会自动创建 git worktree。如果目录本身不是 git 仓库，worktree 创建会失败。确保测试目录是有效的 git 仓库。
@@ -342,3 +458,4 @@ Phase 1 完成 → AWAITING_REVIEW, 任务 PAUSED
 3. **权限模式**：跨项目任务中 Phase 创建的 ClaudeTask 使用 `bypassPermissions` 模式。
 4. **费用追踪**：需要 Worker 端报告 token 用量，费用才会在阶段和任务上显示。
 5. **初始会话**：triggerReview 需要 initialSessionId，如果从 UI 创建的任务可能没有 initialSessionId（UI 当前未传入），此功能需要通过 Tutor Agent 对话触发创建才有。
+6. **NAVIGATOR_API_KEY**：该环境变量仅在用户有有效 API Key 时注入。如果用户没有 API Key 或所有 Key 已过期/禁用，则不注入（传 null）。个人技能应检测变量是否存在并给出友好提示。
