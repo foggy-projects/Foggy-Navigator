@@ -16,8 +16,8 @@ dependencies = [
 dev = ["pytest", "httpx", "pytest-asyncio"]
 
 [build-system]
-requires = ["setuptools>=68.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.8.0"]
+build-backend = "hatchling.build"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_worker"]
