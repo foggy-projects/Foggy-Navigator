@@ -2806,7 +2806,42 @@ async function handleCreateTask() {
     if (selectedDirectoryId.value) {
       form.directoryId = selectedDirectoryId.value
     } else if (taskForm.value.cwd) {
-      form.cwd = taskForm.value.cwd
+      // Check if any existing directory matches this cwd path
+      const cwdInput = taskForm.value.cwd.replace(/[\\/]+$/, '') // normalize trailing slashes
+      const existingDir = workerState.directories.value.find(
+        d => d.workerId === selectedWorkerId.value && d.path.replace(/[\\/]+$/, '') === cwdInput,
+      )
+      if (existingDir) {
+        form.directoryId = existingDir.directoryId
+      } else {
+        // Prompt user to auto-create a WorkingDirectory
+        try {
+          await ElMessageBox.confirm(
+            `路径 "${cwdInput}" 尚未注册为工作目录。是否自动创建？\n创建后可在侧边栏管理该目录和关联任务。`,
+            '创建工作目录',
+            { confirmButtonText: '创建并运行', cancelButtonText: '仅本次使用', type: 'info', distinguishCancelAndClose: true },
+          )
+          // User confirmed — create directory first
+          const pathSegments = cwdInput.replace(/\\/g, '/').split('/')
+          const projectName = pathSegments[pathSegments.length - 1] || cwdInput
+          const newDir = await dirApi.createDirectory({
+            workerId: selectedWorkerId.value!,
+            projectName,
+            path: cwdInput,
+          })
+          await workerState.loadDirectories(selectedWorkerId.value!)
+          form.directoryId = newDir.directoryId
+          ElMessage.success(`工作目录 "${projectName}" 已创建`)
+        } catch (action) {
+          if (action === 'cancel') {
+            // User chose "仅本次使用" — pass raw cwd
+            form.cwd = cwdInput
+          } else {
+            // User closed the dialog — abort task creation
+            return
+          }
+        }
+      }
     }
     if (taskForm.value.model) {
       form.model = taskForm.value.model
