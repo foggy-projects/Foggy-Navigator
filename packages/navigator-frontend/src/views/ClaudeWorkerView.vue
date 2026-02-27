@@ -371,50 +371,47 @@
           </div>
         </div>
 
-        <!-- Agent Management Section -->
-        <div class="agent-section">
-          <div class="agent-section-header">
-            <span class="agent-section-title">Coding Agents</span>
-            <el-button size="small" @click="openAgentRegisterDialog">+ 注册 Agent</el-button>
-          </div>
-          <div v-if="agentsForWorker.length === 0" class="agent-empty">
-            暂无 Agent，点击上方注册
-          </div>
-          <div v-for="agent in agentsForWorker" :key="agent.agentId" class="agent-card">
-            <div class="agent-card-info">
-              <div class="agent-card-name">{{ agent.name }}</div>
-              <div v-if="agent.description" class="agent-card-desc">{{ agent.description }}</div>
-              <div class="agent-card-meta">
-                <span v-if="agent.defaultDirectoryId" class="agent-dir-tag">
-                  &#128193; {{ dirNameById(agent.defaultDirectoryId) }}
-                  <span v-if="dirBranchById(agent.defaultDirectoryId)" class="agent-branch">({{ dirBranchById(agent.defaultDirectoryId) }})</span>
-                </span>
-                <span v-if="agent.authorizedDirectories" class="agent-dir-count">
-                  {{ agent.authorizedDirectories.length }} 个授权目录
-                </span>
+        <!-- Worker Tabs: Agents & CLI Processes -->
+        <el-tabs v-model="workerActiveTab" class="worker-tabs" @tab-change="handleWorkerTabChange">
+          <el-tab-pane name="agents">
+            <template #label>
+              <span>Coding Agents</span>
+              <el-tag v-if="agentsForWorker.length > 0" size="small" type="info" style="margin-left: 6px;">{{ agentsForWorker.length }}</el-tag>
+            </template>
+            <div class="tab-pane-toolbar">
+              <el-button size="small" @click="openAgentRegisterDialog">+ 注册 Agent</el-button>
+            </div>
+            <div v-if="agentsForWorker.length === 0" class="agent-empty">
+              暂无 Agent，点击上方注册
+            </div>
+            <div v-for="agent in agentsForWorker" :key="agent.agentId" class="agent-card">
+              <div class="agent-card-info">
+                <div class="agent-card-name">{{ agent.name }}</div>
+                <div v-if="agent.description" class="agent-card-desc">{{ agent.description }}</div>
+                <div class="agent-card-meta">
+                  <span v-if="agent.defaultDirectoryId" class="agent-dir-tag">
+                    &#128193; {{ dirNameById(agent.defaultDirectoryId) }}
+                    <span v-if="dirBranchById(agent.defaultDirectoryId)" class="agent-branch">({{ dirBranchById(agent.defaultDirectoryId) }})</span>
+                  </span>
+                  <span v-if="agent.authorizedDirectories" class="agent-dir-count">
+                    {{ agent.authorizedDirectories.length }} 个授权目录
+                  </span>
+                </div>
+              </div>
+              <div class="agent-card-actions">
+                <el-button size="small" text @click="openAgentEditDialog(agent)">编辑</el-button>
+                <el-button size="small" text @click="openAgentBindingDialog(agent)">目录</el-button>
+                <el-button size="small" text type="danger" @click="handleDeleteAgent(agent)">删除</el-button>
               </div>
             </div>
-            <div class="agent-card-actions">
-              <el-button size="small" text @click="openAgentEditDialog(agent)">编辑</el-button>
-              <el-button size="small" text @click="openAgentBindingDialog(agent)">目录</el-button>
-              <el-button size="small" text type="danger" @click="handleDeleteAgent(agent)">删除</el-button>
-            </div>
-          </div>
-        </div>
+          </el-tab-pane>
 
-        <!-- CLI Process Management Section -->
-        <div class="process-section">
-          <div class="process-section-header" @click="processesExpanded = !processesExpanded; if (processesExpanded && cliProcesses.length === 0) loadCliProcesses()">
-            <span class="process-section-title">
-              Claude CLI 进程
-              <el-tag v-if="cliProcesses.length > 0" size="small" :type="cliProcesses.some(p => p.isOrphan) ? 'danger' : 'info'" style="margin-left: 6px;">
-                {{ cliProcesses.length }}
-              </el-tag>
-            </span>
-            <span class="process-expand-icon">{{ processesExpanded ? '&#9660;' : '&#9654;' }}</span>
-          </div>
-          <div v-if="processesExpanded" class="process-section-body">
-            <div class="process-toolbar">
+          <el-tab-pane name="processes">
+            <template #label>
+              <span>CLI 进程</span>
+              <el-tag v-if="cliProcesses.length > 0" size="small" :type="cliProcesses.some(p => p.isOrphan) ? 'danger' : 'info'" style="margin-left: 6px;">{{ cliProcesses.length }}</el-tag>
+            </template>
+            <div class="tab-pane-toolbar">
               <el-button size="small" :loading="loadingProcesses" @click="loadCliProcesses">刷新</el-button>
             </div>
             <el-table
@@ -445,8 +442,8 @@
                 </template>
               </el-table-column>
             </el-table>
-          </div>
-        </div>
+          </el-tab-pane>
+        </el-tabs>
 
         <!-- Task Form: collapse when panes are open -->
         <div v-if="panes.length === 0" class="task-form">
@@ -1382,12 +1379,19 @@ const agentsForWorker = computed(() =>
   agentState.agents.value.filter(a => a.workerId === selectedWorkerId.value),
 )
 
+// --- Worker tabs state (Agents / CLI Processes) ---
+const workerActiveTab = ref('agents')
+function handleWorkerTabChange(tab: string) {
+  if (tab === 'processes' && cliProcesses.value.length === 0) {
+    loadCliProcesses()
+  }
+}
+
 // --- CLI process management state ---
 import type { CliProcessInfo } from '@/types'
 const cliProcesses = ref<CliProcessInfo[]>([])
 const cliProcessActiveTaskCount = ref(0)
 const loadingProcesses = ref(false)
-const processesExpanded = ref(false)
 
 async function loadCliProcesses() {
   if (!selectedWorkerId.value) return
@@ -2094,7 +2098,7 @@ function selectWorker(workerId: string) {
   selectedDirectoryId.value = null
   directorySkills.value = []
   cliProcesses.value = []
-  processesExpanded.value = false
+  workerActiveTab.value = 'agents'
   exitBatchSelectMode()
   // No disposeAllPanes — workspace context preserves panes per directory
   // Auto-expand
@@ -4094,29 +4098,6 @@ function handlePopOutTerminal() {
 }
 
 /* ---- Agent management section ---- */
-.agent-section {
-  margin-bottom: 12px;
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.agent-section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 12px;
-  background: #f5f7fa;
-  border-bottom: 1px solid #e4e7ed;
-}
-
-.agent-section-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #606266;
-}
-
 .agent-empty {
   padding: 16px;
   text-align: center;
@@ -4200,9 +4181,9 @@ function handlePopOutTerminal() {
   align-items: center;
 }
 
-/* --- CLI Process Management --- */
+/* --- Worker Tabs (Agents / CLI Processes) --- */
 
-.process-section {
+.worker-tabs {
   margin-bottom: 12px;
   border: 1px solid #e4e7ed;
   border-radius: 6px;
@@ -4210,38 +4191,22 @@ function handlePopOutTerminal() {
   flex-shrink: 0;
 }
 
-.process-section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 12px;
+.worker-tabs :deep(.el-tabs__header) {
+  margin: 0;
+  padding: 0 12px;
   background: #f5f7fa;
-  cursor: pointer;
-  user-select: none;
 }
 
-.process-section-header:hover {
-  background: #ebeef5;
+.worker-tabs :deep(.el-tabs__nav-wrap::after) {
+  height: 1px;
+  background: #e4e7ed;
 }
 
-.process-section-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #606266;
-  display: inline-flex;
-  align-items: center;
+.worker-tabs :deep(.el-tabs__content) {
+  padding: 8px 12px;
 }
 
-.process-expand-icon {
-  font-size: 10px;
-  color: #909399;
-}
-
-.process-section-body {
-  padding: 8px;
-}
-
-.process-toolbar {
+.tab-pane-toolbar {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 8px;
