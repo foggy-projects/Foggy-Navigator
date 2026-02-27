@@ -29,6 +29,7 @@ fi
 ROOT_USERNAME=${ROOT_USERNAME:-root}
 ROOT_PASSWORD=${ROOT_PASSWORD:-root123}
 ROOT_EMAIL=${ROOT_EMAIL:-root@foggy.local}
+ROOT_PASSWORD_RESET=${ROOT_PASSWORD_RESET:-false}
 SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
 
 echo ""
@@ -106,6 +107,7 @@ nohup java -Dfile.encoding=UTF-8 \
     -Dsystem.root.username="${ROOT_USERNAME}" \
     -Dsystem.root.password="${ROOT_PASSWORD}" \
     -Dsystem.root.email="${ROOT_EMAIL}" \
+    -Dsystem.root.password-reset="${ROOT_PASSWORD_RESET}" \
     -jar "$JAR_PATH" \
     --spring.profiles.active="${SPRING_PROFILES_ACTIVE}" \
     > "$LOG_DIR/backend.log" 2> "$LOG_DIR/backend-error.log" &
