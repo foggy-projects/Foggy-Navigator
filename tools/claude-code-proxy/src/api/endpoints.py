@@ -150,10 +150,14 @@ async def _forward_passthrough(
         # Strip thinking blocks from message content arrays
         # (assistant messages may contain {"type":"thinking",...} from previous turns)
         _strip_thinking_blocks(body_json)
-        logger.debug(f"Passthrough body keys: {list(body_json.keys())}")
+        # Log sanitized body info at INFO level for diagnostics
+        msg_count = len(body_json.get("messages", []))
+        has_tools = "tools" in body_json and body_json["tools"]
+        tool_count = len(body_json["tools"]) if has_tools else 0
+        logger.info(f"Passthrough body: keys={list(body_json.keys())}, msgs={msg_count}, tools={tool_count}")
         raw_body = json.dumps(body_json, ensure_ascii=False).encode("utf-8")
-    except (json.JSONDecodeError, TypeError):
-        pass  # Forward as-is if body is not valid JSON
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.warning(f"Passthrough body parse failed: {e}, forwarding raw body ({len(raw_body)} bytes)")
 
     # Build headers: auth + content-type + passthrough relevant client headers
     headers = {
@@ -179,10 +183,18 @@ async def _forward_passthrough(
                         if resp.status_code != 200:
                             error_body = await resp.aread()
                             error_text = error_body.decode(errors="replace")
-                            logger.error(f"Passthrough stream error {resp.status_code}: {error_text}")
+                            logger.error(f"Passthrough stream error {resp.status_code}: {error_text[:1000]}")
+                            # Extract backend error message for client
+                            backend_msg = f"Backend returned {resp.status_code}"
+                            try:
+                                err_json = json.loads(error_text)
+                                if "error" in err_json and isinstance(err_json["error"], dict):
+                                    backend_msg = err_json["error"].get("message", backend_msg)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
                             error_payload = json.dumps({
                                 "type": "error",
-                                "error": {"type": "api_error", "message": f"Backend returned {resp.status_code}"},
+                                "error": {"type": "api_error", "message": backend_msg},
                             })
                             yield f"event: error\ndata: {error_payload}\n\n"
                             return
@@ -227,6 +239,8 @@ async def _forward_passthrough(
                 error_text = resp.text[:500]
                 logger.error(f"Passthrough non-JSON response {resp.status_code}: {error_text}")
                 body = {"type": "error", "error": {"type": "api_error", "message": error_text}}
+            if resp.status_code != 200:
+                logger.error(f"Passthrough error {resp.status_code}: {json.dumps(body, ensure_ascii=False)[:1000]}")
             return JSONResponse(status_code=resp.status_code, content=body)
 
 
