@@ -280,40 +280,72 @@ def _extract_error_detail(exc: Exception, task_id: str) -> str:
 def _find_sdk_cli_pids() -> set[int]:
     """Return PIDs of Claude CLI processes spawned by the SDK.
 
-    The SDK always launches the CLI with the ``--print`` flag (JSON
-    streaming protocol).  User-interactive terminals (``claude`` or
-    ``claude --dangerously-skip-permissions``) never use ``--print``,
-    so this is a safe discriminator that avoids false positives.
+    Detects two SDK variants:
+
+    * **claude-agent-sdk** (current): launches ``claude.exe`` (or
+      ``claude``) with ``--output-format stream-json``.
+    * **claude-code-sdk** (legacy): launches ``node.exe … cli.js
+      --print``.
+
+    User-interactive terminals never use these flags, so this is a safe
+    discriminator that avoids false positives.
 
     Uses ``wmic`` on Windows, ``pgrep`` on Unix.  Returns an empty set
     if detection fails — this is best-effort.
     """
 
     pids: set[int] = set()
+
+    # --- Windows -----------------------------------------------------------
+    if os.name == "nt":
+        # Pattern 1: claude-agent-sdk  →  claude.exe --output-format stream-json
+        _wmic_query(
+            "commandline like '%--output-format%stream-json%' and name='claude.exe'",
+            pids,
+        )
+        # Pattern 2: claude-code-sdk (legacy)  →  node.exe …cli.js --print
+        _wmic_query(
+            "commandline like '%claude-code%cli.js%--print%' and name='node.exe'",
+            pids,
+        )
+    # --- Unix --------------------------------------------------------------
+    else:
+        # Pattern 1: claude-agent-sdk
+        _pgrep(r"claude.*--output-format.*stream-json", pids)
+        # Pattern 2: claude-code-sdk (legacy)
+        _pgrep(r"claude-code.*cli\.js.*--print", pids)
+
+    return pids
+
+
+def _wmic_query(where_clause: str, out_pids: set[int]) -> None:
+    """Run a wmic query and append matching PIDs to *out_pids*."""
     try:
-        if os.name == "nt":
-            out = subprocess.check_output(
-                ["wmic", "process", "where",
-                 "commandline like '%claude-code%cli.js%--print%' and name='node.exe'",
-                 "get", "processid"],
-                text=True, timeout=5, stderr=subprocess.DEVNULL,
-            )
-            for line in out.strip().splitlines():
-                line = line.strip()
-                if line.isdigit():
-                    pids.add(int(line))
-        else:
-            out = subprocess.check_output(
-                ["pgrep", "-f", r"claude-code.*cli\.js.*--print"],
-                text=True, timeout=5, stderr=subprocess.DEVNULL,
-            )
-            for line in out.strip().splitlines():
-                line = line.strip()
-                if line.isdigit():
-                    pids.add(int(line))
+        out = subprocess.check_output(
+            ["wmic", "process", "where", where_clause, "get", "processid"],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        )
+        for line in out.strip().splitlines():
+            line = line.strip()
+            if line.isdigit():
+                out_pids.add(int(line))
     except (subprocess.SubprocessError, FileNotFoundError, OSError):
         pass
-    return pids
+
+
+def _pgrep(pattern: str, out_pids: set[int]) -> None:
+    """Run ``pgrep -f`` and append matching PIDs to *out_pids*."""
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-f", pattern],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        )
+        for line in out.strip().splitlines():
+            line = line.strip()
+            if line.isdigit():
+                out_pids.add(int(line))
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
 
 
 def _kill_orphan_cli_processes(before: set[int], label: str) -> None:
@@ -495,6 +527,7 @@ class SdkWrapper:
         base_url: str | None = None,
         permission_mode: str | None = None,
         navigator_api_key: str | None = None,
+        disallowed_tools: list[str] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
@@ -575,6 +608,8 @@ class SdkWrapper:
                 base_env["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = "300000"
                 options_kwargs["env"] = base_env
                 self._apply_agents_config(extra_args, options_kwargs)
+                if disallowed_tools:
+                    options_kwargs["disallowed_tools"] = disallowed_tools
             elif extra_args:
                 options_kwargs["extra_args"] = extra_args
 
@@ -595,7 +630,8 @@ class SdkWrapper:
             logger.info(
                 "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s, "
                 "auth_mode=%s, auth_hint=%s, base_url=%s, "
-                "has_agents=%s, has_env=%s, hard_timeout=%ss, heartbeat_timeout=%ss",
+                "has_agents=%s, has_env=%s, disallowed_tools=%s, "
+                "hard_timeout=%ss, heartbeat_timeout=%ss",
                 task_id,
                 repr(prompt[:80]) if prompt else None,
                 cwd,
@@ -606,6 +642,7 @@ class SdkWrapper:
                 eff_url or "(default)",
                 "agents" in options_kwargs,
                 bool(env),
+                disallowed_tools or "(none)",
                 hard_timeout,
                 heartbeat_timeout,
             )

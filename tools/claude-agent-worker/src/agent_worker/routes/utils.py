@@ -37,7 +37,11 @@ def validate_path(path: str) -> str:
 
 
 async def run_git(cwd: str, *args: str) -> tuple[int, str]:
-    """Run a git command and return ``(returncode, stdout)``."""
+    """Run a git command and return ``(returncode, combined_output)``.
+
+    On success (rc == 0) returns stdout; on failure returns stderr + stdout
+    so that error messages from git are not lost.
+    """
     proc = await asyncio.create_subprocess_exec(
         "git", *args,
         cwd=cwd,
@@ -45,7 +49,7 @@ async def run_git(cwd: str, *args: str) -> tuple[int, str]:
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, _ = await asyncio.wait_for(
+        stdout, stderr = await asyncio.wait_for(
             proc.communicate(), timeout=settings.git_timeout_seconds,
         )
     except asyncio.TimeoutError:
@@ -55,4 +59,9 @@ async def run_git(cwd: str, *args: str) -> tuple[int, str]:
             args[0] if args else "?", settings.git_timeout_seconds, cwd,
         )
         return -1, f"git command timed out after {settings.git_timeout_seconds}s"
-    return proc.returncode, stdout.decode("utf-8", errors="replace").rstrip()
+    out = stdout.decode("utf-8", errors="replace").rstrip()
+    if proc.returncode != 0:
+        err = stderr.decode("utf-8", errors="replace").rstrip()
+        # Prefer stderr (where git usually writes errors), fall back to stdout
+        return proc.returncode, err or out
+    return proc.returncode, out

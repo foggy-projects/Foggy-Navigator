@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .routes import auth, files, git_info, health, processes, query, sessions, skills, ssh, worktree
+from .platform_skills.deployer import deploy_platform_skills
 from .ssh.session_manager import start_cleanup_task, stop_cleanup_and_close_all
 
 import sys
@@ -69,6 +70,9 @@ async def lifespan(app: FastAPI):
     else:
         default_auth = "SUBSCRIPTION (claude login)"
     logger.info("  default_auth   = %s", default_auth)
+
+    # Deploy platform skills to ~/.claude/skills/
+    deploy_platform_skills()
 
     # SSH idle-cleanup background task
     start_cleanup_task()

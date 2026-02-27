@@ -65,6 +65,7 @@ async def _event_generator(
     base_url: str | None = None,
     permission_mode: str | None = None,
     navigator_api_key: str | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield SSE-compatible ``dict`` payloads from the SDK wrapper stream."""
 
@@ -83,6 +84,7 @@ async def _event_generator(
             base_url=base_url,
             permission_mode=permission_mode,
             navigator_api_key=navigator_api_key,
+            disallowed_tools=disallowed_tools,
         ):
             yield {"event": "message", "data": json.dumps(event)}
     except asyncio.CancelledError:
@@ -137,6 +139,7 @@ async def query(body: QueryRequest):
             base_url=body.base_url,
             permission_mode=body.permission_mode,
             navigator_api_key=body.navigator_api_key,
+            disallowed_tools=body.disallowed_tools,
         ),
         media_type="text/event-stream",
     )

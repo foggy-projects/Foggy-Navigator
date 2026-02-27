@@ -93,7 +93,11 @@ async def create_worktree(request: CreateWorktreeRequest) -> CreateWorktreeRespo
             detail=f"Worktree path already exists: {wt_path}",
         )
 
-    rc, output = await run_git(resolved, "worktree", "add", wt_path, request.branch)
+    # Try creating a new branch (-b); if the branch already exists, check it out directly
+    rc, output = await run_git(resolved, "worktree", "add", "-b", request.branch, wt_path)
+    if rc != 0 and "already exists" in output:
+        # Branch exists — try checking out existing branch into worktree
+        rc, output = await run_git(resolved, "worktree", "add", wt_path, request.branch)
     if rc != 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
