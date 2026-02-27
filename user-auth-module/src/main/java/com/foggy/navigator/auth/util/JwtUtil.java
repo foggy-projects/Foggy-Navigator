@@ -91,6 +91,32 @@ public class JwtUtil {
     }
 
     /**
+     * 判断Token是否需要续期（剩余有效期不足总时长的一半）
+     */
+    public boolean needsRenewal(String token) {
+        try {
+            Date exp = getExpirationFromToken(token);
+            long remaining = exp.getTime() - System.currentTimeMillis();
+            return remaining > 0 && remaining < (expiration * 1000 / 2);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 用原有 claims 重新签发一个新 Token（续期）
+     */
+    public String renewToken(String token) {
+        Claims claims = getClaims(token);
+        return generateToken(
+                claims.getSubject(),
+                claims.get("username", String.class),
+                claims.get("tenantId", String.class),
+                claims.get("roles", String.class)
+        );
+    }
+
+    /**
      * 解析Token
      */
     private Claims getClaims(String token) {

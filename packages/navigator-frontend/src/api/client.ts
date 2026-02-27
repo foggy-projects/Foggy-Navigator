@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import { getToken, clearAuth } from '@/utils/auth'
+import { getToken, setToken, clearAuth } from '@/utils/auth'
 import router from '@/router'
 
 const client = axios.create({
@@ -20,7 +20,13 @@ client.interceptors.request.use(
 )
 
 client.interceptors.response.use(
-  (response) => response.data,
+  (response) => {
+    const newToken = response.headers['x-new-token']
+    if (newToken) {
+      setToken(newToken)
+    }
+    return response.data
+  },
   (error) => {
     const status = error.response?.status
     const message = error.response?.data?.msg || error.response?.data?.message || error.message
