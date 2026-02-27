@@ -30,12 +30,14 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
     private final String permissionMode;
     /** Navigator platform API Key (plaintext) for injecting into CLI env */
     private final String navigatorApiKey;
+    /** Navigator API base URL (e.g. http://host:8112) for CLI env injection */
+    private final String navigatorApiBase;
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
                                  String workerId, String userId, String prompt,
                                  String cwd, String claudeSessionId) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -44,7 +46,7 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String model, Integer maxTurns, String agentTeamsJson,
                                  String apiKey, String authToken, String baseUrl) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                model, maxTurns, agentTeamsJson, null, apiKey, authToken, baseUrl, null, null);
+                model, maxTurns, agentTeamsJson, null, apiKey, authToken, baseUrl, null, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -54,7 +56,7 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String images,
                                  String apiKey, String authToken, String baseUrl) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                model, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl, null, null);
+                model, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl, null, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -66,7 +68,7 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String permissionMode) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
                 model, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl,
-                permissionMode, null);
+                permissionMode, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -76,6 +78,19 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String images,
                                  String apiKey, String authToken, String baseUrl,
                                  String permissionMode, String navigatorApiKey) {
+        this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
+                model, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl,
+                permissionMode, navigatorApiKey, null);
+    }
+
+    public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
+                                 String workerId, String userId, String prompt,
+                                 String cwd, String claudeSessionId,
+                                 String model, Integer maxTurns, String agentTeamsJson,
+                                 String images,
+                                 String apiKey, String authToken, String baseUrl,
+                                 String permissionMode, String navigatorApiKey,
+                                 String navigatorApiBase) {
         super(source);
         this.taskId = taskId;
         this.sessionId = sessionId;
@@ -93,5 +108,6 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
         this.baseUrl = baseUrl;
         this.permissionMode = permissionMode;
         this.navigatorApiKey = navigatorApiKey;
+        this.navigatorApiBase = navigatorApiBase;
     }
 }

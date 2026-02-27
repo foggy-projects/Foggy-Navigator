@@ -38,8 +38,10 @@ class QueryRequest(BaseModel):
     base_url: str | None = Field(None, description="Per-request Anthropic base URL override")
     # Permission mode: "bypassPermissions" | "acceptEdits" | "default" (interactive)
     permission_mode: str | None = Field(None, description="Permission mode for tool authorization")
-    # Navigator platform API key (injected into CLI env as NAVIGATOR_API_KEY)
+    # Navigator platform API key (injected into CLI env as NAVIGATOR_TOKEN)
     navigator_api_key: str | None = Field(None, description="Navigator platform API key for cross-project task skills")
+    # Navigator API base URL (injected into CLI env as NAVIGATOR_API_BASE)
+    navigator_api_base: str | None = Field(None, description="Navigator API base URL (e.g. http://host:8112)")
     # Tool restrictions (claude-agent-sdk only)
     disallowed_tools: list[str] | None = Field(None, description="Tools to disallow for this query (e.g. ['Task'])")
 

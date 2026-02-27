@@ -59,7 +59,8 @@ public class ClaudeWorkerClient {
                                                        String agentTeamsJson, String images,
                                                        String apiKey, String authToken, String baseUrl,
                                                        String permissionMode,
-                                                       String navigatorApiKey) {
+                                                       String navigatorApiKey,
+                                                       String navigatorApiBase) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) {
@@ -105,6 +106,10 @@ public class ClaudeWorkerClient {
         // Navigator platform API Key (for CLI env injection)
         if (navigatorApiKey != null && !navigatorApiKey.isEmpty()) {
             body.put("navigator_api_key", navigatorApiKey);
+        }
+        // Navigator API base URL (for CLI env injection)
+        if (navigatorApiBase != null && !navigatorApiBase.isEmpty()) {
+            body.put("navigator_api_base", navigatorApiBase);
         }
 
         return webClient.post()
