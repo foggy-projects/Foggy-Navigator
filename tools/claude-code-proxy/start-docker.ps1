@@ -26,6 +26,12 @@ if ($existingContainer) {
     Start-Sleep -Milliseconds 1000
 }
 
+# Ensure log directory exists on host
+$LogDir = Join-Path $ProxyDir "logs"
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir | Out-Null
+}
+
 # Build and start container
 Set-Location $ProxyDir
 Write-Host "Building Docker image..." -ForegroundColor Green
@@ -36,9 +42,11 @@ docker run -d `
     --name claude-code-proxy `
     -p ${Port}:8082 `
     --env-file .env `
+    -v "${LogDir}:/app/logs" `
     --restart unless-stopped `
     claude-code-proxy
 
 Write-Host "Claude Code Proxy started on port $Port" -ForegroundColor Green
 Write-Host "Container name: claude-code-proxy" -ForegroundColor Gray
-Write-Host "View logs: docker logs -f claude-code-proxy" -ForegroundColor Gray
+Write-Host "Log file: $LogDir\proxy.log" -ForegroundColor Gray
+Write-Host "View console logs: docker logs -f claude-code-proxy" -ForegroundColor Gray

@@ -28,8 +28,15 @@ if ($existingPid) {
     Start-Sleep -Milliseconds 500
 }
 
+# Ensure log directory exists
+$LogDir = Join-Path $ProxyDir "logs"
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir | Out-Null
+}
+
 # Start the proxy
 Set-Location $ProxyDir
 $env:PYTHONPATH = Join-Path $ProxyDir "src"
 Write-Host "Starting Claude Code Proxy on port $Port..." -ForegroundColor Green
+Write-Host "Log file: $LogDir\proxy.log" -ForegroundColor Gray
 python start_proxy.py

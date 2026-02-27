@@ -56,10 +56,13 @@ echo "Installing dependencies..."
 "$PROXY_DIR/venv/bin/pip" install -q -r "$PROXY_DIR/requirements.txt"
 
 # Start in background
+# Python logging module writes to logs/proxy.log (with rotation).
+# nohup captures stdout/stderr (startup messages, uncaught errors) to proxy-stdout.log.
+STDOUT_LOG="$PROXY_DIR/logs/proxy-stdout.log"
 echo "Starting Claude Code Proxy on port $PORT (background)..."
 export PYTHONPATH="$PROXY_DIR/src"
 nohup "$PROXY_DIR/venv/bin/python" "$PROXY_DIR/start_proxy.py" \
-    >> "$LOG_FILE" 2>&1 &
+    >> "$STDOUT_LOG" 2>&1 &
 PROXY_PID=$!
 echo "$PROXY_PID" > "$PID_FILE"
 
@@ -69,7 +72,9 @@ if kill -0 "$PROXY_PID" 2>/dev/null; then
     echo "Proxy started successfully (PID: $PROXY_PID)"
     echo "Log: $LOG_FILE"
 else
-    echo "ERROR: Proxy failed to start. Check log: $LOG_FILE"
-    tail -20 "$LOG_FILE"
+    echo "ERROR: Proxy failed to start. Check logs:"
+    echo "  $LOG_FILE"
+    echo "  $STDOUT_LOG"
+    tail -20 "$STDOUT_LOG"
     exit 1
 fi
