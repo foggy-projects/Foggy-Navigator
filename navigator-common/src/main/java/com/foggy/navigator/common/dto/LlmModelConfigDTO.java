@@ -1,9 +1,11 @@
 package com.foggy.navigator.common.dto;
 
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ModelAccessScope;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * LLM 模型配置 DTO（不含 API Key）
@@ -19,6 +21,8 @@ public class LlmModelConfigDTO {
     private String modelName;
     private Boolean isDefault;
     private Boolean hasApiKey;
+    private ModelAccessScope scope;
+    private List<String> allowedWorkerIds;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

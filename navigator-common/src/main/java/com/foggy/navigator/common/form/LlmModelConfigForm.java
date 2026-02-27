@@ -1,7 +1,10 @@
 package com.foggy.navigator.common.form;
 
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ModelAccessScope;
 import lombok.Data;
+
+import java.util.List;
 
 /**
  * LLM 模型配置表单
@@ -38,4 +41,14 @@ public class LlmModelConfigForm {
      * 是否设为该 category 的默认模型
      */
     private Boolean isDefault;
+
+    /**
+     * 访问范围
+     */
+    private ModelAccessScope scope;
+
+    /**
+     * 限定访问的 Worker ID 列表（scope=RESTRICTED 时有效）
+     */
+    private List<String> allowedWorkerIds;
 }

@@ -143,8 +143,13 @@ public class PlatformConfigController {
     }
 
     @GetMapping("/llm")
-    public RX<List<LlmModelConfigDTO>> listModelConfigs() {
+    public RX<List<LlmModelConfigDTO>> listModelConfigs(@RequestParam(required = false) String workerId) {
         String tenantId = resolveTenantId();
+        if (workerId != null && !workerId.isEmpty()) {
+            log.info("List LLM models for worker: tenantId={}, workerId={}", tenantId, workerId);
+            List<LlmModelConfigDTO> list = llmModelManager.listModelConfigsForWorker(tenantId, workerId);
+            return RX.ok(list);
+        }
         log.info("List LLM models: tenantId={}", tenantId);
         List<LlmModelConfigDTO> list = llmModelManager.listModelConfigs(tenantId);
         return RX.ok(list);

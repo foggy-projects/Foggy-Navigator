@@ -190,6 +190,8 @@ export type GitProviderType = 'GITHUB' | 'GITLAB' | 'GITEE'
 
 export type LlmModelCategory = 'GENERAL' | 'CODING' | 'REASONING' | 'VISION'
 
+export type ModelAccessScope = 'GLOBAL' | 'RESTRICTED'
+
 /** Git 提供者配置 */
 export interface GitProviderConfig {
   id: string
@@ -221,6 +223,8 @@ export interface LlmModelConfig {
   modelName: string
   isDefault: boolean
   hasApiKey: boolean
+  scope: ModelAccessScope
+  allowedWorkerIds?: string[]
   createdAt: string
   updatedAt: string
 }
@@ -233,6 +237,8 @@ export interface LlmModelConfigForm {
   modelName: string
   apiKey: string
   isDefault?: boolean
+  scope?: ModelAccessScope
+  allowedWorkerIds?: string[]
 }
 
 /** Agent 模型覆盖 */

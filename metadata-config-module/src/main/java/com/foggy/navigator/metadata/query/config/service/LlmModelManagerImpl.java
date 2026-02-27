@@ -3,12 +3,15 @@ package com.foggy.navigator.metadata.query.config.service;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.AgentModelOverrideEntity;
 import com.foggy.navigator.common.entity.LlmModelConfigEntity;
+import com.foggy.navigator.common.entity.ModelWorkerAccessEntity;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ModelAccessScope;
 import com.foggy.navigator.common.form.AgentModelOverrideForm;
 import com.foggy.navigator.common.form.LlmModelConfigForm;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.metadata.query.config.repository.AgentModelOverrideRepository;
 import com.foggy.navigator.metadata.query.config.repository.LlmModelConfigRepository;
+import com.foggy.navigator.metadata.query.config.repository.ModelWorkerAccessRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
@@ -20,10 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -38,6 +38,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
 
     private final LlmModelConfigRepository llmModelRepo;
     private final AgentModelOverrideRepository overrideRepo;
+    private final ModelWorkerAccessRepository workerAccessRepo;
     private final CredentialEncryptor credentialEncryptor;
     private final RestTemplateBuilder restTemplateBuilder;
 
@@ -57,6 +58,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setModelName(form.getModelName());
         entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
         entity.setIsDefault(form.getIsDefault() != null ? form.getIsDefault() : false);
+        entity.setScope(form.getScope() != null ? form.getScope() : ModelAccessScope.GLOBAL);
 
         // 如果标记为默认，取消同 category 下其他默认
         if (Boolean.TRUE.equals(entity.getIsDefault())) {
@@ -64,6 +66,12 @@ public class LlmModelManagerImpl implements LlmModelManager {
         }
 
         llmModelRepo.save(entity);
+
+        // RESTRICTED 时保存关联表
+        if (entity.getScope() == ModelAccessScope.RESTRICTED && form.getAllowedWorkerIds() != null) {
+            saveWorkerAccess(entity.getId(), tenantId, form.getAllowedWorkerIds());
+        }
+
         log.info("LLM model config saved: id={}", entity.getId());
         return entity.getId();
     }
@@ -90,6 +98,21 @@ public class LlmModelManagerImpl implements LlmModelManager {
             entity.setIsDefault(form.getIsDefault());
         }
 
+        // scope 变化处理
+        if (form.getScope() != null) {
+            entity.setScope(form.getScope());
+            if (form.getScope() == ModelAccessScope.RESTRICTED) {
+                // 替换关联表记录
+                workerAccessRepo.deleteByModelConfigId(id);
+                if (form.getAllowedWorkerIds() != null) {
+                    saveWorkerAccess(id, entity.getTenantId(), form.getAllowedWorkerIds());
+                }
+            } else {
+                // GLOBAL：清空关联表
+                workerAccessRepo.deleteByModelConfigId(id);
+            }
+        }
+
         llmModelRepo.save(entity);
         log.info("LLM model config updated: id={}", id);
     }
@@ -98,6 +121,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     @Transactional
     public void deleteModelConfig(String id) {
         log.info("Deleting LLM model config: id={}", id);
+        workerAccessRepo.deleteByModelConfigId(id);
         llmModelRepo.deleteById(id);
         log.info("LLM model config deleted: id={}", id);
     }
@@ -114,6 +138,26 @@ public class LlmModelManagerImpl implements LlmModelManager {
     public Optional<LlmModelConfigDTO> getModelConfig(String id) {
         log.debug("Getting LLM model config: id={}", id);
         return llmModelRepo.findById(id).map(this::toDTO);
+    }
+
+    // ========== Worker 级别过滤 ==========
+
+    @Override
+    public List<LlmModelConfigDTO> listModelConfigsForWorker(String tenantId, String workerId) {
+        log.debug("Listing LLM model configs for worker: tenantId={}, workerId={}", tenantId, workerId);
+        List<LlmModelConfigEntity> allModels = llmModelRepo.findByTenantIdOrderByCreatedAtAsc(tenantId);
+        Set<String> authorizedModelIds = workerAccessRepo.findByWorkerIdAndTenantId(workerId, tenantId)
+                .stream()
+                .map(ModelWorkerAccessEntity::getModelConfigId)
+                .collect(Collectors.toSet());
+
+        return allModels.stream()
+                .filter(entity -> {
+                    ModelAccessScope s = entity.getScope() != null ? entity.getScope() : ModelAccessScope.GLOBAL;
+                    return s == ModelAccessScope.GLOBAL || authorizedModelIds.contains(entity.getId());
+                })
+                .map(this::toDTO)
+                .collect(Collectors.toList());
     }
 
     // ========== 模型选择 ==========
@@ -302,6 +346,17 @@ public class LlmModelManagerImpl implements LlmModelManager {
         return "连接测试失败: " + msg;
     }
 
+    private void saveWorkerAccess(String modelConfigId, String tenantId, List<String> workerIds) {
+        for (String workerId : workerIds) {
+            ModelWorkerAccessEntity access = new ModelWorkerAccessEntity();
+            access.setId(UUID.randomUUID().toString());
+            access.setTenantId(tenantId);
+            access.setModelConfigId(modelConfigId);
+            access.setWorkerId(workerId);
+            workerAccessRepo.save(access);
+        }
+    }
+
     private LlmModelConfigDTO toDTO(LlmModelConfigEntity entity) {
         LlmModelConfigDTO dto = new LlmModelConfigDTO();
         dto.setId(entity.getId());
@@ -312,6 +367,17 @@ public class LlmModelManagerImpl implements LlmModelManager {
         dto.setModelName(entity.getModelName());
         dto.setIsDefault(entity.getIsDefault());
         dto.setHasApiKey(entity.getApiKey() != null && !entity.getApiKey().isEmpty());
+        ModelAccessScope scope = entity.getScope() != null ? entity.getScope() : ModelAccessScope.GLOBAL;
+        dto.setScope(scope);
+        if (scope == ModelAccessScope.RESTRICTED) {
+            dto.setAllowedWorkerIds(
+                    workerAccessRepo.findByModelConfigId(entity.getId()).stream()
+                            .map(ModelWorkerAccessEntity::getWorkerId)
+                            .collect(Collectors.toList())
+            );
+        } else {
+            dto.setAllowedWorkerIds(Collections.emptyList());
+        }
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());
         return dto;

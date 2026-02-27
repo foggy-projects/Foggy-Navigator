@@ -1,6 +1,7 @@
 package com.foggy.navigator.common.entity;
 
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.enums.ModelAccessScope;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -66,6 +67,13 @@ public class LlmModelConfigEntity {
     private Boolean isDefault;
 
     /**
+     * 访问范围：GLOBAL（所有 Worker 可用）/ RESTRICTED（仅指定 Worker 可用）
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private ModelAccessScope scope;
+
+    /**
      * 创建时间
      */
     @Column(nullable = false, updatable = false)
@@ -83,6 +91,9 @@ public class LlmModelConfigEntity {
         updatedAt = LocalDateTime.now();
         if (isDefault == null) {
             isDefault = false;
+        }
+        if (scope == null) {
+            scope = ModelAccessScope.GLOBAL;
         }
     }
 

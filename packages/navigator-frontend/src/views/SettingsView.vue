@@ -80,6 +80,14 @@
               <span v-if="row.isDefault" style="color: #67c23a">&#10003;</span>
             </template>
           </el-table-column>
+          <el-table-column label="范围" width="110" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.scope === 'RESTRICTED'" type="warning" size="small">
+                限定 ({{ row.allowedWorkerIds?.length || 0 }})
+              </el-tag>
+              <el-tag v-else size="small">全局</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="API Key" width="80" align="center">
             <template #default="{ row }">
               <el-tag :type="row.hasApiKey ? 'success' : 'danger'" size="small">
@@ -286,6 +294,22 @@
         <el-form-item>
           <el-checkbox v-model="llmForm.isDefault">设为该类别的默认模型</el-checkbox>
         </el-form-item>
+        <el-form-item label="访问范围">
+          <el-radio-group v-model="llmForm.scope">
+            <el-radio value="GLOBAL">全局（所有 Worker 可用）</el-radio>
+            <el-radio value="RESTRICTED">限定 Worker</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="llmForm.scope === 'RESTRICTED'" label="允许的 Worker" required>
+          <el-select v-model="llmForm.allowedWorkerIds" multiple placeholder="选择 Worker" style="width: 100%">
+            <el-option
+              v-for="w in workers"
+              :key="w.workerId"
+              :label="w.name"
+              :value="w.workerId"
+            />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showLlmDialog_ = false">取消</el-button>
@@ -451,7 +475,7 @@ import {
   deleteWorker as apiDeleteWorker,
   triggerHealthCheck as apiHealthCheck,
 } from '@/api/claudeWorker'
-import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, UserMemory, UserMemoryCategory, ApiCredential, AuthType } from '@/types'
+import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, ModelAccessScope, UserMemory, UserMemoryCategory, ApiCredential, AuthType } from '@/types'
 
 const router = useRouter()
 const activeTab = ref('git')
@@ -555,6 +579,8 @@ const llmForm = ref({
   modelName: '',
   apiKey: '',
   isDefault: false,
+  scope: 'GLOBAL' as ModelAccessScope,
+  allowedWorkerIds: [] as string[],
 })
 
 const llmPresets = [
@@ -567,7 +593,7 @@ function showLlmDialog(mode: 'add' | 'edit') {
   llmDialogMode.value = mode
   if (mode === 'add') {
     editingLlmId.value = ''
-    llmForm.value = { name: '', category: 'GENERAL', baseUrl: '', modelName: '', apiKey: '', isDefault: false }
+    llmForm.value = { name: '', category: 'GENERAL', baseUrl: '', modelName: '', apiKey: '', isDefault: false, scope: 'GLOBAL', allowedWorkerIds: [] }
   }
   showLlmDialog_.value = true
 }
@@ -582,6 +608,8 @@ function applyPreset(preset: (typeof llmPresets)[number]) {
     modelName: preset.modelName,
     apiKey: '',
     isDefault: false,
+    scope: 'GLOBAL',
+    allowedWorkerIds: [],
   }
   showLlmDialog_.value = true
 }
@@ -596,6 +624,8 @@ function editLlmModel(row: LlmModelConfig) {
     modelName: row.modelName,
     apiKey: '',
     isDefault: row.isDefault,
+    scope: row.scope || 'GLOBAL',
+    allowedWorkerIds: row.allowedWorkerIds ? [...row.allowedWorkerIds] : [],
   }
   showLlmDialog_.value = true
 }
@@ -609,6 +639,10 @@ async function saveLlm() {
     ElMessage.warning('请填写 API Key')
     return
   }
+  if (llmForm.value.scope === 'RESTRICTED' && (!llmForm.value.allowedWorkerIds || llmForm.value.allowedWorkerIds.length === 0)) {
+    ElMessage.warning('限定模式下请至少选择一个 Worker')
+    return
+  }
   saving.value = true
   try {
     if (llmDialogMode.value === 'add') {
@@ -619,6 +653,8 @@ async function saveLlm() {
         modelName: llmForm.value.modelName,
         apiKey: llmForm.value.apiKey,
         isDefault: llmForm.value.isDefault,
+        scope: llmForm.value.scope,
+        allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : undefined,
       })
     } else {
       const form: Record<string, unknown> = {
@@ -627,6 +663,8 @@ async function saveLlm() {
         baseUrl: llmForm.value.baseUrl,
         modelName: llmForm.value.modelName,
         isDefault: llmForm.value.isDefault,
+        scope: llmForm.value.scope,
+        allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : [],
       }
       if (llmForm.value.apiKey) form.apiKey = llmForm.value.apiKey
       await apiUpdateLlm(editingLlmId.value, form)

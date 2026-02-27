@@ -1575,15 +1575,23 @@ async function loadPlatformModelConfig() {
   try {
     const [overrides, models] = await Promise.all([
       listAgentModelOverrides(),
-      listModelConfigs(),
+      listModelConfigs(selectedWorkerId.value || undefined),
     ])
+    const previousId = platformModelConfigId.value
     platformModels.value = models.filter((m) => m.hasApiKey)
-    // 自动选择 claude-worker 的 agent-model override（如有）
-    const override = overrides.find((o) => o.agentId === 'claude-worker')
-    if (override && models.some((m) => m.id === override.modelConfigId)) {
-      platformModelConfigId.value = override.modelConfigId
-    } else if (platformModels.value.length > 0) {
-      platformModelConfigId.value = platformModels.value[0]!.id
+    // 保持之前选中的模型（如果仍在列表中）
+    if (previousId && platformModels.value.some((m) => m.id === previousId)) {
+      platformModelConfigId.value = previousId
+    } else {
+      // 自动选择 claude-worker 的 agent-model override（如有）
+      const override = overrides.find((o) => o.agentId === 'claude-worker')
+      if (override && platformModels.value.some((m) => m.id === override.modelConfigId)) {
+        platformModelConfigId.value = override.modelConfigId
+      } else if (platformModels.value.length > 0) {
+        platformModelConfigId.value = platformModels.value[0]!.id
+      } else {
+        platformModelConfigId.value = ''
+      }
     }
   } catch {
     // best-effort
@@ -2106,6 +2114,8 @@ function selectWorker(workerId: string) {
     expandedWorkerIds.add(workerId)
     workerState.loadDirectories(workerId)
   }
+  // 切换 Worker 时刷新可用模型列表
+  loadPlatformModelConfig()
 }
 
 function selectDirectory(workerId: string, directoryId: string) {

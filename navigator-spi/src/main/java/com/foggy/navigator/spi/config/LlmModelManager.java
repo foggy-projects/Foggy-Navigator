@@ -105,6 +105,18 @@ public interface LlmModelManager {
      */
     List<AgentModelOverrideForm> listAgentModelOverrides(String tenantId);
 
+    // ========== Worker 级别过滤 ==========
+
+    /**
+     * 获取指定 Worker 可用的模型配置列表
+     * 包括所有 GLOBAL 模型 + 该 Worker 被授权的 RESTRICTED 模型
+     *
+     * @param tenantId 租户ID
+     * @param workerId Worker ID
+     * @return 该 Worker 可用的模型配置列表
+     */
+    List<LlmModelConfigDTO> listModelConfigsForWorker(String tenantId, String workerId);
+
     // ========== 状态检查 ==========
 
     /**
