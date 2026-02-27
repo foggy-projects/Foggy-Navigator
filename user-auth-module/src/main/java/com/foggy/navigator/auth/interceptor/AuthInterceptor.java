@@ -32,7 +32,7 @@ public class AuthInterceptor implements HandlerInterceptor {
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         // 尝试从请求中获取用户信息
-        CurrentUser currentUser = extractUser(request);
+        CurrentUser currentUser = extractUser(request, response);
 
         if (currentUser != null) {
             UserContext.setCurrentUser(currentUser);
@@ -52,15 +52,23 @@ public class AuthInterceptor implements HandlerInterceptor {
         UserContext.clear();
     }
 
+    private static final String RENEW_TOKEN_HEADER = "X-New-Token";
+
     /**
-     * 从请求中提取用户信息
+     * 从请求中提取用户信息，并在 token 剩余有效期不足一半时自动续期
      */
-    private CurrentUser extractUser(HttpServletRequest request) {
+    private CurrentUser extractUser(HttpServletRequest request, HttpServletResponse response) {
         // 1. 尝试从 JWT Token 获取
         String authHeader = request.getHeader(AUTHORIZATION_HEADER);
         if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
             String token = authHeader.substring(BEARER_PREFIX.length());
-            return extractFromToken(token);
+            CurrentUser user = extractFromToken(token);
+            if (user != null && jwtUtil.needsRenewal(token)) {
+                String newToken = jwtUtil.renewToken(token);
+                response.setHeader(RENEW_TOKEN_HEADER, newToken);
+                log.debug("Token renewed for user: {}", user.getUsername());
+            }
+            return user;
         }
 
         // 2. 尝试从 URL query param 获取 token（SSE 场景，EventSource 不支持自定义 header）
