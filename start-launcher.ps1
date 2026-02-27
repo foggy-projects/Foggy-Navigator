@@ -7,6 +7,33 @@ $JAVA_PATH = "C:\Program Files\Java\jdk-17.0.1\bin\java.exe"
 $BACKEND_PORT = 8112
 $LOG_DIR = "logs"
 $JAR_PATH = "launcher\target\launcher-1.0.0-SNAPSHOT.jar"
+$ENV_FILE = "launcher\.env"
+
+# Set defaults
+$ROOT_USERNAME = "root"
+$ROOT_PASSWORD = "root123"
+$ROOT_EMAIL = "root@foggy.local"
+$SPRING_PROFILES_ACTIVE = "docker"
+
+# Load environment variables from .env file if exists
+if (Test-Path $ENV_FILE) {
+    Write-Host "Loading configuration from $ENV_FILE" -ForegroundColor Gray
+    Get-Content $ENV_FILE | ForEach-Object {
+        if ($_ -notmatch '^#' -and $_ -match '^(.+?)=(.+)$') {
+            $name = $matches[1]
+            $value = $matches[2]
+            Set-Item -Path "env:$name" -Value $value
+        }
+    }
+
+    # Override with env values if set
+    if ($env:ROOT_USERNAME) { $ROOT_USERNAME = $env:ROOT_USERNAME }
+    if ($env:ROOT_PASSWORD) { $ROOT_PASSWORD = $env:ROOT_PASSWORD }
+    if ($env:ROOT_EMAIL) { $ROOT_EMAIL = $env:ROOT_EMAIL }
+    if ($env:SPRING_PROFILES_ACTIVE) { $SPRING_PROFILES_ACTIVE = $env:SPRING_PROFILES_ACTIVE }
+} else {
+    Write-Host "Warning: $ENV_FILE not found, using defaults" -ForegroundColor Yellow
+}
 
 # Check if Java exists
 if (-not (Test-Path $JAVA_PATH)) {
@@ -79,12 +106,18 @@ Write-Host ""
 Write-Host "[4/4] Starting backend service..." -ForegroundColor Yellow
 Write-Host "  Java: $JAVA_PATH" -ForegroundColor Gray
 Write-Host "  JAR: $JAR_PATH" -ForegroundColor Gray
-Write-Host "  Profile: docker" -ForegroundColor Gray
+Write-Host "  Profile: $SPRING_PROFILES_ACTIVE" -ForegroundColor Gray
 Write-Host "  Port: $BACKEND_PORT" -ForegroundColor Gray
+Write-Host "  Root User: $ROOT_USERNAME" -ForegroundColor Gray
 Write-Host ""
 
 Start-Process $JAVA_PATH `
-    -ArgumentList '-Dfile.encoding=UTF-8', '-jar', $JAR_PATH, '--spring.profiles.active=docker' `
+    -ArgumentList '-Dfile.encoding=UTF-8', `
+        "-Dsystem.root.username=$ROOT_USERNAME", `
+        "-Dsystem.root.password=$ROOT_PASSWORD", `
+        "-Dsystem.root.email=$ROOT_EMAIL", `
+        '-jar', $JAR_PATH, `
+        "--spring.profiles.active=$SPRING_PROFILES_ACTIVE" `
     -RedirectStandardOutput "logs\backend.log" `
     -RedirectStandardError "logs\backend-error.log" `
     -NoNewWindow
