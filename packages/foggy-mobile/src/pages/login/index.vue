@@ -36,6 +36,10 @@
         </view>
       </view>
 
+      <view class="form-item remember-row">
+        <wd-checkbox v-model="rememberPassword" custom-class="remember-check">记住密码</wd-checkbox>
+      </view>
+
       <button
         class="login-btn"
         :loading="loading"
@@ -85,9 +89,12 @@ import {
   setActiveServerId,
 } from '@/utils/config'
 
+const REMEMBER_KEY = 'navigator_remember_login'
+
 const authStore = useAuthStore()
 const loading = ref(false)
 const showPicker = ref(false)
+const rememberPassword = ref(false)
 
 const servers = ref<ServerConfig[]>(getServers())
 const activeServer = ref<ServerConfig>(getActiveServer())
@@ -96,6 +103,17 @@ const form = reactive({
   username: '',
   password: '',
 })
+
+// 读取已保存的凭据
+const saved = uni.getStorageSync(REMEMBER_KEY)
+if (saved) {
+  try {
+    const parsed = JSON.parse(saved)
+    form.username = parsed.username || ''
+    form.password = parsed.password || ''
+    rememberPassword.value = true
+  } catch { /* ignore */ }
+}
 
 function selectServer(server: ServerConfig) {
   setActiveServerId(server.id)
@@ -121,6 +139,16 @@ async function handleLogin() {
       username: result.username,
       roles: result.roles,
     })
+
+    // 记住/清除密码
+    if (rememberPassword.value) {
+      uni.setStorageSync(REMEMBER_KEY, JSON.stringify({
+        username: form.username,
+        password: form.password,
+      }))
+    } else {
+      uni.removeStorageSync(REMEMBER_KEY)
+    }
 
     uni.showToast({ title: '登录成功', icon: 'success' })
     uni.switchTab({ url: '/pages/chat/index' })
@@ -278,6 +306,14 @@ async function handleLogin() {
 .picker-tip-text {
   font-size: 24rpx;
   color: #c0c4cc;
+}
+
+.remember-row {
+  margin-bottom: 16rpx;
+}
+:deep(.remember-check) {
+  font-size: 26rpx;
+  color: #606266;
 }
 
 .login-btn {
