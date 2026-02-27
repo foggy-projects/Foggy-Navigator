@@ -173,3 +173,6 @@ packages/foggy-mobile/unpackage/
 packages/foggy-mobile/pack-config.json
 packages/foggy-mobile/uni_modules/
 packages/foggy-mobile/uniCloud-aliyun/
+
+# PID files
+*.pid
