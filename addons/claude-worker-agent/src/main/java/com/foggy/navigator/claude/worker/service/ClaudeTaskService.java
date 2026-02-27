@@ -19,7 +19,6 @@ import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -51,11 +50,6 @@ public class ClaudeTaskService {
     private final ApplicationEventPublisher eventPublisher;
     private final LlmModelManager llmModelManager;
     private final UserAuthService userAuthService;
-
-    /** Navigator API external URL, injected into CLI env as NAVIGATOR_API_BASE.
-     *  Defaults to http://localhost:{server.port} when not explicitly configured. */
-    @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}")
-    private String navigatorApiBaseUrl;
 
     /**
      * 创建任务
@@ -129,7 +123,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(),
                 authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey, navigatorApiBaseUrl));
+                navigatorApiKey));
 
         return toDTO(entity);
     }
@@ -210,7 +204,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
                 form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 null, authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey, navigatorApiBaseUrl));
+                navigatorApiKey));
 
         return toDTO(entity);
     }

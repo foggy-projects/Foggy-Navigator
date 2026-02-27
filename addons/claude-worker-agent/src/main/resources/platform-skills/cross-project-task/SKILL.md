@@ -18,14 +18,14 @@ description: 创建并启动跨项目任务（多 Agent 协作编排）。当用
 
 ## 前提条件
 
-环境变量 `NAVIGATOR_TOKEN` 和 `NAVIGATOR_API_BASE` 必须存在。如果不存在，告知用户：
+环境变量 `NAVIGATOR_TOKEN` 必须存在。如果不存在，告知用户：
 
-> 当前未检测到 `NAVIGATOR_TOKEN` / `NAVIGATOR_API_BASE` 环境变量。这些变量由 Foggy Navigator 后端在派发任务时自动注入。
+> 当前未检测到 `NAVIGATOR_TOKEN` 环境变量。该变量由 Foggy Navigator 后端在派发任务时自动注入。
 > 请确保你是通过 Navigator 平台派发的任务（而非直接运行 Claude Code）。
 
 ## API 基础信息
 
-- **Base URL**: `$NAVIGATOR_API_BASE`（环境变量，由平台自动注入）
+- **Base URL**: `http://localhost:8112`
 - **认证头**: `Authorization: Bearer $NAVIGATOR_TOKEN`
 - **响应格式**: `{ "code": 200, "data": ... }` — 取 `.data` 字段
 
@@ -34,7 +34,7 @@ description: 创建并启动跨项目任务（多 Agent 协作编排）。当用
 ### Step 1: 发现可用 Agent
 
 ```bash
-curl -s $NAVIGATOR_API_BASE/api/v1/coding-agents \
+curl -s http://localhost:8112/api/v1/coding-agents \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data'
 ```
 
@@ -74,7 +74,7 @@ with open('/tmp/_cross_task.json', 'w', encoding='utf-8') as f:
 "
 
 # 2) 用 curl 发送文件
-curl -s -X POST $NAVIGATOR_API_BASE/api/v1/cross-project-tasks \
+curl -s -X POST http://localhost:8112/api/v1/cross-project-tasks \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
   -H "Content-Type: application/json; charset=UTF-8" \
   --data-binary @/tmp/_cross_task.json
@@ -92,7 +92,7 @@ curl -s -X POST $NAVIGATOR_API_BASE/api/v1/cross-project-tasks \
 ### Step 4: 启动任务
 
 ```bash
-curl -s -X POST $NAVIGATOR_API_BASE/api/v1/cross-project-tasks/{contextId}/start \
+curl -s -X POST http://localhost:8112/api/v1/cross-project-tasks/{contextId}/start \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data'
 ```
 
@@ -107,15 +107,15 @@ curl -s -X POST $NAVIGATOR_API_BASE/api/v1/cross-project-tasks/{contextId}/start
 
 ```bash
 # 查询任务状态
-curl -s $NAVIGATOR_API_BASE/api/v1/cross-project-tasks/{contextId} \
+curl -s http://localhost:8112/api/v1/cross-project-tasks/{contextId} \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data'
 
 # 推进到下一阶段
-curl -s -X POST $NAVIGATOR_API_BASE/api/v1/cross-project-tasks/{contextId}/advance \
+curl -s -X POST http://localhost:8112/api/v1/cross-project-tasks/{contextId}/advance \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data'
 
 # 取消任务
-curl -s -X POST $NAVIGATOR_API_BASE/api/v1/cross-project-tasks/{contextId}/cancel \
+curl -s -X POST http://localhost:8112/api/v1/cross-project-tasks/{contextId}/cancel \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data'
 ```
 
