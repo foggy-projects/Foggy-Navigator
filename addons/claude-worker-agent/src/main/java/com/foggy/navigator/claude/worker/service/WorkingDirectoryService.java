@@ -20,7 +20,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.foggy.navigator.common.util.IdGenerator;
 
 /**
  * 工作目录管理
@@ -98,7 +98,7 @@ public class WorkingDirectoryService {
         }
 
         WorkingDirectoryEntity entity = new WorkingDirectoryEntity();
-        entity.setDirectoryId(UUID.randomUUID().toString().substring(0, 8));
+        entity.setDirectoryId(IdGenerator.shortId());
         entity.setWorkerId(form.getWorkerId());
         entity.setUserId(userId);
         entity.setTenantId(tenantId);
@@ -288,7 +288,7 @@ public class WorkingDirectoryService {
 
         // 创建 WorkingDirectoryEntity
         WorkingDirectoryEntity entity = new WorkingDirectoryEntity();
-        entity.setDirectoryId(UUID.randomUUID().toString().substring(0, 8));
+        entity.setDirectoryId(IdGenerator.shortId());
         entity.setWorkerId(source.getWorkerId());
         entity.setUserId(userId);
         entity.setTenantId(tenantId);

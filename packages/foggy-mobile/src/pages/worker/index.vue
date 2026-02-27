@@ -57,36 +57,70 @@
                 </view>
                 <!-- PROJECT 子目录 -->
                 <view v-if="expandedProjects.has(project.directoryId)">
-                  <view
+                  <template
                     v-for="child in workerStore.getChildDirectories(worker.workerId, project.directoryId)"
                     :key="child.directoryId"
-                    class="directory-item child-item"
-                    @tap="openTasks(worker.workerId, child)"
                   >
-                    <view class="dir-info">
-                      <text class="dir-name">{{ child.projectName }}</text>
-                      <text v-if="child.gitBranch" class="dir-branch">{{ child.gitBranch }}</text>
-                      <text v-if="child.worktree" class="worktree-tag">worktree</text>
+                    <view
+                      class="directory-item child-item"
+                      @tap="openTasks(worker.workerId, child)"
+                    >
+                      <view class="dir-info">
+                        <text class="dir-name">{{ child.projectName }}</text>
+                        <text v-if="child.gitBranch" class="dir-branch">{{ child.gitBranch }}</text>
+                      </view>
+                      <text class="dir-path">{{ child.path }}</text>
                     </view>
-                    <text class="dir-path">{{ child.path }}</text>
-                  </view>
+                    <!-- Worktree 嵌套在源目录下 -->
+                    <view
+                      v-for="wt in workerStore.getWorktreesForDirectory(worker.workerId, child.directoryId)"
+                      :key="wt.directoryId"
+                      class="directory-item worktree-item"
+                      @tap="openTasks(worker.workerId, wt)"
+                    >
+                      <view class="dir-info">
+                        <text class="worktree-indent">└─</text>
+                        <text class="dir-name">{{ wt.projectName }}</text>
+                        <text v-if="wt.gitBranch" class="dir-branch">{{ wt.gitBranch }}</text>
+                        <text class="worktree-tag">worktree</text>
+                      </view>
+                      <text class="dir-path worktree-path">{{ wt.path }}</text>
+                    </view>
+                  </template>
                 </view>
               </view>
 
-              <!-- 独立目录（不属于任何 PROJECT） -->
-              <view
+              <!-- 独立目录（不属于任何 PROJECT，排除 worktree） -->
+              <template
                 v-for="dir in workerStore.getOrphanDirectories(worker.workerId)"
                 :key="dir.directoryId"
-                class="directory-item"
-                @tap="openTasks(worker.workerId, dir)"
               >
-                <view class="dir-info">
-                  <text class="dir-name">{{ dir.projectName }}</text>
-                  <text v-if="dir.gitBranch" class="dir-branch">{{ dir.gitBranch }}</text>
-                  <text v-if="dir.worktree" class="worktree-tag">worktree</text>
+                <view
+                  class="directory-item"
+                  @tap="openTasks(worker.workerId, dir)"
+                >
+                  <view class="dir-info">
+                    <text class="dir-name">{{ dir.projectName }}</text>
+                    <text v-if="dir.gitBranch" class="dir-branch">{{ dir.gitBranch }}</text>
+                  </view>
+                  <text class="dir-path">{{ dir.path }}</text>
                 </view>
-                <text class="dir-path">{{ dir.path }}</text>
-              </view>
+                <!-- Worktree 嵌套在源目录下 -->
+                <view
+                  v-for="wt in workerStore.getWorktreesForDirectory(worker.workerId, dir.directoryId)"
+                  :key="wt.directoryId"
+                  class="directory-item worktree-item"
+                  @tap="openTasks(worker.workerId, wt)"
+                >
+                  <view class="dir-info">
+                    <text class="worktree-indent">└─</text>
+                    <text class="dir-name">{{ wt.projectName }}</text>
+                    <text v-if="wt.gitBranch" class="dir-branch">{{ wt.gitBranch }}</text>
+                    <text class="worktree-tag">worktree</text>
+                  </view>
+                  <text class="dir-path worktree-path">{{ wt.path }}</text>
+                </view>
+              </template>
 
               <view
                 v-if="workerStore.getProjectDirectories(worker.workerId).length === 0 && workerStore.getOrphanDirectories(worker.workerId).length === 0"
@@ -170,7 +204,7 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
 .worker-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: calc(100vh - var(--window-top, 0px));
   background: #f5f5f5;
 }
 .page-header {
@@ -236,6 +270,18 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
 .child-item {
   padding-left: 80rpx;
   background: #ffffff;
+}
+.worktree-item {
+  padding-left: 112rpx;
+  background: #fafbfc;
+}
+.worktree-indent {
+  font-size: 24rpx;
+  color: #c0c4cc;
+  margin-right: 8rpx;
+}
+.worktree-path {
+  padding-left: 40rpx;
 }
 .directory-item {
   padding: 24rpx 28rpx;

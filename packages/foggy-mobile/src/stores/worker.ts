@@ -37,16 +37,21 @@ export const useWorkerStore = defineStore('worker', () => {
     return getDirectories(workerId).filter((d) => d.directoryType === 'PROJECT')
   }
 
-  /** 某 PROJECT 下的子目录 */
+  /** 某 PROJECT 下的子目录（排除 worktree，它们嵌套在源目录下） */
   function getChildDirectories(workerId: string, projectDirectoryId: string): WorkingDirectory[] {
-    return getDirectories(workerId).filter((d) => d.parentProjectId === projectDirectoryId)
+    return getDirectories(workerId).filter((d) => d.parentProjectId === projectDirectoryId && !d.sourceDirectoryId)
   }
 
-  /** 不属于任何 PROJECT 的普通目录 */
+  /** 不属于任何 PROJECT 的普通目录（排除 worktree） */
   function getOrphanDirectories(workerId: string): WorkingDirectory[] {
     return getDirectories(workerId).filter(
-      (d) => d.directoryType !== 'PROJECT' && !d.parentProjectId,
+      (d) => d.directoryType !== 'PROJECT' && !d.parentProjectId && !d.sourceDirectoryId,
     )
+  }
+
+  /** 某目录下关联的 worktree 列表 */
+  function getWorktreesForDirectory(workerId: string, directoryId: string): WorkingDirectory[] {
+    return getDirectories(workerId).filter((d) => d.sourceDirectoryId === directoryId)
   }
 
   async function healthCheck(workerId: string) {
@@ -79,6 +84,7 @@ export const useWorkerStore = defineStore('worker', () => {
     getProjectDirectories,
     getChildDirectories,
     getOrphanDirectories,
+    getWorktreesForDirectory,
     healthCheck,
     loadTasksByDirectory,
   }

@@ -29,7 +29,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.foggy.navigator.common.util.IdGenerator;
 
 /**
  * 跨项目任务编排
@@ -58,7 +58,7 @@ public class CrossProjectTaskService {
             throw new IllegalArgumentException("At least one phase is required");
         }
 
-        String contextId = UUID.randomUUID().toString().substring(0, 12);
+        String contextId = IdGenerator.shortId();
 
         CrossProjectTaskEntity task = new CrossProjectTaskEntity();
         task.setContextId(contextId);
@@ -75,7 +75,7 @@ public class CrossProjectTaskService {
         for (int i = 0; i < form.getPhases().size(); i++) {
             CreateCrossProjectTaskForm.PhaseForm pf = form.getPhases().get(i);
             CrossProjectPhaseEntity phase = new CrossProjectPhaseEntity();
-            phase.setPhaseId(UUID.randomUUID().toString().substring(0, 12));
+            phase.setPhaseId(IdGenerator.shortId());
             phase.setContextId(contextId);
             phase.setPhaseIndex(i);
             phase.setPhaseName(pf.getPhaseName());

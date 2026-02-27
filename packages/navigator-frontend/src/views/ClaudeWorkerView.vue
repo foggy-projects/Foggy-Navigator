@@ -68,45 +68,83 @@
               </div>
               <!-- Level 3: child directories under PROJECT -->
               <template v-if="expandedProjectIds.has(dir.directoryId)">
-                <div
-                  v-for="child in childrenForProject(dir.directoryId)"
-                  :key="child.directoryId"
-                  :class="[
-                    'directory-item child-dir',
-                    { active: selectedDirectoryId === child.directoryId },
-                  ]"
-                  @click="selectDirectory(worker.workerId, child.directoryId)"
-                >
-                  <div class="dir-info">
-                    <span class="dir-name">{{ child.projectName }}</span>
-                    <el-tag v-if="child.worktree" size="small" type="info" effect="plain" class="worktree-tag">worktree</el-tag>
-                    <span v-if="child.gitStatus === 'dirty'" class="dirty-dot" title="Uncommitted changes" />
+                <template v-for="child in childrenForProject(dir.directoryId)" :key="child.directoryId">
+                  <div
+                    :class="[
+                      'directory-item child-dir',
+                      { active: selectedDirectoryId === child.directoryId },
+                    ]"
+                    @click="selectDirectory(worker.workerId, child.directoryId)"
+                  >
+                    <div class="dir-info">
+                      <span class="dir-name">{{ child.projectName }}</span>
+                      <span v-if="child.gitStatus === 'dirty'" class="dirty-dot" title="Uncommitted changes" />
+                    </div>
+                    <div v-if="child.gitBranch" class="dir-branch">
+                      <span class="branch-icon">⎇</span> {{ child.gitBranch }}
+                    </div>
                   </div>
-                  <div v-if="child.gitBranch" class="dir-branch">
-                    <span class="branch-icon">⎇</span> {{ child.gitBranch }}
+                  <!-- Level 4: worktrees nested under source directory -->
+                  <div
+                    v-for="wt in worktreesForDirectory(child.directoryId)"
+                    :key="wt.directoryId"
+                    :class="[
+                      'directory-item worktree-dir',
+                      { active: selectedDirectoryId === wt.directoryId },
+                    ]"
+                    @click="selectDirectory(worker.workerId, wt.directoryId)"
+                  >
+                    <div class="dir-info">
+                      <span class="worktree-indent">└─</span>
+                      <span class="dir-name">{{ wt.projectName }}</span>
+                      <el-tag size="small" type="info" effect="plain" class="worktree-tag">worktree</el-tag>
+                      <span v-if="wt.gitStatus === 'dirty'" class="dirty-dot" title="Uncommitted changes" />
+                    </div>
+                    <div v-if="wt.gitBranch" class="dir-branch worktree-branch">
+                      <span class="branch-icon">⎇</span> {{ wt.gitBranch }}
+                    </div>
                   </div>
-                </div>
+                </template>
               </template>
             </template>
-            <!-- Orphan STANDARD directories (no parentProjectId) -->
-            <div
-              v-for="dir in orphanDirectoriesForWorker(worker.workerId)"
-              :key="dir.directoryId"
-              :class="[
-                'directory-item',
-                { active: selectedDirectoryId === dir.directoryId },
-              ]"
-              @click="selectDirectory(worker.workerId, dir.directoryId)"
-            >
-              <div class="dir-info">
-                <span class="dir-name">{{ dir.projectName }}</span>
-                <el-tag v-if="dir.worktree" size="small" type="info" effect="plain" class="worktree-tag">worktree</el-tag>
-                <span v-if="dir.gitStatus === 'dirty'" class="dirty-dot" title="Uncommitted changes" />
+            <!-- Orphan STANDARD directories (no parentProjectId, no sourceDirectoryId) -->
+            <template v-for="dir in orphanDirectoriesForWorker(worker.workerId)" :key="dir.directoryId">
+              <div
+                :class="[
+                  'directory-item',
+                  { active: selectedDirectoryId === dir.directoryId },
+                ]"
+                @click="selectDirectory(worker.workerId, dir.directoryId)"
+              >
+                <div class="dir-info">
+                  <span class="dir-name">{{ dir.projectName }}</span>
+                  <span v-if="dir.gitStatus === 'dirty'" class="dirty-dot" title="Uncommitted changes" />
+                </div>
+                <div v-if="dir.gitBranch" class="dir-branch">
+                  <span class="branch-icon">⎇</span> {{ dir.gitBranch }}
+                </div>
               </div>
-              <div v-if="dir.gitBranch" class="dir-branch">
-                <span class="branch-icon">⎇</span> {{ dir.gitBranch }}
+              <!-- Worktrees nested under orphan directory -->
+              <div
+                v-for="wt in worktreesForDirectory(dir.directoryId)"
+                :key="wt.directoryId"
+                :class="[
+                  'directory-item worktree-dir orphan-worktree',
+                  { active: selectedDirectoryId === wt.directoryId },
+                ]"
+                @click="selectDirectory(worker.workerId, wt.directoryId)"
+              >
+                <div class="dir-info">
+                  <span class="worktree-indent">└─</span>
+                  <span class="dir-name">{{ wt.projectName }}</span>
+                  <el-tag size="small" type="info" effect="plain" class="worktree-tag">worktree</el-tag>
+                  <span v-if="wt.gitStatus === 'dirty'" class="dirty-dot" title="Uncommitted changes" />
+                </div>
+                <div v-if="wt.gitBranch" class="dir-branch worktree-branch">
+                  <span class="branch-icon">⎇</span> {{ wt.gitBranch }}
+                </div>
               </div>
-            </div>
+            </template>
             <div
               v-if="directoriesForWorker(worker.workerId).length === 0"
               class="empty-dir-hint"
@@ -1967,13 +2005,19 @@ function projectDirectoriesForWorker(workerId: string): WorkingDirectory[] {
 
 function orphanDirectoriesForWorker(workerId: string): WorkingDirectory[] {
   return workerState.directories.value.filter(
-    (d) => d.workerId === workerId && d.directoryType !== 'PROJECT' && !d.parentProjectId,
+    (d) => d.workerId === workerId && d.directoryType !== 'PROJECT' && !d.parentProjectId && !d.sourceDirectoryId,
   )
 }
 
 function childrenForProject(projectDirectoryId: string): WorkingDirectory[] {
   return workerState.directories.value.filter(
-    (d) => d.parentProjectId === projectDirectoryId,
+    (d) => d.parentProjectId === projectDirectoryId && !d.sourceDirectoryId,
+  )
+}
+
+function worktreesForDirectory(directoryId: string): WorkingDirectory[] {
+  return workerState.directories.value.filter(
+    (d) => d.sourceDirectoryId === directoryId,
   )
 }
 
@@ -3657,6 +3701,25 @@ function handlePopOutTerminal() {
 .worktree-tag {
   margin-left: 4px;
   transform: scale(0.85);
+}
+
+.worktree-dir {
+  padding-left: 72px !important;
+}
+
+.orphan-worktree {
+  padding-left: 40px !important;
+}
+
+.worktree-indent {
+  color: #c0c4cc;
+  font-size: 12px;
+  margin-right: 4px;
+  user-select: none;
+}
+
+.worktree-branch {
+  padding-left: 20px;
 }
 
 .empty-dir-hint {

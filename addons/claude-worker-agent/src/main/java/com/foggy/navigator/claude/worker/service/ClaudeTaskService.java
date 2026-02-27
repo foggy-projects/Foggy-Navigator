@@ -29,7 +29,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import com.foggy.navigator.common.util.IdGenerator;
 
 /**
  * 任务生命周期管理
@@ -96,7 +96,7 @@ public class ClaudeTaskService {
                 .build());
 
         // 4. 持久化任务
-        String taskId = UUID.randomUUID().toString().substring(0, 12);
+        String taskId = IdGenerator.shortId();
         ClaudeTaskEntity entity = new ClaudeTaskEntity();
         entity.setTaskId(taskId);
         entity.setSessionId(sessionId);
@@ -177,7 +177,7 @@ public class ClaudeTaskService {
                 .content(form.getPrompt())
                 .build());
 
-        String taskId = UUID.randomUUID().toString().substring(0, 12);
+        String taskId = IdGenerator.shortId();
         ClaudeTaskEntity entity = new ClaudeTaskEntity();
         entity.setTaskId(taskId);
         entity.setSessionId(sessionId);
@@ -475,7 +475,7 @@ public class ClaudeTaskService {
                     .build());
 
             // Create ClaudeTask entity
-            String taskId = UUID.randomUUID().toString().substring(0, 12);
+            String taskId = IdGenerator.shortId();
             ClaudeTaskEntity entity = new ClaudeTaskEntity();
             entity.setTaskId(taskId);
             entity.setSessionId(sessionId);
