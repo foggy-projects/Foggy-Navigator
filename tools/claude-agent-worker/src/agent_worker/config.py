@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     max_ssh_sessions: int = 5
     ssh_idle_timeout_seconds: int = 1800  # 30 min
 
+    # Navigator platform URL (injected into SKILL.md templates at deploy time)
+    navigator_api_base: str = "http://localhost:8112"
+
     # LLM config -- injected into Claude Code CLI subprocess via env
     # 二选一：api_key 或 auth_token（取决于你平时用哪个）
     anthropic_api_key: str = ""
