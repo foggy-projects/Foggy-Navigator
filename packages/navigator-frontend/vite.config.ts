@@ -15,7 +15,7 @@ export default defineConfig({
   server: {
     port: 5174,
     host: '0.0.0.0',
-    allowedHosts: 'all',
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8112',
