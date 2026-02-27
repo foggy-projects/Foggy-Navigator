@@ -7,6 +7,7 @@ JAVA_CMD="java"
 BACKEND_PORT=8112
 LOG_DIR="logs"
 JAR_PATH="launcher/target/launcher-1.0.0-SNAPSHOT.jar"
+ENV_FILE="launcher/.env"
 
 # Colors
 RED='\033[0;31m'
@@ -15,6 +16,20 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 GRAY='\033[0;37m'
 NC='\033[0m' # No Color
+
+# Load environment variables from .env file if exists
+if [ -f "$ENV_FILE" ]; then
+    echo -e "${GRAY}Loading configuration from $ENV_FILE${NC}"
+    export $(cat "$ENV_FILE" | grep -v '^#' | grep -v '^$' | xargs)
+else
+    echo -e "${YELLOW}Warning: $ENV_FILE not found, using defaults${NC}"
+fi
+
+# Set defaults if not set in .env
+ROOT_USERNAME=${ROOT_USERNAME:-root}
+ROOT_PASSWORD=${ROOT_PASSWORD:-root123}
+ROOT_EMAIL=${ROOT_EMAIL:-root@foggy.local}
+SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
 
 echo ""
 echo -e "${CYAN}========================================${NC}"
@@ -81,12 +96,19 @@ echo ""
 echo -e "${YELLOW}[4/4] Starting backend service...${NC}"
 echo -e "${GRAY}  Java: ${JAVA_CMD}${NC}"
 echo -e "${GRAY}  JAR: ${JAR_PATH}${NC}"
-echo -e "${GRAY}  Profile: docker${NC}"
+echo -e "${GRAY}  Profile: ${SPRING_PROFILES_ACTIVE}${NC}"
 echo -e "${GRAY}  Port: ${BACKEND_PORT}${NC}"
+echo -e "${GRAY}  Root User: ${ROOT_USERNAME}${NC}"
 echo ""
 
 # Start service in background
-nohup java -Dfile.encoding=UTF-8 -jar "$JAR_PATH" --spring.profiles.active=docker > "$LOG_DIR/backend.log" 2> "$LOG_DIR/backend-error.log" &
+nohup java -Dfile.encoding=UTF-8 \
+    -Dsystem.root.username="${ROOT_USERNAME}" \
+    -Dsystem.root.password="${ROOT_PASSWORD}" \
+    -Dsystem.root.email="${ROOT_EMAIL}" \
+    -jar "$JAR_PATH" \
+    --spring.profiles.active="${SPRING_PROFILES_ACTIVE}" \
+    > "$LOG_DIR/backend.log" 2> "$LOG_DIR/backend-error.log" &
 echo $! > "$LOG_DIR/backend.pid"
 
 echo -e "${GRAY}  Waiting for service to be ready...${NC}"
