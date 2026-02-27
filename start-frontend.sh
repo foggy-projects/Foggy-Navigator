@@ -43,18 +43,28 @@ fi
 
 # Install dependencies if needed
 if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-    echo -e "${YELLOW}[1/2] Installing dependencies...${NC}"
-    cd "$FRONTEND_DIR"
-    pnpm install
-    cd ..
-else
-    echo -e "${GRAY}[1/2] Dependencies ready${NC}"
+    echo -e "${YELLOW}[1/3] Installing dependencies...${NC}"
+    pnpm install --no-frozen-lockfile
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}  pnpm install failed!${NC}"
+        exit 1
+    fi
 fi
 
-echo -e "${YELLOW}[2/2] Starting dev server...${NC}"
+# Build workspace packages if dist is missing
+if [ ! -d "packages/foggy-chat-core/dist" ] || [ ! -d "packages/foggy-chat/dist" ]; then
+    echo -e "${YELLOW}[2/3] Building workspace packages...${NC}"
+    (cd packages/foggy-chat-core && pnpm build) && (cd packages/foggy-chat && pnpm build)
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}  Workspace package build failed!${NC}"
+        exit 1
+    fi
+fi
+
+echo -e "${YELLOW}[3/3] Starting dev server...${NC}"
 echo ""
 echo -e "${CYAN}  URL: http://localhost:${FRONTEND_PORT}${NC}"
-echo -e "${CYAN}  Login: root / root123${NC}"
+echo -e "${CYAN}  Login: admin / @Shundao888${NC}"
 echo ""
 
 cd "$FRONTEND_DIR"
