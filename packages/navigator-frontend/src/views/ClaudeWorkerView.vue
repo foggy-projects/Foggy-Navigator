@@ -402,6 +402,52 @@
           </div>
         </div>
 
+        <!-- CLI Process Management Section -->
+        <div class="process-section">
+          <div class="process-section-header" @click="processesExpanded = !processesExpanded; if (processesExpanded && cliProcesses.length === 0) loadCliProcesses()">
+            <span class="process-section-title">
+              Claude CLI 进程
+              <el-tag v-if="cliProcesses.length > 0" size="small" :type="cliProcesses.some(p => p.isOrphan) ? 'danger' : 'info'" style="margin-left: 6px;">
+                {{ cliProcesses.length }}
+              </el-tag>
+            </span>
+            <span class="process-expand-icon">{{ processesExpanded ? '&#9660;' : '&#9654;' }}</span>
+          </div>
+          <div v-if="processesExpanded" class="process-section-body">
+            <div class="process-toolbar">
+              <el-button size="small" :loading="loadingProcesses" @click="loadCliProcesses">刷新</el-button>
+            </div>
+            <el-table
+              v-loading="loadingProcesses"
+              :data="cliProcesses"
+              size="small"
+              stripe
+              empty-text="未检测到 Claude CLI 进程"
+              style="width: 100%"
+            >
+              <el-table-column prop="pid" label="PID" width="80" />
+              <el-table-column prop="command" label="命令" min-width="200" show-overflow-tooltip />
+              <el-table-column label="内存" width="80">
+                <template #default="{ row }">{{ row.memoryMb ? row.memoryMb.toFixed(1) + ' MB' : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="启动时间" width="150">
+                <template #default="{ row }">{{ row.startedAt || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="80" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.isOrphan ? 'danger' : 'success'" size="small">{{ row.isOrphan ? '孤儿' : '活跃' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="140" align="center">
+                <template #default="{ row }">
+                  <el-button text size="small" @click="handleKillProcess(row.pid, false)">终止</el-button>
+                  <el-button text size="small" type="danger" @click="handleKillProcess(row.pid, true)">强制</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+
         <!-- Task Form: collapse when panes are open -->
         <div v-if="panes.length === 0" class="task-form">
           <el-form :model="taskForm" label-position="top" size="default">
@@ -1336,6 +1382,53 @@ const agentsForWorker = computed(() =>
   agentState.agents.value.filter(a => a.workerId === selectedWorkerId.value),
 )
 
+// --- CLI process management state ---
+import type { CliProcessInfo } from '@/types'
+const cliProcesses = ref<CliProcessInfo[]>([])
+const cliProcessActiveTaskCount = ref(0)
+const loadingProcesses = ref(false)
+const processesExpanded = ref(false)
+
+async function loadCliProcesses() {
+  if (!selectedWorkerId.value) return
+  loadingProcesses.value = true
+  try {
+    const data = await dirApi.listCliProcesses(selectedWorkerId.value)
+    cliProcesses.value = data.processes
+    cliProcessActiveTaskCount.value = data.activeTaskCount
+  } catch {
+    cliProcesses.value = []
+    cliProcessActiveTaskCount.value = 0
+  } finally {
+    loadingProcesses.value = false
+  }
+}
+
+async function handleKillProcess(pid: number, force = false) {
+  if (!selectedWorkerId.value) return
+  const action = force ? '强制终止' : '终止'
+  try {
+    await ElMessageBox.confirm(
+      `确定要${action}进程 PID ${pid} 吗？`,
+      `${action}进程`,
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return // cancelled
+  }
+  try {
+    const result = await dirApi.killCliProcess(selectedWorkerId.value, pid, force)
+    if (result.status === 'killed') {
+      ElMessage.success(`进程 ${pid} 已${action}`)
+    } else {
+      ElMessage.warning(result.message)
+    }
+    await loadCliProcesses()
+  } catch (e: unknown) {
+    ElMessage.error(`${action}失败: ${e instanceof Error ? e.message : e}`)
+  }
+}
+
 const selectedWorkerId = ref<string | null>(null)
 const selectedDirectoryId = ref<string | null>(null)
 const expandedWorkerIds = reactive(new Set<string>())
@@ -2000,6 +2093,8 @@ function selectWorker(workerId: string) {
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = null
   directorySkills.value = []
+  cliProcesses.value = []
+  processesExpanded.value = false
   exitBatchSelectMode()
   // No disposeAllPanes — workspace context preserves panes per directory
   // Auto-expand
@@ -4103,6 +4198,53 @@ function handlePopOutTerminal() {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+/* --- CLI Process Management --- */
+
+.process-section {
+  margin-bottom: 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.process-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  cursor: pointer;
+  user-select: none;
+}
+
+.process-section-header:hover {
+  background: #ebeef5;
+}
+
+.process-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+  display: inline-flex;
+  align-items: center;
+}
+
+.process-expand-icon {
+  font-size: 10px;
+  color: #909399;
+}
+
+.process-section-body {
+  padding: 8px;
+}
+
+.process-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 </style>
 

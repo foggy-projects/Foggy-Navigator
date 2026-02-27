@@ -348,3 +348,39 @@ class FoggyIgnoreResponse(BaseModel):
     """Response for foggy-ignore endpoints."""
 
     patterns: list[str] = Field(default_factory=list, description="Current custom patterns")
+
+
+# ---------------------------------------------------------------------------
+# CLI process management
+# ---------------------------------------------------------------------------
+
+class CliProcessInfo(BaseModel):
+    """A single Claude CLI node process."""
+
+    pid: int
+    command: str = Field("", description="Command line excerpt (truncated to 200 chars)")
+    memory_mb: float = Field(0.0, description="Working set memory in MB")
+    started_at: str = Field("", description="Process start time (ISO 8601 or raw)")
+    is_orphan: bool = Field(True, description="True if not associated with any active task")
+
+
+class CliProcessListResponse(BaseModel):
+    """Response for ``GET /api/v1/processes``."""
+
+    processes: list[CliProcessInfo]
+    active_task_count: int
+    total: int
+
+
+class KillProcessRequest(BaseModel):
+    """Payload for ``POST /api/v1/processes/{pid}/kill``."""
+
+    force: bool = Field(False, description="True = SIGKILL, False = SIGTERM")
+
+
+class KillProcessResponse(BaseModel):
+    """Response for ``POST /api/v1/processes/{pid}/kill``."""
+
+    pid: int
+    status: str = Field(..., description="killed | not_found | failed")
+    message: str = ""

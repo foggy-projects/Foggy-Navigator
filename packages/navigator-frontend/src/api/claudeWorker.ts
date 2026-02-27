@@ -1,5 +1,5 @@
 import client from './client'
-import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig } from '@/types'
+import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse } from '@/types'
 
 // ===== Worker API =====
 
@@ -42,6 +42,27 @@ export async function triggerHealthCheck(workerId: string): Promise<ClaudeWorker
   const rx = (await client.post(
     `/claude-workers/${workerId}/health-check`,
   )) as unknown as RX<ClaudeWorker>
+  return rx.data
+}
+
+// ===== CLI Process Management API =====
+
+export async function listCliProcesses(workerId: string): Promise<CliProcessListResponse> {
+  const rx = (await client.get(
+    `/claude-workers/${workerId}/processes`,
+  )) as unknown as RX<CliProcessListResponse>
+  return rx.data
+}
+
+export async function killCliProcess(
+  workerId: string,
+  pid: number,
+  force = false,
+): Promise<KillProcessResponse> {
+  const rx = (await client.post(
+    `/claude-workers/${workerId}/processes/${pid}/kill`,
+    { force },
+  )) as unknown as RX<KillProcessResponse>
   return rx.data
 }
 

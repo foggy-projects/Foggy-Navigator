@@ -12,7 +12,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Worker 管理 API
@@ -78,5 +80,50 @@ public class ClaudeWorkerController {
         }
         healthChecker.checkWorker(entity);
         return RX.ok(workerService.getWorker(userId, workerId));
+    }
+
+    // ===== CLI Process Management =====
+
+    @GetMapping("/{workerId}/processes")
+    public RX<Map<String, Object>> listCliProcesses(@PathVariable String workerId) {
+        String userId = UserContext.getCurrentUserId();
+        var entity = workerService.getWorkerEntity(workerId);
+        if (!entity.getUserId().equals(userId)) {
+            throw RX.throwB("Worker not found");
+        }
+        var client = workerService.createClient(entity);
+        try {
+            Map<String, Object> result = client.listCliProcesses()
+                    .block(Duration.ofSeconds(10));
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to list CLI processes for worker {}: {}", workerId, e.getMessage());
+            return RX.failA("获取 CLI 进程列表失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/{workerId}/processes/{pid}/kill")
+    public RX<Map<String, Object>> killCliProcess(
+            @PathVariable String workerId,
+            @PathVariable int pid,
+            @RequestBody(required = false) Map<String, Object> body) {
+        String userId = UserContext.getCurrentUserId();
+        var entity = workerService.getWorkerEntity(workerId);
+        if (!entity.getUserId().equals(userId)) {
+            throw RX.throwB("Worker not found");
+        }
+        boolean force = false;
+        if (body != null && body.containsKey("force")) {
+            force = Boolean.TRUE.equals(body.get("force"));
+        }
+        var client = workerService.createClient(entity);
+        try {
+            Map<String, Object> result = client.killCliProcess(pid, force)
+                    .block(Duration.ofSeconds(10));
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to kill CLI process {} for worker {}: {}", pid, workerId, e.getMessage());
+            return RX.failA("终止 CLI 进程失败: " + e.getMessage());
+        }
     }
 }

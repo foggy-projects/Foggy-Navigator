@@ -566,6 +566,38 @@ public class ClaudeWorkerClient {
                 .doOnError(e -> log.warn("SSH resize failed for worker {}, session {}: {}", workerId, sessionId, e.getMessage()));
     }
 
+    // ===== CLI Process Management =====
+
+    /**
+     * 列出 Worker 上的 Claude CLI node 进程
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> listCliProcesses() {
+        return webClient.get()
+                .uri("/api/v1/processes")
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("List CLI processes failed for worker {}: {}", workerId, e.getMessage()));
+    }
+
+    /**
+     * 终止指定 PID 的 Claude CLI 进程
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> killCliProcess(int pid, boolean force) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("force", force);
+        return webClient.post()
+                .uri("/api/v1/processes/" + pid + "/kill")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Kill CLI process failed for worker {}, pid {}: {}", workerId, pid, e.getMessage()));
+    }
+
     public String getWorkerId() {
         return workerId;
     }

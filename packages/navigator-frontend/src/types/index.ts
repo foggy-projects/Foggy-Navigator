@@ -333,6 +333,31 @@ export interface DirectorySummary {
   gitBranch?: string
 }
 
+// ===== CLI 进程管理类型 =====
+
+/** Worker 上的 Claude CLI node 进程 */
+export interface CliProcessInfo {
+  pid: number
+  command: string
+  memoryMb: number
+  startedAt: string
+  isOrphan: boolean
+}
+
+/** CLI 进程列表响应 */
+export interface CliProcessListResponse {
+  processes: CliProcessInfo[]
+  activeTaskCount: number
+  total: number
+}
+
+/** 终止进程响应 */
+export interface KillProcessResponse {
+  pid: number
+  status: 'killed' | 'not_found' | 'failed'
+  message: string
+}
+
 // ===== 跨项目任务类型 =====
 
 export type CrossProjectTaskStatus = 'DRAFT' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
