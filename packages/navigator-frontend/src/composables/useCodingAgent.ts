@@ -35,8 +35,16 @@ export function useCodingAgent() {
     skills?: string
     defaultBranch?: string
     defaultDirectoryId?: string
+    projectSummary?: string
   }) {
     const updated = await agentApi.updateAgent(agentId, form)
+    const idx = agents.value.findIndex(a => a.agentId === agentId)
+    if (idx >= 0) agents.value[idx] = updated
+    return updated
+  }
+
+  async function generateSummary(agentId: string, hint?: string) {
+    const updated = await agentApi.generateSummary(agentId, hint)
     const idx = agents.value.findIndex(a => a.agentId === agentId)
     if (idx >= 0) agents.value[idx] = updated
     return updated
@@ -61,6 +69,7 @@ export function useCodingAgent() {
     loadAgents,
     registerAgent,
     updateAgent,
+    generateSummary,
     deleteAgent,
     bindDirectory,
     unbindDirectory,

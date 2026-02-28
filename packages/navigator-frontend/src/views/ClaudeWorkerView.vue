@@ -426,6 +426,7 @@
               <div class="agent-card-info">
                 <div class="agent-card-name">{{ agent.name }}</div>
                 <div v-if="agent.description" class="agent-card-desc">{{ agent.description }}</div>
+                <div v-if="agent.projectSummary" class="agent-card-summary">{{ agent.projectSummary }}</div>
                 <div class="agent-card-meta">
                   <span v-if="agent.defaultDirectoryId" class="agent-dir-tag">
                     &#128193; {{ dirNameById(agent.defaultDirectoryId) }}
@@ -1328,7 +1329,7 @@
     </el-dialog>
 
     <!-- Edit Agent Dialog -->
-    <el-dialog v-model="showAgentEditDialog" title="编辑 Agent" width="480px">
+    <el-dialog v-model="showAgentEditDialog" title="编辑 Agent" width="520px">
       <el-form :model="agentForm" label-position="top">
         <el-form-item label="名称" required>
           <el-input v-model="agentForm.name" />
@@ -1348,6 +1349,22 @@
         </el-form-item>
         <el-form-item label="默认分支">
           <el-input v-model="agentForm.defaultBranch" placeholder="留空则由任务决定" />
+        </el-form-item>
+        <el-form-item>
+          <template #label>
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+              <span>项目概述</span>
+              <el-button size="small" text type="primary" :loading="generatingSummary" @click="handleGenerateSummary">
+                AI 自动生成
+              </el-button>
+            </div>
+          </template>
+          <el-input
+            v-model="agentForm.projectSummary"
+            type="textarea"
+            :rows="5"
+            placeholder="技术栈、主要模块、对外API端点等（可手动填写或点击自动生成）"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1469,7 +1486,8 @@ const showAgentBindingDialog = ref(false)
 const editingAgent = ref<CodingAgent | null>(null)
 const bindingAgent = ref<CodingAgent | null>(null)
 const bindingDirectories = ref<DirectorySummary[]>([])
-const agentForm = ref({ name: '', description: '', defaultDirectoryId: '', defaultBranch: '' })
+const agentForm = ref({ name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '' })
+const generatingSummary = ref(false)
 const bindDirectoryId = ref('')
 
 const agentsForWorker = computed(() =>
@@ -1714,7 +1732,7 @@ function dirBranchById(dirId?: string): string | undefined {
 }
 
 function openAgentRegisterDialog() {
-  agentForm.value = { name: '', description: '', defaultDirectoryId: '', defaultBranch: '' }
+  agentForm.value = { name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '' }
   showAgentRegisterDialog.value = true
 }
 
@@ -1725,6 +1743,7 @@ function openAgentEditDialog(agent: CodingAgent) {
     description: agent.description || '',
     defaultDirectoryId: agent.defaultDirectoryId || '',
     defaultBranch: agent.defaultBranch || '',
+    projectSummary: agent.projectSummary || '',
   }
   showAgentEditDialog.value = true
 }
@@ -1758,6 +1777,7 @@ async function handleUpdateAgent() {
       description: agentForm.value.description || undefined,
       defaultBranch: agentForm.value.defaultBranch || undefined,
       defaultDirectoryId: agentForm.value.defaultDirectoryId || undefined,
+      projectSummary: agentForm.value.projectSummary || undefined,
     })
     showAgentEditDialog.value = false
     ElMessage.success('Agent 更新成功')
@@ -1765,6 +1785,24 @@ async function handleUpdateAgent() {
     ElMessage.error(e.message || '更新失败')
   } finally {
     saving.value = false
+  }
+}
+
+async function handleGenerateSummary() {
+  if (!editingAgent.value) return
+  generatingSummary.value = true
+  try {
+    const updated = await agentState.generateSummary(editingAgent.value.agentId)
+    if (updated.projectSummary) {
+      agentForm.value.projectSummary = updated.projectSummary
+      ElMessage.success('项目概述已生成')
+    } else {
+      ElMessage.warning('未能生成项目概述')
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '生成失败')
+  } finally {
+    generatingSummary.value = false
   }
 }
 
@@ -2105,7 +2143,35 @@ function toggleProjectExpand(projectId: string) {
 // Active tasks polling (fallback) + SSE-driven refresh
 let activeTasksInterval: ReturnType<typeof setInterval> | null = null
 
-function handleTaskUpdateEvent() {
+function handleTaskUpdateEvent(event: Event) {
+  const detail = (event as CustomEvent).detail
+  if (detail?.type === 'task_status_change' && detail?.taskId) {
+    const newStatus = detail.status as string
+    if (['RUNNING', 'AWAITING_PERMISSION'].includes(newStatus)) {
+      // Active state — update in-place or refresh list
+      const existing = workerState.activeTasks.value.find(t => t.taskId === detail.taskId)
+      if (existing) {
+        existing.status = newStatus as any
+      } else {
+        workerState.loadActiveTasks()
+      }
+    } else {
+      // Terminal state — remove from active list + update task list
+      workerState.activeTasks.value = workerState.activeTasks.value.filter(
+        t => t.taskId !== detail.taskId
+      )
+      const inTasks = workerState.tasks.value.find(t => t.taskId === detail.taskId)
+      if (inTasks) {
+        inTasks.status = newStatus as any
+        if (detail.errorMessage) inTasks.errorMessage = detail.errorMessage
+      }
+    }
+  } else {
+    workerState.loadActiveTasks() // Fallback for legacy format
+  }
+}
+
+function handleNotificationReconnected() {
   workerState.loadActiveTasks()
 }
 
@@ -2114,6 +2180,7 @@ onMounted(async () => {
   document.addEventListener('click', closeFavScriptCtx)
   // Listen for SSE-driven task updates (from useNotifications)
   window.addEventListener('task-update', handleTaskUpdateEvent)
+  window.addEventListener('notification-reconnected', handleNotificationReconnected)
   await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), workerState.loadActiveTasks(), loadPlatformModelConfig(), agentState.loadAgents()])
   // Load conversation configs for all loaded tasks (including active)
   const allSessionIds = [
@@ -2134,6 +2201,7 @@ onUnmounted(() => {
     activeTasksInterval = null
   }
   window.removeEventListener('task-update', handleTaskUpdateEvent)
+  window.removeEventListener('notification-reconnected', handleNotificationReconnected)
   window.removeEventListener('message', handleFileBrowserMessage)
   document.removeEventListener('click', closeFavScriptCtx)
   disposeAllWorkspaces()
@@ -4365,6 +4433,18 @@ function handlePopOutTerminal() {
   font-size: 12px;
   color: #909399;
   margin-top: 2px;
+}
+.agent-card-summary {
+  font-size: 12px;
+  color: #606266;
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  max-height: 80px;
+  overflow-y: auto;
+  line-height: 1.4;
 }
 
 .agent-card-meta {
