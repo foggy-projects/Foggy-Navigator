@@ -3538,8 +3538,8 @@ async function doSshConnect(
     }
     const result = await sshApi.sshConnect(connectForm)
 
-    // Create WebSocket connection
-    const wsConn = new WebSocket(result.wsUrl)
+    // Create WebSocket connection via Java backend proxy
+    const wsConn = new WebSocket(sshApi.buildSshWsUrl(result.wsUrl))
     wsConn.binaryType = 'arraybuffer'
 
     const worker = selectedWorkerEntity.value

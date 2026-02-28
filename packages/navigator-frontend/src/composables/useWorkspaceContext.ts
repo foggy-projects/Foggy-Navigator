@@ -1,6 +1,6 @@
 import { ref, shallowRef, type Ref, type ShallowRef } from 'vue'
 import type { TaskPaneState } from './useTaskPane'
-import type { SshSessionDTO } from '@/api/ssh'
+import { buildSshWsUrl, type SshSessionDTO } from '@/api/ssh'
 
 /**
  * SSH terminal tab state — WS lifecycle managed here, not in components.
@@ -81,7 +81,7 @@ export function restoreTerminalTabs(
     }
 
     try {
-      const ws = new WebSocket(s.wsUrl)
+      const ws = new WebSocket(buildSshWsUrl(s.wsUrl))
       ws.binaryType = 'arraybuffer'
       tab.ws = ws
 

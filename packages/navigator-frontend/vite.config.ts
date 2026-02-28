@@ -21,6 +21,7 @@ export default defineConfig({
         target: 'http://localhost:8112',
         changeOrigin: true,
         secure: false,
+        ws: true,
         configure: (proxy, _options) => {
           proxy.on('proxyReq', (proxyReq, req, _res) => {
             proxyReq.setHeader('X-Accel-Buffering', 'no')

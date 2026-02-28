@@ -120,11 +120,9 @@ public class SshProxyController {
             return RX.failB("SSH connect failed: no response");
         }
 
-        // Build WS URL: worker baseUrl + /api/v1/ssh/{sessionId}/ws?token=...
+        // Build WS URL: relative path, browser connects to Java backend which proxies to Worker
         String sessionId = (String) result.get("session_id");
-        String wsBase = worker.getBaseUrl().replaceFirst("^http", "ws");
-        String token = workerService.getDecryptedToken(worker);
-        String wsUrl = wsBase + "/api/v1/ssh/" + sessionId + "/ws?token=" + token;
+        String wsUrl = "/api/v1/ssh/" + sessionId + "/ws?workerId=" + form.getWorkerId();
 
         return RX.ok(Map.of("sessionId", sessionId, "wsUrl", wsUrl));
     }
@@ -154,9 +152,6 @@ public class SshProxyController {
             return RX.ok(List.of());
         }
 
-        String wsBase = worker.getBaseUrl().replaceFirst("^http", "ws");
-        String token = workerService.getDecryptedToken(worker);
-
         List<SshSessionDTO> result = new ArrayList<>();
         for (Map<String, Object> ws : workerSessions) {
             String dirId = (String) ws.get("directory_id");
@@ -181,7 +176,7 @@ public class SshProxyController {
             dto.setSessionId(sessionId);
             dto.setDirectoryId(dirId);
             dto.setLabel(username + "@" + host);
-            dto.setWsUrl(wsBase + "/api/v1/ssh/" + sessionId + "/ws?token=" + token);
+            dto.setWsUrl("/api/v1/ssh/" + sessionId + "/ws?workerId=" + workerId);
             dto.setCols(cols);
             dto.setRows(rows);
             dto.setConnectedAt(ws.get("connected_at") != null ? ws.get("connected_at").toString() : null);

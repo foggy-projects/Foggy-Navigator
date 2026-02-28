@@ -1,5 +1,6 @@
 import client from './client'
 import type { RX } from '@/types'
+import { getToken } from '@/utils/auth'
 
 export interface SshConnectResult {
   sessionId: string
@@ -15,6 +16,17 @@ export interface SshSessionDTO {
   rows: number
   connectedAt: string
   lastActivity: string
+}
+
+/**
+ * 将后端返回的相对 wsUrl 路径构建为完整 WebSocket URL。
+ * 自动处理 ws/wss 协议、host、JWT token 拼接。
+ */
+export function buildSshWsUrl(path: string): string {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const separator = path.includes('?') ? '&' : '?'
+  const token = getToken() || ''
+  return `${protocol}//${location.host}${path}${separator}token=${token}`
 }
 
 export async function sshConnect(form: {
