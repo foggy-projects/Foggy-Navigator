@@ -9,6 +9,7 @@ export interface TaskAssistantConfig {
   claudeSessionId: string | null
   cwd: string | null
   foggySessionId: string | null
+  model: string | null
 }
 
 export interface A2aAgentCard {
@@ -38,6 +39,7 @@ export async function getAssistantConfig(): Promise<TaskAssistantConfig | null> 
 export async function createAssistant(form: {
   workerId: string
   directoryPath?: string
+  model?: string
 }): Promise<TaskAssistantConfig> {
   const rx = (await client.post('/task-assistant/config', form)) as unknown as RX<TaskAssistantConfig>
   return rx.data

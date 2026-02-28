@@ -11,6 +11,7 @@ public class TaskAssistantConfig {
     private String directoryId;
     private String claudeSessionId;
     private String cwd;
+    private String model;
 
     public TaskAssistantConfig() {}
 
@@ -35,6 +36,9 @@ public class TaskAssistantConfig {
     public String getCwd() { return cwd; }
     public void setCwd(String cwd) { this.cwd = cwd; }
 
+    public String getModel() { return model; }
+    public void setModel(String model) { this.model = model; }
+
     public static Builder builder() { return new Builder(); }
 
     public static class Builder {
@@ -45,6 +49,7 @@ public class TaskAssistantConfig {
         private String directoryId;
         private String claudeSessionId;
         private String cwd;
+        private String model;
 
         public Builder userId(String userId) { this.userId = userId; return this; }
         public Builder enabled(Boolean enabled) { this.enabled = enabled; return this; }
@@ -53,6 +58,7 @@ public class TaskAssistantConfig {
         public Builder directoryId(String directoryId) { this.directoryId = directoryId; return this; }
         public Builder claudeSessionId(String claudeSessionId) { this.claudeSessionId = claudeSessionId; return this; }
         public Builder cwd(String cwd) { this.cwd = cwd; return this; }
+        public Builder model(String model) { this.model = model; return this; }
 
         public TaskAssistantConfig build() {
             TaskAssistantConfig config = new TaskAssistantConfig();
@@ -63,6 +69,7 @@ public class TaskAssistantConfig {
             config.directoryId = directoryId;
             config.claudeSessionId = claudeSessionId;
             config.cwd = cwd;
+            config.model = model;
             return config;
         }
     }

@@ -8,9 +8,12 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.event.WorkerEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
+import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
 import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
+import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +33,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
     private final WorkerStreamRelay streamRelay;
+    private final WorkingDirectoryRepository directoryRepository;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -107,7 +111,8 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
     @Override
     public Map<String, Object> syncQuery(String userId, String workerId, String prompt,
-                                          String cwd, String claudeSessionId) {
+                                          String cwd, String claudeSessionId, int maxTurns,
+                                          String model) {
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
         if (!worker.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Worker not found: " + workerId);
@@ -119,9 +124,12 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         try {
             ClaudeWorkerClient client = workerService.createClient(worker);
 
-            // Collect all SSE events synchronously with maxTurns=1, bypassPermissions
+            // 根据 maxTurns 调整超时：每轮约 30s
+            long timeoutSeconds = Math.max(60, maxTurns * 30L);
+
+            // Collect all SSE events synchronously with bypassPermissions
             List<WorkerEvent> events = client.streamQuery(
-                            prompt, cwd, claudeSessionId, null, 1,
+                            prompt, cwd, claudeSessionId, model, maxTurns,
                             null, null, null, null, null, "bypassPermissions", null,
                             null, null)
                     .mapNotNull(sse -> {
@@ -135,7 +143,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                         }
                     })
                     .collectList()
-                    .block(Duration.ofSeconds(60));
+                    .block(Duration.ofSeconds(timeoutSeconds));
 
             if (events == null) events = List.of();
 
@@ -168,7 +176,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     }
 
     @Override
-    public void initDirectory(String userId, String workerId, String path, Map<String, String> files) {
+    public String initDirectory(String userId, String workerId, String path, Map<String, String> files) {
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
         if (!worker.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Worker not found: " + workerId);
@@ -181,6 +189,26 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             log.error("Failed to init directory on worker {}: {}", workerId, e.getMessage(), e);
             throw new RuntimeException("Failed to initialize directory: " + e.getMessage(), e);
         }
+
+        // 注册工作目录（如果已存在则返回现有 directoryId）
+        Optional<WorkingDirectoryEntity> existing = directoryRepository
+                .findByWorkerIdAndPathAndUserId(workerId, path, userId);
+        if (existing.isPresent()) {
+            return existing.get().getDirectoryId();
+        }
+
+        WorkingDirectoryEntity entity = new WorkingDirectoryEntity();
+        entity.setDirectoryId(IdGenerator.shortId());
+        entity.setWorkerId(workerId);
+        entity.setUserId(userId);
+        entity.setProjectName("foggy-assistant");
+        entity.setPath(path);
+        entity.setDirectoryType("STANDARD");
+        entity.setWorktree(false);
+        directoryRepository.save(entity);
+        log.info("Registered working directory: directoryId={}, path={}", entity.getDirectoryId(), path);
+
+        return entity.getDirectoryId();
     }
 
     private Map<String, Object> workerToMap(WorkerDTO dto) {

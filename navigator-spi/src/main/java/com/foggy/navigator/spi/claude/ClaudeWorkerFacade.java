@@ -53,14 +53,17 @@ public interface ClaudeWorkerFacade {
      * 同步查询 — 发送 prompt 到 Worker，阻塞等待完成返回结果
      * 用于轻量级 AI 查询（通知生成等），不创建任务记录，不发布事件
      *
+     * @param maxTurns 最大轮次（1=纯文本分析，>1 允许工具调用）
      * @return Map: {resultText, claudeSessionId, costUsd, durationMs, error}
      */
     Map<String, Object> syncQuery(String userId, String workerId, String prompt,
-                                   String cwd, String claudeSessionId);
+                                   String cwd, String claudeSessionId, int maxTurns,
+                                   String model);
 
     /**
-     * 在 Worker 上初始化目录 — 创建目录并写入文件
+     * 在 Worker 上初始化目录并注册为工作目录
      * @param files 文件相对路径 → 内容 的映射
+     * @return 注册的 directoryId
      */
-    void initDirectory(String userId, String workerId, String path, Map<String, String> files);
+    String initDirectory(String userId, String workerId, String path, Map<String, String> files);
 }

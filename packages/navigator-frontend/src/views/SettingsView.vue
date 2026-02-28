@@ -258,6 +258,13 @@
                 </div>
               </el-form-item>
 
+              <el-form-item label="AI 模型">
+                <el-input v-model="assistantCreateForm.model" placeholder="如 claude-sonnet-4-20250514" />
+                <div class="el-form-item__description" style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
+                  留空则使用 Worker 默认模型
+                </div>
+              </el-form-item>
+
               <el-form-item>
                 <el-button
                   type="primary"
@@ -283,6 +290,9 @@
               </el-descriptions-item>
               <el-descriptions-item label="工作目录">
                 {{ assistantConfig.cwd || '~/foggy-assistant' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="AI 模型">
+                {{ assistantConfig.model || '（Worker 默认）' }}
               </el-descriptions-item>
               <el-descriptions-item label="会话 ID">
                 {{ assistantConfig.claudeSessionId || '（新会话）' }}
@@ -1162,7 +1172,7 @@ const assistantLoading = ref(false)
 const assistantSaving = ref(false)
 const assistantTesting = ref(false)
 const assistantEnabledToggle = ref(false)
-const assistantCreateForm = ref({ workerId: '', directoryPath: '' })
+const assistantCreateForm = ref({ workerId: '', directoryPath: '', model: '' })
 
 async function loadAssistantConfig() {
   assistantLoading.value = true
@@ -1181,6 +1191,7 @@ async function handleCreateAssistant() {
     assistantConfig.value = await apiCreateAssistant({
       workerId: assistantCreateForm.value.workerId,
       directoryPath: assistantCreateForm.value.directoryPath || undefined,
+      model: assistantCreateForm.value.model || undefined,
     })
     assistantEnabledToggle.value = assistantConfig.value?.enabled || false
     ElMessage.success('助手创建成功')
@@ -1206,7 +1217,7 @@ async function handleDeleteAssistant() {
     await ElMessageBox.confirm('确认删除助手？Worker 上的工作目录将保留。', '提示', { type: 'warning' })
     await apiDeleteAssistant()
     assistantConfig.value = null
-    assistantCreateForm.value = { workerId: '', directoryPath: '' }
+    assistantCreateForm.value = { workerId: '', directoryPath: '', model: '' }
     ElMessage.success('助手已删除')
   } catch { /* cancelled */ }
 }

@@ -1,5 +1,6 @@
 {
   "permissions": {
-    "deny": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"]
+    "allow": ["Read", "Write", "Edit", "Glob", "Grep"],
+    "deny": ["Bash", "NotebookEdit"]
   }
 }

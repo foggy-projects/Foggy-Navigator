@@ -39,7 +39,7 @@ public class TaskAssistantController {
     @PostMapping("/config")
     public RX<TaskAssistantConfig> createAssistant(@RequestBody CreateForm form) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(assistantFacade.createOrUpdate(userId, form.getWorkerId(), form.getDirectoryPath()));
+        return RX.ok(assistantFacade.createOrUpdate(userId, form.getWorkerId(), form.getDirectoryPath(), form.getModel()));
     }
 
     @PutMapping("/config")
@@ -88,6 +88,8 @@ public class TaskAssistantController {
     public static class CreateForm {
         private String workerId;
         private String directoryPath;
+        /** AI 模型名称，如 claude-sonnet-4-20250514 */
+        private String model;
     }
 
     @Data

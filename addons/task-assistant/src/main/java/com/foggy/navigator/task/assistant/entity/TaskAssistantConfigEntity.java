@@ -40,6 +40,10 @@ public class TaskAssistantConfigEntity {
     @Column(length = 512)
     private String cwd;
 
+    /** AI 模型名称，如 claude-sonnet-4-20250514 */
+    @Column(length = 128)
+    private String model;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
