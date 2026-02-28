@@ -3,6 +3,8 @@ package com.foggy.navigator.task.assistant.spi;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -12,8 +14,14 @@ import java.util.Optional;
 public interface TaskAssistantFacade {
 
     /**
-     * 发送一批平台事件给助手，返回 AI 生成的通知消息
+     * 处理一批平台事件 — 创建 AgentTask 记录、调用 syncQuery、完成任务、推送通知
      */
+    void processEvents(String userId, List<Map<String, Object>> events);
+
+    /**
+     * @deprecated 使用 {@link #processEvents(String, List)} 替代
+     */
+    @Deprecated
     Optional<A2aMessage> sendEvents(String userId, A2aMessage events);
 
     /**
@@ -32,9 +40,9 @@ public interface TaskAssistantFacade {
     Optional<TaskAssistantConfig> getConfig(String userId);
 
     /**
-     * 创建或更新助手配置，绑定 Worker + 目录
+     * 创建或更新助手配置，绑定 Worker + 目录 + 模型
      */
-    TaskAssistantConfig createOrUpdate(String userId, String workerId, String directoryPath);
+    TaskAssistantConfig createOrUpdate(String userId, String workerId, String directoryPath, String model);
 
     /**
      * 启用/禁用

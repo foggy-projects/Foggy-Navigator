@@ -62,7 +62,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
                 .collect(Collectors.joining("\n"));
 
         Map<String, Object> result = workerFacade.syncQuery(
-                entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd, null);
+                entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd, null, 1, null);
 
         String resultText = (String) result.get("resultText");
         String error = (String) result.get("error");
