@@ -86,6 +86,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/coding-agents/", "/api/v1/coding-agents/**").permitAll()
                         .requestMatchers("/api/v1/cross-project-tasks/", "/api/v1/cross-project-tasks/**").permitAll()
                         .requestMatchers("/api/v1/agent-tasks/", "/api/v1/agent-tasks/**").permitAll()
+                        .requestMatchers("/api/v1/task-assistant/", "/api/v1/task-assistant/**").permitAll()
 
 
                         // 开放 Spring Boot 错误端点（避免异常转发时被拦截返回 403）
