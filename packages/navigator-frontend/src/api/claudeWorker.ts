@@ -303,7 +303,22 @@ export async function syncWorkerSessions(
   return rx.data
 }
 
+export async function listActiveTasks(): Promise<ClaudeTask[]> {
+  const rx = (await client.get('/claude-tasks/active')) as unknown as RX<ClaudeTask[]>
+  return rx.data
+}
+
 // ===== Conversation Config API =====
+
+export async function updateConversationTags(
+  sessionId: string,
+  tags: string[],
+): Promise<ConversationConfig> {
+  const rx = (await client.patch(`/claude-tasks/conversations/${sessionId}/tags`, {
+    tags,
+  })) as unknown as RX<ConversationConfig>
+  return rx.data
+}
 
 export async function updateConversationPin(
   sessionId: string,

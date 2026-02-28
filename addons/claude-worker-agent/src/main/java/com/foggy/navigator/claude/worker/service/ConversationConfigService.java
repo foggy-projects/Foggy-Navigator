@@ -13,7 +13,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -25,6 +30,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ConversationConfigService {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ConversationConfigRepository configRepository;
     private final ClaudeTaskRepository taskRepository;
@@ -232,6 +239,26 @@ public class ConversationConfigService {
     }
 
     /**
+     * 更新会话标签
+     */
+    @Transactional
+    public ConversationConfigDTO updateTags(String sessionId, String userId, List<String> tags) {
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+        if (!entity.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Access denied");
+        }
+        try {
+            entity.setTags(tags != null && !tags.isEmpty()
+                    ? OBJECT_MAPPER.writeValueAsString(tags)
+                    : null);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("Invalid tags format");
+        }
+        configRepository.save(entity);
+        return toDTO(entity);
+    }
+
+    /**
      * 批量获取配置（供前端合并）
      */
     public List<ConversationConfigDTO> listBySessionIds(List<String> sessionIds) {
@@ -301,6 +328,7 @@ public class ConversationConfigService {
                 masked = "***";
             }
         }
+        List<String> tagList = parseTags(entity.getTags());
         return ConversationConfigDTO.builder()
                 .sessionId(entity.getSessionId())
                 .pinned(Boolean.TRUE.equals(entity.getPinned()))
@@ -310,7 +338,18 @@ public class ConversationConfigService {
                 .authBound(entity.getAuthBoundAt() != null)
                 .baseUrl(entity.getBaseUrl())
                 .maskedAuthToken(masked)
+                .tags(tagList)
                 .build();
+    }
+
+    private List<String> parseTags(String tagsJson) {
+        if (tagsJson == null || tagsJson.isBlank()) return Collections.emptyList();
+        try {
+            return OBJECT_MAPPER.readValue(tagsJson, new TypeReference<List<String>>() {});
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to parse tags JSON: {}", tagsJson);
+            return Collections.emptyList();
+        }
     }
 
     /**

@@ -46,6 +46,14 @@
         <span class="tool-toggle">{{ collapsed ? '\u25B6' : '\u25BC' }}</span>
         <span class="tool-icon">&#9881;</span>
         <span class="tool-name">{{ props.message.toolName || 'Tool' }}</span>
+        <span v-if="props.message.content" class="tool-actions" @click.stop>
+          <button class="action-btn" title="复制" @click="copyContent">
+            {{ copyLabel }}
+          </button>
+          <button class="action-btn" title="查看" @click="showViewer = true">
+            查看
+          </button>
+        </span>
         <span v-if="collapsed && commandSummary" class="tool-summary">{{ commandSummary }}</span>
         <span v-if="props.message.thought" class="tool-thought">{{ props.message.thought }}</span>
         <span class="tool-status-indicator">
@@ -55,6 +63,19 @@
           <span v-else-if="hasResult" class="status-dot success"></span>
         </span>
       </div>
+
+      <!-- JSON Viewer Dialog -->
+      <ElDialog v-model="showViewer" :title="`${props.message.toolName || 'Tool'} - Command`"
+                width="70vw" top="10vh" :close-on-press-escape="true" :append-to-body="true"
+                class="json-viewer-dialog">
+        <template #header="{ titleId, titleClass }">
+          <div class="json-viewer-header">
+            <span :id="titleId" :class="titleClass" class="json-viewer-title">{{ props.message.toolName || 'Tool' }} - Command</span>
+            <button class="action-btn viewer-copy-btn" @click="copyFormatted">{{ copyFormattedLabel }}</button>
+          </div>
+        </template>
+        <pre class="json-viewer-content"><code>{{ formattedContent }}</code></pre>
+      </ElDialog>
       <template v-if="!collapsed">
         <div v-if="props.message.content" class="tool-command">
           <div class="code-label">command</div>
@@ -74,12 +95,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { ElDialog } from 'element-plus'
 import type { ChatMessage } from '../types/chat'
 
 const props = defineProps<{
   message: ChatMessage
   defaultCollapsed?: boolean
+  forceCollapsed?: boolean | null
 }>()
 
 const isTodoWrite = computed(() => props.message.toolName === 'TodoWrite')
@@ -100,6 +123,12 @@ const isRunning = computed(() => !hasResult.value)
 const collapsed = ref(
   props.defaultCollapsed !== undefined ? props.defaultCollapsed : hasResult.value
 )
+
+watch(() => props.forceCollapsed, (val) => {
+  if (val !== null && val !== undefined) {
+    collapsed.value = val
+  }
+})
 
 function toggleCollapse() {
   collapsed.value = !collapsed.value
@@ -174,6 +203,40 @@ const subagentType = computed(() => {
 
 function truncate(text: string, max: number) {
   return text.length > max ? text.substring(0, max) + '...' : text
+}
+
+// Copy & View functionality
+const showViewer = ref(false)
+const copyLabel = ref('复制')
+const copyFormattedLabel = ref('复制')
+
+function formatJson(text: string): string {
+  try {
+    const parsed = JSON.parse(text)
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return text
+  }
+}
+
+const formattedContent = computed(() => {
+  return formatJson(props.message.content || '')
+})
+
+async function copyContent() {
+  try {
+    await navigator.clipboard.writeText(props.message.content || '')
+    copyLabel.value = '已复制'
+    setTimeout(() => { copyLabel.value = '复制' }, 1500)
+  } catch { /* ignore */ }
+}
+
+async function copyFormatted() {
+  try {
+    await navigator.clipboard.writeText(formattedContent.value)
+    copyFormattedLabel.value = '已复制'
+    setTimeout(() => { copyFormattedLabel.value = '复制' }, 1500)
+  } catch { /* ignore */ }
 }
 </script>
 
@@ -264,6 +327,33 @@ function truncate(text: string, max: number) {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+/* Action buttons */
+.tool-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.action-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  border: 1px solid #dcdfe6;
+  border-radius: 3px;
+  background: #fff;
+  color: #606266;
+  cursor: pointer;
+  line-height: 1.6;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.action-btn:hover {
+  border-color: #409eff;
+  color: #409eff;
+  background: #ecf5ff;
 }
 
 .code-label {
@@ -370,5 +460,34 @@ function truncate(text: string, max: number) {
 .code-block.subagent-prompt {
   background-color: #1a1a2e;
   max-height: 150px;
+}
+
+/* JSON Viewer Dialog */
+.json-viewer-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.json-viewer-title {
+  flex: 1;
+}
+
+.viewer-copy-btn {
+  flex-shrink: 0;
+}
+
+.json-viewer-content {
+  margin: 0;
+  padding: 16px;
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow: auto;
+  max-height: 60vh;
+  border-radius: 4px;
+  tab-size: 2;
 }
 </style>

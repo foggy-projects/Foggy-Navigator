@@ -2,8 +2,8 @@
     "name" : "Foggy Navigator",
     "appid" : "__UNI__AC2B8DB",
     "description" : "Foggy Navigator 移动端",
-    "versionName" : "1.0.0",
-    "versionCode" : "100",
+    "versionName" : "1.0.8",
+    "versionCode" : "108",
     "transformPx" : false,
     "h5" : {
         "title" : "Foggy Navigator",
@@ -21,6 +21,15 @@
         }
     },
     "app-plus" : {
+        "privacy" : {
+            "prompt" : "template",
+            "template" : {
+                "title" : "服务协议和隐私政策",
+                "message" : "我们依据《用户服务协议》和《隐私政策》来收集和使用您的个人信息，请仔细阅读并同意后继续使用。",
+                "buttonAccept" : "同意并继续",
+                "buttonRefuse" : "暂不使用"
+            }
+        },
         "distribute" : {
             "android" : {
                 "permissions" : [

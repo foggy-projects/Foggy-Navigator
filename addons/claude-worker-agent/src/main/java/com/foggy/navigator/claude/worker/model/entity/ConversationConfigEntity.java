@@ -48,6 +48,10 @@ public class ConversationConfigEntity {
 
     private LocalDateTime authBoundAt;
 
+    /** JSON array of tags: ["主任务","bugfix"] */
+    @Column(columnDefinition = "TEXT")
+    private String tags;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

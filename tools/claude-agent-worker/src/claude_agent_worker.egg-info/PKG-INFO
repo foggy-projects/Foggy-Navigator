@@ -6,8 +6,9 @@ Requires-Python: >=3.10
 Requires-Dist: fastapi>=0.115.0
 Requires-Dist: uvicorn[standard]>=0.34.0
 Requires-Dist: pydantic-settings>=2.0.0
-Requires-Dist: claude-code-sdk>=0.0.10
+Requires-Dist: claude-agent-sdk>=0.1.37
 Requires-Dist: sse-starlette>=2.0.0
+Requires-Dist: asyncssh>=2.13.0
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: httpx; extra == "dev"

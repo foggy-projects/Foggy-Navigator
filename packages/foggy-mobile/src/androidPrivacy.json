@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "prompt": "template",
+  "title": "服务协议和隐私政策",
+  "message": "我们依据《用户服务协议》和《隐私政策》来收集和使用您的个人信息，包括设备标识符等，用于保障应用正常运行和基础统计分析。<br/>请您仔细阅读并充分理解相关条款后再点击同意。",
+  "buttonAccept": "同意并继续",
+  "buttonRefuse": "暂不使用",
+  "hrefLoader": "system",
+  "second": {
+    "title": "确认提示",
+    "message": "如果您不同意隐私政策，将无法正常使用本应用的部分功能。是否同意？",
+    "buttonAccept": "同意并继续",
+    "buttonRefuse": "退出应用"
+  }
+}

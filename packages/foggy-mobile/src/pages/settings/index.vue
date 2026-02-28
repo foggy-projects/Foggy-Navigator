@@ -60,6 +60,12 @@
           <text class="setting-label">平台</text>
           <text class="setting-value">{{ platform }}</text>
         </view>
+        <!-- #ifdef APP-PLUS -->
+        <view class="setting-item clickable" @tap="handleCheckUpgrade">
+          <text class="setting-label">检查更新</text>
+          <text class="setting-value">{{ upgradeStatus }}</text>
+        </view>
+        <!-- #endif -->
       </view>
 
       <!-- 退出登录 -->
@@ -67,6 +73,10 @@
         <button class="logout-btn" @tap="handleLogout">退出登录</button>
       </view>
     </view>
+
+    <!-- #ifdef APP-PLUS -->
+    <UpgradePopup />
+    <!-- #endif -->
 
     <!-- 添加/编辑服务器弹窗 -->
     <wd-popup v-model="showServerForm" position="bottom" custom-style="border-radius: 24rpx 24rpx 0 0; padding: 40rpx;">
@@ -101,6 +111,10 @@ import {
   updateServer,
   removeServer,
 } from '@/utils/config'
+// #ifdef APP-PLUS
+import { checkUpgradeManual } from '@/utils/upgrade'
+import UpgradePopup from '@/components/UpgradePopup.vue'
+// #endif
 
 const authStore = useAuthStore()
 
@@ -190,6 +204,27 @@ function handleLogout() {
     },
   })
 }
+
+// 检查更新
+const upgradeStatus = ref('点击检查')
+
+async function handleCheckUpgrade() {
+  // #ifdef APP-PLUS
+  upgradeStatus.value = '检查中...'
+  try {
+    const hasUpdate = await checkUpgradeManual()
+    if (!hasUpdate) {
+      upgradeStatus.value = '已是最新'
+      uni.showToast({ title: '已是最新版本', icon: 'success' })
+    } else {
+      upgradeStatus.value = '有新版本'
+    }
+  } catch {
+    upgradeStatus.value = '检查失败'
+    uni.showToast({ title: '检查更新失败', icon: 'none' })
+  }
+  // #endif
+}
 </script>
 
 <style scoped>
@@ -250,6 +285,12 @@ function handleLogout() {
   font-size: 28rpx;
   color: #909399;
   text-align: right;
+}
+.setting-item.clickable {
+  cursor: pointer;
+}
+.setting-item.clickable:active {
+  background: #f5f5f5;
 }
 
 /* 服务器列表 */

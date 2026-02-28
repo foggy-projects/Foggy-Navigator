@@ -33,6 +33,10 @@
       </view>
       <!-- 模型 / 轮次 选择行 -->
       <view class="option-row">
+        <view v-if="platformModels.length > 0" class="option-tag option-tag--api" @tap="showApiModelPicker">
+          <text class="option-label">{{ selectedModelName ? 'API: ' + selectedModelName : 'API 凭证' }}</text>
+          <text v-if="selectedModelConfigId" class="option-clear" @tap.stop="selectedModelConfigId = ''">✕</text>
+        </view>
         <view class="option-tag" @tap="showModelPicker">
           <text class="option-label">{{ selectedModel || '默认模型' }}</text>
           <text v-if="selectedModel" class="option-clear" @tap.stop="selectedModel = ''">✕</text>
@@ -77,7 +81,8 @@
 import { ref, computed, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import * as workerApi from '@/api/claudeWorker'
-import type { ClaudeTask } from '@/api/types'
+import { listModelConfigs, listAgentModelOverrides } from '@/api/platform'
+import type { ClaudeTask, LlmModelConfig } from '@/api/types'
 import { useInputMemory } from '@/composables/useInputMemory'
 import TaskCard from '@/components/TaskCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -91,6 +96,14 @@ const loading = ref(false)
 const tasks = ref<ClaudeTask[]>([])
 const page = ref(0)
 const totalPages = ref(0)
+
+// Platform models
+const platformModels = ref<LlmModelConfig[]>([])
+const selectedModelConfigId = ref('')
+const selectedModelName = computed(() => {
+  const m = platformModels.value.find(m => m.id === selectedModelConfigId.value)
+  return m ? m.name : ''
+})
 
 // Model / turns
 const MODEL_OPTIONS = ['Sonnet 4', 'Opus 4', 'Haiku 4', 'Sonnet 3.5']
@@ -125,7 +138,27 @@ onLoad((options) => {
   const draft = loadDraft()
   if (draft) promptInput.value = draft
   loadTasks()
+  loadPlatformModels()
 })
+
+async function loadPlatformModels() {
+  try {
+    const [models, overrides] = await Promise.all([
+      listModelConfigs(),
+      listAgentModelOverrides(),
+    ])
+    platformModels.value = models.filter(m => m.hasApiKey)
+    // Auto-select claude-worker's agent-model override if exists
+    const override = overrides.find(o => o.agentId === 'claude-worker')
+    if (override && platformModels.value.some(m => m.id === override.modelConfigId)) {
+      selectedModelConfigId.value = override.modelConfigId
+    } else if (platformModels.value.length > 0) {
+      selectedModelConfigId.value = platformModels.value[0]!.id
+    }
+  } catch {
+    // best-effort
+  }
+}
 
 async function loadTasks() {
   if (!directoryId.value) return
@@ -167,6 +200,7 @@ async function handleCreateTask() {
       prompt: promptInput.value.trim(),
       directoryId: directoryId.value,
     }
+    if (selectedModelConfigId.value) form.modelConfigId = selectedModelConfigId.value
     if (selectedModel.value) form.model = selectedModel.value
     if (selectedTurns.value) form.maxTurns = selectedTurns.value
     if (selectedPermission.value) form.permissionMode = selectedPermission.value
@@ -207,6 +241,16 @@ function showHistory() {
   })
 }
 
+function showApiModelPicker() {
+  const names = platformModels.value.map(m => m.name)
+  uni.showActionSheet({
+    itemList: names,
+    success: (res) => {
+      selectedModelConfigId.value = platformModels.value[res.tapIndex].id
+    },
+  })
+}
+
 function showModelPicker() {
   uni.showActionSheet({
     itemList: MODEL_OPTIONS,
@@ -241,7 +285,7 @@ function showPermissionPicker() {
 .tasks-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: calc(100vh - var(--window-top, 0px));
   background: #f5f5f5;
 }
 .task-header-bar {
@@ -314,6 +358,12 @@ function showPermissionPicker() {
   padding: 8rpx 20rpx;
   background: #f0f2f5;
   border-radius: 24rpx;
+}
+.option-tag--api {
+  background: #e8f5e9;
+}
+.option-tag--api .option-label {
+  color: #2e7d32;
 }
 .option-label {
   font-size: 24rpx;

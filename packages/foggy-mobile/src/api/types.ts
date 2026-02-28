@@ -98,6 +98,24 @@ export interface WorkingDirectory {
   updatedAt: string
 }
 
+/** LLM 模型配置 */
+export interface LlmModelConfig {
+  id: string
+  name: string
+  baseUrl: string
+  modelName: string
+  hasApiKey: boolean
+  isDefault: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+/** Agent 模型覆盖 */
+export interface AgentModelOverride {
+  agentId: string
+  modelConfigId: string
+}
+
 /** 初始化状态 */
 export interface SetupStatus {
   gitConfigured: boolean

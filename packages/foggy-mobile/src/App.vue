@@ -1,21 +1,17 @@
 <script setup lang="ts">
-import { onLaunch, onShow } from '@dcloudio/uni-app'
-import { getToken } from './utils/auth'
-import { checkUpgrade } from './utils/upgrade'
+import { onError, onLaunch } from '@dcloudio/uni-app'
 
-onLaunch(() => {
-  // 延迟检查登录状态，避免与初始路由渲染冲突
-  setTimeout(() => {
-    if (!getToken()) {
-      uni.reLaunch({ url: '/pages/login/index' })
-    }
-  }, 100)
+// 全局错误捕获 — 用原生弹窗显示，不依赖 webview
+onError((err) => {
+  uni.showModal({
+    title: 'JS Error (onError)',
+    content: String(err).substring(0, 500),
+    showCancel: false,
+  })
 })
 
-onShow(() => {
-  // #ifdef APP-PLUS
-  checkUpgrade()
-  // #endif
+onLaunch(() => {
+  uni.showToast({ title: 'onLaunch OK', icon: 'none', duration: 2000 })
 })
 </script>
 

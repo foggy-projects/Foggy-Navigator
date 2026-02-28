@@ -219,6 +219,22 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 列出用户所有进行中的任务（RUNNING + AWAITING_PERMISSION），额外填充 directoryName
+     */
+    public List<TaskDTO> listActiveTasks(String userId) {
+        List<ClaudeTaskEntity> entities = taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
+                userId, List.of("RUNNING", "AWAITING_PERMISSION"));
+        return entities.stream().map(e -> {
+            TaskDTO dto = toDTO(e);
+            if (e.getDirectoryId() != null) {
+                workingDirectoryRepository.findByDirectoryId(e.getDirectoryId())
+                        .ifPresent(dir -> dto.setDirectoryName(dir.getProjectName()));
+            }
+            return dto;
+        }).toList();
+    }
+
+    /**
      * 列出用户的所有任务
      */
     public List<TaskDTO> listTasks(String userId) {

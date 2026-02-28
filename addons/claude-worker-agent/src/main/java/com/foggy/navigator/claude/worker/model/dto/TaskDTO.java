@@ -31,6 +31,8 @@ public class TaskDTO {
     private String checkpoints;
     /** Whether file checkpointing was enabled for this task */
     private Boolean fileCheckpointingEnabled;
+    /** 仅 /active 端点填充：工作目录名称 */
+    private String directoryName;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

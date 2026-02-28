@@ -475,6 +475,13 @@ Worker (福安-PC-win)
 | POST | `/api/v1/claude-tasks/conversations/batch-bind-auth` | 批量绑定 Auth |
 | GET | `/api/v1/claude-tasks/conversation-configs?sessionIds=` | 批量获取配置 |
 
+#### CLI 进程管理
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/api/v1/claude-workers/{workerId}/processes` | 列出 Worker 上的 Claude CLI 进程 |
+| POST | `/api/v1/claude-workers/{workerId}/processes/{pid}/kill` | 终止指定 CLI 进程（body: `{force: bool}`） |
+
 ### Python Worker API
 
 | 方法 | 端点 | 说明 |
@@ -497,6 +504,8 @@ Worker (福安-PC-win)
 | GET | `/api/v1/git-diff?path=` | Git 变更摘要 |
 | GET | `/api/v1/git-diff/file?path=&file=` | 单文件 diff |
 | GET | `/health` | 健康检查 |
+| GET | `/api/v1/processes` | 列出 Claude CLI node 进程（PID、命令、内存、是否孤儿） |
+| POST | `/api/v1/processes/{pid}/kill` | 终止指定 CLI 进程（body: `{force: bool}`） |
 
 ## 常见问题与踩坑
 

@@ -41,43 +41,43 @@ export function offUpgradeAvailable() {
 }
 
 /**
- * 检查版本更新（入口）
- * 在 App.vue 的 onShow 中调用
+ * 手动检查版本更新（设置页调用）
+ * 返回是否有可用更新
  */
-export function checkUpgrade() {
+export async function checkUpgradeManual(): Promise<boolean> {
   // #ifdef APP-PLUS
-  doCheckUpgrade()
+  return await doCheckUpgrade()
+  // #endif
+  // #ifndef APP-PLUS
+  return false
   // #endif
 }
 
-async function doCheckUpgrade() {
-  try {
-    const appVersion = plus.runtime.version || '1.0.0'
-    const wgtVersion = plus.runtime.innerVersion || appVersion
+async function doCheckUpgrade(): Promise<boolean> {
+  const appVersion = plus.runtime.version || '1.0.0'
+  const wgtVersion = plus.runtime.innerVersion || appVersion
 
-    const res = await uni.request({
-      url: UPGRADE_API,
-      method: 'POST',
-      data: {
-        action: 'checkVersion',
-        appid: APPID,
-        appVersion,
-        wgtVersion,
-        platform: 'android',
-      },
-    })
+  const res = await uni.request({
+    url: UPGRADE_API,
+    method: 'POST',
+    data: {
+      action: 'checkVersion',
+      appid: APPID,
+      appVersion,
+      wgtVersion,
+      platform: 'android',
+    },
+  })
 
-    const data = (res as any).data as UpgradeInfo
-    if (!data || data.code <= 0) return
+  const data = (res as any).data as UpgradeInfo
+  if (!data || data.code <= 0) return false
 
-    if (data.is_silently && data.type === 'wgt') {
-      silentWgtUpdate(data.url)
-    } else {
-      _listener?.(data)
-    }
-  } catch (e) {
-    console.warn('[upgrade] check failed:', e)
+  if (data.is_silently && data.type === 'wgt') {
+    silentWgtUpdate(data.url)
+  } else {
+    _listener?.(data)
   }
+  return true
 }
 
 /** 静默 wgt 热更新：后台下载 → 安装 → 下次启动生效 */

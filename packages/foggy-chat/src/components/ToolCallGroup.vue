@@ -7,6 +7,11 @@
         {{ items.length }} tool call{{ items.length > 1 ? 's' : '' }}:
         <span class="group-names">{{ toolNamesSummary }}</span>
       </span>
+      <span v-if="mode !== 'collapsed'" class="group-actions" @click.stop>
+        <button class="group-action-btn" :title="allToolsCollapsed ? '展开全部' : '收起全部'" @click="toggleAllTools">
+          {{ allToolsCollapsed ? '展开全部' : '收起全部' }}
+        </button>
+      </span>
       <span v-if="allCompleted" class="group-status">
         <span v-if="allSucceeded" class="status-dot success"></span>
         <span v-else class="status-dot failure"></span>
@@ -21,6 +26,7 @@
         :key="item.id"
         :message="item"
         :default-collapsed="!isLastGroup || hasOutput(item)"
+        :force-collapsed="forceCollapsed"
       />
     </div>
   </div>
@@ -65,6 +71,15 @@ const allSucceeded = computed(() =>
 
 function hasOutput(msg: ChatMessage): boolean {
   return msg.toolOutput !== undefined || msg.error !== undefined
+}
+
+// Collapse/expand all tool calls within the group
+const allToolsCollapsed = ref(false)
+const forceCollapsed = ref<boolean | null>(null)
+
+function toggleAllTools() {
+  allToolsCollapsed.value = !allToolsCollapsed.value
+  forceCollapsed.value = allToolsCollapsed.value
 }
 
 // Cycle: expanded → compact → collapsed → expanded
@@ -123,6 +138,29 @@ function toggle() {
 .group-names {
   color: #303133;
   font-weight: 500;
+}
+
+.group-actions {
+  flex-shrink: 0;
+}
+
+.group-action-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  border: 1px solid #dcdfe6;
+  border-radius: 3px;
+  background: #fff;
+  color: #606266;
+  cursor: pointer;
+  line-height: 1.6;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.group-action-btn:hover {
+  border-color: #409eff;
+  color: #409eff;
+  background: #ecf5ff;
 }
 
 .group-status {

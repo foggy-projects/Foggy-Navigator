@@ -1,7 +1,19 @@
 import client from './client'
-import type { RX, SetupStatus } from './types'
+import type { RX, SetupStatus, LlmModelConfig, AgentModelOverride } from './types'
+
+const BASE = '/config/platform'
 
 export async function getSetupStatus(): Promise<SetupStatus> {
-  const rx = (await client.get('/config/platform/setup-status')) as unknown as RX<SetupStatus>
+  const rx = (await client.get(`${BASE}/setup-status`)) as unknown as RX<SetupStatus>
+  return rx.data
+}
+
+export async function listModelConfigs(): Promise<LlmModelConfig[]> {
+  const rx = (await client.get(`${BASE}/llm`)) as unknown as RX<LlmModelConfig[]>
+  return rx.data
+}
+
+export async function listAgentModelOverrides(): Promise<AgentModelOverride[]> {
+  const rx = (await client.get(`${BASE}/agent-model`)) as unknown as RX<AgentModelOverride[]>
   return rx.data
 }

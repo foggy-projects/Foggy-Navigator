@@ -17,9 +17,9 @@ function genId(): string {
 
 /** 默认服务器列表 */
 const DEFAULT_SERVERS: ServerConfig[] = [
-  { id: 'kvm', name: 'KVM 开发机', url: 'https://dev-kvm-jdk12.qlfloor.com' },
-  { id: 'fjg', name: '丰景阁', url: 'https://dev-fjg-home.qlfloor.com' },
-  { id: 'local', name: '本地开发', url: 'http://localhost:8112' },
+  { id: 'kvm17', name: 'KVM 开发机17', url: 'https://dev-kvm-jdk17-api.qlfloor.com' },
+  // { id: 'kvm12', name: 'KVM 开发机12', url: 'https://dev-kvm-jdk12-api.qlfloor.com' },
+  { id: 'local', name: 'local', url: 'http://localhost:8112' }
 ]
 
 /** 获取所有服务器配置 */
@@ -52,7 +52,7 @@ export function getActiveServerId(): string {
   const id = uni.getStorageSync(ACTIVE_SERVER_KEY)
   if (id) return id
   const servers = getServers()
-  return servers[0]?.id || 'local'
+  return servers[0]?.id || 'kvm17'
 }
 
 export function setActiveServerId(id: string): void {

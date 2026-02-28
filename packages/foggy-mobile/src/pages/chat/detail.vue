@@ -112,7 +112,7 @@ function sendGuideMessage(content: string) {
 .chat-detail-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: calc(100vh - var(--window-top, 0px));
   background: #f5f5f5;
 }
 .message-area {

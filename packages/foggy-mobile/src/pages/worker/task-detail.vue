@@ -229,7 +229,7 @@ function formatDuration(ms: number): string {
 .task-detail-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: calc(100vh - var(--window-top, 0px));
   background: #f5f5f5;
 }
 .task-status-bar {

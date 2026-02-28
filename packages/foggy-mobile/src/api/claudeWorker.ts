@@ -35,6 +35,7 @@ export async function createTask(form: {
   model?: string
   maxTurns?: number
   permissionMode?: string
+  modelConfigId?: string
 }): Promise<ClaudeTask> {
   const rx = (await client.post('/claude-tasks', form)) as unknown as RX<ClaudeTask>
   return rx.data

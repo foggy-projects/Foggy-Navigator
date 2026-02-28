@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Foggy Navigator APK 云端打包脚本（自动化）
 
@@ -66,7 +66,7 @@ if ([string]::IsNullOrWhiteSpace($KEYSTORE_PASSWORD)) { $KEYSTORE_PASSWORD = "@S
 if ([string]::IsNullOrWhiteSpace($KEY_PASSWORD)) { $KEY_PASSWORD = $KEYSTORE_PASSWORD }
 
 # 读取版本号
-$manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+$manifest = Get-Content $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $version = $manifest.versionName
 
 # Keystore 路径
@@ -151,8 +151,14 @@ Write-Host ""
 Write-Host "  等待云端打包完成（通常 2-5 分钟）..." -ForegroundColor Yellow
 Write-Host ""
 
+# 设置 UTF-8 编码以正确捕获 CLI 输出
+$prevEncoding = [Console]::OutputEncoding
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+
 $packOutput = & $HBUILDERX_CLI @packArgs 2>&1 | Tee-Object -Variable packResult
 $packExitCode = $LASTEXITCODE
+
+[Console]::OutputEncoding = $prevEncoding
 
 # 输出打包日志
 $packResult | ForEach-Object { Write-Host "  $_" }
@@ -165,8 +171,8 @@ if ($packExitCode -ne 0) {
     exit 1
 }
 
-# 尝试从输出中提取下载 URL
-$downloadUrl = ($packResult | Select-String -Pattern 'https?://[^\s]+\.apk' | Select-Object -First 1)
+# 尝试从输出中提取下载 URL（DCloud 下载链接格式: https://app.liuyingyong.cn/build/download/<uuid>）
+$downloadUrl = ($packResult | Select-String -Pattern 'https?://app\.liuyingyong\.cn/build/download/[a-f0-9-]+' | Select-Object -First 1)
 
 # ==============================================
 # Step 4: 下载 APK
