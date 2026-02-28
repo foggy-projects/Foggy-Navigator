@@ -45,7 +45,7 @@ public class FileBrowserController {
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to list files for directory {}: {}", directoryId, e.getMessage());
-            return RX.failA("列出文件失败: " + e.getMessage());
+            return RX.failA(formatFriendlyError(e, "列出文件失败"));
         }
     }
 
@@ -64,7 +64,7 @@ public class FileBrowserController {
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to read file for directory {}: {}", directoryId, e.getMessage());
-            return RX.failA("读取文件失败: " + e.getMessage());
+            return RX.failA(formatFriendlyError(e, "读取文件失败"));
         }
     }
 
@@ -80,7 +80,7 @@ public class FileBrowserController {
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to get git diff for directory {}: {}", directoryId, e.getMessage());
-            return RX.failA("获取 Git diff 失败: " + e.getMessage());
+            return RX.failA(formatFriendlyError(e, "获取 Git diff 失败"));
         }
     }
 
@@ -102,7 +102,7 @@ public class FileBrowserController {
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to get file diff for directory {}, file {}: {}", directoryId, file, e.getMessage());
-            return RX.failA("获取文件 diff 失败: " + e.getMessage());
+            return RX.failA(formatFriendlyError(e, "获取文件 diff 失败"));
         }
     }
 
@@ -121,7 +121,7 @@ public class FileBrowserController {
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to search files for directory {}: {}", directoryId, e.getMessage());
-            return RX.failA("搜索文件失败: " + e.getMessage());
+            return RX.failA(formatFriendlyError(e, "搜索文件失败"));
         }
     }
 
@@ -143,7 +143,7 @@ public class FileBrowserController {
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to search content for directory {}: {}", directoryId, e.getMessage());
-            return RX.failA("搜索内容失败: " + e.getMessage());
+            return RX.failA(formatFriendlyError(e, "搜索内容失败"));
         }
     }
 
@@ -159,7 +159,7 @@ public class FileBrowserController {
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to get foggy ignore for directory {}: {}", directoryId, e.getMessage());
-            return RX.failA("获取排除规则失败: " + e.getMessage());
+            return RX.failA(formatFriendlyError(e, "获取排除规则失败"));
         }
     }
 
@@ -180,7 +180,7 @@ public class FileBrowserController {
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to add foggy ignore for directory {}: {}", directoryId, e.getMessage());
-            return RX.failA("添加排除规则失败: " + e.getMessage());
+            return RX.failA(formatFriendlyError(e, "添加排除规则失败"));
         }
     }
 
@@ -201,7 +201,7 @@ public class FileBrowserController {
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to remove foggy ignore for directory {}: {}", directoryId, e.getMessage());
-            return RX.failA("移除排除规则失败: " + e.getMessage());
+            return RX.failA(formatFriendlyError(e, "移除排除规则失败"));
         }
     }
 
@@ -232,5 +232,28 @@ public class FileBrowserController {
             normalized = normalized.substring(1);
         }
         return basePath + "/" + normalized;
+    }
+
+    /**
+     * 将 Worker 调用错误转换为友好提示
+     */
+    private String formatFriendlyError(Exception e, String operation) {
+        String msg = e.getMessage();
+        if (msg == null) {
+            return operation;
+        }
+        if (msg.contains("401") || msg.contains("Unauthorized")) {
+            return "Worker 认证失败，请检查 Worker Token 配置是否正确";
+        }
+        if (msg.contains("403") || msg.contains("Forbidden")) {
+            return "Worker 拒绝访问，请检查权限配置";
+        }
+        if (msg.contains("Connection refused")) {
+            return "Worker 服务未运行，请检查 Worker 是否已启动";
+        }
+        if (msg.contains("timeout")) {
+            return "Worker 响应超时，请稍后重试";
+        }
+        return operation + ": " + msg;
     }
 }
