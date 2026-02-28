@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routes import auth, files, git_info, health, init_directory, processes, query, sessions, skills, ssh, worktree
+from .routes import auth, files, git_info, git_log, health, init_directory, processes, query, sessions, skills, ssh, worktree
 from .platform_skills.deployer import deploy_platform_skills
 from .ssh.session_manager import start_cleanup_task, stop_cleanup_and_close_all
 
@@ -109,6 +109,7 @@ app.include_router(skills.router)
 app.include_router(auth.router)
 app.include_router(worktree.router)
 app.include_router(files.router)
+app.include_router(git_log.router)
 app.include_router(ssh.router)
 app.include_router(processes.router)
 app.include_router(init_directory.router)

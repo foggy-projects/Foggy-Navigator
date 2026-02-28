@@ -106,6 +106,76 @@ public class FileBrowserController {
         }
     }
 
+    // ===== Git Log / History =====
+
+    private static final java.util.regex.Pattern HASH_PATTERN = java.util.regex.Pattern.compile("[0-9a-fA-F]{4,40}");
+
+    /**
+     * 获取 git log（分页 + 分支 ahead/behind）
+     */
+    @GetMapping("/git-log")
+    public RX<Map<String, Object>> gitLog(
+            @RequestParam String directoryId,
+            @RequestParam(required = false, defaultValue = "50") int limit,
+            @RequestParam(required = false, defaultValue = "0") int skip) {
+        ClaudeWorkerClient client = resolveClient(directoryId);
+        WorkingDirectoryEntity entity = getEntity(directoryId);
+        try {
+            Map<String, Object> result = client.getGitLog(entity.getPath(), limit, skip).block(TIMEOUT);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to get git log for directory {}: {}", directoryId, e.getMessage());
+            return RX.failA(formatFriendlyError(e, "获取 Git 历史失败"));
+        }
+    }
+
+    /**
+     * 获取 commit 详情（文件列表 + 统计）
+     */
+    @GetMapping("/git-log/commit")
+    public RX<Map<String, Object>> commitDetail(
+            @RequestParam String directoryId,
+            @RequestParam String hash) {
+        if (!HASH_PATTERN.matcher(hash).matches()) {
+            return RX.failA("hash 格式无效，需要 4-40 位十六进制字符");
+        }
+        ClaudeWorkerClient client = resolveClient(directoryId);
+        WorkingDirectoryEntity entity = getEntity(directoryId);
+        try {
+            Map<String, Object> result = client.getCommitDetail(entity.getPath(), hash).block(TIMEOUT);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to get commit detail for directory {}, hash {}: {}", directoryId, hash, e.getMessage());
+            return RX.failA(formatFriendlyError(e, "获取 commit 详情失败"));
+        }
+    }
+
+    /**
+     * 获取 commit 中单文件的 diff
+     */
+    @GetMapping("/git-log/commit/file-diff")
+    public RX<Map<String, Object>> commitFileDiff(
+            @RequestParam String directoryId,
+            @RequestParam String hash,
+            @RequestParam String file) {
+        if (!HASH_PATTERN.matcher(hash).matches()) {
+            return RX.failA("hash 格式无效，需要 4-40 位十六进制字符");
+        }
+        if (file.contains("..")) {
+            return RX.failA("file 参数不允许包含 '..'");
+        }
+        ClaudeWorkerClient client = resolveClient(directoryId);
+        WorkingDirectoryEntity entity = getEntity(directoryId);
+        try {
+            Map<String, Object> result = client.getCommitFileDiff(entity.getPath(), hash, file).block(TIMEOUT);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to get commit file diff for directory {}, hash {}, file {}: {}",
+                    directoryId, hash, file, e.getMessage());
+            return RX.failA(formatFriendlyError(e, "获取 commit 文件 diff 失败"));
+        }
+    }
+
     /**
      * 搜索文件名
      */

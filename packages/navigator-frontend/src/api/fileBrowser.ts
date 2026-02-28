@@ -82,6 +82,58 @@ export interface FoggyIgnoreResponse {
   patterns: string[]
 }
 
+// ---- Git Log Types --------------------------------------------------------
+
+export interface GitLogEntry {
+  hash: string
+  short_hash: string
+  author_name: string
+  author_email: string
+  author_date: string
+  relative_date: string
+  subject: string
+  body: string
+  refs: string
+}
+
+export interface GitLogResponse {
+  branch: string
+  upstream: string | null
+  ahead: number
+  behind: number
+  commits: GitLogEntry[]
+  has_more: boolean
+}
+
+export interface CommitFileEntry {
+  file: string
+  status: string
+  insertions: number
+  deletions: number
+}
+
+export interface CommitDetailResponse {
+  hash: string
+  short_hash: string
+  author_name: string
+  author_email: string
+  author_date: string
+  relative_date: string
+  subject: string
+  body: string
+  files: CommitFileEntry[]
+  total_insertions: number
+  total_deletions: number
+}
+
+export interface CommitFileDiff {
+  file: string
+  status: string
+  original: string | null
+  modified: string | null
+  language: string
+}
+
 // ---- API ------------------------------------------------------------------
 
 export async function listDirectory(
@@ -171,5 +223,39 @@ export async function removeFoggyIgnore(directoryId: string, pattern: string): P
   const rx = (await client.delete('/file-browser/ignore', {
     data: { directoryId, pattern },
   })) as unknown as RX<FoggyIgnoreResponse>
+  return rx.data
+}
+
+// ---- Git Log API ----------------------------------------------------------
+
+export async function getGitLog(
+  directoryId: string,
+  limit = 50,
+  skip = 0,
+): Promise<GitLogResponse> {
+  const rx = (await client.get('/file-browser/git-log', {
+    params: { directoryId, limit, skip },
+  })) as unknown as RX<GitLogResponse>
+  return rx.data
+}
+
+export async function getCommitDetail(
+  directoryId: string,
+  hash: string,
+): Promise<CommitDetailResponse> {
+  const rx = (await client.get('/file-browser/git-log/commit', {
+    params: { directoryId, hash },
+  })) as unknown as RX<CommitDetailResponse>
+  return rx.data
+}
+
+export async function getCommitFileDiff(
+  directoryId: string,
+  hash: string,
+  file: string,
+): Promise<CommitFileDiff> {
+  const rx = (await client.get('/file-browser/git-log/commit/file-diff', {
+    params: { directoryId, hash, file },
+  })) as unknown as RX<CommitFileDiff>
   return rx.data
 }

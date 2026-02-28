@@ -48,7 +48,7 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson) {
-        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null);
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -59,7 +59,8 @@ public class ClaudeWorkerClient {
                                                        String agentTeamsJson, String images,
                                                        String apiKey, String authToken, String baseUrl,
                                                        String permissionMode,
-                                                       String navigatorApiKey) {
+                                                       String navigatorApiKey,
+                                                       String foggyTaskId, String foggySessionId) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) {
@@ -105,6 +106,13 @@ public class ClaudeWorkerClient {
         // Navigator platform API Key (for CLI env injection)
         if (navigatorApiKey != null && !navigatorApiKey.isEmpty()) {
             body.put("navigator_api_key", navigatorApiKey);
+        }
+        // Foggy platform tracking IDs (injected as env vars into CLI subprocess)
+        if (foggyTaskId != null && !foggyTaskId.isEmpty()) {
+            body.put("foggy_task_id", foggyTaskId);
+        }
+        if (foggySessionId != null && !foggySessionId.isEmpty()) {
+            body.put("foggy_session_id", foggySessionId);
         }
 
         return webClient.post()
@@ -460,6 +468,59 @@ public class ClaudeWorkerClient {
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
                 .doOnError(e -> log.warn("File diff failed for worker {}, path {}, file {}: {}", workerId, path, file, e.getMessage()));
+    }
+
+    // ===== Git Log / History Methods =====
+
+    /**
+     * 获取 git log（分页 + 分支 ahead/behind）
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getGitLog(String path, int limit, int skip) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/git-log")
+                        .queryParam("path", path)
+                        .queryParam("limit", limit)
+                        .queryParam("skip", skip)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Git log failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
+     * 获取 commit 详情（文件列表 + 统计）
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getCommitDetail(String path, String hash) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/git-log/commit")
+                        .queryParam("path", path)
+                        .queryParam("hash", hash)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Commit detail failed for worker {}, path {}, hash {}: {}", workerId, path, hash, e.getMessage()));
+    }
+
+    /**
+     * 获取 commit 中单文件的 parent vs commit diff
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> getCommitFileDiff(String path, String hash, String file) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/git-log/commit/file-diff")
+                        .queryParam("path", path)
+                        .queryParam("hash", hash)
+                        .queryParam("file", file)
+                        .build())
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Commit file diff failed for worker {}, path {}, hash {}, file {}: {}",
+                        workerId, path, hash, file, e.getMessage()));
     }
 
     // ===== Foggy Ignore Methods =====

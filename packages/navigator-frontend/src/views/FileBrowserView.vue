@@ -32,24 +32,107 @@
         </el-tree-v2>
       </div>
 
-      <!-- Git changes tab -->
-      <div v-else class="git-list">
-        <div v-if="diffLoading" class="center-hint">加载中...</div>
-        <div v-else-if="diffFiles.length === 0" class="center-hint">无改动</div>
-        <div
-          v-for="f in diffFiles"
-          v-else
-          :key="f.file"
-          class="diff-item"
-          :class="{ selected: selectedDiffFile === f.file }"
-          @click="handleDiffFileClick(f)"
-        >
-          <span class="diff-status" :class="'st-' + f.status.replace('?', 'q')">{{ f.status }}</span>
-          <span class="diff-name" :title="f.file">{{ f.file }}</span>
-          <span v-if="f.insertions || f.deletions" class="diff-stat">
-            <span class="ins">+{{ f.insertions }}</span>
-            <span class="del">-{{ f.deletions }}</span>
-          </span>
+      <!-- Git tab (changes + history sub-tabs) -->
+      <div v-else class="git-panel">
+        <!-- Sub-tab bar -->
+        <div class="git-sub-tabs">
+          <button :class="{ active: gitSubTab === 'changes' }" @click="gitSubTab = 'changes'">改动</button>
+          <button :class="{ active: gitSubTab === 'history' }" @click="switchToHistoryTab">历史</button>
+        </div>
+
+        <!-- Changes sub-tab (existing) -->
+        <div v-if="gitSubTab === 'changes'" class="git-list">
+          <div v-if="diffLoading" class="center-hint">加载中...</div>
+          <div v-else-if="diffFiles.length === 0" class="center-hint">无改动</div>
+          <div
+            v-for="f in diffFiles"
+            v-else
+            :key="f.file"
+            class="diff-item"
+            :class="{ selected: selectedDiffFile === f.file }"
+            @click="handleDiffFileClick(f)"
+          >
+            <span class="diff-status" :class="'st-' + f.status.replace('?', 'q')">{{ f.status }}</span>
+            <span class="diff-name" :title="f.file">{{ f.file }}</span>
+            <span v-if="f.insertions || f.deletions" class="diff-stat">
+              <span class="ins">+{{ f.insertions }}</span>
+              <span class="del">-{{ f.deletions }}</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- History sub-tab -->
+        <div v-if="gitSubTab === 'history'" class="git-history">
+          <!-- Commit detail view (drill-down) -->
+          <div v-if="selectedCommit" class="commit-detail-view">
+            <button class="back-btn" @click="selectedCommit = null">
+              <span class="back-arrow">&larr;</span> 返回
+            </button>
+            <div class="commit-meta">
+              <div class="commit-subject">{{ selectedCommit.subject }}</div>
+              <div v-if="selectedCommit.body" class="commit-body">{{ selectedCommit.body }}</div>
+              <div class="commit-info">
+                <span class="commit-hash">{{ selectedCommit.short_hash }}</span>
+                <span class="commit-author">{{ selectedCommit.author_name }}</span>
+                <span class="commit-date">{{ selectedCommit.relative_date }}</span>
+              </div>
+            </div>
+            <div v-if="commitDetailLoading" class="center-hint">加载中...</div>
+            <div v-else class="commit-files">
+              <div
+                v-for="cf in commitFiles"
+                :key="cf.file"
+                class="diff-item"
+                :class="{ selected: selectedCommitFile === cf.file }"
+                @click="handleCommitFileClick(cf)"
+              >
+                <span class="diff-status" :class="'st-' + cf.status">{{ cf.status }}</span>
+                <span class="diff-name" :title="cf.file">{{ cf.file }}</span>
+                <span v-if="cf.insertions || cf.deletions" class="diff-stat">
+                  <span class="ins">+{{ cf.insertions }}</span>
+                  <span class="del">-{{ cf.deletions }}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Commit list view -->
+          <div v-else>
+            <!-- Branch info bar -->
+            <div v-if="gitLogBranch" class="branch-bar">
+              <span class="branch-name">{{ gitLogBranch }}</span>
+              <span v-if="gitLogAhead > 0" class="branch-ahead">&uarr;{{ gitLogAhead }}</span>
+              <span v-if="gitLogBehind > 0" class="branch-behind">&darr;{{ gitLogBehind }}</span>
+              <span v-if="gitLogUpstream" class="branch-upstream">&larr; {{ gitLogUpstream }}</span>
+            </div>
+
+            <div v-if="historyLoading && commits.length === 0" class="center-hint">加载中...</div>
+            <div v-else-if="commits.length === 0" class="center-hint">无提交记录</div>
+            <div v-else class="commit-list">
+              <div
+                v-for="c in commits"
+                :key="c.hash"
+                class="commit-item"
+                @click="handleCommitClick(c)"
+              >
+                <div class="commit-subject-line">{{ c.subject }}</div>
+                <div class="commit-meta-line">
+                  <span class="commit-hash">{{ c.short_hash }}</span>
+                  <span v-if="c.refs" class="commit-refs">{{ c.refs }}</span>
+                  <span class="commit-date">{{ c.relative_date }}</span>
+                  <span class="commit-author">{{ c.author_name }}</span>
+                </div>
+              </div>
+              <button
+                v-if="hasMoreCommits"
+                class="load-more-btn"
+                :disabled="historyLoading"
+                @click="loadMoreCommits"
+              >
+                {{ historyLoading ? '加载中...' : '加载更多' }}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </aside>
@@ -138,11 +221,14 @@ import {
   readFileContent,
   getGitDiffSummary,
   getFileDiff,
+  getGitLog,
+  getCommitDetail,
+  getCommitFileDiff,
   getFoggyIgnore,
   addFoggyIgnore,
   removeFoggyIgnore,
 } from '@/api/fileBrowser'
-import type { FileEntry, DiffFileEntry } from '@/api/fileBrowser'
+import type { FileEntry, DiffFileEntry, GitLogEntry, CommitFileEntry } from '@/api/fileBrowser'
 import FileSearchDialog from '@/components/file-browser/FileSearchDialog.vue'
 
 // ---- Route params ---------------------------------------------------------
@@ -536,13 +622,21 @@ function setEditorContent(content: string, language: string) {
   }
 }
 
-// ---- Git diff tab ---------------------------------------------------------
+// ---- Git tab (sub-tabs) ---------------------------------------------------
+const gitSubTab = ref<'changes' | 'history'>('changes')
 const diffFiles = ref<DiffFileEntry[]>([])
 
 async function switchToGitTab() {
   activeTab.value = 'git'
-  if (diffFiles.value.length === 0) {
+  if (gitSubTab.value === 'changes' && diffFiles.value.length === 0) {
     await loadDiffSummary()
+  }
+}
+
+async function switchToHistoryTab() {
+  gitSubTab.value = 'history'
+  if (commits.value.length === 0) {
+    await loadGitLog()
   }
 }
 
@@ -584,6 +678,93 @@ async function handleDiffFileClick(f: DiffFileEntry) {
   } catch (e) {
     console.error('Failed to load file diff:', e)
     ElMessage.error('加载 diff 失败')
+  } finally {
+    editorLoading.value = false
+  }
+}
+
+// ---- Git history ----------------------------------------------------------
+const historyLoading = ref(false)
+const commits = ref<GitLogEntry[]>([])
+const hasMoreCommits = ref(false)
+const gitLogBranch = ref('')
+const gitLogUpstream = ref<string | null>(null)
+const gitLogAhead = ref(0)
+const gitLogBehind = ref(0)
+
+// Commit detail (drill-down)
+const selectedCommit = ref<GitLogEntry | null>(null)
+const commitDetailLoading = ref(false)
+const commitFiles = ref<CommitFileEntry[]>([])
+const selectedCommitFile = ref('')
+
+async function loadGitLog(append = false) {
+  if (!directoryId.value) return
+  historyLoading.value = true
+  try {
+    const skip = append ? commits.value.length : 0
+    const result = await getGitLog(directoryId.value, 50, skip)
+    gitLogBranch.value = result.branch
+    gitLogUpstream.value = result.upstream
+    gitLogAhead.value = result.ahead
+    gitLogBehind.value = result.behind
+    if (append) {
+      commits.value.push(...result.commits)
+    } else {
+      commits.value = result.commits
+    }
+    hasMoreCommits.value = result.has_more
+  } catch (e) {
+    console.error('Failed to load git log:', e)
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+function loadMoreCommits() {
+  loadGitLog(true)
+}
+
+async function handleCommitClick(c: GitLogEntry) {
+  selectedCommit.value = c
+  commitFiles.value = []
+  commitDetailLoading.value = true
+  selectedCommitFile.value = ''
+  try {
+    const detail = await getCommitDetail(directoryId.value, c.hash)
+    commitFiles.value = detail.files
+  } catch (e) {
+    console.error('Failed to load commit detail:', e)
+    ElMessage.error('加载 commit 详情失败')
+  } finally {
+    commitDetailLoading.value = false
+  }
+}
+
+async function handleCommitFileClick(cf: CommitFileEntry) {
+  if (!directoryId.value || !selectedCommit.value) return
+  selectedCommitFile.value = cf.file
+  editorLoading.value = true
+  diffMode.value = true
+  showBinaryHint.value = false
+  showTooLargeHint.value = false
+  currentFilePath.value = cf.file
+  currentLanguage.value = 'plaintext'
+  currentFileSize.value = 0
+  currentLineCount.value = 0
+
+  try {
+    await nextTick()
+    ensureDiffEditor()
+
+    const result = await getCommitFileDiff(directoryId.value, selectedCommit.value.hash, cf.file)
+    currentLanguage.value = result.language
+
+    await nextTick()
+    setDiffContent(result.original || '', result.modified || '', result.language)
+  } catch (e) {
+    console.error('Failed to load commit file diff:', e)
+    ElMessage.error('加载 commit diff 失败')
   } finally {
     editorLoading.value = false
   }
@@ -689,8 +870,12 @@ watch(() => route.query.directoryId, () => {
   if (directoryId.value) {
     treeData.value = []
     diffFiles.value = []
+    commits.value = []
+    selectedCommit.value = null
+    commitFiles.value = []
     currentFilePath.value = ''
     diffMode.value = false
+    gitSubTab.value = 'changes'
     loadDirectory()
     loadIgnoredPatterns()
   }
@@ -944,6 +1129,211 @@ watch(() => route.query.directoryId, () => {
 
 .git-list .center-hint {
   padding-top: 40px;
+}
+
+/* ---- Git panel (sub-tabs) ---- */
+.git-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.git-sub-tabs {
+  display: flex;
+  border-bottom: 1px solid #333;
+  background: #252526;
+}
+
+.git-sub-tabs button {
+  flex: 1;
+  padding: 6px 0;
+  background: transparent;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 12px;
+  border-bottom: 2px solid transparent;
+}
+
+.git-sub-tabs button.active {
+  color: #ddd;
+  border-bottom-color: #007acc;
+}
+
+.git-sub-tabs button:hover {
+  color: #ccc;
+}
+
+/* ---- Git history ---- */
+.git-history {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.branch-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #1e1e1e;
+  border-bottom: 1px solid #333;
+}
+
+.branch-name {
+  color: #569cd6;
+  font-weight: bold;
+}
+
+.branch-ahead {
+  color: #73c991;
+  font-size: 11px;
+}
+
+.branch-behind {
+  color: #e2c08d;
+  font-size: 11px;
+}
+
+.branch-upstream {
+  color: #888;
+  font-size: 11px;
+}
+
+.commit-list {
+  flex: 1;
+}
+
+.commit-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.commit-item:hover {
+  background: #2a2d2e;
+}
+
+.commit-subject-line {
+  font-size: 13px;
+  color: #ddd;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: #888;
+}
+
+.commit-meta-line .commit-hash {
+  color: #569cd6;
+  font-family: monospace;
+}
+
+.commit-meta-line .commit-refs {
+  color: #e2c08d;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.load-more-btn {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid #333;
+  color: #569cd6;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.load-more-btn:hover:not(:disabled) {
+  background: #2a2d2e;
+}
+
+.load-more-btn:disabled {
+  color: #666;
+  cursor: not-allowed;
+}
+
+/* ---- Commit detail (drill-down) ---- */
+.commit-detail-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.back-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #333;
+  color: #569cd6;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.back-btn:hover {
+  background: #2a2d2e;
+}
+
+.back-arrow {
+  font-size: 14px;
+}
+
+.commit-meta {
+  padding: 8px 12px;
+  border-bottom: 1px solid #333;
+}
+
+.commit-meta .commit-subject {
+  font-size: 13px;
+  color: #ddd;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.commit-meta .commit-body {
+  font-size: 12px;
+  color: #aaa;
+  white-space: pre-wrap;
+  margin-bottom: 4px;
+  max-height: 60px;
+  overflow-y: auto;
+}
+
+.commit-meta .commit-info {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  color: #888;
+}
+
+.commit-meta .commit-hash {
+  color: #569cd6;
+  font-family: monospace;
+}
+
+.commit-files {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
 }
 </style>
 

@@ -42,6 +42,9 @@ class QueryRequest(BaseModel):
     navigator_api_key: str | None = Field(None, description="Navigator platform API key for cross-project task skills")
     # Tool restrictions (claude-agent-sdk only)
     disallowed_tools: list[str] | None = Field(None, description="Tools to disallow for this query (e.g. ['Task'])")
+    # Foggy platform tracking IDs (injected as env vars into CLI subprocess)
+    foggy_task_id: str | None = Field(None, description="Foggy platform task ID for tracking/correlation")
+    foggy_session_id: str | None = Field(None, description="Foggy platform session ID for tracking/correlation")
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +367,9 @@ class CliProcessInfo(BaseModel):
     memory_mb: float = Field(0.0, description="Working set memory in MB")
     started_at: str = Field("", description="Process start time (ISO 8601 or raw)")
     is_orphan: bool = Field(True, description="True if not associated with any active task")
+    claude_session_id: str | None = Field(None, description="Claude session ID parsed from --resume flag")
+    foggy_task_id: str | None = Field(None, description="Foggy platform task ID from task_registry")
+    foggy_session_id: str | None = Field(None, description="Foggy platform session ID from task_registry")
 
 
 class CliProcessListResponse(BaseModel):
@@ -386,3 +392,67 @@ class KillProcessResponse(BaseModel):
     pid: int
     status: str = Field(..., description="killed | not_found | failed")
     message: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Git log / history
+# ---------------------------------------------------------------------------
+
+class GitLogEntry(BaseModel):
+    """A single commit in the git log."""
+
+    hash: str
+    short_hash: str
+    author_name: str
+    author_email: str
+    author_date: str
+    relative_date: str
+    subject: str
+    body: str = ""
+    refs: str = ""
+
+
+class GitLogResponse(BaseModel):
+    """Response for ``GET /api/v1/git-log``."""
+
+    branch: str
+    upstream: str | None = None
+    ahead: int = 0
+    behind: int = 0
+    commits: list[GitLogEntry]
+    has_more: bool = False
+
+
+class CommitFileEntry(BaseModel):
+    """A single changed file in a commit."""
+
+    file: str
+    status: str
+    insertions: int = 0
+    deletions: int = 0
+
+
+class CommitDetailResponse(BaseModel):
+    """Response for ``GET /api/v1/git-log/commit``."""
+
+    hash: str
+    short_hash: str
+    author_name: str
+    author_email: str
+    author_date: str
+    relative_date: str
+    subject: str
+    body: str = ""
+    files: list[CommitFileEntry]
+    total_insertions: int = 0
+    total_deletions: int = 0
+
+
+class CommitFileDiffResponse(BaseModel):
+    """Response for ``GET /api/v1/git-log/commit/file-diff``."""
+
+    file: str
+    status: str
+    original: str | None = None
+    modified: str | None = None
+    language: str = "plaintext"
