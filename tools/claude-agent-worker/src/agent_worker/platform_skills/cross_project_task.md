@@ -42,9 +42,24 @@ curl -s {{NAVIGATOR_API_BASE}}/api/v1/coding-agents \
 - `agentId` — Agent 唯一 ID（创建任务时用）
 - `name` — Agent 名称
 - `description` — 能力说明
+- `projectSummary` — 项目概述（技术栈、模块、API，可能为 null）
 - `defaultDirectory.projectName` — 默认项目
 - `defaultDirectory.path` — 工作路径
 - `defaultDirectory.gitBranch` — Git 分支
+
+### Step 1.5: 调研阶段（复杂任务时使用）
+
+如果仅凭 Agent 列表信息（description、projectSummary）不足以制定准确的任务分配方案，可以向 Agent 提问：
+
+```bash
+curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "描述你负责的项目架构、技术栈和主要API端点"}' | jq '.data'
+```
+
+返回 A2aTask，取 `.artifacts[0].parts[0].text` 获取 Agent 的回答。
+根据调研结果规划后续阶段的 prompt。
 
 ### Step 2: 展示并确认
 

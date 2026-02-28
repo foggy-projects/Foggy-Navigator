@@ -77,6 +77,15 @@ public class CodingAgentController {
         return RX.ok(Map.of("agentId", agentId, "directoryId", directoryId, "bound", true));
     }
 
+    @PostMapping("/{agentId}/generate-summary")
+    public RX<CodingAgentDTO> generateSummary(
+            @PathVariable String agentId,
+            @RequestBody(required = false) Map<String, String> body) {
+        String userId = UserContext.getCurrentUserId();
+        String hint = (body != null) ? body.get("hint") : null;
+        return RX.ok(agentService.generateSummary(userId, agentId, hint));
+    }
+
     @DeleteMapping("/{agentId}/directories/{directoryId}")
     public RX<Map<String, Object>> unbindDirectory(
             @PathVariable String agentId,

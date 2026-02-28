@@ -67,6 +67,10 @@ public class CodingAgentEntity {
     @Column(length = 128)
     private String defaultBranch;
 
+    /** 项目概述（技术栈、模块、API） */
+    @Column(columnDefinition = "TEXT")
+    private String projectSummary;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

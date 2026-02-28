@@ -10,12 +10,15 @@ import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -30,6 +33,7 @@ public class CodingAgentService {
     private final AgentDirectoryBindingRepository bindingRepository;
     private final ClaudeWorkerService workerService;
     private final WorkingDirectoryRepository directoryRepository;
+    private final ClaudeWorkerFacade claudeWorkerFacade;
 
     /**
      * 注册新 Agent
@@ -104,6 +108,9 @@ public class CodingAgentService {
         }
         if (form.getDefaultBranch() != null) {
             entity.setDefaultBranch(form.getDefaultBranch().isEmpty() ? null : form.getDefaultBranch());
+        }
+        if (form.getProjectSummary() != null) {
+            entity.setProjectSummary(form.getProjectSummary().isEmpty() ? null : form.getProjectSummary());
         }
         if (form.getDefaultDirectoryId() != null) {
             if (form.getDefaultDirectoryId().isEmpty()) {
@@ -205,6 +212,43 @@ public class CodingAgentService {
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
     }
 
+    /**
+     * 自动生成项目概述 — 通过 Claude Worker 分析项目目录
+     */
+    @Transactional
+    public CodingAgentDTO generateSummary(String userId, String agentId, String hint) {
+        CodingAgentEntity entity = agentRepository.findByAgentIdAndUserId(agentId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+
+        if (entity.getWorkerId() == null) {
+            throw new IllegalArgumentException("Agent has no associated worker");
+        }
+
+        String cwd = resolveDefaultCwd(entity);
+        String prompt = "分析当前项目目录结构和代码，生成结构化的项目概述。" +
+                "包含：技术栈、主要模块/服务、对外API端点、关键依赖。" +
+                "以简洁的文本格式输出，控制在500字以内。" +
+                (hint != null ? "\n补充信息：" + hint : "");
+
+        Map<String, Object> result = claudeWorkerFacade.syncQuery(
+                userId, entity.getWorkerId(), prompt, cwd, null);
+
+        String summary = (String) result.get("resultText");
+        if (summary != null && !summary.isBlank()) {
+            entity.setProjectSummary(summary);
+            agentRepository.save(entity);
+            log.info("Project summary generated for agent: agentId={}", agentId);
+        }
+        return toDTO(entity);
+    }
+
+    String resolveDefaultCwd(CodingAgentEntity entity) {
+        if (entity.getDefaultDirectoryId() == null) return null;
+        return directoryRepository.findByDirectoryId(entity.getDefaultDirectoryId())
+                .map(WorkingDirectoryEntity::getPath)
+                .orElse(null);
+    }
+
     private CodingAgentDTO toDTO(CodingAgentEntity entity) {
         // 查询 worker 名称
         String workerName = null;
@@ -240,6 +284,7 @@ public class CodingAgentService {
                 .defaultDirectoryId(entity.getDefaultDirectoryId())
                 .skills(entity.getSkills())
                 .defaultBranch(entity.getDefaultBranch())
+                .projectSummary(entity.getProjectSummary())
                 .defaultDirectory(defaultDir)
                 .authorizedDirectories(authorizedDirs)
                 .createdAt(entity.getCreatedAt())

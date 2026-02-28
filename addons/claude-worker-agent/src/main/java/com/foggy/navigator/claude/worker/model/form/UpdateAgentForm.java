@@ -12,4 +12,5 @@ public class UpdateAgentForm {
     private String skills;
     private String defaultBranch;
     private String defaultDirectoryId;
+    private String projectSummary;
 }

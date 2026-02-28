@@ -21,6 +21,7 @@ public class CodingAgentDTO {
     private String defaultDirectoryId;
     private String skills;
     private String defaultBranch;
+    private String projectSummary;
 
     /** 默认目录信息 */
     private DirectorySummary defaultDirectory;

@@ -5,29 +5,42 @@ import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
- * A2aAgent 适配器 — 包装 CodingAgentEntity + ClaudeTaskService
+ * A2aAgent 适配器 — 包装 CodingAgentEntity + ClaudeTaskService + ClaudeWorkerFacade
  */
 class ClaudeWorkerA2aAgent implements A2aAgent {
 
     private final CodingAgentEntity entity;
     private final ClaudeTaskService taskService;
+    private final ClaudeWorkerFacade workerFacade;
+    private final String defaultCwd;
 
-    ClaudeWorkerA2aAgent(CodingAgentEntity entity, ClaudeTaskService taskService) {
+    ClaudeWorkerA2aAgent(CodingAgentEntity entity, ClaudeTaskService taskService,
+                         ClaudeWorkerFacade workerFacade, String defaultCwd) {
         this.entity = entity;
         this.taskService = taskService;
+        this.workerFacade = workerFacade;
+        this.defaultCwd = defaultCwd;
     }
 
     @Override
     public A2aAgentCard getAgentCard() {
+        String desc = entity.getDescription();
+        if (entity.getProjectSummary() != null) {
+            desc = (desc != null ? desc + "\n\n" : "") + "## 项目概述\n" + entity.getProjectSummary();
+        }
         return A2aAgentCard.builder()
                 .name(entity.getName())
-                .description(entity.getDescription())
+                .description(desc)
                 .url(entity.getEndpointUrl())
                 .version("1.0.0")
                 .skills(List.of(
@@ -43,23 +56,40 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
 
     @Override
     public A2aTask sendTask(A2aMessage message) {
-        // Extract prompt text from A2aMessage parts
         String prompt = message.getParts().stream()
                 .filter(p -> "text".equals(p.getType()))
                 .map(A2aPart::getText)
-                .findFirst()
-                .orElse("");
+                .collect(Collectors.joining("\n"));
 
-        // Note: actual task creation requires CreateTaskForm with workerId, etc.
-        // This is a simplified adapter — full implementation would populate form from entity
+        Map<String, Object> result = workerFacade.syncQuery(
+                entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd, null);
+
+        String resultText = (String) result.get("resultText");
+        String error = (String) result.get("error");
+
+        if (error != null) {
+            return A2aTask.builder()
+                    .id(UUID.randomUUID().toString())
+                    .status(A2aTaskStatus.builder()
+                            .state(A2aTaskState.FAILED)
+                            .description(error)
+                            .timestamp(Instant.now())
+                            .build())
+                    .history(List.of(message))
+                    .build();
+        }
+
         return A2aTask.builder()
-                .id("pending")
+                .id(UUID.randomUUID().toString())
                 .status(A2aTaskStatus.builder()
-                        .state(A2aTaskState.SUBMITTED)
-                        .description("Task submitted to " + entity.getName())
+                        .state(A2aTaskState.COMPLETED)
                         .timestamp(Instant.now())
                         .build())
                 .history(List.of(message))
+                .artifacts(List.of(A2aArtifact.builder()
+                        .name("response")
+                        .parts(List.of(A2aPart.text(resultText != null ? resultText : "")))
+                        .build()))
                 .build();
     }
 
