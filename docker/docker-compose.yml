@@ -31,14 +31,36 @@ services:
       timeout: 5s
       retries: 5
 
-  # GitLab 服务
+  # Nginx 前端服务
+  nginx:
+    image: nginx:alpine
+    container_name: foggy-navigator-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ../nginx/navigator.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../dist/nginx:/usr/share/nginx/html:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mysql
+    networks:
+      - foggy-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # GitLab 服务（移除 80 端口映射，使用 8080）
   gitlab:
     image: gitlab/gitlab-ce:latest
     container_name: foggy-navigator-gitlab
     restart: unless-stopped
     hostname: gitlab.foggy.local
     ports:
-      - "80:80"
+      - "8080:80"
       - "443:443"
       - "2222:22"
     environment:

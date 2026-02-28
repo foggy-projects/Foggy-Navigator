@@ -2587,12 +2587,12 @@ async function handleTogglePin(conv: ConversationGroup) {
 
 async function handleEditTitle(conv: ConversationGroup) {
   try {
-    const { value: title } = await ElMessageBox.prompt('输入自定义标题', '编辑标题', {
+    const { value: title } = (await ElMessageBox.prompt('输入自定义标题', '编辑标题', {
       confirmButtonText: '保存',
       cancelButtonText: '取消',
       inputValue: conv.config?.customTitle || '',
       inputPlaceholder: '留空则显示原始 prompt',
-    })
+    })) as { value: string }
     await workerState.setTitle(conv.sessionId, title || '')
     ElMessage.success('标题已更新')
   } catch (e) {
@@ -3307,12 +3307,12 @@ async function handleResumeFromHistory(task: ClaudeTask) {
   if (!task.claudeSessionId || !selectedWorkerId.value) return
 
   try {
-    const { value: prompt } = await ElMessageBox.prompt('输入后续指令', '继续对话', {
+    const { value: prompt } = (await ElMessageBox.prompt('输入后续指令', '继续对话', {
       confirmButtonText: '发送',
       cancelButtonText: '取消',
       inputType: 'textarea',
       inputPlaceholder: '请输入后续任务描述...',
-    })
+    })) as { value: string }
     if (!prompt) return
 
     const newTask = await workerState.resumeTask({
