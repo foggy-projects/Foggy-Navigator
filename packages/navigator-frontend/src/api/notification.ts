@@ -3,11 +3,8 @@ import type { RX } from '@/types'
 
 export interface TaskAssistantConfig {
   userId: string
-  workerId: string
-  directoryId: string | null
-  claudeSessionId: string | null
-  foggySessionId: string | null
   enabled: boolean
+  foggySessionId: string | null
 }
 
 export interface A2aAgentCard {
@@ -35,8 +32,6 @@ export async function getAssistantConfig(): Promise<TaskAssistantConfig | null> 
 }
 
 export async function updateAssistantConfig(form: {
-  workerId: string
-  directoryId?: string | null
   enabled?: boolean
 }): Promise<TaskAssistantConfig> {
   const rx = (await client.put('/task-assistant/config', form)) as unknown as RX<TaskAssistantConfig>

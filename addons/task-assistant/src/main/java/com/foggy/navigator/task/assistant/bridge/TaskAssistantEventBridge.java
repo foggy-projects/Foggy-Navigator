@@ -1,12 +1,12 @@
-package com.foggy.navigator.session.assistant;
+package com.foggy.navigator.task.assistant.bridge;
 
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aPart;
-import com.foggy.navigator.session.sse.UserSseEmitter;
 import com.foggy.navigator.spi.assistant.TaskAssistantFacade;
+import com.foggy.navigator.spi.notification.UserNotificationSender;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
 import org.springframework.context.event.EventListener;
@@ -18,7 +18,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * 事件桥接：监听平台事件 → 批次聚合 → 调用 TaskAssistantFacade → 推送通知
+ * 事件桥接：监听平台事件 → 批次聚合 → 调用 TaskAssistantFacade → 通过 SPI 推送通知
  *
  * 批次策略：5s 滑动窗口 + 15s 硬上限
  */
@@ -27,7 +27,7 @@ import java.util.concurrent.*;
 public class TaskAssistantEventBridge {
 
     private final SessionManager sessionManager;
-    private final UserSseEmitter userSseEmitter;
+    private final UserNotificationSender notificationSender;
     @Nullable
     private final TaskAssistantFacade assistantFacade;
 
@@ -50,16 +50,13 @@ public class TaskAssistantEventBridge {
     });
 
     public TaskAssistantEventBridge(SessionManager sessionManager,
-                                     UserSseEmitter userSseEmitter,
+                                     UserNotificationSender notificationSender,
                                      @Nullable TaskAssistantFacade assistantFacade) {
         this.sessionManager = sessionManager;
-        this.userSseEmitter = userSseEmitter;
+        this.notificationSender = notificationSender;
         this.assistantFacade = assistantFacade;
     }
 
-    /**
-     * 任务完成/失败事件
-     */
     @Async("sessionEventExecutor")
     @EventListener
     public void onTaskCompletion(TaskCompletionEvent event) {
@@ -77,9 +74,6 @@ public class TaskAssistantEventBridge {
         eventData.put("agent", event.getTargetAgentId());
         eventData.put("summary", event.getResultSummary());
         eventData.put("timestamp", Instant.now().toString());
-
-        // 无论助手是否可用，都推送 task_update 给前端面板
-        userSseEmitter.sendTaskUpdate(userId, eventData);
 
         addEvent(userId, eventData);
     }
@@ -131,7 +125,7 @@ public class TaskAssistantEventBridge {
             ));
 
             Optional<A2aMessage> response = assistantFacade.sendEvents(userId, request);
-            response.ifPresent(msg -> userSseEmitter.sendNotification(userId, msg));
+            response.ifPresent(msg -> notificationSender.sendNotification(userId, msg));
         } catch (Exception e) {
             log.error("Failed to send events to task assistant for userId={}", userId, e);
         }

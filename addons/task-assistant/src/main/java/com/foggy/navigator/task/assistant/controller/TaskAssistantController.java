@@ -1,4 +1,4 @@
-package com.foggy.navigator.claude.worker.controller;
+package com.foggy.navigator.task.assistant.controller;
 
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
@@ -40,21 +40,17 @@ public class TaskAssistantController {
     public RX<TaskAssistantConfig> updateConfig(@RequestBody ConfigForm form) {
         String userId = UserContext.getCurrentUserId();
 
-        TaskAssistantConfig config = assistantFacade.configure(userId, form.getWorkerId(), form.getDirectoryId());
-
         if (form.getEnabled() != null) {
             assistantFacade.setEnabled(userId, form.getEnabled());
-            config.setEnabled(form.getEnabled());
         }
 
-        return RX.ok(config);
+        return RX.ok(assistantFacade.getConfig(userId).orElse(null));
     }
 
     @PostMapping("/test")
     public RX<A2aMessage> testNotification() {
         String userId = UserContext.getCurrentUserId();
 
-        // 构造一个测试事件
         A2aMessage testEvents = A2aMessage.user(List.of(
                 A2aPart.data(Map.of("events", List.of(
                         Map.of(
@@ -79,8 +75,6 @@ public class TaskAssistantController {
 
     @Data
     public static class ConfigForm {
-        private String workerId;
-        private String directoryId;
         private Boolean enabled;
     }
 }

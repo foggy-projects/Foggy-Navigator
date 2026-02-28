@@ -1,6 +1,6 @@
-package com.foggy.navigator.claude.worker.repository;
+package com.foggy.navigator.task.assistant.repository;
 
-import com.foggy.navigator.claude.worker.model.entity.TaskAssistantConfigEntity;
+import com.foggy.navigator.task.assistant.entity.TaskAssistantConfigEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;

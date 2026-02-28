@@ -233,43 +233,10 @@
       <el-tab-pane label="任务助手" name="assistant">
         <div v-loading="assistantLoading" class="assistant-config">
           <p class="tab-description">
-            AI 任务助手会在任务完成/失败时自动生成智能通知和行动建议，通过浏览器推送提醒。
+            AI 任务助手会在任务完成/失败时自动生成智能通知和行动建议，使用平台已配置的 AI 模型直接生成。
           </p>
 
           <el-form :model="assistantForm" label-position="top" style="max-width: 480px">
-            <el-form-item label="Worker">
-              <el-select
-                v-model="assistantForm.workerId"
-                placeholder="选择 Worker"
-                style="width: 100%"
-                @change="handleAssistantWorkerChange"
-              >
-                <el-option
-                  v-for="w in workers"
-                  :key="w.workerId"
-                  :label="w.name"
-                  :value="w.workerId"
-                />
-              </el-select>
-            </el-form-item>
-
-            <el-form-item label="工作目录（可选）">
-              <el-select
-                v-model="assistantForm.directoryId"
-                placeholder="选择工作目录"
-                clearable
-                style="width: 100%"
-                :disabled="!assistantForm.workerId"
-              >
-                <el-option
-                  v-for="d in assistantDirectories"
-                  :key="d.directoryId"
-                  :label="d.path"
-                  :value="d.directoryId"
-                />
-              </el-select>
-            </el-form-item>
-
             <el-form-item label="启用">
               <el-switch v-model="assistantForm.enabled" />
             </el-form-item>
@@ -537,7 +504,6 @@ import {
   updateWorker as apiUpdateWorker,
   deleteWorker as apiDeleteWorker,
   triggerHealthCheck as apiHealthCheck,
-  listDirectoriesByWorker as apiListDirectoriesByWorker,
 } from '@/api/claudeWorker'
 import {
   getAssistantConfig as apiGetAssistantConfig,
@@ -1135,8 +1101,7 @@ const assistantConfig = ref<TaskAssistantConfig | null>(null)
 const assistantLoading = ref(false)
 const assistantSaving = ref(false)
 const assistantTesting = ref(false)
-const assistantForm = ref({ workerId: '', directoryId: '', enabled: false })
-const assistantDirectories = ref<Array<{ directoryId: string; path: string }>>([])
+const assistantForm = ref({ enabled: false })
 
 async function loadAssistantConfig() {
   assistantLoading.value = true
@@ -1144,45 +1109,17 @@ async function loadAssistantConfig() {
     assistantConfig.value = await apiGetAssistantConfig()
     if (assistantConfig.value) {
       assistantForm.value = {
-        workerId: assistantConfig.value.workerId || '',
-        directoryId: assistantConfig.value.directoryId || '',
         enabled: assistantConfig.value.enabled || false,
-      }
-      if (assistantForm.value.workerId) {
-        await loadAssistantDirectories(assistantForm.value.workerId)
       }
     }
   } catch { /* handled by interceptor */ }
   finally { assistantLoading.value = false }
 }
 
-async function loadAssistantDirectories(workerId: string) {
-  try {
-    const dirs = await apiListDirectoriesByWorker(workerId)
-    assistantDirectories.value = dirs.map(d => ({ directoryId: d.directoryId, path: d.path }))
-  } catch {
-    assistantDirectories.value = []
-  }
-}
-
-async function handleAssistantWorkerChange(workerId: string) {
-  assistantForm.value.directoryId = ''
-  assistantDirectories.value = []
-  if (workerId) {
-    await loadAssistantDirectories(workerId)
-  }
-}
-
 async function saveAssistantConfig() {
-  if (!assistantForm.value.workerId) {
-    ElMessage.warning('请选择 Worker')
-    return
-  }
   assistantSaving.value = true
   try {
     assistantConfig.value = await apiUpdateAssistantConfig({
-      workerId: assistantForm.value.workerId,
-      directoryId: assistantForm.value.directoryId || null,
       enabled: assistantForm.value.enabled,
     })
     ElMessage.success('配置已保存')

@@ -1,4 +1,4 @@
-package com.foggy.navigator.claude.worker.model.entity;
+package com.foggy.navigator.task.assistant.entity;
 
 import jakarta.persistence.*;
 import lombok.Data;
@@ -22,20 +22,11 @@ public class TaskAssistantConfigEntity {
     @Column(length = 64, nullable = false, unique = true)
     private String userId;
 
-    @Column(length = 64, nullable = false)
-    private String workerId;
-
-    @Column(length = 64)
-    private String directoryId;
-
-    @Column(length = 128)
-    private String claudeSessionId;
+    @Column(nullable = false)
+    private Boolean enabled = false;
 
     @Column(length = 64)
     private String foggySessionId;
-
-    @Column(nullable = false)
-    private Boolean enabled = false;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;

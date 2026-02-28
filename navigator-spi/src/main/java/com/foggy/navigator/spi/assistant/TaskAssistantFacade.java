@@ -7,7 +7,7 @@ import java.util.Optional;
 
 /**
  * 任务助手门面接口 (SPI)
- * 初始实现基于 Claude Worker，后续可切换为任何 A2A Server
+ * 实现基于 LangChain4j 直接调用 LLM
  */
 public interface TaskAssistantFacade {
 
@@ -32,7 +32,7 @@ public interface TaskAssistantFacade {
     Optional<TaskAssistantConfig> getConfig(String userId);
 
     /**
-     * 配置助手（选择 worker + directory）
+     * 配置助手（兼容旧签名，workerId/directoryId 不再使用）
      */
     TaskAssistantConfig configure(String userId, String workerId, String directoryId);
 

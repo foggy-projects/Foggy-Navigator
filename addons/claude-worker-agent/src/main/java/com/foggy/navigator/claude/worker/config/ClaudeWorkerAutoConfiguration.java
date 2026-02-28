@@ -14,7 +14,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "com.foggy.navigator.claude.worker.service",
         "com.foggy.navigator.claude.worker.controller",
         "com.foggy.navigator.claude.worker.client",
-        "com.foggy.navigator.claude.worker.spi"
+        "com.foggy.navigator.claude.worker.spi",
+        "com.foggy.navigator.claude.worker.adapter"
 })
 @EntityScan(basePackages = {
         "com.foggy.navigator.claude.worker.model.entity"
