@@ -234,16 +234,6 @@ public class ClaudeTaskService {
         }).toList();
     }
 
-    /**
-     * 列出用户的所有任务
-     */
-    public List<TaskDTO> listActiveTasks(String userId) {
-        return taskRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-                .filter(t -> "RUNNING".equals(t.getStatus()) || "WAITING".equals(t.getStatus()) || "PENDING".equals(t.getStatus()))
-                .map(this::toDTO)
-                .toList();
-    }
-
     public List<TaskDTO> listTasks(String userId) {
         return taskRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
                 .map(this::toDTO)
