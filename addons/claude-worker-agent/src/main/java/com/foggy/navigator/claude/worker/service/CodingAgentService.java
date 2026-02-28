@@ -231,7 +231,7 @@ public class CodingAgentService {
                 (hint != null ? "\n补充信息：" + hint : "");
 
         Map<String, Object> result = claudeWorkerFacade.syncQuery(
-                userId, entity.getWorkerId(), prompt, cwd, null);
+                userId, entity.getWorkerId(), prompt, cwd, null, 1, null);
 
         String summary = (String) result.get("resultText");
         if (summary != null && !summary.isBlank()) {
