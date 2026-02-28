@@ -1,11 +1,12 @@
 package com.foggy.navigator.task.assistant.bridge;
 
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
+import com.foggy.navigator.agent.framework.event.TaskStartedEvent;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aPart;
-import com.foggy.navigator.spi.assistant.TaskAssistantFacade;
+import com.foggy.navigator.task.assistant.spi.TaskAssistantFacade;
 import com.foggy.navigator.spi.notification.UserNotificationSender;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
@@ -73,6 +74,25 @@ public class TaskAssistantEventBridge {
         eventData.put("status", event.getStatus());
         eventData.put("agent", event.getTargetAgentId());
         eventData.put("summary", event.getResultSummary());
+        eventData.put("timestamp", Instant.now().toString());
+
+        addEvent(userId, eventData);
+    }
+
+    @Async("sessionEventExecutor")
+    @EventListener
+    public void onTaskStarted(TaskStartedEvent event) {
+        String userId = resolveUserId(event.getParentSessionId());
+        if (userId == null) {
+            log.debug("Cannot resolve userId for parentSessionId={}", event.getParentSessionId());
+            return;
+        }
+
+        Map<String, Object> eventData = new LinkedHashMap<>();
+        eventData.put("type", "task_started");
+        eventData.put("taskId", event.getExternalTaskId());
+        eventData.put("agent", event.getTargetAgentId());
+        eventData.put("prompt", event.getPrompt());
         eventData.put("timestamp", Instant.now().toString());
 
         addEvent(userId, eventData);

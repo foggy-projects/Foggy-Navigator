@@ -28,6 +28,18 @@ public class TaskAssistantConfigEntity {
     @Column(length = 64)
     private String foggySessionId;
 
+    @Column(length = 64)
+    private String workerId;
+
+    @Column(length = 64)
+    private String directoryId;
+
+    @Column(length = 128)
+    private String claudeSessionId;
+
+    @Column(length = 512)
+    private String cwd;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

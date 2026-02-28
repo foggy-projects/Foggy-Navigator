@@ -5,8 +5,8 @@ import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aPart;
-import com.foggy.navigator.spi.assistant.TaskAssistantConfig;
-import com.foggy.navigator.spi.assistant.TaskAssistantFacade;
+import com.foggy.navigator.task.assistant.spi.TaskAssistantConfig;
+import com.foggy.navigator.task.assistant.spi.TaskAssistantFacade;
 import com.foggyframework.core.ex.RX;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -36,15 +36,26 @@ public class TaskAssistantController {
         return RX.ok(assistantFacade.getConfig(userId).orElse(null));
     }
 
-    @PutMapping("/config")
-    public RX<TaskAssistantConfig> updateConfig(@RequestBody ConfigForm form) {
+    @PostMapping("/config")
+    public RX<TaskAssistantConfig> createAssistant(@RequestBody CreateForm form) {
         String userId = UserContext.getCurrentUserId();
+        return RX.ok(assistantFacade.createOrUpdate(userId, form.getWorkerId(), form.getDirectoryPath()));
+    }
 
+    @PutMapping("/config")
+    public RX<TaskAssistantConfig> updateConfig(@RequestBody UpdateForm form) {
+        String userId = UserContext.getCurrentUserId();
         if (form.getEnabled() != null) {
             assistantFacade.setEnabled(userId, form.getEnabled());
         }
-
         return RX.ok(assistantFacade.getConfig(userId).orElse(null));
+    }
+
+    @DeleteMapping("/config")
+    public RX<Void> deleteAssistant() {
+        String userId = UserContext.getCurrentUserId();
+        assistantFacade.delete(userId);
+        return RX.ok(null);
     }
 
     @PostMapping("/test")
@@ -74,7 +85,13 @@ public class TaskAssistantController {
     }
 
     @Data
-    public static class ConfigForm {
+    public static class CreateForm {
+        private String workerId;
+        private String directoryPath;
+    }
+
+    @Data
+    public static class UpdateForm {
         private Boolean enabled;
     }
 }

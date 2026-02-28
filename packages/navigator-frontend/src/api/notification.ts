@@ -4,6 +4,10 @@ import type { RX } from '@/types'
 export interface TaskAssistantConfig {
   userId: string
   enabled: boolean
+  workerId: string | null
+  directoryId: string | null
+  claudeSessionId: string | null
+  cwd: string | null
   foggySessionId: string | null
 }
 
@@ -31,11 +35,23 @@ export async function getAssistantConfig(): Promise<TaskAssistantConfig | null> 
   return rx.data
 }
 
+export async function createAssistant(form: {
+  workerId: string
+  directoryPath?: string
+}): Promise<TaskAssistantConfig> {
+  const rx = (await client.post('/task-assistant/config', form)) as unknown as RX<TaskAssistantConfig>
+  return rx.data
+}
+
 export async function updateAssistantConfig(form: {
   enabled?: boolean
 }): Promise<TaskAssistantConfig> {
   const rx = (await client.put('/task-assistant/config', form)) as unknown as RX<TaskAssistantConfig>
   return rx.data
+}
+
+export async function deleteAssistant(): Promise<void> {
+  await client.delete('/task-assistant/config')
 }
 
 export async function testNotification(): Promise<any> {

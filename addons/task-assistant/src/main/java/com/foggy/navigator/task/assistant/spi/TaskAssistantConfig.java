@@ -1,4 +1,4 @@
-package com.foggy.navigator.spi.assistant;
+package com.foggy.navigator.task.assistant.spi;
 
 /**
  * 任务助手配置 DTO
@@ -7,19 +7,12 @@ public class TaskAssistantConfig {
     private String userId;
     private Boolean enabled;
     private String foggySessionId;
-
-    // Deprecated fields — kept for API backward compatibility, always null
     private String workerId;
     private String directoryId;
     private String claudeSessionId;
+    private String cwd;
 
     public TaskAssistantConfig() {}
-
-    public TaskAssistantConfig(String userId, Boolean enabled, String foggySessionId) {
-        this.userId = userId;
-        this.enabled = enabled;
-        this.foggySessionId = foggySessionId;
-    }
 
     public String getUserId() { return userId; }
     public void setUserId(String userId) { this.userId = userId; }
@@ -39,24 +32,38 @@ public class TaskAssistantConfig {
     public String getClaudeSessionId() { return claudeSessionId; }
     public void setClaudeSessionId(String claudeSessionId) { this.claudeSessionId = claudeSessionId; }
 
+    public String getCwd() { return cwd; }
+    public void setCwd(String cwd) { this.cwd = cwd; }
+
     public static Builder builder() { return new Builder(); }
 
     public static class Builder {
         private String userId;
         private Boolean enabled;
         private String foggySessionId;
+        private String workerId;
+        private String directoryId;
+        private String claudeSessionId;
+        private String cwd;
 
         public Builder userId(String userId) { this.userId = userId; return this; }
         public Builder enabled(Boolean enabled) { this.enabled = enabled; return this; }
         public Builder foggySessionId(String foggySessionId) { this.foggySessionId = foggySessionId; return this; }
-
-        // Deprecated builder methods — kept for backward compatibility
-        public Builder workerId(String workerId) { return this; }
-        public Builder directoryId(String directoryId) { return this; }
-        public Builder claudeSessionId(String claudeSessionId) { return this; }
+        public Builder workerId(String workerId) { this.workerId = workerId; return this; }
+        public Builder directoryId(String directoryId) { this.directoryId = directoryId; return this; }
+        public Builder claudeSessionId(String claudeSessionId) { this.claudeSessionId = claudeSessionId; return this; }
+        public Builder cwd(String cwd) { this.cwd = cwd; return this; }
 
         public TaskAssistantConfig build() {
-            return new TaskAssistantConfig(userId, enabled, foggySessionId);
+            TaskAssistantConfig config = new TaskAssistantConfig();
+            config.userId = userId;
+            config.enabled = enabled;
+            config.foggySessionId = foggySessionId;
+            config.workerId = workerId;
+            config.directoryId = directoryId;
+            config.claudeSessionId = claudeSessionId;
+            config.cwd = cwd;
+            return config;
         }
     }
 }

@@ -232,30 +232,88 @@
       <!-- Tab: Task Assistant -->
       <el-tab-pane label="任务助手" name="assistant">
         <div v-loading="assistantLoading" class="assistant-config">
-          <p class="tab-description">
-            AI 任务助手会在任务完成/失败时自动生成智能通知和行动建议，使用平台已配置的 AI 模型直接生成。
-          </p>
+          <!-- 未创建状态 -->
+          <template v-if="!assistantConfig || !assistantConfig.workerId">
+            <p class="tab-description">
+              AI 编程会话管理助手会在任务开始/完成/失败时自动生成智能通知和行动建议。
+              选择一个 Worker 来创建助手。
+            </p>
 
-          <el-form :model="assistantForm" label-position="top" style="max-width: 480px">
-            <el-form-item label="启用">
-              <el-switch v-model="assistantForm.enabled" />
-            </el-form-item>
+            <el-form label-position="top" style="max-width: 480px">
+              <el-form-item label="Worker" required>
+                <el-select v-model="assistantCreateForm.workerId" placeholder="选择 Worker" style="width: 100%">
+                  <el-option
+                    v-for="w in workers"
+                    :key="w.workerId"
+                    :label="w.name || w.workerId"
+                    :value="w.workerId"
+                  />
+                </el-select>
+              </el-form-item>
 
-            <el-form-item>
-              <div style="display: flex; gap: 8px">
-                <el-button type="primary" :loading="assistantSaving" @click="saveAssistantConfig">
-                  保存配置
-                </el-button>
+              <el-form-item label="工作目录路径">
+                <el-input v-model="assistantCreateForm.directoryPath" placeholder="~/foggy-assistant" />
+                <div class="el-form-item__description" style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
+                  留空则默认使用 ~/foggy-assistant
+                </div>
+              </el-form-item>
+
+              <el-form-item>
                 <el-button
-                  :loading="assistantTesting"
-                  :disabled="!assistantConfig?.enabled"
-                  @click="handleTestNotification"
+                  type="primary"
+                  :loading="assistantSaving"
+                  :disabled="!assistantCreateForm.workerId"
+                  @click="handleCreateAssistant"
                 >
-                  测试通知
+                  创建助手
                 </el-button>
-              </div>
-            </el-form-item>
-          </el-form>
+              </el-form-item>
+            </el-form>
+          </template>
+
+          <!-- 已创建状态 -->
+          <template v-else>
+            <p class="tab-description">
+              AI 编程会话管理助手已配置，会在任务开始/完成/失败时自动生成智能通知和行动建议。
+            </p>
+
+            <el-descriptions :column="1" border style="max-width: 480px; margin-bottom: 16px">
+              <el-descriptions-item label="Worker">
+                {{ getWorkerName(assistantConfig.workerId) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="工作目录">
+                {{ assistantConfig.cwd || '~/foggy-assistant' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="会话 ID">
+                {{ assistantConfig.claudeSessionId || '（新会话）' }}
+              </el-descriptions-item>
+            </el-descriptions>
+
+            <el-form label-position="top" style="max-width: 480px">
+              <el-form-item label="启用">
+                <el-switch v-model="assistantEnabledToggle" @change="handleToggleAssistant" />
+              </el-form-item>
+
+              <el-form-item>
+                <div style="display: flex; gap: 8px">
+                  <el-button
+                    :loading="assistantTesting"
+                    :disabled="!assistantConfig?.enabled"
+                    @click="handleTestNotification"
+                  >
+                    测试通知
+                  </el-button>
+                  <el-button
+                    type="danger"
+                    plain
+                    @click="handleDeleteAssistant"
+                  >
+                    删除助手
+                  </el-button>
+                </div>
+              </el-form-item>
+            </el-form>
+          </template>
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -507,7 +565,9 @@ import {
 } from '@/api/claudeWorker'
 import {
   getAssistantConfig as apiGetAssistantConfig,
+  createAssistant as apiCreateAssistant,
   updateAssistantConfig as apiUpdateAssistantConfig,
+  deleteAssistant as apiDeleteAssistant,
   testNotification as apiTestNotification,
 } from '@/api/notification'
 import type { TaskAssistantConfig } from '@/api/notification'
@@ -1101,33 +1161,54 @@ const assistantConfig = ref<TaskAssistantConfig | null>(null)
 const assistantLoading = ref(false)
 const assistantSaving = ref(false)
 const assistantTesting = ref(false)
-const assistantForm = ref({ enabled: false })
+const assistantEnabledToggle = ref(false)
+const assistantCreateForm = ref({ workerId: '', directoryPath: '' })
 
 async function loadAssistantConfig() {
   assistantLoading.value = true
   try {
     assistantConfig.value = await apiGetAssistantConfig()
     if (assistantConfig.value) {
-      assistantForm.value = {
-        enabled: assistantConfig.value.enabled || false,
-      }
+      assistantEnabledToggle.value = assistantConfig.value.enabled || false
     }
   } catch { /* handled by interceptor */ }
   finally { assistantLoading.value = false }
 }
 
-async function saveAssistantConfig() {
+async function handleCreateAssistant() {
   assistantSaving.value = true
   try {
-    assistantConfig.value = await apiUpdateAssistantConfig({
-      enabled: assistantForm.value.enabled,
+    assistantConfig.value = await apiCreateAssistant({
+      workerId: assistantCreateForm.value.workerId,
+      directoryPath: assistantCreateForm.value.directoryPath || undefined,
     })
-    ElMessage.success('配置已保存')
-  } catch {
-    ElMessage.error('保存失败')
+    assistantEnabledToggle.value = assistantConfig.value?.enabled || false
+    ElMessage.success('助手创建成功')
+  } catch (e: any) {
+    ElMessage.error('创建失败: ' + (e?.response?.data?.msg || e?.message || '未知错误'))
   } finally {
     assistantSaving.value = false
   }
+}
+
+async function handleToggleAssistant(val: boolean) {
+  try {
+    assistantConfig.value = await apiUpdateAssistantConfig({ enabled: val })
+    ElMessage.success(val ? '助手已启用' : '助手已禁用')
+  } catch {
+    assistantEnabledToggle.value = !val
+    ElMessage.error('操作失败')
+  }
+}
+
+async function handleDeleteAssistant() {
+  try {
+    await ElMessageBox.confirm('确认删除助手？Worker 上的工作目录将保留。', '提示', { type: 'warning' })
+    await apiDeleteAssistant()
+    assistantConfig.value = null
+    assistantCreateForm.value = { workerId: '', directoryPath: '' }
+    ElMessage.success('助手已删除')
+  } catch { /* cancelled */ }
 }
 
 async function handleTestNotification() {
@@ -1140,6 +1221,12 @@ async function handleTestNotification() {
   } finally {
     assistantTesting.value = false
   }
+}
+
+function getWorkerName(workerId: string | null): string {
+  if (!workerId) return '（未选择）'
+  const w = workers.value.find(w => w.workerId === workerId)
+  return w ? (w.name || w.workerId) : workerId
 }
 
 onMounted(() => {

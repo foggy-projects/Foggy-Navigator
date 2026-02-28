@@ -2,6 +2,7 @@ package com.foggy.navigator.claude.worker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
+import com.foggy.navigator.agent.framework.event.TaskStartedEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
@@ -107,6 +108,14 @@ public class WorkerStreamRelay {
                     .subscribe();
 
             activeStreams.put(taskId, subscription);
+
+            // 发布跨 Agent 任务开始事件
+            eventPublisher.publishEvent(TaskStartedEvent.builder()
+                    .externalTaskId(taskId)
+                    .parentSessionId(sessionId)
+                    .targetAgentId(AGENT_ID)
+                    .prompt(truncateResult(event.getPrompt()))
+                    .build());
 
         } catch (Exception e) {
             log.error("Failed to start stream relay: taskId={}", taskId, e);

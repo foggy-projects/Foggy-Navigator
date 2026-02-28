@@ -1,4 +1,4 @@
-package com.foggy.navigator.spi.assistant;
+package com.foggy.navigator.task.assistant.spi;
 
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
@@ -6,13 +6,13 @@ import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import java.util.Optional;
 
 /**
- * 任务助手门面接口 (SPI)
- * 实现基于 LangChain4j 直接调用 LLM
+ * 任务助手门面接口
+ * 基于 Claude Code Worker 的 AI 编程会话管理助手
  */
 public interface TaskAssistantFacade {
 
     /**
-     * 发送一批平台事件给助手，返回 LLM 生成的通知消息
+     * 发送一批平台事件给助手，返回 AI 生成的通知消息
      */
     Optional<A2aMessage> sendEvents(String userId, A2aMessage events);
 
@@ -32,12 +32,17 @@ public interface TaskAssistantFacade {
     Optional<TaskAssistantConfig> getConfig(String userId);
 
     /**
-     * 配置助手（兼容旧签名，workerId/directoryId 不再使用）
+     * 创建或更新助手配置，绑定 Worker + 目录
      */
-    TaskAssistantConfig configure(String userId, String workerId, String directoryId);
+    TaskAssistantConfig createOrUpdate(String userId, String workerId, String directoryPath);
 
     /**
      * 启用/禁用
      */
     void setEnabled(String userId, boolean enabled);
+
+    /**
+     * 删除助手配置
+     */
+    void delete(String userId);
 }

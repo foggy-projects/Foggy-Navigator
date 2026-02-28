@@ -2,21 +2,12 @@ package com.foggy.navigator.task.assistant.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.dto.a2a.*;
-import com.foggy.navigator.spi.assistant.TaskAssistantConfig;
-import com.foggy.navigator.spi.assistant.TaskAssistantFacade;
-import com.foggy.navigator.common.enums.LlmModelCategory;
-import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.task.assistant.spi.TaskAssistantConfig;
+import com.foggy.navigator.task.assistant.spi.TaskAssistantFacade;
+import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.task.assistant.entity.TaskAssistantConfigEntity;
 import com.foggy.navigator.task.assistant.repository.TaskAssistantConfigRepository;
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
-import dev.langchain4j.model.chat.request.ChatRequest;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.openai.OpenAiChatModel;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
@@ -24,64 +15,60 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 /**
- * 任务助手服务 — TaskAssistantFacade 的 LangChain4j 实现
- * 直接调用 LLM 生成智能通知，无需远程 Claude Worker
+ * 任务助手服务 — 基于 Claude Code Worker 的 AI 编程会话管理助手
+ * 通过 ClaudeWorkerFacade.syncQuery() 调用远程 Worker 进行纯文本分析
  */
 @Slf4j
 @Service
 public class TaskAssistantService implements TaskAssistantFacade {
 
-    private static final String SKILL_PATH = "platform-skills/task-assistant/SKILL.md";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final TaskAssistantConfigRepository configRepository;
     @Nullable
-    private final LlmModelManager llmModelManager;
-
-    @Value("${agent.llm.openai.api-key:}")
-    private String fallbackApiKey;
-
-    @Value("${agent.llm.openai.base-url:https://api.openai.com/v1}")
-    private String fallbackBaseUrl;
-
-    @Value("${agent.llm.openai.model:gpt-4}")
-    private String fallbackModel;
-
-    private String cachedSkillPrompt;
+    private final ClaudeWorkerFacade claudeWorkerFacade;
 
     public TaskAssistantService(TaskAssistantConfigRepository configRepository,
-                                 @Nullable LlmModelManager llmModelManager) {
+                                 @Nullable ClaudeWorkerFacade claudeWorkerFacade) {
         this.configRepository = configRepository;
-        this.llmModelManager = llmModelManager;
+        this.claudeWorkerFacade = claudeWorkerFacade;
     }
 
     @Override
     public Optional<A2aMessage> sendEvents(String userId, A2aMessage events) {
         TaskAssistantConfigEntity config = configRepository.findByUserId(userId).orElse(null);
-        if (config == null || !Boolean.TRUE.equals(config.getEnabled())) {
-            log.debug("Task assistant not enabled for userId={}", userId);
+        if (config == null || !Boolean.TRUE.equals(config.getEnabled())
+                || claudeWorkerFacade == null
+                || config.getWorkerId() == null || config.getCwd() == null) {
+            log.debug("Task assistant not ready for userId={}", userId);
             return Optional.empty();
         }
 
         try {
             String eventJson = OBJECT_MAPPER.writeValueAsString(events.getParts());
-            String userPrompt = "Platform events:\n" + eventJson;
+            String prompt = "Analyze these platform events and generate a notification:\n\n" + eventJson;
 
-            ChatLanguageModel chatModel = buildChatModel(userId);
-            List<ChatMessage> messages = List.of(
-                    SystemMessage.from(getSkillPrompt()),
-                    UserMessage.from(userPrompt)
-            );
+            Map<String, Object> result = claudeWorkerFacade.syncQuery(
+                    userId, config.getWorkerId(), prompt,
+                    config.getCwd(), config.getClaudeSessionId());
 
-            ChatResponse response = chatModel.chat(ChatRequest.builder().messages(messages).build());
-            String responseText = response.aiMessage().text();
+            // 更新 claudeSessionId（对话记忆连续性）
+            String newSessionId = (String) result.get("claudeSessionId");
+            if (newSessionId != null && !newSessionId.equals(config.getClaudeSessionId())) {
+                config.setClaudeSessionId(newSessionId);
+                configRepository.save(config);
+            }
 
+            String error = (String) result.get("error");
+            if (error != null) {
+                log.warn("Task assistant syncQuery error for userId={}: {}", userId, error);
+                return Optional.empty();
+            }
+
+            String responseText = (String) result.get("resultText");
             if (responseText == null || responseText.isBlank()) {
                 log.warn("Task assistant returned empty response for userId={}", userId);
                 return Optional.empty();
@@ -99,8 +86,8 @@ public class TaskAssistantService implements TaskAssistantFacade {
     public A2aAgentCard getAgentCard() {
         return A2aAgentCard.builder()
                 .name("Task Assistant")
-                .description("AI-powered task notification assistant for Foggy Navigator")
-                .version("1.0.0")
+                .description("AI-powered programming session management assistant for Foggy Navigator")
+                .version("2.0.0")
                 .skills(List.of(
                         A2aAgentSkill.builder()
                                 .id("task-notification")
@@ -120,8 +107,11 @@ public class TaskAssistantService implements TaskAssistantFacade {
 
     @Override
     public boolean isAvailable(String userId) {
+        if (claudeWorkerFacade == null) return false;
         return configRepository.findByUserId(userId)
-                .map(config -> Boolean.TRUE.equals(config.getEnabled()))
+                .map(config -> Boolean.TRUE.equals(config.getEnabled())
+                        && config.getWorkerId() != null
+                        && config.getCwd() != null)
                 .orElse(false);
     }
 
@@ -132,16 +122,33 @@ public class TaskAssistantService implements TaskAssistantFacade {
 
     @Override
     @Transactional
-    public TaskAssistantConfig configure(String userId, String workerId, String directoryId) {
-        // workerId and directoryId are no longer used in LangChain4j implementation
-        // but we keep the SPI signature for compatibility
+    public TaskAssistantConfig createOrUpdate(String userId, String workerId, String directoryPath) {
+        if (claudeWorkerFacade == null) {
+            throw new IllegalStateException("Claude Worker module is not available");
+        }
+
+        // 验证 Worker 存在
+        claudeWorkerFacade.getWorker(userId, workerId);
+
+        // 展开默认路径
+        String path = (directoryPath == null || directoryPath.isBlank())
+                ? "~/foggy-assistant" : directoryPath;
+
+        // 初始化工作目录（创建 CLAUDE.md + settings.json）
+        Map<String, String> initFiles = loadInitFiles();
+        claudeWorkerFacade.initDirectory(userId, workerId, path, initFiles);
+
+        // 创建/更新配置
         TaskAssistantConfigEntity entity = configRepository.findByUserId(userId)
                 .orElseGet(() -> {
                     TaskAssistantConfigEntity e = new TaskAssistantConfigEntity();
                     e.setUserId(userId);
-                    e.setEnabled(false);
                     return e;
                 });
+        entity.setWorkerId(workerId);
+        entity.setCwd(path);
+        entity.setEnabled(true);
+        entity.setClaudeSessionId(null); // 新会话
 
         return toDTO(configRepository.save(entity));
     }
@@ -159,37 +166,13 @@ public class TaskAssistantService implements TaskAssistantFacade {
         configRepository.save(entity);
     }
 
-    // --- Private helpers ---
-
-    private ChatLanguageModel buildChatModel(String userId) {
-        String apiKey = fallbackApiKey;
-        String baseUrl = fallbackBaseUrl;
-        String modelName = fallbackModel;
-
-        // Try to resolve from platform model config (GENERAL category)
-        if (llmModelManager != null) {
-            // Use "default" as tenantId — task-assistant is per-user, resolve via default tenant
-            var modelConfig = llmModelManager.getDefaultModel("default", LlmModelCategory.GENERAL);
-            if (modelConfig.isPresent()) {
-                var mc = modelConfig.get();
-                baseUrl = mc.getBaseUrl();
-                modelName = mc.getModelName();
-                try {
-                    apiKey = llmModelManager.getDecryptedApiKey(mc.getId());
-                } catch (Exception e) {
-                    log.warn("Failed to decrypt API key for model {}, using fallback", mc.getId());
-                }
-            }
-        }
-
-        return OpenAiChatModel.builder()
-                .apiKey(apiKey)
-                .baseUrl(baseUrl)
-                .modelName(modelName)
-                .temperature(0.3)
-                .timeout(Duration.ofSeconds(30))
-                .build();
+    @Override
+    @Transactional
+    public void delete(String userId) {
+        configRepository.findByUserId(userId).ifPresent(configRepository::delete);
     }
+
+    // --- Private helpers ---
 
     @SuppressWarnings("unchecked")
     private Optional<A2aMessage> parseNotificationResponse(String responseText) {
@@ -217,17 +200,21 @@ public class TaskAssistantService implements TaskAssistantFacade {
         }
     }
 
-    private String getSkillPrompt() {
-        if (cachedSkillPrompt == null) {
-            try {
-                ClassPathResource resource = new ClassPathResource(SKILL_PATH);
-                cachedSkillPrompt = new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                log.error("Failed to load task assistant SKILL.md", e);
-                cachedSkillPrompt = "You are a task notification assistant. Generate concise JSON notifications.";
-            }
+    private Map<String, String> loadInitFiles() {
+        Map<String, String> files = new LinkedHashMap<>();
+        files.put("CLAUDE.md", loadResource("assistant-init/CLAUDE.md"));
+        files.put(".claude/settings.json", loadResource("assistant-init/.claude/settings.json"));
+        return files;
+    }
+
+    private String loadResource(String path) {
+        try {
+            ClassPathResource resource = new ClassPathResource(path);
+            return new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.error("Failed to load resource: {}", path, e);
+            throw new RuntimeException("Failed to load init file: " + path, e);
         }
-        return cachedSkillPrompt;
     }
 
     private TaskAssistantConfig toDTO(TaskAssistantConfigEntity entity) {
@@ -235,6 +222,10 @@ public class TaskAssistantService implements TaskAssistantFacade {
                 .userId(entity.getUserId())
                 .enabled(entity.getEnabled())
                 .foggySessionId(entity.getFoggySessionId())
+                .workerId(entity.getWorkerId())
+                .directoryId(entity.getDirectoryId())
+                .claudeSessionId(entity.getClaudeSessionId())
+                .cwd(entity.getCwd())
                 .build();
     }
 }

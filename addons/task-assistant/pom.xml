@@ -14,7 +14,7 @@
 
     <artifactId>task-assistant</artifactId>
     <name>Task Assistant</name>
-    <description>AI 任务通知助手 — 独立模块，使用 LangChain4j 直接调用 LLM 生成智能通知</description>
+    <description>AI 编程会话管理助手 — 基于 Claude Code Worker 的智能通知和会话管理</description>
 
     <dependencies>
         <!-- Navigator Common -->

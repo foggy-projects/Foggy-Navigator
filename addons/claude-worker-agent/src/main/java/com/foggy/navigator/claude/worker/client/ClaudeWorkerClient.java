@@ -604,6 +604,21 @@ public class ClaudeWorkerClient {
                 .doOnError(e -> log.warn("Kill CLI process failed for worker {}, pid {}: {}", workerId, pid, e.getMessage()));
     }
 
+    /**
+     * 初始化目录 + 写入文件
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> initDirectory(String path, Map<String, String> files) {
+        return webClient.post()
+                .uri("/api/v1/init-directory")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("path", path, "files", files))
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Init directory failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
     public String getWorkerId() {
         return workerId;
     }

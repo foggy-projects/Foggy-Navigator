@@ -48,4 +48,19 @@ public interface ClaudeWorkerFacade {
      * 列出用户的所有任务
      */
     List<Map<String, Object>> listTasks(String userId);
+
+    /**
+     * 同步查询 — 发送 prompt 到 Worker，阻塞等待完成返回结果
+     * 用于轻量级 AI 查询（通知生成等），不创建任务记录，不发布事件
+     *
+     * @return Map: {resultText, claudeSessionId, costUsd, durationMs, error}
+     */
+    Map<String, Object> syncQuery(String userId, String workerId, String prompt,
+                                   String cwd, String claudeSessionId);
+
+    /**
+     * 在 Worker 上初始化目录 — 创建目录并写入文件
+     * @param files 文件相对路径 → 内容 的映射
+     */
+    void initDirectory(String userId, String workerId, String path, Map<String, String> files);
 }
