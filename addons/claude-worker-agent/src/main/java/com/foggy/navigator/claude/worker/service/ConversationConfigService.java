@@ -353,6 +353,19 @@ public class ConversationConfigService {
     }
 
     /**
+     * 更新会话标签（TODO: 当前为存根，tags 尚未持久化到数据库）
+     */
+    @Transactional
+    public ConversationConfigDTO updateTags(String sessionId, String userId, java.util.List<String> tags) {
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+        if (!entity.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Access denied");
+        }
+        log.warn("updateTags called but tags persistence is not yet implemented, sessionId={}, tags={}", sessionId, tags);
+        return toDTO(entity);
+    }
+
+    /**
      * 脱敏 token：保留前6位和后4位，中间用 **** 替代
      */
     private String maskToken(String token) {

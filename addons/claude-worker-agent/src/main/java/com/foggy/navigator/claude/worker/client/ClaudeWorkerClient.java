@@ -425,15 +425,21 @@ public class ClaudeWorkerClient {
      */
     @SuppressWarnings("unchecked")
     public Mono<Map<String, Object>> searchContent(String path, String query, int maxResults,
-                                                     int contextLines, boolean caseSensitive) {
+                                                     int contextLines, boolean caseSensitive,
+                                                     String filePattern) {
         return webClient.get()
-                .uri(uriBuilder -> uriBuilder.path("/api/v1/files/search-content")
-                        .queryParam("path", path)
-                        .queryParam("query", query)
-                        .queryParam("max_results", maxResults)
-                        .queryParam("context_lines", contextLines)
-                        .queryParam("case_sensitive", caseSensitive)
-                        .build())
+                .uri(uriBuilder -> {
+                    var b = uriBuilder.path("/api/v1/files/search-content")
+                            .queryParam("path", path)
+                            .queryParam("query", query)
+                            .queryParam("max_results", maxResults)
+                            .queryParam("context_lines", contextLines)
+                            .queryParam("case_sensitive", caseSensitive);
+                    if (filePattern != null && !filePattern.isBlank()) {
+                        b = b.queryParam("file_pattern", filePattern);
+                    }
+                    return b.build();
+                })
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)

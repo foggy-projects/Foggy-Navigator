@@ -134,12 +134,13 @@ public class FileBrowserController {
             @RequestParam String query,
             @RequestParam(required = false, defaultValue = "50") int maxResults,
             @RequestParam(required = false, defaultValue = "2") int contextLines,
-            @RequestParam(required = false, defaultValue = "false") boolean caseSensitive) {
+            @RequestParam(required = false, defaultValue = "false") boolean caseSensitive,
+            @RequestParam(required = false) String filePattern) {
         ClaudeWorkerClient client = resolveClient(directoryId);
         WorkingDirectoryEntity entity = getEntity(directoryId);
         try {
             Map<String, Object> result = client.searchContent(
-                    entity.getPath(), query, maxResults, contextLines, caseSensitive).block(TIMEOUT);
+                    entity.getPath(), query, maxResults, contextLines, caseSensitive, filePattern).block(TIMEOUT);
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to search content for directory {}: {}", directoryId, e.getMessage());

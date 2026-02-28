@@ -16,6 +16,8 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -276,11 +278,16 @@ public class WorkingDirectoryService {
         try {
             result = client.createWorktree(source.getPath(), branch, null)
                     .block(Duration.ofSeconds(30));
+        } catch (WebClientResponseException e) {
+            // 从 Worker 响应体中提取真实的 git 错误信息
+            String body = e.getResponseBodyAsString();
+            String detail = extractWorkerErrorDetail(body, e.getMessage());
+            throw new IllegalArgumentException("创建 worktree 失败: " + detail);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to create worktree: " + e.getMessage());
+            throw new IllegalArgumentException("创建 worktree 失败: " + e.getMessage());
         }
         if (result == null) {
-            throw new RuntimeException("Failed to create worktree: empty response");
+            throw new IllegalArgumentException("创建 worktree 失败: Worker 返回空响应");
         }
 
         String worktreePath = (String) result.get("path");
@@ -430,5 +437,31 @@ public class WorkingDirectoryService {
         } catch (Exception e) {
             return "***";
         }
+    }
+
+    /**
+     * 从 Worker HTTP 响应体中提取 detail 字段，格式通常为 {"detail": "..."}
+     */
+    private String extractWorkerErrorDetail(String responseBody, String fallback) {
+        if (responseBody != null && !responseBody.isBlank()) {
+            try {
+                // 简单解析 JSON {"detail": "..."} 结构，避免引入额外依赖
+                int idx = responseBody.indexOf("\"detail\"");
+                if (idx >= 0) {
+                    int colon = responseBody.indexOf(':', idx);
+                    if (colon >= 0) {
+                        int start = responseBody.indexOf('"', colon + 1);
+                        int end = responseBody.lastIndexOf('"');
+                        if (start >= 0 && end > start) {
+                            return responseBody.substring(start + 1, end);
+                        }
+                    }
+                }
+                return responseBody;
+            } catch (Exception ex) {
+                log.warn("Failed to parse worker error body: {}", ex.getMessage());
+            }
+        }
+        return fallback;
     }
 }

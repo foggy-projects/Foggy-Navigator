@@ -137,9 +137,17 @@ export async function searchContent(
   maxResults = 50,
   contextLines = 2,
   caseSensitive = false,
+  filePattern?: string,
 ): Promise<ContentSearchResponse> {
   const rx = (await client.get('/file-browser/search-content', {
-    params: { directoryId, query, maxResults, contextLines, caseSensitive },
+    params: {
+      directoryId,
+      query,
+      maxResults,
+      contextLines,
+      caseSensitive,
+      ...(filePattern ? { filePattern } : {}),
+    },
   })) as unknown as RX<ContentSearchResponse>
   return rx.data
 }

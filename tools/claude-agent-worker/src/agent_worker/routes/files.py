@@ -359,6 +359,7 @@ async def search_content(
     max_results: int = Query(50, ge=1, le=_MAX_SEARCH_RESULTS),
     context_lines: int = Query(2, ge=0, le=5),
     case_sensitive: bool = Query(False),
+    file_pattern: str | None = Query(None, description="Glob pattern to filter files, e.g. '*.java'"),
 ) -> ContentSearchResponse:
     """Full-text search in file contents. Uses ``git grep`` in git repos, falls back to Python."""
     resolved = validate_path(path)
@@ -369,6 +370,9 @@ async def search_content(
             detail=f"Path is not a directory: {path}",
         )
 
+    # Normalize file_pattern
+    fp = file_pattern.strip() if file_pattern and file_pattern.strip() else None
+
     # Try git grep
     excludes = _get_exclude_patterns(resolved)
     git_args = ["grep", "-n", "--no-color", "-F", f"-C{context_lines}"]
@@ -376,6 +380,8 @@ async def search_content(
         git_args.append("-i")
     git_args.append("--")
     git_args.append(query)
+    if fp:
+        git_args.append(fp)
     git_args.extend(_build_pathspec_excludes(excludes))
 
     rc, output = await run_git(resolved, *git_args)
@@ -383,7 +389,7 @@ async def search_content(
     if rc not in (0, 1):
         # rc==1 means no matches in git grep, which is fine
         # Non-git repo or other error — fallback
-        return _fallback_content_search(resolved, query, max_results, context_lines, case_sensitive)
+        return _fallback_content_search(resolved, query, max_results, context_lines, case_sensitive, fp)
 
     if rc == 1 or not output:
         return ContentSearchResponse(query=query, matches=[], total_matches=0, total_files=0)
@@ -482,6 +488,7 @@ def _parse_git_grep_output(
 
 def _fallback_content_search(
     base_dir: str, query: str, max_results: int, context_lines: int, case_sensitive: bool,
+    file_pattern: str | None = None,
 ) -> ContentSearchResponse:
     """Pure-Python fallback for non-git repos."""
     matches: list[ContentMatch] = []
@@ -494,6 +501,8 @@ def _fallback_content_search(
         dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
         for fname in files:
             if _should_skip_file(fname, excludes):
+                continue
+            if file_pattern and not fnmatch.fnmatch(fname, file_pattern):
                 continue
             abs_path = os.path.join(root, fname)
             rel_path = os.path.relpath(abs_path, base_dir).replace("\\", "/")

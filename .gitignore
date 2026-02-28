@@ -162,6 +162,7 @@ uploads/
 exports/
 temp/
 cache/
+.foggy-attachments/
 
 # Backup files
 *.bak

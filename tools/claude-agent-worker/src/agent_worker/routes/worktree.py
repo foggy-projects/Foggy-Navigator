@@ -93,16 +93,31 @@ async def create_worktree(request: CreateWorktreeRequest) -> CreateWorktreeRespo
             detail=f"Worktree path already exists: {wt_path}",
         )
 
-    # Try creating a new branch (-b); if the branch already exists, check it out directly
-    rc, output = await run_git(resolved, "worktree", "add", "-b", request.branch, wt_path)
-    if rc != 0 and "already exists" in output:
-        # Branch exists — try checking out existing branch into worktree
-        rc, output = await run_git(resolved, "worktree", "add", wt_path, request.branch)
+    # Strategy:
+    # 1. Try checking out as existing local branch first
+    # 2. If not found locally, fetch from remote and checkout with tracking
+    # 3. If remote doesn't have it either, create a new branch from HEAD
+
+    rc, output = await run_git(resolved, "worktree", "add", wt_path, request.branch)
     if rc != 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"git worktree add failed: {output}",
-        )
+        # Local branch not found — try to fetch from remote and set up tracking
+        remote_ref = f"origin/{request.branch}"
+        fetch_rc, fetch_out = await run_git(resolved, "fetch", "origin", request.branch)
+        if fetch_rc == 0:
+            # Remote branch fetched — create local tracking branch in the worktree
+            rc, output = await run_git(
+                resolved, "worktree", "add", "--track", "-b", request.branch, wt_path, remote_ref
+            )
+        if rc != 0:
+            # Branch doesn't exist remotely either — create new branch from HEAD
+            new_rc, new_out = await run_git(resolved, "worktree", "add", "-b", request.branch, wt_path)
+            if new_rc == 0:
+                rc, output = new_rc, new_out
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"git worktree add failed: {output or new_out}",
+                )
 
     logger.info("Created worktree: path=%s, branch=%s", wt_path, request.branch)
     return CreateWorktreeResponse(path=wt_path, branch=request.branch)

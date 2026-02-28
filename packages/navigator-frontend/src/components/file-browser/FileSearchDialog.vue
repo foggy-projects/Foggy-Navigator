@@ -12,6 +12,26 @@
             @keydown="handleKeydown"
           />
           <div v-if="mode === 'content'" class="search-options">
+            <!-- 文件类型过滤 -->
+            <div class="filter-row">
+              <input
+                v-model="filePattern"
+                class="filter-input"
+                placeholder="文件过滤，如 *.java"
+                @keydown.enter.stop
+                @keydown.esc.stop="filePattern = ''"
+              />
+              <div class="preset-chips">
+                <span
+                  v-for="p in PRESET_PATTERNS"
+                  :key="p"
+                  class="chip"
+                  :class="{ active: filePattern === p }"
+                  @click="filePattern = filePattern === p ? '' : p"
+                >{{ p }}</span>
+              </div>
+            </div>
+            <!-- 大小写选项 -->
             <label class="option-label">
               <input v-model="caseSensitive" type="checkbox" />
               区分大小写
@@ -110,13 +130,25 @@ const emit = defineEmits<{
   (e: 'select-content', file: string, lineNumber: number): void
 }>()
 
+const PATTERN_STORAGE_KEY = 'foggy:file-search:file-pattern'
+const PRESET_PATTERNS = [
+  '*.java', '*.ts', '*.vue', '*.py', '*.xml',
+  '*Controller.java', '*Service.java', '*Mapper.java',
+]
+
 const inputRef = ref<HTMLInputElement>()
 const resultsRef = ref<HTMLElement>()
 const queryText = ref('')
 const caseSensitive = ref(false)
+const filePattern = ref(localStorage.getItem(PATTERN_STORAGE_KEY) || '')
 const loading = ref(false)
 const searched = ref(false)
 const activeIndex = ref(0)
+
+// 自动保存文件过滤规则到 localStorage
+watch(filePattern, (val) => {
+  localStorage.setItem(PATTERN_STORAGE_KEY, val.trim())
+})
 
 const fileResponse = ref<FileSearchResponse | null>(null)
 const contentResponse = ref<ContentSearchResponse | null>(null)
@@ -141,7 +173,7 @@ watch(() => props.visible, async (v) => {
 // Debounced search
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
-watch([queryText, caseSensitive], () => {
+watch([queryText, caseSensitive, filePattern], () => {
   if (debounceTimer) clearTimeout(debounceTimer)
   if (!queryText.value.trim()) {
     fileResponse.value = null
@@ -162,8 +194,9 @@ async function doSearch() {
     if (props.mode === 'file') {
       fileResponse.value = await searchFiles(props.directoryId, q)
     } else {
+      const fp = filePattern.value.trim() || undefined
       contentResponse.value = await searchContent(
-        props.directoryId, q, 50, 2, caseSensitive.value,
+        props.directoryId, q, 50, 2, caseSensitive.value, fp,
       )
     }
   } catch (err) {
@@ -309,6 +342,62 @@ function escapeRegex(s: string): string {
 
 .search-options {
   margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.filter-input {
+  width: 100%;
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #ccc;
+  font-size: 12px;
+  height: 26px;
+  padding: 0 8px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.filter-input:focus {
+  border-color: #007acc;
+}
+
+.preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chip {
+  background: #3a3a3a;
+  border: 1px solid #555;
+  border-radius: 3px;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  padding: 2px 7px;
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.chip:hover {
+  background: #4a4a4a;
+  color: #ddd;
+}
+
+.chip.active {
+  background: #094771;
+  border-color: #007acc;
+  color: #fff;
 }
 
 .option-label {
