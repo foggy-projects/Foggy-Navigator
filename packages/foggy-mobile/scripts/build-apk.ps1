@@ -109,20 +109,31 @@ if (-not (Test-Path $CompiledAppDir)) {
 Write-Host "  编译完成 → $CompiledAppDir" -ForegroundColor Green
 
 # ==============================================
-# Step 2: 在 HBuilderX 中导入编译产物
+# Step 2: 复制编译产物到临时目录（绕过 HBuilderX CLI pack 的编译 bug）
 # ==============================================
+# 原因: HBuilderX CLI 的 pack 命令会重新编译项目，但内部调用 uni.js build 时
+#       不传 -p app 参数，导致编译 H5 而非 App。当编译产物在项目树内时，pack 能
+#       找到 node_modules/@dcloudio/vite-plugin-uni 并使用 CLI 编译器（有 bug）。
+#       复制到项目树外的临时目录，pack 找不到 CLI 编译器，会使用 HBuilderX 内置
+#       编译器（不受此 bug 影响）。
 Write-Host ""
-Write-Host "[2/5] 导入编译产物到 HBuilderX..." -ForegroundColor Cyan
+Write-Host "[2/5] 复制到临时目录..." -ForegroundColor Cyan
+
+$TempPackDir = Join-Path $env:TEMP "foggy-app-pack"
+if (Test-Path $TempPackDir) { Remove-Item $TempPackDir -Recurse -Force }
+Copy-Item $CompiledAppDir $TempPackDir -Recurse
+Write-Host "  已复制到: $TempPackDir" -ForegroundColor Green
 
 # 关闭可能已打开的源项目（避免冲突）
 & $HBUILDERX_CLI project close --path $ProjectRoot 2>$null
+& $HBUILDERX_CLI project close --path $CompiledAppDir 2>$null
 
-# 导入编译后的目录作为独立项目
-& $HBUILDERX_CLI project open --path $CompiledAppDir
+# 导入临时目录
+& $HBUILDERX_CLI project open --path $TempPackDir
 if ($LASTEXITCODE -ne 0) {
     Write-Host "WARNING: project open 返回非零，继续尝试..." -ForegroundColor Yellow
 }
-Write-Host "  已导入: $CompiledAppDir" -ForegroundColor Green
+Write-Host "  已导入: $TempPackDir" -ForegroundColor Green
 
 # ==============================================
 # Step 3: 提交云端打包
@@ -137,7 +148,7 @@ Write-Host ""
 $packArgs = @(
     "pack",
     "--platform", "android",
-    "--project", $CompiledAppDir,
+    "--project", $TempPackDir,
     "--android.androidpacktype", "0",
     "--android.packagename", "com.foggy.navigator",
     "--android.certfile", $KeystorePath,
@@ -211,9 +222,10 @@ if ($downloadUrl) {
 }
 
 # ==============================================
-# 清理: 关闭临时项目，重新打开源项目
+# 清理: 关闭临时项目，删除临时目录，重新打开源项目
 # ==============================================
-& $HBUILDERX_CLI project close --path $CompiledAppDir 2>$null
+& $HBUILDERX_CLI project close --path $TempPackDir 2>$null
+if (Test-Path $TempPackDir) { Remove-Item $TempPackDir -Recurse -Force -ErrorAction SilentlyContinue }
 & $HBUILDERX_CLI project open --path $ProjectRoot 2>$null
 
 # ==============================================

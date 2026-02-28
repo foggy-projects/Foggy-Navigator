@@ -1,6 +1,6 @@
 {
   "name": "@foggy/mobile",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "private": true,
   "scripts": {
     "dev:h5": "uni -p h5",
@@ -16,7 +16,7 @@
     "@dcloudio/uni-components": "3.0.0-4080720251210001",
     "@dcloudio/uni-h5": "3.0.0-4080720251210001",
     "@dcloudio/uni-mp-weixin": "3.0.0-4080720251210001",
-    "@foggy/chat-core": "workspace:*",
+    "@foggy/chat-core": "file:../foggy-chat-core",
     "@vue/shared": "3.4.21",
     "@vue/reactivity": "3.4.21",
     "@vue/runtime-core": "3.4.21",

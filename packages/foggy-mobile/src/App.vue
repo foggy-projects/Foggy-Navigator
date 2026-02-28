@@ -1,17 +1,36 @@
 <script setup lang="ts">
 import { onError, onLaunch } from '@dcloudio/uni-app'
 
-// 全局错误捕获 — 用原生弹窗显示，不依赖 webview
+// 全局错误捕获 — plus.nativeUI.alert 直接调 Android AlertDialog，不依赖 webview
 onError((err) => {
-  uni.showModal({
+  // #ifdef APP-PLUS
+  plus.nativeUI.alert({
     title: 'JS Error (onError)',
-    content: String(err).substring(0, 500),
-    showCancel: false,
+    message: String(err).substring(0, 500),
   })
+  // #endif
 })
 
 onLaunch(() => {
-  uni.showToast({ title: 'onLaunch OK', icon: 'none', duration: 2000 })
+  // #ifdef APP-PLUS
+  const info: string[] = []
+  try {
+    info.push('onLaunch: YES')
+    info.push('Runtime: ' + plus.runtime.version)
+    info.push('AppID: ' + plus.runtime.appid)
+    info.push('InnerVer: ' + plus.runtime.innerVersion)
+    // webview 信息
+    const wv = plus.webview.currentWebview()
+    info.push('WV id: ' + wv.id)
+    info.push('WV visible: ' + wv.isVisible())
+  } catch (e) {
+    info.push('Error: ' + String(e))
+  }
+  plus.nativeUI.alert({
+    title: 'DIAG v1.0.9',
+    message: info.join('\n'),
+  })
+  // #endif
 })
 </script>
 
