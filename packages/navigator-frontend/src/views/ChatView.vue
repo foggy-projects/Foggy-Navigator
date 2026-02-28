@@ -30,7 +30,12 @@
       <div class="sidebar-footer">
         <span class="username">{{ userInfo?.username }}</span>
         <div class="footer-actions">
-          <el-icon class="settings-icon" @click="router.push('/tasks')" title="任务看板">
+          <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99" class="notification-badge">
+            <el-icon class="settings-icon" @click="router.push('/tasks')" title="任务看板">
+              <Bell />
+            </el-icon>
+          </el-badge>
+          <el-icon class="settings-icon" @click="router.push('/tasks')" title="任务列表">
             <List />
           </el-icon>
           <el-icon class="settings-icon" @click="router.push('/settings')" title="设置">
@@ -96,13 +101,14 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close, Connection, List, Monitor, Setting } from '@element-plus/icons-vue'
+import { Bell, Close, Connection, List, Monitor, Setting } from '@element-plus/icons-vue'
 import { ChatPanel, useChatStore } from '@foggy/chat'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSession, setRouteRequestHandler } from '@/composables/useSession'
 import { getUserInfo, clearAuth } from '@/utils/auth'
 import { resetSetupStatus } from '@/router'
 import * as sessionApi from '@/api/session'
+import { useNotifications } from '@/composables/useNotifications'
 import type { GuideCard, RoutePayload } from '@/types'
 
 const route = useRoute()
@@ -113,6 +119,7 @@ const { connectToSession, sendMessage, disconnectSession } = useSession()
 
 const userInfo = getUserInfo()
 const guideCards = ref<GuideCard[]>([])
+const { unreadCount, connect: connectNotifications, requestPermission } = useNotifications()
 
 const activeSession = computed(() =>
   sessionStore.sessions.find((s) => s.id === sessionStore.activeSessionId),
@@ -132,6 +139,10 @@ onMounted(async () => {
       { icon: '📐', title: '语义层', description: '了解语义层模型' },
     ]
   }
+
+  // 连接用户级通知 SSE
+  connectNotifications()
+  requestPermission()
 
   // 设置路由请求处理器（用于处理 Agent 委托跳转）
   setRouteRequestHandler(handleRouteRequest)
@@ -369,6 +380,13 @@ function formatTime(dateStr: string): string {
 
 .settings-icon:hover {
   color: #409eff;
+}
+
+.notification-badge :deep(.el-badge__content) {
+  font-size: 10px;
+  height: 16px;
+  line-height: 16px;
+  padding: 0 4px;
 }
 
 .chat-main {

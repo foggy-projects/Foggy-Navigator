@@ -654,7 +654,7 @@
     </main>
 
     <!-- Right Panel: Task History -->
-    <aside v-if="selectedWorkerId" class="worker-history">
+    <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" class="worker-history">
       <div class="history-header">
         <h3>历史会话</h3>
         <div class="history-header-actions">
@@ -703,6 +703,39 @@
         </div>
       </div>
       <div class="history-content">
+        <!-- Active sessions section (global: RUNNING + AWAITING_PERMISSION) -->
+        <div v-if="activeSessionConvs.length > 0" class="active-sessions-section">
+          <div class="active-header">
+            <span class="active-title">&#9679; 进行中 ({{ activeSessionConvs.length }})</span>
+            <el-button size="small" text @click="workerState.loadActiveTasks()">&#8635;</el-button>
+          </div>
+          <div
+            v-for="ac in activeSessionConvs"
+            :key="ac.sessionId"
+            class="active-conv-item"
+            @click="navigateToActiveSession(ac)"
+          >
+            <div class="conv-row-1">
+              <el-tag v-if="ac.latestTask.directoryName" size="small" type="info" effect="plain" class="active-dir-tag">{{ ac.latestTask.directoryName }}</el-tag>
+              <span :class="['conv-status-dot', ac.latestTask.status.toLowerCase()]" :title="ac.latestTask.status" />
+              <span class="active-status-label">{{ ac.latestTask.status === 'RUNNING' ? '运行中' : '等待授权' }}</span>
+            </div>
+            <div class="conv-row-1" style="margin-top: 2px;">
+              <span class="conv-prompt" :title="ac.config?.customTitle || ac.firstPrompt">{{ truncate(ac.config?.customTitle || ac.firstPrompt, 30) }}</span>
+            </div>
+            <div class="conv-row-2">
+              <el-tag v-for="tag in (ac.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
+              <span v-if="ac.totalCost > 0" class="conv-cost">${{ ac.totalCost.toFixed(2) }}</span>
+              <span v-if="ac.latestTask.durationMs" class="conv-time">{{ Math.round((ac.latestTask.durationMs || 0) / 60000) }}min</span>
+              <span class="conv-time">{{ formatTime(ac.latestTask.createdAt) }}</span>
+            </div>
+          </div>
+          <div class="active-divider">
+            <span class="active-divider-line" />
+            <span class="active-divider-text">历史会话</span>
+            <span class="active-divider-line" />
+          </div>
+        </div>
         <!-- Conversation list (shared template for directory / worker-level) -->
         <div
           v-if="activeConversations.length > 0"
@@ -734,6 +767,7 @@
               <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
             </div>
             <div class="conv-row-2">
+              <el-tag v-for="tag in (conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
               <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }}轮</span>
               <span v-if="conv.latestTask.model" class="conv-model">{{ shortModel(conv.latestTask.model) }}</span>
               <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(2) }}</span>
@@ -773,6 +807,9 @@
                       </el-dropdown-item>
                       <el-dropdown-item @click="handleAuthConfig(conv)">
                         Auth 配置
+                      </el-dropdown-item>
+                      <el-dropdown-item @click="handleEditTags(conv)">
+                        标签
                       </el-dropdown-item>
                       <el-dropdown-item @click="handleShowDetail(conv)">
                         详情
@@ -1351,6 +1388,28 @@
       </template>
     </el-dialog>
 
+    <!-- Tag editing dialog -->
+    <el-dialog v-model="showTagDialog" title="编辑标签" width="440px">
+      <el-select
+        v-model="tagForm.tags"
+        multiple
+        filterable
+        allow-create
+        default-first-option
+        placeholder="选择或输入标签"
+        style="width: 100%"
+      >
+        <el-option label="主任务" value="主任务" />
+        <el-option label="临时" value="临时" />
+        <el-option label="bugfix" value="bugfix" />
+        <el-option label="feature" value="feature" />
+      </el-select>
+      <template #footer>
+        <el-button @click="showTagDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingTags" @click="handleSaveTags">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- Favorite script context menu -->
     <Teleport to="body">
       <div
@@ -1502,6 +1561,12 @@ const batchAuthSessionIds = ref<string[]>([])
 // Batch selection state
 const batchSelectMode = ref(false)
 const selectedConvIds = ref<Set<string>>(new Set())
+
+// Tag dialog state
+const showTagDialog = ref(false)
+const savingTags = ref(false)
+const tagDialogSessionId = ref('')
+const tagForm = ref<{ tags: string[] }>({ tags: [] })
 
 // Detail dialog state
 const showDetailDialog = ref(false)
@@ -1993,6 +2058,9 @@ const activeConversations = computed(() =>
   selectedDirectoryId.value ? directoryConversations.value : workerConversations.value,
 )
 
+// Active sessions: group activeTasks into ConversationGroups
+const activeSessionConvs = computed(() => groupTasksToConversations(workerState.activeTasks.value))
+
 function directoriesForWorker(workerId: string): WorkingDirectory[] {
   return workerState.directories.value.filter((d) => d.workerId === workerId)
 }
@@ -2034,18 +2102,38 @@ function toggleProjectExpand(projectId: string) {
   }
 }
 
+// Active tasks polling (fallback) + SSE-driven refresh
+let activeTasksInterval: ReturnType<typeof setInterval> | null = null
+
+function handleTaskUpdateEvent() {
+  workerState.loadActiveTasks()
+}
+
 onMounted(async () => {
   window.addEventListener('message', handleFileBrowserMessage)
   document.addEventListener('click', closeFavScriptCtx)
-  await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), loadPlatformModelConfig(), agentState.loadAgents()])
-  // Load conversation configs for all loaded tasks
-  const sessionIds = [...new Set(workerState.tasks.value.map((t) => t.sessionId))]
+  // Listen for SSE-driven task updates (from useNotifications)
+  window.addEventListener('task-update', handleTaskUpdateEvent)
+  await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), workerState.loadActiveTasks(), loadPlatformModelConfig(), agentState.loadAgents()])
+  // Load conversation configs for all loaded tasks (including active)
+  const allSessionIds = [
+    ...workerState.tasks.value.map((t) => t.sessionId),
+    ...workerState.activeTasks.value.map((t) => t.sessionId),
+  ]
+  const sessionIds = [...new Set(allSessionIds)]
   if (sessionIds.length > 0) {
     await workerState.loadConversationConfigs(sessionIds)
   }
+  // Start polling active tasks every 15s (fallback for SSE disconnects)
+  activeTasksInterval = setInterval(() => workerState.loadActiveTasks(), 15000)
 })
 
 onUnmounted(() => {
+  if (activeTasksInterval) {
+    clearInterval(activeTasksInterval)
+    activeTasksInterval = null
+  }
+  window.removeEventListener('task-update', handleTaskUpdateEvent)
   window.removeEventListener('message', handleFileBrowserMessage)
   document.removeEventListener('click', closeFavScriptCtx)
   disposeAllWorkspaces()
@@ -2143,6 +2231,19 @@ function toggleExpand(workerId: string) {
     expandedWorkerIds.add(workerId)
     workerState.loadDirectories(workerId)
   }
+}
+
+function navigateToActiveSession(conv: ConversationGroup) {
+  const task = conv.latestTask
+  // Auto-select the corresponding worker & directory
+  if (task.workerId && task.workerId !== selectedWorkerId.value) {
+    selectWorker(task.workerId)
+  }
+  if (task.directoryId && task.directoryId !== selectedDirectoryId.value) {
+    selectDirectory(task.workerId, task.directoryId)
+  }
+  // Open the task in a pane
+  viewTask(task)
 }
 
 function selectWorker(workerId: string) {
@@ -2498,6 +2599,35 @@ async function handleEditTitle(conv: ConversationGroup) {
     if (e !== 'cancel') {
       ElMessage.error('更新失败')
     }
+  }
+}
+
+function handleEditTags(conv: ConversationGroup) {
+  tagDialogSessionId.value = conv.sessionId
+  tagForm.value.tags = [...(conv.config?.tags || [])]
+  showTagDialog.value = true
+}
+
+async function handleSaveTags() {
+  savingTags.value = true
+  try {
+    await workerState.updateTags(tagDialogSessionId.value, tagForm.value.tags)
+    showTagDialog.value = false
+    ElMessage.success('标签已更新')
+  } catch {
+    ElMessage.error('更新标签失败')
+  } finally {
+    savingTags.value = false
+  }
+}
+
+function tagColor(tag: string): '' | 'success' | 'warning' | 'danger' | 'info' {
+  switch (tag) {
+    case '主任务': return ''
+    case '临时': return 'info'
+    case 'bugfix': return 'danger'
+    case 'feature': return 'success'
+    default: return 'info'
   }
 }
 
@@ -4318,6 +4448,80 @@ function handlePopOutTerminal() {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 8px;
+}
+
+/* Active sessions section */
+.active-sessions-section {
+  margin-bottom: 4px;
+}
+
+.active-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+}
+
+.active-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #409eff;
+}
+
+.active-conv-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  border-left: 3px solid #409eff;
+  margin: 2px 0;
+  background: #f0f7ff;
+}
+
+.active-conv-item:hover {
+  background: #e1eeff;
+}
+
+.active-dir-tag {
+  font-size: 11px;
+  padding: 0 4px;
+  height: 18px;
+  line-height: 18px;
+  margin-right: 4px;
+}
+
+.active-status-label {
+  font-size: 12px;
+  color: #409eff;
+  font-weight: 500;
+}
+
+.active-divider {
+  display: flex;
+  align-items: center;
+  margin: 8px 0 4px;
+  gap: 8px;
+}
+
+.active-divider-line {
+  flex: 1;
+  height: 1px;
+  background: #e4e7ed;
+}
+
+.active-divider-text {
+  font-size: 11px;
+  color: #909399;
+  white-space: nowrap;
+}
+
+/* Conversation tags */
+.conv-tag {
+  font-size: 10px;
+  height: 18px;
+  line-height: 18px;
+  padding: 0 4px;
+  flex-shrink: 0;
 }
 </style>
 

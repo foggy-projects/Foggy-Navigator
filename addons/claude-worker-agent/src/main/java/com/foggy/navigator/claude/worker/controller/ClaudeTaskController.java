@@ -49,10 +49,10 @@ public class ClaudeTaskController {
         return RX.ok(taskService.resumeTask(userId, tenantId, form));
     }
 
-    @GetMapping("/{taskId}")
-    public RX<TaskDTO> getTask(@PathVariable String taskId) {
+    @GetMapping("/active")
+    public RX<List<TaskDTO>> listActiveTasks() {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(taskService.getTask(userId, taskId));
+        return RX.ok(taskService.listActiveTasks(userId));
     }
 
     @GetMapping
@@ -67,6 +67,12 @@ public class ClaudeTaskController {
             @RequestParam(defaultValue = "20") int size) {
         String userId = UserContext.getCurrentUserId();
         return RX.ok(taskService.listTasksBySession(userId, page, size));
+    }
+
+    @GetMapping("/{taskId}")
+    public RX<TaskDTO> getTask(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskService.getTask(userId, taskId));
     }
 
     @PostMapping("/{taskId}/abort")
@@ -351,6 +357,14 @@ public class ClaudeTaskController {
     }
 
     // ===== Conversation Config endpoints =====
+
+    @PatchMapping("/conversations/{sessionId}/tags")
+    public RX<ConversationConfigDTO> updateTags(
+            @PathVariable String sessionId,
+            @RequestBody UpdateTagsForm form) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.updateTags(sessionId, userId, form.getTags()));
+    }
 
     @PatchMapping("/conversations/{sessionId}/pin")
     public RX<ConversationConfigDTO> updatePin(
