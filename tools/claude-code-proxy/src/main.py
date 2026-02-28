@@ -4,6 +4,15 @@ import uvicorn
 import sys
 from src.core.config import config
 
+# -- Foggy Monitor (optional RabbitMQ log forwarding) ----------------------
+try:
+    from foggy_monitor import setup_monitoring
+    setup_monitoring("proxy")
+except ImportError:
+    pass
+except Exception:
+    pass
+
 app = FastAPI(title="Claude-to-OpenAI API Proxy", version="1.0.0")
 
 app.include_router(api_router)

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "foggy-monitor"
+version = "0.1.0"
+description = "Shared monitoring library for Foggy Navigator Python services"
+requires-python = ">=3.9"
+dependencies = [
+    "pika>=1.3.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/foggy_monitor"]

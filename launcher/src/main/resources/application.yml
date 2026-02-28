@@ -23,6 +23,17 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
 
+  # RabbitMQ 配置（监控事件总线）
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:foggy}
+    password: ${RABBITMQ_PASS:foggy@monitor123}
+    virtual-host: /
+    listener:
+      simple:
+        missing-queues-fatal: false
+
 server:
   port: 8112
   # SSE requires long-lived async requests; disable the default 30s timeout

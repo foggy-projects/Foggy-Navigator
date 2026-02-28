@@ -1,4 +1,5 @@
 import { ref, onUnmounted } from 'vue'
+import { ElNotification } from 'element-plus'
 import { getToken } from '@/utils/auth'
 
 export interface AssistantNotification {
@@ -49,7 +50,11 @@ function handleEvent(eventType: string, data: string) {
     if (eventType === 'assistant_notification') {
       handleAssistantNotification(parsed)
     } else if (eventType === 'task_update') {
-      window.dispatchEvent(new CustomEvent('task-update', { detail: parsed }))
+      if (parsed.type === 'monitoring_alert') {
+        handleMonitoringAlert(parsed)
+      } else {
+        window.dispatchEvent(new CustomEvent('task-update', { detail: parsed }))
+      }
     } else if (eventType === 'heartbeat') {
       // heartbeat - connection alive
     } else if (!eventType || eventType === 'message') {
@@ -112,6 +117,38 @@ function handleAssistantNotification(data: any) {
       body: notification.body,
       tag: notification.id,
     })
+  }
+}
+
+function handleMonitoringAlert(data: any) {
+  const level = (data.level || 'ERROR').toUpperCase()
+  const service = data.service || 'unknown'
+  const message = data.message || '(no details)'
+
+  const notifType = level === 'ERROR' ? 'error' : 'warning'
+  ElNotification({
+    title: `[${service}] ${level}`,
+    message: message.length > 120 ? message.substring(0, 120) + '...' : message,
+    type: notifType,
+    duration: 8000,
+    position: 'top-right',
+  })
+
+  // Also add to notification list for history
+  const notification: AssistantNotification = {
+    id: `monitor-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    title: `[${service}] ${level}`,
+    body: message,
+    severity: notifType,
+    relatedTaskIds: [],
+    suggestions: [],
+    timestamp: Date.now(),
+    read: false,
+  }
+  notifications.value.unshift(notification)
+  unreadCount.value++
+  if (notifications.value.length > 50) {
+    notifications.value = notifications.value.slice(0, 50)
   }
 }
 

@@ -38,6 +38,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# -- Foggy Monitor (optional RabbitMQ log forwarding) ----------------------
+_monitor_publisher = None
+try:
+    from foggy_monitor import setup_monitoring
+    _monitor_publisher = setup_monitoring("worker", instance_id=f"worker-{Path(__file__).resolve().parent.parent.parent.name}")
+except ImportError:
+    logger.debug("foggy-monitor not installed, skipping RabbitMQ log forwarding")
+except Exception as _exc:
+    logger.debug("foggy-monitor setup failed: %s", _exc)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -81,6 +91,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown: close all SSH sessions
     await stop_cleanup_and_close_all()
+    if _monitor_publisher:
+        _monitor_publisher.close()
     logger.info("Claude Agent Worker stopped")
 
 

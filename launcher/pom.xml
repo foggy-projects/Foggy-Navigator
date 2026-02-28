@@ -64,6 +64,13 @@
             <artifactId>task-assistant</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <!-- Monitoring Module - 监控模块 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>monitoring-module</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>
