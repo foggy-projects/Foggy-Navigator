@@ -528,6 +528,8 @@ class SdkWrapper:
         permission_mode: str | None = None,
         navigator_api_key: str | None = None,
         disallowed_tools: list[str] | None = None,
+        foggy_task_id: str | None = None,
+        foggy_session_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
@@ -571,6 +573,8 @@ class SdkWrapper:
             "session_id": session_id,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "asyncio_task": asyncio.current_task(),
+            "foggy_task_id": foggy_task_id,
+            "foggy_session_id": foggy_session_id,
         }
 
         current_session_id: str | None = session_id
@@ -580,6 +584,15 @@ class SdkWrapper:
         try:
             env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url,
                                   navigator_api_key=navigator_api_key)
+
+            # Inject Foggy platform tracking IDs as environment variables.
+            # These don't affect CLI behavior but appear in process listings
+            # (ps/wmic) and logs, making it easy to correlate Worker tasks
+            # with Foggy platform entities.
+            if foggy_task_id:
+                env["FOGGY_TASK_ID"] = foggy_task_id
+            if foggy_session_id:
+                env["FOGGY_SESSION_ID"] = foggy_session_id
 
             # Build SDK options.  We use keyword arguments so that the call
             # works with both ``ClaudeAgentOptions`` and ``ClaudeCodeOptions``.
@@ -631,7 +644,8 @@ class SdkWrapper:
                 "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s, "
                 "auth_mode=%s, auth_hint=%s, base_url=%s, "
                 "has_agents=%s, has_env=%s, disallowed_tools=%s, "
-                "hard_timeout=%ss, heartbeat_timeout=%ss",
+                "hard_timeout=%ss, heartbeat_timeout=%ss, "
+                "foggy_task_id=%s, foggy_session_id=%s",
                 task_id,
                 repr(prompt[:80]) if prompt else None,
                 cwd,
@@ -645,6 +659,8 @@ class SdkWrapper:
                 disallowed_tools or "(none)",
                 hard_timeout,
                 heartbeat_timeout,
+                foggy_task_id or "(none)",
+                foggy_session_id or "(none)",
             )
 
             # -- can_use_tool callback (Producer/Queue pattern) -----------------

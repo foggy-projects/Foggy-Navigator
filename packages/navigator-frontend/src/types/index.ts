@@ -352,6 +352,9 @@ export interface CliProcessInfo {
   memoryMb: number
   startedAt: string
   isOrphan: boolean
+  claudeSessionId?: string
+  foggyTaskId?: string
+  foggySessionId?: string
 }
 
 /** CLI 进程列表响应 */

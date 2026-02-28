@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import signal
 import subprocess
 from datetime import datetime, timezone
@@ -27,6 +28,47 @@ router = APIRouter(prefix="/api/v1", tags=["processes"], dependencies=[Depends(v
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _parse_resume_session_id(command: str) -> str | None:
+    """Extract Claude session ID from ``--resume <id>`` in the command line."""
+    m = re.search(r'--resume\s+(\S+)', command)
+    return m.group(1) if m else None
+
+
+def _build_session_lookup() -> dict[str, dict[str, str | None]]:
+    """Build a mapping from Claude session_id to foggy IDs using task_registry.
+
+    Returns ``{claude_session_id: {"foggy_task_id": ..., "foggy_session_id": ...}}``.
+    """
+    lookup: dict[str, dict[str, str | None]] = {}
+    for entry in task_registry.values():
+        sid = entry.get("session_id")
+        if sid:
+            lookup[sid] = {
+                "foggy_task_id": entry.get("foggy_task_id"),
+                "foggy_session_id": entry.get("foggy_session_id"),
+            }
+    return lookup
+
+
+def _enrich_processes(processes: list[CliProcessInfo]) -> None:
+    """Enrich process list with Claude session and Foggy platform IDs.
+
+    Parses ``--resume <session_id>`` from each process command line,
+    then matches against the task_registry to fill foggy IDs and
+    refine ``is_orphan``.
+    """
+    session_lookup = _build_session_lookup()
+    for proc in processes:
+        claude_sid = _parse_resume_session_id(proc.command)
+        if claude_sid:
+            proc.claude_session_id = claude_sid
+            match = session_lookup.get(claude_sid)
+            if match:
+                proc.foggy_task_id = match.get("foggy_task_id")
+                proc.foggy_session_id = match.get("foggy_session_id")
+                proc.is_orphan = False
+
 
 def _get_process_details_windows(pids: set[int]) -> list[CliProcessInfo]:
     """Get process details on Windows via wmic."""
@@ -181,6 +223,7 @@ async def list_processes() -> CliProcessListResponse:
     """
     pids = _find_sdk_cli_pids()
     processes = _get_process_details(pids)
+    _enrich_processes(processes)
     return CliProcessListResponse(
         processes=processes,
         active_task_count=len(task_registry),

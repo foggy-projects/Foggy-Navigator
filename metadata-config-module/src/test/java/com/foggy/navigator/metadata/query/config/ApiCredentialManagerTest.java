@@ -18,7 +18,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@SpringBootTest
+@SpringBootTest(classes = TestConfig.class)
 @ActiveProfiles("test")
 @Transactional
 class ApiCredentialManagerTest {

@@ -10,6 +10,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,7 @@ class CodingAgentServiceTest {
     private AgentDirectoryBindingRepository bindingRepository;
     private ClaudeWorkerService workerService;
     private WorkingDirectoryRepository directoryRepository;
+    private ClaudeWorkerFacade claudeWorkerFacade;
     private CodingAgentService service;
 
     private static final String USER_ID = "user-1";
@@ -42,7 +44,8 @@ class CodingAgentServiceTest {
         bindingRepository = mock(AgentDirectoryBindingRepository.class);
         workerService = mock(ClaudeWorkerService.class);
         directoryRepository = mock(WorkingDirectoryRepository.class);
-        service = new CodingAgentService(agentRepository, bindingRepository, workerService, directoryRepository);
+        claudeWorkerFacade = mock(ClaudeWorkerFacade.class);
+        service = new CodingAgentService(agentRepository, bindingRepository, workerService, directoryRepository, claudeWorkerFacade);
 
         // Default: worker belongs to user
         ClaudeWorkerEntity worker = createWorker();

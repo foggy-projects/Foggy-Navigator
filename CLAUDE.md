@@ -75,7 +75,7 @@ pnpm install && pnpm dev
 
 ```powershell
 # 后端编译
-mvn compile -pl launcher -am -DskipTests
+mvn compile test -pl launcher -am 
 
 # 前端编译
 cd packages/navigator-frontend && pnpm exec vite build
@@ -95,3 +95,4 @@ cd packages/navigator-frontend && pnpm exec vite build
 4. **需求记录**：`docs/requirement-tracker/YYYY-QX/DD-需求简述.md`，用户确认后再开发
 5. **先调研再实现**：集成外部系统（Claude Code SDK、OpenHands 等）的功能时，必须先调研目标系统的已有机制和内部数据结构，再设计实现方案。禁止在不了解底层机制的情况下"猜测式"实现。
 6. **语义对齐**：实现涉及用户交互的功能前，先明确关键语义（操作是否产生新实体、是否等待用户确认、UI 状态如何变化），必要时主动向用户确认，避免多轮返工。
+7. **SecurityConfig.java**：增加新的http端口注意更新权限

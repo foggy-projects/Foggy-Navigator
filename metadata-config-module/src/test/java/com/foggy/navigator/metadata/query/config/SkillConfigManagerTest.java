@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * SkillConfigManager 集成测试
  */
-@SpringBootTest
+@SpringBootTest(classes = TestConfig.class)
 @ActiveProfiles("test")
 @Transactional
 class SkillConfigManagerTest {

@@ -122,7 +122,8 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             // Collect all SSE events synchronously with maxTurns=1, bypassPermissions
             List<WorkerEvent> events = client.streamQuery(
                             prompt, cwd, claudeSessionId, null, 1,
-                            null, null, null, null, null, "bypassPermissions", null)
+                            null, null, null, null, null, "bypassPermissions", null,
+                            null, null)
                     .mapNotNull(sse -> {
                         String data = sse.data();
                         if (data == null || data.isEmpty()) return null;

@@ -1,10 +1,13 @@
 package com.foggy.navigator.coding.agent.api.service;
 
+import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.coding.agent.api.model.Conversation;
 import com.foggy.navigator.coding.agent.api.model.CreateConversationRequest;
 import com.foggy.navigator.coding.agent.api.model.Event;
 import com.foggy.navigator.coding.agent.api.model.entity.ConversationEntity;
 import com.foggy.navigator.coding.agent.api.repository.ConversationRepository;
+import com.foggy.navigator.coding.agent.api.repository.GitCredentialRepository;
+import com.foggy.navigator.coding.agent.git.GitProviderFactory;
 import com.foggy.navigator.coding.agent.git.OpenHandsClient;
 import com.foggy.navigator.coding.agent.git.OpenHandsClientFactory;
 import com.foggy.navigator.coding.agent.git.model.v1.AppConversationStartRequest;
@@ -24,6 +27,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class ConversationServiceTest {
@@ -43,6 +47,15 @@ class ConversationServiceTest {
     @Mock
     private ValidationService validationService;
 
+    @Mock
+    private SessionManager sessionManager;
+
+    @Mock
+    private GitCredentialRepository gitCredentialRepository;
+
+    @Mock
+    private GitProviderFactory gitProviderFactory;
+
     @InjectMocks
     private ConversationService conversationService;
 
@@ -50,6 +63,7 @@ class ConversationServiceTest {
     void setUp() {
         ReflectionTestUtils.setField(conversationService, "autoTriggerValidationOnCreate", true);
         ReflectionTestUtils.setField(conversationService, "configuredModel", "gpt-4");
+        lenient().when(sessionManager.createSession(any())).thenReturn("session-001");
     }
 
     @Test
