@@ -56,6 +56,7 @@ function handleEvent(eventType: string, data: string) {
       if (parsed.type === 'connected') {
         connected.value = true
         retryCount = 0
+        window.dispatchEvent(new CustomEvent('notification-reconnected'))
       }
     }
   } catch {

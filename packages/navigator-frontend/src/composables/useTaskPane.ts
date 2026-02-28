@@ -31,6 +31,33 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   const pendingInput = ref('')
   let sseController: SseController | null = null
 
+  // User-level SSE fallback: listen for task_status_change via useNotifications
+  let taskUpdateHandler: ((event: Event) => void) | null = null
+
+  function attachTaskUpdateListener() {
+    detachTaskUpdateListener()
+    taskUpdateHandler = (event: Event) => {
+      const detail = (event as CustomEvent).detail
+      if (!task.value || detail?.taskId !== task.value.taskId) return
+      const newStatus = detail?.status as string
+      if (newStatus && newStatus !== task.value.status) {
+        task.value.status = newStatus as any
+        if (detail.errorMessage) task.value.errorMessage = detail.errorMessage
+        if (['COMPLETED', 'FAILED', 'ABORTED'].includes(newStatus)) {
+          options?.onTaskFinished?.(paneId)
+        }
+      }
+    }
+    window.addEventListener('task-update', taskUpdateHandler)
+  }
+
+  function detachTaskUpdateListener() {
+    if (taskUpdateHandler) {
+      window.removeEventListener('task-update', taskUpdateHandler)
+      taskUpdateHandler = null
+    }
+  }
+
   /** Create SSE connection for a given sessionId (shared by connect and resumeInPlace) */
   function createSseConnection(sessionId: string) {
     const token = getToken()
@@ -143,6 +170,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     }
 
     createSseConnection(sessionId)
+    attachTaskUpdateListener()
 
     // Non-blocking: detect and load JSONL delta messages
     if (task.value?.claudeSessionId && task.value?.workerId) {
@@ -210,6 +238,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
     // Reconnect SSE to the same sessionId (no history reload)
     createSseConnection(newTask.sessionId)
+    attachTaskUpdateListener()
   }
 
   function disconnect() {
@@ -217,6 +246,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       sseController.close()
       sseController = null
     }
+    detachTaskUpdateListener()
     chatState.setConnectionStatus('disconnected')
   }
 

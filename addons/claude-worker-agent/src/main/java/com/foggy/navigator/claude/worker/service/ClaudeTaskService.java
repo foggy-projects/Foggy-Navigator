@@ -1,5 +1,6 @@
 package com.foggy.navigator.claude.worker.service;
 
+import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
@@ -110,6 +111,7 @@ public class ClaudeTaskService {
         taskRepository.save(entity);
 
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}", taskId, sessionId, form.getWorkerId(), userId);
+        publishStatusChange(entity, null);
 
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
@@ -192,6 +194,7 @@ public class ClaudeTaskService {
         taskRepository.save(entity);
 
         log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}", taskId, form.getClaudeSessionId(), directoryId);
+        publishStatusChange(entity, null);
 
         // 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
@@ -346,6 +349,7 @@ public class ClaudeTaskService {
                               Long inputTokens, Long outputTokens, Long durationMs,
                               Integer numTurns, String model) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String prev = entity.getStatus();
             entity.setStatus("COMPLETED");
             entity.setClaudeSessionId(claudeSessionId);
             entity.setCostUsd(costUsd);
@@ -356,6 +360,7 @@ public class ClaudeTaskService {
             entity.setModel(model);
             taskRepository.save(entity);
             log.info("Task completed: taskId={}, model={}, costUsd={}, durationMs={}", taskId, model, costUsd, durationMs);
+            publishStatusChange(entity, prev);
         });
     }
 
@@ -365,6 +370,7 @@ public class ClaudeTaskService {
     @Transactional
     public void failTask(String taskId, String claudeSessionId, String errorMessage) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String prev = entity.getStatus();
             entity.setStatus("FAILED");
             entity.setErrorMessage(errorMessage);
             if (claudeSessionId != null && entity.getClaudeSessionId() == null) {
@@ -372,6 +378,7 @@ public class ClaudeTaskService {
             }
             taskRepository.save(entity);
             log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
+            publishStatusChange(entity, prev);
         });
     }
 
@@ -381,9 +388,11 @@ public class ClaudeTaskService {
     @Transactional
     public void setAwaitingPermission(String taskId) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String prev = entity.getStatus();
             entity.setStatus("AWAITING_PERMISSION");
             taskRepository.save(entity);
             log.info("Task awaiting permission: taskId={}", taskId);
+            publishStatusChange(entity, prev);
         });
     }
 
@@ -394,9 +403,11 @@ public class ClaudeTaskService {
     public void resumeFromPermission(String taskId) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             if ("AWAITING_PERMISSION".equals(entity.getStatus())) {
+                String prev = entity.getStatus();
                 entity.setStatus("RUNNING");
                 taskRepository.save(entity);
                 log.info("Task resumed from permission: taskId={}", taskId);
+                publishStatusChange(entity, prev);
             }
         });
     }
@@ -407,9 +418,11 @@ public class ClaudeTaskService {
     @Transactional
     public void abortTask(String taskId) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String prev = entity.getStatus();
             entity.setStatus("ABORTED");
             taskRepository.save(entity);
             log.info("Task aborted: taskId={}", taskId);
+            publishStatusChange(entity, prev);
         });
     }
 
@@ -648,20 +661,24 @@ public class ClaudeTaskService {
         LocalDateTime runningCutoff = LocalDateTime.now().minusHours(4);
         List<ClaudeTaskEntity> timedOut = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", runningCutoff);
         for (ClaudeTaskEntity entity : timedOut) {
+            String prev = entity.getStatus();
             entity.setStatus("FAILED");
             entity.setErrorMessage("Task timed out (exceeded 4 hours)");
             taskRepository.save(entity);
             log.warn("Task timed out: taskId={}, createdAt={}", entity.getTaskId(), entity.getCreatedAt());
+            publishStatusChange(entity, prev);
         }
 
         // AWAITING_PERMISSION tasks: 30 minute timeout
         LocalDateTime permissionCutoff = LocalDateTime.now().minusMinutes(30);
         List<ClaudeTaskEntity> permissionTimedOut = taskRepository.findByStatusAndCreatedAtBefore("AWAITING_PERMISSION", permissionCutoff);
         for (ClaudeTaskEntity entity : permissionTimedOut) {
+            String prev = entity.getStatus();
             entity.setStatus("FAILED");
             entity.setErrorMessage("Permission request timed out (exceeded 30 minutes)");
             taskRepository.save(entity);
             log.warn("Permission timed out: taskId={}, createdAt={}", entity.getTaskId(), entity.getCreatedAt());
+            publishStatusChange(entity, prev);
         }
 
         int total = timedOut.size() + permissionTimedOut.size();
@@ -693,6 +710,18 @@ public class ClaudeTaskService {
     private String truncate(String text, int maxLen) {
         if (text == null) return null;
         return text.length() > maxLen ? text.substring(0, maxLen) + "..." : text;
+    }
+
+    private void publishStatusChange(ClaudeTaskEntity entity, String previousStatus) {
+        eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
+                .taskId(entity.getTaskId())
+                .sessionId(entity.getSessionId())
+                .userId(entity.getUserId())
+                .agentId(AGENT_ID)
+                .status(entity.getStatus())
+                .previousStatus(previousStatus)
+                .errorMessage(entity.getErrorMessage())
+                .build());
     }
 
     private TaskDTO toDTO(ClaudeTaskEntity entity) {

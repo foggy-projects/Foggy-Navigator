@@ -469,6 +469,19 @@
               <el-table-column label="启动时间" width="150">
                 <template #default="{ row }">{{ row.startedAt || '-' }}</template>
               </el-table-column>
+              <el-table-column label="会话" width="120">
+                <template #default="{ row }">
+                  <el-link
+                    v-if="row.foggySessionId"
+                    type="primary"
+                    :underline="false"
+                    @click="navigateToProcessSession(row)"
+                  >
+                    {{ row.claudeSessionId?.slice(0, 8) || '-' }}
+                  </el-link>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
               <el-table-column label="状态" width="80" align="center">
                 <template #default="{ row }">
                   <el-tag :type="row.isOrphan ? 'danger' : 'success'" size="small">{{ row.isOrphan ? '孤儿' : '活跃' }}</el-tag>
@@ -1545,6 +1558,21 @@ async function handleKillProcess(pid: number, force = false) {
     await loadCliProcesses()
   } catch (e: unknown) {
     ElMessage.error(`${action}失败: ${e instanceof Error ? e.message : e}`)
+  }
+}
+
+function navigateToProcessSession(process: CliProcessInfo) {
+  if (!process.foggySessionId) return
+  const task = workerState.tasks.value.find(
+    (t) => t.sessionId === process.foggySessionId,
+  )
+  if (task) {
+    if (task.directoryId && task.directoryId !== selectedDirectoryId.value) {
+      selectDirectory(task.workerId, task.directoryId)
+    }
+    viewTask(task)
+  } else {
+    ElMessage.info('未找到关联的会话记录')
   }
 }
 

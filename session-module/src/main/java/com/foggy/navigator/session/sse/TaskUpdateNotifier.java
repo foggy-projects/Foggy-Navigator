@@ -1,6 +1,7 @@
 package com.foggy.navigator.session.sse;
 
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
+import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.spi.notification.UserNotificationSender;
@@ -14,7 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 任务状态更新推送器 — 监听 TaskCompletionEvent，立即推送 task_update SSE
+ * 任务状态更新推送器 — 监听 TaskCompletionEvent + TaskStatusChangeEvent，立即推送 task_update SSE
  * 从 TaskAssistantEventBridge 拆分出来的"实时面板更新"功能，属于平台基础设施
  */
 @Slf4j
@@ -49,6 +50,24 @@ public class TaskUpdateNotifier {
         eventData.put("timestamp", Instant.now().toString());
 
         notificationSender.sendTaskUpdate(userId, eventData);
+    }
+
+    @Async("sessionEventExecutor")
+    @EventListener
+    public void onTaskStatusChange(TaskStatusChangeEvent event) {
+        if (event.getUserId() == null) return;
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("type", "task_status_change");
+        data.put("taskId", event.getTaskId());
+        data.put("sessionId", event.getSessionId());
+        data.put("status", event.getStatus());
+        data.put("previousStatus", event.getPreviousStatus());
+        data.put("agent", event.getAgentId());
+        data.put("errorMessage", event.getErrorMessage());
+        data.put("timestamp", Instant.now().toString());
+
+        notificationSender.sendTaskUpdate(event.getUserId(), data);
     }
 
     private String resolveUserId(String sessionId) {
