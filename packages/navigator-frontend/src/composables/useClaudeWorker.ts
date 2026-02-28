@@ -10,6 +10,7 @@ const taskPage = ref(0)
 const taskSize = ref(20)
 const taskTotal = ref(0)
 const conversationConfigs = ref<Map<string, ConversationConfig>>(new Map())
+const activeTasks = ref<ClaudeTask[]>([])
 
 export function useClaudeWorker() {
   const onlineWorkers = computed(() => workers.value.filter((w) => w.status === 'ONLINE'))
@@ -131,7 +132,9 @@ export function useClaudeWorker() {
   // ===== Directory methods =====
 
   async function loadDirectories(workerId: string) {
-    directories.value = await api.listDirectoriesByWorker(workerId)
+    const newDirs = await api.listDirectoriesByWorker(workerId)
+    // Merge: remove old entries for this worker, then add fresh data
+    directories.value = directories.value.filter((d) => d.workerId !== workerId).concat(newDirs)
   }
 
   async function createDirectory(form: { workerId: string; projectName: string; path: string; directoryType?: string; parentProjectId?: string }) {
@@ -155,6 +158,22 @@ export function useClaudeWorker() {
   async function syncSessions(workerId: string) {
     const result = await api.syncWorkerSessions(workerId)
     return result
+  }
+
+  // ===== Active tasks =====
+
+  async function loadActiveTasks() {
+    try {
+      activeTasks.value = await api.listActiveTasks()
+    } catch {
+      activeTasks.value = []
+    }
+  }
+
+  async function updateTags(sessionId: string, tags: string[]) {
+    const config = await api.updateConversationTags(sessionId, tags)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
   }
 
   // ===== Conversation Config methods =====
@@ -237,6 +256,9 @@ export function useClaudeWorker() {
     deleteDirectory,
     syncGitInfo,
     syncSessions,
+    activeTasks,
+    loadActiveTasks,
+    updateTags,
     conversationConfigs,
     loadConversationConfigs,
     togglePin,
