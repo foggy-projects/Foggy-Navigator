@@ -16,6 +16,8 @@ export interface TaskPaneState {
   connect(sessionId: string): Promise<void>
   /** Resume in-place: keep messages, update task, reconnect SSE */
   resumeInPlace(newTask: ClaudeTask): void
+  /** Pull latest task status from backend (idempotent, skips terminal states) */
+  syncTaskStatus(): Promise<void>
   disconnect(): void
   dispose(): void
 }
@@ -58,6 +60,38 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     }
   }
 
+  // --- Status polling fallback (activated when SSE retries exhausted) ---
+  let statusPollTimer: ReturnType<typeof setInterval> | null = null
+
+  function startStatusPolling() {
+    stopStatusPolling()
+    statusPollTimer = setInterval(() => syncTaskStatus(), 10_000)
+  }
+
+  function stopStatusPolling() {
+    if (statusPollTimer) {
+      clearInterval(statusPollTimer)
+      statusPollTimer = null
+    }
+  }
+
+  async function syncTaskStatus() {
+    if (!task.value) return
+    if (['COMPLETED', 'FAILED', 'ABORTED'].includes(task.value.status)) return
+    try {
+      const fresh = await workerApi.getTask(task.value.taskId)
+      if (fresh.status !== task.value.status) {
+        Object.assign(task.value, fresh)
+        if (['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
+          options?.onTaskFinished?.(paneId)
+          stopStatusPolling()
+        }
+      }
+    } catch {
+      /* task deleted or inaccessible — ignore */
+    }
+  }
+
   /** Create SSE connection for a given sessionId (shared by connect and resumeInPlace) */
   function createSseConnection(sessionId: string) {
     const token = getToken()
@@ -84,6 +118,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       },
       onMaxRetriesExceeded: () => {
         chatState.setConnectionStatus('error')
+        startStatusPolling()
       },
       onRawEvent: (raw: AgentMessage) => {
         if (!task.value) return
@@ -246,6 +281,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       sseController.close()
       sseController = null
     }
+    stopStatusPolling()
     detachTaskUpdateListener()
     chatState.setConnectionStatus('disconnected')
   }
@@ -262,6 +298,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     pendingInput,
     connect,
     resumeInPlace,
+    syncTaskStatus,
     disconnect,
     dispose,
   }

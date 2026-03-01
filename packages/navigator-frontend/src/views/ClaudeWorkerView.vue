@@ -1479,7 +1479,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, watch } from 'vue'
+import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
@@ -1493,6 +1493,7 @@ import {
   getOrCreateWorkspace,
   disposeWorkspace,
   disposeAllWorkspaces,
+  getAllPanes,
   isDirectorySynced,
   markDirectorySynced,
   restoreTerminalTabs,
@@ -2256,6 +2257,17 @@ onUnmounted(() => {
   window.removeEventListener('message', handleFileBrowserMessage)
   document.removeEventListener('click', closeFavScriptCtx)
   disposeAllWorkspaces()
+})
+
+// keep-alive: re-sync all pane task statuses + refresh lists when view is activated
+onActivated(() => {
+  for (const pane of getAllPanes()) {
+    pane.syncTaskStatus()
+  }
+  workerState.loadActiveTasks()
+  if (selectedDirectoryId.value) {
+    loadDirectoryTasks()
+  }
 })
 
 // ---- File browser cross-window messaging ----------------------------------

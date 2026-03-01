@@ -109,6 +109,19 @@ export function restoreTerminalTabs(
 }
 
 // ---------------------------------------------------------------------------
+// Cross-workspace helpers
+// ---------------------------------------------------------------------------
+
+/** Return all panes across all workspaces (for bulk sync on keep-alive activate). */
+export function getAllPanes(): TaskPaneState[] {
+  const result: TaskPaneState[] = []
+  for (const ctx of workspaceMap.values()) {
+    result.push(...ctx.panes.value)
+  }
+  return result
+}
+
+// ---------------------------------------------------------------------------
 // Workspace CRUD
 // ---------------------------------------------------------------------------
 
