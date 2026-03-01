@@ -209,6 +209,7 @@
               创建 Worktree
             </el-button>
             <el-button size="small" @click="openFileBrowser">浏览文件</el-button>
+            <el-button size="small" @click="openCodeServer">VS Code</el-button>
             <el-button size="small" @click="handleToggleTerminal">终端</el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
             <el-button
@@ -2668,6 +2669,27 @@ function openFileBrowser() {
   if (!selectedDirectoryId.value) return
   const url = `${window.location.origin}/#/files?directoryId=${selectedDirectoryId.value}&workerId=${selectedWorkerId.value}`
   window.open(url, '_blank', 'width=1400,height=900')
+}
+
+function openCodeServer() {
+  if (!selectedDirectoryId.value) return
+  const worker = selectedWorkerEntity.value
+  if (!worker) return
+
+  const dir = selectedDirectory.value
+  const folder = dir ? encodeURIComponent(dir.path) : ''
+
+  // Extract hostname from worker baseUrl (e.g. http://192.168.1.100:3031 → 192.168.1.100)
+  let host: string
+  try {
+    host = new URL(worker.baseUrl).hostname
+  } catch {
+    host = worker.baseUrl.replace(/https?:\/\//, '').replace(/:\d+.*/, '')
+  }
+
+  const codeServerPort = 18443
+  const url = `http://${host}:${codeServerPort}/?folder=${folder}`
+  window.open(url, '_blank')
 }
 
 async function handleSyncGitInfo() {
