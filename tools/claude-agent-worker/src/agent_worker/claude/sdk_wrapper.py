@@ -1119,6 +1119,20 @@ class SdkWrapper:
                         try:
                             evt = await asyncio.wait_for(queue.get(), timeout=poll_interval)
                         except asyncio.TimeoutError:
+                            # If there is a pending permission request for this task,
+                            # the SDK is intentionally paused waiting for user input —
+                            # do NOT count silence against the heartbeat timeout.
+                            has_pending_permission = any(
+                                e.get("task_id") == task_id
+                                for e in permission_pending.values()
+                            )
+                            if has_pending_permission:
+                                logger.debug(
+                                    "Task %s has pending permission, skipping heartbeat count (silence=%ss)",
+                                    task_id, silence_elapsed,
+                                )
+                                continue
+
                             silence_elapsed += poll_interval
                             if silence_elapsed >= heartbeat_timeout:
                                 logger.warning("Task %s no events for %ss (heartbeat timeout)", task_id, heartbeat_timeout)
