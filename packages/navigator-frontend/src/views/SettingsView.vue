@@ -2,9 +2,6 @@
   <div class="settings-layout">
     <div class="settings-header">
       <h2>系统设置</h2>
-      <el-button text @click="router.push('/')">
-        <el-icon><Back /></el-icon> 返回会话
-      </el-button>
     </div>
 
     <el-tabs v-model="activeTab" class="settings-tabs">
@@ -55,7 +52,7 @@
       </el-tab-pane>
 
       <!-- Tab 2: AI Models -->
-      <el-tab-pane label="AI 模型" name="llm">
+      <el-tab-pane label="LLM 配置" name="llm">
         <div class="tab-toolbar">
           <div class="toolbar-left">
             <el-button type="primary" size="small" @click="showLlmDialog('add')">+ 添加</el-button>
@@ -258,8 +255,15 @@
                 </div>
               </el-form-item>
 
-              <el-form-item label="AI 模型">
-                <el-input v-model="assistantCreateForm.model" placeholder="如 claude-sonnet-4-20250514" />
+              <el-form-item label="LLM 配置">
+                <el-select v-model="assistantCreateForm.model" placeholder="使用 Worker 默认模型" clearable style="width: 100%">
+                  <el-option
+                    v-for="m in llmModels"
+                    :key="m.id"
+                    :label="`${m.name} (${m.modelName})`"
+                    :value="m.modelName"
+                  />
+                </el-select>
                 <div class="el-form-item__description" style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                   留空则使用 Worker 默认模型
                 </div>
@@ -291,7 +295,7 @@
               <el-descriptions-item label="工作目录">
                 {{ assistantConfig.cwd || '~/foggy-assistant' }}
               </el-descriptions-item>
-              <el-descriptions-item label="AI 模型">
+              <el-descriptions-item label="LLM 配置">
                 {{ assistantConfig.model || '（Worker 默认）' }}
               </el-descriptions-item>
               <el-descriptions-item label="会话 ID">
@@ -537,10 +541,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { resetSetupStatus } from '@/router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Back } from '@element-plus/icons-vue'
 import {
   listGitProviders as apiListGit,
   saveGitProvider as apiSaveGit,
@@ -583,7 +585,6 @@ import {
 import type { TaskAssistantConfig } from '@/api/notification'
 import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, ModelAccessScope, UserMemory, UserMemoryCategory, ApiCredential, AuthType } from '@/types'
 
-const router = useRouter()
 const activeTab = ref('git')
 const saving = ref(false)
 

@@ -26,9 +26,6 @@
           暂无跨项目任务
         </div>
       </div>
-      <div class="sidebar-footer">
-        <el-button text size="small" @click="router.push('/workers')">返回 Workers</el-button>
-      </div>
     </aside>
 
     <!-- Main: Task Detail -->
@@ -416,7 +413,7 @@ function formatDate(dateStr: string): string {
 <style scoped>
 .cross-project-view {
   display: flex;
-  height: 100vh;
+  height: 100%;
   background: #f5f7fa;
 }
 
@@ -483,11 +480,6 @@ function formatDate(dateStr: string): string {
   font-size: 12px;
   color: #909399;
   margin-top: 4px;
-}
-
-.sidebar-footer {
-  padding: 12px 16px;
-  border-top: 1px solid #e4e7ed;
 }
 
 .empty-hint {

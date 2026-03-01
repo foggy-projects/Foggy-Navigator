@@ -1032,36 +1032,57 @@
           </el-select>
         </el-form-item>
         <el-divider content-position="left">Auth 默认配置</el-divider>
-        <el-form-item label="认证模式">
-          <el-radio-group v-model="editDirForm.defaultAuthMode">
-            <el-radio value="">未配置</el-radio>
-            <el-radio value="SUBSCRIPTION">Subscription</el-radio>
-            <el-radio value="API_KEY">API Key</el-radio>
-            <el-radio value="CUSTOM_ENDPOINT">自定义端点</el-radio>
-          </el-radio-group>
+        <el-form-item v-if="platformModels.length > 0" label="LLM 配置">
+          <el-select
+            v-model="editDirForm.defaultModelConfigId"
+            clearable
+            placeholder="（不使用平台配置）"
+            style="width: 100%"
+            @change="onEditDirModelConfigChange"
+          >
+            <el-option
+              v-for="m in platformModels"
+              :key="m.id"
+              :label="`${m.name} (${m.modelName})`"
+              :value="m.id"
+            />
+          </el-select>
+          <div class="form-tip">
+            选择平台 LLM 配置后，将使用其 API Key 和 Base URL，无需手动填写。
+          </div>
         </el-form-item>
-        <el-form-item v-if="editDirForm.defaultAuthMode === 'API_KEY'" label="API Key">
-          <el-input
-            v-model="editDirForm.defaultAuthToken"
-            type="password"
-            show-password
-            :placeholder="selectedDirectory?.maskedDefaultAuthToken || '留空保持不变'"
-          />
-        </el-form-item>
-        <el-form-item v-if="editDirForm.defaultAuthMode === 'CUSTOM_ENDPOINT'" label="Auth Token">
-          <el-input
-            v-model="editDirForm.defaultAuthToken"
-            type="password"
-            show-password
-            :placeholder="selectedDirectory?.maskedDefaultAuthToken || '自定义端点的认证 token'"
-          />
-        </el-form-item>
-        <el-form-item v-if="editDirForm.defaultAuthMode === 'CUSTOM_ENDPOINT'" label="Base URL">
-          <el-input v-model="editDirForm.defaultBaseUrl" placeholder="https://aiproxy.example.com/api/v1/anthropic" />
-        </el-form-item>
-        <div v-if="editDirForm.defaultAuthMode === 'SUBSCRIPTION'" class="form-tip">
-          使用 Worker 端 claude login 凭据，无需配置 Token
-        </div>
+        <template v-if="!editDirForm.defaultModelConfigId">
+          <el-form-item label="认证模式">
+            <el-radio-group v-model="editDirForm.defaultAuthMode">
+              <el-radio value="">未配置</el-radio>
+              <el-radio value="SUBSCRIPTION">Subscription</el-radio>
+              <el-radio value="API_KEY">API Key</el-radio>
+              <el-radio value="CUSTOM_ENDPOINT">自定义端点</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="editDirForm.defaultAuthMode === 'API_KEY'" label="API Key">
+            <el-input
+              v-model="editDirForm.defaultAuthToken"
+              type="password"
+              show-password
+              :placeholder="selectedDirectory?.maskedDefaultAuthToken || '留空保持不变'"
+            />
+          </el-form-item>
+          <el-form-item v-if="editDirForm.defaultAuthMode === 'CUSTOM_ENDPOINT'" label="Auth Token">
+            <el-input
+              v-model="editDirForm.defaultAuthToken"
+              type="password"
+              show-password
+              :placeholder="selectedDirectory?.maskedDefaultAuthToken || '自定义端点的认证 token'"
+            />
+          </el-form-item>
+          <el-form-item v-if="editDirForm.defaultAuthMode === 'CUSTOM_ENDPOINT'" label="Base URL">
+            <el-input v-model="editDirForm.defaultBaseUrl" placeholder="https://aiproxy.example.com/api/v1/anthropic" />
+          </el-form-item>
+          <div v-if="editDirForm.defaultAuthMode === 'SUBSCRIPTION'" class="form-tip">
+            使用 Worker 端 claude login 凭据，无需配置 Token
+          </div>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="showEditDirectoryDialog = false">取消</el-button>
@@ -1702,6 +1723,7 @@ const editDirForm = ref({
   defaultAuthMode: '' as string,
   defaultAuthToken: '' as string,
   defaultBaseUrl: '' as string,
+  defaultModelConfigId: '' as string,
 })
 
 const taskForm = ref({
@@ -2532,6 +2554,15 @@ async function handleAddDirectory() {
   }
 }
 
+function onEditDirModelConfigChange(val: string) {
+  if (val) {
+    // 选中平台配置后清空手动 auth
+    editDirForm.value.defaultAuthMode = ''
+    editDirForm.value.defaultAuthToken = ''
+    editDirForm.value.defaultBaseUrl = ''
+  }
+}
+
 async function handleEditDirectory() {
   if (!selectedDirectoryId.value) return
   saving.value = true
@@ -2547,13 +2578,17 @@ async function handleEditDirectory() {
     if (selectedDirectory.value?.directoryType === 'STANDARD') {
       form.parentProjectId = editDirForm.value.parentProjectId || ''
     }
-    // Auth config
-    form.defaultAuthMode = editDirForm.value.defaultAuthMode
-    if (editDirForm.value.defaultAuthToken) {
-      form.defaultAuthToken = editDirForm.value.defaultAuthToken
-    }
-    if (editDirForm.value.defaultAuthMode === 'CUSTOM_ENDPOINT') {
-      form.defaultBaseUrl = editDirForm.value.defaultBaseUrl
+    // Platform model config
+    form.defaultModelConfigId = editDirForm.value.defaultModelConfigId || ''
+    // Auth config (only when no platform model selected)
+    if (!editDirForm.value.defaultModelConfigId) {
+      form.defaultAuthMode = editDirForm.value.defaultAuthMode
+      if (editDirForm.value.defaultAuthToken) {
+        form.defaultAuthToken = editDirForm.value.defaultAuthToken
+      }
+      if (editDirForm.value.defaultAuthMode === 'CUSTOM_ENDPOINT') {
+        form.defaultBaseUrl = editDirForm.value.defaultBaseUrl
+      }
     }
     const updated = await dirApi.updateDirectory(selectedDirectoryId.value, form)
     const idx = workerState.directories.value.findIndex(
@@ -3469,6 +3504,7 @@ watch(showEditDirectoryDialog, (val) => {
       defaultAuthMode: selectedDirectory.value.defaultAuthMode || '',
       defaultAuthToken: '',
       defaultBaseUrl: selectedDirectory.value.defaultBaseUrl || '',
+      defaultModelConfigId: selectedDirectory.value.defaultModelConfigId || '',
     }
   }
 })
@@ -3753,7 +3789,7 @@ function handlePopOutTerminal() {
 <style scoped>
 .worker-layout {
   display: flex;
-  height: 100vh;
+  height: 100%;
 }
 
 .worker-sidebar {

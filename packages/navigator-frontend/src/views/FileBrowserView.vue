@@ -885,7 +885,7 @@ watch(() => route.query.directoryId, () => {
 <style scoped>
 .file-browser {
   display: flex;
-  height: 100vh;
+  height: 100%;
   background: #1e1e1e;
   color: #cccccc;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

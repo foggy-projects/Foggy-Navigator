@@ -27,29 +27,6 @@
           暂无会话，点击上方按钮新建
         </div>
       </div>
-      <div class="sidebar-footer">
-        <span class="username">{{ userInfo?.username }}</span>
-        <div class="footer-actions">
-          <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99" class="notification-badge">
-            <el-icon class="settings-icon" @click="router.push('/tasks')" title="任务看板">
-              <Bell />
-            </el-icon>
-          </el-badge>
-          <el-icon class="settings-icon" @click="router.push('/tasks')" title="任务列表">
-            <List />
-          </el-icon>
-          <el-icon class="settings-icon" @click="router.push('/settings')" title="设置">
-            <Setting />
-          </el-icon>
-          <el-icon class="settings-icon" @click="router.push('/workers')" title="Workers">
-            <Monitor />
-          </el-icon>
-          <el-icon class="settings-icon" @click="router.push('/cross-tasks')" title="跨项目任务">
-            <Connection />
-          </el-icon>
-          <el-button text size="small" @click="handleLogout">退出</el-button>
-        </div>
-      </div>
     </aside>
 
     <!-- 右侧聊天区域 -->
@@ -101,14 +78,11 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Bell, Close, Connection, List, Monitor, Setting } from '@element-plus/icons-vue'
+import { Close } from '@element-plus/icons-vue'
 import { ChatPanel, useChatStore } from '@foggy/chat'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSession, setRouteRequestHandler } from '@/composables/useSession'
-import { getUserInfo, clearAuth } from '@/utils/auth'
-import { resetSetupStatus } from '@/router'
 import * as sessionApi from '@/api/session'
-import { useNotifications } from '@/composables/useNotifications'
 import type { GuideCard, RoutePayload } from '@/types'
 
 const route = useRoute()
@@ -117,9 +91,8 @@ const sessionStore = useSessionStore()
 const chatStore = useChatStore()
 const { connectToSession, sendMessage, disconnectSession } = useSession()
 
-const userInfo = getUserInfo()
 const guideCards = ref<GuideCard[]>([])
-const { unreadCount, connect: connectNotifications, requestPermission } = useNotifications()
+
 
 const activeSession = computed(() =>
   sessionStore.sessions.find((s) => s.id === sessionStore.activeSessionId),
@@ -139,10 +112,6 @@ onMounted(async () => {
       { icon: '📐', title: '语义层', description: '了解语义层模型' },
     ]
   }
-
-  // 连接用户级通知 SSE
-  connectNotifications()
-  requestPermission()
 
   // 设置路由请求处理器（用于处理 Agent 委托跳转）
   setRouteRequestHandler(handleRouteRequest)
@@ -218,12 +187,6 @@ function handleGuideClick(card: GuideCard) {
   sendMessage(id, card.description)
 }
 
-function handleLogout() {
-  clearAuth()
-  resetSetupStatus()
-  router.push('/login')
-}
-
 /** 处理 Agent 发起的路由请求（委托跳转） */
 async function handleRouteRequest(payload: RoutePayload) {
   console.log('Handling route request:', payload)
@@ -272,7 +235,7 @@ function formatTime(dateStr: string): string {
 <style scoped>
 .chat-layout {
   display: flex;
-  height: 100vh;
+  height: 100%;
 }
 
 .sidebar {
@@ -350,43 +313,6 @@ function formatTime(dateStr: string): string {
   color: #909399;
   font-size: 13px;
   padding: 24px 0;
-}
-
-.sidebar-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 12px;
-  border-top: 1px solid #e4e7ed;
-  font-size: 13px;
-}
-
-.username {
-  color: #606266;
-}
-
-.footer-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.settings-icon {
-  font-size: 16px;
-  color: #909399;
-  cursor: pointer;
-  transition: color 0.2s;
-}
-
-.settings-icon:hover {
-  color: #409eff;
-}
-
-.notification-badge :deep(.el-badge__content) {
-  font-size: 10px;
-  height: 16px;
-  line-height: 16px;
-  padding: 0 4px;
 }
 
 .chat-main {

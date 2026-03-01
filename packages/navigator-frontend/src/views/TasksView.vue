@@ -3,9 +3,6 @@
     <div class="tasks-container">
       <div class="tasks-header">
         <div class="header-left">
-          <el-button text @click="router.push('/')">
-            <el-icon><Back /></el-icon> 返回会话
-          </el-button>
           <h2>任务看板</h2>
         </div>
         <div class="header-actions">
@@ -115,14 +112,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { Back, Refresh } from '@element-plus/icons-vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { listAgentTasks } from '@/api/agentTask'
 import type { AgentTask } from '@/types'
 
-const router = useRouter()
 const tasks = ref<AgentTask[]>([])
 const loading = ref(false)
 const expandedRows = ref<string[]>([])
@@ -152,6 +147,20 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopAutoRefresh()
+})
+
+// keep-alive: pause/resume auto-refresh when tab switches
+onDeactivated(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+})
+
+onActivated(() => {
+  if (autoRefresh.value && !refreshTimer) {
+    refreshTimer = setInterval(() => loadTasks(), 10000)
+  }
 })
 
 async function loadTasks() {
@@ -225,7 +234,7 @@ function formatTime(dateStr: string): string {
 
 <style scoped>
 .tasks-layout {
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: #fff;
