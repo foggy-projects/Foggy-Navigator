@@ -165,12 +165,28 @@
         </div>
       </div>
 
+      <!-- Tab bar -->
+      <div v-if="openTabs.length > 0 && !diffMode" class="tab-bar">
+        <div
+          v-for="tab in openTabs"
+          :key="tab.id"
+          class="tab-item"
+          :class="{ active: tab.id === activeTabId }"
+          :title="tab.fullPath"
+          @click="switchTab(tab.id)"
+          @mousedown.middle.prevent="closeTab(tab.id)"
+        >
+          <span class="tab-label">{{ tab.label }}</span>
+          <span class="tab-close" @click.stop="closeTab(tab.id)">&times;</span>
+        </div>
+      </div>
+
       <!-- Editor container -->
       <div class="editor-container">
         <div v-if="editorLoading" class="center-hint">加载中...</div>
         <div v-else-if="showBinaryHint" class="center-hint">二进制文件，无法预览</div>
         <div v-else-if="showTooLargeHint" class="center-hint">文件过大 ({{ formatSize(currentFileSize) }})，无法预览</div>
-        <div v-else-if="!currentFilePath && !diffMode" class="center-hint">选择文件查看内容</div>
+        <div v-else-if="!activeTabId && !diffMode" class="center-hint">选择文件查看内容</div>
         <div ref="editorEl" class="monaco-mount" :class="{ hidden: !showEditor }"></div>
         <div ref="diffEditorEl" class="monaco-mount" :class="{ hidden: !diffMode }"></div>
       </div>
@@ -219,6 +235,7 @@ import { ElMessage } from 'element-plus'
 import {
   listDirectory,
   readFileContent,
+  searchFiles,
   getGitDiffSummary,
   getFileDiff,
   getGitLog,
@@ -244,6 +261,23 @@ let diffEditorInstance: import('monaco-editor').editor.IStandaloneDiffEditor | n
 const editorEl = ref<HTMLElement>()
 const diffEditorEl = ref<HTMLElement>()
 
+// ---- Tab system -----------------------------------------------------------
+interface EditorTab {
+  id: string        // fullPath as unique key
+  label: string     // file name for display
+  fullPath: string
+  language: string
+  size: number
+  lineCount: number
+}
+
+// Non-reactive Maps for Monaco objects (not serializable)
+const tabModels = new Map<string, import('monaco-editor').editor.ITextModel>()
+const tabViewStates = new Map<string, import('monaco-editor').editor.ICodeEditorViewState | null>()
+
+const openTabs = ref<EditorTab[]>([])
+const activeTabId = ref('')
+
 // ---- State ----------------------------------------------------------------
 const activeTab = ref<'files' | 'git'>('files')
 const editorLoading = ref(false)
@@ -262,7 +296,7 @@ const selectedDiffFile = ref('')
 const showHidden = ref(true)
 
 const showEditor = computed(
-  () => !diffMode.value && currentFilePath.value && !showBinaryHint.value && !showTooLargeHint.value && !editorLoading.value,
+  () => !diffMode.value && activeTabId.value && !showBinaryHint.value && !showTooLargeHint.value && !editorLoading.value,
 )
 
 // ---- Breadcrumbs ----------------------------------------------------------
@@ -541,22 +575,21 @@ function handleSearchSelectFile(relativePath: string) {
   }
 }
 
-function handleSearchSelectContent(file: string, lineNumber: number) {
+async function handleSearchSelectContent(file: string, lineNumber: number) {
   if (!directoryId.value) return
   const rootDir = getRootDir()
   if (rootDir) {
-    loadFile(rootDir + '/' + file).then(() => {
-      // Reveal the line in the editor
-      if (editorInstance) {
-        editorInstance.revealLineInCenter(lineNumber)
-        editorInstance.setSelection({
-          startLineNumber: lineNumber,
-          startColumn: 1,
-          endLineNumber: lineNumber,
-          endColumn: 1000,
-        })
-      }
-    })
+    await loadFile(rootDir + '/' + file)
+    await nextTick()
+    if (editorInstance) {
+      editorInstance.revealLineInCenter(lineNumber)
+      editorInstance.setSelection({
+        startLineNumber: lineNumber,
+        startColumn: 1,
+        endLineNumber: lineNumber,
+        endColumn: 1000,
+      })
+    }
   }
 }
 
@@ -575,9 +608,83 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
+// ---- Tab operations -------------------------------------------------------
+function switchTab(id: string) {
+  if (!editorInstance || !monaco) return
+
+  // Save current tab's view state
+  if (activeTabId.value && tabModels.has(activeTabId.value)) {
+    tabViewStates.set(activeTabId.value, editorInstance.saveViewState())
+  }
+
+  activeTabId.value = id
+  const model = tabModels.get(id)
+  if (model) {
+    editorInstance.setModel(model)
+    const savedState = tabViewStates.get(id) || null
+    if (savedState) {
+      editorInstance.restoreViewState(savedState)
+    }
+  }
+
+  // Update current file info from tab
+  const tab = openTabs.value.find(t => t.id === id)
+  if (tab) {
+    currentFilePath.value = tab.fullPath
+    currentLanguage.value = tab.language
+    currentFileSize.value = tab.size
+    currentLineCount.value = tab.lineCount
+  }
+
+  diffMode.value = false
+  showBinaryHint.value = false
+  showTooLargeHint.value = false
+}
+
+function closeTab(id: string) {
+  // Dispose model
+  const model = tabModels.get(id)
+  if (model) {
+    model.dispose()
+    tabModels.delete(id)
+  }
+  tabViewStates.delete(id)
+
+  // Remove from list
+  const idx = openTabs.value.findIndex(t => t.id === id)
+  if (idx === -1) return
+  openTabs.value.splice(idx, 1)
+
+  // If closed tab was active, switch to adjacent
+  if (activeTabId.value === id) {
+    if (openTabs.value.length > 0) {
+      const nextIdx = Math.min(idx, openTabs.value.length - 1)
+      switchTab(openTabs.value[nextIdx]!.id)
+    } else {
+      // All tabs closed
+      activeTabId.value = ''
+      currentFilePath.value = ''
+      currentLanguage.value = 'plaintext'
+      currentFileSize.value = 0
+      currentLineCount.value = 0
+      if (editorInstance) {
+        editorInstance.setModel(null)
+      }
+    }
+  }
+}
+
 // ---- File loading ---------------------------------------------------------
 async function loadFile(fullPath: string) {
   if (!directoryId.value) return
+
+  // If tab already exists, just switch to it
+  const existingTab = openTabs.value.find(t => t.fullPath === fullPath)
+  if (existingTab) {
+    switchTab(existingTab.id)
+    return
+  }
+
   diffMode.value = false
   editorLoading.value = true
   showBinaryHint.value = false
@@ -603,8 +710,34 @@ async function loadFile(fullPath: string) {
       return
     }
 
+    if (!monaco || !editorInstance) return
+
+    // Save current tab's view state before switching
+    if (activeTabId.value && tabModels.has(activeTabId.value)) {
+      tabViewStates.set(activeTabId.value, editorInstance.saveViewState())
+    }
+
+    // Create new model for this file
+    const model = monaco.editor.createModel(result.content || '', result.language)
+    const tabId = fullPath
+    tabModels.set(tabId, model)
+    tabViewStates.set(tabId, null)
+
+    // Create tab entry
+    const fileName = fullPath.replace(/\\/g, '/').split('/').pop() || fullPath
+    const tab: EditorTab = {
+      id: tabId,
+      label: fileName,
+      fullPath,
+      language: result.language,
+      size: result.size,
+      lineCount: result.line_count,
+    }
+    openTabs.value.push(tab)
+    activeTabId.value = tabId
+
     await nextTick()
-    setEditorContent(result.content || '', result.language)
+    editorInstance.setModel(model)
   } catch (e) {
     console.error('Failed to load file:', e)
     ElMessage.error('加载文件失败')
@@ -613,13 +746,44 @@ async function loadFile(fullPath: string) {
   }
 }
 
-function setEditorContent(content: string, language: string) {
-  if (!monaco || !editorInstance) return
-  const model = editorInstance.getModel()
-  if (model) {
-    monaco.editor.setModelLanguage(model, language)
-    model.setValue(content)
+// ---- Ctrl+Click go-to-definition ------------------------------------------
+async function handleGoToDefinition(word: string) {
+  if (!directoryId.value) return
+  try {
+    const results = await searchFiles(directoryId.value, word, 10)
+    if (!results.results.length) return
+
+    // Prefer exact file name match (without extension)
+    const exactMatch = results.results.find(r => {
+      const nameNoExt = r.name.replace(/\.[^.]+$/, '')
+      return nameNoExt === word
+    })
+    const target = exactMatch || results.results[0]!
+
+    const rootDir = getRootDir()
+    if (rootDir) {
+      await loadFile(rootDir + '/' + target.relative_path)
+    }
+  } catch (e) {
+    console.error('Go to definition failed:', e)
   }
+}
+
+function registerCtrlClickHandler() {
+  if (!editorInstance || !monaco) return
+  editorInstance.onMouseDown(async (e) => {
+    if (!e.event.ctrlKey || !monaco) return
+    if (e.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT) return
+    const pos = e.target.position
+    if (!pos) return
+    const model = editorInstance!.getModel()
+    if (!model) return
+    const word = model.getWordAtPosition(pos)
+    if (!word || word.word.length < 2) return
+
+    e.event.preventDefault()
+    await handleGoToDefinition(word.word)
+  })
 }
 
 // ---- Git tab (sub-tabs) ---------------------------------------------------
@@ -837,6 +1001,9 @@ onMounted(async () => {
       renderWhitespace: 'selection',
       wordWrap: 'off',
     })
+    // No initial model — tabs will set models
+    editorInstance.setModel(null)
+    registerCtrlClickHandler()
   }
 
   // Load initial tree + ignored patterns
@@ -859,8 +1026,14 @@ onBeforeUnmount(() => {
     diffEditorInstance.dispose()
     diffEditorInstance = null
   }
+  // Dispose all tab models
+  for (const model of tabModels.values()) {
+    model.dispose()
+  }
+  tabModels.clear()
+  tabViewStates.clear()
   if (editorInstance) {
-    editorInstance.getModel()?.dispose()
+    editorInstance.setModel(null)
     editorInstance.dispose()
     editorInstance = null
   }
@@ -876,6 +1049,17 @@ watch(() => route.query.directoryId, () => {
     currentFilePath.value = ''
     diffMode.value = false
     gitSubTab.value = 'changes'
+    // Clear all tabs
+    for (const model of tabModels.values()) {
+      model.dispose()
+    }
+    tabModels.clear()
+    tabViewStates.clear()
+    openTabs.value = []
+    activeTabId.value = ''
+    if (editorInstance) {
+      editorInstance.setModel(null)
+    }
     loadDirectory()
     loadIgnoredPatterns()
   }
@@ -1098,6 +1282,73 @@ watch(() => route.query.directoryId, () => {
 .toolbar-btn:hover {
   background: #3c3c3c;
   color: #fff;
+}
+
+/* ---- Tab bar ---- */
+.tab-bar {
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: #252526;
+  border-bottom: 1px solid #333;
+  scrollbar-width: thin;
+  scrollbar-color: #555 transparent;
+}
+
+.tab-bar::-webkit-scrollbar {
+  height: 3px;
+}
+
+.tab-bar::-webkit-scrollbar-thumb {
+  background: #555;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #888;
+  cursor: pointer;
+  white-space: nowrap;
+  border-right: 1px solid #333;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.tab-item:hover {
+  color: #ccc;
+}
+
+.tab-item.active {
+  background: #1e1e1e;
+  color: #fff;
+  border-top: 2px solid #007acc;
+  padding-top: 4px;
+}
+
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.tab-item:hover .tab-close,
+.tab-item.active .tab-close {
+  opacity: 0.6;
+}
+
+.tab-close:hover {
+  opacity: 1 !important;
+  background: #3c3c3c;
 }
 
 .editor-container {
