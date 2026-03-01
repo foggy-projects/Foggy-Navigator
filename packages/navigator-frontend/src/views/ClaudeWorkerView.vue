@@ -3296,7 +3296,18 @@ async function handlePaneSend(paneId: string, content: string) {
     if (platformModelConfigId.value) {
       resumeForm.modelConfigId = platformModelConfigId.value
     }
+    // Attach images as JSON string
+    if (attachedImages.value.length > 0) {
+      resumeForm.images = JSON.stringify(
+        attachedImages.value.map((img) => ({
+          name: img.name,
+          data: img.base64,
+          mime_type: img.mimeType,
+        })),
+      )
+    }
     const newTask = await workerState.resumeTask(resumeForm)
+    clearAttachedImages()
 
     pane.resumeInPlace(newTask)
 

@@ -206,7 +206,7 @@ public class ClaudeTaskService {
                 this, taskId, sessionId, form.getWorkerId(), userId,
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
                 form.getModel(), form.getMaxTurns(), agentTeamsJson,
-                null, authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
+                form.getImages(), authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
                 navigatorApiKey));
 
         return toDTO(entity);

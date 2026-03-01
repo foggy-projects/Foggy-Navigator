@@ -165,6 +165,7 @@ export async function resumeTask(form: {
   model?: string
   maxTurns?: number
   agentTeamsJson?: string
+  images?: string
   permissionMode?: string
   modelConfigId?: string
 }): Promise<ClaudeTask> {

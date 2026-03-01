@@ -18,6 +18,8 @@ public class ResumeTaskForm {
     private Integer maxTurns;
     /** Agent Teams JSON (直接传入或由 directoryId 解析) */
     private String agentTeamsJson;
+    /** Base64-encoded image attachments JSON: [{name, data, mime_type}] */
+    private String images;
     /** Permission mode: bypassPermissions | acceptEdits | default */
     private String permissionMode;
     /** 平台 LLM 模型配置 ID，用于从平台配置中获取 apiKey + baseUrl */
