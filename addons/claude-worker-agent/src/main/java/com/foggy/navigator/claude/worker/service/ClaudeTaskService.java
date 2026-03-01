@@ -724,39 +724,50 @@ public class ClaudeTaskService {
 
     /**
      * 定时检查超时任务（每5分钟）
-     * RUNNING 超过 4 小时的任务标记为 FAILED（与 Worker 端 hard timeout 对齐）
+     * - 交互式任务（fileCheckpointingEnabled=true）：4 小时超时（与 Worker hard timeout 对齐）
+     * - Tracked sync 任务（fileCheckpointingEnabled=false）：10 分钟超时（syncQuery 正常 < 2 分钟）
      */
     @Scheduled(fixedDelay = 300000)
     @Transactional
     public void checkTimeoutTasks() {
-        // RUNNING tasks: 4 hour timeout
+        // 交互式编程任务：4 小时超时
+        // Claude Code 的编程任务通常涉及多轮工具调用、代码生成和测试，执行时间可能很长，
+        // 4 小时与 Worker 端 hard_timeout 对齐，避免误杀正常长任务。
         LocalDateTime runningCutoff = LocalDateTime.now().minusHours(4);
         List<ClaudeTaskEntity> timedOut = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", runningCutoff);
         for (ClaudeTaskEntity entity : timedOut) {
-            String prev = entity.getStatus();
-            entity.setStatus("FAILED");
-            entity.setErrorMessage("Task timed out (exceeded 4 hours)");
-            taskRepository.save(entity);
-            log.warn("Task timed out: taskId={}, createdAt={}", entity.getTaskId(), entity.getCreatedAt());
-            publishStatusChange(entity, prev);
+            failTimeout(entity, "Task timed out (exceeded 4 hours)");
+        }
+
+        // Tracked sync tasks: 10 minute timeout (syncQuery should complete in < 2 min)
+        LocalDateTime syncCutoff = LocalDateTime.now().minusMinutes(10);
+        List<ClaudeTaskEntity> syncTimedOut = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", syncCutoff);
+        for (ClaudeTaskEntity entity : syncTimedOut) {
+            if (Boolean.FALSE.equals(entity.getFileCheckpointingEnabled())) {
+                failTimeout(entity, "Sync task timed out (exceeded 10 minutes)");
+            }
         }
 
         // AWAITING_PERMISSION tasks: 30 minute timeout
         LocalDateTime permissionCutoff = LocalDateTime.now().minusMinutes(30);
         List<ClaudeTaskEntity> permissionTimedOut = taskRepository.findByStatusAndCreatedAtBefore("AWAITING_PERMISSION", permissionCutoff);
         for (ClaudeTaskEntity entity : permissionTimedOut) {
-            String prev = entity.getStatus();
-            entity.setStatus("FAILED");
-            entity.setErrorMessage("Permission request timed out (exceeded 30 minutes)");
-            taskRepository.save(entity);
-            log.warn("Permission timed out: taskId={}, createdAt={}", entity.getTaskId(), entity.getCreatedAt());
-            publishStatusChange(entity, prev);
+            failTimeout(entity, "Permission request timed out (exceeded 30 minutes)");
         }
 
-        int total = timedOut.size() + permissionTimedOut.size();
+        int total = timedOut.size() + syncTimedOut.size() + permissionTimedOut.size();
         if (total > 0) {
             log.info("Marked {} timed-out tasks as FAILED", total);
         }
+    }
+
+    private void failTimeout(ClaudeTaskEntity entity, String reason) {
+        String prev = entity.getStatus();
+        entity.setStatus("FAILED");
+        entity.setErrorMessage(reason);
+        taskRepository.save(entity);
+        log.warn("Task timed out: taskId={}, createdAt={}, reason={}", entity.getTaskId(), entity.getCreatedAt(), reason);
+        publishStatusChange(entity, prev);
     }
 
     /**
