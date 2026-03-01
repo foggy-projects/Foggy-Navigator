@@ -238,6 +238,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
             // Extract result from events
             String resultText = null;
+            StringBuilder assistantTextBuilder = new StringBuilder();
             String newSessionId = claudeSessionId;
             for (WorkerEvent event : events) {
                 if (event.getSessionId() != null) {
@@ -248,9 +249,19 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                     result.put("costUsd", event.getCostUsd());
                     result.put("durationMs", event.getDurationMs());
                     result.put("model", event.getModel());
+                } else if ("assistant_text".equals(event.getType())) {
+                    // Accumulate streamed text as fallback when result.content is null
+                    if (event.getContent() != null) {
+                        assistantTextBuilder.append(event.getContent());
+                    }
                 } else if ("error".equals(event.getType())) {
                     result.put("error", event.getError());
                 }
+            }
+
+            // Fallback: use accumulated assistant_text if result event had no content
+            if (resultText == null && !assistantTextBuilder.isEmpty()) {
+                resultText = assistantTextBuilder.toString();
             }
 
             result.put("resultText", resultText);

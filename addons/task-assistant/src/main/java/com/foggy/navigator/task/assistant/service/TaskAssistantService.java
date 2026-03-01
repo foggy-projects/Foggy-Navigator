@@ -71,6 +71,9 @@ public class TaskAssistantService implements TaskAssistantFacade {
             return;
         }
 
+        // Lazy repair: fix stale cwd (~ not expanded) and re-bind auth
+        repairConfigIfNeeded(config);
+
         // 1. 创建 AgentTask（正式记录）
         String agentTaskId = null;
         if (agentTaskManager != null) {
@@ -94,7 +97,7 @@ public class TaskAssistantService implements TaskAssistantFacade {
 
             Map<String, Object> result = claudeWorkerFacade.syncQueryTracked(
                     userId, config.getWorkerId(), prompt,
-                    config.getCwd(), config.getClaudeSessionId(), 1,
+                    config.getCwd(), config.getClaudeSessionId(), 4,
                     config.getModel(),
                     ensureFoggySession(config),
                     config.getDirectoryId());
@@ -401,6 +404,46 @@ public class TaskAssistantService implements TaskAssistantFacade {
         } catch (Exception e) {
             log.warn("Failed to create foggy session for userId={}, falling back", config.getUserId(), e);
             return "task-assistant";
+        }
+    }
+
+    /**
+     * 修复旧配置：cwd 未展开（含 ~）时重新调用 initDirectory 获取展开路径，
+     * 同时重新绑定 modelConfig 确保 auth 状态正确。
+     */
+    private void repairConfigIfNeeded(TaskAssistantConfigEntity config) {
+        if (claudeWorkerFacade == null) return;
+        boolean needsSave = false;
+
+        // 1. cwd 含 ~ → 重新 initDirectory 获取展开路径 + 注册 allowed_cwds
+        if (config.getCwd() != null && config.getCwd().contains("~")) {
+            try {
+                Map<String, String> initFiles = loadInitFiles();
+                String directoryId = claudeWorkerFacade.initDirectory(
+                        config.getUserId(), config.getWorkerId(), config.getCwd(), initFiles);
+                String expandedPath = claudeWorkerFacade.getDirectoryPath(config.getUserId(), directoryId);
+                if (expandedPath != null && !expandedPath.equals(config.getCwd())) {
+                    log.info("Repaired cwd: {} → {} for userId={}", config.getCwd(), expandedPath, config.getUserId());
+                    config.setCwd(expandedPath);
+                    needsSave = true;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to repair cwd for userId={}: {}", config.getUserId(), e.getMessage());
+            }
+        }
+
+        // 2. modelConfigId 设置但目录 auth 未绑定 → 重新 bindDirectoryModelConfig
+        if (config.getModelConfigId() != null && config.getDirectoryId() != null) {
+            try {
+                claudeWorkerFacade.bindDirectoryModelConfig(
+                        config.getUserId(), config.getDirectoryId(), config.getModelConfigId());
+            } catch (Exception e) {
+                log.debug("Failed to rebind directory model config: {}", e.getMessage());
+            }
+        }
+
+        if (needsSave) {
+            configRepository.save(config);
         }
     }
 

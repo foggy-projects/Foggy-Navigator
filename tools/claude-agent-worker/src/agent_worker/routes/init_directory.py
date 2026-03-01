@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from ..auth import verify_token
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,17 @@ async def init_directory(request: InitDirectoryRequest) -> InitDirectoryResponse
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
             created_files.append(file_path)
+
+        # Register path in runtime allowed_cwds so subsequent /query calls are accepted
+        resolved = os.path.realpath(expanded_path)
+        if settings.allowed_cwds:
+            already_allowed = any(
+                resolved == os.path.realpath(a) or resolved.startswith(os.path.realpath(a).rstrip(os.sep) + os.sep)
+                for a in settings.allowed_cwds
+            )
+            if not already_allowed:
+                settings.allowed_cwds.append(resolved)
+                logger.info("Added %s to runtime allowed_cwds", resolved)
 
         logger.info("Initialized directory %s with %d files", expanded_path, len(created_files))
         return InitDirectoryResponse(path=expanded_path, files_created=created_files)
