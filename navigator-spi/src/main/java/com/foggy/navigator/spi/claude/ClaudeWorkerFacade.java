@@ -61,6 +61,21 @@ public interface ClaudeWorkerFacade {
                                    String model);
 
     /**
+     * 同步查询（带 claude_tasks 记录） — 在 syncQuery 基础上创建/完成任务记录，
+     * 使 Workers 页"历史会话"面板能按目录查到这些轻量查询。
+     *
+     * @param sessionId   Foggy 会话 ID（所有助手任务共用同一会话）
+     * @param directoryId 工作目录 ID（让 Workers 页按目录筛选到）
+     * @return Map: {resultText, claudeSessionId, costUsd, durationMs, error, taskId}
+     */
+    default Map<String, Object> syncQueryTracked(
+            String userId, String workerId, String prompt,
+            String cwd, String claudeSessionId, int maxTurns,
+            String model, String sessionId, String directoryId) {
+        return syncQuery(userId, workerId, prompt, cwd, claudeSessionId, maxTurns, model);
+    }
+
+    /**
      * 在 Worker 上初始化目录并注册为工作目录
      * @param files 文件相对路径 → 内容 的映射
      * @return 注册的 directoryId

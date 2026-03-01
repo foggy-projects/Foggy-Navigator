@@ -176,6 +176,34 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     }
 
     @Override
+    public Map<String, Object> syncQueryTracked(String userId, String workerId, String prompt,
+                                                 String cwd, String claudeSessionId, int maxTurns,
+                                                 String model, String sessionId, String directoryId) {
+        // 1. 创建 claude_tasks 记录（RUNNING）
+        String taskId = taskService.createTrackedSyncTask(
+                userId, workerId, sessionId, prompt, cwd, directoryId, claudeSessionId);
+
+        // 2. 执行 syncQuery
+        Map<String, Object> result = syncQuery(userId, workerId, prompt, cwd, claudeSessionId, maxTurns, model);
+
+        // 3. 完成/失败记录
+        String error = (String) result.get("error");
+        String newClaudeSessionId = (String) result.get("claudeSessionId");
+        if (error != null) {
+            taskService.failTask(taskId, newClaudeSessionId, truncate(error, 500));
+        } else {
+            taskService.completeTask(taskId, newClaudeSessionId,
+                    toBigDecimal(result.get("costUsd")),
+                    null, null,
+                    toLong(result.get("durationMs")),
+                    null, (String) result.get("model"));
+        }
+
+        result.put("taskId", taskId);
+        return result;
+    }
+
+    @Override
     public String initDirectory(String userId, String workerId, String path, Map<String, String> files) {
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
         if (!worker.getUserId().equals(userId)) {
@@ -239,5 +267,24 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         map.put("errorMessage", dto.getErrorMessage());
         map.put("createdAt", dto.getCreatedAt());
         return map;
+    }
+
+    private String truncate(String text, int maxLen) {
+        if (text == null) return null;
+        return text.length() > maxLen ? text.substring(0, maxLen) + "..." : text;
+    }
+
+    private java.math.BigDecimal toBigDecimal(Object value) {
+        if (value == null) return null;
+        if (value instanceof java.math.BigDecimal bd) return bd;
+        if (value instanceof Number num) return java.math.BigDecimal.valueOf(num.doubleValue());
+        return null;
+    }
+
+    private Long toLong(Object value) {
+        if (value == null) return null;
+        if (value instanceof Long l) return l;
+        if (value instanceof Number num) return num.longValue();
+        return null;
     }
 }

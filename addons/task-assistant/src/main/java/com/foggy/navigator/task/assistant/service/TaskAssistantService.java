@@ -92,10 +92,12 @@ public class TaskAssistantService implements TaskAssistantFacade {
             String eventJson = OBJECT_MAPPER.writeValueAsString(events);
             String prompt = "分析以下平台事件并生成通知：\n\n" + eventJson;
 
-            Map<String, Object> result = claudeWorkerFacade.syncQuery(
+            Map<String, Object> result = claudeWorkerFacade.syncQueryTracked(
                     userId, config.getWorkerId(), prompt,
                     config.getCwd(), config.getClaudeSessionId(), 1,
-                    config.getModel());
+                    config.getModel(),
+                    ensureFoggySession(config),
+                    config.getDirectoryId());
 
             // 3. 更新 claudeSessionId（对话记忆连续性）
             updateSessionId(config, result);
@@ -312,10 +314,12 @@ public class TaskAssistantService implements TaskAssistantFacade {
                     + "4. 返回通知 JSON（severity 根据今天的整体情况判断）\n\n"
                     + "如果今天没有任何任务活动记录，返回 severity=info 的简短通知即可。";
 
-            Map<String, Object> result = claudeWorkerFacade.syncQuery(
+            Map<String, Object> result = claudeWorkerFacade.syncQueryTracked(
                     config.getUserId(), config.getWorkerId(), prompt,
                     config.getCwd(), config.getClaudeSessionId(), 5,
-                    config.getModel());
+                    config.getModel(),
+                    ensureFoggySession(config),
+                    config.getDirectoryId());
 
             // 3. 更新 claudeSessionId
             updateSessionId(config, result);

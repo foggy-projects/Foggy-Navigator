@@ -213,6 +213,31 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 创建轻量 sync 任务记录（仅持久化 RUNNING 状态，不启动 SSE 流、不发布 ClaudeTaskStartEvent）
+     * 用于 syncQueryTracked 场景：让 Workers 页"历史会话"面板能查到这些轻量查询。
+     */
+    @Transactional
+    public String createTrackedSyncTask(String userId, String workerId, String sessionId,
+                                         String prompt, String cwd, String directoryId,
+                                         String claudeSessionId) {
+        String taskId = IdGenerator.shortId();
+        ClaudeTaskEntity entity = new ClaudeTaskEntity();
+        entity.setTaskId(taskId);
+        entity.setSessionId(sessionId);
+        entity.setWorkerId(workerId);
+        entity.setUserId(userId);
+        entity.setPrompt(truncate(prompt, 200));
+        entity.setCwd(cwd);
+        entity.setDirectoryId(directoryId);
+        entity.setClaudeSessionId(claudeSessionId);
+        entity.setFileCheckpointingEnabled(false);
+        entity.setStatus("RUNNING");
+        taskRepository.save(entity);
+        log.info("Tracked sync task created: taskId={}, workerId={}, directoryId={}", taskId, workerId, directoryId);
+        return taskId;
+    }
+
+    /**
      * 获取任务状态
      */
     public TaskDTO getTask(String userId, String taskId) {
