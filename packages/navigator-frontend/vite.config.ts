@@ -38,7 +38,7 @@ export default defineConfig({
         },
       },
       '/code': {
-        target: 'http://localhost:8443',
+        target: 'http://localhost:18443',
         changeOrigin: true,
         ws: true,
         rewrite: (path) => path.replace(/^\/code/, ''),
