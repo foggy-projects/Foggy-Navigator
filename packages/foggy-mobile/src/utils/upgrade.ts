@@ -54,30 +54,41 @@ export async function checkUpgradeManual(): Promise<boolean> {
 }
 
 async function doCheckUpgrade(): Promise<boolean> {
-  const appVersion = plus.runtime.version || '1.0.0'
-  const wgtVersion = plus.runtime.innerVersion || appVersion
+  try {
+    const appVersion = plus.runtime.version || '1.0.0'
+    const wgtVersion = plus.runtime.innerVersion || appVersion
 
-  const res = await uni.request({
-    url: UPGRADE_API,
-    method: 'POST',
-    data: {
-      action: 'checkVersion',
-      appid: APPID,
-      appVersion,
-      wgtVersion,
-      platform: 'android',
-    },
-  })
+    const res = await uni.request({
+      url: UPGRADE_API,
+      method: 'POST',
+      data: {
+        action: 'checkVersion',
+        appid: APPID,
+        appVersion,
+        wgtVersion,
+        platform: 'android',
+      },
+    })
 
-  const data = (res as any).data as UpgradeInfo
-  if (!data || data.code <= 0) return false
+    const statusCode = (res as any).statusCode
+    if (!statusCode || statusCode < 200 || statusCode >= 300) {
+      console.warn('[upgrade] check failed, HTTP', statusCode)
+      return false
+    }
 
-  if (data.is_silently && data.type === 'wgt') {
-    silentWgtUpdate(data.url)
-  } else {
-    _listener?.(data)
+    const data = (res as any).data as UpgradeInfo
+    if (!data || typeof data !== 'object' || !data.code || data.code <= 0) return false
+
+    if (data.is_silently && data.type === 'wgt') {
+      silentWgtUpdate(data.url)
+    } else {
+      _listener?.(data)
+    }
+    return true
+  } catch (e) {
+    console.warn('[upgrade] check error:', e)
+    return false
   }
-  return true
 }
 
 /** 静默 wgt 热更新：后台下载 → 安装 → 下次启动生效 */

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { createUniAppAxiosAdapter } from '@uni-helper/axios-adapter'
+import { createUniAppAxiosAdapter } from '@/utils/uni-axios-adapter'
 import { getApiBaseUrl } from '@/utils/config'
 import type { RX } from './types'
 

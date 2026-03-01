@@ -1,87 +1,135 @@
 <template>
-  <view class="diag-page">
-    <text class="diag-title">DIAG v1.0.9</text>
-    <text class="diag-info">{{ msg }}</text>
+  <view class="chat-list-page">
+    <!-- 头部 -->
+    <view class="page-header">
+      <text class="header-title">会话</text>
+      <view class="header-action" @tap="createNewSession">
+        <text class="action-icon">+</text>
+      </view>
+    </view>
+
+    <!-- 会话列表 -->
+    <scroll-view
+      scroll-y
+      class="session-list"
+      :refresher-enabled="true"
+      :refresher-triggered="refreshing"
+      @refresherrefresh="onRefresh"
+    >
+      <view v-if="loading && sessions.length === 0" class="loading-wrap">
+        <text class="loading-text">加载中...</text>
+      </view>
+      <view v-if="sessions.length > 0">
+        <view v-for="session in sessions" :key="session.id" class="session-swipe-wrap">
+          <SessionItem
+            :session="session"
+            @tap="openSession(session)"
+          />
+        </view>
+      </view>
+      <view v-if="!loading && sessions.length === 0" class="empty-wrap">
+        <EmptyState
+          title="暂无会话"
+          description="点击右上角 + 开始新对话"
+        />
+      </view>
+    </scroll-view>
+
+    <!-- #ifdef APP-PLUS -->
+    <UpgradePopup />
+    <!-- #endif -->
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { useSessionStore } from '@/stores/session'
+import type { Session } from '@/api/types'
+import SessionItem from '@/components/SessionItem.vue'
+import EmptyState from '@/components/EmptyState.vue'
+// #ifdef APP-PLUS
+import UpgradePopup from '@/components/UpgradePopup.vue'
+// #endif
 
-const msg = ref('setup started')
+const sessionStore = useSessionStore()
+const refreshing = ref(false)
+const loading = computed(() => sessionStore.loading)
 
-try {
-  msg.value = 'Vue setup OK, platform: '
-  // #ifdef APP-PLUS
-  msg.value += 'APP-PLUS'
-  // #endif
-  // #ifdef H5
-  msg.value += 'H5'
-  // #endif
-  msg.value += ', time: ' + new Date().toLocaleTimeString()
-} catch (e) {
-  msg.value = 'ERROR: ' + String(e)
-}
-
-onMounted(() => {
-  // #ifdef APP-PLUS
-  plus.nativeUI.alert({
-    title: 'Page Mounted',
-    message: 'chat/index onMounted OK\n' + msg.value,
-  })
-  // #endif
-})
+const sessions = computed(() =>
+  [...sessionStore.sessions].sort(
+    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+  ),
+)
 
 onShow(() => {
-  // #ifdef APP-PLUS
-  try {
-    // 检查当前页面 webview 状态
-    const pages = getCurrentPages()
-    const info = [
-      'onShow: YES',
-      'pages count: ' + pages.length,
-    ]
-    // 获取当前 webview 详情
-    const wv = plus.webview.currentWebview()
-    info.push('WV id: ' + wv.id)
-    info.push('WV URL: ' + (wv.getURL() || 'null'))
-    info.push('WV visible: ' + wv.isVisible())
-    // 所有 webview 列表
-    const all = plus.webview.all()
-    info.push('Total WVs: ' + all.length)
-    for (let i = 0; i < Math.min(all.length, 5); i++) {
-      info.push('  [' + i + '] id=' + all[i].id + ' visible=' + all[i].isVisible())
-    }
-    plus.nativeUI.alert({
-      title: 'Page onShow',
-      message: info.join('\n'),
-    })
-  } catch (e) {
-    plus.nativeUI.alert({
-      title: 'onShow Error',
-      message: String(e),
-    })
-  }
-  // #endif
+  sessionStore.loadSessions()
 })
+
+async function onRefresh() {
+  refreshing.value = true
+  await sessionStore.loadSessions()
+  refreshing.value = false
+}
+
+async function createNewSession() {
+  const session = await sessionStore.createSession('新会话')
+  if (session) {
+    uni.navigateTo({ url: `/pages/chat/detail?id=${session.id}` })
+  }
+}
+
+function openSession(session: Session) {
+  uni.navigateTo({ url: `/pages/chat/detail?id=${session.id}` })
+}
 </script>
 
 <style scoped>
-.diag-page {
-  background-color: #ff0000;
-  padding: 200rpx 40rpx;
+.chat-list-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #f5f5f5;
 }
-.diag-title {
-  font-size: 60rpx;
-  color: #ffffff;
-  font-weight: 700;
-  display: block;
-  margin-bottom: 40rpx;
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #f0f0f0;
 }
-.diag-info {
-  font-size: 36rpx;
+.header-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+}
+.header-action {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #667eea;
+  border-radius: 50%;
+}
+.action-icon {
+  font-size: 18px;
   color: #ffffff;
-  display: block;
+  font-weight: 300;
+}
+.session-list {
+  flex: 1;
+}
+.empty-wrap {
+  padding: 24px;
+}
+.loading-wrap {
+  padding: 24px;
+  text-align: center;
+}
+.loading-text {
+  font-size: 14px;
+  color: #909399;
 }
 </style>
