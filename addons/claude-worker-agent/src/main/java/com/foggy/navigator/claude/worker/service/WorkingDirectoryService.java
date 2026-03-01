@@ -430,7 +430,7 @@ public class WorkingDirectoryService {
                 .worktree(entity.getWorktree())
                 .sourceDirectoryId(entity.getSourceDirectoryId())
                 .defaultAuthMode(entity.getDefaultAuthMode())
-                .defaultAuthConfigured(entity.getDefaultAuthToken() != null)
+                .defaultAuthConfigured(entity.getDefaultAuthToken() != null || entity.getDefaultModelConfigId() != null)
                 .defaultBaseUrl(entity.getDefaultBaseUrl())
                 .maskedDefaultAuthToken(maskToken(entity))
                 .defaultModelConfigId(entity.getDefaultModelConfigId())

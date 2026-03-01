@@ -215,7 +215,11 @@ public class TaskAssistantService implements TaskAssistantFacade {
         Map<String, String> initFiles = loadInitFiles();
         String directoryId = claudeWorkerFacade.initDirectory(userId, workerId, path, initFiles);
 
-        // 绑定平台 LLM 配置���工作目录（设置 auth）
+        // 获取 Worker 上展开后的实际路径（~ → 绝对路径）
+        String expandedPath = claudeWorkerFacade.getDirectoryPath(userId, directoryId);
+        if (expandedPath == null) expandedPath = path;
+
+        // 绑定平台 LLM 配置到工作目录（设置 auth）
         if (modelConfigId != null && !modelConfigId.isEmpty()) {
             claudeWorkerFacade.bindDirectoryModelConfig(userId, directoryId, modelConfigId);
         }
@@ -228,7 +232,7 @@ public class TaskAssistantService implements TaskAssistantFacade {
                     return e;
                 });
         entity.setWorkerId(workerId);
-        entity.setCwd(path);
+        entity.setCwd(expandedPath);
         entity.setDirectoryId(directoryId);
         entity.setModelConfigId(modelConfigId);
         entity.setModel(model);

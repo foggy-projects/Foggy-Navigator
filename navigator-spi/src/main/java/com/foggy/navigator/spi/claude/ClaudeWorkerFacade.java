@@ -88,4 +88,11 @@ public interface ClaudeWorkerFacade {
     default void bindDirectoryModelConfig(String userId, String directoryId, String modelConfigId) {
         // no-op by default
     }
+
+    /**
+     * 获取工作目录的实际路径（Worker 上展开后的绝对路径）
+     */
+    default String getDirectoryPath(String userId, String directoryId) {
+        return null;
+    }
 }

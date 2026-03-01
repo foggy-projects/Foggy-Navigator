@@ -234,7 +234,39 @@ public class ClaudeTaskService {
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
         log.info("Tracked sync task created: taskId={}, workerId={}, directoryId={}", taskId, workerId, directoryId);
+
+        // 绑定目录 auth 到 session 的 ConversationConfig（UI 历史会话能看到 auth 状态）
+        try {
+            resolveAuth(sessionId, workerId, userId, directoryId, null);
+        } catch (Exception e) {
+            log.debug("Failed to bind auth for tracked sync task: {}", e.getMessage());
+        }
+
         return taskId;
+    }
+
+    /**
+     * 将同步查询的 prompt + result 持久化到 Session，使历史会话面板能显示对话内容
+     */
+    public void persistTrackedSyncMessages(String sessionId, String prompt, String resultText) {
+        try {
+            // USER prompt
+            sessionManager.addMessage(sessionId, com.foggy.navigator.agent.framework.session.Message.builder()
+                    .sessionId(sessionId)
+                    .role(com.foggy.navigator.agent.framework.session.MessageRole.USER)
+                    .content(prompt)
+                    .build());
+            // ASSISTANT result
+            if (resultText != null && !resultText.isEmpty()) {
+                sessionManager.addMessage(sessionId, com.foggy.navigator.agent.framework.session.Message.builder()
+                        .sessionId(sessionId)
+                        .role(com.foggy.navigator.agent.framework.session.MessageRole.ASSISTANT)
+                        .content(resultText)
+                        .build());
+            }
+        } catch (Exception e) {
+            log.warn("Failed to persist tracked sync messages: sessionId={}, error={}", sessionId, e.getMessage());
+        }
     }
 
     /**

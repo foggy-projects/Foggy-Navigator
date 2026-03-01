@@ -136,24 +136,36 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         String taskId = taskService.createTrackedSyncTask(
                 userId, workerId, sessionId, prompt, cwd, directoryId, claudeSessionId);
 
-        // 2. 解析目录绑定的 LLM 配置 auth
-        String[] auth = resolveDirectoryAuth(directoryId, userId);
+        Map<String, Object> result;
+        try {
+            // 2. 解析目录绑定的 LLM 配置 auth
+            String[] auth = resolveDirectoryAuth(directoryId, userId);
 
-        // 3. 执行 syncQuery（带 auth）
-        Map<String, Object> result = doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns,
-                auth[0], auth[1], auth[2]);
+            // 3. 执行 syncQuery（带 auth）
+            result = doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns,
+                    auth[0], auth[1], auth[2]);
 
-        // 4. 完成/失败记录
-        String error = (String) result.get("error");
-        String newClaudeSessionId = (String) result.get("claudeSessionId");
-        if (error != null) {
-            taskService.failTask(taskId, newClaudeSessionId, truncate(error, 500));
-        } else {
-            taskService.completeTask(taskId, newClaudeSessionId,
-                    toBigDecimal(result.get("costUsd")),
-                    null, null,
-                    toLong(result.get("durationMs")),
-                    null, (String) result.get("model"));
+            // 4. 持久化 prompt + result 到 Session（使历史会话面板能显示对话内容）
+            String resultText = (String) result.get("resultText");
+            taskService.persistTrackedSyncMessages(sessionId, prompt, resultText);
+
+            // 5. 完成/失败记录
+            String error = (String) result.get("error");
+            String newClaudeSessionId = (String) result.get("claudeSessionId");
+            if (error != null) {
+                taskService.failTask(taskId, newClaudeSessionId, truncate(error, 500));
+            } else {
+                taskService.completeTask(taskId, newClaudeSessionId,
+                        toBigDecimal(result.get("costUsd")),
+                        null, null,
+                        toLong(result.get("durationMs")),
+                        null, (String) result.get("model"));
+            }
+        } catch (Exception e) {
+            log.error("syncQueryTracked failed after task creation: taskId={}, error={}", taskId, e.getMessage(), e);
+            taskService.failTask(taskId, claudeSessionId, truncate(e.getMessage(), 500));
+            result = new LinkedHashMap<>();
+            result.put("error", e.getMessage());
         }
 
         result.put("taskId", taskId);
@@ -166,7 +178,13 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                 .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
         if (modelConfigId != null && !modelConfigId.isEmpty()) {
             entity.setDefaultModelConfigId(modelConfigId);
-            entity.setDefaultAuthMode(null);
+            // 从模型配置推导 authMode（用于 UI 显示 Auth 状态标签）
+            LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
+            if (modelConfig != null) {
+                String authMode = (modelConfig.getBaseUrl() != null && !modelConfig.getBaseUrl().isEmpty())
+                        ? "CUSTOM_ENDPOINT" : "API_KEY";
+                entity.setDefaultAuthMode(authMode);
+            }
             entity.setDefaultAuthToken(null);
             entity.setDefaultBaseUrl(null);
         } else {
@@ -174,6 +192,13 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         }
         directoryRepository.save(entity);
         log.info("Bound model config to directory: directoryId={}, modelConfigId={}", directoryId, modelConfigId);
+    }
+
+    @Override
+    public String getDirectoryPath(String userId, String directoryId) {
+        return directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .map(WorkingDirectoryEntity::getPath)
+                .orElse(null);
     }
 
     /**
@@ -222,6 +247,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                     resultText = event.getContent() != null ? event.getContent() : event.getResult();
                     result.put("costUsd", event.getCostUsd());
                     result.put("durationMs", event.getDurationMs());
+                    result.put("model", event.getModel());
                 } else if ("error".equals(event.getType())) {
                     result.put("error", event.getError());
                 }
@@ -229,6 +255,9 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
             result.put("resultText", resultText);
             result.put("claudeSessionId", newSessionId);
+
+            log.info("doSyncQuery completed: workerId={}, events={}, hasResult={}, hasError={}",
+                    worker.getWorkerId(), events.size(), resultText != null, result.containsKey("error"));
 
         } catch (Exception e) {
             log.error("syncQuery failed: workerId={}, error={}", worker.getWorkerId(), e.getMessage(), e);
@@ -265,10 +294,15 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         if (!worker.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Worker not found: " + workerId);
         }
+        // Worker 返回展开后的路径（如 ~/foggy-assistant → C:\Users\xxx\foggy-assistant）
+        String expandedPath = path;
         try {
             ClaudeWorkerClient client = workerService.createClient(worker);
-            client.initDirectory(path, files).block(Duration.ofSeconds(30));
-            log.info("Initialized directory on worker {}: path={}", workerId, path);
+            Map<String, Object> response = client.initDirectory(path, files).block(Duration.ofSeconds(30));
+            if (response != null && response.get("path") != null) {
+                expandedPath = (String) response.get("path");
+            }
+            log.info("Initialized directory on worker {}: path={} → {}", workerId, path, expandedPath);
         } catch (Exception e) {
             log.error("Failed to init directory on worker {}: {}", workerId, e.getMessage(), e);
             throw new RuntimeException("Failed to initialize directory: " + e.getMessage(), e);
@@ -276,9 +310,19 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
         // 注册工作目录（如果已存在则返回现有 directoryId）
         Optional<WorkingDirectoryEntity> existing = directoryRepository
-                .findByWorkerIdAndPathAndUserId(workerId, path, userId);
+                .findByWorkerIdAndPathAndUserId(workerId, expandedPath, userId);
         if (existing.isPresent()) {
             return existing.get().getDirectoryId();
+        }
+        // 也检查原始路径（兼容旧数据）
+        Optional<WorkingDirectoryEntity> existingOriginal = directoryRepository
+                .findByWorkerIdAndPathAndUserId(workerId, path, userId);
+        if (existingOriginal.isPresent()) {
+            // 更新为展开后的路径
+            WorkingDirectoryEntity old = existingOriginal.get();
+            old.setPath(expandedPath);
+            directoryRepository.save(old);
+            return old.getDirectoryId();
         }
 
         WorkingDirectoryEntity entity = new WorkingDirectoryEntity();
@@ -286,7 +330,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         entity.setWorkerId(workerId);
         entity.setUserId(userId);
         entity.setProjectName("foggy-assistant");
-        entity.setPath(path);
+        entity.setPath(expandedPath);
         entity.setDirectoryType("STANDARD");
         entity.setWorktree(false);
         directoryRepository.save(entity);

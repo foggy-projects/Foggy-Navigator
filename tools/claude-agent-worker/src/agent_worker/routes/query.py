@@ -33,7 +33,7 @@ def _validate_cwd(cwd: str | None) -> str:
     if cwd is None:
         cwd = os.getcwd()
 
-    resolved = os.path.realpath(cwd)
+    resolved = os.path.realpath(os.path.expanduser(cwd))
 
     if not settings.allowed_cwds:
         return resolved
