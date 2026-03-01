@@ -75,6 +75,12 @@ public class TaskAssistantEventBridge {
             return;
         }
 
+        // 跳过来自助手自身会话的事件（用户手动在 foggy-assistant 目录发送的消息）
+        if (isAssistantSession(userId, event.getParentSessionId())) {
+            log.debug("Skipping event from assistant's own session: parentSessionId={}", event.getParentSessionId());
+            return;
+        }
+
         Map<String, Object> eventData = new LinkedHashMap<>();
         eventData.put("type", "task_completed");
         eventData.put("taskId", event.getTaskId());
@@ -98,6 +104,11 @@ public class TaskAssistantEventBridge {
         String userId = resolveUserId(event.getParentSessionId());
         if (userId == null) {
             log.debug("Cannot resolve userId for parentSessionId={}", event.getParentSessionId());
+            return;
+        }
+
+        // 跳过来自助手自身会话的事件
+        if (isAssistantSession(userId, event.getParentSessionId())) {
             return;
         }
 
@@ -166,6 +177,17 @@ public class TaskAssistantEventBridge {
     private List<Map<String, Object>> drainEvents(String userId) {
         List<Map<String, Object>> events = pendingEvents.remove(userId);
         return events != null ? new ArrayList<>(events) : List.of();
+    }
+
+    /**
+     * 判断 sessionId 是否为该用户的任务助手专属会话，
+     * 是则跳过（用户手动在 foggy-assistant 目录操作不需要二次处理）。
+     */
+    private boolean isAssistantSession(String userId, String sessionId) {
+        if (assistantFacade == null || sessionId == null) return false;
+        return assistantFacade.getConfig(userId)
+                .map(config -> sessionId.equals(config.getFoggySessionId()))
+                .orElse(false);
     }
 
     @Nullable
