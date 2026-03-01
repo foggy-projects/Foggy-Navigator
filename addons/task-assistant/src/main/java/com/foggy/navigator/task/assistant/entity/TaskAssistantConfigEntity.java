@@ -40,6 +40,10 @@ public class TaskAssistantConfigEntity {
     @Column(length = 512)
     private String cwd;
 
+    /** 平台 LLM 模型配置 ID（用于绑定工作目录 auth + 解析 API Key） */
+    @Column(length = 64)
+    private String modelConfigId;
+
     /** AI 模型名称，如 claude-sonnet-4-20250514 */
     @Column(length = 128)
     private String model;

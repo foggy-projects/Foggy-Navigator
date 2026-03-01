@@ -41,8 +41,11 @@ public interface TaskAssistantFacade {
 
     /**
      * 创建或更新助手配置，绑定 Worker + 目录 + 模型
+     * @param modelConfigId 平台 LLM 配置 ID（绑定到工作目录 auth）
+     * @param model         模型名称（传给 Worker 的 --model 参数）
      */
-    TaskAssistantConfig createOrUpdate(String userId, String workerId, String directoryPath, String model);
+    TaskAssistantConfig createOrUpdate(String userId, String workerId, String directoryPath,
+                                        String modelConfigId, String model);
 
     /**
      * 启用/禁用

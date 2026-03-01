@@ -256,12 +256,12 @@
               </el-form-item>
 
               <el-form-item label="LLM 配置">
-                <el-select v-model="assistantCreateForm.model" placeholder="使用 Worker 默认模型" clearable style="width: 100%">
+                <el-select v-model="assistantCreateForm.modelConfigId" placeholder="使用 Worker 默认模型" clearable style="width: 100%">
                   <el-option
                     v-for="m in llmModels"
                     :key="m.id"
                     :label="`${m.name} (${m.modelName})`"
-                    :value="m.modelName"
+                    :value="m.id"
                   />
                 </el-select>
                 <div class="el-form-item__description" style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
@@ -1173,7 +1173,7 @@ const assistantLoading = ref(false)
 const assistantSaving = ref(false)
 const assistantTesting = ref(false)
 const assistantEnabledToggle = ref(false)
-const assistantCreateForm = ref({ workerId: '', directoryPath: '', model: '' })
+const assistantCreateForm = ref({ workerId: '', directoryPath: '', modelConfigId: '' })
 
 async function loadAssistantConfig() {
   assistantLoading.value = true
@@ -1189,10 +1189,12 @@ async function loadAssistantConfig() {
 async function handleCreateAssistant() {
   assistantSaving.value = true
   try {
+    const selectedModel = llmModels.value.find(m => m.id === assistantCreateForm.value.modelConfigId)
     assistantConfig.value = await apiCreateAssistant({
       workerId: assistantCreateForm.value.workerId,
       directoryPath: assistantCreateForm.value.directoryPath || undefined,
-      model: assistantCreateForm.value.model || undefined,
+      modelConfigId: assistantCreateForm.value.modelConfigId || undefined,
+      model: selectedModel?.modelName || undefined,
     })
     assistantEnabledToggle.value = assistantConfig.value?.enabled || false
     ElMessage.success('助手创建成功')
@@ -1218,7 +1220,7 @@ async function handleDeleteAssistant() {
     await ElMessageBox.confirm('确认删除助手？Worker 上的工作目录将保留。', '提示', { type: 'warning' })
     await apiDeleteAssistant()
     assistantConfig.value = null
-    assistantCreateForm.value = { workerId: '', directoryPath: '', model: '' }
+    assistantCreateForm.value = { workerId: '', directoryPath: '', modelConfigId: '' }
     ElMessage.success('助手已删除')
   } catch { /* cancelled */ }
 }

@@ -81,4 +81,11 @@ public interface ClaudeWorkerFacade {
      * @return 注册的 directoryId
      */
     String initDirectory(String userId, String workerId, String path, Map<String, String> files);
+
+    /**
+     * 绑定平台 LLM 配置到工作目录（设置 defaultModelConfigId，清空手动 auth）
+     */
+    default void bindDirectoryModelConfig(String userId, String directoryId, String modelConfigId) {
+        // no-op by default
+    }
 }

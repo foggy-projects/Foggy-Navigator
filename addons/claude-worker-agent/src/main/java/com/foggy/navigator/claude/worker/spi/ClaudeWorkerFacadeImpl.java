@@ -13,8 +13,10 @@ import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
 import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -34,6 +36,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     private final ClaudeTaskService taskService;
     private final WorkerStreamRelay streamRelay;
     private final WorkingDirectoryRepository directoryRepository;
+    private final LlmModelManager llmModelManager;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -117,7 +120,68 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         if (!worker.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Worker not found: " + workerId);
         }
+        return doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns, null, null, null);
+    }
 
+    @Override
+    public Map<String, Object> syncQueryTracked(String userId, String workerId, String prompt,
+                                                 String cwd, String claudeSessionId, int maxTurns,
+                                                 String model, String sessionId, String directoryId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Worker not found: " + workerId);
+        }
+
+        // 1. 创建 claude_tasks 记录（RUNNING）
+        String taskId = taskService.createTrackedSyncTask(
+                userId, workerId, sessionId, prompt, cwd, directoryId, claudeSessionId);
+
+        // 2. 解析目录绑定的 LLM 配置 auth
+        String[] auth = resolveDirectoryAuth(directoryId, userId);
+
+        // 3. 执行 syncQuery（带 auth）
+        Map<String, Object> result = doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns,
+                auth[0], auth[1], auth[2]);
+
+        // 4. 完成/失败记录
+        String error = (String) result.get("error");
+        String newClaudeSessionId = (String) result.get("claudeSessionId");
+        if (error != null) {
+            taskService.failTask(taskId, newClaudeSessionId, truncate(error, 500));
+        } else {
+            taskService.completeTask(taskId, newClaudeSessionId,
+                    toBigDecimal(result.get("costUsd")),
+                    null, null,
+                    toLong(result.get("durationMs")),
+                    null, (String) result.get("model"));
+        }
+
+        result.put("taskId", taskId);
+        return result;
+    }
+
+    @Override
+    public void bindDirectoryModelConfig(String userId, String directoryId, String modelConfigId) {
+        WorkingDirectoryEntity entity = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+        if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            entity.setDefaultModelConfigId(modelConfigId);
+            entity.setDefaultAuthMode(null);
+            entity.setDefaultAuthToken(null);
+            entity.setDefaultBaseUrl(null);
+        } else {
+            entity.setDefaultModelConfigId(null);
+        }
+        directoryRepository.save(entity);
+        log.info("Bound model config to directory: directoryId={}, modelConfigId={}", directoryId, modelConfigId);
+    }
+
+    /**
+     * 内部 syncQuery 实现，支持可选的 per-request auth 覆盖
+     */
+    private Map<String, Object> doSyncQuery(ClaudeWorkerEntity worker, String prompt, String cwd,
+                                             String claudeSessionId, String model, int maxTurns,
+                                             String apiKey, String authToken, String baseUrl) {
         Map<String, Object> result = new LinkedHashMap<>();
         long startTime = System.currentTimeMillis();
 
@@ -130,7 +194,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             // Collect all SSE events synchronously with bypassPermissions
             List<WorkerEvent> events = client.streamQuery(
                             prompt, cwd, claudeSessionId, model, maxTurns,
-                            null, null, null, null, null, "bypassPermissions", null,
+                            null, null, apiKey, authToken, baseUrl, "bypassPermissions", null,
                             null, null)
                     .mapNotNull(sse -> {
                         String data = sse.data();
@@ -167,7 +231,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             result.put("claudeSessionId", newSessionId);
 
         } catch (Exception e) {
-            log.error("syncQuery failed: workerId={}, error={}", workerId, e.getMessage(), e);
+            log.error("syncQuery failed: workerId={}, error={}", worker.getWorkerId(), e.getMessage(), e);
             result.put("error", e.getMessage());
             result.put("durationMs", System.currentTimeMillis() - startTime);
         }
@@ -175,32 +239,24 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         return result;
     }
 
-    @Override
-    public Map<String, Object> syncQueryTracked(String userId, String workerId, String prompt,
-                                                 String cwd, String claudeSessionId, int maxTurns,
-                                                 String model, String sessionId, String directoryId) {
-        // 1. 创建 claude_tasks 记录（RUNNING）
-        String taskId = taskService.createTrackedSyncTask(
-                userId, workerId, sessionId, prompt, cwd, directoryId, claudeSessionId);
-
-        // 2. 执行 syncQuery
-        Map<String, Object> result = syncQuery(userId, workerId, prompt, cwd, claudeSessionId, maxTurns, model);
-
-        // 3. 完成/失败记录
-        String error = (String) result.get("error");
-        String newClaudeSessionId = (String) result.get("claudeSessionId");
-        if (error != null) {
-            taskService.failTask(taskId, newClaudeSessionId, truncate(error, 500));
-        } else {
-            taskService.completeTask(taskId, newClaudeSessionId,
-                    toBigDecimal(result.get("costUsd")),
-                    null, null,
-                    toLong(result.get("durationMs")),
-                    null, (String) result.get("model"));
+    /**
+     * 从工作目录的 defaultModelConfigId 解析 auth
+     * @return [apiKey, authToken, baseUrl]（可能全 null）
+     */
+    private String[] resolveDirectoryAuth(String directoryId, String userId) {
+        if (directoryId == null || directoryId.isEmpty()) {
+            return new String[]{null, null, null};
         }
-
-        result.put("taskId", taskId);
-        return result;
+        WorkingDirectoryEntity dir = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId).orElse(null);
+        if (dir == null || dir.getDefaultModelConfigId() == null) {
+            return new String[]{null, null, null};
+        }
+        LlmModelConfigDTO config = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
+        if (config == null || !Boolean.TRUE.equals(config.getHasApiKey())) {
+            return new String[]{null, null, null};
+        }
+        String apiKey = llmModelManager.getDecryptedApiKey(dir.getDefaultModelConfigId());
+        return new String[]{apiKey, null, config.getBaseUrl()};
     }
 
     @Override

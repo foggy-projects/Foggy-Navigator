@@ -39,7 +39,8 @@ public class TaskAssistantController {
     @PostMapping("/config")
     public RX<TaskAssistantConfig> createAssistant(@RequestBody CreateForm form) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(assistantFacade.createOrUpdate(userId, form.getWorkerId(), form.getDirectoryPath(), form.getModel()));
+        return RX.ok(assistantFacade.createOrUpdate(userId, form.getWorkerId(), form.getDirectoryPath(),
+                form.getModelConfigId(), form.getModel()));
     }
 
     @PutMapping("/config")
@@ -88,6 +89,8 @@ public class TaskAssistantController {
     public static class CreateForm {
         private String workerId;
         private String directoryPath;
+        /** 平台 LLM 配置 ID（绑定目录 auth） */
+        private String modelConfigId;
         /** AI 模型名称，如 claude-sonnet-4-20250514 */
         private String model;
     }

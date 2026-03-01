@@ -198,7 +198,8 @@ public class TaskAssistantService implements TaskAssistantFacade {
 
     @Override
     @Transactional
-    public TaskAssistantConfig createOrUpdate(String userId, String workerId, String directoryPath, String model) {
+    public TaskAssistantConfig createOrUpdate(String userId, String workerId, String directoryPath,
+                                               String modelConfigId, String model) {
         if (claudeWorkerFacade == null) {
             throw new IllegalStateException("Claude Worker module is not available");
         }
@@ -214,6 +215,11 @@ public class TaskAssistantService implements TaskAssistantFacade {
         Map<String, String> initFiles = loadInitFiles();
         String directoryId = claudeWorkerFacade.initDirectory(userId, workerId, path, initFiles);
 
+        // 绑定平台 LLM 配置���工作目录（设置 auth）
+        if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            claudeWorkerFacade.bindDirectoryModelConfig(userId, directoryId, modelConfigId);
+        }
+
         // 创建/更新配置
         TaskAssistantConfigEntity entity = configRepository.findByUserId(userId)
                 .orElseGet(() -> {
@@ -224,6 +230,7 @@ public class TaskAssistantService implements TaskAssistantFacade {
         entity.setWorkerId(workerId);
         entity.setCwd(path);
         entity.setDirectoryId(directoryId);
+        entity.setModelConfigId(modelConfigId);
         entity.setModel(model);
         entity.setEnabled(true);
         entity.setClaudeSessionId(null); // 新会话
@@ -458,6 +465,7 @@ public class TaskAssistantService implements TaskAssistantFacade {
                 .directoryId(entity.getDirectoryId())
                 .claudeSessionId(entity.getClaudeSessionId())
                 .cwd(entity.getCwd())
+                .modelConfigId(entity.getModelConfigId())
                 .model(entity.getModel())
                 .build();
     }
