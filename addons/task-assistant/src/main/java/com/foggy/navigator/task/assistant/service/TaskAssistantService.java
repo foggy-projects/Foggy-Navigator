@@ -7,6 +7,8 @@ import com.foggy.navigator.task.assistant.spi.TaskAssistantFacade;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.notification.UserNotificationSender;
 import com.foggy.navigator.spi.task.AgentTaskManager;
+import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
+import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.task.assistant.entity.TaskAssistantConfigEntity;
 import com.foggy.navigator.task.assistant.repository.TaskAssistantConfigRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -42,15 +44,19 @@ public class TaskAssistantService implements TaskAssistantFacade {
     private final ClaudeWorkerFacade claudeWorkerFacade;
     @Nullable
     private final AgentTaskManager agentTaskManager;
+    @Nullable
+    private final SessionManager sessionManager;
 
     public TaskAssistantService(TaskAssistantConfigRepository configRepository,
                                  UserNotificationSender notificationSender,
                                  @Nullable ClaudeWorkerFacade claudeWorkerFacade,
-                                 @Nullable AgentTaskManager agentTaskManager) {
+                                 @Nullable AgentTaskManager agentTaskManager,
+                                 @Nullable SessionManager sessionManager) {
         this.configRepository = configRepository;
         this.notificationSender = notificationSender;
         this.claudeWorkerFacade = claudeWorkerFacade;
         this.agentTaskManager = agentTaskManager;
+        this.sessionManager = sessionManager;
     }
 
     // --- 新增：正式任务记录的事件处理 ---
@@ -70,7 +76,7 @@ public class TaskAssistantService implements TaskAssistantFacade {
         if (agentTaskManager != null) {
             String promptSummary = truncate(events.size() + " platform events", PROMPT_SUMMARY_MAX_LENGTH);
             agentTaskId = agentTaskManager.createTask(
-                    "task-assistant",   // parentSessionId — 助手无父会话，用固定标识
+                    ensureFoggySession(config),
                     userId,
                     "task-assistant",   // sourceAgentId
                     "task-assistant",   // targetAgentId
@@ -220,6 +226,9 @@ public class TaskAssistantService implements TaskAssistantFacade {
         entity.setEnabled(true);
         entity.setClaudeSessionId(null); // 新会话
 
+        // 确保关联 Foggy 会话
+        ensureFoggySession(entity);
+
         return toDTO(configRepository.save(entity));
     }
 
@@ -280,7 +289,7 @@ public class TaskAssistantService implements TaskAssistantFacade {
         String agentTaskId = null;
         if (agentTaskManager != null) {
             agentTaskId = agentTaskManager.createTask(
-                    "task-assistant",   // parentSessionId — 助手无父会话，用固定标识
+                    ensureFoggySession(config),
                     config.getUserId(),
                     "task-assistant",   // sourceAgentId
                     "task-assistant",   // targetAgentId
@@ -345,6 +354,33 @@ public class TaskAssistantService implements TaskAssistantFacade {
     }
 
     // --- Private helpers ---
+
+    /**
+     * 确保 config 持有一个 Foggy 会话 ID。
+     * 已有则直接返回；没有则懒创建并持久化。创建失败时 fallback "task-assistant"。
+     */
+    private String ensureFoggySession(TaskAssistantConfigEntity config) {
+        if (config.getFoggySessionId() != null) {
+            return config.getFoggySessionId();
+        }
+        if (sessionManager == null) {
+            return "task-assistant";
+        }
+        try {
+            String foggySessionId = sessionManager.createSession(SessionCreateRequest.builder()
+                    .userId(config.getUserId())
+                    .agentId("task-assistant")
+                    .taskName("任务助手")
+                    .build());
+            config.setFoggySessionId(foggySessionId);
+            configRepository.save(config);
+            log.info("Lazy-created foggy session {} for userId={}", foggySessionId, config.getUserId());
+            return foggySessionId;
+        } catch (Exception e) {
+            log.warn("Failed to create foggy session for userId={}, falling back", config.getUserId(), e);
+            return "task-assistant";
+        }
+    }
 
     private void updateSessionId(TaskAssistantConfigEntity config, Map<String, Object> result) {
         String newSessionId = (String) result.get("claudeSessionId");
