@@ -2679,16 +2679,25 @@ function openCodeServer() {
   const dir = selectedDirectory.value
   const folder = dir ? encodeURIComponent(dir.path) : ''
 
-  // Extract hostname from worker baseUrl (e.g. http://192.168.1.100:3031 → 192.168.1.100)
-  let host: string
-  try {
-    host = new URL(worker.baseUrl).hostname
-  } catch {
-    host = worker.baseUrl.replace(/https?:\/\//, '').replace(/:\d+.*/, '')
-  }
+  // If accessing via frp/proxy (same origin), use /code/ path
+  // If accessing locally (Worker IP reachable), use direct port
+  const currentHost = window.location.hostname
+  const isLocalAccess = currentHost === 'localhost' || currentHost === '127.0.0.1'
 
-  const codeServerPort = 18443
-  const url = `http://${host}:${codeServerPort}/?folder=${folder}`
+  let url: string
+  if (isLocalAccess) {
+    // Local dev: direct to code-server port
+    let host: string
+    try {
+      host = new URL(worker.baseUrl).hostname
+    } catch {
+      host = worker.baseUrl.replace(/https?:\/\//, '').replace(/:\d+.*/, '')
+    }
+    url = `http://${host}:18443/?folder=${folder}`
+  } else {
+    // Production via frp: use same origin + /code/ path (Vite/Nginx proxy)
+    url = `${window.location.origin}/code/?folder=${folder}`
+  }
   window.open(url, '_blank')
 }
 
