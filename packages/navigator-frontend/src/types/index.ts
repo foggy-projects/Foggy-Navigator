@@ -81,6 +81,7 @@ export interface ClaudeWorker {
   sshUsername?: string
   sshPort?: number
   sshPasswordConfigured?: boolean
+  codeServerUrl?: string
 }
 
 /** Claude 任务 */
@@ -164,6 +165,31 @@ export interface ConversationConfig {
   baseUrl?: string
   maskedAuthToken?: string
   tags?: string[]
+}
+
+// ===== A2A 协议类型 =====
+
+export interface A2aPart {
+  type: 'text' | 'data' | 'file'
+  text?: string
+  data?: Record<string, unknown>
+}
+
+export interface A2aArtifact {
+  artifactId?: string
+  name?: string
+  parts: A2aPart[]
+}
+
+export interface A2aTaskStatus {
+  state: 'SUBMITTED' | 'WORKING' | 'INPUT_REQUIRED' | 'COMPLETED' | 'FAILED' | 'CANCELED'
+  description?: string
+}
+
+export interface A2aTask {
+  id: string
+  status: A2aTaskStatus
+  artifacts?: A2aArtifact[]
 }
 
 // ===== 跨 Agent 任务类型 =====

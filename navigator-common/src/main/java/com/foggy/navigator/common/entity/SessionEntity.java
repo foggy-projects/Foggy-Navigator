@@ -45,6 +45,10 @@ public class SessionEntity {
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    /** 参与本会话的 Agent ID 列表，JSON 数组 ["agentId1","agentId2"] */
+    @Column(columnDefinition = "TEXT")
+    private String participatingAgentIds;
+
     @Column(nullable = false)
     private LocalDateTime updatedAt;
 

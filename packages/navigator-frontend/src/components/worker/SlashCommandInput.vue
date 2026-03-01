@@ -18,6 +18,33 @@
       </template>
     </el-input>
 
+    <!-- @mention palette — teleported to body -->
+    <Teleport to="body">
+      <div
+        v-if="showAtPanel"
+        class="slash-panel"
+        ref="atPanelRef"
+        :style="panelStyle"
+      >
+        <div v-if="filteredAgents.length" class="slash-group">
+          <div class="slash-group-title">Agents</div>
+          <div
+            v-for="(agent, i) in filteredAgents"
+            :key="'agent-' + agent.agentId"
+            :class="['slash-item', { active: i === atActiveIndex }]"
+            @mousedown.prevent="selectAgent(i)"
+            @mouseenter="atActiveIndex = i"
+          >
+            <span class="slash-name">@{{ agent.name }}</span>
+            <span class="slash-desc">{{ agent.description || '' }}</span>
+          </div>
+        </div>
+        <div v-if="!filteredAgents.length" class="slash-empty">
+          无匹配 Agent
+        </div>
+      </div>
+    </Teleport>
+
     <!-- Command palette — teleported to body to escape overflow:hidden -->
     <Teleport to="body">
       <div
@@ -131,6 +158,12 @@ const BUILT_IN: BuiltInCommand[] = [
   },
 ]
 
+export interface AgentItem {
+  agentId: string
+  name: string
+  description?: string
+}
+
 const props = withDefaults(
   defineProps<{
     modelValue: string
@@ -139,6 +172,7 @@ const props = withDefaults(
     disabled?: boolean
     size?: '' | 'small' | 'large' | 'default'
     skills?: SkillInfo[]
+    agents?: AgentItem[]
     autoGrow?: boolean
     maxRows?: number
   }>(),
@@ -148,6 +182,7 @@ const props = withDefaults(
     disabled: false,
     size: '',
     skills: () => [],
+    agents: () => [],
     autoGrow: false,
     maxRows: 6,
   },
@@ -166,6 +201,34 @@ const emit = defineEmits<{
 const inputRef = ref()
 const wrapRef = ref<HTMLElement>()
 const panelRef = ref<HTMLElement>()
+const atPanelRef = ref<HTMLElement>()
+
+// --- @mention state ---
+const atPhase = ref(false)
+const atQuery = ref('')
+const atActiveIndex = ref(0)
+const showAtPanel = computed(() => atPhase.value && props.agents.length > 0)
+
+const filteredAgents = computed(() => {
+  const q = atQuery.value.toLowerCase()
+  return props.agents.filter(
+    (a) => a.name.toLowerCase().includes(q) || (a.description || '').toLowerCase().includes(q),
+  )
+})
+
+function selectAgent(idx: number) {
+  const agent = filteredAgents.value[idx]
+  if (!agent) return
+  emit('update:modelValue', '@' + agent.name + ' ')
+  closeAtPanel()
+  focusInput()
+}
+
+function closeAtPanel() {
+  atPhase.value = false
+  atQuery.value = ''
+  atActiveIndex.value = 0
+}
 
 const showPanel = ref(false)
 const phase = ref<'main' | 'sub'>('main')
@@ -251,11 +314,28 @@ function openPanel() {
   nextTick(updatePanelPosition)
 }
 
-// Watch text changes to detect slash prefix
+// Watch text changes to detect slash or @mention prefix
 watch(
   () => props.modelValue,
   (val) => {
     if (phase.value === 'sub') return // don't re-enter main when in sub-phase
+
+    // Detect @mention: text starts with @ and no space yet in the @query part
+    const atMatch = val.match(/^@(\S*)$/)
+    if (atMatch && props.agents.length > 0) {
+      atQuery.value = atMatch[1] ?? ''
+      atPhase.value = true
+      atActiveIndex.value = 0
+      closePanel() // close slash panel if open
+      nextTick(updatePanelPosition)
+      return
+    }
+
+    // Close @mention panel if text no longer matches
+    if (atPhase.value) {
+      closeAtPanel()
+    }
+
     if (val.startsWith('/')) {
       const query = val.slice(1)
       slashQuery.value = query
@@ -295,6 +375,30 @@ function closePanel() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // Handle @mention panel keyboard navigation
+  if (showAtPanel.value) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeAtPanel()
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      atActiveIndex.value = Math.min(atActiveIndex.value + 1, filteredAgents.value.length - 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      atActiveIndex.value = Math.max(atActiveIndex.value - 1, 0)
+      return
+    }
+    if (e.key === 'Tab' || e.key === 'Enter') {
+      e.preventDefault()
+      selectAgent(atActiveIndex.value)
+      return
+    }
+  }
+
   if (!showPanel.value) {
     // Ctrl+Enter → submit (for textarea mode)
     if (e.key === 'Enter' && e.ctrlKey && props.rows > 1) {
@@ -425,8 +529,14 @@ function scrollActiveIntoView() {
 
 // Close panel when clicking outside
 function handleClickOutside(e: MouseEvent) {
-  if (!showPanel.value) return
   const inWrap = wrapRef.value?.contains(e.target as Node)
+  if (showAtPanel.value) {
+    const inAtPanel = atPanelRef.value?.contains(e.target as Node)
+    if (!inWrap && !inAtPanel) {
+      closeAtPanel()
+    }
+  }
+  if (!showPanel.value) return
   const inPanel = panelRef.value?.contains(e.target as Node)
   if (!inWrap && !inPanel) {
     closePanel()

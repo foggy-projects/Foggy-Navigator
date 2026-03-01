@@ -60,8 +60,9 @@
               auto-grow
               :max-rows="4"
               :disabled="inputDisabled"
-              placeholder="输入后续指令... (Shift+Enter 换行, / 触发命令)"
+              placeholder="输入后续指令... (Shift+Enter 换行, / 命令, @ 提及 Agent)"
               :skills="skills || []"
+              :agents="agents || []"
               @submit="handleSend()"
               @command="handleCommand"
               @history-prev="handlePaneHistoryPrev"
@@ -88,10 +89,12 @@ import type { TaskPaneState } from '@/composables/useTaskPane'
 import { useInputMemory } from '@/composables/useInputMemory'
 import type { SkillInfo } from '@/types'
 import SlashCommandInput from './SlashCommandInput.vue'
+import type { AgentItem } from './SlashCommandInput.vue'
 
 const props = defineProps<{
   paneState: TaskPaneState
   skills?: SkillInfo[]
+  agents?: AgentItem[]
 }>()
 
 const emit = defineEmits<{

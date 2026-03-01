@@ -5,6 +5,7 @@
       :key="pane.paneId"
       :pane-state="pane"
       :skills="skills"
+      :agents="agents"
       :class="{ 'span-full': panes.length === 3 && pane === panes[2] }"
       @close="(id) => emit('close', id)"
       @abort="(id) => emit('abort', id)"
@@ -22,10 +23,12 @@
 import TaskPane from './TaskPane.vue'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import type { SkillInfo } from '@/types'
+import type { AgentItem } from './SlashCommandInput.vue'
 
 defineProps<{
   panes: TaskPaneState[]
   skills?: SkillInfo[]
+  agents?: AgentItem[]
 }>()
 
 const emit = defineEmits<{

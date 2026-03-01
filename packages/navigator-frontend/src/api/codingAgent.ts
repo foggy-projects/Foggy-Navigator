@@ -1,5 +1,5 @@
 import client from './client'
-import type { RX, CodingAgent, DirectorySummary } from '@/types'
+import type { RX, CodingAgent, DirectorySummary, A2aTask } from '@/types'
 
 export async function listAgents(): Promise<CodingAgent[]> {
   const rx = (await client.get('/coding-agents')) as unknown as RX<CodingAgent[]>
@@ -52,4 +52,12 @@ export async function bindDirectory(agentId: string, directoryId: string): Promi
 
 export async function unbindDirectory(agentId: string, directoryId: string): Promise<void> {
   await client.delete(`/coding-agents/${agentId}/directories/${directoryId}`)
+}
+
+/** 向 Agent 提问（A2A ask），可选传入 sessionId 记录咨询 */
+export async function askAgent(agentId: string, question: string, sessionId?: string): Promise<A2aTask> {
+  const payload: Record<string, string> = { question }
+  if (sessionId) payload.sessionId = sessionId
+  const rx = (await client.post(`/agents/${agentId}/ask`, payload)) as unknown as RX<A2aTask>
+  return rx.data
 }

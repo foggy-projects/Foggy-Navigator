@@ -380,6 +380,7 @@
           v-if="panes.length > 0"
           :panes="panes"
           :skills="directorySkills"
+          :agents="allAgentItems"
           @close="closePane"
           @abort="abortPane"
           @send="handlePaneSend"
@@ -621,6 +622,7 @@
           v-if="panes.length > 0"
           :panes="panes"
           :skills="directorySkills"
+          :agents="allAgentItems"
           @close="closePane"
           @abort="abortPane"
           @send="handlePaneSend"
@@ -1516,6 +1518,7 @@ import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary } from '@/types'
+import type { AipMessageType } from '@foggy/chat'
 
 const MAX_PANES = 4
 
@@ -1537,6 +1540,18 @@ const bindDirectoryId = ref('')
 const agentsForWorker = computed(() =>
   agentState.agents.value.filter(a => a.workerId === selectedWorkerId.value),
 )
+
+/** All agents as lightweight items for @mention panel */
+const allAgentItems = computed(() =>
+  agentState.agents.value.map(a => ({
+    agentId: a.agentId,
+    name: a.name,
+    description: a.description,
+  })),
+)
+
+/** Per-pane @agent consultation context — consumed on next resume */
+const paneAgentContext = ref<Map<string, Array<{ agentName: string; question: string; answer: string }>>>(new Map())
 
 // --- Worker tabs state (Agents / CLI Processes) ---
 const workerActiveTab = ref('agents')
@@ -2706,7 +2721,7 @@ function openCodeServer() {
   const currentHost = window.location.hostname
   const isLocalAccess = currentHost === 'localhost' || currentHost === '127.0.0.1'
   if (isLocalAccess && /^[A-Za-z]:[\\\/]/.test(folderPath)) {
-    const drive = folderPath[0].toLowerCase()
+    const drive = folderPath[0]!.toLowerCase()
     folderPath = '/mnt/' + drive + folderPath.slice(2).replace(/\\/g, '/')
   }
 
@@ -3290,17 +3305,84 @@ async function abortPane(paneId: string) {
   }
 }
 
+/** Handle @agent ask — send question to an Agent via A2A, show response in pane chat */
+async function handleAskAgent(paneId: string, agent: { agentId: string; name: string }, question: string) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  if (!pane) return
+
+  const sessionId = pane.task.value?.sessionId
+
+  // Show the user's @mention as a user message
+  pane.chatState.addUserMessage(`@${agent.name} ${question}`)
+
+  try {
+    const task = await agentState.askAgent(agent.agentId, question, sessionId)
+    const responseText = task.artifacts?.[0]?.parts?.[0]?.text || '(无回答)'
+    const failed = task.status.state === 'FAILED'
+
+    pane.chatState.messages.value.push({
+      id: `agent-ask-${Date.now()}`,
+      type: 'TEXT_COMPLETE' as AipMessageType,
+      sender: 'assistant',
+      content: failed
+        ? `**${agent.name}** 查询失败: ${task.status.description || '未知错误'}`
+        : `**${agent.name}**:\n\n${responseText}`,
+      timestamp: Date.now(),
+    })
+
+    // Store context for injection into next resume
+    if (!failed && responseText) {
+      const ctx = paneAgentContext.value.get(paneId) || []
+      ctx.push({ agentName: agent.name, question, answer: responseText })
+      paneAgentContext.value.set(paneId, ctx)
+    }
+  } catch (e: unknown) {
+    const errMsg = e instanceof Error ? e.message : '网络错误'
+    pane.chatState.messages.value.push({
+      id: `agent-ask-err-${Date.now()}`,
+      type: 'ERROR' as AipMessageType,
+      sender: 'system',
+      content: '',
+      error: `@${agent.name} 查询失败: ${errMsg}`,
+      timestamp: Date.now(),
+    })
+  }
+}
+
 /** Handle inline send from pane input (replaces dialog-based resume) */
 async function handlePaneSend(paneId: string, content: string) {
+  // Intercept @agent mentions
+  const atMatch = content.match(/^@(\S+)\s+([\s\S]+)/)
+  if (atMatch && atMatch[1] && atMatch[2]) {
+    const agentName = atMatch[1]
+    const question = atMatch[2].trim()
+    const agent = agentState.agents.value.find(a => a.name === agentName)
+    if (agent) {
+      await handleAskAgent(paneId, { agentId: agent.agentId, name: agent.name }, question)
+      return
+    }
+  }
+
   const pane = panes.value.find((p) => p.paneId === paneId)
   const oldTask = pane?.task.value
   if (!pane || !oldTask?.claudeSessionId || !selectedWorkerId.value) return
+
+  // Inject @agent context into prompt if available
+  let finalPrompt = content
+  const ctx = paneAgentContext.value.get(paneId)
+  if (ctx && ctx.length > 0) {
+    const contextBlock = ctx.map(c =>
+      `[来自 ${c.agentName} 的参考信息]\nQ: ${c.question}\nA: ${c.answer}`,
+    ).join('\n\n')
+    finalPrompt = `${contextBlock}\n\n---\n\n${content}`
+    paneAgentContext.value.delete(paneId)
+  }
 
   try {
     const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
       workerId: selectedWorkerId.value,
       claudeSessionId: oldTask.claudeSessionId,
-      prompt: content,
+      prompt: finalPrompt,
       cwd: oldTask.cwd,
       directoryId: oldTask.directoryId,
     }

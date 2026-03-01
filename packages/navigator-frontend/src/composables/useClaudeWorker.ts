@@ -104,6 +104,7 @@ export function useClaudeWorker() {
     model?: string
     maxTurns?: number
     agentTeamsJson?: string
+    images?: string
     permissionMode?: string
     modelConfigId?: string
   }) {

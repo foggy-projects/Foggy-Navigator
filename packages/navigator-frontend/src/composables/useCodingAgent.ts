@@ -63,6 +63,10 @@ export function useCodingAgent() {
     await agentApi.unbindDirectory(agentId, directoryId)
   }
 
+  async function askAgent(agentId: string, question: string, sessionId?: string) {
+    return await agentApi.askAgent(agentId, question, sessionId)
+  }
+
   return {
     agents,
     loading,
@@ -73,5 +77,6 @@ export function useCodingAgent() {
     deleteAgent,
     bindDirectory,
     unbindDirectory,
+    askAgent,
   }
 }
