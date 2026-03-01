@@ -28,8 +28,15 @@ if ($existingPid) {
     Start-Sleep -Milliseconds 500
 }
 
-# Start the worker
+# Install / sync dependencies from pyproject.toml before starting
 Set-Location $WorkerDir
+Write-Host "Syncing Python dependencies..." -ForegroundColor Cyan
+pip install -e . -q
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "WARNING: pip install failed, continuing with existing env..." -ForegroundColor Yellow
+}
+
+# Start the worker
 $env:PYTHONPATH = Join-Path $WorkerDir "src"
 Write-Host "Starting Agent Worker on port $Port..." -ForegroundColor Green
 python -m uvicorn agent_worker.main:app --host 0.0.0.0 --port $Port

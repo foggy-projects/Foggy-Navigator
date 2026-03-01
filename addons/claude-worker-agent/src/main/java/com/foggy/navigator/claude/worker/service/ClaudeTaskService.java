@@ -10,6 +10,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
@@ -20,13 +21,16 @@ import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +49,10 @@ public class ClaudeTaskService {
     private final ClaudeTaskRepository taskRepository;
     private final ClaudeWorkerService workerService;
     private final ConversationConfigService conversationConfigService;
+
+    /** @Lazy 打破 ClaudeTaskService ↔ WorkerStreamRelay 的循环依赖 */
+    @Autowired @Lazy
+    private WorkerStreamRelay streamRelay;
     private final WorkingDirectoryService workingDirectoryService;
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final SessionManager sessionManager;
@@ -725,40 +733,84 @@ public class ClaudeTaskService {
     /**
      * 定时检查超时任务（每5分钟）
      * - 交互式任务（fileCheckpointingEnabled=true）：4 小时超时（与 Worker hard timeout 对齐）
+     *   使用 lastAliveAt（Reconciler 心跳时间）作为基准，避免误判仍在运行的长任务
      * - Tracked sync 任务（fileCheckpointingEnabled=false）：10 分钟超时（syncQuery 正常 < 2 分钟）
+     * - AWAITING_PERMISSION 任务：30 分钟超时（同样使用 lastAliveAt 基准）
      */
     @Scheduled(fixedDelay = 300000)
     @Transactional
     public void checkTimeoutTasks() {
+        LocalDateTime now = LocalDateTime.now();
+        int timedOutCount = 0;
+
         // 交互式编程任务：4 小时超时
-        // Claude Code 的编程任务通常涉及多轮工具调用、代码生成和测试，执行时间可能很长，
-        // 4 小时与 Worker 端 hard_timeout 对齐，避免误杀正常长任务。
-        LocalDateTime runningCutoff = LocalDateTime.now().minusHours(4);
-        List<ClaudeTaskEntity> timedOut = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", runningCutoff);
-        for (ClaudeTaskEntity entity : timedOut) {
-            failTimeout(entity, "Task timed out (exceeded 4 hours)");
+        // 先用 createdAt 过滤出候选任务，再用 lastAliveAt（Reconciler 更新）作为真正基准，
+        // 避免误杀 Reconciler 近期确认存活的任务。
+        LocalDateTime runningCutoff = now.minusHours(4);
+        List<ClaudeTaskEntity> runningOld = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", runningCutoff);
+        for (ClaudeTaskEntity entity : runningOld) {
+            if (Boolean.FALSE.equals(entity.getFileCheckpointingEnabled())) {
+                continue; // sync tasks handled separately below
+            }
+            LocalDateTime baseline = entity.getLastAliveAt() != null ? entity.getLastAliveAt() : entity.getCreatedAt();
+            if (baseline.isBefore(runningCutoff)) {
+                failTimeout(entity, "Task timed out (exceeded 4 hours without CLI activity)");
+                timedOutCount++;
+            }
         }
 
         // Tracked sync tasks: 10 minute timeout (syncQuery should complete in < 2 min)
-        LocalDateTime syncCutoff = LocalDateTime.now().minusMinutes(10);
-        List<ClaudeTaskEntity> syncTimedOut = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", syncCutoff);
-        for (ClaudeTaskEntity entity : syncTimedOut) {
+        // Sync tasks are short-lived, Reconciler does not track them — use createdAt directly.
+        LocalDateTime syncCutoff = now.minusMinutes(10);
+        List<ClaudeTaskEntity> syncOld = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", syncCutoff);
+        for (ClaudeTaskEntity entity : syncOld) {
             if (Boolean.FALSE.equals(entity.getFileCheckpointingEnabled())) {
                 failTimeout(entity, "Sync task timed out (exceeded 10 minutes)");
+                timedOutCount++;
             }
         }
 
         // AWAITING_PERMISSION tasks: 30 minute timeout
-        LocalDateTime permissionCutoff = LocalDateTime.now().minusMinutes(30);
-        List<ClaudeTaskEntity> permissionTimedOut = taskRepository.findByStatusAndCreatedAtBefore("AWAITING_PERMISSION", permissionCutoff);
-        for (ClaudeTaskEntity entity : permissionTimedOut) {
-            failTimeout(entity, "Permission request timed out (exceeded 30 minutes)");
+        // Use lastAliveAt as baseline if Reconciler has confirmed the CLI is alive recently.
+        LocalDateTime permissionCutoff = now.minusMinutes(30);
+        List<ClaudeTaskEntity> permOld = taskRepository.findByStatusAndCreatedAtBefore("AWAITING_PERMISSION", permissionCutoff);
+        for (ClaudeTaskEntity entity : permOld) {
+            LocalDateTime baseline = entity.getLastAliveAt() != null ? entity.getLastAliveAt() : entity.getCreatedAt();
+            if (baseline.isBefore(permissionCutoff)) {
+                failTimeout(entity, "Permission request timed out (exceeded 30 minutes)");
+                timedOutCount++;
+            }
         }
 
-        int total = timedOut.size() + syncTimedOut.size() + permissionTimedOut.size();
-        if (total > 0) {
-            log.info("Marked {} timed-out tasks as FAILED", total);
+        if (timedOutCount > 0) {
+            log.info("Marked {} timed-out tasks as FAILED", timedOutCount);
         }
+    }
+
+    /**
+     * Reconciler 心跳：更新任务的最后存活时间，防止误判超时。
+     * 每次 Reconciler 确认 CLI 进程仍在运行时调用。
+     */
+    @Transactional
+    public void touchAlive(String taskId) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setLastAliveAt(LocalDateTime.now());
+            taskRepository.save(entity);
+        });
+    }
+
+    /**
+     * Reconciler 专用：按 taskId 强制将任务标记为 FAILED。
+     * 仅对仍处于活跃状态（RUNNING / AWAITING_PERMISSION）的任务生效，幂等安全。
+     */
+    @Transactional
+    public void reconcilerFailTask(String taskId, String reason) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String status = entity.getStatus();
+            if ("RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status)) {
+                failTimeout(entity, reason);
+            }
+        });
     }
 
     private void failTimeout(ClaudeTaskEntity entity, String reason) {
@@ -768,6 +820,25 @@ public class ClaudeTaskService {
         taskRepository.save(entity);
         log.warn("Task timed out: taskId={}, createdAt={}, reason={}", entity.getTaskId(), entity.getCreatedAt(), reason);
         publishStatusChange(entity, prev);
+
+        String taskId = entity.getTaskId();
+
+        // 通知 Worker 中止任务（使用 foggy_task_id，Worker 端已支持按此字段查找）
+        try {
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            client.abortTask(taskId).block(Duration.ofSeconds(3));
+            log.info("Worker abort sent on timeout: taskId={}", taskId);
+        } catch (Exception e) {
+            log.warn("Failed to abort worker task on timeout: taskId={}, error={}", taskId, e.getMessage());
+        }
+
+        // 清理本地 SSE 流订阅
+        try {
+            streamRelay.abortStream(taskId);
+        } catch (Exception e) {
+            log.warn("Failed to abort local stream on timeout: taskId={}", taskId, e.getMessage());
+        }
     }
 
     /**

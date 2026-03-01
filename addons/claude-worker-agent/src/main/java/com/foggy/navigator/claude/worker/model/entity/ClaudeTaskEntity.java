@@ -75,6 +75,14 @@ public class ClaudeTaskEntity {
     @Column
     private Boolean fileCheckpointingEnabled;
 
+    /**
+     * Reconciler 最后一次确认 CLI 进程存活的时间。
+     * 超时检查用此字段替代 createdAt，保证真正运行中的任务不会被误判超时。
+     * null 表示从未被 reconciler 确认过（任务刚创建或 reconciler 尚未运行）。
+     */
+    @Column
+    private LocalDateTime lastAliveAt;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

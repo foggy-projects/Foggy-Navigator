@@ -9,6 +9,7 @@ import signal
 import subprocess
 from datetime import datetime, timezone
 
+import psutil
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from ..auth import verify_token
@@ -35,10 +36,32 @@ def _parse_resume_session_id(command: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _build_session_lookup() -> dict[str, dict[str, str | None]]:
-    """Build a mapping from Claude session_id to foggy IDs using task_registry.
+def _read_foggy_env(pid: int) -> dict[str, str | None]:
+    """Read FOGGY_TASK_ID / FOGGY_SESSION_ID directly from the process environment.
 
-    Returns ``{claude_session_id: {"foggy_task_id": ..., "foggy_session_id": ...}}``.
+    Uses psutil for cross-platform support (Linux /proc, Windows NtQueryInformation).
+    This works even after Worker restart when task_registry is empty, because the
+    env vars were injected into the CLI subprocess at spawn time and survive as long
+    as the process is alive.
+
+    Returns an empty dict on any access error (process gone, permission denied, etc.).
+    """
+    try:
+        env = psutil.Process(pid).environ()
+        return {
+            "foggy_task_id": env.get("FOGGY_TASK_ID") or None,
+            "foggy_session_id": env.get("FOGGY_SESSION_ID") or None,
+        }
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        return {"foggy_task_id": None, "foggy_session_id": None}
+
+
+def _build_registry_session_lookup() -> dict[str, dict[str, str | None]]:
+    """Build claude_session_id → foggy IDs mapping from the live task_registry.
+
+    This is a secondary enrichment source used to correlate the ``--resume``
+    session ID in the command line with Foggy platform IDs when the process
+    environment is not accessible.  It is empty after a Worker restart.
     """
     lookup: dict[str, dict[str, str | None]] = {}
     for entry in task_registry.values():
@@ -54,20 +77,42 @@ def _build_session_lookup() -> dict[str, dict[str, str | None]]:
 def _enrich_processes(processes: list[CliProcessInfo]) -> None:
     """Enrich process list with Claude session and Foggy platform IDs.
 
-    Parses ``--resume <session_id>`` from each process command line,
-    then matches against the task_registry to fill foggy IDs and
-    refine ``is_orphan``.
+    Enrichment strategy (two layers):
+
+    1. **Primary — process env vars via psutil**: Read FOGGY_TASK_ID and
+       FOGGY_SESSION_ID directly from the process environment.  This is
+       reliable even after a Worker restart because the vars are baked into
+       the spawned subprocess and persist as long as the process is alive.
+
+    2. **Secondary — task_registry session lookup**: Parse ``--resume <id>``
+       from the command line and cross-reference against the live
+       task_registry.  This layer provides claude_session_id correlation and
+       serves as a fallback if psutil env access fails.
+
+    A process is considered non-orphan when its foggy_task_id can be resolved
+    from either layer.
     """
-    session_lookup = _build_session_lookup()
+    registry_lookup = _build_registry_session_lookup()
+
     for proc in processes:
-        claude_sid = _parse_resume_session_id(proc.command)
+        # Layer 1: read env vars directly from the process (survives Worker restart)
+        foggy_env = _read_foggy_env(proc.pid)
+        if foggy_env.get("foggy_task_id"):
+            proc.foggy_task_id = foggy_env["foggy_task_id"]
+            proc.foggy_session_id = foggy_env["foggy_session_id"]
+            proc.is_orphan = False
+
+        # Layer 2: command-line --resume → task_registry lookup
+        claude_sid = _parse_resume_session_id(proc.command or "")
         if claude_sid:
             proc.claude_session_id = claude_sid
-            match = session_lookup.get(claude_sid)
-            if match:
-                proc.foggy_task_id = match.get("foggy_task_id")
-                proc.foggy_session_id = match.get("foggy_session_id")
-                proc.is_orphan = False
+            if not proc.foggy_task_id:
+                # Layer 1 didn't resolve it; try registry
+                match = registry_lookup.get(claude_sid)
+                if match and match.get("foggy_task_id"):
+                    proc.foggy_task_id = match["foggy_task_id"]
+                    proc.foggy_session_id = match.get("foggy_session_id")
+                    proc.is_orphan = False
 
 
 def _get_process_details_windows(pids: set[int]) -> list[CliProcessInfo]:

@@ -4,6 +4,7 @@ import com.foggy.navigator.claude.worker.model.dto.WorkerDTO;
 import com.foggy.navigator.claude.worker.model.form.RegisterWorkerForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkerForm;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
+import com.foggy.navigator.claude.worker.service.TaskStateReconciler;
 import com.foggy.navigator.claude.worker.service.WorkerHealthChecker;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
@@ -13,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -28,6 +30,7 @@ public class ClaudeWorkerController {
 
     private final ClaudeWorkerService workerService;
     private final WorkerHealthChecker healthChecker;
+    private final TaskStateReconciler reconciler;
 
     @GetMapping
     public RX<List<WorkerDTO>> listWorkers() {
@@ -84,6 +87,7 @@ public class ClaudeWorkerController {
 
     // ===== CLI Process Management =====
 
+    @SuppressWarnings("unchecked")
     @GetMapping("/{workerId}/processes")
     public RX<Map<String, Object>> listCliProcesses(@PathVariable String workerId) {
         String userId = UserContext.getCurrentUserId();
@@ -95,10 +99,43 @@ public class ClaudeWorkerController {
         try {
             Map<String, Object> result = client.listCliProcesses()
                     .block(Duration.ofSeconds(10));
+            if (result != null) {
+                enrichWithOrphanInfo(workerId, result);
+            }
             return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to list CLI processes for worker {}: {}", workerId, e.getMessage());
             return RX.failA("获取 CLI 进程列表失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 将 Reconciler 掌握的孤儿信息（首次发现时间 + 自动杀死时间）注入到进程列表中。
+     * 前端据此展示倒计时和手动杀死按钮。
+     */
+    @SuppressWarnings("unchecked")
+    private void enrichWithOrphanInfo(String workerId, Map<String, Object> result) {
+        Object procObj = result.get("processes");
+        if (!(procObj instanceof List<?> rawList)) return;
+
+        for (Object item : rawList) {
+            if (!(item instanceof Map<?, ?> rawProc)) continue;
+            Map<String, Object> proc = (Map<String, Object>) rawProc;
+
+            Object pidObj = proc.get("pid");
+            if (pidObj == null) continue;
+            int pid = ((Number) pidObj).intValue();
+
+            Instant firstSeen = reconciler.getOrphanFirstSeen(workerId, pid);
+            if (firstSeen != null) {
+                proc.put("orphan_first_seen_at", firstSeen.toString());
+                Instant autoKillAt = reconciler.getOrphanAutoKillAt(workerId, pid);
+                if (autoKillAt != null) {
+                    proc.put("orphan_auto_kill_at", autoKillAt.toString());
+                }
+                // Override is_orphan with Reconciler's authoritative verdict
+                proc.put("is_orphan", true);
+            }
         }
     }
 

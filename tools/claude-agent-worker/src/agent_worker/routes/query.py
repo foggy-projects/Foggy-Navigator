@@ -261,6 +261,11 @@ async def rewind_files(body: RewindRequest):
 async def abort_query(task_id: str) -> AbortResponse:
     """Cancel a running query by its ``task_id``.
 
+    Accepts either the Worker's internal UUID *or* the Foggy platform
+    ``foggy_task_id`` (injected at task creation).  The latter allows the
+    Java backend to abort tasks using its own task ID without maintaining
+    a separate ID-mapping table.
+
     If the task is still active its underlying asyncio task will be cancelled
     and cleaned up.
     """
@@ -268,9 +273,21 @@ async def abort_query(task_id: str) -> AbortResponse:
     entry = task_registry.pop(task_id, None)
 
     if entry is None:
-        # Task already finished or was never registered — treat as idempotent success
-        logger.info("Abort called for task '%s' but already gone from registry", task_id)
-        return AbortResponse(task_id=task_id, status="cancelled")
+        # Fallback: search by foggy_task_id so the Java backend can abort
+        # using its own task ID (YYYYMMDD-xxxx format) without needing the
+        # Worker's internal UUID.
+        resolved_id = None
+        for tid, e in list(task_registry.items()):
+            if e.get("foggy_task_id") == task_id:
+                resolved_id = tid
+                break
+        if resolved_id is not None:
+            entry = task_registry.pop(resolved_id, None)
+            logger.info("Abort: resolved foggy_task_id '%s' → worker task_id '%s'", task_id, resolved_id)
+        else:
+            # Task already finished or was never registered — treat as idempotent success
+            logger.info("Abort called for task '%s' but already gone from registry", task_id)
+            return AbortResponse(task_id=task_id, status="cancelled")
 
     asyncio_task: asyncio.Task | None = entry.get("asyncio_task")
     if asyncio_task is not None and not asyncio_task.done():

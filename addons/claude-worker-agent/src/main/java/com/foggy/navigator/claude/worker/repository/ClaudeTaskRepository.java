@@ -59,4 +59,11 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
             "WHERE t.directoryId = :directoryId AND t.userId = :userId")
     long countDistinctSessionsByDirectory(@Param("directoryId") String directoryId,
                                           @Param("userId") String userId);
+
+    /** Reconciler: 查询指定 Worker 下的活跃任务（排除刚创建的任务以避免误判） */
+    List<ClaudeTaskEntity> findByWorkerIdAndStatusInAndCreatedAtBefore(
+            String workerId, List<String> statuses, LocalDateTime createdBefore);
+
+    /** Reconciler: 查询指定 Worker 下所有活跃任务（不限创建时间） */
+    List<ClaudeTaskEntity> findByWorkerIdAndStatusIn(String workerId, List<String> statuses);
 }

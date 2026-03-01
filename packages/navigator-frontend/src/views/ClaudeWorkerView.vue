@@ -450,7 +450,7 @@
           <el-tab-pane name="processes">
             <template #label>
               <span>CLI 进程</span>
-              <el-tag v-if="cliProcesses.length > 0" size="small" :type="cliProcesses.some(p => p.isOrphan) ? 'danger' : 'info'" style="margin-left: 6px;">{{ cliProcesses.length }}</el-tag>
+              <el-tag v-if="cliProcesses.length > 0" size="small" :type="cliProcesses.some(p => p.is_orphan) ? 'danger' : 'info'" style="margin-left: 6px;">{{ cliProcesses.length }}</el-tag>
             </template>
             <div class="tab-pane-toolbar">
               <el-button size="small" :loading="loadingProcesses" @click="loadCliProcesses">刷新</el-button>
@@ -466,27 +466,35 @@
               <el-table-column prop="pid" label="PID" width="80" />
               <el-table-column prop="command" label="命令" min-width="200" show-overflow-tooltip />
               <el-table-column label="内存" width="80">
-                <template #default="{ row }">{{ row.memoryMb ? row.memoryMb.toFixed(1) + ' MB' : '-' }}</template>
+                <template #default="{ row }">{{ row.memory_mb ? row.memory_mb.toFixed(1) + ' MB' : '-' }}</template>
               </el-table-column>
               <el-table-column label="启动时间" width="150">
-                <template #default="{ row }">{{ row.startedAt || '-' }}</template>
+                <template #default="{ row }">{{ row.started_at || '-' }}</template>
               </el-table-column>
               <el-table-column label="会话" width="120">
                 <template #default="{ row }">
                   <el-link
-                    v-if="row.foggySessionId"
+                    v-if="row.foggy_session_id"
                     type="primary"
                     :underline="false"
                     @click="navigateToProcessSession(row)"
                   >
-                    {{ row.claudeSessionId?.slice(0, 8) || '-' }}
+                    {{ row.claude_session_id?.slice(0, 8) || '-' }}
                   </el-link>
                   <span v-else>-</span>
                 </template>
               </el-table-column>
-              <el-table-column label="状态" width="80" align="center">
+              <el-table-column label="状态" width="160" align="center">
                 <template #default="{ row }">
-                  <el-tag :type="row.isOrphan ? 'danger' : 'success'" size="small">{{ row.isOrphan ? '孤儿' : '活跃' }}</el-tag>
+                  <template v-if="row.orphan_first_seen_at">
+                    <el-tooltip :content="orphanTooltip(row)" placement="top">
+                      <el-tag type="danger" size="small" style="cursor:help">
+                        孤儿 · {{ orphanCountdown(row) }}
+                      </el-tag>
+                    </el-tooltip>
+                  </template>
+                  <el-tag v-else-if="row.is_orphan" type="warning" size="small">孤儿</el-tag>
+                  <el-tag v-else type="success" size="small">活跃</el-tag>
                 </template>
               </el-table-column>
               <el-table-column label="操作" width="140" align="center">
@@ -1573,7 +1581,7 @@ async function loadCliProcesses() {
   try {
     const data = await dirApi.listCliProcesses(selectedWorkerId.value)
     cliProcesses.value = data.processes
-    cliProcessActiveTaskCount.value = data.activeTaskCount
+    cliProcessActiveTaskCount.value = data.active_task_count
   } catch {
     cliProcesses.value = []
     cliProcessActiveTaskCount.value = 0
@@ -1607,10 +1615,30 @@ async function handleKillProcess(pid: number, force = false) {
   }
 }
 
+/** 返回孤儿进程距自动杀死的剩余时间描述，如 "8分钟后自动关闭" */
+function orphanCountdown(process: CliProcessInfo): string {
+  if (!process.orphan_auto_kill_at) return '孤儿'
+  const msLeft = new Date(process.orphan_auto_kill_at).getTime() - Date.now()
+  if (msLeft <= 0) return '即将关闭'
+  const minsLeft = Math.ceil(msLeft / 60000)
+  return `${minsLeft}分钟后自动关闭`
+}
+
+/** 孤儿进程 tooltip 内容 */
+function orphanTooltip(process: CliProcessInfo): string {
+  const firstSeen = process.orphan_first_seen_at
+    ? new Date(process.orphan_first_seen_at).toLocaleString()
+    : '-'
+  const autoKill = process.orphan_auto_kill_at
+    ? new Date(process.orphan_auto_kill_at).toLocaleString()
+    : '-'
+  return `首次发现：${firstSeen}\n预计自动关闭：${autoKill}`
+}
+
 function navigateToProcessSession(process: CliProcessInfo) {
-  if (!process.foggySessionId) return
+  if (!process.foggy_session_id) return
   const task = workerState.tasks.value.find(
-    (t) => t.sessionId === process.foggySessionId,
+    (t) => t.sessionId === process.foggy_session_id,
   )
   if (task) {
     if (task.directoryId && task.directoryId !== selectedDirectoryId.value) {

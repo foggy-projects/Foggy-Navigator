@@ -377,18 +377,22 @@ export interface DirectorySummary {
 export interface CliProcessInfo {
   pid: number
   command: string
-  memoryMb: number
-  startedAt: string
-  isOrphan: boolean
-  claudeSessionId?: string
-  foggyTaskId?: string
-  foggySessionId?: string
+  memory_mb: number
+  started_at: string
+  is_orphan: boolean
+  claude_session_id?: string
+  foggy_task_id?: string
+  foggy_session_id?: string
+  /** Reconciler 首次发现该进程为孤儿的时间（ISO-8601），null 表示非孤儿 */
+  orphan_first_seen_at?: string
+  /** 孤儿进程预计自动杀死时间（ISO-8601）= orphan_first_seen_at + 10 min */
+  orphan_auto_kill_at?: string
 }
 
 /** CLI 进程列表响应 */
 export interface CliProcessListResponse {
   processes: CliProcessInfo[]
-  activeTaskCount: number
+  active_task_count: number
   total: number
 }
 
