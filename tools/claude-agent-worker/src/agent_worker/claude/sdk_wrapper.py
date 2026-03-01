@@ -781,7 +781,19 @@ class SdkWrapper:
                     except asyncio.TimeoutError:
                         logger.warning("Task %s permission timeout (%ds): pid=%s", task_id, timeout, pid)
                         permission_pending.pop(pid, None)
-                        return _PermissionResultDeny(message=f"Permission request timed out ({timeout // 60} minutes)")
+                        # Ask Claude to pause gracefully so the user can resume later.
+                        # This produces a clean "waiting" response rather than an error,
+                        # letting the user simply send "continue" in a resume task.
+                        return _PermissionResultDeny(
+                            message=(
+                                f"The user did not respond to the permission request within "
+                                f"{timeout // 60} minutes. "
+                                "Please stop what you are doing, write a brief summary of "
+                                "your progress so far and exactly what you were about to do "
+                                "next (tool, arguments, reason), then politely let the user "
+                                "know they can reply 'continue' to resume from this point."
+                            )
+                        )
 
                     entry = permission_pending.pop(pid, None)
                     if entry and entry["result"] == "allow":
