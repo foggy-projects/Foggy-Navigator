@@ -367,12 +367,19 @@ public class TaskAssistantService implements TaskAssistantFacade {
     // --- Private helpers ---
 
     /**
-     * 确保 config 持有一个 Foggy 会话 ID。
-     * 已有则直接返回；没有则懒创建并持久化。创建失败时 fallback "task-assistant"。
+     * 确保 config 持有一个有效的 Foggy 会话 ID。
+     * 已有且存在则直接返回；已被删除或不存在则重建并持久化。创建失败时 fallback "task-assistant"。
      */
     private String ensureFoggySession(TaskAssistantConfigEntity config) {
         if (config.getFoggySessionId() != null) {
-            return config.getFoggySessionId();
+            if (sessionManager != null && sessionManager.getSession(config.getFoggySessionId()) == null) {
+                log.warn("Foggy session {} was deleted, recreating for userId={}",
+                        config.getFoggySessionId(), config.getUserId());
+                config.setFoggySessionId(null);
+                // fall through to recreate
+            } else {
+                return config.getFoggySessionId();
+            }
         }
         if (sessionManager == null) {
             return "task-assistant";
