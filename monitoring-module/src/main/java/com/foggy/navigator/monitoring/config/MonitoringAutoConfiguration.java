@@ -16,7 +16,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  */
 @Slf4j
 @AutoConfiguration
-@ConditionalOnProperty(name = "foggy.monitoring.enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = "foggy.monitoring.enabled", havingValue = "true", matchIfMissing = false)
 @ComponentScan(basePackages = "com.foggy.navigator.monitoring")
 @EntityScan(basePackages = "com.foggy.navigator.monitoring.model.entity")
 @EnableJpaRepositories(basePackages = "com.foggy.navigator.monitoring.repository")

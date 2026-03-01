@@ -24,6 +24,7 @@ spring:
         dialect: org.hibernate.dialect.MySQLDialect
 
   # RabbitMQ 配置（监控事件总线）
+  # 仅在 foggy.monitoring.enabled=true 时需要 RabbitMQ
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
@@ -33,6 +34,7 @@ spring:
     listener:
       simple:
         missing-queues-fatal: false
+        auto-startup: ${foggy.monitoring.enabled:false}
 
 server:
   port: 8112
