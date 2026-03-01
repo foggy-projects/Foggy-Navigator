@@ -173,3 +173,13 @@ echo '    proxy_set_header X-Real-IP $remote_addr;'
 echo '    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
 echo '    proxy_set_header X-Forwarded-Proto $scheme;'
 echo '  }'
+echo ""
+echo "frpc tunnel snippet (add to your frpc.toml):"
+echo "  [[proxies]]"
+echo "  name = \"code-server-$(hostname)\""
+echo "  type = \"tcp\""
+echo "  localIP = \"127.0.0.1\""
+echo "  localPort = ${PORT}"
+echo "  remotePort = ${PORT}  # adjust if port conflict"
+echo ""
+echo "Then set codeServerUrl in Worker settings to: http://<frps-host>:${PORT}"

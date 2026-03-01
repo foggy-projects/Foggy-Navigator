@@ -2745,32 +2745,22 @@ function openCodeServer() {
   const dir = selectedDirectory.value
   let folderPath = dir?.path || ''
 
-  // Local dev (WSL): convert Windows paths → /mnt/d/...
-  const currentHost = window.location.hostname
-  const isLocalAccess = currentHost === 'localhost' || currentHost === '127.0.0.1'
-  if (isLocalAccess && /^[A-Za-z]:[\\\/]/.test(folderPath)) {
+  // 本地开发 (WSL): Windows 路径 → /mnt/d/...
+  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  if (isLocal && /^[A-Za-z]:[\\\/]/.test(folderPath)) {
     const drive = folderPath[0]!.toLowerCase()
     folderPath = '/mnt/' + drive + folderPath.slice(2).replace(/\\/g, '/')
   }
 
   const folder = folderPath ? encodeURIComponent(folderPath) : ''
 
-  // Use codeServerUrl if configured, otherwise derive from baseUrl host + :18443
-  let base: string
-  if (worker.codeServerUrl) {
-    base = worker.codeServerUrl.replace(/\/+$/, '')
-  } else {
-    let host: string
-    try {
-      host = new URL(worker.baseUrl).hostname
-    } catch {
-      host = worker.baseUrl.replace(/https?:\/\//, '').replace(/[:/].*/, '')
-    }
-    base = `http://${host}:18443`
-  }
+  // 有 codeServerUrl → 直接用（生产环境，通过 frp 隧道暴露的地址）
+  // 没有 → 走 Vite/Nginx /code/ 代理（本地开发）
+  const base = worker.codeServerUrl
+    ? worker.codeServerUrl.replace(/\/+$/, '')
+    : `${window.location.origin}/code`
 
-  const url = `${base}/?folder=${folder}`
-  window.open(url, '_blank')
+  window.open(`${base}/?folder=${folder}`, '_blank')
 }
 
 async function handleSyncGitInfo() {
