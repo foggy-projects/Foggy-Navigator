@@ -70,7 +70,7 @@ public class TaskAssistantService implements TaskAssistantFacade {
         if (agentTaskManager != null) {
             String promptSummary = truncate(events.size() + " platform events", PROMPT_SUMMARY_MAX_LENGTH);
             agentTaskId = agentTaskManager.createTask(
-                    null,               // parentSessionId — 助手无父会话
+                    "task-assistant",   // parentSessionId — 助手无父会话，用固定标识
                     userId,
                     "task-assistant",   // sourceAgentId
                     "task-assistant",   // targetAgentId
@@ -280,7 +280,7 @@ public class TaskAssistantService implements TaskAssistantFacade {
         String agentTaskId = null;
         if (agentTaskManager != null) {
             agentTaskId = agentTaskManager.createTask(
-                    null,               // parentSessionId
+                    "task-assistant",   // parentSessionId — 助手无父会话，用固定标识
                     config.getUserId(),
                     "task-assistant",   // sourceAgentId
                     "task-assistant",   // targetAgentId

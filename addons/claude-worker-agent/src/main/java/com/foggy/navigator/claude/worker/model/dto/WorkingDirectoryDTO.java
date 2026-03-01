@@ -30,6 +30,7 @@ public class WorkingDirectoryDTO {
     private boolean defaultAuthConfigured;
     private String defaultBaseUrl;
     private String maskedDefaultAuthToken;
+    private String defaultModelConfigId;
     private List<WorkingDirectoryDTO> children;
     private LocalDateTime lastSyncedAt;
     private LocalDateTime createdAt;

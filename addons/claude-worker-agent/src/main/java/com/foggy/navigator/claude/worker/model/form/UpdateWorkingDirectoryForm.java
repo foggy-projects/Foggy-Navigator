@@ -20,4 +20,6 @@ public class UpdateWorkingDirectoryForm {
     private String defaultAuthToken;
     /** 默认 Base URL */
     private String defaultBaseUrl;
+    /** 平台 LLM 配置 ID（选中后清空手动 auth 配置），"" 清除, null 不改 */
+    private String defaultModelConfigId;
 }

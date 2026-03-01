@@ -86,6 +86,10 @@ public class WorkingDirectoryEntity {
     @Column(length = 512)
     private String defaultBaseUrl;
 
+    /** 平台 LLM 配置 ID（优先于手动 auth 配置） */
+    @Column(length = 64)
+    private String defaultModelConfigId;
+
     private LocalDateTime lastSyncedAt;
 
     @Column(nullable = false, updatable = false)

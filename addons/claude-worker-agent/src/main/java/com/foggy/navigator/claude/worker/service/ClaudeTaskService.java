@@ -616,19 +616,34 @@ public class ClaudeTaskService {
         if (directoryId != null && !directoryId.isEmpty()) {
             WorkingDirectoryEntity dir = workingDirectoryRepository
                     .findByDirectoryIdAndUserId(directoryId, userId).orElse(null);
-            if (dir != null && dir.getDefaultAuthMode() != null) {
-                String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(dir);
-                conversationConfigService.bindAuthFromDirectory(
-                        sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
-                // Return decrypted values
-                String apiKey = null;
-                String authToken = null;
-                if ("API_KEY".equals(dirAuth[0]) || "CUSTOM_ENDPOINT".equals(dirAuth[0])) {
-                    apiKey = dirAuth[1];
-                } else {
-                    authToken = dirAuth[1];
+            if (dir != null) {
+                // 优先使用目录绑定的平台 LLM 配置
+                if (dir.getDefaultModelConfigId() != null && !dir.getDefaultModelConfigId().isEmpty()) {
+                    LlmModelConfigDTO dirModelConfig = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
+                    if (dirModelConfig != null && Boolean.TRUE.equals(dirModelConfig.getHasApiKey())) {
+                        String decryptedApiKey = llmModelManager.getDecryptedApiKey(dir.getDefaultModelConfigId());
+                        log.info("Auth resolved from directory platform model config: {}", dirModelConfig.getName());
+                        String authMode = (dirModelConfig.getBaseUrl() != null && !dirModelConfig.getBaseUrl().isEmpty())
+                                ? "CUSTOM_ENDPOINT" : "API_KEY";
+                        conversationConfigService.bindAuthFromDirectory(
+                                sessionId, workerId, userId, authMode, decryptedApiKey, dirModelConfig.getBaseUrl());
+                        return new String[]{decryptedApiKey, null, dirModelConfig.getBaseUrl()};
+                    }
                 }
-                return new String[]{apiKey, authToken, dirAuth[2]};
+                // 手动 auth 配置 fallback
+                if (dir.getDefaultAuthMode() != null) {
+                    String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(dir);
+                    conversationConfigService.bindAuthFromDirectory(
+                            sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
+                    String apiKey = null;
+                    String authToken = null;
+                    if ("API_KEY".equals(dirAuth[0]) || "CUSTOM_ENDPOINT".equals(dirAuth[0])) {
+                        apiKey = dirAuth[1];
+                    } else {
+                        authToken = dirAuth[1];
+                    }
+                    return new String[]{apiKey, authToken, dirAuth[2]};
+                }
             }
         }
 

@@ -171,8 +171,21 @@ public class WorkingDirectoryService {
             }
         }
 
-        // Auth 默认配置
-        if (form.getDefaultAuthMode() != null) {
+        // 平台 LLM 配置优先
+        if (form.getDefaultModelConfigId() != null) {
+            if (form.getDefaultModelConfigId().isEmpty()) {
+                entity.setDefaultModelConfigId(null);
+            } else {
+                entity.setDefaultModelConfigId(form.getDefaultModelConfigId());
+                // 选中平台配置后清空手动 auth
+                entity.setDefaultAuthMode(null);
+                entity.setDefaultAuthToken(null);
+                entity.setDefaultBaseUrl(null);
+            }
+        }
+
+        // Auth 默认配置（仅在未设置平台 LLM 配置时有效）
+        if (form.getDefaultAuthMode() != null && entity.getDefaultModelConfigId() == null) {
             if (form.getDefaultAuthMode().isEmpty()) {
                 // 清空 auth
                 entity.setDefaultAuthMode(null);
@@ -310,6 +323,7 @@ public class WorkingDirectoryService {
         entity.setDefaultAuthMode(source.getDefaultAuthMode());
         entity.setDefaultAuthToken(source.getDefaultAuthToken());
         entity.setDefaultBaseUrl(source.getDefaultBaseUrl());
+        entity.setDefaultModelConfigId(source.getDefaultModelConfigId());
 
         directoryRepository.save(entity);
         log.info("Worktree created: directoryId={}, branch={}, path={}",
@@ -419,6 +433,7 @@ public class WorkingDirectoryService {
                 .defaultAuthConfigured(entity.getDefaultAuthToken() != null)
                 .defaultBaseUrl(entity.getDefaultBaseUrl())
                 .maskedDefaultAuthToken(maskToken(entity))
+                .defaultModelConfigId(entity.getDefaultModelConfigId())
                 .lastSyncedAt(entity.getLastSyncedAt())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())

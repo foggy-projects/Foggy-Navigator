@@ -130,6 +130,7 @@ export interface WorkingDirectory {
   defaultAuthConfigured?: boolean
   defaultBaseUrl?: string
   maskedDefaultAuthToken?: string
+  defaultModelConfigId?: string
   lastSyncedAt?: string
   createdAt: string
   updatedAt: string
