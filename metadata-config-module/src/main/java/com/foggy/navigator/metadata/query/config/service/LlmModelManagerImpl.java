@@ -60,6 +60,12 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setIsDefault(form.getIsDefault() != null ? form.getIsDefault() : false);
         entity.setScope(form.getScope() != null ? form.getScope() : ModelAccessScope.GLOBAL);
 
+        // 新增项排在最后
+        int maxSort = llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc(tenantId).stream()
+                .mapToInt(e -> e.getSortOrder() != null ? e.getSortOrder() : 0)
+                .max().orElse(-1);
+        entity.setSortOrder(maxSort + 1);
+
         // 如果标记为默认，取消同 category 下其他默认
         if (Boolean.TRUE.equals(entity.getIsDefault())) {
             clearDefaultForCategory(tenantId, form.getCategory());
@@ -129,7 +135,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     @Override
     public List<LlmModelConfigDTO> listModelConfigs(String tenantId) {
         log.debug("Listing LLM model configs: tenantId={}", tenantId);
-        return llmModelRepo.findByTenantIdOrderByCreatedAtAsc(tenantId).stream()
+        return llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc(tenantId).stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
     }
@@ -145,7 +151,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     @Override
     public List<LlmModelConfigDTO> listModelConfigsForWorker(String tenantId, String workerId) {
         log.debug("Listing LLM model configs for worker: tenantId={}, workerId={}", tenantId, workerId);
-        List<LlmModelConfigEntity> allModels = llmModelRepo.findByTenantIdOrderByCreatedAtAsc(tenantId);
+        List<LlmModelConfigEntity> allModels = llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc(tenantId);
         Set<String> authorizedModelIds = workerAccessRepo.findByWorkerIdAndTenantId(workerId, tenantId)
                 .stream()
                 .map(ModelWorkerAccessEntity::getModelConfigId)
@@ -158,6 +164,21 @@ public class LlmModelManagerImpl implements LlmModelManager {
                 })
                 .map(this::toDTO)
                 .collect(Collectors.toList());
+    }
+
+    // ========== 排序 ==========
+
+    @Override
+    @Transactional
+    public void reorderModelConfigs(List<String> orderedIds) {
+        log.info("Reordering LLM model configs: count={}", orderedIds.size());
+        for (int i = 0; i < orderedIds.size(); i++) {
+            String id = orderedIds.get(i);
+            llmModelRepo.findById(id).ifPresent(entity -> {
+                entity.setSortOrder(orderedIds.indexOf(entity.getId()));
+                llmModelRepo.save(entity);
+            });
+        }
     }
 
     // ========== 模型选择 ==========
@@ -233,7 +254,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     @Override
     public List<AgentModelOverrideForm> listAgentModelOverrides(String tenantId) {
         log.debug("Listing agent model overrides: tenantId={}", tenantId);
-        return overrideRepo.findByTenantIdOrderByCreatedAtAsc(tenantId).stream()
+        return overrideRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc(tenantId).stream()
                 .map(entity -> {
                     AgentModelOverrideForm form = new AgentModelOverrideForm();
                     form.setAgentId(entity.getAgentId());
@@ -306,7 +327,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
 
     private void clearDefaultForCategory(String tenantId, LlmModelCategory category) {
         List<LlmModelConfigEntity> defaults = llmModelRepo
-                .findByTenantIdAndCategoryOrderByCreatedAtAsc(tenantId, category);
+                .findByTenantIdAndCategoryOrderBySortOrderAscCreatedAtAsc(tenantId, category);
         for (LlmModelConfigEntity e : defaults) {
             if (Boolean.TRUE.equals(e.getIsDefault())) {
                 e.setIsDefault(false);
@@ -367,6 +388,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
         dto.setModelName(entity.getModelName());
         dto.setIsDefault(entity.getIsDefault());
         dto.setHasApiKey(entity.getApiKey() != null && !entity.getApiKey().isEmpty());
+        dto.setSortOrder(entity.getSortOrder() != null ? entity.getSortOrder() : 0);
         ModelAccessScope scope = entity.getScope() != null ? entity.getScope() : ModelAccessScope.GLOBAL;
         dto.setScope(scope);
         if (scope == ModelAccessScope.RESTRICTED) {

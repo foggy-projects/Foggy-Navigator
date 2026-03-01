@@ -14,11 +14,11 @@ import java.util.Optional;
 @Repository
 public interface LlmModelConfigRepository extends JpaRepository<LlmModelConfigEntity, String> {
 
-    List<LlmModelConfigEntity> findByTenantIdOrderByCreatedAtAsc(String tenantId);
+    List<LlmModelConfigEntity> findByTenantIdOrderBySortOrderAscCreatedAtAsc(String tenantId);
 
     Optional<LlmModelConfigEntity> findByTenantIdAndCategoryAndIsDefaultTrue(String tenantId, LlmModelCategory category);
 
-    List<LlmModelConfigEntity> findByTenantIdAndCategoryOrderByCreatedAtAsc(String tenantId, LlmModelCategory category);
+    List<LlmModelConfigEntity> findByTenantIdAndCategoryOrderBySortOrderAscCreatedAtAsc(String tenantId, LlmModelCategory category);
 
     List<LlmModelConfigEntity> findByTenantIdAndIsDefaultTrue(String tenantId);
 

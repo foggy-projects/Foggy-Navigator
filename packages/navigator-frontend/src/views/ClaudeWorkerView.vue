@@ -2677,27 +2677,23 @@ function openCodeServer() {
   if (!worker) return
 
   const dir = selectedDirectory.value
-  const folder = dir ? encodeURIComponent(dir.path) : ''
+  let folderPath = dir?.path || ''
 
-  // If accessing via frp/proxy (same origin), use /code/ path
-  // If accessing locally (Worker IP reachable), use direct port
+  // Local dev: code-server runs in WSL, convert Windows paths to WSL format
+  // e.g. D:\foggy-projects\student-analytics → /mnt/d/foggy-projects/student-analytics
   const currentHost = window.location.hostname
   const isLocalAccess = currentHost === 'localhost' || currentHost === '127.0.0.1'
-
-  let url: string
-  if (isLocalAccess) {
-    // Local dev: direct to code-server port
-    let host: string
-    try {
-      host = new URL(worker.baseUrl).hostname
-    } catch {
-      host = worker.baseUrl.replace(/https?:\/\//, '').replace(/:\d+.*/, '')
-    }
-    url = `http://${host}:18443/?folder=${folder}`
-  } else {
-    // Production via frp: use same origin + /code/ path (Vite/Nginx proxy)
-    url = `${window.location.origin}/code/?folder=${folder}`
+  if (isLocalAccess && /^[A-Za-z]:[\\\/]/.test(folderPath)) {
+    const drive = folderPath[0].toLowerCase()
+    folderPath = '/mnt/' + drive + folderPath.slice(2).replace(/\\/g, '/')
   }
+
+  const folder = folderPath ? encodeURIComponent(folderPath) : ''
+
+  // Always use /code/ proxy path:
+  // - Local dev: Vite proxy /code → localhost:8443 (WSL code-server)
+  // - Production: Nginx proxy /code/ → localhost:18443 (native code-server)
+  const url = `${window.location.origin}/code/?folder=${folder}`
   window.open(url, '_blank')
 }
 

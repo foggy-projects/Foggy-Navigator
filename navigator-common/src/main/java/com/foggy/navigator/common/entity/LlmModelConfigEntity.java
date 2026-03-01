@@ -80,6 +80,12 @@ public class LlmModelConfigEntity {
     private LocalDateTime createdAt;
 
     /**
+     * 排序序号（越小越靠前）
+     */
+    @Column(nullable = false)
+    private Integer sortOrder;
+
+    /**
      * 更新时间
      */
     @Column(nullable = false)
@@ -94,6 +100,9 @@ public class LlmModelConfigEntity {
         }
         if (scope == null) {
             scope = ModelAccessScope.GLOBAL;
+        }
+        if (sortOrder == null) {
+            sortOrder = 0;
         }
     }
 

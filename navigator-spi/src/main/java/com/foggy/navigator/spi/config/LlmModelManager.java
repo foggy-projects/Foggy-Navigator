@@ -117,6 +117,14 @@ public interface LlmModelManager {
      */
     List<LlmModelConfigDTO> listModelConfigsForWorker(String tenantId, String workerId);
 
+    // ========== 排序 ==========
+
+    /**
+     * 批量更新模型排序
+     * @param orderedIds 按期望顺序排列的配置ID列表
+     */
+    void reorderModelConfigs(List<String> orderedIds);
+
     // ========== 状态检查 ==========
 
     /**

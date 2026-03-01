@@ -23,6 +23,7 @@ public class LlmModelConfigDTO {
     private Boolean hasApiKey;
     private ModelAccessScope scope;
     private List<String> allowedWorkerIds;
+    private Integer sortOrder;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

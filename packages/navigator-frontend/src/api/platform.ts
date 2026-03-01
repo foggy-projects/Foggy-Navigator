@@ -83,6 +83,10 @@ export async function deleteModelConfig(id: string): Promise<void> {
   await client.delete(`${BASE}/llm/${id}`)
 }
 
+export async function reorderModelConfigs(orderedIds: string[]): Promise<void> {
+  await client.put(`${BASE}/llm/reorder`, orderedIds)
+}
+
 // ===== Agent 模型覆盖 =====
 
 export async function listAgentModelOverrides(): Promise<AgentModelOverride[]> {

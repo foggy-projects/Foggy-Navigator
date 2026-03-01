@@ -64,20 +64,20 @@
         </div>
 
         <el-table :data="llmModels" v-loading="loadingLlm" stripe>
-          <el-table-column prop="name" label="名称" min-width="140" />
-          <el-table-column prop="category" label="类别" width="100">
+          <el-table-column prop="name" label="名称" min-width="140" sortable />
+          <el-table-column prop="category" label="类别" width="100" sortable>
             <template #default="{ row }">
               <el-tag size="small">{{ categoryLabel(row.category) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="modelName" label="模型" width="160" />
-          <el-table-column prop="baseUrl" label="API 地址" min-width="200" show-overflow-tooltip />
-          <el-table-column label="默认" width="70" align="center">
+          <el-table-column prop="modelName" label="模型" width="160" sortable />
+          <el-table-column prop="baseUrl" label="API 地址" min-width="200" show-overflow-tooltip sortable />
+          <el-table-column label="默认" width="80" align="center" sortable :sort-method="(a: any, b: any) => (a.isDefault ? 1 : 0) - (b.isDefault ? 1 : 0)">
             <template #default="{ row }">
               <span v-if="row.isDefault" style="color: #67c23a">&#10003;</span>
             </template>
           </el-table-column>
-          <el-table-column label="范围" width="110" align="center">
+          <el-table-column label="范围" width="110" align="center" sortable :sort-method="(a: any, b: any) => (a.scope || '').localeCompare(b.scope || '')">
             <template #default="{ row }">
               <el-tag v-if="row.scope === 'RESTRICTED'" type="warning" size="small">
                 限定 ({{ row.allowedWorkerIds?.length || 0 }})
@@ -92,8 +92,10 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="200" align="center">
-            <template #default="{ row }">
+          <el-table-column label="操作" width="260" align="center">
+            <template #default="{ row, $index }">
+              <el-button text size="small" :disabled="$index === 0" @click="moveLlm($index, -1)">&#9650;</el-button>
+              <el-button text size="small" :disabled="$index === llmModels.length - 1" @click="moveLlm($index, 1)">&#9660;</el-button>
               <el-button text size="small" :loading="row._testing" @click="handleTestSaved(row)">测试</el-button>
               <el-button text size="small" @click="editLlmModel(row)">编辑</el-button>
               <el-button text type="danger" size="small" @click="deleteLlm(row.id)">删除</el-button>
@@ -552,6 +554,7 @@ import {
   saveModelConfig as apiSaveLlm,
   updateModelConfig as apiUpdateLlm,
   deleteModelConfig as apiDeleteLlm,
+  reorderModelConfigs as apiReorderLlm,
   listAgentModelOverrides as apiListOverrides,
   setAgentModelOverride as apiSetOverride,
   removeAgentModelOverride as apiRemoveOverride,
@@ -828,6 +831,21 @@ async function deleteLlm(id: string) {
     ElMessage.success('已删除')
     await loadLlmModels()
   } catch { /* cancelled */ }
+}
+
+async function moveLlm(index: number, direction: -1 | 1) {
+  const target = index + direction
+  if (target < 0 || target >= llmModels.value.length) return
+  const arr = [...llmModels.value]
+  const temp = arr[index]!
+  arr[index] = arr[target]!
+  arr[target] = temp
+  llmModels.value = arr
+  try {
+    await apiReorderLlm(arr.map(m => m.id))
+  } catch {
+    await loadLlmModels()
+  }
 }
 
 function categoryLabel(c: string): string {

@@ -155,6 +155,13 @@ public class PlatformConfigController {
         return RX.ok(list);
     }
 
+    @PutMapping("/llm/reorder")
+    public RX<Void> reorderModelConfigs(@RequestBody List<String> orderedIds) {
+        log.info("Reorder LLM models: count={}", orderedIds.size());
+        llmModelManager.reorderModelConfigs(orderedIds);
+        return RX.ok();
+    }
+
     @GetMapping("/llm/{id}")
     public RX<LlmModelConfigDTO> getModelConfig(@PathVariable String id) {
         log.info("Get LLM model: id={}", id);

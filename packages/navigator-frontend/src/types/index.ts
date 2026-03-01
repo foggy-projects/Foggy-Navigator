@@ -229,6 +229,7 @@ export interface LlmModelConfig {
   hasApiKey: boolean
   scope: ModelAccessScope
   allowedWorkerIds?: string[]
+  sortOrder: number
   createdAt: string
   updatedAt: string
 }
