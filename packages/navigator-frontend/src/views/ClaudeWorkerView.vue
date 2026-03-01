@@ -906,6 +906,10 @@
         <el-form-item label="SSH 密码">
           <el-input v-model="addForm.sshPassword" type="password" show-password placeholder="SSH 登录密码" />
         </el-form-item>
+        <el-divider content-position="left">Code Server（可选）</el-divider>
+        <el-form-item label="VS Code 地址">
+          <el-input v-model="addForm.codeServerUrl" placeholder="如 http://192.168.1.100:18443，留空自动拼接" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAddDialog = false">取消</el-button>
@@ -951,6 +955,10 @@
             show-password
             :placeholder="selectedWorkerEntity?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
           />
+        </el-form-item>
+        <el-divider content-position="left">Code Server（可选）</el-divider>
+        <el-form-item label="VS Code 地址">
+          <el-input v-model="editForm.codeServerUrl" placeholder="如 http://192.168.1.100:18443，留空自动拼接" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1697,6 +1705,7 @@ const addForm = ref({
   sshUsername: '',
   sshPort: 22 as number,
   sshPassword: '',
+  codeServerUrl: '',
 })
 
 const editForm = ref({
@@ -1707,6 +1716,7 @@ const editForm = ref({
   sshUsername: '',
   sshPort: 22 as number,
   sshPassword: '',
+  codeServerUrl: '',
 })
 
 const addDirForm = ref({
@@ -2464,7 +2474,7 @@ async function handleAdd() {
   try {
     await workerState.registerWorker(addForm.value)
     showAddDialog.value = false
-    addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '' }
+    addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '', codeServerUrl: '' }
     ElMessage.success('Worker 添加成功')
   } catch {
     ElMessage.error('添加失败')
@@ -2483,6 +2493,7 @@ async function handleEdit() {
       authMode: editForm.value.authMode,
       sshUsername: editForm.value.sshUsername,
       sshPort: editForm.value.sshPort,
+      codeServerUrl: editForm.value.codeServerUrl || null,
     }
     // 密码类字段：有值才发送，空串不发（避免清空已保存的密码）
     if (editForm.value.authToken) {
@@ -2691,8 +2702,7 @@ function openCodeServer() {
   const dir = selectedDirectory.value
   let folderPath = dir?.path || ''
 
-  // Local dev: code-server runs in WSL, convert Windows paths to WSL format
-  // e.g. D:\foggy-projects\student-analytics → /mnt/d/foggy-projects/student-analytics
+  // Local dev (WSL): convert Windows paths → /mnt/d/...
   const currentHost = window.location.hostname
   const isLocalAccess = currentHost === 'localhost' || currentHost === '127.0.0.1'
   if (isLocalAccess && /^[A-Za-z]:[\\\/]/.test(folderPath)) {
@@ -2702,10 +2712,21 @@ function openCodeServer() {
 
   const folder = folderPath ? encodeURIComponent(folderPath) : ''
 
-  // Always use /code/ proxy path:
-  // - Local dev: Vite proxy /code → localhost:8443 (WSL code-server)
-  // - Production: Nginx proxy /code/ → localhost:18443 (native code-server)
-  const url = `${window.location.origin}/code/?folder=${folder}`
+  // Use codeServerUrl if configured, otherwise derive from baseUrl host + :18443
+  let base: string
+  if (worker.codeServerUrl) {
+    base = worker.codeServerUrl.replace(/\/+$/, '')
+  } else {
+    let host: string
+    try {
+      host = new URL(worker.baseUrl).hostname
+    } catch {
+      host = worker.baseUrl.replace(/https?:\/\//, '').replace(/[:/].*/, '')
+    }
+    base = `http://${host}:18443`
+  }
+
+  const url = `${base}/?folder=${folder}`
   window.open(url, '_blank')
 }
 
@@ -3539,6 +3560,7 @@ watch(showEditDialog, (val) => {
       sshUsername: selectedWorkerEntity.value.sshUsername || '',
       sshPort: selectedWorkerEntity.value.sshPort || 22,
       sshPassword: '',
+      codeServerUrl: selectedWorkerEntity.value.codeServerUrl || '',
     }
   }
 })
