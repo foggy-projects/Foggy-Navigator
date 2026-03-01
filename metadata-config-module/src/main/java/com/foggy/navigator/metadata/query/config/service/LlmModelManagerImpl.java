@@ -254,7 +254,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     @Override
     public List<AgentModelOverrideForm> listAgentModelOverrides(String tenantId) {
         log.debug("Listing agent model overrides: tenantId={}", tenantId);
-        return overrideRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc(tenantId).stream()
+        return overrideRepo.findByTenantIdOrderByCreatedAtAsc(tenantId).stream()
                 .map(entity -> {
                     AgentModelOverrideForm form = new AgentModelOverrideForm();
                     form.setAgentId(entity.getAgentId());
