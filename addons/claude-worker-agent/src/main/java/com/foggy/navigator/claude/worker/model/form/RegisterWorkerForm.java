@@ -14,4 +14,5 @@ public class RegisterWorkerForm {
     private String sshUsername;
     private Integer sshPort;
     private String sshPassword;
+    private String codeServerUrl;
 }

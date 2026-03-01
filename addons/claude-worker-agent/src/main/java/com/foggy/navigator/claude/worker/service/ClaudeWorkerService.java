@@ -55,6 +55,9 @@ public class ClaudeWorkerService {
         if (form.getSshPassword() != null && !form.getSshPassword().isEmpty()) {
             entity.setSshPassword(encrypt(form.getSshPassword()));
         }
+        if (form.getCodeServerUrl() != null && !form.getCodeServerUrl().isEmpty()) {
+            entity.setCodeServerUrl(form.getCodeServerUrl());
+        }
 
         workerRepository.save(entity);
         log.info("Worker registered: workerId={}, name={}, userId={}", entity.getWorkerId(), entity.getName(), userId);
@@ -95,6 +98,10 @@ public class ClaudeWorkerService {
             } else {
                 entity.setSshPassword(encrypt(form.getSshPassword()));
             }
+        }
+        // codeServerUrl: null 不改，空串清除
+        if (form.getCodeServerUrl() != null) {
+            entity.setCodeServerUrl(form.getCodeServerUrl().isEmpty() ? null : form.getCodeServerUrl());
         }
 
         workerRepository.save(entity);
@@ -205,6 +212,7 @@ public class ClaudeWorkerService {
                 .sshUsername(entity.getSshUsername())
                 .sshPort(entity.getSshPort())
                 .sshPasswordConfigured(entity.getSshPassword() != null)
+                .codeServerUrl(entity.getCodeServerUrl())
                 .build();
     }
 }
