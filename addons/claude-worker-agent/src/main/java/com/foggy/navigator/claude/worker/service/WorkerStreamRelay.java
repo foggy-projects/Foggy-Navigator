@@ -50,6 +50,7 @@ public class WorkerStreamRelay {
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
     private final ClaudeTaskRepository taskRepository;
+    private final ConversationConfigService conversationConfigService;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
 
@@ -132,14 +133,19 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
 
             // Subscribe via the reconnection endpoint.
-            // replay_from=0 replays all events — the relay logic is idempotent for
-            // state-changing operations (completeTask/failTask check current status).
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, 0);
+            // Use replay_from=MAX to skip all past events — Java side already has them
+            // in DB. Replaying would re-trigger state changes (interactionState, etc.)
+            // We only want NEW events going forward.
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, Integer.MAX_VALUE);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, true);
 
             activeStreams.put(taskId, subscription);
+
+            // Reset interactionState to PROCESSING — the previous SSE disconnect
+            // may have left it as AWAITING_REPLY via failIfStillRunning path.
+            conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 
             // Push a STATE_SYNC so the frontend knows the task stream is reconnected
             publishMessage(sessionId, MessageType.STATE_SYNC,
@@ -283,13 +289,17 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
 
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, 0);
+            // Skip past events — only watch for new ones
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, Integer.MAX_VALUE);
 
             // isReconnect=true to prevent infinite reconnection loop
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, true);
 
             activeStreams.put(taskId, subscription);
+
+            // Reset interactionState to PROCESSING
+            conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 
             publishMessage(sessionId, MessageType.STATE_SYNC,
                     Map.of("content", "Task stream reconnected", "subtype", "reconnected", "taskId", taskId));

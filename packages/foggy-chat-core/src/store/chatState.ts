@@ -214,6 +214,18 @@ export function createChatState(): ChatState {
           })
           break
         }
+        if (subtype === 'reconnected') {
+          // Stream reconnected hint — lightweight divider (same as compression hint)
+          messages.value.push({
+            id: aip.messageId,
+            type: aip.type,
+            sender: 'system',
+            content: (raw.content as string) || 'Task stream reconnected',
+            raw: { subtype },
+            timestamp: aip.timestamp,
+          })
+          break
+        }
         if (subtype === 'waiting') {
           // "Waiting for response" hint — replace previous waiting msg to avoid stacking
           const existingIdx = messages.value.findIndex(
