@@ -2371,6 +2371,8 @@ onActivated(() => {
   if (selectedDirectoryId.value) {
     loadDirectoryTasks()
   }
+  // 重新激活时刷新模型列表，确保 Worker 授权变更后下拉框数据是最新的
+  loadPlatformModelConfig()
 })
 
 // ---- File browser cross-window messaging ----------------------------------
@@ -2498,9 +2500,14 @@ function selectWorker(workerId: string) {
 }
 
 function selectDirectory(workerId: string, directoryId: string) {
+  const previousWorkerId = selectedWorkerId.value
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = directoryId
   exitBatchSelectMode()
+  // 切换到不同 Worker 的目录时，刷新该 Worker 的可用模型列表
+  if (workerId !== previousWorkerId) {
+    loadPlatformModelConfig()
+  }
   // No disposeAllPanes — workspace context preserves panes per directory
   taskForm.value.prompt = ''
   taskForm.value.cwd = ''
