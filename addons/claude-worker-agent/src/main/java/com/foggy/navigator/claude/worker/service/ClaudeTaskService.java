@@ -1,6 +1,9 @@
 package com.foggy.navigator.claude.worker.service;
 
+import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
+import com.foggy.navigator.agent.framework.protocol.AgentMessage;
+import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
@@ -34,6 +37,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -853,6 +857,36 @@ public class ClaudeTaskService {
         });
     }
 
+    /**
+     * 流正常结束但任务仍在 RUNNING 时调用（未收到 result/error 事件）。
+     * 典型场景：系统资源不足导致 CLI 无法启动，Worker 进程异常退出。
+     * 标记任务失败 + 推送友好错误消息到会话。
+     */
+    @Transactional
+    public void failIfStillRunning(String taskId, String sessionId, String reason) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String status = entity.getStatus();
+            if ("RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status)) {
+                String prev = entity.getStatus();
+                entity.setStatus("FAILED");
+                entity.setErrorMessage(reason);
+                taskRepository.save(entity);
+                log.warn("Task stream ended without result: taskId={}, reason={}", taskId, reason);
+                publishStatusChange(entity, prev);
+                publishSessionError(sessionId, taskId, reason);
+
+                // 发布跨 Agent 任务失败事件
+                eventPublisher.publishEvent(TaskCompletionEvent.builder()
+                        .externalTaskId(taskId)
+                        .parentSessionId(sessionId)
+                        .targetAgentId(AGENT_ID)
+                        .status("FAILED")
+                        .resultSummary(reason)
+                        .build());
+            }
+        });
+    }
+
     private void failTimeout(ClaudeTaskEntity entity, String reason) {
         String prev = entity.getStatus();
         entity.setStatus("FAILED");
@@ -862,6 +896,9 @@ public class ClaudeTaskService {
         publishStatusChange(entity, prev);
 
         String taskId = entity.getTaskId();
+
+        // 推送错误消息到会话，让用户在聊天中看到失败原因
+        publishSessionError(entity.getSessionId(), taskId, reason);
 
         // 通知 Worker 中止任务（使用 foggy_task_id，Worker 端已支持按此字段查找）
         try {
@@ -904,6 +941,23 @@ public class ClaudeTaskService {
     private String truncate(String text, int maxLen) {
         if (text == null) return null;
         return text.length() > maxLen ? text.substring(0, maxLen) + "..." : text;
+    }
+
+    /**
+     * 推送 ERROR 消息到会话，让用户在聊天界面中看到错误原因。
+     * 仅用于显示，不影响 LLM 上下文（Claude Worker 的 LLM 上下文在远端 CLI 上）。
+     */
+    private void publishSessionError(String sessionId, String taskId, String errorMessage) {
+        if (sessionId == null) return;
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("content", errorMessage);
+            payload.put("taskId", taskId);
+            eventPublisher.publishEvent(
+                    AgentMessage.of(sessionId, AGENT_ID, MessageType.ERROR, payload));
+        } catch (Exception e) {
+            log.warn("Failed to publish session error: taskId={}, error={}", taskId, e.getMessage());
+        }
     }
 
     private void publishStatusChange(ClaudeTaskEntity entity, String previousStatus) {
