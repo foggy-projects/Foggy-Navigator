@@ -1,14 +1,11 @@
 /**
  * App 版本检查与更新（wgt 热更新 + APK 整包更新）
  *
- * 通过 HTTP 调用 uni-admin 升级中心云函数，不依赖 uniCloud SDK。
+ * 通过 uniCloud client API 协议调用升级中心云函数（绕过 HTTP trigger）。
  * 仅在 APP-PLUS 环境生效。
  */
 
-const UPGRADE_API =
-  'https://fc-mp-4af7054d-5a40-4315-8678-df36b44298bb.next.bspapp.com/uni-upgrade-center'
-
-const APPID = '__UNI__AC2B8DB'
+import { callUpgradeCenter } from './unicloud-client'
 
 export interface UpgradeInfo {
   /** > 0 表示有更新 */
@@ -19,13 +16,13 @@ export interface UpgradeInfo {
   /** 下载地址 */
   url: string
   /** android / ios */
-  platform: string
+  platform: string | string[]
   /** wgt / native_app */
   type: 'wgt' | 'native_app'
   /** 版本号 */
   version: string
-  /** 更新内容 */
-  note: string
+  /** 更新内容（云函数返回 contents 字段） */
+  contents: string
 }
 
 /** 事件总线：用于通知 UpgradePopup 显示 */
@@ -53,30 +50,30 @@ export async function checkUpgradeManual(): Promise<boolean> {
   // #endif
 }
 
+/** 获取当前 wgt 资源版本（wgt 热更新后会变，plus.runtime.version 不变） */
+function getWgtVersion(): Promise<string> {
+  return new Promise((resolve) => {
+    plus.runtime.getProperty(plus.runtime.appid!, (info) => {
+      resolve(info.version || plus.runtime.version || '1.0.0')
+    })
+  })
+}
+
 async function doCheckUpgrade(): Promise<boolean> {
   try {
     const appVersion = plus.runtime.version || '1.0.0'
-    const wgtVersion = plus.runtime.innerVersion || appVersion
+    const wgtVersion = await getWgtVersion()
 
-    const res = await uni.request({
-      url: UPGRADE_API,
-      method: 'POST',
-      data: {
-        action: 'checkVersion',
-        appid: APPID,
-        appVersion,
-        wgtVersion,
-        platform: 'android',
-      },
-    })
+    console.log('[upgrade] checking...', { appVersion, wgtVersion })
+    const result = await callUpgradeCenter(appVersion, wgtVersion)
 
-    const statusCode = (res as any).statusCode
-    if (!statusCode || statusCode < 200 || statusCode >= 300) {
-      console.warn('[upgrade] check failed, HTTP', statusCode)
+    if (!result.success) {
+      console.warn('[upgrade] cloud function call failed:', result.error)
       return false
     }
 
-    const data = (res as any).data as UpgradeInfo
+    const data = result.data as UpgradeInfo
+    console.log('[upgrade] response:', JSON.stringify(data))
     if (!data || typeof data !== 'object' || !data.code || data.code <= 0) return false
 
     if (data.is_silently && data.type === 'wgt') {
@@ -106,7 +103,7 @@ function silentWgtUpdate(url: string) {
   task.start()
 }
 
-/** 下载 wgt 并安装（带进度回调） */
+/** 下载 wgt 并安装（带进度回调），安装完成后 resolve，由调用方处理重启交互 */
 export function downloadAndInstallWgt(
   url: string,
   onProgress: (percent: number) => void,
@@ -117,16 +114,7 @@ export function downloadAndInstallWgt(
         plus.runtime.install(
           d.filename!,
           { force: true },
-          () => {
-            resolve()
-            uni.showModal({
-              title: '更新完成',
-              content: '新版本已安装，是否立即重启？',
-              success: (r) => {
-                if (r.confirm) plus.runtime.restart()
-              },
-            })
-          },
+          () => resolve(),
           (err) => reject(new Error(err.message)),
         )
       } else {

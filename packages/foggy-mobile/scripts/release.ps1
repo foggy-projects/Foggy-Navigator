@@ -118,13 +118,17 @@ Write-Host ""
 Write-Host "[3/3] 发布到 uni-admin 升级中心..." -ForegroundColor Cyan
 
 $apiScript = Join-Path $ScriptDir "uni-admin-api.js"
+# 查找当前最新的原生 App 版本号作为 min_uni_version
+# wgt 热更新必须设置此字段，否则云函数的兼容性校验会跳过更新
+$latestNativeVersion = $currentVersion
 $publishArgs = @(
     $apiScript, "publish",
     "--type", "wgt",
     "--version", $newVersion,
     "--title", $releaseTitle,
     "--content", $releaseNote,
-    "--file", $wgtFile
+    "--file", $wgtFile,
+    "--minVersion", $latestNativeVersion
 )
 if ($isSilent) { $publishArgs += "--silent" }
 

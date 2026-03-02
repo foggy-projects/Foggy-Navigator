@@ -280,7 +280,7 @@ async function createVersion(opts, fileUrl, accessToken, uniIdToken, config) {
     platform: ['Android'],
     type: opts.type,
     version: opts.version,
-    min_uni_version: '',
+    min_uni_version: opts.minVersion || '',
     url: fileUrl,
     is_silently: opts.silent ? true : false,
     is_mandatory: opts.force ? true : false,

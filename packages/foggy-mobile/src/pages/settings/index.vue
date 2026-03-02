@@ -130,7 +130,10 @@ const serverForm = ref({ name: '', url: '' })
 // 版本和平台
 const appVersion = ref('0.1.0')
 // #ifdef APP-PLUS
-appVersion.value = plus.runtime.version || '0.1.0'
+// getProperty 返回 wgt 热更新后的实际资源版本，plus.runtime.version 只返回原生 APK 版本
+plus.runtime.getProperty(plus.runtime.appid!, (info) => {
+  appVersion.value = info.version || plus.runtime.version || '0.1.0'
+})
 // #endif
 
 let platform = 'H5'

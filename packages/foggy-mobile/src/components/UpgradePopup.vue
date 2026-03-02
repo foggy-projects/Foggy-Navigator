@@ -1,27 +1,29 @@
 <!-- #ifdef APP-PLUS -->
 <template>
-  <wd-popup v-model="visible" position="center" :close-on-click-modal="false" custom-style="border-radius: 16px; width: 80%; max-width: 320px;">
-    <view class="upgrade-popup">
+  <view v-if="visible" class="upgrade-overlay" @tap.stop>
+    <view class="upgrade-modal">
       <view class="upgrade-header">
         <text class="upgrade-title">发现新版本</text>
         <text class="upgrade-version">v{{ info?.version }}</text>
       </view>
 
-      <view class="upgrade-note" v-if="info?.note">
-        <text class="upgrade-note-text">{{ info.note }}</text>
+      <view class="upgrade-note" v-if="info?.contents">
+        <text class="upgrade-note-text">{{ info.contents }}</text>
       </view>
 
       <view class="upgrade-progress" v-if="downloading">
-        <wd-progress :percentage="progress" :show-text="true" />
-        <text class="upgrade-progress-tip">正在下载更新...</text>
+        <view class="progress-bar">
+          <view class="progress-fill" :style="{ width: progress + '%' }"></view>
+        </view>
+        <text class="upgrade-progress-tip">正在下载更新... {{ progress }}%</text>
       </view>
 
       <view class="upgrade-actions" v-if="!downloading">
-        <wd-button type="primary" block @click="handleUpdate">立即更新</wd-button>
-        <wd-button v-if="!forceUpdate" plain block custom-style="margin-top: 12px;" @click="handleLater">稍后提醒</wd-button>
+        <button class="btn-primary" @tap="handleUpdate">立即更新</button>
+        <button v-if="!forceUpdate" class="btn-plain" @tap="handleLater">稍后提醒</button>
       </view>
     </view>
-  </wd-popup>
+  </view>
 </template>
 
 <script setup lang="ts">
@@ -40,8 +42,8 @@ const downloading = ref(false)
 const progress = ref(0)
 
 const forceUpdate = computed(() => {
-  // code === 2 表示强制更新（uni-admin 升级中心的约定）
-  return info.value?.code === 2
+  // code === 102 表示强制更新（uni-upgrade-center: 101=可选, 102=强制）
+  return info.value?.code === 102
 })
 
 function handleUpgradeAvailable(data: UpgradeInfo) {
@@ -58,8 +60,20 @@ async function handleUpdate() {
     const onProgress = (p: number) => { progress.value = p }
     if (info.value.type === 'wgt') {
       await downloadAndInstallWgt(info.value.url, onProgress)
+      // 先关闭遮罩层，再弹重启确认（否则 modal 被遮罩挡住无法点击）
+      visible.value = false
+      downloading.value = false
+      uni.showModal({
+        title: '更新完成',
+        content: '新版本已安装，是否立即重启？',
+        success: (r) => {
+          if (r.confirm) plus.runtime.restart()
+        },
+      })
     } else {
       await downloadAndInstallApk(info.value.url, onProgress)
+      visible.value = false
+      downloading.value = false
     }
   } catch (e: any) {
     downloading.value = false
@@ -81,7 +95,24 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.upgrade-popup {
+.upgrade-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.upgrade-modal {
+  width: 80%;
+  max-width: 320px;
+  background: #ffffff;
+  border-radius: 16px;
   padding: 24px 20px;
 }
 
@@ -95,7 +126,7 @@ onUnmounted(() => {
 .upgrade-title {
   font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: #333333;
 }
 
 .upgrade-version {
@@ -117,7 +148,7 @@ onUnmounted(() => {
 
 .upgrade-note-text {
   font-size: 14px;
-  color: #666;
+  color: #666666;
   line-height: 1.6;
 }
 
@@ -125,16 +156,56 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 
+.progress-bar {
+  height: 8px;
+  background: #e9ecef;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+
 .upgrade-progress-tip {
   display: block;
   text-align: center;
   font-size: 12px;
-  color: #999;
+  color: #999999;
   margin-top: 8px;
 }
 
 .upgrade-actions {
   margin-top: 4px;
+}
+
+.btn-primary {
+  width: 100%;
+  height: 44px;
+  line-height: 44px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 22px;
+  border: none;
+  text-align: center;
+}
+
+.btn-plain {
+  width: 100%;
+  height: 44px;
+  line-height: 44px;
+  background: #ffffff;
+  color: #666666;
+  font-size: 14px;
+  border-radius: 22px;
+  border: 1px solid #dcdfe6;
+  text-align: center;
+  margin-top: 12px;
 }
 </style>
 <!-- #endif -->
