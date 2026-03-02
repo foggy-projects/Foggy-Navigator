@@ -5,6 +5,7 @@ import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,7 @@ import static org.mockito.Mockito.*;
 class ClaudeTaskServiceSyncTest {
 
     private ClaudeTaskRepository taskRepository;
+    private DeletedClaudeSessionRepository deletedSessionRepository;
     private WorkingDirectoryRepository directoryRepository;
     private SessionManager sessionManager;
     private ClaudeTaskService service;
@@ -42,6 +44,7 @@ class ClaudeTaskServiceSyncTest {
     @BeforeEach
     void setUp() {
         taskRepository = mock(ClaudeTaskRepository.class);
+        deletedSessionRepository = mock(DeletedClaudeSessionRepository.class);
         directoryRepository = mock(WorkingDirectoryRepository.class);
         sessionManager = mock(SessionManager.class);
 
@@ -53,7 +56,7 @@ class ClaudeTaskServiceSyncTest {
         LlmModelManager llmModelManager = mock(LlmModelManager.class);
         UserAuthService userAuthService = mock(UserAuthService.class);
         service = new ClaudeTaskService(
-                taskRepository, workerService, configService,
+                taskRepository, deletedSessionRepository, workerService, configService,
                 dirService, directoryRepository, sessionManager, publisher, llmModelManager,
                 userAuthService);
 

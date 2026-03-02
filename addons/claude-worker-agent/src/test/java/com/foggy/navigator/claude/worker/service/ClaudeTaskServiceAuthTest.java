@@ -37,6 +37,7 @@ class ClaudeTaskServiceAuthTest {
     private ApplicationEventPublisher publisher;
     private LlmModelManager llmModelManager;
     private com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository workingDirectoryRepository;
+    private com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository deletedSessionRepository;
 
     private static final String USER_ID = "user-1";
     private static final String TENANT_ID = "tenant-1";
@@ -50,6 +51,7 @@ class ClaudeTaskServiceAuthTest {
         configService = mock(ConversationConfigService.class);
         directoryService = mock(WorkingDirectoryService.class);
         workingDirectoryRepository = mock(com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository.class);
+        deletedSessionRepository = mock(com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository.class);
         sessionManager = mock(SessionManager.class);
         publisher = mock(ApplicationEventPublisher.class);
         llmModelManager = mock(LlmModelManager.class);
@@ -60,6 +62,7 @@ class ClaudeTaskServiceAuthTest {
 
         service = new ClaudeTaskService(
                 taskRepository,
+                deletedSessionRepository,
                 workerService, configService, directoryService,
                 workingDirectoryRepository,
                 sessionManager, publisher, llmModelManager, userAuthService);
