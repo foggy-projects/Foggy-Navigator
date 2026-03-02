@@ -296,6 +296,52 @@ public class ConversationConfigService {
     }
 
     /**
+     * 查询指定状态的 sessionIds
+     */
+    public List<String> findSessionIdsByInteractionState(String userId, String state) {
+        return configRepository.findSessionIdsByInteractionState(userId, state);
+    }
+
+    /**
+     * 更新会话交互状态
+     */
+    @Transactional
+    public void updateInteractionState(String sessionId, String state) {
+        configRepository.findBySessionId(sessionId).ifPresent(entity -> {
+            entity.setInteractionState(state);
+            configRepository.save(entity);
+        });
+    }
+
+    /**
+     * 归档会话
+     */
+    @Transactional
+    public ConversationConfigDTO archiveConversation(String sessionId, String userId) {
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+        if (!entity.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Access denied");
+        }
+        entity.setInteractionState("ARCHIVED");
+        configRepository.save(entity);
+        return toDTO(entity);
+    }
+
+    /**
+     * 取消归档
+     */
+    @Transactional
+    public ConversationConfigDTO unarchiveConversation(String sessionId, String userId) {
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+        if (!entity.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Access denied");
+        }
+        entity.setInteractionState("AWAITING_REPLY");
+        configRepository.save(entity);
+        return toDTO(entity);
+    }
+
+    /**
      * 获取实体（内部使用，用于解密 token）
      */
     public ConversationConfigEntity getConfigEntity(String sessionId) {
@@ -339,6 +385,7 @@ public class ConversationConfigService {
                 .baseUrl(entity.getBaseUrl())
                 .maskedAuthToken(masked)
                 .tags(tagList)
+                .interactionState(entity.getInteractionState())
                 .build();
     }
 

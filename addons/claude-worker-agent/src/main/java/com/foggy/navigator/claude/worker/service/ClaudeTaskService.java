@@ -130,6 +130,7 @@ public class ClaudeTaskService {
 
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}", taskId, sessionId, form.getWorkerId(), userId);
         publishStatusChange(entity, null);
+        conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
@@ -222,6 +223,7 @@ public class ClaudeTaskService {
 
         log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}", taskId, form.getClaudeSessionId(), directoryId);
         publishStatusChange(entity, null);
+        conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 
         // 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
@@ -333,17 +335,41 @@ public class ClaudeTaskService {
      * 每页包含 size 个会话（而非任务），返回这些会话的所有任务。
      */
     public SessionPageDTO listTasksBySession(String userId, int page, int size) {
+        return listTasksBySession(userId, page, size, null);
+    }
+
+    public SessionPageDTO listTasksBySession(String userId, int page, int size, String interactionState) {
+        // 如果指定了 interactionState 筛选，先从 ConversationConfig 拿到匹配的 sessionIds
+        Set<String> stateFilterSessionIds = null;
+        if (interactionState != null && !interactionState.isEmpty()) {
+            stateFilterSessionIds = Set.copyOf(
+                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState));
+        }
+
         // 1. 获取当前页的 sessionIds（按最新任务时间排序）
         List<String> sessionIds = taskRepository.findDistinctSessionIdsByUser(userId, PageRequest.of(page, size));
         if (sessionIds.isEmpty()) {
             return SessionPageDTO.builder()
                     .content(List.of()).totalSessions(0).page(page).size(size).build();
         }
+
+        // 如果有 interactionState 过滤，只保留匹配的 session
+        if (stateFilterSessionIds != null) {
+            Set<String> filterSet = stateFilterSessionIds;
+            sessionIds = sessionIds.stream().filter(filterSet::contains).toList();
+            if (sessionIds.isEmpty()) {
+                return SessionPageDTO.builder()
+                        .content(List.of()).totalSessions(0).page(page).size(size).build();
+            }
+        }
+
         // 2. 获取这些 session 的所有任务
         List<TaskDTO> tasks = taskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
                 .stream().map(this::toDTO).toList();
         // 3. 获取会话总数
-        long totalSessions = taskRepository.countDistinctSessionsByUser(userId);
+        long totalSessions = stateFilterSessionIds != null
+                ? stateFilterSessionIds.size()
+                : taskRepository.countDistinctSessionsByUser(userId);
         return SessionPageDTO.builder()
                 .content(tasks).totalSessions(totalSessions).page(page).size(size).build();
     }
@@ -446,6 +472,7 @@ public class ClaudeTaskService {
             taskRepository.save(entity);
             log.info("Task completed: taskId={}, model={}, costUsd={}, durationMs={}", taskId, model, costUsd, durationMs);
             publishStatusChange(entity, prev);
+            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
     }
 
@@ -464,6 +491,7 @@ public class ClaudeTaskService {
             taskRepository.save(entity);
             log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
             publishStatusChange(entity, prev);
+            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
     }
 
@@ -478,6 +506,7 @@ public class ClaudeTaskService {
             taskRepository.save(entity);
             log.info("Task awaiting permission: taskId={}", taskId);
             publishStatusChange(entity, prev);
+            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
     }
 
@@ -493,6 +522,7 @@ public class ClaudeTaskService {
                 taskRepository.save(entity);
                 log.info("Task resumed from permission: taskId={}", taskId);
                 publishStatusChange(entity, prev);
+                conversationConfigService.updateInteractionState(entity.getSessionId(), "PROCESSING");
             }
         });
     }
@@ -873,6 +903,7 @@ public class ClaudeTaskService {
                 taskRepository.save(entity);
                 log.warn("Task stream ended without result: taskId={}, reason={}", taskId, reason);
                 publishStatusChange(entity, prev);
+                conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
                 publishSessionError(sessionId, taskId, reason);
 
                 // 发布跨 Agent 任务失败事件
@@ -894,6 +925,7 @@ public class ClaudeTaskService {
         taskRepository.save(entity);
         log.warn("Task timed out: taskId={}, createdAt={}, reason={}", entity.getTaskId(), entity.getCreatedAt(), reason);
         publishStatusChange(entity, prev);
+        conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
 
         String taskId = entity.getTaskId();
 
@@ -961,6 +993,7 @@ public class ClaudeTaskService {
     }
 
     private void publishStatusChange(ClaudeTaskEntity entity, String previousStatus) {
+        String interactionState = deriveInteractionState(entity.getStatus());
         eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
                 .taskId(entity.getTaskId())
                 .sessionId(entity.getSessionId())
@@ -969,7 +1002,17 @@ public class ClaudeTaskService {
                 .status(entity.getStatus())
                 .previousStatus(previousStatus)
                 .errorMessage(entity.getErrorMessage())
+                .interactionState(interactionState)
                 .build());
+    }
+
+    private String deriveInteractionState(String taskStatus) {
+        if ("RUNNING".equals(taskStatus)) return "PROCESSING";
+        if ("COMPLETED".equals(taskStatus) || "FAILED".equals(taskStatus)
+                || "AWAITING_PERMISSION".equals(taskStatus) || "ABORTED".equals(taskStatus)) {
+            return "AWAITING_REPLY";
+        }
+        return null;
     }
 
     private TaskDTO toDTO(ClaudeTaskEntity entity) {

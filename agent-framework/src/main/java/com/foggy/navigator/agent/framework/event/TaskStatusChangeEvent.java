@@ -22,4 +22,5 @@ public class TaskStatusChangeEvent {
     private String status;          // RUNNING / COMPLETED / FAILED / AWAITING_PERMISSION / ABORTED
     private String previousStatus;
     private String errorMessage;
+    private String interactionState;  // PROCESSING / AWAITING_REPLY / ARCHIVED
 }

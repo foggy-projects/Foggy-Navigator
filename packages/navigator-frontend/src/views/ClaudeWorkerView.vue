@@ -682,16 +682,6 @@
     <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" class="worker-history">
       <div class="history-header">
         <h3>历史会话</h3>
-        <el-select
-          v-model="sessionSourceFilter"
-          size="small"
-          class="source-filter-select"
-          style="width: 100px; margin-left: 6px;"
-        >
-          <el-option label="平台创建" value="PLATFORM" />
-          <el-option label="本地同步" value="SYNCED" />
-          <el-option label="全部" value="ALL" />
-        </el-select>
         <div class="history-header-actions">
           <template v-if="batchSelectMode">
             <el-button size="small" text @click="handleBatchSelectAll">
@@ -737,23 +727,57 @@
           </template>
         </div>
       </div>
+      <div class="history-filter-bar">
+        <div class="filter-group">
+          <span
+            :class="['filter-tag', { active: interactionStateFilter === 'ALL' }]"
+            @click="interactionStateFilter = 'ALL'"
+          >全部</span>
+          <span
+            :class="['filter-tag awaiting', { active: interactionStateFilter === 'AWAITING_REPLY' }]"
+            @click="interactionStateFilter = 'AWAITING_REPLY'"
+          >待回复</span>
+          <span
+            :class="['filter-tag', { active: interactionStateFilter === 'PROCESSING' }]"
+            @click="interactionStateFilter = 'PROCESSING'"
+          >处理中</span>
+          <span
+            :class="['filter-tag', { active: interactionStateFilter === 'ARCHIVED' }]"
+            @click="interactionStateFilter = 'ARCHIVED'"
+          >已归档</span>
+        </div>
+        <div class="filter-group">
+          <span
+            :class="['filter-tag', { active: sessionSourceFilter === 'PLATFORM' }]"
+            @click="sessionSourceFilter = 'PLATFORM'"
+          >平台</span>
+          <span
+            :class="['filter-tag', { active: sessionSourceFilter === 'SYNCED' }]"
+            @click="sessionSourceFilter = 'SYNCED'"
+          >同步</span>
+          <span
+            :class="['filter-tag', { active: sessionSourceFilter === 'ALL' }]"
+            @click="sessionSourceFilter = 'ALL'"
+          >全部来源</span>
+        </div>
+      </div>
       <div class="history-content">
-        <!-- Active sessions section (global: RUNNING + AWAITING_PERMISSION) -->
-        <div v-if="activeSessionConvs.length > 0" class="active-sessions-section">
+        <!-- Global attention section: active tasks + awaiting reply -->
+        <div v-if="globalAttentionConvs.length > 0" class="active-sessions-section">
           <div class="active-header">
-            <span class="active-title">&#9679; 进行中 ({{ activeSessionConvs.length }})</span>
+            <span class="active-title">&#9679; 需要关注 ({{ globalAttentionConvs.length }})</span>
             <el-button size="small" text @click="workerState.loadActiveTasks()">&#8635;</el-button>
           </div>
           <div
-            v-for="ac in activeSessionConvs"
+            v-for="ac in globalAttentionConvs"
             :key="ac.sessionId"
             class="active-conv-item"
             @click="navigateToActiveSession(ac)"
           >
             <div class="conv-row-1">
               <el-tag v-if="ac.latestTask.directoryName" size="small" type="info" effect="plain" class="active-dir-tag">{{ ac.latestTask.directoryName }}</el-tag>
-              <span :class="['conv-status-dot', ac.latestTask.status.toLowerCase()]" :title="ac.latestTask.status" />
-              <span class="active-status-label">{{ ac.latestTask.status === 'RUNNING' ? '运行中' : '等待授权' }}</span>
+              <span :class="['conv-interaction-badge', (ac.config?.interactionState || 'processing').toLowerCase()]" />
+              <span class="active-status-label">{{ attentionStatusLabel(ac) }}</span>
             </div>
             <div class="conv-row-1" style="margin-top: 2px;">
               <span class="conv-prompt" :title="ac.config?.customTitle || ac.firstPrompt">{{ truncate(ac.config?.customTitle || ac.firstPrompt, 30) }}</span>
@@ -796,6 +820,11 @@
                 title="已置顶"
                 @click.stop="handleTogglePin(conv)"
               >&#128204;</span>
+              <span
+                v-if="conv.config?.interactionState"
+                :class="['conv-interaction-badge', conv.config.interactionState.toLowerCase()]"
+                :title="interactionStateLabel(conv.config.interactionState)"
+              />
               <span class="conv-prompt" :title="conv.config?.customTitle || conv.firstPrompt">{{
                 truncate(conv.config?.customTitle || conv.firstPrompt, 36)
               }}</span>
@@ -855,6 +884,18 @@
                       </el-dropdown-item>
                       <el-dropdown-item @click="handleShowDetail(conv)">
                         详情
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="conv.config?.interactionState !== 'ARCHIVED'"
+                        @click="handleArchiveConversation(conv)"
+                      >
+                        归档
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="conv.config?.interactionState === 'ARCHIVED'"
+                        @click="handleUnarchiveConversation(conv)"
+                      >
+                        取消归档
                       </el-dropdown-item>
                       <el-dropdown-item
                         v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
@@ -1702,6 +1743,9 @@ const selectedConvIds = ref<Set<string>>(new Set())
 // Session source filter: 'ALL' | 'PLATFORM' | 'SYNCED'
 const sessionSourceFilter = ref<'ALL' | 'PLATFORM' | 'SYNCED'>('PLATFORM')
 
+// Interaction state filter
+const interactionStateFilter = ref<'ALL' | 'AWAITING_REPLY' | 'PROCESSING' | 'ARCHIVED'>('ALL')
+
 // Tag dialog state
 const showTagDialog = ref(false)
 const savingTags = ref(false)
@@ -2221,22 +2265,51 @@ const allConversations = computed(() =>
   selectedDirectoryId.value ? directoryConversations.value : workerConversations.value,
 )
 const activeConversations = computed(() => {
+  let list = allConversations.value
+
+  // Source filter
   const filter = sessionSourceFilter.value
-  if (filter === 'ALL') return allConversations.value
-  return allConversations.value.filter((conv) => {
-    // Check source of tasks in this conversation
-    // A conversation is PLATFORM if any task has source=PLATFORM (or null with fileCheckpointingEnabled=true for legacy)
-    // A conversation is SYNCED if all tasks have source=SYNCED (or null with fileCheckpointingEnabled=false for legacy)
-    const isPlatform = conv.tasks.some((t) =>
-      t.source === 'PLATFORM' || (t.source == null && t.fileCheckpointingEnabled === true),
-    )
-    if (filter === 'PLATFORM') return isPlatform
-    return !isPlatform // SYNCED
-  })
+  if (filter !== 'ALL') {
+    list = list.filter((conv) => {
+      const isPlatform = conv.tasks.some((t) =>
+        t.source === 'PLATFORM' || (t.source == null && t.fileCheckpointingEnabled === true),
+      )
+      if (filter === 'PLATFORM') return isPlatform
+      return !isPlatform // SYNCED
+    })
+  }
+
+  // Interaction state filter
+  const stateFilter = interactionStateFilter.value
+  if (stateFilter !== 'ALL') {
+    list = list.filter((conv) => {
+      const state = conv.config?.interactionState
+      return state === stateFilter
+    })
+  } else {
+    // Default: hide ARCHIVED and AWAITING_REPLY (shown in global attention section)
+    list = list.filter((conv) => {
+      const state = conv.config?.interactionState
+      return state !== 'ARCHIVED' && state !== 'AWAITING_REPLY'
+    })
+  }
+
+  return list
 })
 
 // Active sessions: group activeTasks into ConversationGroups
 const activeSessionConvs = computed(() => groupTasksToConversations(workerState.activeTasks.value))
+
+// AWAITING_REPLY conversations: global (not directory-filtered), from all worker conversations
+const awaitingReplyConvs = computed(() => {
+  const activeSessionIds = new Set(activeSessionConvs.value.map(c => c.sessionId))
+  return workerConversations.value.filter(conv =>
+    conv.config?.interactionState === 'AWAITING_REPLY' && !activeSessionIds.has(conv.sessionId),
+  )
+})
+
+// Combined "needs attention" section: active tasks + awaiting reply
+const globalAttentionConvs = computed(() => [...activeSessionConvs.value, ...awaitingReplyConvs.value])
 
 // Set of claudeSessionIds that currently have a RUNNING task (for concurrency protection)
 const runningClaudeSessionIds = computed(() => {
@@ -2302,6 +2375,10 @@ function handleTaskUpdateEvent(event: Event) {
   const detail = (event as CustomEvent).detail
   if (detail?.type === 'task_status_change' && detail?.taskId) {
     const newStatus = detail.status as string
+    // Sync interactionState from SSE
+    if (detail.sessionId && detail.interactionState) {
+      workerState.updateInteractionStateFromSSE(detail.sessionId, detail.interactionState)
+    }
     if (['RUNNING', 'AWAITING_PERMISSION'].includes(newStatus)) {
       // Active state — update in-place or refresh list
       const existing = workerState.activeTasks.value.find(t => t.taskId === detail.taskId)
@@ -3662,6 +3739,48 @@ async function handleDeleteConversation(conv: ConversationGroup) {
   }
 }
 
+async function handleArchiveConversation(conv: ConversationGroup) {
+  try {
+    await ElMessageBox.confirm(
+      '确认归档该会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。',
+      '归档会话',
+      { type: 'info', confirmButtonText: '确认归档', cancelButtonText: '取消' },
+    )
+    await workerState.archiveConversation(conv.sessionId)
+    ElMessage.success('已归档')
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('归档失败')
+  }
+}
+
+async function handleUnarchiveConversation(conv: ConversationGroup) {
+  try {
+    await workerState.unarchiveConversation(conv.sessionId)
+    ElMessage.success('已取消归档')
+  } catch {
+    ElMessage.error('取消归档失败')
+  }
+}
+
+function interactionStateLabel(state: string): string {
+  switch (state) {
+    case 'PROCESSING': return '处理中'
+    case 'AWAITING_REPLY': return '待回复'
+    case 'ARCHIVED': return '已归档'
+    default: return state
+  }
+}
+
+function attentionStatusLabel(conv: ConversationGroup): string {
+  const state = conv.config?.interactionState
+  if (state === 'AWAITING_REPLY') return '待回复'
+  // Active task statuses
+  const status = conv.latestTask.status
+  if (status === 'RUNNING') return '运行中'
+  if (status === 'AWAITING_PERMISSION') return '等待授权'
+  return interactionStateLabel(state || 'PROCESSING')
+}
+
 async function handleResumeFromHistory(task: ClaudeTask) {
   if (!task.claudeSessionId || !selectedWorkerId.value) return
 
@@ -4270,6 +4389,34 @@ function handlePopOutTerminal() {
   gap: 2px;
 }
 
+.history-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid #ebeef5;
+  background: #fafafa;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.filter-tag {
+  font-size: 12px;
+  color: #909399;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.filter-tag:hover { color: #409eff; background: #ecf5ff; }
+.filter-tag.active { color: #409eff; background: #ecf5ff; font-weight: 600; }
+.filter-tag.awaiting.active { color: #e6a23c; background: #fdf6ec; }
+
 .history-content {
   flex: 1;
   overflow-y: auto;
@@ -4467,6 +4614,16 @@ function handlePopOutTerminal() {
 .conv-status-dot.running { background: #409eff; animation: convPulse 1.5s infinite; }
 .conv-status-dot.failed { background: #f56c6c; }
 .conv-status-dot.aborted { background: #e6a23c; }
+
+.conv-interaction-badge {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.conv-interaction-badge.processing { background: #409eff; animation: convPulse 1.5s infinite; }
+.conv-interaction-badge.awaiting_reply { background: #e6a23c; }
+.conv-interaction-badge.archived { background: #909399; }
 
 @keyframes convPulse {
   0%, 100% { opacity: 1; }

@@ -231,6 +231,25 @@ export function useClaudeWorker() {
     return result
   }
 
+  async function archiveConversation(sessionId: string) {
+    const config = await api.archiveConversation(sessionId)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
+  async function unarchiveConversation(sessionId: string) {
+    const config = await api.unarchiveConversation(sessionId)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
+  function updateInteractionStateFromSSE(sessionId: string, interactionState: string) {
+    const config = conversationConfigs.value.get(sessionId)
+    if (config) {
+      config.interactionState = interactionState as ConversationConfig['interactionState']
+    }
+  }
+
   return {
     workers,
     tasks,
@@ -267,5 +286,8 @@ export function useClaudeWorker() {
     bindAuth,
     updateAuth,
     batchBindAuth,
+    archiveConversation,
+    unarchiveConversation,
+    updateInteractionStateFromSSE,
   }
 }

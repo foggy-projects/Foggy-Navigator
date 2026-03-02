@@ -52,6 +52,10 @@ public class ConversationConfigEntity {
     @Column(columnDefinition = "TEXT")
     private String tags;
 
+    /** 交互状态：PROCESSING / AWAITING_REPLY / ARCHIVED */
+    @Column(length = 32)
+    private String interactionState;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -68,6 +72,9 @@ public class ConversationConfigEntity {
         }
         if (pinned == null) {
             pinned = false;
+        }
+        if (interactionState == null) {
+            interactionState = "PROCESSING";
         }
     }
 

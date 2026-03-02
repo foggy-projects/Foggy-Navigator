@@ -386,3 +386,21 @@ export async function batchBindConversationAuth(form: {
   )) as unknown as RX<{ bound: number; total: number }>
   return rx.data
 }
+
+export async function archiveConversation(
+  sessionId: string,
+): Promise<ConversationConfig> {
+  const rx = (await client.post(
+    `/claude-tasks/conversations/${sessionId}/archive`,
+  )) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
+export async function unarchiveConversation(
+  sessionId: string,
+): Promise<ConversationConfig> {
+  const rx = (await client.post(
+    `/claude-tasks/conversations/${sessionId}/unarchive`,
+  )) as unknown as RX<ConversationConfig>
+  return rx.data
+}

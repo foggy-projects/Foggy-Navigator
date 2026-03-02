@@ -64,9 +64,10 @@ public class ClaudeTaskController {
     @GetMapping("/page")
     public RX<SessionPageDTO> listTasksPaged(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String state) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(taskService.listTasksBySession(userId, page, size));
+        return RX.ok(taskService.listTasksBySession(userId, page, size, state));
     }
 
     @GetMapping("/{taskId}")
@@ -408,6 +409,18 @@ public class ClaudeTaskController {
     public RX<List<ConversationConfigDTO>> listConversationConfigs(
             @RequestParam List<String> sessionIds) {
         return RX.ok(configService.listBySessionIds(sessionIds));
+    }
+
+    @PostMapping("/conversations/{sessionId}/archive")
+    public RX<ConversationConfigDTO> archiveConversation(@PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.archiveConversation(sessionId, userId));
+    }
+
+    @PostMapping("/conversations/{sessionId}/unarchive")
+    public RX<ConversationConfigDTO> unarchiveConversation(@PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.unarchiveConversation(sessionId, userId));
     }
 
     @PostMapping("/conversations/batch-bind-auth")

@@ -21,4 +21,5 @@ public class ConversationConfigDTO {
     private String baseUrl;
     private String maskedAuthToken;
     private List<String> tags;
+    private String interactionState;
 }

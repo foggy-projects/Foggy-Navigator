@@ -167,6 +167,7 @@ export interface ConversationConfig {
   baseUrl?: string
   maskedAuthToken?: string
   tags?: string[]
+  interactionState?: 'PROCESSING' | 'AWAITING_REPLY' | 'ARCHIVED'
 }
 
 // ===== A2A 协议类型 =====
