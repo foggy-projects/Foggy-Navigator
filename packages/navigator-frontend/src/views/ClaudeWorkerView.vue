@@ -406,6 +406,7 @@
           </div>
           <div class="header-actions">
             <el-button size="small" @click="handleRefreshStatus">刷新状态</el-button>
+            <el-button size="small" :loading="syncingSkills" @click="handleSyncSkills">同步 Skills</el-button>
             <el-button size="small" @click="showEditDialog = true">编辑</el-button>
             <el-button size="small" type="danger" text @click="handleDelete">删除</el-button>
           </div>
@@ -787,6 +788,61 @@
               <span v-if="ac.totalCost > 0" class="conv-cost">${{ ac.totalCost.toFixed(2) }}</span>
               <span v-if="ac.latestTask.durationMs" class="conv-time">{{ Math.round((ac.latestTask.durationMs || 0) / 60000) }}min</span>
               <span class="conv-time">{{ formatTime(ac.latestTask.createdAt) }}</span>
+              <!-- Action buttons -->
+              <span class="conv-actions" @click.stop>
+                <el-button
+                  v-if="ac.latestTask.status !== 'RUNNING' && ac.claudeSessionId"
+                  type="primary"
+                  size="small"
+                  text
+                  :disabled="isSessionBusy(ac)"
+                  title="继续对话"
+                  @click="handleResumeFromHistory(ac.latestTask)"
+                >
+                  继续
+                </el-button>
+                <el-button
+                  v-if="ac.latestTask.status === 'RUNNING'"
+                  type="warning"
+                  size="small"
+                  text
+                  title="中止任务"
+                  @click="handleAbortTask(ac.latestTask.taskId)"
+                >
+                  中止
+                </el-button>
+                <el-dropdown trigger="click" @click.stop>
+                  <span class="conv-more-trigger" @click.stop>&#8943;</span>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item @click="handleTogglePin(ac)">
+                        {{ ac.config?.pinned ? '取消置顶' : '置顶' }}
+                      </el-dropdown-item>
+                      <el-dropdown-item @click="handleEditTitle(ac)">
+                        编辑标题
+                      </el-dropdown-item>
+                      <el-dropdown-item @click="handleEditTags(ac)">
+                        标签
+                      </el-dropdown-item>
+                      <el-dropdown-item @click="handleShowDetail(ac)">
+                        详情
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="ac.config?.interactionState !== 'ARCHIVED'"
+                        @click="handleArchiveConversation(ac)"
+                      >
+                        归档
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="ac.config?.interactionState === 'ARCHIVED'"
+                        @click="handleUnarchiveConversation(ac)"
+                      >
+                        取消归档
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </span>
             </div>
           </div>
           <div class="active-divider">
@@ -2724,6 +2780,20 @@ async function handleRefreshStatus() {
     ElMessage.success('状态已刷新')
   } catch {
     ElMessage.error('刷新失败')
+  }
+}
+
+const syncingSkills = ref(false)
+async function handleSyncSkills() {
+  if (!selectedWorkerId.value) return
+  syncingSkills.value = true
+  try {
+    await workerState.syncSkills(selectedWorkerId.value)
+    ElMessage.success('Skills 已同步')
+  } catch {
+    ElMessage.error('同步失败')
+  } finally {
+    syncingSkills.value = false
   }
 }
 
