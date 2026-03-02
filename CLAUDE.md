@@ -87,6 +87,18 @@ cd packages/navigator-frontend && pnpm exec vite build
 - **平台配置**：首次使用需在 `/#/setup` 配置 Git 提供者和 AI 模型
 - **日志文件**：`logs/backend.log`、`logs/backend-error.log`
 
+## Agent 编排核心 — A2A 统一发现与调用
+
+Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实现）统一通过 A2A 协议交互。
+
+- **SPI 接口**: `A2aAgent`（执行）+ `A2aAgentProvider`（提供者模式），位于 `navigator-spi/spi/agent/`
+- **统一注册**: `DefaultA2aAgentRegistry`（session-module）聚合所有 Provider
+- **REST 端点**: `GET /api/v1/agents`（发现）、`POST /api/v1/agents/{id}/ask`（调用）
+- **当前实现**: `ClaudeWorkerAgentProvider` → `ClaudeWorkerA2aAgent`（通过 `syncQuery` 同步执行）
+- **扩展**: 新 addon 只需实现 `A2aAgentProvider` + `@Component`，自动注入 Registry
+
+详见 [A2A Agent 架构文档](docs/a2a-agent-architecture.md)
+
 ## 开发规范
 
 1. **JPA 单体设计**：Entity 间不用关联注解，用外键字段 + Service 层组合查询
