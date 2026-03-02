@@ -381,6 +381,8 @@
           :panes="panes"
           :skills="directorySkills"
           :agents="allAgentItems"
+          :focused-pane-id="focusedPaneId"
+          :pane-labels="PANE_LABELS"
           @close="closePane"
           @abort="abortPane"
           @send="handlePaneSend"
@@ -389,6 +391,7 @@
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
+          @focus="focusedPaneId = $event"
         >
           <template #header-extra="{ paneState }">
             <span
@@ -646,6 +649,8 @@
           :panes="panes"
           :skills="directorySkills"
           :agents="allAgentItems"
+          :focused-pane-id="focusedPaneId"
+          :pane-labels="PANE_LABELS"
           @close="closePane"
           @abort="abortPane"
           @send="handlePaneSend"
@@ -654,6 +659,7 @@
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
+          @focus="focusedPaneId = $event"
         >
           <template #header-extra="{ paneState }">
             <span
@@ -800,10 +806,14 @@
           <div
             v-for="ac in globalAttentionConvs"
             :key="ac.sessionId"
-            class="active-conv-item"
+            :class="['active-conv-item', { 'conv-pane-focused': ac.sessionId === focusedSessionId }]"
             @click="navigateToActiveSession(ac)"
           >
             <div class="conv-row-1">
+              <span
+                v-if="paneSessionMap.has(ac.sessionId)"
+                :class="['sidebar-pane-letter', `pane-letter-${paneSessionMap.get(ac.sessionId)!.label.toLowerCase()}`]"
+              >{{ paneSessionMap.get(ac.sessionId)!.label }}</span>
               <el-tag v-if="ac.latestTask.directoryName" size="small" type="info" effect="plain" class="active-dir-tag">{{ ac.latestTask.directoryName }}</el-tag>
               <span :class="['conv-interaction-badge', (ac.config?.interactionState || 'processing').toLowerCase()]" />
               <span class="active-status-label">{{ attentionStatusLabel(ac) }}</span>
@@ -887,10 +897,14 @@
           <div
             v-for="conv in activeConversations"
             :key="conv.sessionId"
-            :class="['conv-item', { 'conv-pinned': conv.config?.pinned, 'conv-selected': batchSelectMode && selectedConvIds.has(conv.sessionId) }]"
+            :class="['conv-item', { 'conv-pinned': conv.config?.pinned, 'conv-selected': batchSelectMode && selectedConvIds.has(conv.sessionId), 'conv-pane-focused': conv.sessionId === focusedSessionId }]"
             @click="batchSelectMode ? toggleConvSelection(conv.sessionId) : viewTask(conv.latestTask)"
           >
             <div class="conv-row-1">
+              <span
+                v-if="paneSessionMap.has(conv.sessionId)"
+                :class="['sidebar-pane-letter', `pane-letter-${paneSessionMap.get(conv.sessionId)!.label.toLowerCase()}`]"
+              >{{ paneSessionMap.get(conv.sessionId)!.label }}</span>
               <el-checkbox
                 v-if="batchSelectMode"
                 :model-value="selectedConvIds.has(conv.sessionId)"
@@ -1886,6 +1900,24 @@ const activeWorkspace = computed<WorkspaceContext | null>(() => {
 })
 const panes = computed<TaskPaneState[]>(() => activeWorkspace.value?.panes.value ?? [])
 
+// --- Pane label + focus tracking ---
+const PANE_LABELS = ['A', 'B', 'C', 'D']
+const focusedPaneId = ref<string | null>(null)
+
+const paneSessionMap = computed(() => {
+  const map = new Map<string, { label: string; index: number }>()
+  panes.value.forEach((p, i) => {
+    const sid = p.task.value?.sessionId
+    if (sid) map.set(sid, { label: PANE_LABELS[i]!, index: i })
+  })
+  return map
+})
+
+const focusedSessionId = computed(() => {
+  const pane = panes.value.find(p => p.paneId === focusedPaneId.value)
+  return pane?.task.value?.sessionId ?? null
+})
+
 // SSH connect dialog state
 const showSshDialog = ref(false)
 const sshForm = ref({ host: '', port: 22, username: '', password: '' })
@@ -2640,6 +2672,7 @@ function selectWorker(workerId: string) {
   directorySkills.value = []
   cliProcesses.value = []
   workerActiveTab.value = 'agents'
+  focusedPaneId.value = null
   exitBatchSelectMode()
   // No disposeAllPanes — workspace context preserves panes per directory
   // Auto-expand
@@ -2655,6 +2688,7 @@ function selectDirectory(workerId: string, directoryId: string) {
   const previousWorkerId = selectedWorkerId.value
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = directoryId
+  focusedPaneId.value = null
   exitBatchSelectMode()
   // 切换到不同 Worker 的目录时，刷新该 Worker 的可用模型列表
   if (workerId !== previousWorkerId) {
@@ -3538,6 +3572,7 @@ function createPane(task: ClaudeTask): TaskPaneState {
 function closePane(paneId: string) {
   const ws = activeWorkspace.value
   if (!ws) return
+  if (focusedPaneId.value === paneId) focusedPaneId.value = null
   const idx = ws.panes.value.findIndex((p) => p.paneId === paneId)
   if (idx >= 0) {
     ws.panes.value[idx]!.dispose()
@@ -3688,7 +3723,10 @@ function handleDirPageChange(page: number) {
 async function viewTask(task: ClaudeTask) {
   // Per-conversation: match by sessionId (same conversation = same pane)
   const existing = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
-  if (existing) return
+  if (existing) {
+    focusedPaneId.value = existing.paneId
+    return
+  }
 
   if (panes.value.length >= MAX_PANES) {
     ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
@@ -3696,6 +3734,7 @@ async function viewTask(task: ClaudeTask) {
   }
 
   const pane = createPane(task)
+  focusedPaneId.value = pane.paneId
   await pane.connect(task.sessionId)
 
   // For synced tasks: if Navigator session was empty, load JSONL history from Worker
@@ -5189,6 +5228,30 @@ function handlePopOutTerminal() {
   line-height: 18px;
   padding: 0 4px;
   flex-shrink: 0;
+}
+
+.sidebar-pane-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.sidebar-pane-letter.pane-letter-a { background: #409eff; }
+.sidebar-pane-letter.pane-letter-b { background: #67c23a; }
+.sidebar-pane-letter.pane-letter-c { background: #e6a23c; }
+.sidebar-pane-letter.pane-letter-d { background: #a855f6; }
+
+.conv-pane-focused {
+  background: rgba(64, 158, 255, 0.08);
+  border-left: 2px solid #409eff;
 }
 </style>
 

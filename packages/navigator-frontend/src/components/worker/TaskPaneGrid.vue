@@ -1,11 +1,13 @@
 <template>
   <div :class="['task-pane-grid', `panes-${panes.length}`]">
     <TaskPane
-      v-for="pane in panes"
+      v-for="(pane, idx) in panes"
       :key="pane.paneId"
       :pane-state="pane"
       :skills="skills"
       :agents="agents"
+      :pane-label="paneLabels?.[idx]"
+      :is-focused="focusedPaneId === pane.paneId"
       :class="{ 'span-full': panes.length === 3 && pane === panes[2] }"
       @close="(id) => emit('close', id)"
       @abort="(id) => emit('abort', id)"
@@ -15,6 +17,7 @@
       @question-respond="(paneId, pid, answers) => emit('questionRespond', paneId, pid, answers)"
       @plan-respond="(paneId, pid, decision, denyMsg, planAction) => emit('planRespond', paneId, pid, decision, denyMsg, planAction)"
       @rewind="(paneId, turnIndex) => emit('rewind', paneId, turnIndex)"
+      @focus="emit('focus', pane.paneId)"
     >
       <template v-if="$slots['header-extra']" #header-extra="slotProps">
         <slot name="header-extra" v-bind="slotProps" />
@@ -33,6 +36,8 @@ defineProps<{
   panes: TaskPaneState[]
   skills?: SkillInfo[]
   agents?: AgentItem[]
+  focusedPaneId?: string | null
+  paneLabels?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -44,6 +49,7 @@ const emit = defineEmits<{
   (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', paneId: string, turnIndex: number): void
+  (e: 'focus', paneId: string): void
 }>()
 </script>
 

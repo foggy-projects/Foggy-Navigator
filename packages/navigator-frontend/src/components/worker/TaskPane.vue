@@ -1,7 +1,10 @@
 <template>
-  <div class="task-pane">
+  <div :class="['task-pane', { 'pane-focused': isFocused }]" @click="emit('focus')">
     <div class="pane-header">
       <div class="pane-label">
+        <span v-if="paneLabel" :class="['pane-letter', `pane-letter-${paneLabel.toLowerCase()}`]">
+          {{ paneLabel }}
+        </span>
         <span :class="['pane-status-dot', paneState.task.value?.status?.toLowerCase()]" />
         <span v-if="modelShort" class="pane-model">{{ modelShort }}</span>
         <span class="pane-prompt" :title="paneState.task.value?.prompt">
@@ -96,6 +99,8 @@ const props = defineProps<{
   paneState: TaskPaneState
   skills?: SkillInfo[]
   agents?: AgentItem[]
+  paneLabel?: string
+  isFocused?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -107,6 +112,7 @@ const emit = defineEmits<{
   (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', paneId: string, turnIndex: number): void
+  (e: 'focus'): void
 }>()
 
 const paneInput = ref('')
@@ -346,5 +352,27 @@ function truncate(text: string, maxLen: number) {
 
 .pane-input-wrap .slash-input-wrap {
   flex: 1;
+}
+
+.pane-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.pane-letter-a { background: #409eff; }
+.pane-letter-b { background: #67c23a; }
+.pane-letter-c { background: #e6a23c; }
+.pane-letter-d { background: #a855f6; }
+
+.pane-focused {
+  box-shadow: 0 0 0 2px #409eff;
 }
 </style>
