@@ -1,14 +1,18 @@
 package com.foggy.navigator.claude.worker.client;
 
 import com.foggy.navigator.claude.worker.model.event.WorkerEvent;
+import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.HttpClient;
 
+import java.time.Duration;
 import java.util.Map;
 
 /**
@@ -23,9 +27,16 @@ public class ClaudeWorkerClient {
 
     public ClaudeWorkerClient(String workerId, String baseUrl, String authToken) {
         this.workerId = workerId;
+        // Configure Netty HttpClient with generous timeouts for long-running SSE streams.
+        // responseTimeout=30min prevents WebClient from closing idle SSE connections
+        // (especially during AWAITING_PERMISSION where no events flow for extended periods).
+        HttpClient httpClient = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10_000)
+                .responseTimeout(Duration.ofMinutes(30));
         this.webClient = WebClient.builder()
                 .baseUrl(baseUrl)
                 .defaultHeader("Authorization", "Bearer " + authToken)
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .build();
     }
 
@@ -693,6 +704,22 @@ public class ClaudeWorkerClient {
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
                 .doOnError(e -> log.warn("Deploy skills failed for worker {}: {}", workerId, e.getMessage()));
+    }
+
+    /**
+     * 订阅已存在任务的 SSE 事件流（用于 Java 重启后重连）。
+     * 支持通过 foggyTaskId 或 Worker 内部 taskId 查找。
+     *
+     * @param taskId     foggyTaskId 或 Worker 内部 task UUID
+     * @param replayFrom 从第几个事件开始重放（0 = 全部重放）
+     */
+    public Flux<ServerSentEvent<String>> subscribeToTask(String taskId, int replayFrom) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/tasks/{taskId}/subscribe")
+                        .queryParam("replay_from", replayFrom)
+                        .build(taskId))
+                .retrieve()
+                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {});
     }
 
     public String getWorkerId() {

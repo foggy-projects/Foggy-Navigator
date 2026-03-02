@@ -178,6 +178,68 @@ the ``/respond`` endpoint to deliver the decision.
 PERMISSION_TIMEOUT_SECONDS = 300  # 5 minutes (regular tool permissions)
 INTERACTIVE_TIMEOUT_SECONDS = 1800  # 30 minutes (plan review & user questions)
 
+# Grace period before killing CLI after SSE consumer disconnects.
+# Default 1 hour — Java backend restart / network recovery may take time,
+# and idle CLI processes are lightweight.  Configurable via env var.
+DISCONNECT_GRACE_SECONDS = int(os.environ.get("DISCONNECT_GRACE_SECONDS", "3600"))
+
+
+# ---------------------------------------------------------------------------
+# Event broadcast — replaces single asyncio.Queue for multi-subscriber SSE
+# ---------------------------------------------------------------------------
+
+class EventBroadcast:
+    """Fan-out event distributor for SSE reconnection.
+
+    The producer pushes events via :meth:`put`.  Each SSE connection calls
+    :meth:`subscribe` to get its own ``asyncio.Queue`` that receives a copy
+    of every event.  Events are also stored in a replay buffer so that new
+    subscribers can catch up from a given index.
+    """
+
+    def __init__(self) -> None:
+        self._subscribers: list[asyncio.Queue] = []
+        self._history: list[dict[str, Any]] = []
+        self._closed = False
+
+    def subscribe(self, replay_from: int = 0) -> asyncio.Queue:
+        """Create a new subscriber queue.
+
+        If *replay_from* > 0, the returned queue is pre-filled with all
+        events from that index onward (so the new SSE connection can catch
+        up on missed events).
+        """
+        q: asyncio.Queue = asyncio.Queue()
+        # Replay missed events
+        for evt in self._history[replay_from:]:
+            q.put_nowait(evt)
+        if self._closed:
+            q.put_nowait(None)  # Stream already done
+        self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        try:
+            self._subscribers.remove(q)
+        except ValueError:
+            pass
+
+    async def put(self, item: dict[str, Any] | None) -> None:
+        if item is not None:
+            self._history.append(item)
+        else:
+            self._closed = True
+        for q in list(self._subscribers):  # snapshot to avoid mutation during iteration
+            await q.put(item)
+
+    @property
+    def event_count(self) -> int:
+        return len(self._history)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
 
 # ---------------------------------------------------------------------------
 # Error detail extraction
@@ -673,7 +735,14 @@ class SdkWrapper:
             #   Consumer: run_query() reads from Queue and yields (SSE stream)
             # This lets the SSE stream stay alive while can_use_tool blocks.
 
-            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            broadcast = EventBroadcast()
+            queue: asyncio.Queue[dict[str, Any] | None] = broadcast.subscribe()
+
+            # Store broadcast in task_registry so the /subscribe endpoint
+            # can create additional subscribers for SSE reconnection.
+            task_registry[task_id]["broadcast"] = broadcast
+            task_registry[task_id]["connected"] = True
+
             use_queue = (
                 _use_agent_sdk
                 and _PermissionResultAllow is not None
@@ -737,7 +806,7 @@ class SdkWrapper:
 
                     if is_question:
                         # Push user_question event with structured questions
-                        await queue.put(event_mapper.map_user_question(
+                        await broadcast.put(event_mapper.map_user_question(
                             task_id=task_id,
                             permission_id=pid,
                             questions=tool_input.get("questions", []),
@@ -749,7 +818,7 @@ class SdkWrapper:
                         )
                     elif is_plan_review:
                         # Push plan_review event for ExitPlanMode
-                        await queue.put(event_mapper.map_plan_review(
+                        await broadcast.put(event_mapper.map_plan_review(
                             task_id=task_id,
                             permission_id=pid,
                             allowed_prompts=tool_input.get("allowedPrompts"),
@@ -761,7 +830,7 @@ class SdkWrapper:
                         )
                     else:
                         # Push permission_request event into the queue
-                        await queue.put(event_mapper.map_permission_request(
+                        await broadcast.put(event_mapper.map_permission_request(
                             task_id=task_id,
                             permission_id=pid,
                             tool_name=tool_name,
@@ -1068,7 +1137,7 @@ class SdkWrapper:
                                 task_id, _msg_count, msg_type,
                             )
                             for evt in _process_message(message):
-                                await queue.put(evt)
+                                await broadcast.put(evt)
                             # When ResultMessage arrives the query is complete.
                             # Release the prompt stream so stdin closes and the
                             # CLI can exit cleanly (otherwise it waits for more
@@ -1077,7 +1146,7 @@ class SdkWrapper:
                                 stream_done_event.set()
                     except asyncio.CancelledError:
                         logger.info("Task %s producer: cancelled after %d msgs", task_id, _msg_count)
-                        await queue.put(event_mapper.map_error(
+                        await broadcast.put(event_mapper.map_error(
                             task_id=task_id,
                             error="Task was cancelled",
                             session_id=current_session_id,
@@ -1092,7 +1161,7 @@ class SdkWrapper:
                         else:
                             logger.error("Task %s producer RuntimeError after %d msgs: %s", task_id, _msg_count, exc)
                             error_detail = _extract_error_detail(exc, task_id)
-                            await queue.put(event_mapper.map_error(
+                            await broadcast.put(event_mapper.map_error(
                                 task_id=task_id,
                                 error=error_detail,
                                 session_id=current_session_id,
@@ -1100,7 +1169,7 @@ class SdkWrapper:
                     except Exception as exc:
                         logger.error("Task %s producer %s after %d msgs: %s", task_id, type(exc).__name__, _msg_count, exc)
                         error_detail = _extract_error_detail(exc, task_id)
-                        await queue.put(event_mapper.map_error(
+                        await broadcast.put(event_mapper.map_error(
                             task_id=task_id,
                             error=error_detail,
                             session_id=current_session_id,
@@ -1108,7 +1177,7 @@ class SdkWrapper:
                     finally:
                         logger.info("Task %s producer: finished (%d msgs total)", task_id, _msg_count)
                         stream_done_event.set()  # Release prompt stream → stdin closes
-                        await queue.put(None)  # Sentinel: stream is done
+                        await broadcast.put(None)  # Sentinel: stream is done
 
                 producer_task = asyncio.create_task(_producer())
 
@@ -1173,15 +1242,59 @@ class SdkWrapper:
                         last_event_at = asyncio.get_event_loop().time()
                         yield evt
                 finally:
-                    if not producer_task.done():
-                        producer_task.cancel()
-                    try:
-                        await producer_task
-                    except (asyncio.CancelledError, RuntimeError, Exception):
-                        # CancelledError: normal cancel
-                        # RuntimeError: anyio cancel-scope mismatch (SDK limitation)
-                        # Exception: any other cleanup error
-                        pass
+                    # Unsubscribe *this* consumer from the broadcast.
+                    broadcast.unsubscribe(queue)
+
+                    if producer_task.done() or broadcast.closed:
+                        # Producer already finished — normal exit, no grace period needed.
+                        if not producer_task.done():
+                            producer_task.cancel()
+                        try:
+                            await producer_task
+                        except (asyncio.CancelledError, RuntimeError, Exception):
+                            pass
+                    else:
+                        # SSE consumer disconnected but producer (CLI) still alive.
+                        # Enter grace period — keep CLI running for reconnection.
+                        logger.warning(
+                            "Task %s SSE consumer disconnected, CLI still alive. "
+                            "Entering grace period (%ds) for reconnection...",
+                            task_id, DISCONNECT_GRACE_SECONDS,
+                        )
+                        task_registry_entry = task_registry.get(task_id)
+                        if task_registry_entry:
+                            task_registry_entry["connected"] = False
+
+                        grace_remaining = DISCONNECT_GRACE_SECONDS
+                        check_interval = 30  # seconds
+                        while grace_remaining > 0 and not producer_task.done():
+                            await asyncio.sleep(min(check_interval, grace_remaining))
+                            grace_remaining -= check_interval
+
+                            entry = task_registry.get(task_id)
+                            if entry and entry.get("connected"):
+                                # A new subscriber reconnected — exit grace loop
+                                logger.info(
+                                    "Task %s reconnected during grace period! "
+                                    "CLI kept alive.",
+                                    task_id,
+                                )
+                                # Do NOT cancel producer — the new SSE consumer
+                                # is now reading from broadcast via subscribe.
+                                # We can exit this generator cleanly.
+                                return
+
+                        if not producer_task.done():
+                            logger.warning(
+                                "Task %s grace period expired with no reconnection. "
+                                "Cancelling CLI...",
+                                task_id,
+                            )
+                            producer_task.cancel()
+                            try:
+                                await producer_task
+                            except (asyncio.CancelledError, RuntimeError, Exception):
+                                pass
 
             else:
                 # Direct iteration (no can_use_tool callback needed)
@@ -1228,11 +1341,17 @@ class SdkWrapper:
             )
 
         finally:
-            task_registry.pop(task_id, None)
-            # Clean up any pending permissions for this task
-            for pid in list(permission_pending):
-                if permission_pending[pid].get("task_id") == task_id:
-                    permission_pending.pop(pid, None)
-            # Kill orphan CLI subprocesses that the SDK failed to clean up
-            # (e.g. due to anyio cancel-scope mismatch on task cancellation).
-            _kill_orphan_cli_processes(cli_pids_before, task_id)
+            # If a new subscriber reconnected during grace period, the task
+            # is still alive — do NOT clean up registry or kill CLI.
+            entry = task_registry.get(task_id)
+            if entry and entry.get("connected"):
+                logger.info("Task %s exiting original generator — reconnected subscriber active, skipping cleanup", task_id)
+            else:
+                task_registry.pop(task_id, None)
+                # Clean up any pending permissions for this task
+                for pid in list(permission_pending):
+                    if permission_pending[pid].get("task_id") == task_id:
+                        permission_pending.pop(pid, None)
+                # Kill orphan CLI subprocesses that the SDK failed to clean up
+                # (e.g. due to anyio cancel-scope mismatch on task cancellation).
+                _kill_orphan_cli_processes(cli_pids_before, task_id)

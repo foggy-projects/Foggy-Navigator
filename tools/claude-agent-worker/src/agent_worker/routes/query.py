@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
 from ..auth import verify_token
-from ..claude.sdk_wrapper import SdkWrapper, task_registry, permission_pending, _sdk_available, _use_agent_sdk
+from ..claude.sdk_wrapper import SdkWrapper, task_registry, permission_pending, _sdk_available, _use_agent_sdk, EventBroadcast
 from ..config import settings
 from ..models import AbortResponse, PermissionResponse, QueryEvent, QueryRequest, RewindRequest
 
@@ -148,6 +148,7 @@ async def query(body: QueryRequest):
             foggy_session_id=body.foggy_session_id,
         ),
         media_type="text/event-stream",
+        ping=30,  # SSE keepalive every 30s — prevents proxies/WebClient idle timeout
     )
 
 
@@ -294,3 +295,89 @@ async def abort_query(task_id: str) -> AbortResponse:
         asyncio_task.cancel()
 
     return AbortResponse(task_id=task_id, status="cancelled")
+
+
+def _resolve_task_entry(task_id: str) -> tuple[str, dict] | None:
+    """Resolve a task by worker task_id or foggy_task_id."""
+    entry = task_registry.get(task_id)
+    if entry is not None:
+        return task_id, entry
+    # Fallback: search by foggy_task_id
+    for tid, e in list(task_registry.items()):
+        if e.get("foggy_task_id") == task_id:
+            return tid, e
+    return None
+
+
+@router.get("/tasks/{task_id}/subscribe")
+async def subscribe_to_task(task_id: str, replay_from: int = 0):
+    """Subscribe to an existing task's SSE event stream.
+
+    This endpoint enables reconnection after SSE disconnect or Java restart.
+    It creates a new subscriber on the task's ``EventBroadcast``, optionally
+    replaying events from a given index so the caller can catch up on missed
+    events.
+
+    Query parameters:
+        ``replay_from``: event index to replay from (0 = all events)
+    """
+    resolved = _resolve_task_entry(task_id)
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task '{task_id}' not found in registry (CLI may have exited)",
+        )
+
+    real_task_id, entry = resolved
+    broadcast: EventBroadcast | None = entry.get("broadcast")
+    if broadcast is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Task '{task_id}' has no broadcast (non-interactive mode or already cleaned up)",
+        )
+
+    # Mark task as reconnected — exits grace period loop in run_query
+    entry["connected"] = True
+    logger.info(
+        "Subscribe: task=%s (resolved=%s), replay_from=%d, total_events=%d",
+        task_id, real_task_id, replay_from, broadcast.event_count,
+    )
+
+    sub_queue = broadcast.subscribe(replay_from=replay_from)
+
+    async def _subscribe_generator() -> AsyncGenerator[dict, None]:
+        try:
+            while True:
+                evt = await sub_queue.get()
+                if evt is None:
+                    break  # Stream finished
+                yield {"event": "message", "data": json.dumps(evt)}
+        except asyncio.CancelledError:
+            pass
+        finally:
+            broadcast.unsubscribe(sub_queue)
+            if broadcast.closed and not broadcast._subscribers:
+                # Producer finished and no subscribers left — clean up registry.
+                cleaned = task_registry.pop(real_task_id, None)
+                if cleaned:
+                    logger.info("Subscribe cleanup: removed task %s from registry (last subscriber)", real_task_id)
+                for pid in list(permission_pending):
+                    if permission_pending[pid].get("task_id") == real_task_id:
+                        permission_pending.pop(pid, None)
+            elif not broadcast.closed and not broadcast._subscribers:
+                # SSE disconnected again but producer still alive.
+                # Mark as disconnected so Java side knows to reconnect again.
+                reg_entry = task_registry.get(real_task_id)
+                if reg_entry:
+                    reg_entry["connected"] = False
+                    logger.warning(
+                        "Subscribe: task %s SSE disconnected again (no subscribers), "
+                        "marked disconnected. Producer still alive — Reconciler will handle.",
+                        real_task_id,
+                    )
+
+    return EventSourceResponse(
+        _subscribe_generator(),
+        media_type="text/event-stream",
+        ping=30,
+    )
