@@ -4,6 +4,7 @@ import com.foggy.navigator.claude.worker.model.dto.WorkerDTO;
 import com.foggy.navigator.claude.worker.model.form.RegisterWorkerForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkerForm;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
+import com.foggy.navigator.claude.worker.service.PlatformSkillSyncer;
 import com.foggy.navigator.claude.worker.service.TaskStateReconciler;
 import com.foggy.navigator.claude.worker.service.WorkerHealthChecker;
 import com.foggy.navigator.common.annotation.RequireAuth;
@@ -31,6 +32,7 @@ public class ClaudeWorkerController {
     private final ClaudeWorkerService workerService;
     private final WorkerHealthChecker healthChecker;
     private final TaskStateReconciler reconciler;
+    private final PlatformSkillSyncer platformSkillSyncer;
 
     @GetMapping
     public RX<List<WorkerDTO>> listWorkers() {
@@ -83,6 +85,22 @@ public class ClaudeWorkerController {
         }
         healthChecker.checkWorker(entity);
         return RX.ok(workerService.getWorker(userId, workerId));
+    }
+
+    @PostMapping("/{workerId}/sync-skills")
+    public RX<Map<String, Object>> syncSkills(@PathVariable String workerId) {
+        String userId = UserContext.getCurrentUserId();
+        var entity = workerService.getWorkerEntity(workerId);
+        if (!entity.getUserId().equals(userId)) {
+            throw RX.throwB("Worker not found");
+        }
+        try {
+            platformSkillSyncer.syncWorkerSkills(workerId);
+            return RX.ok(Map.of("status", "ok"));
+        } catch (Exception e) {
+            log.warn("Failed to sync skills for worker {}: {}", workerId, e.getMessage());
+            return RX.failA("同步 Skills 失败: " + e.getMessage());
+        }
     }
 
     // ===== CLI Process Management =====

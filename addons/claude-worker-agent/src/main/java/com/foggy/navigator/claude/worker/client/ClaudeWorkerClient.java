@@ -680,6 +680,21 @@ public class ClaudeWorkerClient {
                 .doOnError(e -> log.warn("Init directory failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
     }
 
+    /**
+     * 推送平台 Skill 到 Worker
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> deploySkills(Map<String, String> skills) {
+        return webClient.post()
+                .uri("/api/v1/platform-skills/deploy")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("skills", skills))
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.warn("Deploy skills failed for worker {}: {}", workerId, e.getMessage()));
+    }
+
     public String getWorkerId() {
         return workerId;
     }

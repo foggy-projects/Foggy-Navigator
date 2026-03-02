@@ -45,6 +45,13 @@ export async function triggerHealthCheck(workerId: string): Promise<ClaudeWorker
   return rx.data
 }
 
+// ===== Platform Skills API =====
+
+export async function syncWorkerSkills(workerId: string): Promise<{ status: string }> {
+  const rx = (await client.post(`/claude-workers/${workerId}/sync-skills`)) as unknown as RX<{ status: string }>
+  return rx.data
+}
+
 // ===== CLI Process Management API =====
 
 export async function listCliProcesses(workerId: string): Promise<CliProcessListResponse> {

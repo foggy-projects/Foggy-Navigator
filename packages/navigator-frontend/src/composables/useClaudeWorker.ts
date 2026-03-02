@@ -78,6 +78,10 @@ export function useClaudeWorker() {
     return updated
   }
 
+  async function syncSkills(workerId: string) {
+    return api.syncWorkerSkills(workerId)
+  }
+
   async function createTask(form: {
     workerId: string
     prompt: string
@@ -266,6 +270,7 @@ export function useClaudeWorker() {
     updateWorker,
     deleteWorker,
     refreshWorkerStatus,
+    syncSkills,
     createTask,
     resumeTask,
     respondToPermission,

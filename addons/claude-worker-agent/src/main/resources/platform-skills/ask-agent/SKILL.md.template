@@ -1,0 +1,57 @@
+---
+name: ask-agent
+description: 向平台上其他 Agent 提问，用于跨项目协作咨询。当用户提到要咨询其他项目或 Agent 时使用。
+---
+
+# 咨询协作 Agent
+
+## 前提条件
+
+环境变量 `NAVIGATOR_TOKEN` 必须存在（由 Foggy Navigator 平台自动注入）。
+
+如果不存在，告知用户：
+
+> 当前未检测到 `NAVIGATOR_TOKEN` 环境变量。该变量由 Foggy Navigator 后端在派发任务时自动注入。
+> 请确保你是通过 Navigator 平台派发的任务（而非直接运行 Claude Code）。
+
+## 当前可用 Agent
+
+| 名称 | Agent ID | 说明 |
+|------|----------|------|
+{{AGENT_TABLE}}
+
+如需获取最新列表：
+
+```bash
+curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data[] | {name, description}'
+```
+
+## 向 Agent 提问
+
+**重要**：JSON body 中如果包含非 ASCII 字符（中文等），必须先写入临时文件再用 `--data-binary @file` 发送，否则 Windows 终端编码会损坏内容导致 400 错误。
+
+```bash
+# 1) 用 python 写 JSON 到临时文件（保证 UTF-8 编码）
+python3 -c "
+import json
+data = {'question': '你的问题内容', 'sessionId': ''}
+with open('/tmp/_ask_agent.json', 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False)
+"
+
+# 2) 用 curl 发送
+curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
+  -H "Content-Type: application/json; charset=UTF-8" \
+  --data-binary @/tmp/_ask_agent.json | jq '.data'
+```
+
+返回 A2aTask，取 `.data.artifacts[0].parts[0].text` 获取回答。
+
+## 注意事项
+
+- 每次提问独立，Agent 不保留上下文
+- 回答基于目标 Agent 的项目代码分析
+- 可将回答作为参考信息融入当前任务
+- 如果 Agent 列表为空，可通过上方的 curl 命令动态获取
