@@ -177,6 +177,8 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         WorkingDirectoryEntity entity = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
         if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            // 校验 Worker 是否有权使用该模型
+            llmModelManager.validateModelAccessForWorker(modelConfigId, entity.getWorkerId());
             entity.setDefaultModelConfigId(modelConfigId);
             // 从模型配置推导 authMode（用于 UI 显示 Auth 状态标签）
             LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
@@ -291,6 +293,8 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         if (dir == null || dir.getDefaultModelConfigId() == null) {
             return new String[]{null, null, null};
         }
+        // 校验 Worker 是否有权使用该模型
+        llmModelManager.validateModelAccessForWorker(dir.getDefaultModelConfigId(), dir.getWorkerId());
         LlmModelConfigDTO config = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
         if (config == null || !Boolean.TRUE.equals(config.getHasApiKey())) {
             return new String[]{null, null, null};

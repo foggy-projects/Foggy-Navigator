@@ -776,6 +776,8 @@ public class ClaudeTaskService {
         // 用户选择的平台模型配置 → 优先于目录默认 auth
         // 仅当 ConversationConfig 尚未绑定时，才使用并保存 modelConfigId 的 auth
         if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            // 校验 Worker 是否有权使用该模型
+            llmModelManager.validateModelAccessForWorker(modelConfigId, workerId);
             LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
             if (modelConfig != null && Boolean.TRUE.equals(modelConfig.getHasApiKey())) {
                 String decryptedApiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
@@ -798,6 +800,8 @@ public class ClaudeTaskService {
             if (dir != null) {
                 // 优先使用目录绑定的平台 LLM 配置
                 if (dir.getDefaultModelConfigId() != null && !dir.getDefaultModelConfigId().isEmpty()) {
+                    // 校验 Worker 是否有权使用该模型（模型 scope 可能在绑定后变更）
+                    llmModelManager.validateModelAccessForWorker(dir.getDefaultModelConfigId(), workerId);
                     LlmModelConfigDTO dirModelConfig = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
                     if (dirModelConfig != null && Boolean.TRUE.equals(dirModelConfig.getHasApiKey())) {
                         String decryptedApiKey = llmModelManager.getDecryptedApiKey(dir.getDefaultModelConfigId());

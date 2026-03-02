@@ -166,6 +166,21 @@ public class LlmModelManagerImpl implements LlmModelManager {
                 .collect(Collectors.toList());
     }
 
+    @Override
+    public void validateModelAccessForWorker(String modelConfigId, String workerId) {
+        LlmModelConfigEntity entity = llmModelRepo.findById(modelConfigId)
+                .orElseThrow(() -> new IllegalArgumentException("LLM model config not found: " + modelConfigId));
+        ModelAccessScope scope = entity.getScope() != null ? entity.getScope() : ModelAccessScope.GLOBAL;
+        if (scope == ModelAccessScope.RESTRICTED) {
+            boolean allowed = workerAccessRepo.findByModelConfigId(modelConfigId).stream()
+                    .anyMatch(a -> a.getWorkerId().equals(workerId));
+            if (!allowed) {
+                log.warn("Worker {} denied access to RESTRICTED model {}", workerId, modelConfigId);
+                throw new IllegalArgumentException("该模型未授权给当前 Worker 使用: " + entity.getName());
+            }
+        }
+    }
+
     // ========== 排序 ==========
 
     @Override

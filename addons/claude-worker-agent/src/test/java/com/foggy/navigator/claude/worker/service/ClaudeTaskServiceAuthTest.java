@@ -38,6 +38,7 @@ class ClaudeTaskServiceAuthTest {
     private LlmModelManager llmModelManager;
     private com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository workingDirectoryRepository;
     private com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository deletedSessionRepository;
+    private com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository taskRepository;
 
     private static final String USER_ID = "user-1";
     private static final String TENANT_ID = "tenant-1";
@@ -55,7 +56,7 @@ class ClaudeTaskServiceAuthTest {
         sessionManager = mock(SessionManager.class);
         publisher = mock(ApplicationEventPublisher.class);
         llmModelManager = mock(LlmModelManager.class);
-        var taskRepository = mock(com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository.class);
+        taskRepository = mock(com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository.class);
 
         UserAuthService userAuthService = mock(UserAuthService.class);
         when(userAuthService.generateServiceToken(anyString())).thenReturn("mock-jwt-token");
@@ -198,7 +199,12 @@ class ClaudeTaskServiceAuthTest {
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Resume task");
         form.setSessionId(SESSION_ID);
+        form.setClaudeSessionId("claude-session-001");
         form.setModelConfigId(modelConfigId);
+
+        // Mock claudeSessionId existence check
+        when(taskRepository.existsByClaudeSessionIdAndWorkerId("claude-session-001", WORKER_ID)).thenReturn(true);
+        when(taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus("claude-session-001", WORKER_ID, "RUNNING")).thenReturn(false);
 
         // Act
         service.resumeTask(USER_ID, TENANT_ID, form);
@@ -223,7 +229,12 @@ class ClaudeTaskServiceAuthTest {
         form.setWorkerId(WORKER_ID);
         form.setPrompt("Resume task");
         form.setSessionId(SESSION_ID);
+        form.setClaudeSessionId("claude-session-002");
         form.setModelConfigId(modelConfigId);
+
+        // Mock claudeSessionId existence check
+        when(taskRepository.existsByClaudeSessionIdAndWorkerId("claude-session-002", WORKER_ID)).thenReturn(true);
+        when(taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus("claude-session-002", WORKER_ID, "RUNNING")).thenReturn(false);
 
         // Act
         service.resumeTask(USER_ID, TENANT_ID, form);
@@ -296,6 +307,27 @@ class ClaudeTaskServiceAuthTest {
         dto.setCreatedAt(LocalDateTime.now());
         dto.setUpdatedAt(LocalDateTime.now());
         return dto;
+    }
+
+    @Test
+    void createTask_withRestrictedModelConfigId_deniedForUnauthorizedWorker() {
+        // Arrange: RESTRICTED model that does NOT allow WORKER_ID
+        String modelConfigId = "restricted-model-001";
+        doThrow(new IllegalArgumentException("该模型未授权给当前 Worker 使用: Restricted-Model"))
+                .when(llmModelManager).validateModelAccessForWorker(modelConfigId, WORKER_ID);
+
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Test task");
+        form.setCwd("/test/path");
+        form.setModelConfigId(modelConfigId);
+
+        // Act & Assert
+        assertThrows(IllegalArgumentException.class, () ->
+                service.createTask(USER_ID, TENANT_ID, form));
+
+        // getDecryptedApiKey should never be called
+        verify(llmModelManager, never()).getDecryptedApiKey(anyString());
     }
 
     private WorkingDirectoryEntity createWorkingDirectory(String directoryId, String path) {

@@ -157,6 +157,8 @@ public class ConversationConfigService {
                             .map(ClaudeTaskEntity::getWorkerId)
                             .orElse(null);
                     if (workerId != null) {
+                        // 校验 Worker 是否有权使用该模型
+                        llmModelManager.validateModelAccessForWorker(modelConfigId, workerId);
                         var modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
                         if (modelConfig != null && Boolean.TRUE.equals(modelConfig.getHasApiKey())) {
                             String decryptedApiKey = llmModelManager.getDecryptedApiKey(modelConfigId);

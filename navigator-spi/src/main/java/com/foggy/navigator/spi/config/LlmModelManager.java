@@ -117,6 +117,16 @@ public interface LlmModelManager {
      */
     List<LlmModelConfigDTO> listModelConfigsForWorker(String tenantId, String workerId);
 
+    /**
+     * 校验指定 Worker 是否有权使用该模型配置
+     * GLOBAL 模型始终允许；RESTRICTED 模型需检查 allowedWorkerIds
+     *
+     * @param modelConfigId 模型配置ID
+     * @param workerId Worker ID
+     * @throws IllegalArgumentException 如果模型不存在或 Worker 无权使用
+     */
+    void validateModelAccessForWorker(String modelConfigId, String workerId);
+
     // ========== 排序 ==========
 
     /**
