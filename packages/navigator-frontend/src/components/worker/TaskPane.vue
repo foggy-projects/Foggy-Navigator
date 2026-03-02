@@ -8,6 +8,7 @@
           {{ truncate(paneState.task.value?.prompt ?? '...', 40) }}
         </span>
       </div>
+      <slot name="header-extra" :pane-state="paneState" />
       <div class="pane-actions">
         <span v-if="paneState.task.value?.costUsd" class="cost-label">
           ${{ paneState.task.value.costUsd.toFixed(4) }}

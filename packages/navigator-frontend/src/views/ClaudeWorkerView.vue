@@ -389,7 +389,14 @@
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
-        />
+        >
+          <template #header-extra="{ paneState }">
+            <span
+              v-if="getInteractionState(paneState.task.value?.sessionId)"
+              :class="['pane-interaction-tag', getInteractionState(paneState.task.value?.sessionId)!.toLowerCase()]"
+            >{{ interactionStateLabel(getInteractionState(paneState.task.value?.sessionId)!) }}</span>
+          </template>
+        </TaskPaneGrid>
       </template>
 
       <!-- Worker selected (no directory): show worker details + all tasks -->
@@ -640,7 +647,14 @@
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
-        />
+        >
+          <template #header-extra="{ paneState }">
+            <span
+              v-if="getInteractionState(paneState.task.value?.sessionId)"
+              :class="['pane-interaction-tag', getInteractionState(paneState.task.value?.sessionId)!.toLowerCase()]"
+            >{{ interactionStateLabel(getInteractionState(paneState.task.value?.sessionId)!) }}</span>
+          </template>
+        </TaskPaneGrid>
       </template>
 
       <template v-else>
@@ -3832,6 +3846,11 @@ async function handleUnarchiveConversation(conv: ConversationGroup) {
   }
 }
 
+function getInteractionState(sessionId?: string): string | undefined {
+  if (!sessionId) return undefined
+  return workerState.conversationConfigs.value.get(sessionId)?.interactionState
+}
+
 function interactionStateLabel(state: string): string {
   switch (state) {
     case 'PROCESSING': return '处理中'
@@ -4694,6 +4713,17 @@ function handlePopOutTerminal() {
 .conv-interaction-badge.processing { background: #409eff; animation: convPulse 1.5s infinite; }
 .conv-interaction-badge.awaiting_reply { background: #e6a23c; }
 .conv-interaction-badge.archived { background: #909399; }
+
+.pane-interaction-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.pane-interaction-tag.processing { background: #ecf5ff; color: #409eff; }
+.pane-interaction-tag.awaiting_reply { background: #fdf6ec; color: #e6a23c; }
+.pane-interaction-tag.archived { background: #f4f4f5; color: #909399; }
 
 @keyframes convPulse {
   0%, 100% { opacity: 1; }

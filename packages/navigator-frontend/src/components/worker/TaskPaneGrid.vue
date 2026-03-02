@@ -15,7 +15,11 @@
       @question-respond="(paneId, pid, answers) => emit('questionRespond', paneId, pid, answers)"
       @plan-respond="(paneId, pid, decision, denyMsg, planAction) => emit('planRespond', paneId, pid, decision, denyMsg, planAction)"
       @rewind="(paneId, turnIndex) => emit('rewind', paneId, turnIndex)"
-    />
+    >
+      <template v-if="$slots['header-extra']" #header-extra="slotProps">
+        <slot name="header-extra" v-bind="slotProps" />
+      </template>
+    </TaskPane>
   </div>
 </template>
 
