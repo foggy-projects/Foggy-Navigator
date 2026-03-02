@@ -18,6 +18,7 @@ body {
 
 html, body, #app {
   height: 100%;
+  overflow: hidden; /* prevent page-level scrollbar on iOS/iPadOS */
 }
 
 /* 强制所有 Tooltip 向下显示（包括表格 overflow-tooltip） */

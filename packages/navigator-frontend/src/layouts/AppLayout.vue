@@ -95,6 +95,7 @@ function handleCommand(command: string) {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* iOS/iPadOS: use dynamic viewport height to avoid Safari toolbar overlap */
 }
 
 .app-header {

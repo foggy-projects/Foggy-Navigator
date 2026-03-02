@@ -4256,6 +4256,9 @@ function handlePopOutTerminal() {
 .header-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .task-form {
@@ -4279,7 +4282,9 @@ function handlePopOutTerminal() {
 .dir-compact-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 8px;
   flex-shrink: 0;
 }
