@@ -281,9 +281,10 @@ public class ClaudeTaskController {
     public RX<SessionPageDTO> listTasksByDirectoryPaged(
             @PathVariable String directoryId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String state) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(taskService.listTasksByDirectorySession(userId, directoryId, page, size));
+        return RX.ok(taskService.listTasksByDirectorySession(userId, directoryId, page, size, state));
     }
 
     @GetMapping("/worker/{workerId}/sessions")

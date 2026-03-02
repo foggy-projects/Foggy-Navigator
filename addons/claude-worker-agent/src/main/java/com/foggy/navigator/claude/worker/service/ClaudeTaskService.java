@@ -339,37 +339,45 @@ public class ClaudeTaskService {
     }
 
     public SessionPageDTO listTasksBySession(String userId, int page, int size, String interactionState) {
-        // 如果指定了 interactionState 筛选，先从 ConversationConfig 拿到匹配的 sessionIds
-        Set<String> stateFilterSessionIds = null;
+        List<String> sessionIds;
+        long totalSessions;
+
         if (interactionState != null && !interactionState.isEmpty()) {
-            stateFilterSessionIds = Set.copyOf(
-                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState));
-        }
-
-        // 1. 获取当前页的 sessionIds（按最新任务时间排序）
-        List<String> sessionIds = taskRepository.findDistinctSessionIdsByUser(userId, PageRequest.of(page, size));
-        if (sessionIds.isEmpty()) {
-            return SessionPageDTO.builder()
-                    .content(List.of()).totalSessions(0).page(page).size(size).build();
-        }
-
-        // 如果有 interactionState 过滤，只保留匹配的 session
-        if (stateFilterSessionIds != null) {
-            Set<String> filterSet = stateFilterSessionIds;
-            sessionIds = sessionIds.stream().filter(filterSet::contains).toList();
-            if (sessionIds.isEmpty()) {
+            // 有 interactionState 筛选：先获取匹配的所有 sessionIds，再在其中分页
+            List<String> allMatchingSessionIds =
+                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState);
+            if (allMatchingSessionIds.isEmpty()) {
                 return SessionPageDTO.builder()
                         .content(List.of()).totalSessions(0).page(page).size(size).build();
             }
+            totalSessions = allMatchingSessionIds.size();
+            // 对匹配的 sessionIds 按最新任务时间排序并分页
+            List<String> sortedSessionIds = taskRepository.findDistinctSessionIdsByUserFilteredBySessionIds(
+                    userId, allMatchingSessionIds, PageRequest.of(page, size));
+            sessionIds = sortedSessionIds;
+        } else {
+            // 无过滤：默认排除 ARCHIVED 会话
+            List<String> archivedSessionIds =
+                    conversationConfigService.findSessionIdsByInteractionState(userId, "ARCHIVED");
+            if (archivedSessionIds.isEmpty()) {
+                sessionIds = taskRepository.findDistinctSessionIdsByUser(userId, PageRequest.of(page, size));
+                totalSessions = taskRepository.countDistinctSessionsByUser(userId);
+            } else {
+                sessionIds = taskRepository.findDistinctSessionIdsByUserExcludingSessionIds(
+                        userId, archivedSessionIds, PageRequest.of(page, size));
+                totalSessions = taskRepository.countDistinctSessionsByUser(userId) - archivedSessionIds.size();
+                if (totalSessions < 0) totalSessions = 0;
+            }
         }
 
-        // 2. 获取这些 session 的所有任务
+        if (sessionIds.isEmpty()) {
+            return SessionPageDTO.builder()
+                    .content(List.of()).totalSessions(totalSessions).page(page).size(size).build();
+        }
+
+        // 获取这些 session 的所有任务
         List<TaskDTO> tasks = taskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
                 .stream().map(this::toDTO).toList();
-        // 3. 获取会话总数
-        long totalSessions = stateFilterSessionIds != null
-                ? stateFilterSessionIds.size()
-                : taskRepository.countDistinctSessionsByUser(userId);
         return SessionPageDTO.builder()
                 .content(tasks).totalSessions(totalSessions).page(page).size(size).build();
     }
@@ -387,14 +395,49 @@ public class ClaudeTaskService {
      * 按目录、按会话分页列出任务
      */
     public SessionPageDTO listTasksByDirectorySession(String userId, String directoryId, int page, int size) {
-        List<String> sessionIds = taskRepository.findDistinctSessionIdsByDirectory(directoryId, userId, PageRequest.of(page, size));
+        return listTasksByDirectorySession(userId, directoryId, page, size, null);
+    }
+
+    public SessionPageDTO listTasksByDirectorySession(String userId, String directoryId, int page, int size, String interactionState) {
+        List<String> sessionIds;
+        long totalSessions;
+
+        if (interactionState != null && !interactionState.isEmpty()) {
+            List<String> allMatchingSessionIds =
+                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState);
+            if (allMatchingSessionIds.isEmpty()) {
+                return SessionPageDTO.builder()
+                        .content(List.of()).totalSessions(0).page(page).size(size).build();
+            }
+            sessionIds = taskRepository.findDistinctSessionIdsByDirectoryFilteredBySessionIds(
+                    directoryId, userId, allMatchingSessionIds, PageRequest.of(page, size));
+            // Count matching sessions within this directory
+            totalSessions = taskRepository.countDistinctSessionsByDirectoryFilteredBySessionIds(
+                    directoryId, userId, allMatchingSessionIds);
+        } else {
+            // Default: exclude ARCHIVED
+            List<String> archivedSessionIds =
+                    conversationConfigService.findSessionIdsByInteractionState(userId, "ARCHIVED");
+            if (archivedSessionIds.isEmpty()) {
+                sessionIds = taskRepository.findDistinctSessionIdsByDirectory(directoryId, userId, PageRequest.of(page, size));
+                totalSessions = taskRepository.countDistinctSessionsByDirectory(directoryId, userId);
+            } else {
+                sessionIds = taskRepository.findDistinctSessionIdsByDirectoryExcludingSessionIds(
+                        directoryId, userId, archivedSessionIds, PageRequest.of(page, size));
+                long total = taskRepository.countDistinctSessionsByDirectory(directoryId, userId);
+                long archivedInDir = taskRepository.countDistinctSessionsByDirectoryFilteredBySessionIds(
+                        directoryId, userId, archivedSessionIds);
+                totalSessions = total - archivedInDir;
+                if (totalSessions < 0) totalSessions = 0;
+            }
+        }
+
         if (sessionIds.isEmpty()) {
             return SessionPageDTO.builder()
-                    .content(List.of()).totalSessions(0).page(page).size(size).build();
+                    .content(List.of()).totalSessions(totalSessions).page(page).size(size).build();
         }
         List<TaskDTO> tasks = taskRepository.findBySessionIdInAndUserIdOrderByCreatedAtDesc(sessionIds, userId)
                 .stream().map(this::toDTO).toList();
-        long totalSessions = taskRepository.countDistinctSessionsByDirectory(directoryId, userId);
         return SessionPageDTO.builder()
                 .content(tasks).totalSessions(totalSessions).page(page).size(size).build();
     }

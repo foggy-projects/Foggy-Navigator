@@ -193,9 +193,12 @@ export async function listTasks(): Promise<ClaudeTask[]> {
 export async function listTasksPaged(
   page: number,
   size: number,
+  state?: string,
 ): Promise<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }> {
+  const params: Record<string, unknown> = { page, size }
+  if (state) params.state = state
   const rx = (await client.get('/claude-tasks/page', {
-    params: { page, size },
+    params,
   })) as unknown as RX<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }>
   return rx.data
 }
@@ -213,9 +216,12 @@ export async function listTasksByDirectoryPaged(
   directoryId: string,
   page: number,
   size: number,
+  state?: string,
 ): Promise<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }> {
+  const params: Record<string, unknown> = { page, size }
+  if (state) params.state = state
   const rx = (await client.get(`/claude-tasks/directory/${directoryId}/page`, {
-    params: { page, size },
+    params,
   })) as unknown as RX<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }>
   return rx.data
 }

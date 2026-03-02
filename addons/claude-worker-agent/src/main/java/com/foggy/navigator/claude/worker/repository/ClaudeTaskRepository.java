@@ -49,6 +49,24 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
 
     List<ClaudeTaskEntity> findBySessionIdInAndUserIdOrderByCreatedAtDesc(List<String> sessionIds, String userId);
 
+    // Session-level pagination filtered to specific sessionIds (for interactionState filtering)
+    @Query("SELECT t.sessionId FROM ClaudeTaskEntity t WHERE t.userId = :userId " +
+            "AND t.sessionId IN :sessionIds " +
+            "GROUP BY t.sessionId ORDER BY MAX(t.createdAt) DESC")
+    List<String> findDistinctSessionIdsByUserFilteredBySessionIds(
+            @Param("userId") String userId,
+            @Param("sessionIds") List<String> sessionIds,
+            Pageable pageable);
+
+    // Session-level pagination excluding specific sessionIds (for hiding archived)
+    @Query("SELECT t.sessionId FROM ClaudeTaskEntity t WHERE t.userId = :userId " +
+            "AND t.sessionId NOT IN :excludeSessionIds " +
+            "GROUP BY t.sessionId ORDER BY MAX(t.createdAt) DESC")
+    List<String> findDistinctSessionIdsByUserExcludingSessionIds(
+            @Param("userId") String userId,
+            @Param("excludeSessionIds") List<String> excludeSessionIds,
+            Pageable pageable);
+
     // Session-level pagination by directory
     @Query("SELECT t.sessionId FROM ClaudeTaskEntity t WHERE t.directoryId = :directoryId AND t.userId = :userId " +
             "GROUP BY t.sessionId ORDER BY MAX(t.createdAt) DESC")
@@ -59,6 +77,34 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
             "WHERE t.directoryId = :directoryId AND t.userId = :userId")
     long countDistinctSessionsByDirectory(@Param("directoryId") String directoryId,
                                           @Param("userId") String userId);
+
+    // Directory-level pagination filtered to specific sessionIds
+    @Query("SELECT t.sessionId FROM ClaudeTaskEntity t WHERE t.directoryId = :directoryId AND t.userId = :userId " +
+            "AND t.sessionId IN :sessionIds " +
+            "GROUP BY t.sessionId ORDER BY MAX(t.createdAt) DESC")
+    List<String> findDistinctSessionIdsByDirectoryFilteredBySessionIds(
+            @Param("directoryId") String directoryId,
+            @Param("userId") String userId,
+            @Param("sessionIds") List<String> sessionIds,
+            Pageable pageable);
+
+    // Directory-level pagination excluding specific sessionIds
+    @Query("SELECT t.sessionId FROM ClaudeTaskEntity t WHERE t.directoryId = :directoryId AND t.userId = :userId " +
+            "AND t.sessionId NOT IN :excludeSessionIds " +
+            "GROUP BY t.sessionId ORDER BY MAX(t.createdAt) DESC")
+    List<String> findDistinctSessionIdsByDirectoryExcludingSessionIds(
+            @Param("directoryId") String directoryId,
+            @Param("userId") String userId,
+            @Param("excludeSessionIds") List<String> excludeSessionIds,
+            Pageable pageable);
+
+    // Count matching sessions in directory filtered by sessionIds
+    @Query("SELECT COUNT(DISTINCT t.sessionId) FROM ClaudeTaskEntity t " +
+            "WHERE t.directoryId = :directoryId AND t.userId = :userId AND t.sessionId IN :sessionIds")
+    long countDistinctSessionsByDirectoryFilteredBySessionIds(
+            @Param("directoryId") String directoryId,
+            @Param("userId") String userId,
+            @Param("sessionIds") List<String> sessionIds);
 
     /** Reconciler: 查询指定 Worker 下的活跃任务（排除刚创建的任务以避免误判） */
     List<ClaudeTaskEntity> findByWorkerIdAndStatusInAndCreatedAtBefore(

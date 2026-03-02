@@ -1813,6 +1813,26 @@ const sessionSourceFilter = ref<'ALL' | 'PLATFORM' | 'SYNCED'>('PLATFORM')
 // Interaction state filter
 const interactionStateFilter = ref<'ALL' | 'AWAITING_REPLY' | 'PROCESSING' | 'ARCHIVED'>('ALL')
 
+/** Compute the backend state param from the current filter */
+function currentStateParam(): string | undefined {
+  return interactionStateFilter.value === 'ALL' ? undefined : interactionStateFilter.value
+}
+
+/** Reload history tasks using the current interactionState filter */
+function reloadFilteredTasks() {
+  if (selectedDirectoryId.value) {
+    dirTaskPage.value = 0
+    loadDirectoryTasks()
+  } else {
+    workerState.loadTasksPage(0, undefined, currentStateParam())
+  }
+}
+
+// When filter changes, reload from page 0 with new filter
+watch(interactionStateFilter, () => {
+  reloadFilteredTasks()
+})
+
 // Tag dialog state
 const showTagDialog = ref(false)
 const savingTags = ref(false)
@@ -2334,7 +2354,7 @@ const allConversations = computed(() =>
 const activeConversations = computed(() => {
   let list = allConversations.value
 
-  // Source filter
+  // Source filter (client-side, orthogonal to state)
   const filter = sessionSourceFilter.value
   if (filter !== 'ALL') {
     list = list.filter((conv) => {
@@ -2346,18 +2366,13 @@ const activeConversations = computed(() => {
     })
   }
 
-  // Interaction state filter
+  // interactionState filtering is now done by the backend API
+  // Only hide AWAITING_REPLY from history when in ALL mode (they're shown in global attention section)
   const stateFilter = interactionStateFilter.value
-  if (stateFilter !== 'ALL') {
+  if (stateFilter === 'ALL') {
     list = list.filter((conv) => {
       const state = conv.config?.interactionState
-      return state === stateFilter
-    })
-  } else {
-    // Default: hide ARCHIVED and AWAITING_REPLY (shown in global attention section)
-    list = list.filter((conv) => {
-      const state = conv.config?.interactionState
-      return state !== 'ARCHIVED' && state !== 'AWAITING_REPLY'
+      return state !== 'AWAITING_REPLY'
     })
   }
 
@@ -2664,11 +2679,14 @@ function selectDirectory(workerId: string, directoryId: string) {
 
 async function loadDirectoryTasks() {
   if (!selectedDirectoryId.value) return
+  // Map filter to backend state param: ALL → undefined (backend hides archived by default)
+  const stateParam = interactionStateFilter.value === 'ALL' ? undefined : interactionStateFilter.value
   try {
     const result = await dirApi.listTasksByDirectoryPaged(
       selectedDirectoryId.value,
       dirTaskPage.value,
       dirTaskSize.value,
+      stateParam,
     )
     directoryTasks.value = result.content
     dirTaskTotal.value = result.totalSessions
@@ -3657,7 +3675,7 @@ async function handlePaneSend(paneId: string, content: string) {
 }
 
 function handlePageChange(page: number) {
-  workerState.loadTasksPage(page - 1)
+  workerState.loadTasksPage(page - 1, undefined, currentStateParam())
 }
 
 function handleDirPageChange(page: number) {

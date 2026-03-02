@@ -24,9 +24,9 @@ export function useClaudeWorker() {
     }
   }
 
-  async function loadTasks() {
+  async function loadTasks(state?: string) {
     try {
-      const result = await api.listTasksPaged(taskPage.value, taskSize.value)
+      const result = await api.listTasksPaged(taskPage.value, taskSize.value, state || undefined)
       tasks.value = result.content
       taskTotal.value = result.totalSessions
     } catch {
@@ -36,10 +36,10 @@ export function useClaudeWorker() {
     }
   }
 
-  async function loadTasksPage(page: number, size?: number) {
+  async function loadTasksPage(page: number, size?: number, state?: string) {
     taskPage.value = page
     if (size !== undefined) taskSize.value = size
-    await loadTasks()
+    await loadTasks(state)
   }
 
   async function registerWorker(form: {
