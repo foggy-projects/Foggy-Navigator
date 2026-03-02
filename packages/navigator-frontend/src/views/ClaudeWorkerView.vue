@@ -395,6 +395,13 @@
               v-if="getInteractionState(paneState.task.value?.sessionId)"
               :class="['pane-interaction-tag', getInteractionState(paneState.task.value?.sessionId)!.toLowerCase()]"
             >{{ interactionStateLabel(getInteractionState(paneState.task.value?.sessionId)!) }}</span>
+            <el-button
+              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              size="small"
+              text
+              title="归档会话"
+              @click="handlePaneArchive(paneState.task.value?.sessionId)"
+            >归档</el-button>
           </template>
         </TaskPaneGrid>
       </template>
@@ -653,6 +660,13 @@
               v-if="getInteractionState(paneState.task.value?.sessionId)"
               :class="['pane-interaction-tag', getInteractionState(paneState.task.value?.sessionId)!.toLowerCase()]"
             >{{ interactionStateLabel(getInteractionState(paneState.task.value?.sessionId)!) }}</span>
+            <el-button
+              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              size="small"
+              text
+              title="归档会话"
+              @click="handlePaneArchive(paneState.task.value?.sessionId)"
+            >归档</el-button>
           </template>
         </TaskPaneGrid>
       </template>
@@ -909,23 +923,6 @@
               <span class="conv-time">{{ formatTime(conv.latestTask.createdAt) }}</span>
               <!-- Visible action buttons -->
               <span class="conv-actions" @click.stop>
-                <el-tooltip
-                  :disabled="!isSessionBusy(conv)"
-                  content="该会话正在运行任务，请等待完成或终止后再继续"
-                  placement="top"
-                >
-                  <el-button
-                    v-if="conv.latestTask.status !== 'RUNNING' && conv.claudeSessionId"
-                    type="primary"
-                    size="small"
-                    text
-                    :disabled="isSessionBusy(conv)"
-                    title="继续对话"
-                    @click="handleResumeFromHistory(conv.latestTask)"
-                  >
-                    继续
-                  </el-button>
-                </el-tooltip>
                 <el-button
                   v-if="conv.latestTask.status === 'RUNNING'"
                   type="warning"
@@ -3831,6 +3828,21 @@ async function handleArchiveConversation(conv: ConversationGroup) {
       { type: 'info', confirmButtonText: '确认归档', cancelButtonText: '取消' },
     )
     await workerState.archiveConversation(conv.sessionId)
+    ElMessage.success('已归档')
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('归档失败')
+  }
+}
+
+async function handlePaneArchive(sessionId?: string) {
+  if (!sessionId) return
+  try {
+    await ElMessageBox.confirm(
+      '确认归档该会话？归档后默认不在列表中显示，可通过"已归档"筛选查看。',
+      '归档会话',
+      { type: 'info', confirmButtonText: '确认归档', cancelButtonText: '取消' },
+    )
+    await workerState.archiveConversation(sessionId)
     ElMessage.success('已归档')
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('归档失败')
