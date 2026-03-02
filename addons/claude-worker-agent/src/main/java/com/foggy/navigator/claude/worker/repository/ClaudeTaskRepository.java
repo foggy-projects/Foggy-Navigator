@@ -66,4 +66,7 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
 
     /** Reconciler: 查询指定 Worker 下所有活跃任务（不限创建时间） */
     List<ClaudeTaskEntity> findByWorkerIdAndStatusIn(String workerId, List<String> statuses);
+
+    /** 并发保护：检查某个 Claude 会话在指定 Worker 上是否有指定状态的任务 */
+    boolean existsByClaudeSessionIdAndWorkerIdAndStatus(String claudeSessionId, String workerId, String status);
 }

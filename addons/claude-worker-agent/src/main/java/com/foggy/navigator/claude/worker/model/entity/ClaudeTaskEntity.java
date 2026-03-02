@@ -75,6 +75,10 @@ public class ClaudeTaskEntity {
     @Column
     private Boolean fileCheckpointingEnabled;
 
+    /** Task source: "PLATFORM" (created via Navigator) or "SYNCED" (imported from local Claude Code) */
+    @Column(length = 32)
+    private String source;
+
     /**
      * Reconciler 最后一次确认 CLI 进程存活的时间。
      * 超时检查用此字段替代 createdAt，保证真正运行中的任务不会被误判超时。

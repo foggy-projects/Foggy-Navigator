@@ -105,6 +105,8 @@ export interface ClaudeTask {
   checkpoints?: string
   /** Whether file checkpointing was enabled for this task */
   fileCheckpointingEnabled?: boolean
+  /** Task source: "PLATFORM" or "SYNCED" */
+  source?: string
   /** 仅 /active 端点填充：工作目录名称 */
   directoryName?: string
   createdAt: string

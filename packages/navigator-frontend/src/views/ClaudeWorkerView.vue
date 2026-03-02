@@ -682,6 +682,16 @@
     <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" class="worker-history">
       <div class="history-header">
         <h3>历史会话</h3>
+        <el-select
+          v-model="sessionSourceFilter"
+          size="small"
+          class="source-filter-select"
+          style="width: 100px; margin-left: 6px;"
+        >
+          <el-option label="平台创建" value="PLATFORM" />
+          <el-option label="本地同步" value="SYNCED" />
+          <el-option label="全部" value="ALL" />
+        </el-select>
         <div class="history-header-actions">
           <template v-if="batchSelectMode">
             <el-button size="small" text @click="handleBatchSelectAll">
@@ -800,16 +810,23 @@
               <span class="conv-time">{{ formatTime(conv.latestTask.createdAt) }}</span>
               <!-- Visible action buttons -->
               <span class="conv-actions" @click.stop>
-                <el-button
-                  v-if="conv.latestTask.status !== 'RUNNING' && conv.claudeSessionId"
-                  type="primary"
-                  size="small"
-                  text
-                  title="继续对话"
-                  @click="handleResumeFromHistory(conv.latestTask)"
+                <el-tooltip
+                  :disabled="!isSessionBusy(conv)"
+                  content="该会话正在运行任务，请等待完成或终止后再继续"
+                  placement="top"
                 >
-                  继续
-                </el-button>
+                  <el-button
+                    v-if="conv.latestTask.status !== 'RUNNING' && conv.claudeSessionId"
+                    type="primary"
+                    size="small"
+                    text
+                    :disabled="isSessionBusy(conv)"
+                    title="继续对话"
+                    @click="handleResumeFromHistory(conv.latestTask)"
+                  >
+                    继续
+                  </el-button>
+                </el-tooltip>
                 <el-button
                   v-if="conv.latestTask.status === 'RUNNING'"
                   type="warning"
@@ -1682,6 +1699,9 @@ const batchAuthSessionIds = ref<string[]>([])
 const batchSelectMode = ref(false)
 const selectedConvIds = ref<Set<string>>(new Set())
 
+// Session source filter: 'ALL' | 'PLATFORM' | 'SYNCED'
+const sessionSourceFilter = ref<'ALL' | 'PLATFORM' | 'SYNCED'>('PLATFORM')
+
 // Tag dialog state
 const showTagDialog = ref(false)
 const savingTags = ref(false)
@@ -2197,12 +2217,42 @@ function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] 
 
 const workerConversations = computed(() => groupTasksToConversations(workerTasks.value))
 const directoryConversations = computed(() => groupTasksToConversations(directoryTasks.value))
-const activeConversations = computed(() =>
+const allConversations = computed(() =>
   selectedDirectoryId.value ? directoryConversations.value : workerConversations.value,
 )
+const activeConversations = computed(() => {
+  const filter = sessionSourceFilter.value
+  if (filter === 'ALL') return allConversations.value
+  return allConversations.value.filter((conv) => {
+    // Check source of tasks in this conversation
+    // A conversation is PLATFORM if any task has source=PLATFORM (or null with fileCheckpointingEnabled=true for legacy)
+    // A conversation is SYNCED if all tasks have source=SYNCED (or null with fileCheckpointingEnabled=false for legacy)
+    const isPlatform = conv.tasks.some((t) =>
+      t.source === 'PLATFORM' || (t.source == null && t.fileCheckpointingEnabled === true),
+    )
+    if (filter === 'PLATFORM') return isPlatform
+    return !isPlatform // SYNCED
+  })
+})
 
 // Active sessions: group activeTasks into ConversationGroups
 const activeSessionConvs = computed(() => groupTasksToConversations(workerState.activeTasks.value))
+
+// Set of claudeSessionIds that currently have a RUNNING task (for concurrency protection)
+const runningClaudeSessionIds = computed(() => {
+  const ids = new Set<string>()
+  for (const task of workerState.activeTasks.value) {
+    if (task.status === 'RUNNING' && task.claudeSessionId) {
+      ids.add(task.claudeSessionId)
+    }
+  }
+  return ids
+})
+
+/** Check if a conversation's Claude session is currently busy (has a RUNNING task) */
+function isSessionBusy(conv: ConversationGroup): boolean {
+  return !!conv.claudeSessionId && runningClaudeSessionIds.value.has(conv.claudeSessionId)
+}
 
 function directoriesForWorker(workerId: string): WorkingDirectory[] {
   return workerState.directories.value.filter((d) => d.workerId === workerId)

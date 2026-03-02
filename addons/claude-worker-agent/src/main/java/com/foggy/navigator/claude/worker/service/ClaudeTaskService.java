@@ -14,7 +14,9 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
+import com.foggy.navigator.claude.worker.model.entity.DeletedClaudeSessionEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.spi.auth.UserAuthService;
@@ -34,6 +36,8 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import com.foggy.navigator.common.util.IdGenerator;
 
 /**
@@ -47,6 +51,7 @@ public class ClaudeTaskService {
     private static final String AGENT_ID = "claude-worker";
 
     private final ClaudeTaskRepository taskRepository;
+    private final DeletedClaudeSessionRepository deletedSessionRepository;
     private final ClaudeWorkerService workerService;
     private final ConversationConfigService conversationConfigService;
 
@@ -115,6 +120,7 @@ public class ClaudeTaskService {
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
         entity.setFileCheckpointingEnabled(true);
+        entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
 
@@ -146,6 +152,14 @@ public class ClaudeTaskService {
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(form.getWorkerId());
         if (!worker.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Worker not found: " + form.getWorkerId());
+        }
+
+        // 并发保护：拒绝向正在运行任务的 Claude 会话发送新任务
+        if (form.getClaudeSessionId() != null && !form.getClaudeSessionId().isEmpty()) {
+            if (taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus(
+                    form.getClaudeSessionId(), form.getWorkerId(), "RUNNING")) {
+                throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
+            }
         }
 
         // 如果指定了 directoryId，从目录解析 cwd 和 agentTeams
@@ -198,6 +212,7 @@ public class ClaudeTaskService {
         entity.setDirectoryId(directoryId);
         entity.setClaudeSessionId(form.getClaudeSessionId());
         entity.setFileCheckpointingEnabled(true);
+        entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
 
@@ -239,6 +254,7 @@ public class ClaudeTaskService {
         entity.setDirectoryId(directoryId);
         entity.setClaudeSessionId(claudeSessionId);
         entity.setFileCheckpointingEnabled(false);
+        entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
         log.info("Tracked sync task created: taskId={}, workerId={}, directoryId={}", taskId, workerId, directoryId);
@@ -504,6 +520,18 @@ public class ClaudeTaskService {
             throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
         }
 
+        // 记录被删除的 claudeSessionId，防止 syncLocalSessions 重新导入
+        if (entity.getClaudeSessionId() != null && !entity.getClaudeSessionId().isEmpty()) {
+            if (!deletedSessionRepository.existsByClaudeSessionIdAndWorkerIdAndUserId(
+                    entity.getClaudeSessionId(), entity.getWorkerId(), userId)) {
+                DeletedClaudeSessionEntity deleted = new DeletedClaudeSessionEntity();
+                deleted.setClaudeSessionId(entity.getClaudeSessionId());
+                deleted.setWorkerId(entity.getWorkerId());
+                deleted.setUserId(userId);
+                deletedSessionRepository.save(deleted);
+            }
+        }
+
         // 同时删除关联的 Session 及其消息
         String sessionId = entity.getSessionId();
         taskRepository.delete(entity);
@@ -527,10 +555,21 @@ public class ClaudeTaskService {
                                  List<Map<String, Object>> sessions) {
         if (sessions == null || sessions.isEmpty()) return 0;
 
+        // Batch load deleted session IDs to skip
+        Set<String> deletedSessionIds = deletedSessionRepository.findByWorkerIdAndUserId(workerId, userId)
+                .stream()
+                .map(DeletedClaudeSessionEntity::getClaudeSessionId)
+                .collect(Collectors.toSet());
+
         int created = 0;
         for (Map<String, Object> session : sessions) {
             String claudeSessionId = (String) session.get("session_id");
             if (claudeSessionId == null || claudeSessionId.isEmpty()) continue;
+
+            // Skip sessions that were previously deleted by the user
+            if (deletedSessionIds.contains(claudeSessionId)) {
+                continue;
+            }
 
             // Dedup: skip if already synced
             if (taskRepository.existsByClaudeSessionIdAndWorkerId(claudeSessionId, workerId)) {
@@ -577,6 +616,7 @@ public class ClaudeTaskService {
             entity.setDirectoryId(directoryId);
             entity.setClaudeSessionId(claudeSessionId);
             entity.setFileCheckpointingEnabled(false);
+            entity.setSource("SYNCED");
             entity.setStatus("COMPLETED");
 
             // Preserve original timestamps from JSONL
@@ -897,6 +937,7 @@ public class ClaudeTaskService {
                 .errorMessage(entity.getErrorMessage())
                 .checkpoints(entity.getCheckpoints())
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
+                .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

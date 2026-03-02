@@ -31,6 +31,8 @@ public class TaskDTO {
     private String checkpoints;
     /** Whether file checkpointing was enabled for this task */
     private Boolean fileCheckpointingEnabled;
+    /** Task source: "PLATFORM" or "SYNCED" */
+    private String source;
     /** 仅 /active 端点填充：工作目录名称 */
     private String directoryName;
     private LocalDateTime createdAt;
