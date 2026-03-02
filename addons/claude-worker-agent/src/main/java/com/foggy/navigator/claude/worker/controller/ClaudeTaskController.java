@@ -124,8 +124,9 @@ public class ClaudeTaskController {
                     form.getAnswers(), form.getPlanAction())
                     .block(java.time.Duration.ofSeconds(10));
 
-            // Resume task from AWAITING_PERMISSION to RUNNING
-            taskService.resumeFromPermission(taskId);
+            // Resume task from AWAITING_PERMISSION to RUNNING + persist response
+            taskService.resumeFromPermission(taskId, form.getPermissionId(),
+                    form.getDecision(), form.getAnswers());
 
             return RX.ok(Map.of("taskId", taskId, "permissionId", form.getPermissionId(),
                     "decision", form.getDecision()));

@@ -30,6 +30,7 @@ public enum MessageType {
     // ===== 用户交互 =====
     USER_ACTION_REQUEST,    // 请求用户操作
     CONFIRMATION_REQUEST,   // 请求用户确认
+    CONFIRMATION_RESPONSE,  // 用户确认/回答的响应（持久化答案）
     FORM_REQUEST,           // 请求表单填写
 
     // ===== 状态同步 =====

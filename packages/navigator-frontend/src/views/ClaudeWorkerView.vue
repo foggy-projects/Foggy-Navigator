@@ -3302,10 +3302,7 @@ async function handlePlanRespond(paneId: string, permissionId: string, decision:
       planAction,
     })
     pane.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
-    if (decision === 'allow') {
-      pane.task.value.status = 'RUNNING'
-    }
-    if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+    syncSidebarAfterRespond(pane, decision)
   } catch {
     ElMessage.error('Plan response failed')
   }

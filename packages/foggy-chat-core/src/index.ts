@@ -12,6 +12,7 @@ export type {
   TaskCompletedPayload,
   CheckpointPayload,
   ConfirmationRequestPayload,
+  ConfirmationResponsePayload,
   UserQuestionItem,
   UserQuestionOption,
   AllowedPrompt,

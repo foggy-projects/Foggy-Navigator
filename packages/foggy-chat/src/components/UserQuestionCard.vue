@@ -99,7 +99,8 @@ const otherTexts = reactive<Record<number, string>>({})
 const otherActive = reactive<Record<number, boolean>>({})
 
 // Previously submitted answers (for display after submission)
-const answeredValues = ref<Record<number, string>>({})
+// Initialize from persisted answeredValues if available (restored from CONFIRMATION_RESPONSE)
+const answeredValues = ref<Record<number, string>>(props.message.answeredValues || {})
 
 function selectSingle(qi: number, label: string) {
   selections[qi] = label

@@ -11,6 +11,7 @@ import type {
   ErrorPayload,
   TaskCompletedPayload,
   ConfirmationRequestPayload,
+  ConfirmationResponsePayload,
 } from '../types/aip'
 import type { ChatMessage, ConnectionStatus } from '../types/chat'
 
@@ -308,6 +309,27 @@ export function createChatState(): ChatState {
           raw: p,
           timestamp: aip.timestamp,
         })
+        break
+      }
+      case AipMessageType.CONFIRMATION_RESPONSE: {
+        const p = aip.payload as ConfirmationResponsePayload
+        // Find the matching CONFIRMATION_REQUEST and resolve it
+        const target = messages.value.find(
+          (m) => m.permissionId === p.permissionId && m.type === AipMessageType.CONFIRMATION_REQUEST,
+        )
+        if (target) {
+          target.permissionStatus = p.decision === 'allow' ? 'approved' : 'denied'
+          // Restore answered values from persisted answers
+          if (p.answers && target.questions) {
+            const vals: Record<number, string> = {}
+            target.questions.forEach((q, qi) => {
+              if (p.answers![q.question]) {
+                vals[qi] = p.answers![q.question]
+              }
+            })
+            target.answeredValues = vals
+          }
+        }
         break
       }
     }

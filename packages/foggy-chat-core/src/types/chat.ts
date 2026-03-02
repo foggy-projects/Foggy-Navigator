@@ -21,6 +21,8 @@ export interface ChatMessage {
   planReview?: boolean
   /** Allowed tool prompts from ExitPlanMode */
   allowedPrompts?: AllowedPrompt[]
+  /** Populated from CONFIRMATION_RESPONSE: maps question index → answered value string */
+  answeredValues?: Record<number, string>
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

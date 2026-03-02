@@ -100,7 +100,8 @@ public class WorkerStreamRelay {
                         activeStreams.remove(taskId);
                         // 如果流正常结束但任务仍在 RUNNING（没收到 result/error 事件），
                         // 说明 CLI 可能因资源不足未能启动，或 Worker 异常断开。
-                        // 主动标记失败并推送友好错误消息到会话。
+                        // 对于 AWAITING_PERMISSION 任务，SSE 空闲期间连接易超时断开，
+                        // 但 CLI 进程通常仍存活等待用户输入 — 交给 Reconciler 判断。
                         taskService.failIfStillRunning(taskId, sessionId,
                                 "Worker 连接已断开，但未收到任务结果。可能原因：系统资源不足导致 CLI 无法启动，或 Worker 进程异常退出。");
                     })

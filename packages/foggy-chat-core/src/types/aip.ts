@@ -23,6 +23,7 @@ export enum AipMessageType {
   // 用户交互
   USER_ACTION_REQUEST = 'USER_ACTION_REQUEST',
   CONFIRMATION_REQUEST = 'CONFIRMATION_REQUEST',
+  CONFIRMATION_RESPONSE = 'CONFIRMATION_RESPONSE',
   FORM_REQUEST = 'FORM_REQUEST',
 
   // 状态同步
@@ -118,6 +119,13 @@ export interface ConfirmationRequestPayload {
   planReview?: boolean
   /** Allowed tool prompts from ExitPlanMode */
   allowedPrompts?: AllowedPrompt[]
+}
+
+export interface ConfirmationResponsePayload {
+  permissionId: string
+  decision: string
+  taskId: string
+  answers?: Record<string, string>
 }
 
 export interface AllowedPrompt {

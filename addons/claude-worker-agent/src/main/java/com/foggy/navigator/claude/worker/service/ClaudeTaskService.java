@@ -536,7 +536,8 @@ public class ClaudeTaskService {
      * 从等待权限恢复为运行中
      */
     @Transactional
-    public void resumeFromPermission(String taskId) {
+    public void resumeFromPermission(String taskId, String permissionId, String decision,
+                                      Map<String, String> answers) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             if ("AWAITING_PERMISSION".equals(entity.getStatus())) {
                 String prev = entity.getStatus();
@@ -545,8 +546,24 @@ public class ClaudeTaskService {
                 log.info("Task resumed from permission: taskId={}", taskId);
                 publishStatusChange(entity, prev);
                 conversationConfigService.updateInteractionState(entity.getSessionId(), "PROCESSING");
+
+                // Persist the user's response so it survives page refresh
+                publishConfirmationResponse(entity.getSessionId(), taskId, permissionId, decision, answers);
             }
         });
+    }
+
+    private void publishConfirmationResponse(String sessionId, String taskId, String permissionId,
+                                              String decision, Map<String, String> answers) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("permissionId", permissionId);
+        payload.put("decision", decision);
+        payload.put("taskId", taskId);
+        if (answers != null && !answers.isEmpty()) {
+            payload.put("answers", answers);
+        }
+        eventPublisher.publishEvent(
+                AgentMessage.of(sessionId, AGENT_ID, MessageType.CONFIRMATION_RESPONSE, payload));
     }
 
     /**
@@ -831,7 +848,7 @@ public class ClaudeTaskService {
      * - 交互式任务（fileCheckpointingEnabled=true）：4 小时超时（与 Worker hard timeout 对齐）
      *   使用 lastAliveAt（Reconciler 心跳时间）作为基准，避免误判仍在运行的长任务
      * - Tracked sync 任务（fileCheckpointingEnabled=false）：10 分钟超时（syncQuery 正常 < 2 分钟）
-     * - AWAITING_PERMISSION 任务：30 分钟超时（同样使用 lastAliveAt 基准）
+     * - AWAITING_PERMISSION 任务：4 小时超时（同样使用 lastAliveAt 基准，用户可能长时间不在）
      */
     @Scheduled(fixedDelay = 300000)
     @Transactional
@@ -866,14 +883,15 @@ public class ClaudeTaskService {
             }
         }
 
-        // AWAITING_PERMISSION tasks: 30 minute timeout
+        // AWAITING_PERMISSION tasks: 4 hour timeout (aligned with interactive tasks).
+        // Users may step away while a question/permission is pending — use a generous window.
         // Use lastAliveAt as baseline if Reconciler has confirmed the CLI is alive recently.
-        LocalDateTime permissionCutoff = now.minusMinutes(30);
+        LocalDateTime permissionCutoff = now.minusHours(4);
         List<ClaudeTaskEntity> permOld = taskRepository.findByStatusAndCreatedAtBefore("AWAITING_PERMISSION", permissionCutoff);
         for (ClaudeTaskEntity entity : permOld) {
             LocalDateTime baseline = entity.getLastAliveAt() != null ? entity.getLastAliveAt() : entity.getCreatedAt();
             if (baseline.isBefore(permissionCutoff)) {
-                failTimeout(entity, "Permission request timed out (exceeded 30 minutes)");
+                failTimeout(entity, "Permission request timed out (exceeded 4 hours without CLI activity)");
                 timedOutCount++;
             }
         }
@@ -913,12 +931,21 @@ public class ClaudeTaskService {
      * 流正常结束但任务仍在 RUNNING 时调用（未收到 result/error 事件）。
      * 典型场景：系统资源不足导致 CLI 无法启动，Worker 进程异常退出。
      * 标记任务失败 + 推送友好错误消息到会话。
+     *
+     * 注意：AWAITING_PERMISSION 任务不立即失败 — SSE 流在等待用户授权期间空闲易超时断开，
+     * 但 CLI 进程通常仍然存活。由 TaskStateReconciler 定期检测 CLI 存活状态来处理。
      */
     @Transactional
     public void failIfStillRunning(String taskId, String sessionId, String reason) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String status = entity.getStatus();
-            if ("RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status)) {
+            if ("AWAITING_PERMISSION".equals(status)) {
+                // SSE 流断开但 CLI 可能仍在等待用户输入，不立即失败。
+                // Reconciler 会检测 CLI 进程存活状态，真正死亡时会 reconcilerFailTask。
+                log.info("SSE stream ended while task awaiting permission — deferring to Reconciler: taskId={}", taskId);
+                return;
+            }
+            if ("RUNNING".equals(status)) {
                 String prev = entity.getStatus();
                 entity.setStatus("FAILED");
                 entity.setErrorMessage(reason);
