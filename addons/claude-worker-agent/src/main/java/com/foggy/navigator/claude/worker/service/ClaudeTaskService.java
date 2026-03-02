@@ -356,18 +356,9 @@ public class ClaudeTaskService {
                     userId, allMatchingSessionIds, PageRequest.of(page, size));
             sessionIds = sortedSessionIds;
         } else {
-            // 无过滤：默认排除 ARCHIVED 会话
-            List<String> archivedSessionIds =
-                    conversationConfigService.findSessionIdsByInteractionState(userId, "ARCHIVED");
-            if (archivedSessionIds.isEmpty()) {
-                sessionIds = taskRepository.findDistinctSessionIdsByUser(userId, PageRequest.of(page, size));
-                totalSessions = taskRepository.countDistinctSessionsByUser(userId);
-            } else {
-                sessionIds = taskRepository.findDistinctSessionIdsByUserExcludingSessionIds(
-                        userId, archivedSessionIds, PageRequest.of(page, size));
-                totalSessions = taskRepository.countDistinctSessionsByUser(userId) - archivedSessionIds.size();
-                if (totalSessions < 0) totalSessions = 0;
-            }
+            // 无过滤："全部"模式，显示所有会话（包括已归档）
+            sessionIds = taskRepository.findDistinctSessionIdsByUser(userId, PageRequest.of(page, size));
+            totalSessions = taskRepository.countDistinctSessionsByUser(userId);
         }
 
         if (sessionIds.isEmpty()) {
@@ -415,21 +406,9 @@ public class ClaudeTaskService {
             totalSessions = taskRepository.countDistinctSessionsByDirectoryFilteredBySessionIds(
                     directoryId, userId, allMatchingSessionIds);
         } else {
-            // Default: exclude ARCHIVED
-            List<String> archivedSessionIds =
-                    conversationConfigService.findSessionIdsByInteractionState(userId, "ARCHIVED");
-            if (archivedSessionIds.isEmpty()) {
-                sessionIds = taskRepository.findDistinctSessionIdsByDirectory(directoryId, userId, PageRequest.of(page, size));
-                totalSessions = taskRepository.countDistinctSessionsByDirectory(directoryId, userId);
-            } else {
-                sessionIds = taskRepository.findDistinctSessionIdsByDirectoryExcludingSessionIds(
-                        directoryId, userId, archivedSessionIds, PageRequest.of(page, size));
-                long total = taskRepository.countDistinctSessionsByDirectory(directoryId, userId);
-                long archivedInDir = taskRepository.countDistinctSessionsByDirectoryFilteredBySessionIds(
-                        directoryId, userId, archivedSessionIds);
-                totalSessions = total - archivedInDir;
-                if (totalSessions < 0) totalSessions = 0;
-            }
+            // 无过滤："全部"模式，显示所有会话（包括已归档）
+            sessionIds = taskRepository.findDistinctSessionIdsByDirectory(directoryId, userId, PageRequest.of(page, size));
+            totalSessions = taskRepository.countDistinctSessionsByDirectory(directoryId, userId);
         }
 
         if (sessionIds.isEmpty()) {

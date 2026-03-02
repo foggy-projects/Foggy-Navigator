@@ -2366,15 +2366,8 @@ const activeConversations = computed(() => {
     })
   }
 
-  // interactionState filtering is now done by the backend API
-  // Only hide AWAITING_REPLY from history when in ALL mode (they're shown in global attention section)
-  const stateFilter = interactionStateFilter.value
-  if (stateFilter === 'ALL') {
-    list = list.filter((conv) => {
-      const state = conv.config?.interactionState
-      return state !== 'AWAITING_REPLY'
-    })
-  }
+  // interactionState filtering is done by the backend API
+  // "全部" shows truly all conversations (backend handles exclusion/inclusion)
 
   return list
 })
@@ -3246,6 +3239,22 @@ function handleShowDetail(conv: ConversationGroup) {
   showDetailDialog.value = true
 }
 
+/** After a permission response succeeds, sync sidebar state immediately (don't wait for SSE) */
+function syncSidebarAfterRespond(pane: ReturnType<typeof createPane>, decision: string) {
+  if (!pane.task.value) return
+  const sessionId = pane.task.value.sessionId
+  if (decision === 'allow') {
+    pane.task.value.status = 'RUNNING'
+    // Also update activeTasks so sidebar computed re-evaluates
+    const activeTask = workerState.activeTasks.value.find(t => t.taskId === pane.task.value!.taskId)
+    if (activeTask && activeTask !== pane.task.value) {
+      activeTask.status = 'RUNNING'
+    }
+    workerState.updateInteractionStateFromSSE(sessionId, 'PROCESSING')
+  }
+  if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+}
+
 async function handlePermissionRespond(paneId: string, permissionId: string, decision: string, scope: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane?.task.value) return
@@ -3258,10 +3267,7 @@ async function handlePermissionRespond(paneId: string, permissionId: string, dec
       scope,
     })
     pane.chatState.resolvePermission(permissionId, decision === 'allow' ? 'approved' : 'denied')
-    if (decision === 'allow') {
-      pane.task.value.status = 'RUNNING'
-    }
-    if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+    syncSidebarAfterRespond(pane, decision)
   } catch {
     ElMessage.error('Permission response failed')
   }
@@ -3278,8 +3284,7 @@ async function handleQuestionRespond(paneId: string, permissionId: string, answe
       answers,
     })
     pane.chatState.resolvePermission(permissionId, 'approved')
-    pane.task.value.status = 'RUNNING'
-    if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+    syncSidebarAfterRespond(pane, 'allow')
   } catch {
     ElMessage.error('Question response failed')
   }
