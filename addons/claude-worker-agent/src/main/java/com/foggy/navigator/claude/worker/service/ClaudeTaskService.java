@@ -154,17 +154,28 @@ public class ClaudeTaskService {
      */
     @Transactional
     public TaskDTO resumeTask(String userId, String tenantId, ResumeTaskForm form) {
+        // Resume 必须指定 claudeSessionId 和 sessionId
+        if (form.getClaudeSessionId() == null || form.getClaudeSessionId().isEmpty()) {
+            throw new IllegalArgumentException("resume 操作必须指定 claudeSessionId");
+        }
+        if (form.getSessionId() == null || form.getSessionId().isEmpty()) {
+            throw new IllegalArgumentException("resume 操作必须指定 sessionId");
+        }
+
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(form.getWorkerId());
         if (!worker.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Worker not found: " + form.getWorkerId());
         }
 
+        // 校验 claudeSessionId 在该 Worker 上是否有过历史任务记录
+        if (!taskRepository.existsByClaudeSessionIdAndWorkerId(form.getClaudeSessionId(), form.getWorkerId())) {
+            throw new IllegalArgumentException("Claude 会话不存在或不属于该 Worker: " + form.getClaudeSessionId());
+        }
+
         // 并发保护：拒绝向正在运行任务的 Claude 会话发送新任务
-        if (form.getClaudeSessionId() != null && !form.getClaudeSessionId().isEmpty()) {
-            if (taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus(
-                    form.getClaudeSessionId(), form.getWorkerId(), "RUNNING")) {
-                throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
-            }
+        if (taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus(
+                form.getClaudeSessionId(), form.getWorkerId(), "RUNNING")) {
+            throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
         }
 
         // 如果指定了 directoryId，从目录解析 cwd 和 agentTeams
@@ -182,22 +193,12 @@ public class ClaudeTaskService {
             }
         }
 
-        // Per-conversation: 复用已有 session 或创建新 session
-        String sessionId;
-        if (form.getSessionId() != null && !form.getSessionId().isEmpty()) {
-            Session existing = sessionManager.getSession(form.getSessionId());
-            if (existing == null || !existing.getUserId().equals(userId)) {
-                throw new IllegalArgumentException("Session not found or access denied");
-            }
-            sessionId = existing.getId();
-        } else {
-            sessionId = sessionManager.createSession(SessionCreateRequest.builder()
-                    .userId(userId)
-                    .tenantId(tenantId)
-                    .agentId(AGENT_ID)
-                    .taskName("Resume: " + truncate(form.getPrompt(), 80))
-                    .build());
+        // 校验 sessionId 有效性
+        Session existing = sessionManager.getSession(form.getSessionId());
+        if (existing == null || !existing.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Session not found or access denied: " + form.getSessionId());
         }
+        String sessionId = existing.getId();
 
         // 添加用户 prompt 作为 USER 消息
         sessionManager.addMessage(sessionId, com.foggy.navigator.agent.framework.session.Message.builder()
