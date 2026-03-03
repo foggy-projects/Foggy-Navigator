@@ -164,6 +164,9 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         } catch (Exception e) {
             log.error("syncQueryTracked failed after task creation: taskId={}, error={}", taskId, e.getMessage(), e);
             taskService.failTask(taskId, claudeSessionId, truncate(e.getMessage(), 500));
+            // 异常路径也要持久化消息，让前端会话面板能看到用户发了什么、失败原因
+            taskService.persistTrackedSyncMessages(sessionId, prompt,
+                    "[系统错误] Worker 请求失败: " + truncate(e.getMessage(), 300));
             result = new LinkedHashMap<>();
             result.put("error", e.getMessage());
         }

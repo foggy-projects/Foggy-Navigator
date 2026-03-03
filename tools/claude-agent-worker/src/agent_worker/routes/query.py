@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
 from ..auth import verify_token
-from ..claude.sdk_wrapper import SdkWrapper, task_registry, permission_pending, _sdk_available, _use_agent_sdk, EventBroadcast
+from ..claude.sdk_wrapper import SdkWrapper, task_registry, permission_pending, _sdk_available, _use_agent_sdk, _find_sdk_cli_pids, EventBroadcast
 from ..config import settings
 from ..models import AbortResponse, PermissionResponse, QueryEvent, QueryRequest, RewindRequest
 
@@ -21,6 +21,42 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["query"], dependencies=[Depends(verify_token)])
 
 _wrapper = SdkWrapper()
+
+
+def _purge_stale_tasks() -> None:
+    """Remove task_registry entries whose asyncio task has finished but were
+    never cleaned up (e.g. ``has_external_subscriber`` leak, crashed generator).
+
+    Also checks system-level Claude CLI processes via ``_find_sdk_cli_pids()``
+    to confirm there is truly nothing running.
+    """
+
+    stale_ids: list[str] = []
+    for tid, entry in list(task_registry.items()):
+        atask: asyncio.Task | None = entry.get("asyncio_task")
+        if atask is not None and atask.done():
+            stale_ids.append(tid)
+
+    if not stale_ids:
+        return
+
+    # Double-check: if there are still live CLI processes, only purge entries
+    # whose asyncio task is done (the CLI might be an orphan from another
+    # entry, but that's safer than accidentally dropping a live task).
+    live_cli_pids = _find_sdk_cli_pids()
+
+    for tid in stale_ids:
+        entry = task_registry.pop(tid, None)
+        if entry:
+            # Also clean up any pending permissions for this task
+            for pid in list(permission_pending):
+                if permission_pending[pid].get("task_id") == tid:
+                    permission_pending.pop(pid, None)
+            logger.warning(
+                "Purged stale task from registry: task_id=%s, foggy_task_id=%s "
+                "(asyncio_task done, live_cli_pids=%d)",
+                tid, entry.get("foggy_task_id"), len(live_cli_pids),
+            )
 
 
 def _validate_cwd(cwd: str | None) -> str:
@@ -117,10 +153,15 @@ async def query(body: QueryRequest):
     """
 
     if len(task_registry) >= settings.max_concurrent_tasks:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Maximum concurrent tasks ({settings.max_concurrent_tasks}) reached",
-        )
+        # Before rejecting, purge stale entries whose asyncio task is already
+        # done (e.g. cleanup skipped due to has_external_subscriber leak) and
+        # that have no live CLI process backing them.
+        _purge_stale_tasks()
+        if len(task_registry) >= settings.max_concurrent_tasks:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Maximum concurrent tasks ({settings.max_concurrent_tasks}) reached",
+            )
 
     cwd = _validate_cwd(body.cwd)
     task_id = str(uuid.uuid4())
