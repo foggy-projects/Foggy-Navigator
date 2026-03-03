@@ -1,21 +1,21 @@
 #!/bin/bash
-# Foggy Navigator - Build Frontend & Start Nginx (Docker)
+# Foggy Navigator - Build Frontend & Restart Nginx
 #
 # 1. Install dependencies (if needed)
 # 2. Build workspace packages (foggy-chat-core, foggy-chat)
-# 3. Build navigator-frontend → dist/
-# 4. Start nginx container serving dist/ with API proxy
+# 3. Build navigator-frontend → packages/navigator-frontend/dist/
+# 4. Restart the docker-compose nginx container (foggy-navigator-nginx)
 #
 # Usage:
-#   ./start-build-frontend.sh              # full build + start nginx
-#   ./start-build-frontend.sh --skip-build # skip build, only (re)start nginx
-#   ./start-build-frontend.sh --build-only # build only, don't start nginx
+#   ./start-build-frontend.sh              # full build + restart nginx
+#   ./start-build-frontend.sh --skip-build # skip build, only restart nginx
+#   ./start-build-frontend.sh --build-only # build only, don't restart nginx
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FRONTEND_DIR="$SCRIPT_DIR/packages/navigator-frontend"
 DIST_DIR="$FRONTEND_DIR/dist"
-NGINX_CONF="$SCRIPT_DIR/nginx/navigator.conf"
-CONTAINER_NAME="foggy-nginx"
+DOCKER_DIR="$SCRIPT_DIR/docker"
+CONTAINER_NAME="foggy-navigator-nginx"
 NGINX_PORT=80
 LOG_DIR="$SCRIPT_DIR/logs"
 
@@ -102,30 +102,22 @@ fi
 
 if [ "$BUILD_ONLY" = true ]; then
     echo ""
-    echo -e "${GREEN}  Build finished. Nginx not started (--build-only).${NC}"
+    echo -e "${GREEN}  Build finished. Nginx not restarted (--build-only).${NC}"
     echo ""
     exit 0
 fi
 
-# ══ 2. Start Nginx Container ════════════════════════════════════════════════
+# ══ 2. Restart Nginx Container (docker-compose) ═════════════════════════════
 echo ""
-echo -e "${YELLOW}  Starting Nginx container...${NC}"
+echo -e "${YELLOW}  Restarting Nginx container...${NC}"
 
-# Stop existing container if running
-if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
-    docker rm -f "$CONTAINER_NAME" > /dev/null 2>&1
-    echo -e "${GRAY}  Removed old container${NC}"
-fi
-
-docker run -d --name "$CONTAINER_NAME" \
-    --add-host=host.docker.internal:host-gateway \
-    -p ${NGINX_PORT}:80 \
-    -v "$DIST_DIR":/usr/share/nginx/html:ro \
-    -v "$NGINX_CONF":/etc/nginx/conf.d/default.conf:ro \
-    nginx:alpine > /dev/null 2>&1
-
-if [ $? -ne 0 ]; then
-    echo -e "${RED}  Docker run failed! Is Docker running?${NC}"
+# Use docker-compose to recreate the nginx service (picks up new volume path)
+if (cd "$DOCKER_DIR" && docker compose up -d --force-recreate nginx) > /dev/null 2>&1; then
+    :  # success
+elif (cd "$DOCKER_DIR" && docker-compose up -d --force-recreate nginx) > /dev/null 2>&1; then
+    :  # fallback to docker-compose v1
+else
+    echo -e "${RED}  docker compose up failed! Check: docker compose -f docker/docker-compose.yml logs nginx${NC}"
     exit 1
 fi
 

@@ -74,12 +74,12 @@ fi
 # ══ 3. Frontend (Nginx container) ═════════════════════════════════════════════
 echo ""
 sep
-echo -e "${YELLOW}[3/4] Frontend (Nginx)${NC}  ${GRAY}(container: foggy-nginx)${NC}"
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^foggy-nginx$"; then
-    docker rm -f foggy-nginx > /dev/null 2>&1
+echo -e "${YELLOW}[3/4] Frontend (Nginx)${NC}  ${GRAY}(container: foggy-navigator-nginx)${NC}"
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^foggy-navigator-nginx$"; then
+    docker rm -f foggy-navigator-nginx > /dev/null 2>&1
     echo -e "${GREEN}  ✓ Nginx container stopped${NC}"
-elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^foggy-nginx$"; then
-    docker rm -f foggy-nginx > /dev/null 2>&1
+elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^foggy-navigator-nginx$"; then
+    docker rm -f foggy-navigator-nginx > /dev/null 2>&1
     echo -e "${GREEN}  ✓ Nginx container removed (was stopped)${NC}"
 else
     echo -e "${GRAY}  − Nginx container was not running${NC}"

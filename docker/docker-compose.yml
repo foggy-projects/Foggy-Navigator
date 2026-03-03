@@ -40,7 +40,7 @@ services:
       - "80:80"
     volumes:
       - ../nginx/navigator.conf:/etc/nginx/conf.d/default.conf:ro
-      - ../dist/nginx:/usr/share/nginx/html:ro
+      - ../packages/navigator-frontend/dist:/usr/share/nginx/html:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
