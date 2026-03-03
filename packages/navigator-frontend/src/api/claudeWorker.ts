@@ -322,6 +322,11 @@ export async function listActiveTasks(): Promise<ClaudeTask[]> {
   return rx.data
 }
 
+export async function listAwaitingReplyTasks(): Promise<ClaudeTask[]> {
+  const rx = (await client.get('/claude-tasks/awaiting-reply')) as unknown as RX<ClaudeTask[]>
+  return rx.data
+}
+
 // ===== Conversation Config API =====
 
 export async function updateConversationTags(

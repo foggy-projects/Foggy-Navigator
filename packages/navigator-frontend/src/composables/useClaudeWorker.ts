@@ -11,6 +11,7 @@ const taskSize = ref(20)
 const taskTotal = ref(0)
 const conversationConfigs = ref<Map<string, ConversationConfig>>(new Map())
 const activeTasks = ref<ClaudeTask[]>([])
+const awaitingReplyTasks = ref<ClaudeTask[]>([])
 
 export function useClaudeWorker() {
   const onlineWorkers = computed(() => workers.value.filter((w) => w.status === 'ONLINE'))
@@ -175,6 +176,14 @@ export function useClaudeWorker() {
     }
   }
 
+  async function loadAwaitingReplyTasks() {
+    try {
+      awaitingReplyTasks.value = await api.listAwaitingReplyTasks()
+    } catch {
+      awaitingReplyTasks.value = []
+    }
+  }
+
   async function updateTags(sessionId: string, tags: string[]) {
     const config = await api.updateConversationTags(sessionId, tags)
     conversationConfigs.value.set(config.sessionId, config)
@@ -283,6 +292,8 @@ export function useClaudeWorker() {
     syncSessions,
     activeTasks,
     loadActiveTasks,
+    awaitingReplyTasks,
+    loadAwaitingReplyTasks,
     updateTags,
     conversationConfigs,
     loadConversationConfigs,

@@ -115,4 +115,10 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
 
     /** 并发保护：检查某个 Claude 会话在指定 Worker 上是否有指定状态的任务 */
     boolean existsByClaudeSessionIdAndWorkerIdAndStatus(String claudeSessionId, String workerId, String status);
+
+    /** 查询指定 sessionId 列表中每个 session 的最新任务 */
+    @Query("SELECT t FROM ClaudeTaskEntity t WHERE t.sessionId IN :sessionIds " +
+           "AND t.createdAt = (SELECT MAX(t2.createdAt) FROM ClaudeTaskEntity t2 WHERE t2.sessionId = t.sessionId) " +
+           "ORDER BY t.createdAt DESC")
+    List<ClaudeTaskEntity> findLatestBySessionIdIn(@Param("sessionIds") List<String> sessionIds);
 }

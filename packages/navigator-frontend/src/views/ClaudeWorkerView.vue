@@ -801,7 +801,7 @@
         <div v-if="globalAttentionConvs.length > 0" class="active-sessions-section">
           <div class="active-header">
             <span class="active-title">&#9679; 需要关注 ({{ globalAttentionConvs.length }})</span>
-            <el-button size="small" text @click="workerState.loadActiveTasks()">&#8635;</el-button>
+            <el-button size="small" text @click="() => { workerState.loadActiveTasks(); workerState.loadAwaitingReplyTasks() }">&#8635;</el-button>
           </div>
           <div
             v-for="ac in globalAttentionConvs"
@@ -2410,12 +2410,13 @@ const activeConversations = computed(() => {
 // Active sessions: group activeTasks into ConversationGroups
 const activeSessionConvs = computed(() => groupTasksToConversations(workerState.activeTasks.value))
 
-// AWAITING_REPLY conversations: global (not directory-filtered), from all worker conversations
+// AWAITING_REPLY conversations: global (not filtered by worker), from backend API
 const awaitingReplyConvs = computed(() => {
   const activeSessionIds = new Set(activeSessionConvs.value.map(c => c.sessionId))
-  return workerConversations.value.filter(conv =>
-    conv.config?.interactionState === 'AWAITING_REPLY' && !activeSessionIds.has(conv.sessionId),
-  )
+  // Use the new awaitingReplyTasks from backend API (global, not worker-filtered)
+  const awaitingConvs = groupTasksToConversations(workerState.awaitingReplyTasks.value)
+  // Exclude sessions that are already in activeSessionConvs to avoid duplicates
+  return awaitingConvs.filter(conv => !activeSessionIds.has(conv.sessionId))
 })
 
 // Combined "needs attention" section: active tasks + awaiting reply
@@ -2496,6 +2497,7 @@ function handleTaskUpdateEvent(event: Event) {
         existing.status = newStatus as any
       } else {
         workerState.loadActiveTasks()
+        workerState.loadAwaitingReplyTasks()
       }
     } else {
       // Terminal state — remove from active list + update task list
@@ -2510,11 +2512,13 @@ function handleTaskUpdateEvent(event: Event) {
     }
   } else {
     workerState.loadActiveTasks() // Fallback for legacy format
+    workerState.loadAwaitingReplyTasks()
   }
 }
 
 function handleNotificationReconnected() {
   workerState.loadActiveTasks()
+  workerState.loadAwaitingReplyTasks()
 }
 
 onMounted(async () => {
@@ -2523,18 +2527,22 @@ onMounted(async () => {
   // Listen for SSE-driven task updates (from useNotifications)
   window.addEventListener('task-update', handleTaskUpdateEvent)
   window.addEventListener('notification-reconnected', handleNotificationReconnected)
-  await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), workerState.loadActiveTasks(), loadPlatformModelConfig(), agentState.loadAgents()])
-  // Load conversation configs for all loaded tasks (including active)
+  await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), workerState.loadActiveTasks(), workerState.loadAwaitingReplyTasks(), loadPlatformModelConfig(), agentState.loadAgents()])
+  // Load conversation configs for all loaded tasks (including active and awaiting reply)
   const allSessionIds = [
     ...workerState.tasks.value.map((t) => t.sessionId),
     ...workerState.activeTasks.value.map((t) => t.sessionId),
+    ...workerState.awaitingReplyTasks.value.map((t) => t.sessionId),
   ]
   const sessionIds = [...new Set(allSessionIds)]
   if (sessionIds.length > 0) {
     await workerState.loadConversationConfigs(sessionIds)
   }
   // Start polling active tasks every 15s (fallback for SSE disconnects)
-  activeTasksInterval = setInterval(() => workerState.loadActiveTasks(), 15000)
+  activeTasksInterval = setInterval(() => {
+    workerState.loadActiveTasks()
+    workerState.loadAwaitingReplyTasks()
+  }, 15000)
 })
 
 onUnmounted(() => {
@@ -2555,6 +2563,7 @@ onActivated(() => {
     pane.syncTaskStatus()
   }
   workerState.loadActiveTasks()
+  workerState.loadAwaitingReplyTasks()
   if (selectedDirectoryId.value) {
     loadDirectoryTasks()
   }

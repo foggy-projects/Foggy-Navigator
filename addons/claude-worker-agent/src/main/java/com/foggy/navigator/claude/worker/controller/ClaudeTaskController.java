@@ -55,6 +55,12 @@ public class ClaudeTaskController {
         return RX.ok(taskService.listActiveTasks(userId));
     }
 
+    @GetMapping("/awaiting-reply")
+    public RX<List<TaskDTO>> listAwaitingReplyTasks() {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskService.listAwaitingReplyTasks(userId));
+    }
+
     @GetMapping
     public RX<List<TaskDTO>> listTasks() {
         String userId = UserContext.getCurrentUserId();

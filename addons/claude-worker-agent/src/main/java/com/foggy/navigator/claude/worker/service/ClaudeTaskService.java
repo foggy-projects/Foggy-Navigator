@@ -19,6 +19,7 @@ import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
 import com.foggy.navigator.claude.worker.model.entity.DeletedClaudeSessionEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.claude.worker.repository.ConversationConfigRepository;
 import com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
@@ -55,6 +56,7 @@ public class ClaudeTaskService {
     private static final String AGENT_ID = "claude-worker";
 
     private final ClaudeTaskRepository taskRepository;
+    private final ConversationConfigRepository conversationConfigRepository;
     private final DeletedClaudeSessionRepository deletedSessionRepository;
     private final ClaudeWorkerService workerService;
     private final ConversationConfigService conversationConfigService;
@@ -316,6 +318,32 @@ public class ClaudeTaskService {
         List<ClaudeTaskEntity> entities = taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
                 userId, List.of("RUNNING", "AWAITING_PERMISSION"));
         return entities.stream().map(e -> {
+            TaskDTO dto = toDTO(e);
+            if (e.getDirectoryId() != null) {
+                workingDirectoryRepository.findByDirectoryId(e.getDirectoryId())
+                        .ifPresent(dir -> dto.setDirectoryName(dir.getProjectName()));
+            }
+            return dto;
+        }).toList();
+    }
+
+    /**
+     * 列出用户所有待回复的任务（interactionState = AWAITING_REPLY），额外填充 directoryName
+     */
+    public List<TaskDTO> listAwaitingReplyTasks(String userId) {
+        // 1. 从 ConversationConfig 查询所有 AWAITING_REPLY 状态的 sessionId
+        List<String> awaitingSessionIds = conversationConfigRepository.findSessionIdsByInteractionState(
+                userId, "AWAITING_REPLY");
+
+        if (awaitingSessionIds.isEmpty()) {
+            return List.of();
+        }
+
+        // 2. 查询这些 session 的最新任务（按 sessionId 分组，每组取最新的任务）
+        List<ClaudeTaskEntity> latestTasks = taskRepository.findLatestBySessionIdIn(awaitingSessionIds);
+
+        // 3. 转换为 DTO 并填充 directoryName
+        return latestTasks.stream().map(e -> {
             TaskDTO dto = toDTO(e);
             if (e.getDirectoryId() != null) {
                 workingDirectoryRepository.findByDirectoryId(e.getDirectoryId())
