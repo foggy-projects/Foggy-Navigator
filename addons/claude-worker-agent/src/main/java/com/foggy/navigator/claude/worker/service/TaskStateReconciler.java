@@ -27,15 +27,15 @@ import java.util.stream.Collectors;
  * ├──────────────────────────┼──────────────┼────────────────────────────────────────────────┤
  * │ RUNNING / AWAITING       │ ✓ 存活        │ touchAlive()，重置超时基准                      │
  * │ RUNNING / AWAITING       │ ✗ 已死亡      │ 连续 3 次未见后 reconcilerFailTask()            │
- * │ COMPLETED / FAILED / ... │ ✓ 存活        │ 孤儿！记录首次发现时间，10 分钟后自动强制杀死  │
+ * │ COMPLETED / FAILED / ... │ ✓ 存活        │ 孤儿！记录首次发现时间，仅检测+日志（用户通过 UI 手动管理） │
  * │ COMPLETED / FAILED / ... │ ✗ 已死亡      │ 清理孤儿记录（如有）                            │
  * └──────────────────────────┴──────────────┴────────────────────────────────────────────────┘
  * </pre>
  *
  * 孤儿进程：CLI 进程仍然存活，但 DB 任务已终结（COMPLETED/FAILED）。
  * 通常由 Worker 崩溃重启或 Java 侧强制超时导致 CLI 成为游离进程。
- * Reconciler 在宽限期内通过 {@link #getOrphanFirstSeen} 将状态暴露给 Controller/UI，
- * 超过宽限期后自动调用 Worker kill 接口强制终止。
+ * Reconciler 通过 {@link #getOrphanFirstSeen} 将状态暴露给 Controller/UI，
+ * 由用户通过进程管理界面手动决定是否终止（不自动杀死，以支持 Java 崩溃重启后的任务恢复）。
  */
 @Slf4j
 @Component
@@ -45,9 +45,6 @@ public class TaskStateReconciler {
     // -------------------------------------------------------------------------
     // 常量配置
     // -------------------------------------------------------------------------
-
-    /** 孤儿进程宽限期（分钟）：超时后自动强制 kill */
-    private static final int ORPHAN_GRACE_MINUTES = 10;
 
     /**
      * CLI 进程丢失连续阈值：连续多少次 reconcile 未见 CLI 进程后才强制失败。
@@ -229,31 +226,14 @@ public class TaskStateReconciler {
 
     private void handleOrphan(String workerId, int pid, String pidKey) {
         Instant firstSeen = orphanFirstSeen.computeIfAbsent(pidKey, k -> {
-            log.warn("Reconciler: orphan CLI process detected! worker={} pid={} — grace period: {} min",
-                    workerId, pid, ORPHAN_GRACE_MINUTES);
+            log.warn("Reconciler: orphan CLI process detected! worker={} pid={} — manage via UI process list",
+                    workerId, pid);
             return Instant.now();
         });
 
         long ageMinutes = Duration.between(firstSeen, Instant.now()).toMinutes();
-        log.debug("Reconciler: orphan worker={} pid={} age={}min (grace={}min)",
-                workerId, pid, ageMinutes, ORPHAN_GRACE_MINUTES);
-
-        if (ageMinutes >= ORPHAN_GRACE_MINUTES) {
-            log.warn("Reconciler: orphan grace period expired! worker={} pid={} (age={}min), force-killing...",
-                    workerId, pid, ageMinutes);
-            try {
-                workerRepository.findByWorkerId(workerId).ifPresent(workerEntity -> {
-                    workerService.createClient(workerEntity)
-                            .killCliProcess(pid, true)
-                            .block(Duration.ofSeconds(5));
-                    log.info("Reconciler: orphan killed — worker={} pid={}", workerId, pid);
-                });
-            } catch (Exception e) {
-                log.warn("Reconciler: failed to kill orphan worker={} pid={}: {}", workerId, pid, e.getMessage());
-            } finally {
-                orphanFirstSeen.remove(pidKey);
-            }
-        }
+        log.debug("Reconciler: orphan worker={} pid={} age={}min (no auto-kill, user-managed)",
+                workerId, pid, ageMinutes);
     }
 
     // -------------------------------------------------------------------------
@@ -283,14 +263,4 @@ public class TaskStateReconciler {
         return orphanFirstSeen.get(workerId + ":" + pid);
     }
 
-    /**
-     * 计算孤儿进程的预计自动杀死时间（firstSeenAt + grace period）。
-     *
-     * @return null 表示该进程不是孤儿
-     */
-    public Instant getOrphanAutoKillAt(String workerId, int pid) {
-        Instant firstSeen = getOrphanFirstSeen(workerId, pid);
-        if (firstSeen == null) return null;
-        return firstSeen.plus(Duration.ofMinutes(ORPHAN_GRACE_MINUTES));
-    }
 }

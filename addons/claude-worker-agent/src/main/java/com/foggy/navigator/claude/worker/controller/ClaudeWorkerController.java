@@ -87,6 +87,20 @@ public class ClaudeWorkerController {
         return RX.ok(workerService.getWorker(userId, workerId));
     }
 
+    @GetMapping("/{workerId}/code-server-password")
+    public RX<Map<String, String>> getCodeServerPassword(@PathVariable String workerId) {
+        String userId = UserContext.getCurrentUserId();
+        var entity = workerService.getWorkerEntity(workerId);
+        if (!entity.getUserId().equals(userId)) {
+            throw RX.throwB("Worker not found");
+        }
+        String pwd = workerService.getDecryptedCodeServerPassword(entity);
+        if (pwd == null) {
+            return RX.failA("未配置 Code Server 密码");
+        }
+        return RX.ok(Map.of("password", pwd));
+    }
+
     @PostMapping("/{workerId}/sync-skills")
     public RX<Map<String, Object>> syncSkills(@PathVariable String workerId) {
         String userId = UserContext.getCurrentUserId();
@@ -128,8 +142,8 @@ public class ClaudeWorkerController {
     }
 
     /**
-     * 将 Reconciler 掌握的孤儿信息（首次发现时间 + 自动杀死时间）注入到进程列表中。
-     * 前端据此展示倒计时和手动杀死按钮。
+     * 将 Reconciler 掌握的孤儿信息（首次发现时间）注入到进程列表中。
+     * 前端据此展示孤儿标识和手动杀死按钮。
      */
     @SuppressWarnings("unchecked")
     private void enrichWithOrphanInfo(String workerId, Map<String, Object> result) {
@@ -147,10 +161,6 @@ public class ClaudeWorkerController {
             Instant firstSeen = reconciler.getOrphanFirstSeen(workerId, pid);
             if (firstSeen != null) {
                 proc.put("orphan_first_seen_at", firstSeen.toString());
-                Instant autoKillAt = reconciler.getOrphanAutoKillAt(workerId, pid);
-                if (autoKillAt != null) {
-                    proc.put("orphan_auto_kill_at", autoKillAt.toString());
-                }
                 // Override is_orphan with Reconciler's authoritative verdict
                 proc.put("is_orphan", true);
             }

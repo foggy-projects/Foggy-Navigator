@@ -12,7 +12,6 @@ import base64
 import json
 import logging
 import os
-import signal
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -331,6 +330,28 @@ def _extract_error_detail(exc: Exception, task_id: str) -> str:
         return detail
 
     # -- Fallback: unknown exception ----------------------------------------
+    # Try to extract details from chained exceptions (__cause__ / __context__)
+    chained = exc.__cause__ or exc.__context__
+    if chained is not None:
+        chained_type = type(chained).__name__
+        chained_exit_code = getattr(chained, "exit_code", None)
+        chained_stderr = getattr(chained, "stderr", None)
+        if chained_exit_code is not None or chained_stderr:
+            logger.error(
+                "Task %s %s (wrapping %s): exit_code=%s, stderr=%s",
+                task_id, exc_type, chained_type,
+                chained_exit_code,
+                chained_stderr[:500] if chained_stderr else None,
+            )
+            parts = [f"[{exc_type} wrapping {chained_type}]"]
+            if chained_exit_code is not None:
+                parts.append(f"exit_code={chained_exit_code}")
+            if chained_stderr:
+                return " | ".join(parts) + f"\nstderr:\n{chained_stderr}"
+            else:
+                parts.append("(no stderr captured)")
+                return " | ".join(parts)
+
     logger.exception("Task %s unexpected error (%s)", task_id, exc_type)
     return f"[{exc_type}] {exc}"
 
@@ -409,25 +430,6 @@ def _pgrep(pattern: str, out_pids: set[int]) -> None:
     except (subprocess.SubprocessError, FileNotFoundError, OSError):
         pass
 
-
-def _kill_orphan_cli_processes(before: set[int], label: str) -> None:
-    """Kill Claude CLI processes spawned *after* the ``before`` snapshot.
-
-    Any PID present now but absent from *before* is considered an orphan
-    spawned by the SDK for the task identified by *label*.
-    """
-
-    after = _find_sdk_cli_pids()
-    orphans = after - before
-    for pid in orphans:
-        try:
-            if os.name == "nt":
-                os.kill(pid, signal.SIGTERM)
-            else:
-                os.kill(pid, signal.SIGTERM)
-            logger.info("Killed orphan Claude CLI process: pid=%d (task %s)", pid, label)
-        except OSError as exc:
-            logger.debug("Failed to kill pid %d: %s", pid, exc)
 
 
 class SdkWrapper:
@@ -624,9 +626,6 @@ class SdkWrapper:
                     logger.info("Task %s: saved %d image(s), prompt augmented", task_id, len(saved_paths))
             except Exception as exc:
                 logger.warning("Task %s: failed to save images: %s", task_id, exc)
-
-        # Snapshot existing CLI processes so we can detect orphans on cleanup.
-        cli_pids_before = _find_sdk_cli_pids()
 
         # Register the task so that it can be observed / cancelled.
         task_registry[task_id] = {
@@ -1357,6 +1356,14 @@ class SdkWrapper:
                 for pid in list(permission_pending):
                     if permission_pending[pid].get("task_id") == task_id:
                         permission_pending.pop(pid, None)
-                # Kill orphan CLI subprocesses that the SDK failed to clean up
-                # (e.g. due to anyio cancel-scope mismatch on task cancellation).
-                _kill_orphan_cli_processes(cli_pids_before, task_id)
+                # Log surviving CLI processes for diagnostics (no auto-kill —
+                # orphans are managed manually via the UI process list).
+                try:
+                    surviving = _find_sdk_cli_pids()
+                    if surviving:
+                        logger.info(
+                            "Task %s ended — %d CLI process(es) still alive: %s",
+                            task_id, len(surviving), surviving,
+                        )
+                except Exception:
+                    pass
