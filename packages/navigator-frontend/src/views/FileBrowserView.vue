@@ -457,10 +457,33 @@ async function copyPath(type: 'name' | 'relative' | 'absolute') {
     text = node.fullPath
   }
   try {
+    // 优先尝试使用 Clipboard API
     await navigator.clipboard.writeText(text)
     ElMessage.success(`已复制: ${text}`)
-  } catch {
-    ElMessage.error('复制失败')
+  } catch (err) {
+    // 如果 Clipboard API 失败，使用传统方法作为后备
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-999999px'
+    textArea.style.top = '-999999px'
+    document.body.appendChild(textArea)
+    textArea.focus()
+    textArea.select()
+
+    try {
+      const successful = document.execCommand('copy')
+      if (successful) {
+        ElMessage.success(`已复制: ${text}`)
+      } else {
+        ElMessage.error('复制失败')
+      }
+    } catch (err) {
+      console.error('复制失败：', err)
+      ElMessage.error('复制失败')
+    } finally {
+      document.body.removeChild(textArea)
+    }
   }
   closeContextMenu()
 }

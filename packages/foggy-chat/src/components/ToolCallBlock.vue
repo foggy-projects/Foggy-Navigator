@@ -224,19 +224,73 @@ const formattedContent = computed(() => {
 })
 
 async function copyContent() {
+  const text = props.message.content || ''
+
   try {
-    await navigator.clipboard.writeText(props.message.content || '')
+    // 优先尝试使用 Clipboard API
+    await navigator.clipboard.writeText(text)
     copyLabel.value = '已复制'
     setTimeout(() => { copyLabel.value = '复制' }, 1500)
-  } catch { /* ignore */ }
+  } catch (err) {
+    // 如果 Clipboard API 失败，使用传统方法作为后备
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-999999px'
+    textArea.style.top = '-999999px'
+    document.body.appendChild(textArea)
+    textArea.focus()
+    textArea.select()
+
+    try {
+      const successful = document.execCommand('copy')
+      if (successful) {
+        copyLabel.value = '已复制'
+        setTimeout(() => { copyLabel.value = '复制' }, 1500)
+      } else {
+        console.error('复制失败：document.execCommand 返回 false')
+      }
+    } catch (err) {
+      console.error('复制失败：', err)
+    } finally {
+      document.body.removeChild(textArea)
+    }
+  }
 }
 
 async function copyFormatted() {
+  const text = formattedContent.value
+
   try {
-    await navigator.clipboard.writeText(formattedContent.value)
+    // 优先尝试使用 Clipboard API
+    await navigator.clipboard.writeText(text)
     copyFormattedLabel.value = '已复制'
     setTimeout(() => { copyFormattedLabel.value = '复制' }, 1500)
-  } catch { /* ignore */ }
+  } catch (err) {
+    // 如果 Clipboard API 失败，使用传统方法作为后备
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-999999px'
+    textArea.style.top = '-999999px'
+    document.body.appendChild(textArea)
+    textArea.focus()
+    textArea.select()
+
+    try {
+      const successful = document.execCommand('copy')
+      if (successful) {
+        copyFormattedLabel.value = '已复制'
+        setTimeout(() => { copyFormattedLabel.value = '复制' }, 1500)
+      } else {
+        console.error('复制失败：document.execCommand 返回 false')
+      }
+    } catch (err) {
+      console.error('复制失败：', err)
+    } finally {
+      document.body.removeChild(textArea)
+    }
+  }
 }
 </script>
 

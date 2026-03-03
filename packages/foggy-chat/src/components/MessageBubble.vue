@@ -112,12 +112,39 @@ const renderedContent = computed(() => {
 })
 
 const copied = ref(false)
-function handleCopy() {
+async function handleCopy() {
   const text = props.message.content || ''
-  navigator.clipboard.writeText(text).then(() => {
+
+  try {
+    // 优先尝试使用 Clipboard API
+    await navigator.clipboard.writeText(text)
     copied.value = true
     setTimeout(() => { copied.value = false }, 1500)
-  })
+  } catch (err) {
+    // 如果 Clipboard API 失败，使用传统方法作为后备
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-999999px'
+    textArea.style.top = '-999999px'
+    document.body.appendChild(textArea)
+    textArea.focus()
+    textArea.select()
+
+    try {
+      const successful = document.execCommand('copy')
+      if (successful) {
+        copied.value = true
+        setTimeout(() => { copied.value = false }, 1500)
+      } else {
+        console.error('复制失败：document.execCommand 返回 false')
+      }
+    } catch (err) {
+      console.error('复制失败：', err)
+    } finally {
+      document.body.removeChild(textArea)
+    }
+  }
 }
 </script>
 
