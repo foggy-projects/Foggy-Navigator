@@ -44,7 +44,7 @@
         :connection-status="paneState.chatState.connectionStatus.value"
         :show-header="false"
         :show-input="canInput"
-        :input-disabled="inputDisabled"
+        :input-disabled="sendDisabled"
         :rewind-enabled="rewindEnabled"
         placeholder="输入后续指令... (Ctrl+Enter 发送)"
         @send="handleSend"
@@ -63,7 +63,7 @@
               :rows="1"
               auto-grow
               :max-rows="4"
-              :disabled="inputDisabled"
+              :disabled="false"
               placeholder="输入后续指令... (Shift+Enter 换行, / 命令, @ 提及 Agent)"
               :skills="skills || []"
               :agents="agents || []"
@@ -74,7 +74,7 @@
             />
             <el-button
               type="primary"
-              :disabled="inputDisabled || !paneInput.trim()"
+              :disabled="sendDisabled || !paneInput.trim()"
               @click="handleSend()"
             >
               发送
@@ -176,15 +176,16 @@ const modelShort = computed(() => {
 
 const canInput = computed(() => {
   const t = props.paneState.task.value
-  return !!t && t.status !== 'RUNNING' && t.status !== 'PENDING' && !!t.claudeSessionId
+  return !!t && t.status !== 'PENDING' && !!t.claudeSessionId
 })
 
-const inputDisabled = computed(() => {
+const sendDisabled = computed(() => {
   const t = props.paneState.task.value
   return !!t && t.status === 'RUNNING'
 })
 
 function handleSend(content?: string) {
+  if (sendDisabled.value) return
   const text = content || paneInput.value.trim()
   if (!text) return
   // Strip leading "/" to prevent CLI from interpreting as slash command
