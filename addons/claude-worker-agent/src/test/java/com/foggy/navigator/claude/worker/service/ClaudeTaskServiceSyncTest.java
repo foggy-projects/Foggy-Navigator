@@ -55,8 +55,9 @@ class ClaudeTaskServiceSyncTest {
 
         LlmModelManager llmModelManager = mock(LlmModelManager.class);
         UserAuthService userAuthService = mock(UserAuthService.class);
+        var conversationConfigRepository = mock(com.foggy.navigator.claude.worker.repository.ConversationConfigRepository.class);
         service = new ClaudeTaskService(
-                taskRepository, deletedSessionRepository, workerService, configService,
+                taskRepository, conversationConfigRepository, deletedSessionRepository, workerService, configService,
                 dirService, directoryRepository, sessionManager, publisher, llmModelManager,
                 userAuthService);
 

@@ -5,7 +5,7 @@ import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.common.entity.AgentTaskEntity;
 import com.foggy.navigator.session.repository.AgentTaskRepository;
-import com.foggy.navigator.session.sse.SseSessionEmitter;
+import com.foggy.navigator.session.sse.UnifiedSseEmitter;
 import com.foggy.navigator.spi.task.AgentTaskManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,7 +25,7 @@ import java.util.*;
 public class AgentTaskService implements AgentTaskManager {
 
     private final AgentTaskRepository agentTaskRepository;
-    private final SseSessionEmitter sseSessionEmitter;
+    private final UnifiedSseEmitter unifiedSseEmitter;
 
     @Override
     @Transactional
@@ -103,7 +103,7 @@ public class AgentTaskService implements AgentTaskManager {
                     MessageType.TASK_COMPLETED,
                     payload
             );
-            sseSessionEmitter.sendEvent(entity.getParentSessionId(), message);
+            unifiedSseEmitter.sendSessionEvent(entity.getParentSessionId(), message);
             log.info("Task completion SSE sent: taskId={}, parentSession={}", entity.getTaskId(), entity.getParentSessionId());
         } catch (Exception e) {
             log.warn("Failed to send task completion SSE: taskId={}", entity.getTaskId(), e);

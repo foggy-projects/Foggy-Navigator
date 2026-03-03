@@ -61,8 +61,10 @@ class ClaudeTaskServiceAuthTest {
         UserAuthService userAuthService = mock(UserAuthService.class);
         when(userAuthService.generateServiceToken(anyString())).thenReturn("mock-jwt-token");
 
+        var conversationConfigRepository = mock(com.foggy.navigator.claude.worker.repository.ConversationConfigRepository.class);
         service = new ClaudeTaskService(
                 taskRepository,
+                conversationConfigRepository,
                 deletedSessionRepository,
                 workerService, configService, directoryService,
                 workingDirectoryRepository,

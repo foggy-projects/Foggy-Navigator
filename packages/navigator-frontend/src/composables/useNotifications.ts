@@ -1,6 +1,6 @@
 import { ref, onUnmounted } from 'vue'
 import { ElNotification } from 'element-plus'
-import { getToken } from '@/utils/auth'
+import { useUnifiedSse } from '@/composables/useUnifiedSse'
 
 export interface AssistantNotification {
   id: string
@@ -15,57 +15,16 @@ export interface AssistantNotification {
 
 const notifications = ref<AssistantNotification[]>([])
 const unreadCount = ref(0)
-const connected = ref(false)
 
-let abortController: AbortController | null = null
-let retryTimer: ReturnType<typeof setTimeout> | null = null
-let retryCount = 0
-let manuallyClosed = false
-const MAX_RETRIES = 10
-const BASE_DELAY = 2000
-const MAX_DELAY = 60000
-
-function parseSseEvents(chunk: string, state: { eventType: string; dataLines: string[] }) {
-  const lines = chunk.split('\n')
-  for (const line of lines) {
-    if (line.startsWith('event:')) {
-      state.eventType = line.slice(6).trim()
-    } else if (line.startsWith('data:')) {
-      state.dataLines.push(line.slice(5).trim())
-    } else if (line.trim() === '') {
-      if (state.dataLines.length > 0) {
-        const data = state.dataLines.join('\n')
-        handleEvent(state.eventType, data)
-        state.dataLines = []
-        state.eventType = ''
-      }
+function handleEvent(eventType: string, data: any) {
+  if (eventType === 'assistant_notification') {
+    handleAssistantNotification(data)
+  } else if (eventType === 'task_update') {
+    if (data.type === 'monitoring_alert') {
+      handleMonitoringAlert(data)
+    } else {
+      window.dispatchEvent(new CustomEvent('task-update', { detail: data }))
     }
-  }
-}
-
-function handleEvent(eventType: string, data: string) {
-  try {
-    const parsed = JSON.parse(data)
-
-    if (eventType === 'assistant_notification') {
-      handleAssistantNotification(parsed)
-    } else if (eventType === 'task_update') {
-      if (parsed.type === 'monitoring_alert') {
-        handleMonitoringAlert(parsed)
-      } else {
-        window.dispatchEvent(new CustomEvent('task-update', { detail: parsed }))
-      }
-    } else if (eventType === 'heartbeat') {
-      // heartbeat - connection alive
-    } else if (!eventType || eventType === 'message') {
-      if (parsed.type === 'connected') {
-        connected.value = true
-        retryCount = 0
-        window.dispatchEvent(new CustomEvent('notification-reconnected'))
-      }
-    }
-  } catch {
-    // ignore non-JSON
   }
 }
 
@@ -152,84 +111,26 @@ function handleMonitoringAlert(data: any) {
   }
 }
 
-function scheduleReconnect() {
-  if (manuallyClosed) return
-  if (retryCount < MAX_RETRIES) {
-    const delay = Math.min(BASE_DELAY * Math.pow(2, retryCount), MAX_DELAY)
-    retryCount++
-    retryTimer = setTimeout(() => {
-      retryTimer = null
-      if (!manuallyClosed) doConnect()
-    }, delay)
-  } else {
-    connected.value = false
-  }
-}
-
-async function doConnect() {
-  abortController = new AbortController()
-  const token = getToken()
-
-  try {
-    const response = await fetch('/api/v1/notifications/stream', {
-      headers: {
-        Accept: 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      signal: abortController.signal,
-    })
-
-    if (!response.ok || !response.body) {
-      scheduleReconnect()
-      return
-    }
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    const state = { eventType: '', dataLines: [] as string[] }
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done || manuallyClosed) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lastNewline = buffer.lastIndexOf('\n')
-      if (lastNewline === -1) continue
-
-      const complete = buffer.substring(0, lastNewline + 1)
-      buffer = buffer.substring(lastNewline + 1)
-      parseSseEvents(complete, state)
-    }
-
-    if (!manuallyClosed) scheduleReconnect()
-  } catch (err: unknown) {
-    if (manuallyClosed) return
-    if (err instanceof DOMException && err.name === 'AbortError') return
-    scheduleReconnect()
-  }
-}
+let removeListener: (() => void) | null = null
 
 export function useNotifications() {
+  const { connected, connect: connectSse, addNotificationListener } = useUnifiedSse()
+
   function connect() {
-    if (abortController) return // already connected
-    manuallyClosed = false
-    retryCount = 0
-    doConnect()
+    // Ensure the unified SSE is connected
+    connectSse()
+    // Register notification listener (idempotent — only adds once)
+    if (!removeListener) {
+      removeListener = addNotificationListener(handleEvent)
+    }
   }
 
   function disconnect() {
-    manuallyClosed = true
-    connected.value = false
-    if (retryTimer != null) {
-      clearTimeout(retryTimer)
-      retryTimer = null
+    if (removeListener) {
+      removeListener()
+      removeListener = null
     }
-    if (abortController) {
-      abortController.abort()
-      abortController = null
-    }
+    // Don't disconnect the unified SSE — other consumers may need it
   }
 
   function markAllRead() {

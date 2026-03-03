@@ -1,14 +1,13 @@
 import { ref } from 'vue'
-import { useChatStore, createSseClient, AipMessageType } from '@foggy/chat'
-import type { SseController } from '@foggy/chat'
-import { ElMessage, ElNotification } from 'element-plus'
+import { useChatStore, AipMessageType } from '@foggy/chat'
+import { ElNotification } from 'element-plus'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'
-import { getToken } from '@/utils/auth'
+import { useUnifiedSse } from '@/composables/useUnifiedSse'
 import type { AgentMessage, RoutePayload } from '@/types'
 import router from '@/router'
 
-let currentSseController: SseController | null = null
+let unsubscribeSse: (() => void) | null = null
 const connectedSessionId = ref<string | null>(null)
 
 /** ROUTE_REQUEST 回调类型 */
@@ -24,6 +23,7 @@ export function setRouteRequestHandler(handler: RouteRequestHandler | null) {
 
 export function useSession() {
   const chatStore = useChatStore()
+  const { subscribeSession, connected } = useUnifiedSse()
 
   async function connectToSession(sessionId: string) {
     disconnectSession()
@@ -72,53 +72,35 @@ export function useSession() {
       console.error('Failed to load history messages:', e)
     }
 
-    // 建立 SSE 连接（通过 Authorization header 传递 token，不再使用 query string）
-    const token = getToken()
-    const sseUrl = `/api/v1/sessions/${sessionId}/stream`
+    // Subscribe to session events via unified SSE
+    unsubscribeSse = subscribeSession(sessionId, (raw: AgentMessage) => {
+      // Pass through adapter for chat messages
+      const msgs = tutorAgentAdapter.convert(raw, sessionId)
+      for (const msg of msgs) {
+        chatStore.processAipMessage(msg)
+      }
 
-    currentSseController = createSseClient<AgentMessage>({
-      url: sseUrl,
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      adapter: tutorAgentAdapter,
-      sessionId,
-      onMessage: (msgs) => {
-        for (const msg of msgs) {
-          chatStore.processAipMessage(msg)
-        }
-      },
-      onConnected: () => {
-        chatStore.setConnectionStatus('connected')
-      },
-      onError: () => {
-        chatStore.setConnectionStatus('error')
-      },
-      onReconnecting: () => {
-        chatStore.setConnectionStatus('connecting')
-      },
-      onMaxRetriesExceeded: () => {
-        ElMessage.error('连接已断开，请刷新页面重试')
-      },
-      onRawEvent: (raw: AgentMessage) => {
-        // 处理 ROUTE_REQUEST 事件（不经过 adapter 转换）
-        if (raw.type === AipMessageType.ROUTE_REQUEST && routeRequestHandler) {
-          console.log('ROUTE_REQUEST received:', raw.payload)
-          routeRequestHandler(raw.payload as RoutePayload)
-        }
-        // 处理 TASK_COMPLETED 事件 — toast 通知
-        if (raw.type === AipMessageType.TASK_COMPLETED) {
-          const p = raw.payload as Record<string, string>
-          const status = p.status || 'COMPLETED'
-          const agent = p.targetAgentId || p.taskType || ''
-          ElNotification({
-            title: status === 'FAILED' ? '任务失败' : '任务完成',
-            message: `${agent} ${p.resultSummary ? '— ' + p.resultSummary.substring(0, 80) : ''}`,
-            type: status === 'FAILED' ? 'error' : 'success',
-            duration: 6000,
-            onClick: () => router.push('/tasks'),
-          })
-        }
-      },
+      // 处理 ROUTE_REQUEST 事件（不经过 adapter 转换）
+      if (raw.type === AipMessageType.ROUTE_REQUEST && routeRequestHandler) {
+        console.log('ROUTE_REQUEST received:', raw.payload)
+        routeRequestHandler(raw.payload as RoutePayload)
+      }
+      // 处理 TASK_COMPLETED 事件 — toast 通知
+      if (raw.type === AipMessageType.TASK_COMPLETED) {
+        const p = raw.payload as Record<string, string>
+        const status = p.status || 'COMPLETED'
+        const agent = p.targetAgentId || p.taskType || ''
+        ElNotification({
+          title: status === 'FAILED' ? '任务失败' : '任务完成',
+          message: `${agent} ${p.resultSummary ? '— ' + p.resultSummary.substring(0, 80) : ''}`,
+          type: status === 'FAILED' ? 'error' : 'success',
+          duration: 6000,
+          onClick: () => router.push('/tasks'),
+        })
+      }
     })
+
+    chatStore.setConnectionStatus(connected.value ? 'connected' : 'connecting')
   }
 
   async function sendMessage(sessionId: string, content: string) {
@@ -133,9 +115,9 @@ export function useSession() {
   }
 
   function disconnectSession() {
-    if (currentSseController) {
-      currentSseController.close()
-      currentSseController = null
+    if (unsubscribeSse) {
+      unsubscribeSse()
+      unsubscribeSse = null
     }
     connectedSessionId.value = null
     chatStore.setConnectionStatus('disconnected')

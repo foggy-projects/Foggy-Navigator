@@ -5,7 +5,7 @@ import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.SessionManager;
-import com.foggy.navigator.session.sse.SseSessionEmitter;
+import com.foggy.navigator.session.sse.UnifiedSseEmitter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -24,7 +24,7 @@ import java.util.Map;
 public class SessionEventListener {
 
     private final SessionManager sessionManager;
-    private final SseSessionEmitter sseEmitter;
+    private final UnifiedSseEmitter sseEmitter;
 
     @Async("sessionEventExecutor")
     @EventListener
@@ -43,9 +43,9 @@ public class SessionEventListener {
             }
         }
 
-        // 2. SSE推送
+        // 2. SSE推送（通过 UnifiedSseEmitter 路由到订阅了该 session 的用户）
         log.debug("Sending SSE event: sessionId={}, type={}", sessionId, message.getType());
-        sseEmitter.sendEvent(sessionId, message);
+        sseEmitter.sendSessionEvent(sessionId, message);
     }
 
     private boolean shouldPersist(MessageType type) {

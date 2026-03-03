@@ -11,13 +11,11 @@ import com.foggy.navigator.common.dto.CurrentUser;
 import com.foggy.navigator.common.service.CodingConversationLookup;
 import com.foggy.navigator.session.dto.UnifiedSessionDTO;
 import com.foggy.navigator.session.repository.SessionRepository;
-import com.foggy.navigator.session.sse.SseSessionEmitter;
 import com.foggyframework.core.ex.RX;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.Map;
@@ -34,7 +32,6 @@ public class SessionController {
 
     private final SessionManager sessionManager;
     private final AgentInvoker agentInvoker;
-    private final SseSessionEmitter sseSessionEmitter;
     private final SessionRepository sessionRepository;
 
     // 可选依赖：coding-agent 模块的会话信息查询服务
@@ -42,10 +39,9 @@ public class SessionController {
     private CodingConversationLookup codingConversationLookup;
 
     public SessionController(SessionManager sessionManager, AgentInvoker agentInvoker,
-                             SseSessionEmitter sseSessionEmitter, SessionRepository sessionRepository) {
+                             SessionRepository sessionRepository) {
         this.sessionManager = sessionManager;
         this.agentInvoker = agentInvoker;
-        this.sseSessionEmitter = sseSessionEmitter;
         this.sessionRepository = sessionRepository;
     }
 
@@ -198,15 +194,6 @@ public class SessionController {
         agentInvoker.invokeAsync(id, session.getAgentId(), userMessage);
 
         return RX.ok(userMessage);
-    }
-
-    /**
-     * SSE事件流
-     */
-    @GetMapping("/{id}/stream")
-    public SseEmitter streamEvents(@PathVariable String id) {
-        log.info("SSE stream requested: sessionId={}", id);
-        return sseSessionEmitter.createEmitter(id);
     }
 
     /**

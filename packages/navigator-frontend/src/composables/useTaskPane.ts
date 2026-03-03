@@ -1,10 +1,10 @@
 import { ref, type Ref } from 'vue'
-import { createChatState, createSseClient, AipMessageType } from '@foggy/chat'
-import type { ChatState, SseController, ChatMessage } from '@foggy/chat'
+import { createChatState, AipMessageType } from '@foggy/chat'
+import type { ChatState, ChatMessage } from '@foggy/chat'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'
 import * as workerApi from '@/api/claudeWorker'
-import { getToken } from '@/utils/auth'
+import { useUnifiedSse } from '@/composables/useUnifiedSse'
 import type { AgentMessage, ClaudeTask } from '@/types'
 
 export interface TaskPaneState {
@@ -33,7 +33,9 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   const task = ref<ClaudeTask | null>(null)
   const chatState = createChatState()
   const pendingInput = ref('')
-  let sseController: SseController | null = null
+  let unsubscribeSse: (() => void) | null = null
+
+  const { subscribeSession, connected } = useUnifiedSse()
 
   // User-level SSE fallback: listen for task_status_change via useNotifications
   let taskUpdateHandler: ((event: Event) => void) | null = null
@@ -62,21 +64,6 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     }
   }
 
-  // --- Status polling fallback (activated when SSE retries exhausted) ---
-  let statusPollTimer: ReturnType<typeof setInterval> | null = null
-
-  function startStatusPolling() {
-    stopStatusPolling()
-    statusPollTimer = setInterval(() => syncTaskStatus(), 10_000)
-  }
-
-  function stopStatusPolling() {
-    if (statusPollTimer) {
-      clearInterval(statusPollTimer)
-      statusPollTimer = null
-    }
-  }
-
   async function syncTaskStatus() {
     if (!task.value) return
     if (['COMPLETED', 'FAILED', 'ABORTED'].includes(task.value.status)) return
@@ -86,7 +73,6 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         Object.assign(task.value, fresh)
         if (['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
           options?.onTaskFinished?.(paneId)
-          stopStatusPolling()
         }
       }
     } catch {
@@ -94,66 +80,50 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     }
   }
 
-  /** Create SSE connection for a given sessionId (shared by connect and resumeInPlace) */
-  function createSseConnection(sessionId: string) {
-    const token = getToken()
-    const sseUrl = `/api/v1/sessions/${sessionId}/stream`
+  /** SSE event handler — shared by connect and resumeInPlace */
+  function handleSseEvent(raw: AgentMessage) {
+    // 1. Pass through adapter for chat messages
+    const msgs = tutorAgentAdapter.convert(raw, raw.sessionId)
+    for (const msg of msgs) {
+      chatState.processAipMessage(msg)
+    }
 
-    sseController = createSseClient<AgentMessage>({
-      url: sseUrl,
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      adapter: tutorAgentAdapter,
-      sessionId,
-      onMessage: (msgs) => {
-        for (const msg of msgs) {
-          chatState.processAipMessage(msg)
-        }
-      },
-      onConnected: () => {
-        chatState.setConnectionStatus('connected')
-      },
-      onError: () => {
-        chatState.setConnectionStatus('error')
-      },
-      onReconnecting: () => {
-        chatState.setConnectionStatus('connecting')
-      },
-      onMaxRetriesExceeded: () => {
-        chatState.setConnectionStatus('error')
-        startStatusPolling()
-      },
-      onRawEvent: (raw: AgentMessage) => {
-        if (!task.value) return
-        const payload = raw.payload as Record<string, unknown> | undefined
-        if (!payload?.taskId) return
+    // 2. Handle raw events for task state tracking
+    if (!task.value) return
+    const payload = raw.payload as Record<string, unknown> | undefined
+    if (!payload?.taskId) return
 
-        // taskId guard: ignore events from previous tasks in the same session
-        if (payload.taskId !== task.value.taskId) return
+    // taskId guard: ignore events from previous tasks in the same session
+    if (payload.taskId !== task.value.taskId) return
 
-        // Capture claudeSessionId as early as possible (from SESSION_START / system events)
-        if (typeof payload.claudeSessionId === 'string' && payload.claudeSessionId) {
-          task.value.claudeSessionId = payload.claudeSessionId
-        }
+    // Capture claudeSessionId as early as possible (from SESSION_START / system events)
+    if (typeof payload.claudeSessionId === 'string' && payload.claudeSessionId) {
+      task.value.claudeSessionId = payload.claudeSessionId
+    }
 
-        if (raw.type === 'CONFIRMATION_REQUEST') {
-          task.value.status = 'AWAITING_PERMISSION' as ClaudeTask['status']
-        } else if (raw.type === 'TEXT_COMPLETE') {
-          task.value.status = 'COMPLETED'
-          if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
-          if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs
-          if (typeof payload.inputTokens === 'number') task.value.inputTokens = payload.inputTokens
-          if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
-          if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
-          if (typeof payload.model === 'string') task.value.model = payload.model
-          options?.onTaskFinished?.(paneId)
-        } else if (raw.type === 'ERROR') {
-          task.value.status = 'FAILED'
-          if (typeof payload.errorMessage === 'string')
-            task.value.errorMessage = payload.errorMessage
-          options?.onTaskFinished?.(paneId)
-        }
-      },
-    })
+    if (raw.type === 'CONFIRMATION_REQUEST') {
+      task.value.status = 'AWAITING_PERMISSION' as ClaudeTask['status']
+    } else if (raw.type === 'TEXT_COMPLETE') {
+      task.value.status = 'COMPLETED'
+      if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
+      if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs
+      if (typeof payload.inputTokens === 'number') task.value.inputTokens = payload.inputTokens
+      if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
+      if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
+      if (typeof payload.model === 'string') task.value.model = payload.model
+      options?.onTaskFinished?.(paneId)
+    } else if (raw.type === 'ERROR') {
+      task.value.status = 'FAILED'
+      if (typeof payload.errorMessage === 'string')
+        task.value.errorMessage = payload.errorMessage
+      options?.onTaskFinished?.(paneId)
+    }
+  }
+
+  /** Subscribe to session events via unified SSE */
+  function createSseSubscription(sessionId: string) {
+    unsubscribeSse = subscribeSession(sessionId, handleSseEvent)
+    chatState.setConnectionStatus(connected.value ? 'connected' : 'connecting')
   }
 
   async function connect(sessionId: string) {
@@ -206,7 +176,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       console.error(`[TaskPane ${paneId}] Failed to load history:`, e)
     }
 
-    createSseConnection(sessionId)
+    createSseSubscription(sessionId)
     attachTaskUpdateListener()
 
     // Non-blocking: detect and load JSONL delta messages
@@ -266,35 +236,34 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     task.value = newTask
     chatState.addUserMessage(newTask.prompt)
 
-    // Disconnect old SSE (without clearing messages)
-    if (sseController) {
-      sseController.close()
-      sseController = null
+    // Unsubscribe old SSE (without clearing messages)
+    if (unsubscribeSse) {
+      unsubscribeSse()
+      unsubscribeSse = null
     }
     chatState.setConnectionStatus('connecting')
 
-    // Reconnect SSE to the same sessionId (no history reload)
-    createSseConnection(newTask.sessionId)
+    // Subscribe to the same sessionId (no history reload)
+    createSseSubscription(newTask.sessionId)
     attachTaskUpdateListener()
   }
 
   /** Reconnect SSE only — no message clear/reload. Used by workspace suspend/resume. */
   function reconnectSse() {
-    if (sseController) return // already connected
+    if (unsubscribeSse) return // already subscribed
     const t = task.value
     if (!t) return
     if (['COMPLETED', 'FAILED', 'ABORTED'].includes(t.status)) return
     chatState.setConnectionStatus('connecting')
-    createSseConnection(t.sessionId)
+    createSseSubscription(t.sessionId)
     attachTaskUpdateListener()
   }
 
   function disconnect() {
-    if (sseController) {
-      sseController.close()
-      sseController = null
+    if (unsubscribeSse) {
+      unsubscribeSse()
+      unsubscribeSse = null
     }
-    stopStatusPolling()
     detachTaskUpdateListener()
     chatState.setConnectionStatus('disconnected')
   }

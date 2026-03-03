@@ -1,12 +1,9 @@
 import { ref } from 'vue'
 import { createChatState, AipMessageType } from '@foggy/chat-core'
 import type { ChatState, ChatMessage } from '@foggy/chat-core'
-import { createUniSseClient } from '@/sse/UniSseClient'
-import type { UniSseController } from '@/sse/types'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
+import { useUnifiedSse } from '@/composables/useUnifiedSse'
 import * as sessionApi from '@/api/session'
-import { getToken } from '@/utils/auth'
-import { getSseBaseUrl } from '@/utils/config'
 import type { AgentMessage, ClaudeTask } from '@/api/types'
 
 export interface TaskStreamState {
@@ -20,63 +17,49 @@ export interface TaskStreamState {
 export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
   const task = ref<ClaudeTask | null>(null)
   const chatState = createChatState()
-  let sseController: UniSseController | null = null
+  let unsubscribeSse: (() => void) | null = null
 
-  function createSseConnection(sessionId: string) {
-    const token = getToken()
-    const sseUrl = `${getSseBaseUrl()}/sessions/${sessionId}/stream`
+  const { subscribeSession, connected } = useUnifiedSse()
 
-    sseController = createUniSseClient<AgentMessage>({
-      url: sseUrl,
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      adapter: tutorAgentAdapter,
-      sessionId,
-      onMessage: (msgs) => {
-        for (const msg of msgs) {
-          chatState.processAipMessage(msg)
-        }
-      },
-      onConnected: () => {
-        chatState.setConnectionStatus('connected')
-      },
-      onError: () => {
-        chatState.setConnectionStatus('error')
-      },
-      onReconnecting: () => {
-        chatState.setConnectionStatus('connecting')
-      },
-      onMaxRetriesExceeded: () => {
-        chatState.setConnectionStatus('error')
-      },
-      onRawEvent: (raw: AgentMessage) => {
-        if (!task.value) return
-        const payload = raw.payload as Record<string, unknown> | undefined
-        if (!payload?.taskId) return
-        if (payload.taskId !== task.value.taskId) return
+  function handleSseEvent(raw: AgentMessage) {
+    // Pass through adapter for chat messages
+    const msgs = tutorAgentAdapter.convert(raw, raw.sessionId)
+    for (const msg of msgs) {
+      chatState.processAipMessage(msg)
+    }
 
-        if (typeof payload.claudeSessionId === 'string' && payload.claudeSessionId) {
-          task.value.claudeSessionId = payload.claudeSessionId
-        }
+    // Handle raw events for task state tracking
+    if (!task.value) return
+    const payload = raw.payload as Record<string, unknown> | undefined
+    if (!payload?.taskId) return
+    if (payload.taskId !== task.value.taskId) return
 
-        if (raw.type === 'TEXT_COMPLETE') {
-          task.value.status = 'COMPLETED'
-          if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
-          if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs
-          if (typeof payload.inputTokens === 'number') task.value.inputTokens = payload.inputTokens
-          if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
-          if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
-          if (typeof payload.model === 'string') task.value.model = payload.model
-          onTaskFinished?.()
-        } else if (raw.type === 'ERROR') {
-          task.value.status = 'FAILED'
-          if (typeof payload.errorMessage === 'string')
-            task.value.errorMessage = payload.errorMessage
-          onTaskFinished?.()
-        } else if (raw.type === 'CONFIRMATION_REQUEST') {
-          task.value.status = 'AWAITING_PERMISSION'
-        }
-      },
-    })
+    if (typeof payload.claudeSessionId === 'string' && payload.claudeSessionId) {
+      task.value.claudeSessionId = payload.claudeSessionId
+    }
+
+    if (raw.type === 'TEXT_COMPLETE') {
+      task.value.status = 'COMPLETED'
+      if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
+      if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs
+      if (typeof payload.inputTokens === 'number') task.value.inputTokens = payload.inputTokens
+      if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
+      if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
+      if (typeof payload.model === 'string') task.value.model = payload.model
+      onTaskFinished?.()
+    } else if (raw.type === 'ERROR') {
+      task.value.status = 'FAILED'
+      if (typeof payload.errorMessage === 'string')
+        task.value.errorMessage = payload.errorMessage
+      onTaskFinished?.()
+    } else if (raw.type === 'CONFIRMATION_REQUEST') {
+      task.value.status = 'AWAITING_PERMISSION'
+    }
+  }
+
+  function createSseSubscription(sessionId: string) {
+    unsubscribeSse = subscribeSession(sessionId, handleSseEvent)
+    chatState.setConnectionStatus(connected.value ? 'connected' : 'connecting')
   }
 
   async function connect(sessionId: string) {
@@ -100,25 +83,25 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
       console.error('Failed to load task history:', e)
     }
 
-    createSseConnection(sessionId)
+    createSseSubscription(sessionId)
   }
 
   function resumeInPlace(newTask: ClaudeTask) {
     task.value = newTask
     chatState.addUserMessage(newTask.prompt)
 
-    if (sseController) {
-      sseController.close()
-      sseController = null
+    if (unsubscribeSse) {
+      unsubscribeSse()
+      unsubscribeSse = null
     }
     chatState.setConnectionStatus('connecting')
-    createSseConnection(newTask.sessionId)
+    createSseSubscription(newTask.sessionId)
   }
 
   function disconnect() {
-    if (sseController) {
-      sseController.close()
-      sseController = null
+    if (unsubscribeSse) {
+      unsubscribeSse()
+      unsubscribeSse = null
     }
     chatState.setConnectionStatus('disconnected')
   }

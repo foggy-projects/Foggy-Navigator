@@ -15,10 +15,6 @@ export type {
 export type { EventAdapter } from './types/adapter'
 export type { ChatMessage, ConnectionStatus } from './types/chat'
 
-// SSE
-export { createSseClient } from './sse/SseClient'
-export type { SseClientOptions, SseController } from './sse/SseClient'
-
 // Store
 export { useChatStore } from './store/useChatStore'
 export { createChatState } from './store/chatState'

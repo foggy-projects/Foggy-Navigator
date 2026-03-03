@@ -75,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, onDeactivated, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Close } from '@element-plus/icons-vue'
@@ -127,6 +127,10 @@ onMounted(async () => {
 onUnmounted(() => {
   disconnectSession()
   setRouteRequestHandler(null) // 清理路由请求处理器
+})
+
+onDeactivated(() => {
+  disconnectSession()
 })
 
 // 监听路由参数变化
