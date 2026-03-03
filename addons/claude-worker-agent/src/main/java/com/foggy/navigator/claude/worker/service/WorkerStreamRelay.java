@@ -19,6 +19,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
@@ -251,16 +252,22 @@ public class WorkerStreamRelay {
                     log.error("Worker stream error: taskId={}", taskId, e);
                     activeStreams.remove(taskId);
 
-                    if (!isReconnect) {
+                    // 4xx client errors (e.g. 429 Too Many Requests) are not transient —
+                    // reconnecting won't help, fail immediately with a clear message.
+                    boolean isClientError = e instanceof WebClientResponseException wce
+                            && wce.getStatusCode().is4xxClientError();
+
+                    if (!isReconnect && !isClientError) {
                         boolean reconnected = attemptReconnect(taskId, sessionId, workerId);
                         if (reconnected) {
                             return;
                         }
                     }
 
-                    taskService.failTask(taskId, detectedClaudeSessionId.get(), e.getMessage());
+                    String errorMsg = extractWorkerErrorMessage(e);
+                    taskService.failTask(taskId, detectedClaudeSessionId.get(), errorMsg);
                     publishMessage(sessionId, MessageType.ERROR,
-                            Map.of("content", "Worker connection error: " + e.getMessage(), "taskId", taskId));
+                            Map.of("content", errorMsg, "taskId", taskId));
                 })
                 .subscribe();
     }
@@ -500,6 +507,32 @@ public class WorkerStreamRelay {
             }
             default -> log.debug("Unknown worker event type: {}", event.getType());
         }
+    }
+
+    /**
+     * 从 WebClient 异常中提取用户友好的错误消息。
+     * 对于 Worker 返回的 HTTP 错误（如 429），解析 FastAPI 的 JSON 响应体提取 detail 字段。
+     */
+    private String extractWorkerErrorMessage(Throwable e) {
+        if (e instanceof WebClientResponseException wce) {
+            int status = wce.getStatusCode().value();
+            String body = wce.getResponseBodyAsString();
+            // FastAPI returns {"detail": "..."} for HTTPException
+            if (body != null && !body.isBlank()) {
+                try {
+                    var json = objectMapper.readValue(body, Map.class);
+                    Object detail = json.get("detail");
+                    if (detail != null) {
+                        return "Worker rejected request (HTTP " + status + "): " + detail;
+                    }
+                } catch (Exception ignored) {
+                    // Not JSON — use raw body
+                }
+                return "Worker rejected request (HTTP " + status + "): " + body;
+            }
+            return "Worker rejected request (HTTP " + status + ")";
+        }
+        return "Worker connection error: " + e.getMessage();
     }
 
     private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
