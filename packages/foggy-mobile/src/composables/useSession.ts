@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { AipMessageType } from '@foggy/chat-core'
 import type { ChatMessage } from '@foggy/chat-core'
 import { useChatStore } from '@/stores/chat'
@@ -58,6 +58,9 @@ export function useSession() {
     })
 
     chatStore.setConnectionStatus(connected.value ? 'connected' : 'connecting')
+    watch(connected, (val) => {
+      chatStore.setConnectionStatus(val ? 'connected' : 'connecting')
+    })
   }
 
   async function sendMessage(sessionId: string, content: string) {

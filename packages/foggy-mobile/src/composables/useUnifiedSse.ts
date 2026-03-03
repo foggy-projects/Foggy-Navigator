@@ -177,6 +177,13 @@ export function useUnifiedSse() {
     sessionId: string,
     callback: SessionCallback,
   ): () => void {
+    // 自动建立 SSE 长连接（幂等，重复调用无副作用）
+    if (!transport) {
+      manuallyClosed = false
+      retryCount = 0
+      doConnect()
+    }
+
     let listeners = sessionListeners.get(sessionId)
     const isNew = !listeners || listeners.size === 0
     if (!listeners) {

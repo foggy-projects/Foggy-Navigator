@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { createChatState, AipMessageType } from '@foggy/chat-core'
 import type { ChatState, ChatMessage } from '@foggy/chat-core'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
@@ -60,6 +60,10 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
   function createSseSubscription(sessionId: string) {
     unsubscribeSse = subscribeSession(sessionId, handleSseEvent)
     chatState.setConnectionStatus(connected.value ? 'connected' : 'connecting')
+    // 监听连接状态变化，实时同步给 chatState
+    watch(connected, (val) => {
+      chatState.setConnectionStatus(val ? 'connected' : 'connecting')
+    })
   }
 
   async function connect(sessionId: string) {
