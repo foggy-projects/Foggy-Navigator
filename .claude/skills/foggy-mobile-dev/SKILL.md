@@ -74,12 +74,13 @@ packages/foggy-mobile/
 | `TaskCard.vue` | 任务列表项（状态 + prompt + 费用 + 耗时） |
 | `StatusBadge.vue` | 通用状态指示（彩色点 + 可选文字） |
 | `EmptyState.vue` | 空状态占位（图标 + 标题 + 描述 + 插槽） |
+| `UpgradePopup.vue` | App-Plus 更新弹窗（原生 view/button，非 wot-design-uni） |
 
 ### 基础设施
 
 | 文件 | 功能 |
 |------|------|
-| `api/client.ts` | axios + `@uni-helper/axios-adapter`，401 自动跳登录 |
+| `api/client.ts` | axios + 自定义 `uni-axios-adapter`（基于 `uni.request`），401 自动跳登录 |
 | `api/types.ts` | 所有后端类型定义（镜像 navigator-frontend/types） |
 | `sse/UniSseClient.ts` | 跨平台 SSE（条件编译选择 transport），指数退避重试 |
 | `sse/fetchSseTransport.ts` | H5: fetch + ReadableStream |
@@ -89,6 +90,9 @@ packages/foggy-mobile/
 | `composables/useSession.ts` | 会话 SSE 生命周期（chat/detail 用） |
 | `composables/useTaskStream.ts` | 任务 SSE 流式输出（task-detail 用），跟踪 cost/duration/tokens |
 | `utils/config.ts` | 服务器地址管理 + 条件编译 baseURL |
+| `utils/unicloud-client.ts` | uniCloud 客户端 API 协议（纯 JS MD5/HMAC-MD5 + 云函数调用） |
+| `utils/uni-axios-adapter.ts` | 自定义 axios 适配器（基于 `uni.request`，替代 `@uni-helper/axios-adapter`） |
+| `utils/upgrade.ts` | App-Plus 版本检查 + wgt/APK 更新下载逻辑 |
 | `adapters/TutorAgentAdapter.ts` | SSE raw → AipMessage 转换 |
 
 ## PC 端已有、移动端待对齐的功能
@@ -194,3 +198,6 @@ pnpm test
 - **Tab 图标为占位 PNG** — 需替换为实际设计图标（81x81px）
 - **暗色模式**：Wot Design Uni 原生支持，需在 App.vue 中配置 CSS 变量切换
 - **避免 `<template v-else-if>` 在 scroll-view 内** — 用独立 `v-if` 块替代
+- **不要用 `@uni-helper/axios-adapter`** — 内部打包了 `window.FormData` 直接访问代码，App-Plus 原生环境无 `window`/`self` 全局对象，导致白屏崩溃。已用自定义 `utils/uni-axios-adapter.ts`（基于 `uni.request`）替代
+- **wot-design-uni 在 App-Plus 可能不渲染** — `wd-popup`、`wd-progress` 等组件在 App-Plus 原生环境可能渲染为空白或纯文本。需要在 App-Plus 中工作的关键 UI（如 UpgradePopup）应使用原生 `view` + `button` + CSS 自绘
+- **plus.runtime API 区分** — `plus.runtime.version` = 原生 APK 版本（wgt 更新后不变）；`plus.runtime.innerVersion` = uni-app 引擎版本（如 `"4.87"`，**不是** wgt 版本）；`plus.runtime.getProperty().version` = 实际 wgt 资源版本（更新后变化）

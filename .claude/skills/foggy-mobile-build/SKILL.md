@@ -125,9 +125,10 @@ UNICLOUD_SPACE_ID=mp-4af7054d-5a40-4315-8678-df36b44298bb
 node scripts/uni-admin-api.js publish --type native_app --version 1.0.0 ^
   --title "v1.0.0" --content "首个版本" --file dist/foggy-navigator-1.0.0.apk
 
-# 发布 wgt 热更新
+# 发布 wgt 热更新（--minVersion 必填，否则云函数兼容性校验失败）
 node scripts/uni-admin-api.js publish --type wgt --version 1.0.1 ^
-  --title "v1.0.1" --content "Bug fixes" --file dist/foggy-navigator-1.0.1.wgt [--silent]
+  --title "v1.0.1" --content "Bug fixes" --minVersion 1.0.0 ^
+  --file dist/foggy-navigator-1.0.1.wgt [--silent]
 ```
 
 若 API 调用失败，脚本会打印手动操作步骤并自动打开浏览器到升级中心页面。
@@ -146,17 +147,24 @@ node scripts/uni-admin-api.js publish --type wgt --version 1.0.1 ^
 
 ### 客户端更新机制
 
-**文件**：`src/utils/upgrade.ts`
+**调用协议**：`src/utils/unicloud-client.ts`
+- 通过 uniCloud 客户端 API 协议（`https://api.next.bspapp.com/client`）调用云函数
+- 纯 JS 实现 MD5/HMAC-MD5 签名（App-Plus 无 Node.js crypto）
+- 流程：`anonymousAuthorize` → accessToken → `serverless.function.runtime.invoke(uni-upgrade-center)`
+- **不走 HTTP trigger**（`fc-{spaceId}.next.bspapp.com` 返回 404，URL化未开启）
 
-- App 启动时 `onShow` 调用 `checkUpgrade()`（仅 `#ifdef APP-PLUS`）
-- HTTP POST 调用 uni-admin 云函数 `uni-upgrade-center`
-- API: `https://fc-mp-4af7054d-5a40-4315-8678-df36b44298bb.next.bspapp.com/uni-upgrade-center`
+**版本检查**：`src/utils/upgrade.ts`
+- 设置页手动调用 `checkUpgradeManual()`（仅 `#ifdef APP-PLUS`）
+- **appVersion**: `plus.runtime.version`（原生 APK 版本，wgt 更新后不变）
+- **wgtVersion**: `plus.runtime.getProperty()` 获取（wgt 更新后会变）
+- **注意**：`plus.runtime.innerVersion` 是引擎版本（如 `4.87`），**不是** wgt 版本，绝对不能传给云函数
 - 支持：静默 wgt 更新、交互式 wgt 更新（带进度条）、APK 整包更新
 
 **UI 组件**：`src/components/UpgradePopup.vue`
-- 挂载在 `pages/chat/index.vue`（主页）
-- wot-design-uni 的 `wd-popup` + `wd-progress`
-- `code === 2` 表示强制更新（无"稍后"按钮）
+- 挂载在 `pages/settings/index.vue`（设置页）
+- 使用原生 `view` + `button` + CSS 进度条（wot-design-uni 组件在 App-Plus 不渲染）
+- `code === 101` 可选更新，`code === 102` 强制更新（隐藏"稍后"按钮）
+- wgt 安装完先关闭遮罩层（`visible=false`），再弹 `uni.showModal` 重启确认（否则 modal 被 z-index:9999 遮罩挡住无法点击）
 
 ## 版本管理
 
@@ -204,6 +212,28 @@ node scripts/uni-admin-api.js publish --type wgt --version 1.0.1 ^
 **可能原因**：uniCloud HTTP API 格式变化、uni-id 登录方式变化、或网络问题。
 **解决**：脚本会自动 fallback 到手动模式，打开浏览器到升级中心页面。
 
+### 检查更新返回 "已是最新" 但实际有新版本
+
+**可能原因 1：wgtVersion 传错**
+`plus.runtime.innerVersion` 返回的是 uni-app **引擎版本**（如 `"4.87"`），不是 wgt 资源版本。
+字符串比较 `"1.0.15" < "4.87"` 导致云函数认为客户端版本更高。
+**解决**：必须用 `plus.runtime.getProperty(appid, cb)` 获取真实 wgt 资源版本。
+
+**可能原因 2：wgt 记录缺少 `min_uni_version`**
+当 wgt 版本号 > APK 版本号时，云函数会检查 `min_uni_version` 兼容性字段。
+该字段为空 → 兼容性校验失败 → wgt 被跳过。
+**解决**：发布 wgt 时必须传 `--minVersion`（当前 APK 版本），`release.ps1` 已自动处理。
+
+### wgt 更新下载完成后卡在 100%（重启无响应）
+
+**原因**：`uni.showModal` 重启确认对话框被 UpgradePopup 的 `position:fixed; z-index:9999` 遮罩层挡住。
+**解决**：wgt 安装完成后，必须先设置 `visible=false`（关闭遮罩），再调用 `uni.showModal`。
+
+### wot-design-uni 组件在 App-Plus 原生环境不渲染
+
+**现象**：`wd-popup`、`wd-button`、`wd-progress` 等在 H5 正常，但 App-Plus 中渲染为纯文本或空白。
+**解决**：UpgradePopup 等需要在 App-Plus 工作的组件，使用原生 `view` + `button` + CSS 自绘。
+
 ## 可复用经验（适用于任何 uni-app + uniCloud + uni-admin 项目）
 
 ### HBuilderX CLI 打包陷阱
@@ -237,10 +267,13 @@ node scripts/uni-admin-api.js publish --type wgt --version 1.0.1 ^
 
 ### 客户端热更新架构
 
-- **不依赖 `uni-upgrade-center-app` 插件**：该插件要求项目内集成 uniCloud SDK。轻量方案：直接 HTTP POST 调用 `uni-upgrade-center` 云函数的 HTTP trigger URL
+- **不依赖 `uni-upgrade-center-app` 插件**：该插件要求项目内集成 uniCloud SDK
+- **不走 HTTP trigger**：`fc-{spaceId}.next.bspapp.com/uni-upgrade-center` 返回 404（URL化未开启）
+- **客户端 API 协议**：`src/utils/unicloud-client.ts` 直接调用 `api.next.bspapp.com/client`，纯 JS 实现 MD5/HMAC-MD5 签名
 - **wgt 优先策略**：日常迭代走 wgt 热更新（免安装、秒级生效），仅原生模块/SDK 变更时发 APK
 - **静默更新**：`is_silently: true` 时后台下载安装，下次启动生效；非静默弹窗带进度条
-- **强制更新**：云函数返回 `code === 2` 时隐藏"稍后"按钮
+- **强制更新**：云函数返回 `code === 102` 时隐藏"稍后"按钮（`101` = 可选更新）
+- **版本号获取**：`plus.runtime.version` = 原生 APK 版本（不变），`plus.runtime.getProperty().version` = wgt 资源版本（更新后变）
 
 ### .env.release 文件模板
 
@@ -272,6 +305,7 @@ UNICLOUD_SPACE_ID=<space-id>
 | `scripts/uni-admin-api.js` | uni-admin 升级中心 API（登录 + 上传 + 创建版本） |
 | `scripts/pack-wgt.js` | wgt 压缩打包（PowerShell Compress-Archive） |
 | `src/utils/upgrade.ts` | 客户端版本检查 + 更新逻辑 |
-| `src/components/UpgradePopup.vue` | 更新弹窗 UI |
+| `src/utils/unicloud-client.ts` | uniCloud 客户端 API 协议（MD5/HMAC-MD5 签名 + 云函数调用） |
+| `src/components/UpgradePopup.vue` | 更新弹窗 UI（原生组件，非 wot-design-uni） |
 | `.env.release` | DCloud 账号、签名密码、uni-admin 凭据（不提交 git） |
 | `keystore/foggy-navigator.keystore` | Android 签名文件（不提交 git） |
