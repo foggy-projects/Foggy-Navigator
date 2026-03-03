@@ -47,11 +47,49 @@ curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
   --data-binary @/tmp/_ask_agent.json | jq '.data'
 ```
 
-返回 A2aTask，取 `.data.artifacts[0].parts[0].text` 获取回答。
+返回 A2aTask，取 `.data.artifacts[0].parts[0].text` 获取回答，取 `.data.contextId` 获取对话上下文 ID。
+
+## 多轮对话
+
+支持通过 `contextId` 进行多轮有状态对话，Agent 会记住之前的讨论内容：
+
+```bash
+# 首次提问（不传 contextId，平台自动生成）
+python3 -c "
+import json
+data = {'question': '项目的认证机制是什么？', 'sessionId': ''}
+with open('/tmp/_ask_agent.json', 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False)
+"
+curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
+  -H "Content-Type: application/json; charset=UTF-8" \
+  --data-binary @/tmp/_ask_agent.json | jq '.data'
+
+# 从响应中获取 contextId，例如 "20260303-a1b2"
+
+# 后续追问（传入 contextId，恢复对话上下文）
+python3 -c "
+import json
+data = {'question': '那 JWT token 的过期时间是多少？', 'sessionId': '', 'contextId': '20260303-a1b2'}
+with open('/tmp/_ask_agent.json', 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False)
+"
+curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
+  -H "Content-Type: application/json; charset=UTF-8" \
+  --data-binary @/tmp/_ask_agent.json | jq '.data'
+```
+
+## 多轮对话策略
+
+- **何时传 contextId**：连续追问同一 Agent 同一话题时，传入上次响应的 contextId
+- **何时不传**：切换到全新话题或不同 Agent 时，不传 contextId（开启新会话）
+- **过期**：contextId 24 小时未使用自动过期，后续传入会开启新会话
+- **自主判断**：根据对话内容判断是否需要延续上下文，无需每次都传
 
 ## 注意事项
 
-- 每次提问独立，Agent 不保留上下文
 - 回答基于目标 Agent 的项目代码分析
 - 可将回答作为参考信息融入当前任务
 - 如果 Agent 列表为空，可通过上方的 curl 命令动态获取

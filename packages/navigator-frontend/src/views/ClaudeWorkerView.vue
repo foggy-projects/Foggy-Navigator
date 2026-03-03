@@ -1700,6 +1700,9 @@ const allAgentItems = computed(() =>
 /** Per-pane @agent consultation context — consumed on next resume */
 const paneAgentContext = ref<Map<string, Array<{ agentName: string; question: string; answer: string }>>>(new Map())
 
+/** Per-pane per-agent contextId tracking for multi-turn A2A conversations */
+const paneAgentContextIds = ref<Map<string, Map<string, string>>>(new Map())
+
 // --- Worker tabs state (Agents / CLI Processes) ---
 const workerActiveTab = ref('agents')
 function handleWorkerTabChange(tab: string) {
@@ -3600,11 +3603,14 @@ async function handleAskAgent(paneId: string, agent: { agentId: string; name: st
 
   const sessionId = pane.task.value?.sessionId
 
+  // Lookup existing contextId for this pane+agent (multi-turn)
+  const existingContextId = paneAgentContextIds.value.get(paneId)?.get(agent.agentId)
+
   // Show the user's @mention as a user message
   pane.chatState.addUserMessage(`@${agent.name} ${question}`)
 
   try {
-    const task = await agentState.askAgent(agent.agentId, question, sessionId)
+    const task = await agentState.askAgent(agent.agentId, question, sessionId, existingContextId)
     const responseText = task.artifacts?.[0]?.parts?.[0]?.text || '(无回答)'
     const failed = task.status.state === 'FAILED'
 
@@ -3617,6 +3623,14 @@ async function handleAskAgent(paneId: string, agent: { agentId: string; name: st
         : `**${agent.name}**:\n\n${responseText}`,
       timestamp: Date.now(),
     })
+
+    // Save returned contextId for subsequent multi-turn asks
+    if (task.contextId) {
+      if (!paneAgentContextIds.value.has(paneId)) {
+        paneAgentContextIds.value.set(paneId, new Map())
+      }
+      paneAgentContextIds.value.get(paneId)!.set(agent.agentId, task.contextId)
+    }
 
     // Store context for injection into next resume
     if (!failed && responseText) {

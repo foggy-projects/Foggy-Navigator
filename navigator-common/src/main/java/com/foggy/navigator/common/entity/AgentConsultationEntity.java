@@ -48,6 +48,10 @@ public class AgentConsultationEntity {
 
     private Long durationMs;
 
+    /** 关联多轮对话上下文 */
+    @Column(length = 64)
+    private String contextId;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

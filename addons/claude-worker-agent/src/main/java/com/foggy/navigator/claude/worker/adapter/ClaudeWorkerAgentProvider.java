@@ -9,8 +9,10 @@ import com.foggy.navigator.common.dto.a2a.A2aAgentSkill;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
+import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import lombok.RequiredArgsConstructor;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -27,6 +29,8 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
     private final ClaudeTaskService taskService;
     private final ClaudeWorkerFacade workerFacade;
     private final WorkingDirectoryRepository directoryRepository;
+    @Nullable
+    private final AgentContextStore contextStore;
 
     @Override
     public String getProviderType() {
@@ -47,7 +51,7 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
                 .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
                 .map(entity -> {
                     String cwd = resolveDefaultCwd(entity);
-                    return new ClaudeWorkerA2aAgent(entity, taskService, workerFacade, cwd);
+                    return new ClaudeWorkerA2aAgent(entity, taskService, workerFacade, cwd, contextStore);
                 });
     }
 

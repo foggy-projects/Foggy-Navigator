@@ -191,6 +191,7 @@ export interface A2aTaskStatus {
 
 export interface A2aTask {
   id: string
+  contextId?: string
   status: A2aTaskStatus
   artifacts?: A2aArtifact[]
 }

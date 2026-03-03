@@ -11,6 +11,7 @@ import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.common.util.IdGenerator;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -64,15 +65,27 @@ public class AgentDiscoveryController {
         A2aAgent agent = registry.resolveAgent(agentId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
 
+        // contextId: 客户端传入则透传，否则平台生成
+        String contextId = body.get("contextId");
+        if (contextId == null || contextId.isBlank()) {
+            contextId = IdGenerator.shortId();
+        }
+
         long start = System.currentTimeMillis();
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(question)));
+        message.setContextId(contextId);
         A2aTask task = agent.sendTask(message);
         long durationMs = System.currentTimeMillis() - start;
+
+        // 确保返回值包含 contextId
+        if (task.getContextId() == null) {
+            task.setContextId(contextId);
+        }
 
         // 记录 consultation
         if (sessionId != null && !sessionId.isBlank()) {
             A2aAgentCard card = agent.getAgentCard();
-            recordConsultation(sessionId, userId, agentId, card.getName(), question, task, durationMs);
+            recordConsultation(sessionId, userId, agentId, card.getName(), question, task, durationMs, contextId);
             updateParticipatingAgents(sessionId, agentId);
         }
 
@@ -86,7 +99,8 @@ public class AgentDiscoveryController {
     }
 
     private void recordConsultation(String sessionId, String userId, String agentId,
-                                    String agentName, String question, A2aTask task, long durationMs) {
+                                    String agentName, String question, A2aTask task,
+                                    long durationMs, String contextId) {
         try {
             AgentConsultationEntity entity = new AgentConsultationEntity();
             entity.setId(UUID.randomUUID().toString());
@@ -96,6 +110,7 @@ public class AgentDiscoveryController {
             entity.setTargetAgentName(agentName);
             entity.setQuestion(question);
             entity.setDurationMs(durationMs);
+            entity.setContextId(contextId);
 
             // 从 task artifacts 提取 answer
             String answer = extractAnswer(task);

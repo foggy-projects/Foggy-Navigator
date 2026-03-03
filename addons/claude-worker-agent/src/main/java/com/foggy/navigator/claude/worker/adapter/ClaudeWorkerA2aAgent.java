@@ -5,7 +5,10 @@ import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.List;
@@ -19,17 +22,23 @@ import java.util.stream.Collectors;
  */
 class ClaudeWorkerA2aAgent implements A2aAgent {
 
+    private static final Logger log = LoggerFactory.getLogger(ClaudeWorkerA2aAgent.class);
+    private static final int CONTEXT_TTL_HOURS = 24;
+
     private final CodingAgentEntity entity;
     private final ClaudeTaskService taskService;
     private final ClaudeWorkerFacade workerFacade;
     private final String defaultCwd;
+    private final AgentContextStore contextStore;
 
     ClaudeWorkerA2aAgent(CodingAgentEntity entity, ClaudeTaskService taskService,
-                         ClaudeWorkerFacade workerFacade, String defaultCwd) {
+                         ClaudeWorkerFacade workerFacade, String defaultCwd,
+                         AgentContextStore contextStore) {
         this.entity = entity;
         this.taskService = taskService;
         this.workerFacade = workerFacade;
         this.defaultCwd = defaultCwd;
+        this.contextStore = contextStore;
     }
 
     @Override
@@ -61,15 +70,36 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
                 .map(A2aPart::getText)
                 .collect(Collectors.joining("\n"));
 
+        String contextId = message.getContextId();
+
+        // 多轮会话：通过 contextId 恢复已有 claudeSessionId
+        String claudeSessionId = null;
+        if (contextId != null && contextStore != null) {
+            claudeSessionId = contextStore.findSessionRef(
+                    contextId, entity.getUserId(), CONTEXT_TTL_HOURS).orElse(null);
+            if (claudeSessionId != null) {
+                log.debug("Resuming A2A context {} with claudeSessionId {}", contextId, claudeSessionId);
+            }
+        }
+
         Map<String, Object> result = workerFacade.syncQuery(
-                entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd, null, 1, null);
+                entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
+                claudeSessionId, 1, null);
 
         String resultText = (String) result.get("resultText");
         String error = (String) result.get("error");
+        String newClaudeSessionId = (String) result.get("claudeSessionId");
+
+        // 保存 contextId → claudeSessionId 映射
+        if (contextId != null && contextStore != null && newClaudeSessionId != null) {
+            contextStore.saveSessionRef(contextId, "claude-worker",
+                    newClaudeSessionId, entity.getUserId(), entity.getAgentId());
+        }
 
         if (error != null) {
             return A2aTask.builder()
                     .id(UUID.randomUUID().toString())
+                    .contextId(contextId)
                     .status(A2aTaskStatus.builder()
                             .state(A2aTaskState.FAILED)
                             .description(error)
@@ -81,6 +111,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
 
         return A2aTask.builder()
                 .id(UUID.randomUUID().toString())
+                .contextId(contextId)
                 .status(A2aTaskStatus.builder()
                         .state(A2aTaskState.COMPLETED)
                         .timestamp(Instant.now())
