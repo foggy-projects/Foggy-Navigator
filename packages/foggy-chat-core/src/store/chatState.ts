@@ -252,13 +252,16 @@ export function createChatState(): ChatState {
           }
           break
         }
-        if (conversationStatus.value === p.status) break
-        conversationStatus.value = p.status
+        // Default: use status if available, otherwise fall back to content field
+        const statusText = p.status || (raw.content as string)
+        if (!statusText) break // skip empty STATE_SYNC
+        if (conversationStatus.value === statusText) break
+        conversationStatus.value = statusText
         messages.value.push({
           id: aip.messageId,
           type: aip.type,
           sender: 'system',
-          content: `状态变更: ${p.status}`,
+          content: p.status ? `状态变更: ${p.status}` : statusText,
           timestamp: aip.timestamp,
         })
         break

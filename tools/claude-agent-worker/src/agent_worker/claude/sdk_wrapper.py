@@ -742,6 +742,7 @@ class SdkWrapper:
             # can create additional subscribers for SSE reconnection.
             task_registry[task_id]["broadcast"] = broadcast
             task_registry[task_id]["connected"] = True
+            task_registry[task_id]["has_external_subscriber"] = False
 
             use_queue = (
                 _use_agent_sdk
@@ -1341,10 +1342,14 @@ class SdkWrapper:
             )
 
         finally:
-            # If a new subscriber reconnected during grace period, the task
-            # is still alive — do NOT clean up registry or kill CLI.
+            # If a new subscriber reconnected via /subscribe endpoint during
+            # grace period, the task is still alive — do NOT clean up registry
+            # or kill CLI.  The subscriber's finally block will handle cleanup.
+            # NOTE: We check "has_external_subscriber" (set by /subscribe)
+            # instead of "connected" (set True at creation) to avoid leaking
+            # registry entries when no subscriber ever connected.
             entry = task_registry.get(task_id)
-            if entry and entry.get("connected"):
+            if entry and entry.get("has_external_subscriber"):
                 logger.info("Task %s exiting original generator — reconnected subscriber active, skipping cleanup", task_id)
             else:
                 task_registry.pop(task_id, None)

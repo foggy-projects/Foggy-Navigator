@@ -338,6 +338,7 @@ async def subscribe_to_task(task_id: str, replay_from: int = 0):
 
     # Mark task as reconnected — exits grace period loop in run_query
     entry["connected"] = True
+    entry["has_external_subscriber"] = True
     logger.info(
         "Subscribe: task=%s (resolved=%s), replay_from=%d, total_events=%d",
         task_id, real_task_id, replay_from, broadcast.event_count,

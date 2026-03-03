@@ -219,6 +219,19 @@ describe('createChatState', () => {
 
       expect(state.messages.value).toHaveLength(1)
     })
+
+    it('falls back to content when status is undefined', () => {
+      state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, { content: 'Task stream reconnected', subtype: 'reconnected' }))
+
+      expect(state.messages.value).toHaveLength(1)
+      expect(state.messages.value[0].content).toBe('Task stream reconnected')
+    })
+
+    it('skips STATE_SYNC with no status and no content', () => {
+      state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {}))
+
+      expect(state.messages.value).toHaveLength(0)
+    })
   })
 
   // ========== ERROR ==========

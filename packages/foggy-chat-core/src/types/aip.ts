@@ -86,7 +86,9 @@ export interface ThinkingPayload {
 }
 
 export interface StateSyncPayload {
-  status: string
+  status?: string
+  content?: string
+  subtype?: string
   data?: Record<string, unknown>
 }
 
