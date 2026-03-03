@@ -34,6 +34,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   const chatState = createChatState()
   const pendingInput = ref('')
   let unsubscribeSse: (() => void) | null = null
+  let connectVersion = 0
 
   const { subscribeSession, connected } = useUnifiedSse()
 
@@ -128,6 +129,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
   async function connect(sessionId: string) {
     disconnect()
+    const myVersion = ++connectVersion
     chatState.clearMessages()
     chatState.setConnectionStatus('connecting')
 
@@ -135,6 +137,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     let dbMessageCount = 0
     try {
       const messages = await sessionApi.getMessages(sessionId)
+      if (connectVersion !== myVersion) return
       for (const msg of messages) {
         // Count USER/ASSISTANT messages (same口径 as JSONL count)
         if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
@@ -173,29 +176,34 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         }
       }
     } catch (e) {
+      if (connectVersion !== myVersion) return
       console.error(`[TaskPane ${paneId}] Failed to load history:`, e)
     }
 
+    if (connectVersion !== myVersion) return
     createSseSubscription(sessionId)
     attachTaskUpdateListener()
 
     // Non-blocking: detect and load JSONL delta messages
+    if (connectVersion !== myVersion) return
     if (task.value?.claudeSessionId && task.value?.workerId) {
-      detectAndLoadDelta(task.value.workerId, task.value.claudeSessionId, dbMessageCount)
+      detectAndLoadDelta(task.value.workerId, task.value.claudeSessionId, dbMessageCount, myVersion)
     }
   }
 
   /** Detect new messages in JSONL that are not in the DB and append them to chat */
-  async function detectAndLoadDelta(workerId: string, claudeSessionId: string, dbMsgCount: number) {
+  async function detectAndLoadDelta(workerId: string, claudeSessionId: string, dbMsgCount: number, myVersion: number) {
     try {
       // 1. Get JSONL message count from Worker
       const countResult = await workerApi.getWorkerSessionMessageCount(workerId, claudeSessionId)
+      if (connectVersion !== myVersion) return
       const jsonlTotal = countResult.total
 
       // 2. If JSONL has more messages than DB and DB has at least some messages
       if (jsonlTotal > dbMsgCount && dbMsgCount > 0) {
         // 3. Fetch all JSONL messages
         const allMessages = await workerApi.getWorkerSessionMessages(workerId, claudeSessionId)
+        if (connectVersion !== myVersion) return
 
         // 4. Take the delta (messages after DB count)
         const delta = allMessages.slice(dbMsgCount)
@@ -226,7 +234,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         console.log(`[TaskPane ${paneId}] Loaded ${delta.length} delta messages from JSONL`)
       }
     } catch (e) {
-      // Best-effort: fail silently
+      if (connectVersion !== myVersion) return
       console.debug(`[TaskPane ${paneId}] Delta detection failed (non-critical):`, e)
     }
   }
@@ -260,6 +268,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   }
 
   function disconnect() {
+    connectVersion++
     if (unsubscribeSse) {
       unsubscribeSse()
       unsubscribeSse = null

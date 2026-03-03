@@ -8,6 +8,7 @@ import * as sessionApi from '@/api/session'
 import type { AgentMessage } from '@/api/types'
 
 let unsubscribeSse: (() => void) | null = null
+let connectVersion = 0
 const connectedSessionId = ref<string | null>(null)
 
 export function useSession() {
@@ -16,6 +17,7 @@ export function useSession() {
 
   async function connectToSession(sessionId: string) {
     disconnectSession()
+    const myVersion = ++connectVersion
     chatStore.clearMessages()
     chatStore.setConnectionStatus('connecting')
     connectedSessionId.value = sessionId
@@ -23,6 +25,7 @@ export function useSession() {
     // 加载历史消息
     try {
       const messages = await sessionApi.getMessages(sessionId)
+      if (connectVersion !== myVersion) return
       for (const msg of messages) {
         const chatMsg: ChatMessage = {
           id: msg.id,
@@ -34,8 +37,11 @@ export function useSession() {
         chatStore.messages.push(chatMsg)
       }
     } catch (e) {
+      if (connectVersion !== myVersion) return
       console.error('Failed to load history messages:', e)
     }
+
+    if (connectVersion !== myVersion) return
 
     // Subscribe to session events via unified SSE
     unsubscribeSse = subscribeSession(sessionId, (raw: AgentMessage) => {
@@ -75,6 +81,7 @@ export function useSession() {
   }
 
   function disconnectSession() {
+    connectVersion++
     if (unsubscribeSse) {
       unsubscribeSse()
       unsubscribeSse = null

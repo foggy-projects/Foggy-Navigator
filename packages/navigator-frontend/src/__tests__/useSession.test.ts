@@ -106,6 +106,28 @@ describe('useSession', () => {
       expect(mockUnsubscribe).toHaveBeenCalled()
     })
 
+    it('discards stale connect when rapid switching', async () => {
+      let resolveFirst!: (value: any) => void
+      mockSessionApi.getMessages
+        .mockReturnValueOnce(new Promise(r => { resolveFirst = r }))  // s1: delayed
+        .mockResolvedValueOnce([{ id: 'm2', sessionId: 's2', role: 'USER',
+                                  content: 'S2', createdAt: '2026-01-01T00:00:00' }])
+
+      const { connectToSession } = useSession()
+      const first = connectToSession('s1')
+      const second = connectToSession('s2')
+
+      // Resolve s1 after s2 has already started — should be discarded
+      resolveFirst([{ id: 'm1', sessionId: 's1', role: 'USER',
+                      content: 'STALE', createdAt: '2026-01-01T00:00:00' }])
+      await first
+      await second
+
+      const store = useChatStore()
+      expect(store.messages).toHaveLength(1)
+      expect(store.messages[0]!.content).toBe('S2')
+    })
+
     it('reconstructs structured messages from metadata', async () => {
       mockSessionApi.getMessages.mockResolvedValue([
         {

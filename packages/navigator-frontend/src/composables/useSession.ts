@@ -8,6 +8,7 @@ import type { AgentMessage, RoutePayload } from '@/types'
 import router from '@/router'
 
 let unsubscribeSse: (() => void) | null = null
+let connectVersion = 0
 const connectedSessionId = ref<string | null>(null)
 
 /** ROUTE_REQUEST 回调类型 */
@@ -27,6 +28,7 @@ export function useSession() {
 
   async function connectToSession(sessionId: string) {
     disconnectSession()
+    const myVersion = ++connectVersion
     chatStore.clearMessages()
     chatStore.setConnectionStatus('connecting')
     connectedSessionId.value = sessionId
@@ -34,6 +36,7 @@ export function useSession() {
     // 加载历史消息 — 从 metadata 还原原始类型，走 processAipMessage 统一路径
     try {
       const messages = await sessionApi.getMessages(sessionId)
+      if (connectVersion !== myVersion) return
       for (const msg of messages) {
         const meta = msg.metadata
         const msgType = meta?.type as string | undefined
@@ -69,8 +72,11 @@ export function useSession() {
         }
       }
     } catch (e) {
+      if (connectVersion !== myVersion) return
       console.error('Failed to load history messages:', e)
     }
+
+    if (connectVersion !== myVersion) return
 
     // Subscribe to session events via unified SSE
     unsubscribeSse = subscribeSession(sessionId, (raw: AgentMessage) => {
@@ -115,6 +121,7 @@ export function useSession() {
   }
 
   function disconnectSession() {
+    connectVersion++
     if (unsubscribeSse) {
       unsubscribeSse()
       unsubscribeSse = null
