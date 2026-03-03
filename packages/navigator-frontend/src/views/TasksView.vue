@@ -159,7 +159,7 @@ onDeactivated(() => {
 
 onActivated(() => {
   if (autoRefresh.value && !refreshTimer) {
-    refreshTimer = setInterval(() => loadTasks(), 10000)
+    refreshTimer = setInterval(() => loadTasks(), 30000)
   }
 })
 
@@ -177,7 +177,7 @@ async function loadTasks() {
 function toggleAutoRefresh() {
   autoRefresh.value = !autoRefresh.value
   if (autoRefresh.value) {
-    refreshTimer = setInterval(() => loadTasks(), 10000)
+    refreshTimer = setInterval(() => loadTasks(), 30000)
   } else {
     stopAutoRefresh()
   }

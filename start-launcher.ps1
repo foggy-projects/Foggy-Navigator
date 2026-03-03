@@ -111,13 +111,25 @@ Write-Host "  Port: $BACKEND_PORT" -ForegroundColor Gray
 Write-Host "  Root User: $ROOT_USERNAME" -ForegroundColor Gray
 Write-Host ""
 
+# JVM tuning: 4-8G heap, G1GC, better throughput
+$JAVA_OPTS = @(
+    '-Xms4g', '-Xmx8g',
+    '-XX:+UseG1GC',
+    '-XX:MaxGCPauseMillis=200',
+    '-XX:+ParallelRefProcEnabled',
+    '-XX:+HeapDumpOnOutOfMemoryError',
+    "-XX:HeapDumpPath=logs\heap-dump.hprof"
+)
+
 Start-Process $JAVA_PATH `
-    -ArgumentList '-Dfile.encoding=UTF-8', `
-        "-Dsystem.root.username=$ROOT_USERNAME", `
-        "-Dsystem.root.password=$ROOT_PASSWORD", `
-        "-Dsystem.root.email=$ROOT_EMAIL", `
-        '-jar', $JAR_PATH, `
-        "--spring.profiles.active=$SPRING_PROFILES_ACTIVE" `
+    -ArgumentList ($JAVA_OPTS + @(
+        '-Dfile.encoding=UTF-8',
+        "-Dsystem.root.username=$ROOT_USERNAME",
+        "-Dsystem.root.password=$ROOT_PASSWORD",
+        "-Dsystem.root.email=$ROOT_EMAIL",
+        '-jar', $JAR_PATH,
+        "--spring.profiles.active=$SPRING_PROFILES_ACTIVE"
+    )) `
     -RedirectStandardOutput "logs\backend.log" `
     -RedirectStandardError "logs\backend-error.log" `
     -NoNewWindow

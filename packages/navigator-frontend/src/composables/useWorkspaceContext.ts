@@ -121,6 +121,32 @@ export function getAllPanes(): TaskPaneState[] {
   return result
 }
 
+/**
+ * Disconnect SSE on all panes of OTHER workspaces (not the active one).
+ * This prevents HTTP/1.1 connection exhaustion (browsers limit 6 per origin).
+ * Pane state (messages, task info) is preserved — only the SSE stream is closed.
+ */
+export function suspendOtherWorkspaces(activeKey: string | null): void {
+  for (const [key, ctx] of workspaceMap) {
+    if (key === activeKey) continue
+    for (const pane of ctx.panes.value) {
+      pane.disconnect()
+    }
+  }
+}
+
+/**
+ * Re-connect SSE on all panes of a workspace that have an active (non-terminal) task.
+ * Uses reconnectSse() which preserves messages — only reconnects the SSE stream.
+ */
+export function resumeWorkspace(key: string): void {
+  const ctx = workspaceMap.get(key)
+  if (!ctx) return
+  for (const pane of ctx.panes.value) {
+    pane.reconnectSse()
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Workspace CRUD
 // ---------------------------------------------------------------------------

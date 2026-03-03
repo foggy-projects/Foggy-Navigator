@@ -102,8 +102,16 @@ echo -e "${GRAY}  Port: ${BACKEND_PORT}${NC}"
 echo -e "${GRAY}  Root User: ${ROOT_USERNAME}${NC}"
 echo ""
 
+# JVM tuning: 4-8G heap, G1GC, better throughput
+JAVA_OPTS="-Xms4g -Xmx8g \
+    -XX:+UseG1GC \
+    -XX:MaxGCPauseMillis=200 \
+    -XX:+ParallelRefProcEnabled \
+    -XX:+HeapDumpOnOutOfMemoryError \
+    -XX:HeapDumpPath=${LOG_DIR}/heap-dump.hprof"
+
 # Start service in background
-nohup java -Dfile.encoding=UTF-8 \
+nohup java ${JAVA_OPTS} -Dfile.encoding=UTF-8 \
     -Dsystem.root.username="${ROOT_USERNAME}" \
     -Dsystem.root.password="${ROOT_PASSWORD}" \
     -Dsystem.root.email="${ROOT_EMAIL}" \

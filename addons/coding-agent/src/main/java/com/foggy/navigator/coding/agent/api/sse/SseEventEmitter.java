@@ -37,8 +37,8 @@ public class SseEventEmitter {
     public SseEmitter createEmitter(String conversationId) {
         log.info("创建 SSE emitter: conversationId={}", conversationId);
 
-        // Use 0 for no timeout — let the heartbeat keep it alive
-        SseEmitter emitter = new SseEmitter(0L);
+        // 24-hour timeout instead of infinite — prevents zombie connections from accumulating
+        SseEmitter emitter = new SseEmitter(24 * 60 * 60 * 1000L);
 
         emitter.onCompletion(() -> {
             log.info("SSE emitter 完成: conversationId={}", conversationId);

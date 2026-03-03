@@ -1653,7 +1653,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, watch } from 'vue'
+import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
@@ -1668,6 +1668,8 @@ import {
   disposeWorkspace,
   disposeAllWorkspaces,
   getAllPanes,
+  suspendOtherWorkspaces,
+  resumeWorkspace,
   isDirectorySynced,
   markDirectorySynced,
   restoreTerminalTabs,
@@ -2559,11 +2561,11 @@ onMounted(async () => {
   if (sessionIds.length > 0) {
     await workerState.loadConversationConfigs(sessionIds)
   }
-  // Start polling active tasks every 15s (fallback for SSE disconnects)
+  // Start polling active tasks every 30s (fallback for SSE disconnects)
   activeTasksInterval = setInterval(() => {
     workerState.loadActiveTasks()
     workerState.loadAwaitingReplyTasks()
-  }, 15000)
+  }, 30000)
 })
 
 onUnmounted(() => {
@@ -2578,8 +2580,22 @@ onUnmounted(() => {
   disposeAllWorkspaces()
 })
 
-// keep-alive: re-sync all pane task statuses + refresh lists when view is activated
+// keep-alive: suspend all SSE when navigating away to free browser connections
+onDeactivated(() => {
+  suspendOtherWorkspaces(null) // null = suspend ALL workspaces
+  if (activeTasksInterval) {
+    clearInterval(activeTasksInterval)
+    activeTasksInterval = null
+  }
+})
+
+// keep-alive: re-sync all pane task statuses + resume SSE when view is activated
 onActivated(() => {
+  // Resume SSE for the currently active workspace
+  const key = activeWorkspaceKey.value
+  if (key) {
+    resumeWorkspace(key)
+  }
   for (const pane of getAllPanes()) {
     pane.syncTaskStatus()
   }
@@ -2590,6 +2606,13 @@ onActivated(() => {
   }
   // 重新激活时刷新模型列表，确保 Worker 授权变更后下拉框数据是最新的
   loadPlatformModelConfig()
+  // Restart polling
+  if (!activeTasksInterval) {
+    activeTasksInterval = setInterval(() => {
+      workerState.loadActiveTasks()
+      workerState.loadAwaitingReplyTasks()
+    }, 30000)
+  }
 })
 
 // ---- File browser cross-window messaging ----------------------------------
@@ -2707,7 +2730,10 @@ function selectWorker(workerId: string) {
   workerActiveTab.value = 'agents'
   focusedPaneId.value = null
   exitBatchSelectMode()
-  // No disposeAllPanes — workspace context preserves panes per directory
+  // Suspend SSE on other workspaces to free browser connections (HTTP/1.1 limit: 6)
+  const newKey = `worker:${workerId}`
+  suspendOtherWorkspaces(newKey)
+  resumeWorkspace(newKey)
   // Auto-expand
   if (!expandedWorkerIds.has(workerId)) {
     expandedWorkerIds.add(workerId)
@@ -2727,7 +2753,9 @@ function selectDirectory(workerId: string, directoryId: string) {
   if (workerId !== previousWorkerId) {
     loadPlatformModelConfig()
   }
-  // No disposeAllPanes — workspace context preserves panes per directory
+  // Suspend SSE on other workspaces to free browser connections (HTTP/1.1 limit: 6)
+  suspendOtherWorkspaces(directoryId)
+  resumeWorkspace(directoryId)
   taskForm.value.prompt = ''
   taskForm.value.cwd = ''
   dirTaskPage.value = 0

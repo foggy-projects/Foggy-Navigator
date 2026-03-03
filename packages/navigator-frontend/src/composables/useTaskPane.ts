@@ -16,6 +16,8 @@ export interface TaskPaneState {
   connect(sessionId: string): Promise<void>
   /** Resume in-place: keep messages, update task, reconnect SSE */
   resumeInPlace(newTask: ClaudeTask): void
+  /** Reconnect SSE only (no message clear/reload). Used by workspace suspend/resume. */
+  reconnectSse(): void
   /** Pull latest task status from backend (idempotent, skips terminal states) */
   syncTaskStatus(): Promise<void>
   disconnect(): void
@@ -276,6 +278,17 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     attachTaskUpdateListener()
   }
 
+  /** Reconnect SSE only — no message clear/reload. Used by workspace suspend/resume. */
+  function reconnectSse() {
+    if (sseController) return // already connected
+    const t = task.value
+    if (!t) return
+    if (['COMPLETED', 'FAILED', 'ABORTED'].includes(t.status)) return
+    chatState.setConnectionStatus('connecting')
+    createSseConnection(t.sessionId)
+    attachTaskUpdateListener()
+  }
+
   function disconnect() {
     if (sseController) {
       sseController.close()
@@ -298,6 +311,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     pendingInput,
     connect,
     resumeInPlace,
+    reconnectSse,
     syncTaskStatus,
     disconnect,
     dispose,

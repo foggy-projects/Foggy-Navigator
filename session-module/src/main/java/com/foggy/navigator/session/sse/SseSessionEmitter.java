@@ -48,7 +48,8 @@ public class SseSessionEmitter {
     public SseEmitter createEmitter(String sessionId) {
         log.info("Creating SSE emitter: sessionId={}", sessionId);
 
-        SseEmitter emitter = new SseEmitter(0L);
+        // 24-hour timeout instead of infinite — prevents zombie connections from accumulating
+        SseEmitter emitter = new SseEmitter(24 * 60 * 60 * 1000L);
 
         emitter.onCompletion(() -> {
             log.info("SSE emitter completed: sessionId={}", sessionId);

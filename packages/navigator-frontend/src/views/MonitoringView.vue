@@ -166,7 +166,7 @@ onDeactivated(() => {
 
 onActivated(() => {
   if (autoRefresh.value && !refreshTimer) {
-    refreshTimer = setInterval(() => loadAll(), 10000)
+    refreshTimer = setInterval(() => loadAll(), 30000)
   }
 })
 
@@ -208,7 +208,7 @@ function handleFilterChange() {
 function toggleAutoRefresh() {
   autoRefresh.value = !autoRefresh.value
   if (autoRefresh.value) {
-    refreshTimer = setInterval(() => loadAll(), 10000)
+    refreshTimer = setInterval(() => loadAll(), 30000)
   } else {
     stopAutoRefresh()
   }

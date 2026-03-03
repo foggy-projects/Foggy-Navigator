@@ -14,6 +14,13 @@ spring:
     username: foggy
     password: foggy@123
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
+      connection-timeout: 20000       # 等待连接超时 20s（默认 30s）
+      idle-timeout: 600000            # 空闲连接 10 分钟回收
+      max-lifetime: 1800000           # 连接最大生命周期 30 分钟
+      leak-detection-threshold: 60000 # 连接泄漏检测阈值 60s
 
   jpa:
     hibernate:
@@ -43,6 +50,10 @@ server:
     async:
       timeout: -1
   tomcat:
+    threads:
+      max: 300          # 最大工作线程（默认 200）
+      min-spare: 20     # 最小空闲线程，避免突发流量时创建延迟
+    max-connections: 10000
     max-http-form-post-size: 30MB
     max-swallow-size: 30MB
 

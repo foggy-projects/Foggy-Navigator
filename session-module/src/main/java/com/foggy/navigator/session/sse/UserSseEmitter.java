@@ -40,7 +40,8 @@ public class UserSseEmitter {
     public SseEmitter createEmitter(String userId) {
         log.info("Creating user SSE emitter: userId={}", userId);
 
-        SseEmitter emitter = new SseEmitter(0L);
+        // 24-hour timeout instead of infinite — prevents zombie connections from accumulating
+        SseEmitter emitter = new SseEmitter(24 * 60 * 60 * 1000L);
 
         emitter.onCompletion(() -> {
             log.info("User SSE emitter completed: userId={}", userId);
