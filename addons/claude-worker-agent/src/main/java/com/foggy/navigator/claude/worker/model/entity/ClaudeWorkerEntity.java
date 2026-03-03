@@ -54,9 +54,17 @@ public class ClaudeWorkerEntity {
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    /** Code Server URL（可选，为空时默认 baseUrl host + 18443） */
+    /** Code Server 公网 URL */
     @Column(length = 512)
-    private String codeServerUrl;
+    private String codeServerPublicUrl;
+
+    /** Code Server 内网 URL */
+    @Column(length = 512)
+    private String codeServerInternalUrl;
+
+    /** Code Server 密码（加密存储） */
+    @Column(columnDefinition = "TEXT")
+    private String codeServerPassword;
 
     /** SSH 用户名 */
     @Column(length = 128)

@@ -81,7 +81,9 @@ export interface ClaudeWorker {
   sshUsername?: string
   sshPort?: number
   sshPasswordConfigured?: boolean
-  codeServerUrl?: string
+  codeServerPublicUrl?: string
+  codeServerInternalUrl?: string
+  codeServerPasswordConfigured?: boolean
 }
 
 /** Claude 任务 */

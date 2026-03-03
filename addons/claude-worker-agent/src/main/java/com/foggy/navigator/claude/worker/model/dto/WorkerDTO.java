@@ -23,5 +23,7 @@ public class WorkerDTO {
     private String sshUsername;
     private Integer sshPort;
     private boolean sshPasswordConfigured;
-    private String codeServerUrl;
+    private String codeServerPublicUrl;
+    private String codeServerInternalUrl;
+    private boolean codeServerPasswordConfigured;
 }

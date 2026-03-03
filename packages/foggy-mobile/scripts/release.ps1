@@ -30,14 +30,71 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Foggy Navigator - wgt 热更新发版" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "当前版本: v$currentVersion (code: $currentVersionCode)" -ForegroundColor Yellow
+Write-Host "当前版本 (本地): v$currentVersion (code: $currentVersionCode)" -ForegroundColor Yellow
+
+# --- 查询线上最新版本 ---
+$apiScript = Join-Path $ScriptDir "uni-admin-api.js"
+$serverVersion = $null
+Write-Host "正在查询线上最新版本..." -ForegroundColor Gray
+try {
+    $serverJson = node $apiScript latest-version 2>$null | Select-Object -Last 1
+    if ($serverJson) {
+        $serverInfo = $serverJson | ConvertFrom-Json
+        if ($serverInfo -and $serverInfo.version) {
+            $serverVersion = $serverInfo.version
+        }
+    }
+} catch {
+    Write-Host "  查询线上版本失败: $_" -ForegroundColor Yellow
+    Write-Host "  将使用本地版本递增" -ForegroundColor Yellow
+}
+
+if ($serverVersion) {
+    Write-Host "线上最新版本:     v$serverVersion" -ForegroundColor Yellow
+} else {
+    Write-Host "线上无版本记录" -ForegroundColor Yellow
+}
+
+# --- 计算建议版本号 (取 max(本地, 服务器) 的 patch+1) ---
+function Parse-SemVer($ver) {
+    # Strip pre-release/build metadata (e.g. 1.2.3-beta+build)
+    $ver = ($ver -split '-')[0]
+    $ver = ($ver -split '\+')[0]
+    $parts = $ver -split '\.'
+    if ($parts.Count -lt 3) {
+        throw "Invalid semver format: $ver (expected X.Y.Z)"
+    }
+    return @{
+        Major = [int]$parts[0]
+        Minor = [int]$parts[1]
+        Patch = [int]$parts[2]
+    }
+}
+
+function Compare-SemVer($a, $b) {
+    # 返回较大版本的字符串
+    $pa = Parse-SemVer $a
+    $pb = Parse-SemVer $b
+    if ($pa.Major -ne $pb.Major) { return $(if ($pa.Major -gt $pb.Major) { $a } else { $b }) }
+    if ($pa.Minor -ne $pb.Minor) { return $(if ($pa.Minor -gt $pb.Minor) { $a } else { $b }) }
+    if ($pa.Patch -ge $pb.Patch) { return $a } else { return $b }
+}
+
+$baseVersion = $currentVersion
+if ($serverVersion) {
+    $baseVersion = Compare-SemVer $currentVersion $serverVersion
+}
+$baseParts = Parse-SemVer $baseVersion
+$suggestedVersion = "$($baseParts.Major).$($baseParts.Minor).$($baseParts.Patch + 1)"
+
 Write-Host ""
+Write-Host "建议版本号: v$suggestedVersion" -ForegroundColor Green
 
 # --- 输入新版本号 ---
-$newVersion = Read-Host "请输入新版本号 (如 1.0.1, 回车跳过使用当前版本)"
+$newVersion = Read-Host "请输入新版本号 (回车使用建议版本 $suggestedVersion)"
 if ([string]::IsNullOrWhiteSpace($newVersion)) {
-    $newVersion = $currentVersion
-    Write-Host "使用当前版本: v$newVersion" -ForegroundColor Gray
+    $newVersion = $suggestedVersion
+    Write-Host "使用版本: v$newVersion" -ForegroundColor Gray
 }
 
 # 自动递增 versionCode
@@ -117,10 +174,39 @@ Write-Host "  wgt: $wgtFile ($([math]::Round($wgtSize / 1MB, 2)) MB)"
 Write-Host ""
 Write-Host "[3/3] 发布到 uni-admin 升级中心..." -ForegroundColor Cyan
 
-$apiScript = Join-Path $ScriptDir "uni-admin-api.js"
-# 查找当前最新的原生 App 版本号作为 min_uni_version
+# 查找线上最新的原生 App (APK) 版本号作为 min_uni_version
 # wgt 热更新必须设置此字段，否则云函数的兼容性校验会跳过更新
-$latestNativeVersion = $currentVersion
+# 注意：必须从服务器查询真实 APK 版本，不能用本地版本号！
+#   本地版本号随 wgt 发版不断递增，可能远高于用户实际安装的 APK 版本。
+#   如果 min_uni_version > 用户 APK 版本，云函数会认为不兼容，跳过 wgt 更新。
+$latestNativeVersion = $null
+Write-Host "  查询线上最新 APK 版本..." -ForegroundColor Gray
+try {
+    $nativeJson = node $apiScript latest-native-version 2>$null | Select-Object -Last 1
+    if ($nativeJson) {
+        $nativeInfo = $nativeJson | ConvertFrom-Json
+        if ($nativeInfo -and $nativeInfo.version -and $nativeInfo.version -ne '') {
+            $latestNativeVersion = $nativeInfo.version
+        }
+    }
+} catch {
+    Write-Host "  查询 APK 版本失败: $_" -ForegroundColor Yellow
+}
+
+if ($latestNativeVersion) {
+    Write-Host "  线上 APK 版本: v$latestNativeVersion (将作为 minVersion)" -ForegroundColor Green
+} else {
+    Write-Host "  WARNING: 未查询到线上 APK 版本记录！" -ForegroundColor Red
+    Write-Host "  wgt 热更新需要对应的 APK 基础版本，否则客户端无法检测到更新。" -ForegroundColor Red
+    Write-Host "  请先使用 build-apk.ps1 发布一个 APK 基础版本。" -ForegroundColor Red
+    $manualVersion = Read-Host "  手动输入 minVersion (留空则中止)"
+    if ([string]::IsNullOrWhiteSpace($manualVersion)) {
+        Write-Host "已取消" -ForegroundColor Yellow
+        exit 0
+    }
+    $latestNativeVersion = $manualVersion
+}
+
 $publishArgs = @(
     $apiScript, "publish",
     "--type", "wgt",

@@ -21,6 +21,9 @@ export async function registerWorker(form: {
   sshUsername?: string
   sshPort?: number
   sshPassword?: string
+  codeServerPublicUrl?: string
+  codeServerInternalUrl?: string
+  codeServerPassword?: string
 }): Promise<ClaudeWorker> {
   const rx = (await client.post('/claude-workers', form)) as unknown as RX<ClaudeWorker>
   return rx.data
@@ -28,7 +31,7 @@ export async function registerWorker(form: {
 
 export async function updateWorker(
   workerId: string,
-  form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string },
+  form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string; codeServerPublicUrl?: string; codeServerInternalUrl?: string; codeServerPassword?: string },
 ): Promise<ClaudeWorker> {
   const rx = (await client.put(`/claude-workers/${workerId}`, form)) as unknown as RX<ClaudeWorker>
   return rx.data
@@ -42,6 +45,11 @@ export async function triggerHealthCheck(workerId: string): Promise<ClaudeWorker
   const rx = (await client.post(
     `/claude-workers/${workerId}/health-check`,
   )) as unknown as RX<ClaudeWorker>
+  return rx.data
+}
+
+export async function getCodeServerPassword(workerId: string): Promise<{ password: string }> {
+  const rx = (await client.get(`/claude-workers/${workerId}/code-server-password`)) as unknown as RX<{ password: string }>
   return rx.data
 }
 

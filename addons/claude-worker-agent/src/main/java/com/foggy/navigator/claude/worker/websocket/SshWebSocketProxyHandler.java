@@ -85,7 +85,10 @@ public class SshWebSocketProxyHandler extends AbstractWebSocketHandler {
     protected void handleBinaryMessage(WebSocketSession browserSession, BinaryMessage message) throws Exception {
         WebSocketSession workerSession = browserToWorker.get(browserSession.getId());
         if (workerSession != null && workerSession.isOpen()) {
+            log.debug("SSH WS proxy: browser→worker binary {} bytes", message.getPayloadLength());
             workerSession.sendMessage(message);
+        } else {
+            log.warn("SSH WS proxy: browser→worker binary dropped (worker session gone)");
         }
     }
 
@@ -93,7 +96,10 @@ public class SshWebSocketProxyHandler extends AbstractWebSocketHandler {
     protected void handleTextMessage(WebSocketSession browserSession, TextMessage message) throws Exception {
         WebSocketSession workerSession = browserToWorker.get(browserSession.getId());
         if (workerSession != null && workerSession.isOpen()) {
+            log.debug("SSH WS proxy: browser→worker text {} chars", message.getPayload().length());
             workerSession.sendMessage(message);
+        } else {
+            log.warn("SSH WS proxy: browser→worker text dropped (worker session gone)");
         }
     }
 
@@ -149,14 +155,20 @@ public class SshWebSocketProxyHandler extends AbstractWebSocketHandler {
         @Override
         protected void handleBinaryMessage(WebSocketSession workerSession, BinaryMessage message) throws Exception {
             if (browserSession.isOpen()) {
+                log.debug("SSH WS proxy: worker→browser binary {} bytes", message.getPayloadLength());
                 browserSession.sendMessage(message);
+            } else {
+                log.warn("SSH WS proxy: worker→browser binary dropped (browser session closed)");
             }
         }
 
         @Override
         protected void handleTextMessage(WebSocketSession workerSession, TextMessage message) throws Exception {
             if (browserSession.isOpen()) {
+                log.debug("SSH WS proxy: worker→browser text {} chars", message.getPayload().length());
                 browserSession.sendMessage(message);
+            } else {
+                log.warn("SSH WS proxy: worker→browser text dropped (browser session closed)");
             }
         }
 

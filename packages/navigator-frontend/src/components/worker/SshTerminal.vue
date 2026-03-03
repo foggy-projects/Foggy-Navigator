@@ -1,5 +1,16 @@
 <template>
-  <div ref="termRef" class="ssh-terminal" v-show="active" />
+  <div
+    ref="wrapRef"
+    class="ssh-terminal-wrap"
+    v-show="active"
+    @click="focusTerminal"
+  >
+    <div ref="termRef" class="ssh-terminal" />
+    <!-- Focus-lost overlay: click anywhere to re-focus -->
+    <div v-if="active && !focused" class="focus-overlay" @click="focusTerminal">
+      点击此处聚焦终端
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -17,11 +28,17 @@ const props = defineProps<{
   workerId: string
 }>()
 
+const wrapRef = ref<HTMLElement | null>(null)
 const termRef = ref<HTMLElement | null>(null)
+const focused = ref(true) // optimistic; onBlur will set false
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let resizeObserver: ResizeObserver | null = null
 let wsMessageHandler: ((ev: MessageEvent) => void) | null = null
+
+function focusTerminal() {
+  terminal?.focus()
+}
 
 onMounted(() => {
   if (!termRef.value) return
@@ -43,6 +60,14 @@ onMounted(() => {
 
   terminal.open(termRef.value)
 
+  // Track focus state for visual indicator via DOM events
+  // (xterm.js v6 removed onFocus/onBlur — use the internal textarea instead)
+  const xtermTextarea = termRef.value.querySelector('.xterm-helper-textarea') as HTMLElement | null
+  if (xtermTextarea) {
+    xtermTextarea.addEventListener('focus', () => { focused.value = true })
+    xtermTextarea.addEventListener('blur', () => { focused.value = false })
+  }
+
   // Replay buffered output
   for (const chunk of props.tab.buffer) {
     terminal.write(chunk)
@@ -58,10 +83,13 @@ onMounted(() => {
     }
   })
 
-  // Fit after a short delay to allow layout
+  // Fit after a short delay to allow layout, then auto-focus
   requestAnimationFrame(() => {
     fitAddon?.fit()
     sendResize()
+    if (props.active) {
+      terminal?.focus()
+    }
   })
 
   // ResizeObserver for auto-fit
@@ -89,12 +117,13 @@ onBeforeUnmount(() => {
   fitAddon = null
 })
 
-// Re-fit when becoming active
+// Re-fit and re-focus when becoming active
 watch(() => props.active, (isActive) => {
   if (isActive && fitAddon) {
     requestAnimationFrame(() => {
       fitAddon?.fit()
       sendResize()
+      terminal?.focus()
     })
   }
 })
@@ -123,23 +152,26 @@ function setupWsHandler() {
   }
   ws.addEventListener('message', wsMessageHandler)
 
-  // For restored sessions (e.g. page refresh), send Enter after open
-  // to trigger a shell prompt refresh. Skip for new connections to avoid
-  // interfering with shell initialization and cwd auto-cd.
+  // Handle WS open: send resize, restored prompt refresh, initial command.
+  const onWsOpen = () => {
+    if (props.tab.initialCommand) {
+      const cmd = props.tab.initialCommand
+      props.tab.initialCommand = undefined
+      setTimeout(() => {
+        ws.send(cmd + '\r')
+      }, 2000) // 等 shell 初始化 + cwd 切换完成（Worker 端 1.5s）
+    }
+    if (props.tab.restored) {
+      ws.send('\r')
+    }
+    sendResize()
+  }
+
   if (ws.readyState === WebSocket.CONNECTING) {
-    ws.addEventListener('open', () => {
-      if (props.tab.initialCommand) {
-        const cmd = props.tab.initialCommand
-        props.tab.initialCommand = undefined
-        setTimeout(() => {
-          ws.send(cmd + '\r')
-        }, 2000) // 等 shell 初始化 + cwd 切换完成（Worker 端 1.5s）
-      }
-      if (props.tab.restored) {
-        ws.send('\r')
-      }
-      sendResize()
-    }, { once: true })
+    ws.addEventListener('open', onWsOpen, { once: true })
+  } else if (ws.readyState === WebSocket.OPEN) {
+    // WS already open (e.g. fast connection) — fire immediately
+    onWsOpen()
   }
 }
 
@@ -169,6 +201,12 @@ function sendResize() {
 </script>
 
 <style scoped>
+.ssh-terminal-wrap {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
 .ssh-terminal {
   width: 100%;
   height: 100%;
@@ -177,5 +215,22 @@ function sendResize() {
 .ssh-terminal :deep(.xterm) {
   height: 100%;
   padding: 4px;
+}
+
+.focus-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+  color: #999;
+  font-size: 13px;
+  cursor: pointer;
+  z-index: 5;
+  pointer-events: auto;
 }
 </style>

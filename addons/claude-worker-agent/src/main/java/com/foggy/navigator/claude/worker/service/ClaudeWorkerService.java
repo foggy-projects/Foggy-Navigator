@@ -55,8 +55,14 @@ public class ClaudeWorkerService {
         if (form.getSshPassword() != null && !form.getSshPassword().isEmpty()) {
             entity.setSshPassword(encrypt(form.getSshPassword()));
         }
-        if (form.getCodeServerUrl() != null && !form.getCodeServerUrl().isEmpty()) {
-            entity.setCodeServerUrl(form.getCodeServerUrl());
+        if (form.getCodeServerPublicUrl() != null && !form.getCodeServerPublicUrl().isEmpty()) {
+            entity.setCodeServerPublicUrl(form.getCodeServerPublicUrl());
+        }
+        if (form.getCodeServerInternalUrl() != null && !form.getCodeServerInternalUrl().isEmpty()) {
+            entity.setCodeServerInternalUrl(form.getCodeServerInternalUrl());
+        }
+        if (form.getCodeServerPassword() != null && !form.getCodeServerPassword().isEmpty()) {
+            entity.setCodeServerPassword(encrypt(form.getCodeServerPassword()));
         }
 
         workerRepository.save(entity);
@@ -99,9 +105,20 @@ public class ClaudeWorkerService {
                 entity.setSshPassword(encrypt(form.getSshPassword()));
             }
         }
-        // codeServerUrl: null 不改，空串清除
-        if (form.getCodeServerUrl() != null) {
-            entity.setCodeServerUrl(form.getCodeServerUrl().isEmpty() ? null : form.getCodeServerUrl());
+        // codeServer URLs: null 不改，空串清除
+        if (form.getCodeServerPublicUrl() != null) {
+            entity.setCodeServerPublicUrl(form.getCodeServerPublicUrl().isEmpty() ? null : form.getCodeServerPublicUrl());
+        }
+        if (form.getCodeServerInternalUrl() != null) {
+            entity.setCodeServerInternalUrl(form.getCodeServerInternalUrl().isEmpty() ? null : form.getCodeServerInternalUrl());
+        }
+        // codeServerPassword: null 不改，空串清除，有值则加密
+        if (form.getCodeServerPassword() != null) {
+            if (form.getCodeServerPassword().isEmpty()) {
+                entity.setCodeServerPassword(null);
+            } else {
+                entity.setCodeServerPassword(encrypt(form.getCodeServerPassword()));
+            }
         }
 
         workerRepository.save(entity);
@@ -164,6 +181,14 @@ public class ClaudeWorkerService {
     }
 
     /**
+     * 获取解密后的 Code Server 密码
+     */
+    public String getDecryptedCodeServerPassword(ClaudeWorkerEntity entity) {
+        if (entity.getCodeServerPassword() == null) return null;
+        return decrypt(entity.getCodeServerPassword());
+    }
+
+    /**
      * 创建 Worker 客户端
      */
     public ClaudeWorkerClient createClient(ClaudeWorkerEntity entity) {
@@ -212,7 +237,9 @@ public class ClaudeWorkerService {
                 .sshUsername(entity.getSshUsername())
                 .sshPort(entity.getSshPort())
                 .sshPasswordConfigured(entity.getSshPassword() != null)
-                .codeServerUrl(entity.getCodeServerUrl())
+                .codeServerPublicUrl(entity.getCodeServerPublicUrl())
+                .codeServerInternalUrl(entity.getCodeServerInternalUrl())
+                .codeServerPasswordConfigured(entity.getCodeServerPassword() != null)
                 .build();
     }
 }

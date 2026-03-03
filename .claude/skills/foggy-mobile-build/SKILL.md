@@ -86,7 +86,12 @@ D:\work\HBuilderX\cli.exe pack --platform android --project dist/build/app ^
 1. 提示输入版本号、更新标题、内容、是否静默
 2. 更新 `manifest.json` 和 `package.json` 中的版本号
 3. `pnpm build:wgt` → 编译 + 打包为 `dist/foggy-navigator-{version}.wgt`
-4. `node uni-admin-api.js publish --type wgt ...` → 上传到 uni-admin 并上线
+4. **查询线上最新 APK 版本**（`latest-native-version`）→ 作为 `--minVersion`
+5. `node uni-admin-api.js publish --type wgt ...` → 上传到 uni-admin 并上线
+
+> **重要**：`--minVersion` 必须是线上实际发布的 APK 版本，不能用本地版本号。
+> 本地版本号随 wgt 发版不断递增，可能远高于用户实际安装的 APK 版本。
+> 如果 `min_uni_version > 用户 APK 版本`，云函数会认为不兼容而跳过 wgt 更新。
 
 ### 手动构建 wgt
 
@@ -125,10 +130,17 @@ UNICLOUD_SPACE_ID=mp-4af7054d-5a40-4315-8678-df36b44298bb
 node scripts/uni-admin-api.js publish --type native_app --version 1.0.0 ^
   --title "v1.0.0" --content "首个版本" --file dist/foggy-navigator-1.0.0.apk
 
-# 发布 wgt 热更新（--minVersion 必填，否则云函数兼容性校验失败）
+# 发布 wgt 热更新（--minVersion 必填，必须是线上实际 APK 版本）
 node scripts/uni-admin-api.js publish --type wgt --version 1.0.1 ^
   --title "v1.0.1" --content "Bug fixes" --minVersion 1.0.0 ^
   --file dist/foggy-navigator-1.0.1.wgt [--silent]
+
+# 查询线上最新原生 App 版本（用于确定 --minVersion）
+node scripts/uni-admin-api.js latest-native-version
+# 输出: {"version":"1.0.0"}
+
+# 查询线上最新版本（任意类型）
+node scripts/uni-admin-api.js latest-version
 ```
 
 若 API 调用失败，脚本会打印手动操作步骤并自动打开浏览器到升级中心页面。
@@ -214,15 +226,22 @@ node scripts/uni-admin-api.js publish --type wgt --version 1.0.1 ^
 
 ### 检查更新返回 "已是最新" 但实际有新版本
 
-**可能原因 1：wgtVersion 传错**
+**最常见原因：`min_uni_version` 高于用户 APK 版本**（已修复）
+发布 wgt 时 `--minVersion` 如果设成了本地 manifest 版本号（随 wgt 发版不断递增），
+会导致 `min_uni_version`（如 1.0.18）远高于用户实际安装的 APK 版本（如 1.0.8）。
+云函数兼容性校验：`用户 APK 版本 < min_uni_version` → 认为 wgt 不兼容 → 跳过。
+**解决**：`release.ps1` 现在通过 `latest-native-version` 从服务器查询真实 APK 版本作为 `--minVersion`，
+不再使用本地版本号。若服务器上无 APK 记录，会提示先发布 APK 基础版本。
+
+**可能原因 2：wgtVersion 传错**
 `plus.runtime.innerVersion` 返回的是 uni-app **引擎版本**（如 `"4.87"`），不是 wgt 资源版本。
 字符串比较 `"1.0.15" < "4.87"` 导致云函数认为客户端版本更高。
 **解决**：必须用 `plus.runtime.getProperty(appid, cb)` 获取真实 wgt 资源版本。
 
-**可能原因 2：wgt 记录缺少 `min_uni_version`**
+**可能原因 3：wgt 记录缺少 `min_uni_version`**
 当 wgt 版本号 > APK 版本号时，云函数会检查 `min_uni_version` 兼容性字段。
 该字段为空 → 兼容性校验失败 → wgt 被跳过。
-**解决**：发布 wgt 时必须传 `--minVersion`（当前 APK 版本），`release.ps1` 已自动处理。
+**解决**：发布 wgt 时必须传 `--minVersion`（线上实际 APK 版本），`release.ps1` 已自动处理。
 
 ### wgt 更新下载完成后卡在 100%（重启无响应）
 

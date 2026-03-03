@@ -1056,8 +1056,14 @@
           <el-input v-model="addForm.sshPassword" type="password" show-password placeholder="SSH 登录密码" />
         </el-form-item>
         <el-divider content-position="left">Code Server（可选）</el-divider>
-        <el-form-item label="VS Code 地址">
-          <el-input v-model="addForm.codeServerUrl" placeholder="如 http://192.168.1.100:18443，留空自动拼接" />
+        <el-form-item label="公网地址">
+          <el-input v-model="addForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
+        </el-form-item>
+        <el-form-item label="内网地址">
+          <el-input v-model="addForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="addForm.codeServerPassword" type="password" show-password placeholder="code-server 登录密码" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1106,8 +1112,19 @@
           />
         </el-form-item>
         <el-divider content-position="left">Code Server（可选）</el-divider>
-        <el-form-item label="VS Code 地址">
-          <el-input v-model="editForm.codeServerUrl" placeholder="如 http://192.168.1.100:18443，留空自动拼接" />
+        <el-form-item label="公网地址">
+          <el-input v-model="editForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
+        </el-form-item>
+        <el-form-item label="内网地址">
+          <el-input v-model="editForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input
+            v-model="editForm.codeServerPassword"
+            type="password"
+            show-password
+            :placeholder="selectedWorkerEntity?.codeServerPasswordConfigured ? '已保存，留空不改' : 'code-server 登录密码'"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1934,7 +1951,9 @@ const addForm = ref({
   sshUsername: '',
   sshPort: 22 as number,
   sshPassword: '',
-  codeServerUrl: '',
+  codeServerPublicUrl: '',
+  codeServerInternalUrl: '',
+  codeServerPassword: '',
 })
 
 const editForm = ref({
@@ -1945,7 +1964,9 @@ const editForm = ref({
   sshUsername: '',
   sshPort: 22 as number,
   sshPassword: '',
-  codeServerUrl: '',
+  codeServerPublicUrl: '',
+  codeServerInternalUrl: '',
+  codeServerPassword: '',
 })
 
 const addDirForm = ref({
@@ -2775,7 +2796,7 @@ async function handleAdd() {
   try {
     await workerState.registerWorker(addForm.value)
     showAddDialog.value = false
-    addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '', codeServerUrl: '' }
+    addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '' }
     ElMessage.success('Worker 添加成功')
   } catch {
     ElMessage.error('添加失败')
@@ -2794,7 +2815,8 @@ async function handleEdit() {
       authMode: editForm.value.authMode,
       sshUsername: editForm.value.sshUsername,
       sshPort: editForm.value.sshPort,
-      codeServerUrl: editForm.value.codeServerUrl || null,
+      codeServerPublicUrl: editForm.value.codeServerPublicUrl || null,
+      codeServerInternalUrl: editForm.value.codeServerInternalUrl || null,
     }
     // 密码类字段：有值才发送，空串不发（避免清空已保存的密码）
     if (editForm.value.authToken) {
@@ -2802,6 +2824,9 @@ async function handleEdit() {
     }
     if (editForm.value.sshPassword) {
       form.sshPassword = editForm.value.sshPassword
+    }
+    if (editForm.value.codeServerPassword) {
+      form.codeServerPassword = editForm.value.codeServerPassword
     }
     await workerState.updateWorker(selectedWorkerId.value, form)
     showEditDialog.value = false
@@ -3009,7 +3034,7 @@ function openFileBrowser() {
   window.open(url, '_blank', 'width=1400,height=900')
 }
 
-function openCodeServer() {
+async function openCodeServer() {
   if (!selectedDirectoryId.value) return
   const worker = selectedWorkerEntity.value
   if (!worker) return
@@ -3026,13 +3051,30 @@ function openCodeServer() {
 
   const folder = folderPath ? encodeURIComponent(folderPath) : ''
 
-  // 有 codeServerUrl → 直接用（生产环境，通过 frp 隧道暴露的地址）
-  // 没有 → 走 Vite/Nginx /code/ 代理（本地开发）
-  const base = worker.codeServerUrl
-    ? worker.codeServerUrl.replace(/\/+$/, '')
-    : `${window.location.origin}/code`
+  // 根据当前访问网络选择公网/内网 URL
+  const internal = isInternalNetwork()
+  const base = internal
+    ? (worker.codeServerInternalUrl?.replace(/\/+$/, '') || '')
+    : (worker.codeServerPublicUrl?.replace(/\/+$/, '') || '')
+    || `${window.location.origin}/code`
+
+  // 密码 → 复制到剪贴板
+  if (worker.codeServerPasswordConfigured && selectedWorkerId.value) {
+    try {
+      const data = await dirApi.getCodeServerPassword(selectedWorkerId.value)
+      await navigator.clipboard.writeText(data.password)
+      ElMessage.success('VS Code 密码已复制到剪贴板，登录时粘贴即可')
+    } catch { /* ignore */ }
+  }
 
   window.open(`${base}/?folder=${folder}`, '_blank')
+}
+
+function isInternalNetwork(): boolean {
+  const h = window.location.hostname
+  return h === 'localhost' || h === '127.0.0.1'
+    || h.startsWith('192.168.') || h.startsWith('10.')
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
 }
 
 async function handleSyncGitInfo() {
@@ -4019,7 +4061,9 @@ watch(showEditDialog, (val) => {
       sshUsername: selectedWorkerEntity.value.sshUsername || '',
       sshPort: selectedWorkerEntity.value.sshPort || 22,
       sshPassword: '',
-      codeServerUrl: selectedWorkerEntity.value.codeServerUrl || '',
+      codeServerPublicUrl: selectedWorkerEntity.value.codeServerPublicUrl || '',
+      codeServerInternalUrl: selectedWorkerEntity.value.codeServerInternalUrl || '',
+      codeServerPassword: '',
     }
   }
 })

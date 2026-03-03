@@ -98,43 +98,59 @@ async def ws_terminal(websocket: WebSocket, session_id: str, token: str | None =
     async def _ssh_to_ws():
         """Forward SSH stdout → WebSocket binary frames."""
         try:
+            logger.debug("ssh→ws loop started for session %s", session_id)
             while True:
                 data = await session.process.stdout.read(4096)
                 if not data:
+                    logger.debug("ssh→ws: stdout EOF for session %s", session_id)
                     break
+                logger.debug("ssh→ws: %d bytes from stdout", len(data))
                 session.touch()
                 await websocket.send_bytes(data)
         except Exception as exc:
-            logger.debug("ssh→ws ended: %s", exc)
+            logger.warning("ssh→ws ended for session %s: %s", session_id, exc)
 
     async def _ws_to_ssh():
         """Forward WebSocket frames → SSH stdin, handle resize control messages."""
         try:
+            logger.debug("ws→ssh loop started for session %s", session_id)
             while True:
                 msg = await websocket.receive()
                 if msg.get("type") == "websocket.disconnect":
+                    logger.info("ws→ssh: WS disconnected for session %s", session_id)
                     break
 
                 session.touch()
 
                 if "bytes" in msg and msg["bytes"]:
+                    logger.debug("ws→ssh: %d bytes from WS", len(msg["bytes"]))
                     session.process.stdin.write(msg["bytes"])
+                    await session.process.stdin.drain()
                 elif "text" in msg and msg["text"]:
+                    text = msg["text"]
+                    handled = False
                     try:
-                        ctrl = json.loads(msg["text"])
-                        if ctrl.get("type") == "resize":
+                        ctrl = json.loads(text)
+                        if isinstance(ctrl, dict) and ctrl.get("type") == "resize":
                             cols = max(1, min(500, int(ctrl["cols"])))
                             rows = max(1, min(500, int(ctrl["rows"])))
                             session.process.change_terminal_size(cols, rows)
                             session.cols = cols
                             session.rows = rows
+                            logger.debug("ws→ssh: resize %dx%d", cols, rows)
+                            handled = True
                     except (json.JSONDecodeError, KeyError, ValueError):
-                        # Treat non-JSON text as raw terminal input
-                        session.process.stdin.write(msg["text"].encode("utf-8"))
+                        pass
+                    if not handled:
+                        # Treat as raw terminal input (plain text or non-resize JSON)
+                        raw = text.encode("utf-8")
+                        logger.debug("ws→ssh: text input %d bytes: %r", len(raw), raw[:50])
+                        session.process.stdin.write(raw)
+                        await session.process.stdin.drain()
         except WebSocketDisconnect:
-            pass
+            logger.info("ws→ssh: WebSocketDisconnect for session %s", session_id)
         except Exception as exc:
-            logger.debug("ws→ssh ended: %s", exc)
+            logger.warning("ws→ssh ended for session %s: %s", session_id, exc)
 
     ssh_task = asyncio.create_task(_ssh_to_ws())
     ws_task = asyncio.create_task(_ws_to_ssh())

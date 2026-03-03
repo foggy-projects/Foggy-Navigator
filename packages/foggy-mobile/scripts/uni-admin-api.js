@@ -328,6 +328,135 @@ async function createVersion(opts, fileUrl, accessToken, uniIdToken, config) {
 }
 
 // ============================================================
+// 查询线上最新版本
+// ============================================================
+
+async function latestVersion() {
+  const config = getConfig()
+  if (!config.password) {
+    console.error('ERROR: UNI_ADMIN_PASSWORD not set in .env.release')
+    process.exit(1)
+  }
+
+  // Suppress login() console.log output — it goes to stdout and pollutes JSON parsing
+  const origLog = console.log
+  console.log = (...args) => console.error(...args)
+  let accessToken, uniIdToken
+  try {
+    accessToken = await getAccessToken(config)
+    uniIdToken = await login(config, accessToken)
+  } finally {
+    console.log = origLog
+  }
+
+  const result = await clientDBRequest({
+    method: 'serverless.function.runtime.invoke',
+    params: JSON.stringify({
+      functionTarget: 'DCloud-clientDB',
+      functionArgs: {
+        command: {
+          $db: [
+            { $method: 'collection', $param: ['opendb-app-versions'] },
+            { $method: 'where', $param: [{ appid: config.appid }] },
+            { $method: 'field', $param: [{ version: true, type: true, create_date: true }] },
+            { $method: 'orderBy', $param: ['create_date', 'desc'] },
+            { $method: 'limit', $param: [1] },
+            { $method: 'get', $param: [] },
+          ],
+        },
+        action: '',
+        multiCommand: false,
+        uniIdToken,
+      },
+    }),
+    spaceId: config.spaceId,
+    timestamp: Date.now(),
+  }, accessToken, uniIdToken, config.clientSecret, config.adminAppid)
+
+  if (!result.success) {
+    throw new Error(`查询版本失败: ${JSON.stringify(result.error || result)}`)
+  }
+
+  const data = typeof result.data === 'string' ? JSON.parse(result.data) : result.data
+  if (data.errCode && data.errCode !== 0) {
+    throw new Error(`查询版本失败: ${data.errMsg || JSON.stringify(data)}`)
+  }
+
+  const records = data.data || []
+  if (records.length === 0 || !records[0].version) {
+    // 没有任何版本记录
+    console.log(JSON.stringify({ version: '', type: '' }))
+    return
+  }
+
+  const latest = records[0]
+  console.log(JSON.stringify({ version: latest.version, type: latest.type || '' }))
+}
+
+// ============================================================
+// 查询线上最新原生 App 版本（用于 wgt 的 minVersion）
+// ============================================================
+
+async function latestNativeVersion() {
+  const config = getConfig()
+  if (!config.password) {
+    console.error('ERROR: UNI_ADMIN_PASSWORD not set in .env.release')
+    process.exit(1)
+  }
+
+  const origLog = console.log
+  console.log = (...args) => console.error(...args)
+  let accessToken, uniIdToken
+  try {
+    accessToken = await getAccessToken(config)
+    uniIdToken = await login(config, accessToken)
+  } finally {
+    console.log = origLog
+  }
+
+  const result = await clientDBRequest({
+    method: 'serverless.function.runtime.invoke',
+    params: JSON.stringify({
+      functionTarget: 'DCloud-clientDB',
+      functionArgs: {
+        command: {
+          $db: [
+            { $method: 'collection', $param: ['opendb-app-versions'] },
+            { $method: 'where', $param: [{ appid: config.appid, type: 'native_app' }] },
+            { $method: 'field', $param: [{ version: true, create_date: true }] },
+            { $method: 'orderBy', $param: ['create_date', 'desc'] },
+            { $method: 'limit', $param: [1] },
+            { $method: 'get', $param: [] },
+          ],
+        },
+        action: '',
+        multiCommand: false,
+        uniIdToken,
+      },
+    }),
+    spaceId: config.spaceId,
+    timestamp: Date.now(),
+  }, accessToken, uniIdToken, config.clientSecret, config.adminAppid)
+
+  if (!result.success) {
+    throw new Error(`查询版本失败: ${JSON.stringify(result.error || result)}`)
+  }
+
+  const data = typeof result.data === 'string' ? JSON.parse(result.data) : result.data
+  if (data.errCode && data.errCode !== 0) {
+    throw new Error(`查询版本失败: ${data.errMsg || JSON.stringify(data)}`)
+  }
+
+  const records = data.data || []
+  if (records.length === 0 || !records[0].version) {
+    console.log(JSON.stringify({ version: '' }))
+    return
+  }
+
+  console.log(JSON.stringify({ version: records[0].version }))
+}
+
+// ============================================================
 // 主流程: 发布
 // ============================================================
 
@@ -418,10 +547,24 @@ async function main() {
       process.exit(ok ? 0 : 1)
       break
     }
+    case 'latest-version': {
+      await latestVersion()
+      break
+    }
+    case 'latest-native-version': {
+      await latestNativeVersion()
+      break
+    }
     default:
       console.log('用法:')
       console.log('  node uni-admin-api.js publish --type native_app|wgt --version X.Y.Z \\')
       console.log('    --title "标题" --content "更新内容" --file <path> [--silent] [--force]')
+      console.log('')
+      console.log('  node uni-admin-api.js latest-version')
+      console.log('    查询线上最新版本（任意类型）')
+      console.log('')
+      console.log('  node uni-admin-api.js latest-native-version')
+      console.log('    查询线上最新原生 App 版本（用于 wgt 的 minVersion）')
       process.exit(1)
   }
 }
