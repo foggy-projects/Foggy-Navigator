@@ -27,6 +27,9 @@ export default defineConfig({
     appPlusPolyfill(),
     uni(),
   ],
+  server: {
+    host: '0.0.0.0',
+  },
   optimizeDeps: {
     exclude: ['@foggy/chat-core'],
   },
