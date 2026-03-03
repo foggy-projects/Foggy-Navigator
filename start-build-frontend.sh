@@ -67,8 +67,10 @@ if [ "$SKIP_BUILD" = false ]; then
         echo -e "${GRAY}[1/3] Dependencies already installed, skipped${NC}"
     fi
 
-    # Build workspace packages if dist is missing
-    if [ ! -d "$SCRIPT_DIR/packages/foggy-chat-core/dist" ] || [ ! -d "$SCRIPT_DIR/packages/foggy-chat/dist" ]; then
+    # Build workspace packages if dist or .d.ts files are missing
+    if [ ! -d "$SCRIPT_DIR/packages/foggy-chat-core/dist" ] || [ ! -d "$SCRIPT_DIR/packages/foggy-chat/dist" ] || \
+       [ -z "$(find "$SCRIPT_DIR/packages/foggy-chat-core/dist" -name '*.d.ts' 2>/dev/null)" ] || \
+       [ -z "$(find "$SCRIPT_DIR/packages/foggy-chat/dist" -name '*.d.ts' 2>/dev/null)" ]; then
         echo -e "${YELLOW}[2/3] Building workspace packages (foggy-chat-core, foggy-chat)...${NC}"
         (cd "$SCRIPT_DIR/packages/foggy-chat-core" && pnpm build) && \
         (cd "$SCRIPT_DIR/packages/foggy-chat" && pnpm build)
