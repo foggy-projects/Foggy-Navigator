@@ -17,7 +17,7 @@ from ..models import (
     KillProcessRequest,
     KillProcessResponse,
 )
-from ..claude.process_detection import get_detector
+from ..claude.process_detection import get_detector, _tracked_pids
 from ..claude.sdk_wrapper import _find_sdk_cli_pids, task_registry
 
 logger = logging.getLogger(__name__)
@@ -94,24 +94,36 @@ def _enrich_processes(processes: list[CliProcessInfo]) -> None:
     registry_lookup = _build_registry_session_lookup()
 
     for proc in processes:
+        # Layer 0: tracked PID registry → task_registry lookup (most reliable,
+        # works on macOS where process.title destroys env/cmdline visibility)
+        tracked_task_id = _tracked_pids.get(proc.pid)
+        if tracked_task_id:
+            entry = task_registry.get(tracked_task_id)
+            if entry:
+                proc.foggy_task_id = entry.get("foggy_task_id")
+                proc.foggy_session_id = entry.get("foggy_session_id")
+                proc.claude_session_id = entry.get("session_id")
+                proc.is_orphan = False
+
         # Layer 1: read env vars directly from the process (survives Worker restart)
-        foggy_env = _read_foggy_env(proc.pid)
-        if foggy_env.get("foggy_task_id"):
-            proc.foggy_task_id = foggy_env["foggy_task_id"]
-            proc.foggy_session_id = foggy_env["foggy_session_id"]
-            proc.is_orphan = False
+        if not proc.foggy_task_id:
+            foggy_env = _read_foggy_env(proc.pid)
+            if foggy_env.get("foggy_task_id"):
+                proc.foggy_task_id = foggy_env["foggy_task_id"]
+                proc.foggy_session_id = foggy_env["foggy_session_id"]
+                proc.is_orphan = False
 
         # Layer 2: command-line --resume → task_registry lookup
-        claude_sid = _parse_resume_session_id(proc.command or "")
-        if claude_sid:
-            proc.claude_session_id = claude_sid
-            if not proc.foggy_task_id:
-                # Layer 1 didn't resolve it; try registry
-                match = registry_lookup.get(claude_sid)
-                if match and match.get("foggy_task_id"):
-                    proc.foggy_task_id = match["foggy_task_id"]
-                    proc.foggy_session_id = match.get("foggy_session_id")
-                    proc.is_orphan = False
+        if not proc.claude_session_id:
+            claude_sid = _parse_resume_session_id(proc.command or "")
+            if claude_sid:
+                proc.claude_session_id = claude_sid
+        if not proc.foggy_task_id and proc.claude_session_id:
+            match = registry_lookup.get(proc.claude_session_id)
+            if match and match.get("foggy_task_id"):
+                proc.foggy_task_id = match["foggy_task_id"]
+                proc.foggy_session_id = match.get("foggy_session_id")
+                proc.is_orphan = False
 
 
 def _get_process_details(pids: set[int]) -> list[CliProcessInfo]:
