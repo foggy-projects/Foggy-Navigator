@@ -8,7 +8,7 @@
 set -euo pipefail
 
 # ---- Defaults ----
-VERSION="4.109.2"
+VERSION="4.106.3"
 PORT=18443
 INSTALL_DIR="$HOME/.local/lib/code-server"
 DATA_DIR="$HOME/.local/share/code-server"

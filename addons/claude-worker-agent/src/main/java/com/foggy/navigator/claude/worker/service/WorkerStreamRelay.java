@@ -27,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -60,6 +61,13 @@ public class WorkerStreamRelay {
 
     /** Java taskId → Worker 内部 taskId 映射 (worker 生成的 UUID) */
     private final ConcurrentHashMap<String, String> workerTaskIdMap = new ConcurrentHashMap<>();
+
+    /**
+     * 当前 Java 实例内每个任务已成功接收的事件数。
+     * 用于 SSE 断连重连时计算精确的 replay_from，避免遗漏 result 事件。
+     * Java 重启后此 Map 为空，此时用 Integer.MAX_VALUE 跳过（历史已在 DB）。
+     */
+    private final ConcurrentHashMap<String, AtomicInteger> receivedEventCounts = new ConcurrentHashMap<>();
 
     @Async("sessionEventExecutor")
     @EventListener
@@ -133,11 +141,12 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
 
-            // Subscribe via the reconnection endpoint.
-            // Use replay_from=MAX to skip all past events — Java side already has them
-            // in DB. Replaying would re-trigger state changes (interactionState, etc.)
-            // We only want NEW events going forward.
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, Integer.MAX_VALUE);
+            // 若当前实例有事件计数（SSE 断连），用精确值回放遗漏事件；
+            // 若无计数（Java 重启，历史已在 DB），用 MAX_VALUE 跳过避免重复。
+            AtomicInteger counter = receivedEventCounts.get(taskId);
+            int replayFrom = counter != null ? counter.get() : Integer.MAX_VALUE;
+            log.info("reconnectTask replay_from={} for task {} (counter={})", replayFrom, taskId, counter);
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, replayFrom);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, true);
@@ -223,6 +232,7 @@ public class WorkerStreamRelay {
                             log.debug("Task {} mapped to worker task: {}", taskId, workerEvent.getTaskId());
                         }
                         relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
+                        receivedEventCounts.computeIfAbsent(taskId, k -> new AtomicInteger()).incrementAndGet();
                     } catch (Exception e) {
                         log.warn("Failed to parse worker event for task {}: {}", taskId, data, e);
                     }
@@ -247,6 +257,7 @@ public class WorkerStreamRelay {
                     // 但 CLI 进程通常仍存活等待用户输入 — 交给 Reconciler 判断。
                     taskService.failIfStillRunning(taskId, sessionId,
                             "Worker 连接已断开，但未收到任务结果。可能原因：系统资源不足导致 CLI 无法启动，或 Worker 进程异常退出。");
+                    receivedEventCounts.remove(taskId);
                 })
                 .doOnError(e -> {
                     log.error("Worker stream error: taskId={}", taskId, e);
@@ -268,6 +279,7 @@ public class WorkerStreamRelay {
                     taskService.failTask(taskId, detectedClaudeSessionId.get(), errorMsg);
                     publishMessage(sessionId, MessageType.ERROR,
                             Map.of("content", errorMsg, "taskId", taskId));
+                    receivedEventCounts.remove(taskId);
                 })
                 .subscribe();
     }
@@ -296,8 +308,12 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
 
-            // Skip past events — only watch for new ones
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, Integer.MAX_VALUE);
+            // 若当前实例有事件计数（SSE 断连），用精确值回放遗漏事件；
+            // 若无计数（Java 重启，历史已在 DB），用 MAX_VALUE 跳过避免重复。
+            AtomicInteger counter = receivedEventCounts.get(taskId);
+            int replayFrom = counter != null ? counter.get() : Integer.MAX_VALUE;
+            log.info("Reconnect replay_from={} for task {} (counter={})", replayFrom, taskId, counter);
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, replayFrom);
 
             // isReconnect=true to prevent infinite reconnection loop
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
@@ -432,14 +448,17 @@ public class WorkerStreamRelay {
                         event.getNumTurns(), resolvedModel);
                 activeStreams.remove(taskId);
                 workerTaskIdMap.remove(taskId);
+                receivedEventCounts.remove(taskId);
 
                 // 发布跨 Agent 任务完成事件
+                // 注意：Python event_mapper 将 result 文本放在 content 字段，
+                // event.getResult() 始终为 null，应使用已解析的 resultContent
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
                         .externalTaskId(taskId)
                         .parentSessionId(sessionId)
                         .targetAgentId(AGENT_ID)
                         .status("COMPLETED")
-                        .resultSummary(truncateResult(event.getResult()))
+                        .resultSummary(truncateResult(resultContent))
                         .build());
             }
             case "permission_request" -> {
