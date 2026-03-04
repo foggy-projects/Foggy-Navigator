@@ -12,7 +12,6 @@ import base64
 import json
 import logging
 import os
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -363,72 +362,10 @@ def _extract_error_detail(exc: Exception, task_id: str) -> str:
 def _find_sdk_cli_pids() -> set[int]:
     """Return PIDs of Claude CLI processes spawned by the SDK.
 
-    Detects two SDK variants:
-
-    * **claude-agent-sdk** (current): launches ``claude.exe`` (or
-      ``claude``) with ``--output-format stream-json``.
-    * **claude-code-sdk** (legacy): launches ``node.exe … cli.js
-      --print``.
-
-    User-interactive terminals never use these flags, so this is a safe
-    discriminator that avoids false positives.
-
-    Uses ``wmic`` on Windows, ``pgrep`` on Unix.  Returns an empty set
-    if detection fails — this is best-effort.
+    Delegates to the platform-specific ``ProcessDetector`` strategy.
     """
-
-    pids: set[int] = set()
-
-    # --- Windows -----------------------------------------------------------
-    if os.name == "nt":
-        # Pattern 1: claude-agent-sdk  →  claude.exe --output-format stream-json
-        _wmic_query(
-            "commandline like '%--output-format%stream-json%' and name='claude.exe'",
-            pids,
-        )
-        # Pattern 2: claude-code-sdk (legacy)  →  node.exe …cli.js --print
-        _wmic_query(
-            "commandline like '%claude-code%cli.js%--print%' and name='node.exe'",
-            pids,
-        )
-    # --- Unix --------------------------------------------------------------
-    else:
-        # Pattern 1: claude-agent-sdk
-        _pgrep(r"claude.*--output-format.*stream-json", pids)
-        # Pattern 2: claude-code-sdk (legacy)
-        _pgrep(r"claude-code.*cli\.js.*--print", pids)
-
-    return pids
-
-
-def _wmic_query(where_clause: str, out_pids: set[int]) -> None:
-    """Run a wmic query and append matching PIDs to *out_pids*."""
-    try:
-        out = subprocess.check_output(
-            ["wmic", "process", "where", where_clause, "get", "processid"],
-            text=True, timeout=5, stderr=subprocess.DEVNULL,
-        )
-        for line in out.strip().splitlines():
-            line = line.strip()
-            if line.isdigit():
-                out_pids.add(int(line))
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        pass
-
-
-def _pgrep(pattern: str, out_pids: set[int]) -> None:
-    """Run ``pgrep -f`` and append matching PIDs to *out_pids*."""
-    try:
-        out = subprocess.check_output(
-            ["pgrep", "-f", pattern],
-            text=True, timeout=5, stderr=subprocess.DEVNULL,
-        )
-        for line in out.strip().splitlines():
-            line = line.strip()
-            if line.isdigit():
-                out_pids.add(int(line))
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        pass
+    from .process_detection import get_detector
+    return get_detector().find_pids()
 
 
 
