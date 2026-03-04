@@ -664,8 +664,7 @@ class SdkWrapper:
                 options_kwargs["env"] = env
             if max_turns is not None:
                 options_kwargs["max_turns"] = max_turns
-            if model is not None:
-                options_kwargs["model"] = model
+            options_kwargs["model"] = model if model is not None else "opus"
             if session_id is not None:
                 options_kwargs["resume"] = session_id
 

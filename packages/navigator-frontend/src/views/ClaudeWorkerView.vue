@@ -283,12 +283,9 @@
                 <span class="image-remove" @click="removeImage(idx)">&times;</span>
               </div>
             </div>
-            <div v-if="taskForm.model || taskForm.maxTurns || platformModelConfig" class="active-overrides">
+            <div v-if="taskForm.maxTurns || platformModelConfig" class="active-overrides">
               <el-tag v-if="platformModelConfig" size="small" type="success">
                 API: {{ platformModelConfig.name }}
-              </el-tag>
-              <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
-                模型: {{ shortModel(taskForm.model) }}
               </el-tag>
               <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
                 轮次: {{ taskForm.maxTurns }}
@@ -308,6 +305,9 @@
                 <el-option value="acceptEdits" label="自动接受编辑" />
                 <el-option value="plan" label="只读(Plan)" />
                 <el-option value="default" label="交互式审批" />
+              </el-select>
+              <el-select v-model="taskForm.model" size="small" style="width: 120px; margin-left: 8px">
+                <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
               </el-select>
               <el-select
                 v-if="platformModels.length > 0"
@@ -551,12 +551,9 @@
             <el-form-item label="工作目录 (cwd)">
               <el-input v-model="taskForm.cwd" placeholder="可选，如 /home/user/project" />
             </el-form-item>
-            <div v-if="taskForm.model || taskForm.maxTurns || platformModelConfig" class="active-overrides">
+            <div v-if="taskForm.maxTurns || platformModelConfig" class="active-overrides">
               <el-tag v-if="platformModelConfig" size="small" type="success">
                 API: {{ platformModelConfig.name }}
-              </el-tag>
-              <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
-                模型: {{ shortModel(taskForm.model) }}
               </el-tag>
               <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
                 轮次: {{ taskForm.maxTurns }}
@@ -576,6 +573,9 @@
                 <el-option value="acceptEdits" label="自动接受编辑" />
                 <el-option value="plan" label="只读(Plan)" />
                 <el-option value="default" label="交互式审批" />
+              </el-select>
+              <el-select v-model="taskForm.model" size="small" style="width: 120px; margin-left: 8px">
+                <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
               </el-select>
               <el-select
                 v-if="platformModels.length > 0"
@@ -1990,10 +1990,16 @@ const editDirForm = ref({
   defaultModelConfigId: '' as string,
 })
 
+const claudeModelOptions = [
+  { value: 'opus', label: 'Opus' },
+  { value: 'sonnet', label: 'Sonnet' },
+  { value: 'haiku', label: 'Haiku' },
+]
+
 const taskForm = ref({
   prompt: '',
   cwd: '',
-  model: '' as string,
+  model: 'opus' as string,
   maxTurns: null as number | null,
   useTeams: true,
   permissionMode: 'bypassPermissions' as string,
@@ -4046,14 +4052,18 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     })) as { value: string }
     if (!prompt) return
 
-    const newTask = await workerState.resumeTask({
+    const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
       workerId: selectedWorkerId.value,
       claudeSessionId: task.claudeSessionId,
       prompt,
       cwd: task.cwd,
       directoryId: task.directoryId,
       sessionId: task.sessionId,  // per-conversation: reuse session
-    })
+    }
+    if (taskForm.value.model) {
+      resumeForm.model = taskForm.value.model
+    }
+    const newTask = await workerState.resumeTask(resumeForm)
 
     // Per-conversation: find existing pane by sessionId
     const existingPane = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
