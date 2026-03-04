@@ -23,6 +23,8 @@ export interface ChatMessage {
   allowedPrompts?: AllowedPrompt[]
   /** Populated from CONFIRMATION_RESPONSE: maps question index → answered value string */
   answeredValues?: Record<number, string>
+  /** Whether this error supports manual reconnection */
+  reconnectable?: boolean
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

@@ -82,6 +82,23 @@ public class ClaudeTaskController {
         return RX.ok(taskService.getTask(userId, taskId));
     }
 
+    @PostMapping("/{taskId}/reconnect")
+    public RX<Map<String, Object>> reconnectTask(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        var task = taskService.getTaskEntity(taskId);
+        if (!task.getUserId().equals(userId)) {
+            throw RX.throwB("Task not found");
+        }
+        if (!"FAILED".equals(task.getStatus())) {
+            throw RX.throwB("Only FAILED tasks can be reconnected");
+        }
+
+        taskService.resetToRunning(taskId);
+        streamRelay.reconnectTask(taskId, task.getSessionId(), task.getWorkerId());
+
+        return RX.ok(Map.of("taskId", taskId, "status", "RECONNECTED"));
+    }
+
     @PostMapping("/{taskId}/abort")
     public RX<Map<String, Object>> abortTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();

@@ -49,6 +49,11 @@ public class WorkerStreamRelay {
     /** 启动后延迟多少毫秒再尝试重连（等 Worker 健康检查完成） */
     private static final long STARTUP_RECONNECT_DELAY_MS = 10_000;
 
+    /** SSE 断连后最大重连次数 */
+    private static final int MAX_RECONNECT_ATTEMPTS = 3;
+    /** 重连退避基础延迟（毫秒），实际延迟 = 2^attempt * BASE */
+    private static final long RECONNECT_BASE_DELAY_MS = 2000;
+
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
     private final ClaudeTaskRepository taskRepository;
@@ -97,7 +102,7 @@ public class WorkerStreamRelay {
                     event.getTaskId(), event.getSessionId());
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
-                    detectedModel, detectedClaudeSessionId, false);
+                    detectedModel, detectedClaudeSessionId, 0);
 
             activeStreams.put(taskId, subscription);
 
@@ -149,7 +154,7 @@ public class WorkerStreamRelay {
             Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, replayFrom);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
-                    detectedModel, detectedClaudeSessionId, true);
+                    detectedModel, detectedClaudeSessionId, 0);
 
             activeStreams.put(taskId, subscription);
 
@@ -206,14 +211,14 @@ public class WorkerStreamRelay {
     /**
      * 创建 SSE Flux 的通用订阅逻辑（新任务和重连共用）。
      *
-     * @param isReconnect true 时不在 doOnComplete 中重试重连（避免无限循环），
-     *                    false 时在 doOnComplete 中尝试一次重连。
+     * @param reconnectAttempt 当前是第几次重连（0=首次连接），
+     *                         超过 MAX_RECONNECT_ATTEMPTS 后不再重试。
      */
     private Disposable subscribeSseFlux(Flux<ServerSentEvent<String>> sseFlux,
                                          String taskId, String sessionId, String workerId,
                                          AtomicReference<String> detectedModel,
                                          AtomicReference<String> detectedClaudeSessionId,
-                                         boolean isReconnect) {
+                                         int reconnectAttempt) {
         return sseFlux
                 .doOnNext(sse -> {
                     String data = sse.data();
@@ -238,14 +243,11 @@ public class WorkerStreamRelay {
                     }
                 })
                 .doOnComplete(() -> {
-                    log.info("Worker stream completed: taskId={}, isReconnect={}", taskId, isReconnect);
+                    log.info("Worker stream completed: taskId={}, reconnectAttempt={}/{}", taskId, reconnectAttempt, MAX_RECONNECT_ATTEMPTS);
                     activeStreams.remove(taskId);
 
-                    if (!isReconnect) {
-                        // First disconnect — attempt reconnection before failing.
-                        // The Worker keeps the CLI alive during its grace period,
-                        // so the subscribe endpoint should work if CLI is still running.
-                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId);
+                    if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
+                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
                         if (reconnected) {
                             return;
                         }
@@ -268,8 +270,8 @@ public class WorkerStreamRelay {
                     boolean isClientError = e instanceof WebClientResponseException wce
                             && wce.getStatusCode().is4xxClientError();
 
-                    if (!isReconnect && !isClientError) {
-                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId);
+                    if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS && !isClientError) {
+                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
                         if (reconnected) {
                             return;
                         }
@@ -285,12 +287,13 @@ public class WorkerStreamRelay {
     }
 
     /**
-     * 尝试通过 Worker subscribe 端点重连。
+     * 尝试通过 Worker subscribe 端点重连，带指数退避。
      * 仅当任务仍在 RUNNING 或 AWAITING_PERMISSION 时尝试。
      *
+     * @param currentAttempt 当前重连次数（0-based），下次将传 currentAttempt+1
      * @return true 如果重连成功启动
      */
-    private boolean attemptReconnect(String taskId, String sessionId, String workerId) {
+    private boolean attemptReconnect(String taskId, String sessionId, String workerId, int currentAttempt) {
         try {
             // Check if the task is still active in DB
             var taskOpt = taskRepository.findByTaskId(taskId);
@@ -300,7 +303,12 @@ public class WorkerStreamRelay {
                 return false;
             }
 
-            log.info("Attempting SSE reconnection for task {} (status={})", taskId, status);
+            int nextAttempt = currentAttempt + 1;
+            long delayMs = (long) Math.pow(2, currentAttempt) * RECONNECT_BASE_DELAY_MS;
+            log.info("Attempting SSE reconnection (attempt {}/{}) for task {} (status={}), backoff={}ms",
+                    nextAttempt, MAX_RECONNECT_ATTEMPTS, taskId, status, delayMs);
+
+            Thread.sleep(delayMs);
 
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
             ClaudeWorkerClient client = workerService.createClient(worker);
@@ -315,9 +323,8 @@ public class WorkerStreamRelay {
             log.info("Reconnect replay_from={} for task {} (counter={})", replayFrom, taskId, counter);
             Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, replayFrom);
 
-            // isReconnect=true to prevent infinite reconnection loop
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
-                    detectedModel, detectedClaudeSessionId, true);
+                    detectedModel, detectedClaudeSessionId, nextAttempt);
 
             activeStreams.put(taskId, subscription);
 
@@ -327,11 +334,16 @@ public class WorkerStreamRelay {
             publishMessage(sessionId, MessageType.STATE_SYNC,
                     Map.of("content", "Task stream reconnected", "subtype", "reconnected", "taskId", taskId));
 
-            log.info("SSE reconnection successful for task {}", taskId);
+            log.info("SSE reconnection successful for task {} (attempt {}/{})", taskId, nextAttempt, MAX_RECONNECT_ATTEMPTS);
             return true;
 
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            log.warn("SSE reconnection interrupted for task {}", taskId);
+            return false;
         } catch (Exception e) {
-            log.warn("SSE reconnection failed for task {}: {}", taskId, e.getMessage());
+            log.warn("SSE reconnection failed for task {} (attempt {}/{}): {}",
+                    taskId, currentAttempt + 1, MAX_RECONNECT_ATTEMPTS, e.getMessage());
             return false;
         }
     }
@@ -514,6 +526,7 @@ public class WorkerStreamRelay {
                 taskService.failTask(taskId, errorClaudeSessionId, event.getError());
                 activeStreams.remove(taskId);
                 workerTaskIdMap.remove(taskId);
+                receivedEventCounts.remove(taskId);
 
                 // 发布跨 Agent 任务失败事件
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()

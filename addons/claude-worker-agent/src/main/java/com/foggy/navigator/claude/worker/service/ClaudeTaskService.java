@@ -979,6 +979,12 @@ public class ClaudeTaskService {
                 return;
             }
             if ("RUNNING".equals(status)) {
+                // 在标记 FAILED 之前，检查 CLI 进程是否仍然存活
+                if (isCliProcessAlive(entity)) {
+                    log.info("CLI process still alive — deferring to Reconciler: taskId={}", taskId);
+                    return;
+                }
+
                 String prev = entity.getStatus();
                 entity.setStatus("FAILED");
                 entity.setErrorMessage(reason);
@@ -986,7 +992,7 @@ public class ClaudeTaskService {
                 log.warn("Task stream ended without result: taskId={}, reason={}", taskId, reason);
                 publishStatusChange(entity, prev);
                 conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
-                publishSessionError(sessionId, taskId, reason);
+                publishSessionError(sessionId, taskId, reason, true);
 
                 // 发布跨 Agent 任务失败事件
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
@@ -998,6 +1004,52 @@ public class ClaudeTaskService {
                         .build());
             }
         });
+    }
+
+    /**
+     * 将 FAILED 任务重置为 RUNNING（用户手动重连场景）。
+     */
+    @Transactional
+    public void resetToRunning(String taskId) {
+        ClaudeTaskEntity entity = getTaskEntity(taskId);
+        if (!"FAILED".equals(entity.getStatus())) {
+            throw new IllegalStateException("Only FAILED tasks can be reconnected, current status: " + entity.getStatus());
+        }
+        String prev = entity.getStatus();
+        entity.setStatus("RUNNING");
+        entity.setErrorMessage(null);
+        taskRepository.save(entity);
+        log.info("Task reset to RUNNING for reconnect: taskId={}", taskId);
+        publishStatusChange(entity, prev);
+    }
+
+    /**
+     * 检查 Worker 上的 CLI 进程是否仍然存活。
+     * 通过 Worker API 列出进程，匹配 foggy_task_id。
+     * 异常时返回 false（保守策略：无法确认存活则允许标记失败）。
+     */
+    @SuppressWarnings("unchecked")
+    private boolean isCliProcessAlive(ClaudeTaskEntity task) {
+        try {
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            Map<String, Object> processInfo = client.listCliProcesses()
+                    .block(java.time.Duration.ofSeconds(5));
+            if (processInfo == null) return false;
+
+            // Worker returns { "processes": [ { "foggy_task_id": "...", ... }, ... ] }
+            Object processesList = processInfo.get("processes");
+            if (processesList instanceof java.util.List<?> processes) {
+                return processes.stream()
+                        .filter(p -> p instanceof Map)
+                        .map(p -> (Map<String, Object>) p)
+                        .anyMatch(p -> task.getTaskId().equals(p.get("foggy_task_id")));
+            }
+            return false;
+        } catch (Exception e) {
+            log.warn("Failed to check CLI process alive for task {}: {}", task.getTaskId(), e.getMessage());
+            return false;
+        }
     }
 
     private void failTimeout(ClaudeTaskEntity entity, String reason) {
@@ -1012,7 +1064,7 @@ public class ClaudeTaskService {
         String taskId = entity.getTaskId();
 
         // 推送错误消息到会话，让用户在聊天中看到失败原因
-        publishSessionError(entity.getSessionId(), taskId, reason);
+        publishSessionError(entity.getSessionId(), taskId, reason, false);
 
         // 通知 Worker 中止任务（使用 foggy_task_id，Worker 端已支持按此字段查找）
         try {
@@ -1061,12 +1113,13 @@ public class ClaudeTaskService {
      * 推送 ERROR 消息到会话，让用户在聊天界面中看到错误原因。
      * 仅用于显示，不影响 LLM 上下文（Claude Worker 的 LLM 上下文在远端 CLI 上）。
      */
-    private void publishSessionError(String sessionId, String taskId, String errorMessage) {
+    private void publishSessionError(String sessionId, String taskId, String errorMessage, boolean reconnectable) {
         if (sessionId == null) return;
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("content", errorMessage);
             payload.put("taskId", taskId);
+            payload.put("reconnectable", reconnectable);
             eventPublisher.publishEvent(
                     AgentMessage.of(sessionId, AGENT_ID, MessageType.ERROR, payload));
         } catch (Exception e) {

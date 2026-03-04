@@ -19,6 +19,7 @@
       @question-respond="(pid, answers) => emit('questionRespond', pid, answers)"
       @plan-respond="(pid, decision, denyMsg, planAction) => emit('planRespond', pid, decision, denyMsg, planAction)"
       @rewind="(turnIndex) => emit('rewind', turnIndex)"
+      @reconnect="(taskId: string) => emit('reconnect', taskId)"
     >
       <template #empty>
         <slot name="empty">
@@ -68,6 +69,7 @@ const emit = defineEmits<{
   (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', turnIndex: number): void
+  (e: 'reconnect', taskId: string): void
 }>()
 
 const connectionLabel = computed(() => {

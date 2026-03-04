@@ -52,6 +52,7 @@
         @question-respond="handleQuestionRespond"
         @plan-respond="(pid: string, decision: string, denyMsg?: string, planAction?: string) => handlePlanRespond(pid, decision, denyMsg, planAction)"
         @rewind="handleRewind"
+        @reconnect="handleReconnect"
       >
         <template #empty>
           <div class="waiting-hint">等待 Worker 响应...</div>
@@ -112,6 +113,7 @@ const emit = defineEmits<{
   (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', paneId: string, turnIndex: number): void
+  (e: 'reconnect', paneId: string, taskId: string): void
   (e: 'focus'): void
 }>()
 
@@ -223,6 +225,10 @@ onUnmounted(() => {
 
 function handleRewind(turnIndex: number) {
   emit('rewind', props.paneState.paneId, turnIndex)
+}
+
+function handleReconnect(taskId: string) {
+  emit('reconnect', props.paneState.paneId, taskId)
 }
 
 // Rewind is enabled when task has a Claude session and is not running

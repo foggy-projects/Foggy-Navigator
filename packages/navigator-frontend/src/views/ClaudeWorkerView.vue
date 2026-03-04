@@ -391,6 +391,7 @@
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
+          @reconnect="handlePaneReconnect"
           @focus="focusedPaneId = $event"
         >
           <template #header-extra="{ paneState }">
@@ -659,6 +660,7 @@
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
+          @reconnect="handlePaneReconnect"
           @focus="focusedPaneId = $event"
         >
           <template #header-extra="{ paneState }">
@@ -3678,6 +3680,35 @@ async function abortPane(paneId: string) {
     ElMessage.info('任务已中止')
   } catch {
     ElMessage.error('中止失败')
+  }
+}
+
+async function handlePaneReconnect(paneId: string, taskId: string) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  if (!pane) return
+  try {
+    await dirApi.reconnectTask(taskId)
+    if (pane.task.value) {
+      pane.task.value.status = 'RUNNING'
+    }
+    // Clear the reconnectable flag on the error message
+    const errorMsg = pane.chatState.messages.value.find(
+      (m) => m.reconnectable && (m.raw as Record<string, unknown>)?.taskId === taskId,
+    )
+    if (errorMsg) {
+      errorMsg.reconnectable = false
+    }
+    pane.chatState.messages.value.push({
+      id: `reconnect-${Date.now()}`,
+      type: 'STATE_SYNC' as AipMessageType,
+      sender: 'system',
+      content: '正在重连任务...',
+      raw: { subtype: 'reconnected' },
+      timestamp: Date.now(),
+    })
+    if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+  } catch {
+    ElMessage.error('重连失败')
   }
 }
 

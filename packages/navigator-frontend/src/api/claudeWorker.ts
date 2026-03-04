@@ -245,6 +245,16 @@ export async function respondToPermission(
   return rx.data
 }
 
+export async function reconnectTask(
+  taskId: string,
+): Promise<{ taskId: string; status: string }> {
+  const rx = (await client.post(`/claude-tasks/${taskId}/reconnect`)) as unknown as RX<{
+    taskId: string
+    status: string
+  }>
+  return rx.data
+}
+
 export async function abortTask(
   taskId: string,
 ): Promise<{ taskId: string; status: string }> {

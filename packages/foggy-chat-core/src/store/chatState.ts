@@ -277,6 +277,8 @@ export function createChatState(): ChatState {
           sender: 'system',
           content: '',
           error: errorText,
+          reconnectable: raw?.reconnectable === true,
+          raw: { taskId: raw?.taskId, reconnectable: raw?.reconnectable },
           timestamp: aip.timestamp,
         })
         break

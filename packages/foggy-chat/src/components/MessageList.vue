@@ -48,6 +48,9 @@
         <ErrorBlock
           v-else-if="isError(item.msg)"
           :error="item.msg.error || item.msg.content"
+          :reconnectable="item.msg.reconnectable"
+          :task-id="(item.msg.raw as Record<string, unknown>)?.taskId as string"
+          @reconnect="(taskId: string) => emit('reconnect', taskId)"
         />
         <TaskCompletionCard
           v-else-if="item.msg.type === AipMessageType.TASK_COMPLETED"
@@ -129,6 +132,7 @@ const emit = defineEmits<{
   (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', turnIndex: number): void
+  (e: 'reconnect', taskId: string): void
 }>()
 
 const listRef = ref<HTMLElement>()
