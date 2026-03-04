@@ -362,10 +362,34 @@ def _extract_error_detail(exc: Exception, task_id: str) -> str:
 def _find_sdk_cli_pids() -> set[int]:
     """Return PIDs of Claude CLI processes spawned by the SDK.
 
-    Delegates to the platform-specific ``ProcessDetector`` strategy.
+    Dual-layer architecture:
+      Layer 1 (primary): tracked PIDs registered at launch time — O(1) lookup.
+      Layer 2 (fallback): platform-specific detector (process-tree, pgrep, etc.).
+    Results are merged (union) with dead processes pruned.
     """
-    from .process_detection import get_detector
-    return get_detector().find_pids()
+    from .process_detection import get_detector, get_tracked_pids
+    tracked = get_tracked_pids()           # Layer 1: proactive registry
+    detected = get_detector().find_pids()  # Layer 2: platform detection fallback
+    return tracked | detected
+
+
+def _capture_child_pids(task_id: str) -> None:
+    """Scan current process's children for CLI processes and register them."""
+    try:
+        import psutil
+        from .process_detection import register_pid
+        me = psutil.Process(os.getpid())
+        for child in me.children(recursive=True):
+            try:
+                name = child.name()
+                if name in ("node", "claude"):
+                    register_pid(child.pid, task_id)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+    except ImportError:
+        pass
+    except Exception:
+        pass
 
 
 
@@ -1065,8 +1089,11 @@ class SdkWrapper:
                     _msg_count = 0
                     try:
                         logger.info("Task %s producer: starting SDK iteration", task_id)
+                        _capture_child_pids(task_id)  # snapshot before first message
                         async for message in _query_fn(prompt=streaming_prompt, options=options):
                             _msg_count += 1
+                            if _msg_count == 1:
+                                _capture_child_pids(task_id)  # capture after first message
                             msg_type = type(message).__name__
                             logger.info(
                                 "Task %s producer msg #%d: %s",
@@ -1234,7 +1261,12 @@ class SdkWrapper:
 
             else:
                 # Direct iteration (no can_use_tool callback needed)
+                _capture_child_pids(task_id)  # snapshot before first message
+                _direct_msg_count = 0
                 async for message in _query_fn(prompt=prompt, options=options):
+                    _direct_msg_count += 1
+                    if _direct_msg_count == 1:
+                        _capture_child_pids(task_id)  # capture after first message
                     now = asyncio.get_event_loop().time()
 
                     if now - started_at > hard_timeout:
@@ -1283,6 +1315,10 @@ class SdkWrapper:
             # NOTE: We check "has_external_subscriber" (set by /subscribe)
             # instead of "connected" (set True at creation) to avoid leaking
             # registry entries when no subscriber ever connected.
+            # Unregister tracked PIDs for this task (Layer 1 cleanup)
+            from .process_detection import unregister_pids_for_task
+            unregister_pids_for_task(task_id)
+
             entry = task_registry.get(task_id)
             if entry and entry.get("has_external_subscriber"):
                 logger.info("Task %s exiting original generator — reconnected subscriber active, skipping cleanup", task_id)

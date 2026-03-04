@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
@@ -265,10 +265,129 @@ class UnixDetector:
 
 
 # ---------------------------------------------------------------------------
+# macOS detector — psutil-based (pgrep -f fails after Node sets process.title)
+# ---------------------------------------------------------------------------
+
+class MacOSDetector:
+    """Detect Claude CLI processes on macOS via process-tree traversal.
+
+    On macOS, Node.js sets ``process.title = 'claude'`` within ~0.3-0.5 s of
+    startup, which overwrites **both** the process args and the environment
+    data in ``KERN_PROCARGS2``.  This breaks ``pgrep -f``, ``ps -o args=``,
+    and ``psutil.Process.environ()``.
+
+    The reliable detection strategy is **process-tree traversal**: the Worker
+    process (this Python process) is the parent of all SDK-spawned CLI
+    subprocesses.  We find children named ``node`` or ``claude`` via
+    ``psutil.Process.children(recursive=True)``.
+    """
+
+    _TARGET_NAMES: frozenset[str] = frozenset({"node", "claude"})
+
+    def find_pids(self) -> set[int]:
+        try:
+            import psutil
+        except ImportError:
+            logger.warning("psutil not available on macOS, falling back to pgrep")
+            pids: set[int] = set()
+            UnixDetector._pgrep(r"claude.*--output-format.*stream-json", pids)
+            return pids
+
+        found: set[int] = set()
+        try:
+            me = psutil.Process(os.getpid())
+            children = me.children(recursive=True)
+            for child in children:
+                try:
+                    name = child.name()
+                    if name in self._TARGET_NAMES:
+                        found.add(child.pid)
+                        logger.info("macOS: found child CLI process pid=%d name=%r", child.pid, name)
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+            logger.info("macOS: %d total children, %d CLI pids", len(children), len(found))
+        except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+            logger.warning("macOS: failed to enumerate children: %s", exc)
+
+        return found
+
+    def get_details(self, pids: set[int]) -> list[ProcessInfo]:
+        if not pids:
+            return []
+
+        try:
+            import psutil
+        except ImportError:
+            return UnixDetector().get_details(pids)
+
+        results: list[ProcessInfo] = []
+        for pid in pids:
+            try:
+                p = psutil.Process(pid)
+                mem_mb = round(p.memory_info().rss / (1024 * 1024), 1)
+                ct = p.create_time()
+                started = datetime.fromtimestamp(ct, tz=timezone.utc).isoformat()
+                results.append(ProcessInfo(
+                    pid=pid,
+                    command=f"claude (pid={pid})",
+                    memory_mb=mem_mb,
+                    started_at=started,
+                ))
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+                results.append(ProcessInfo(pid=pid))
+        return results
+
+
+# ---------------------------------------------------------------------------
 # Factory — module-level singleton
 # ---------------------------------------------------------------------------
 
 _detector: ProcessDetector | None = None
+
+# ---------------------------------------------------------------------------
+# PID tracking registry — Layer 1 (primary, O(1) lookup)
+# ---------------------------------------------------------------------------
+# Populated at SDK launch time when the PID is already known.
+# Platform detectors (Layer 2) serve as fallback.
+
+_tracked_pids: dict[int, str] = {}  # pid → task_id
+
+
+def register_pid(pid: int, task_id: str) -> None:
+    """Register a CLI process PID for active tracking."""
+    _tracked_pids[pid] = task_id
+    logger.info("Registered tracked PID %d for task %s", pid, task_id)
+
+
+def unregister_pid(pid: int) -> None:
+    """Remove a single PID from the tracking registry."""
+    removed = _tracked_pids.pop(pid, None)
+    if removed is not None:
+        logger.info("Unregistered tracked PID %d (task %s)", pid, removed)
+
+
+def get_tracked_pids() -> set[int]:
+    """Return all tracked PIDs that are still alive (prune dead ones)."""
+    alive = set()
+    dead = []
+    for pid in _tracked_pids:
+        try:
+            os.kill(pid, 0)  # signal 0: existence check only
+            alive.add(pid)
+        except OSError:
+            dead.append(pid)
+    for pid in dead:
+        _tracked_pids.pop(pid, None)
+    return alive
+
+
+def unregister_pids_for_task(task_id: str) -> None:
+    """Remove all PIDs associated with a given task."""
+    to_remove = [pid for pid, tid in _tracked_pids.items() if tid == task_id]
+    for pid in to_remove:
+        _tracked_pids.pop(pid, None)
+    if to_remove:
+        logger.info("Unregistered %d tracked PID(s) for task %s: %s", len(to_remove), task_id, to_remove)
 
 
 def get_detector() -> ProcessDetector:
@@ -277,7 +396,8 @@ def get_detector() -> ProcessDetector:
     if _detector is None:
         if os.name == "nt":
             _detector = WindowsDetector()
-        # Future: elif sys.platform == "darwin": _detector = MacOSDetector()
+        elif sys.platform == "darwin":
+            _detector = MacOSDetector()
         else:
             _detector = UnixDetector()
     return _detector
