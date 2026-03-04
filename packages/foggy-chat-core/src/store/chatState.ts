@@ -268,12 +268,15 @@ export function createChatState(): ChatState {
       }
       case AipMessageType.ERROR: {
         const p = aip.payload as ErrorPayload
+        // Backend may store error text as 'content' (WorkerStreamRelay) or 'error' (ErrorPayload)
+        const raw = aip.payload as Record<string, unknown>
+        const errorText = p.error || (raw?.content as string) || ''
         messages.value.push({
           id: aip.messageId,
           type: aip.type,
           sender: 'system',
           content: '',
-          error: p.error,
+          error: errorText,
           timestamp: aip.timestamp,
         })
         break

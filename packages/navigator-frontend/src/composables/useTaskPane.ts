@@ -155,6 +155,17 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
             content: msg.content || '',
             timestamp: ts,
           })
+        } else if (msgType === 'STATE_SYNC' && meta?.subtype === 'waiting') {
+          // Render transient "waiting" hints as permanent text in history view,
+          // otherwise processAipMessage's removeWaitingHint() deletes them
+          // when the subsequent ERROR message is processed.
+          chatState.messages.value.push({
+            id: msg.id,
+            type: AipMessageType.TEXT_COMPLETE,
+            sender: 'assistant',
+            content: msg.content || 'Waiting for response...',
+            timestamp: ts,
+          })
         } else if (msgType && msgType in AipMessageType) {
           // Structured messages — reconstruct from metadata via processAipMessage
           chatState.processAipMessage({
