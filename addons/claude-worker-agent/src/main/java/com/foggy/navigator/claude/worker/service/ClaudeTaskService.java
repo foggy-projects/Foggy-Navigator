@@ -562,24 +562,39 @@ public class ClaudeTaskService {
     }
 
     /**
-     * 从等待权限恢复为运行中
+     * 从等待权限恢复为运行中。
+     *
+     * @return true 如果成功将状态从 AWAITING_PERMISSION 更新为 RUNNING
      */
     @Transactional
-    public void resumeFromPermission(String taskId, String permissionId, String decision,
-                                      Map<String, String> answers) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
-            if ("AWAITING_PERMISSION".equals(entity.getStatus())) {
-                String prev = entity.getStatus();
-                entity.setStatus("RUNNING");
-                taskRepository.save(entity);
-                log.info("Task resumed from permission: taskId={}", taskId);
-                publishStatusChange(entity, prev);
-                conversationConfigService.updateInteractionState(entity.getSessionId(), "PROCESSING");
+    public boolean resumeFromPermission(String taskId, String permissionId, String decision,
+                                         Map<String, String> answers) {
+        var opt = taskRepository.findByTaskId(taskId);
+        if (opt.isEmpty()) {
+            log.warn("resumeFromPermission: task not found: taskId={}", taskId);
+            return false;
+        }
+        ClaudeTaskEntity entity = opt.get();
+        String currentStatus = entity.getStatus();
+        if (!"AWAITING_PERMISSION".equals(currentStatus)) {
+            log.warn("resumeFromPermission: task status is '{}', expected AWAITING_PERMISSION — "
+                    + "forcing to RUNNING anyway (permission was already relayed to Worker): taskId={}",
+                    currentStatus, taskId);
+            // 即使状态不是 AWAITING_PERMISSION，也强制恢复为 RUNNING。
+            // 因为 Worker 已经收到了 approve 响应，CLI 会继续执行。
+            // 典型场景：SSE 竞态导致 status 被短暂改为其他值。
+        }
+        String prev = entity.getStatus();
+        entity.setStatus("RUNNING");
+        entity.setErrorMessage(null); // 清除之前可能的错误信息
+        taskRepository.save(entity);
+        log.info("Task resumed from permission: taskId={}, prev={}", taskId, prev);
+        publishStatusChange(entity, prev);
+        conversationConfigService.updateInteractionState(entity.getSessionId(), "PROCESSING");
 
-                // Persist the user's response so it survives page refresh
-                publishConfirmationResponse(entity.getSessionId(), taskId, permissionId, decision, answers);
-            }
-        });
+        // Persist the user's response so it survives page refresh
+        publishConfirmationResponse(entity.getSessionId(), taskId, permissionId, decision, answers);
+        return true;
     }
 
     private void publishConfirmationResponse(String sessionId, String taskId, String permissionId,

@@ -148,11 +148,14 @@ public class ClaudeTaskController {
                     .block(java.time.Duration.ofSeconds(10));
 
             // Resume task from AWAITING_PERMISSION to RUNNING + persist response
-            taskService.resumeFromPermission(taskId, form.getPermissionId(),
+            boolean resumed = taskService.resumeFromPermission(taskId, form.getPermissionId(),
                     form.getDecision(), form.getAnswers());
+            if (!resumed) {
+                log.warn("respondToPermission: Worker relay succeeded but DB update failed: taskId={}", taskId);
+            }
 
             return RX.ok(Map.of("taskId", taskId, "permissionId", form.getPermissionId(),
-                    "decision", form.getDecision()));
+                    "decision", form.getDecision(), "resumed", resumed));
         } catch (Exception e) {
             log.warn("Failed to respond to permission: taskId={}, error={}", taskId, e.getMessage());
             return RX.failB("响应权限请求失败: " + e.getMessage());
