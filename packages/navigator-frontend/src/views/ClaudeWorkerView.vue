@@ -209,7 +209,17 @@
               创建 Worktree
             </el-button>
             <el-button size="small" @click="openFileBrowser">浏览文件</el-button>
-            <el-button size="small" @click="openCodeServer">VS Code</el-button>
+            <el-dropdown size="small" trigger="click" @command="openCodeServer">
+              <el-button size="small">
+                VS Code<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="internal">内网访问</el-dropdown-item>
+                  <el-dropdown-item command="public">公网访问</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button size="small" @click="handleToggleTerminal">终端</el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
             <el-button
@@ -430,42 +440,8 @@
           </div>
         </div>
 
-        <!-- Worker Tabs: Agents & CLI Processes -->
+        <!-- Worker Tabs: CLI Processes & Agents -->
         <el-tabs v-model="workerActiveTab" class="worker-tabs" @tab-change="handleWorkerTabChange">
-          <el-tab-pane name="agents">
-            <template #label>
-              <span>Coding Agents</span>
-              <el-tag v-if="agentsForWorker.length > 0" size="small" type="info" style="margin-left: 6px;">{{ agentsForWorker.length }}</el-tag>
-            </template>
-            <div class="tab-pane-toolbar">
-              <el-button size="small" @click="openAgentRegisterDialog">+ 注册 Agent</el-button>
-            </div>
-            <div v-if="agentsForWorker.length === 0" class="agent-empty">
-              暂无 Agent，点击上方注册
-            </div>
-            <div v-for="agent in agentsForWorker" :key="agent.agentId" class="agent-card">
-              <div class="agent-card-info">
-                <div class="agent-card-name">{{ agent.name }}</div>
-                <div v-if="agent.description" class="agent-card-desc">{{ agent.description }}</div>
-                <div v-if="agent.projectSummary" class="agent-card-summary">{{ agent.projectSummary }}</div>
-                <div class="agent-card-meta">
-                  <span v-if="agent.defaultDirectoryId" class="agent-dir-tag">
-                    &#128193; {{ dirNameById(agent.defaultDirectoryId) }}
-                    <span v-if="dirBranchById(agent.defaultDirectoryId)" class="agent-branch">({{ dirBranchById(agent.defaultDirectoryId) }})</span>
-                  </span>
-                  <span v-if="agent.authorizedDirectories" class="agent-dir-count">
-                    {{ agent.authorizedDirectories.length }} 个授权目录
-                  </span>
-                </div>
-              </div>
-              <div class="agent-card-actions">
-                <el-button size="small" text @click="openAgentEditDialog(agent)">编辑</el-button>
-                <el-button size="small" text @click="openAgentBindingDialog(agent)">目录</el-button>
-                <el-button size="small" text type="danger" @click="handleDeleteAgent(agent)">删除</el-button>
-              </div>
-            </div>
-          </el-tab-pane>
-
           <el-tab-pane name="processes">
             <template #label>
               <span>CLI 进程</span>
@@ -523,6 +499,40 @@
                 </template>
               </el-table-column>
             </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane name="agents">
+            <template #label>
+              <span>Coding Agents</span>
+              <el-tag v-if="agentsForWorker.length > 0" size="small" type="info" style="margin-left: 6px;">{{ agentsForWorker.length }}</el-tag>
+            </template>
+            <div class="tab-pane-toolbar">
+              <el-button size="small" @click="openAgentRegisterDialog">+ 注册 Agent</el-button>
+            </div>
+            <div v-if="agentsForWorker.length === 0" class="agent-empty">
+              暂无 Agent，点击上方注册
+            </div>
+            <div v-for="agent in agentsForWorker" :key="agent.agentId" class="agent-card">
+              <div class="agent-card-info">
+                <div class="agent-card-name">{{ agent.name }}</div>
+                <div v-if="agent.description" class="agent-card-desc">{{ agent.description }}</div>
+                <div v-if="agent.projectSummary" class="agent-card-summary">{{ agent.projectSummary }}</div>
+                <div class="agent-card-meta">
+                  <span v-if="agent.defaultDirectoryId" class="agent-dir-tag">
+                    &#128193; {{ dirNameById(agent.defaultDirectoryId) }}
+                    <span v-if="dirBranchById(agent.defaultDirectoryId)" class="agent-branch">({{ dirBranchById(agent.defaultDirectoryId) }})</span>
+                  </span>
+                  <span v-if="agent.authorizedDirectories" class="agent-dir-count">
+                    {{ agent.authorizedDirectories.length }} 个授权目录
+                  </span>
+                </div>
+              </div>
+              <div class="agent-card-actions">
+                <el-button size="small" text @click="openAgentEditDialog(agent)">编辑</el-button>
+                <el-button size="small" text @click="openAgentBindingDialog(agent)">目录</el-button>
+                <el-button size="small" text type="danger" @click="handleDeleteAgent(agent)">删除</el-button>
+              </div>
+            </div>
           </el-tab-pane>
         </el-tabs>
 
@@ -767,34 +777,34 @@
       <div class="history-filter-bar">
         <div class="filter-group">
           <span
-            :class="['filter-tag', { active: interactionStateFilter === 'ALL' }]"
-            @click="interactionStateFilter = 'ALL'"
+            :class="['filter-tag', { active: ALL_STATES.every((s) => interactionStateFilters.has(s)) }]"
+            @click="toggleAllStates()"
           >全部</span>
           <span
-            :class="['filter-tag awaiting', { active: interactionStateFilter === 'AWAITING_REPLY' }]"
-            @click="interactionStateFilter = 'AWAITING_REPLY'"
+            :class="['filter-tag awaiting', { active: interactionStateFilters.has('AWAITING_REPLY') }]"
+            @click="toggleStateFilter('AWAITING_REPLY')"
           >待回复</span>
           <span
-            :class="['filter-tag', { active: interactionStateFilter === 'PROCESSING' }]"
-            @click="interactionStateFilter = 'PROCESSING'"
+            :class="['filter-tag', { active: interactionStateFilters.has('PROCESSING') }]"
+            @click="toggleStateFilter('PROCESSING')"
           >处理中</span>
           <span
-            :class="['filter-tag', { active: interactionStateFilter === 'ARCHIVED' }]"
-            @click="interactionStateFilter = 'ARCHIVED'"
+            :class="['filter-tag', { active: interactionStateFilters.has('ARCHIVED') }]"
+            @click="toggleStateFilter('ARCHIVED')"
           >已归档</span>
         </div>
         <div class="filter-group">
           <span
-            :class="['filter-tag', { active: sessionSourceFilter === 'PLATFORM' }]"
-            @click="sessionSourceFilter = 'PLATFORM'"
+            :class="['filter-tag', { active: sessionSourceFilters.has('PLATFORM') }]"
+            @click="toggleSourceFilter('PLATFORM')"
           >平台</span>
           <span
-            :class="['filter-tag', { active: sessionSourceFilter === 'SYNCED' }]"
-            @click="sessionSourceFilter = 'SYNCED'"
+            :class="['filter-tag', { active: sessionSourceFilters.has('SYNCED') }]"
+            @click="toggleSourceFilter('SYNCED')"
           >同步</span>
           <span
-            :class="['filter-tag', { active: sessionSourceFilter === 'ALL' }]"
-            @click="sessionSourceFilter = 'ALL'"
+            :class="['filter-tag', { active: ALL_SOURCES.every((s) => sessionSourceFilters.has(s)) }]"
+            @click="toggleAllSources()"
           >全部来源</span>
         </div>
       </div>
@@ -1658,7 +1668,7 @@
 import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Back } from '@element-plus/icons-vue'
+import { ArrowDown, Back } from '@element-plus/icons-vue'
 import { useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useCodingAgent } from '@/composables/useCodingAgent'
 import { useInputMemory } from '@/composables/useInputMemory'
@@ -1725,7 +1735,7 @@ const paneAgentContext = ref<Map<string, Array<{ agentName: string; question: st
 const paneAgentContextIds = ref<Map<string, Map<string, string>>>(new Map())
 
 // --- Worker tabs state (Agents / CLI Processes) ---
-const workerActiveTab = ref('agents')
+const workerActiveTab = ref('processes')
 function handleWorkerTabChange(tab: string) {
   if (tab === 'processes' && cliProcesses.value.length === 0) {
     loadCliProcesses()
@@ -1845,15 +1855,50 @@ const batchAuthSessionIds = ref<string[]>([])
 const batchSelectMode = ref(false)
 const selectedConvIds = ref<Set<string>>(new Set())
 
-// Session source filter: 'ALL' | 'PLATFORM' | 'SYNCED'
-const sessionSourceFilter = ref<'ALL' | 'PLATFORM' | 'SYNCED'>('PLATFORM')
+// Multi-select filter: interaction states (default: 待回复 + 处理中)
+const ALL_STATES = ['AWAITING_REPLY', 'PROCESSING', 'ARCHIVED'] as const
+const interactionStateFilters = ref<Set<string>>(new Set(['AWAITING_REPLY', 'PROCESSING']))
 
-// Interaction state filter
-const interactionStateFilter = ref<'ALL' | 'AWAITING_REPLY' | 'PROCESSING' | 'ARCHIVED'>('ALL')
+// Multi-select filter: session sources (default: 平台)
+const ALL_SOURCES = ['PLATFORM', 'SYNCED'] as const
+const sessionSourceFilters = ref<Set<string>>(new Set(['PLATFORM']))
 
-/** Compute the backend state param from the current filter */
+/** Toggle a state filter value */
+function toggleStateFilter(value: string) {
+  const s = new Set(interactionStateFilters.value)
+  if (s.has(value)) {
+    if (s.size > 1) s.delete(value) // 至少保留一个选中
+  } else {
+    s.add(value)
+  }
+  interactionStateFilters.value = s
+}
+/** Select all state filters */
+function toggleAllStates() {
+  if (ALL_STATES.every((v) => interactionStateFilters.value.has(v))) return
+  interactionStateFilters.value = new Set(ALL_STATES)
+}
+/** Toggle a source filter value */
+function toggleSourceFilter(value: string) {
+  const s = new Set(sessionSourceFilters.value)
+  if (s.has(value)) {
+    if (s.size > 1) s.delete(value)
+  } else {
+    s.add(value)
+  }
+  sessionSourceFilters.value = s
+}
+/** Select all source filters */
+function toggleAllSources() {
+  if (ALL_SOURCES.every((v) => sessionSourceFilters.value.has(v))) return
+  sessionSourceFilters.value = new Set(ALL_SOURCES)
+}
+
+/** Compute the backend state param from the current multi-select filter */
 function currentStateParam(): string | undefined {
-  return interactionStateFilter.value === 'ALL' ? undefined : interactionStateFilter.value
+  // 全部选中 → 无过滤
+  if (ALL_STATES.every((s) => interactionStateFilters.value.has(s))) return undefined
+  return [...interactionStateFilters.value].join(',')
 }
 
 /** Reload history tasks using the current interactionState filter */
@@ -1866,10 +1911,10 @@ function reloadFilteredTasks() {
   }
 }
 
-// When filter changes, reload from page 0 with new filter
-watch(interactionStateFilter, () => {
+// When state filter changes, reload from page 0 with new filter
+watch(interactionStateFilters, () => {
   reloadFilteredTasks()
-})
+}, { deep: true })
 
 // Tag dialog state
 const showTagDialog = ref(false)
@@ -2420,20 +2465,20 @@ const allConversations = computed(() =>
 const activeConversations = computed(() => {
   let list = allConversations.value
 
-  // Source filter (client-side, orthogonal to state)
-  const filter = sessionSourceFilter.value
-  if (filter !== 'ALL') {
+  // Source filter (client-side, multi-select)
+  const allSourcesSelected = ALL_SOURCES.every((s) => sessionSourceFilters.value.has(s))
+  if (!allSourcesSelected) {
     list = list.filter((conv) => {
       const isPlatform = conv.tasks.some((t) =>
         t.source === 'PLATFORM' || (t.source == null && t.fileCheckpointingEnabled === true),
       )
-      if (filter === 'PLATFORM') return isPlatform
-      return !isPlatform // SYNCED
+      if (sessionSourceFilters.value.has('PLATFORM') && !sessionSourceFilters.value.has('SYNCED')) return isPlatform
+      if (sessionSourceFilters.value.has('SYNCED') && !sessionSourceFilters.value.has('PLATFORM')) return !isPlatform
+      return true
     })
   }
 
-  // interactionState filtering is done by the backend API
-  // "全部" shows truly all conversations (backend handles exclusion/inclusion)
+  // interactionState filtering is done by the backend API (multi-select via comma-separated param)
 
   return list
 })
@@ -2540,6 +2585,7 @@ function handleTaskUpdateEvent(event: Event) {
         inTasks.status = newStatus as any
         if (detail.errorMessage) inTasks.errorMessage = detail.errorMessage
       }
+      workerState.loadAwaitingReplyTasks()
     }
   } else {
     workerState.loadActiveTasks() // Fallback for legacy format
@@ -2735,9 +2781,11 @@ function selectWorker(workerId: string) {
   selectedDirectoryId.value = null
   directorySkills.value = []
   cliProcesses.value = []
-  workerActiveTab.value = 'agents'
+  workerActiveTab.value = 'processes'
   focusedPaneId.value = null
   exitBatchSelectMode()
+  // Load CLI processes when selecting a worker
+  loadCliProcesses()
   // Suspend SSE on other workspaces to free browser connections (HTTP/1.1 limit: 6)
   const newKey = `worker:${workerId}`
   suspendOtherWorkspaces(newKey)
@@ -2775,8 +2823,7 @@ function selectDirectory(workerId: string, directoryId: string) {
 
 async function loadDirectoryTasks() {
   if (!selectedDirectoryId.value) return
-  // Map filter to backend state param: ALL → undefined (backend hides archived by default)
-  const stateParam = interactionStateFilter.value === 'ALL' ? undefined : interactionStateFilter.value
+  const stateParam = currentStateParam()
   try {
     const result = await dirApi.listTasksByDirectoryPaged(
       selectedDirectoryId.value,
@@ -3070,7 +3117,7 @@ function openFileBrowser() {
   window.open(url, '_blank', 'width=1400,height=900')
 }
 
-async function openCodeServer() {
+async function openCodeServer(network: 'internal' | 'public') {
   if (!selectedDirectoryId.value) return
   const worker = selectedWorkerEntity.value
   if (!worker) return
@@ -3087,12 +3134,16 @@ async function openCodeServer() {
 
   const folder = folderPath ? encodeURIComponent(folderPath) : ''
 
-  // 根据当前访问网络选择公网/内网 URL
-  const internal = isInternalNetwork()
-  const base = internal
+  // 根据用户选择的网络类型选择公网/内网 URL
+  const base = network === 'internal'
     ? (worker.codeServerInternalUrl?.replace(/\/+$/, '') || '')
     : (worker.codeServerPublicUrl?.replace(/\/+$/, '') || '')
     || `${window.location.origin}/code`
+
+  if (!base) {
+    ElMessage.warning(`未配置${network === 'internal' ? '内网' : '公网'}地址，请先在编辑中配置`)
+    return
+  }
 
   // 密码 → 复制到剪贴板
   if (worker.codeServerPasswordConfigured && selectedWorkerId.value) {
@@ -3678,8 +3729,12 @@ async function abortPane(paneId: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane?.task.value) return
   try {
-    await workerState.abortTask(pane.task.value.taskId)
+    const taskId = pane.task.value.taskId
+    await workerState.abortTask(taskId)
     pane.task.value.status = 'ABORTED'
+    // Immediately remove from activeTasks (don't wait for SSE)
+    workerState.activeTasks.value = workerState.activeTasks.value.filter(t => t.taskId !== taskId)
+    workerState.loadAwaitingReplyTasks()
     if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
     ElMessage.info('任务已中止')
   } catch {
@@ -3901,8 +3956,11 @@ async function handleAbortTask(taskId: string) {
     })
     await workerState.abortTask(taskId)
     ElMessage.success('任务已中止')
+    // Immediately remove from activeTasks (don't wait for SSE)
+    workerState.activeTasks.value = workerState.activeTasks.value.filter(t => t.taskId !== taskId)
     // Refresh task lists
     workerState.loadTasks()
+    workerState.loadAwaitingReplyTasks()
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
     }
@@ -4022,6 +4080,7 @@ async function handleArchiveConversation(conv: ConversationGroup) {
     )
     await workerState.archiveConversation(conv.sessionId)
     ElMessage.success('已归档')
+    reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('归档失败')
   }
@@ -4037,6 +4096,7 @@ async function handlePaneArchive(sessionId?: string) {
     )
     await workerState.archiveConversation(sessionId)
     ElMessage.success('已归档')
+    reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('归档失败')
   }
@@ -4046,6 +4106,7 @@ async function handleUnarchiveConversation(conv: ConversationGroup) {
   try {
     await workerState.unarchiveConversation(conv.sessionId)
     ElMessage.success('已取消归档')
+    reloadFilteredTasks()
   } catch {
     ElMessage.error('取消归档失败')
   }

@@ -107,8 +107,64 @@ class MockResponseConfig(BaseModel):
     tool_calls: Optional[List[Dict]] = None
 
 
+class AnthropicResponseConfig(BaseModel):
+    """Anthropic Messages API 响应配置"""
+
+    thinking: Optional[str] = None  # 思维链内容（可选）
+    content: str  # 文本响应
+    tool_uses: Optional[List[Dict[str, Any]]] = None  # tool_use 块列表
+
+
+class AnthropicStreamConfig(BaseModel):
+    """Anthropic 流式配置"""
+
+    fixture_file: Optional[str] = None  # JSONL fixture 文件路径（优先使用）
+    chunk_size: int = 20  # 每块字符数（无 fixture 时使用）
+    delay_ms: int = 30  # 块间延迟
+
+
 class ResponseRule(BaseModel):
     name: str  # 规则名称（唯一标识）
     match: MatchRule  # 匹配规则
-    response: MockResponseConfig  # 响应配置
-    stream: Optional[StreamConfig] = None  # 流式配置
+    response: MockResponseConfig  # OpenAI 格式响应配置
+    stream: Optional[StreamConfig] = None  # OpenAI 流式配置
+    anthropic: Optional[AnthropicResponseConfig] = None  # Anthropic 格式响应
+    anthropic_stream: Optional[AnthropicStreamConfig] = None  # Anthropic 流式配置
+
+
+# ========== Anthropic Messages API 请求/响应模型 ==========
+
+
+class AnthropicContentBlock(BaseModel):
+    """Anthropic 消息中的内容块"""
+
+    type: str  # "text" | "image" | "tool_use" | "tool_result"
+    text: Optional[str] = None
+    # tool_result 字段
+    tool_use_id: Optional[str] = None
+    content: Optional[Any] = None  # tool_result 的内容
+    # tool_use 字段
+    id: Optional[str] = None
+    name: Optional[str] = None
+    input: Optional[Dict[str, Any]] = None
+
+
+class AnthropicMessage(BaseModel):
+    """Anthropic 消息格式"""
+
+    role: str  # "user" | "assistant"
+    content: Any  # str 或 List[AnthropicContentBlock]
+
+
+class AnthropicMessagesRequest(BaseModel):
+    """Anthropic POST /v1/messages 请求"""
+
+    model: str
+    max_tokens: int = 4096
+    messages: List[AnthropicMessage]
+    system: Optional[str] = None
+    stream: Optional[bool] = False
+    tools: Optional[List[Dict[str, Any]]] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    metadata: Optional[Dict[str, Any]] = None

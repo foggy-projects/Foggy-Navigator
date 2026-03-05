@@ -107,7 +107,8 @@ public class WorkerStreamRelay {
                     event.getAgentTeamsJson(), event.getImages(),
                     event.getApiKey(), event.getAuthToken(), event.getBaseUrl(),
                     event.getPermissionMode(), event.getNavigatorApiKey(),
-                    event.getTaskId(), event.getSessionId());
+                    event.getTaskId(), event.getSessionId(),
+                    event.getExtraEnvVars());
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, 0);
@@ -554,6 +555,9 @@ public class WorkerStreamRelay {
                 payload.put("planReview", true);
                 if (event.getAllowedPrompts() != null) {
                     payload.put("allowedPrompts", event.getAllowedPrompts());
+                }
+                if (event.getPlan() != null) {
+                    payload.put("plan", event.getPlan());
                 }
                 payload.put("taskId", taskId);
                 publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);

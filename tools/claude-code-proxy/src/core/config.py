@@ -20,6 +20,11 @@ class Config:
         self.request_timeout = int(os.environ.get("REQUEST_TIMEOUT", "90"))
         self.max_retries = int(os.environ.get("MAX_RETRIES", "2"))
 
+        # Context truncation settings (for passthrough retry on input-length errors)
+        self.truncation_tool_result_limit = int(os.environ.get("TRUNCATION_TOOL_RESULT_LIMIT", "30000"))
+        self.truncation_keep_head_messages = int(os.environ.get("TRUNCATION_KEEP_HEAD_MESSAGES", "4"))
+        self.truncation_keep_tail_messages = int(os.environ.get("TRUNCATION_KEEP_TAIL_MESSAGES", "40"))
+
         # Global model settings (fallback for per-key)
         self.big_model = os.environ.get("BIG_MODEL", "gpt-4o")
         self.middle_model = os.environ.get("MIDDLE_MODEL", self.big_model)

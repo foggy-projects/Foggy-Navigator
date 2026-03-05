@@ -140,6 +140,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       if (connectVersion !== myVersion) return
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i]
+        if (!msg) continue
         // Count USER/ASSISTANT messages (same口径 as JSONL count)
         if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
           dbMessageCount++

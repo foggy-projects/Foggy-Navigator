@@ -38,6 +38,8 @@ public class WorkerEvent {
     private String permissionId;
     @JsonProperty("allowed_prompts")
     private java.util.List<Map<String, Object>> allowedPrompts;
+    /** ExitPlanMode 规划内容（Markdown） */
+    private String plan;
     private java.util.List<Map<String, Object>> questions;
     @JsonProperty("checkpoint_id")
     private String checkpointId;

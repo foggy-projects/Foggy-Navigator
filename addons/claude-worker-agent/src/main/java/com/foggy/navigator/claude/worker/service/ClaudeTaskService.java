@@ -7,6 +7,7 @@ import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import java.util.Arrays;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
@@ -136,6 +137,7 @@ public class ClaudeTaskService {
 
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
+        Map<String, String> extraEnvVars = resolveEnvVars(form.getModelConfigId(), directoryId, userId);
 
         // 5.5. 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
@@ -146,7 +148,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(),
                 authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey));
+                navigatorApiKey, extraEnvVars));
 
         return toDTO(entity);
     }
@@ -230,6 +232,7 @@ public class ClaudeTaskService {
 
         // 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
+        Map<String, String> extraEnvVars = resolveEnvVars(form.getModelConfigId(), directoryId, userId);
 
         // 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
@@ -239,7 +242,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
                 form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(), authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey));
+                navigatorApiKey, extraEnvVars));
 
         return toDTO(entity);
     }
@@ -372,9 +375,18 @@ public class ClaudeTaskService {
         long totalSessions;
 
         if (interactionState != null && !interactionState.isEmpty()) {
-            // 有 interactionState 筛选：先获取匹配的所有 sessionIds，再在其中分页
-            List<String> allMatchingSessionIds =
-                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState);
+            // 支持逗号分隔的多状态筛选（如 "AWAITING_REPLY,PROCESSING"）
+            List<String> states = Arrays.stream(interactionState.split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty()).toList();
+
+            List<String> allMatchingSessionIds;
+            if (states.size() == 1) {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionState(userId, states.get(0));
+            } else {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionStates(userId, states);
+            }
             if (allMatchingSessionIds.isEmpty()) {
                 return SessionPageDTO.builder()
                         .content(List.of()).totalSessions(0).page(page).size(size).build();
@@ -423,8 +435,18 @@ public class ClaudeTaskService {
         long totalSessions;
 
         if (interactionState != null && !interactionState.isEmpty()) {
-            List<String> allMatchingSessionIds =
-                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState);
+            // 支持逗号分隔的多状态筛选
+            List<String> states = Arrays.stream(interactionState.split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty()).toList();
+
+            List<String> allMatchingSessionIds;
+            if (states.size() == 1) {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionState(userId, states.get(0));
+            } else {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionStates(userId, states);
+            }
             if (allMatchingSessionIds.isEmpty()) {
                 return SessionPageDTO.builder()
                         .content(List.of()).totalSessions(0).page(page).size(size).build();
@@ -621,6 +643,7 @@ public class ClaudeTaskService {
             taskRepository.save(entity);
             log.info("Task aborted: taskId={}", taskId);
             publishStatusChange(entity, prev);
+            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
     }
 
@@ -874,6 +897,32 @@ public class ClaudeTaskService {
         }
 
         return new String[]{null, null, null};
+    }
+
+    /**
+     * 从 LLM 模型配置中解析环境变量
+     * 优先级：显式 modelConfigId → 目录默认 modelConfigId
+     */
+    private Map<String, String> resolveEnvVars(String modelConfigId, String directoryId, String userId) {
+        // 优先使用显式指定的 modelConfigId
+        if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            LlmModelConfigDTO config = llmModelManager.getModelConfig(modelConfigId).orElse(null);
+            if (config != null && config.getEnvVars() != null && !config.getEnvVars().isEmpty()) {
+                return config.getEnvVars();
+            }
+        }
+        // Fallback: 目录绑定的默认模型
+        if (directoryId != null && !directoryId.isEmpty()) {
+            WorkingDirectoryEntity dir = workingDirectoryRepository
+                    .findByDirectoryIdAndUserId(directoryId, userId).orElse(null);
+            if (dir != null && dir.getDefaultModelConfigId() != null) {
+                LlmModelConfigDTO config = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
+                if (config != null && config.getEnvVars() != null && !config.getEnvVars().isEmpty()) {
+                    return config.getEnvVars();
+                }
+            }
+        }
+        return null;
     }
 
     private LocalDateTime parseSessionDateTime(Object value) {

@@ -104,6 +104,7 @@ async def _event_generator(
     disallowed_tools: list[str] | None = None,
     foggy_task_id: str | None = None,
     foggy_session_id: str | None = None,
+    extra_env_vars: dict[str, str] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield SSE-compatible ``dict`` payloads from the SDK wrapper stream."""
 
@@ -125,6 +126,7 @@ async def _event_generator(
             disallowed_tools=disallowed_tools,
             foggy_task_id=foggy_task_id,
             foggy_session_id=foggy_session_id,
+            extra_env_vars=extra_env_vars,
         ):
             yield {"event": "message", "data": json.dumps(event)}
     except asyncio.CancelledError:
@@ -187,6 +189,7 @@ async def query(body: QueryRequest):
             disallowed_tools=body.disallowed_tools,
             foggy_task_id=body.foggy_task_id,
             foggy_session_id=body.foggy_session_id,
+            extra_env_vars=body.extra_env_vars,
         ),
         media_type="text/event-stream",
         ping=30,  # SSE keepalive every 30s — prevents proxies/WebClient idle timeout

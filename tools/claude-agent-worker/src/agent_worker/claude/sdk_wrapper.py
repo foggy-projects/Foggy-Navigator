@@ -446,6 +446,7 @@ class SdkWrapper:
         auth_token: str | None = None,
         base_url: str | None = None,
         navigator_api_key: str | None = None,
+        extra_env_vars: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Build an environment-variable dict to inject into the CLI subprocess.
 
@@ -473,6 +474,9 @@ class SdkWrapper:
         # Navigator service token — allows CLI skills to call Navigator API
         if navigator_api_key:
             env["NAVIGATOR_TOKEN"] = navigator_api_key
+        # Extra env vars from LLM model config (e.g. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)
+        if extra_env_vars:
+            env.update(extra_env_vars)
         return env
 
     # -- Agent Teams ---------------------------------------------------------
@@ -597,6 +601,7 @@ class SdkWrapper:
         disallowed_tools: list[str] | None = None,
         foggy_task_id: str | None = None,
         foggy_session_id: str | None = None,
+        extra_env_vars: dict[str, str] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
@@ -647,7 +652,8 @@ class SdkWrapper:
 
         try:
             env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url,
-                                  navigator_api_key=navigator_api_key)
+                                  navigator_api_key=navigator_api_key,
+                                  extra_env_vars=extra_env_vars)
 
             # Inject Foggy platform tracking IDs as environment variables.
             # These don't affect CLI behavior but appear in process listings
@@ -828,6 +834,7 @@ class SdkWrapper:
                             task_id=task_id,
                             permission_id=pid,
                             allowed_prompts=tool_input.get("allowedPrompts"),
+                            plan=tool_input.get("plan"),
                             session_id=current_session_id,
                         ))
                         logger.info(
