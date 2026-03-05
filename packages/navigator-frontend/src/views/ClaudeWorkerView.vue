@@ -2745,7 +2745,7 @@ function selectWorker(workerId: string) {
   selectedDirectoryId.value = null
   directorySkills.value = []
   cliProcesses.value = []
-  workerActiveTab.value = 'agents'
+  workerActiveTab.value = 'processes'
   focusedPaneId.value = null
   exitBatchSelectMode()
   // Suspend SSE on other workspaces to free browser connections (HTTP/1.1 limit: 6)
