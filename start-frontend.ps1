@@ -3,10 +3,12 @@
 # Options:
 #   -Build        先编译前端（更新 dist/nginx，供 Nginx/内网访问用）
 #   -BuildOnly    仅编译，不启动 dev server
+#   -Force        强制重建 workspace 依赖包（foggy-chat-core, foggy-chat）
 
 param(
     [switch]$Build,
-    [switch]$BuildOnly
+    [switch]$BuildOnly,
+    [switch]$Force
 )
 
 $FRONTEND_PORT = 5174
@@ -36,28 +38,54 @@ if (-not (Test-Path "$FRONTEND_DIR\node_modules")) {
 }
 
 # ── Step 2: Build workspace packages (foggy-chat-core, foggy-chat) ────────────
-$chatCoreDist = "$PSScriptRoot\packages\foggy-chat-core\dist"
-$chatDist = "$PSScriptRoot\packages\foggy-chat\dist"
-if (-not (Test-Path $chatCoreDist) -or -not (Test-Path $chatDist)) {
-    Write-Host "[2] Building workspace packages (foggy-chat-core, foggy-chat)..." -ForegroundColor Yellow
-    Push-Location "$PSScriptRoot\packages\foggy-chat-core"
-    pnpm build
-    if ($LASTEXITCODE -ne 0) {
-        Pop-Location
-        Write-Host "  foggy-chat-core build failed!" -ForegroundColor Red
-        exit 1
-    }
-    Pop-Location
-    Push-Location "$PSScriptRoot\packages\foggy-chat"
-    pnpm build
-    if ($LASTEXITCODE -ne 0) {
-        Pop-Location
-        Write-Host "  foggy-chat build failed!" -ForegroundColor Red
-        exit 1
-    }
-    Pop-Location
+$chatCoreDir = "$PSScriptRoot\packages\foggy-chat-core"
+$chatDir     = "$PSScriptRoot\packages\foggy-chat"
+$wsNeedsBuild = $false
+
+if ($Force) {
+    Write-Host "[2] -Force: cleaning workspace dist..." -ForegroundColor Yellow
+    Remove-Item "$chatCoreDir\dist" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item "$chatDir\dist" -Recurse -Force -ErrorAction SilentlyContinue
+    $wsNeedsBuild = $true
+} elseif (-not (Test-Path "$chatCoreDir\dist") -or -not (Test-Path "$chatDir\dist") -or
+          -not (Get-ChildItem "$chatCoreDir\dist" -Filter "*.d.ts" -Recurse -ErrorAction SilentlyContinue) -or
+          -not (Get-ChildItem "$chatDir\dist" -Filter "*.d.ts" -Recurse -ErrorAction SilentlyContinue)) {
+    $wsNeedsBuild = $true
 } else {
-    Write-Host "[2] Workspace packages already built" -ForegroundColor Gray
+    # Stale detection: compare newest src file vs oldest dist file
+    $coreNewestSrc  = (Get-ChildItem "$chatCoreDir\src" -Recurse -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+    $coreOldestDist = (Get-ChildItem "$chatCoreDir\dist" -Recurse -File | Sort-Object LastWriteTime | Select-Object -First 1).LastWriteTime
+    $chatNewestSrc  = (Get-ChildItem "$chatDir\src" -Recurse -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+    $chatOldestDist = (Get-ChildItem "$chatDir\dist" -Recurse -File | Sort-Object LastWriteTime | Select-Object -First 1).LastWriteTime
+
+    if ($coreNewestSrc -and $coreOldestDist -and $coreNewestSrc -gt $coreOldestDist) {
+        Write-Host "  foggy-chat-core src is newer than dist, rebuilding..." -ForegroundColor Yellow
+        $wsNeedsBuild = $true
+    } elseif ($chatNewestSrc -and $chatOldestDist -and $chatNewestSrc -gt $chatOldestDist) {
+        Write-Host "  foggy-chat src is newer than dist, rebuilding..." -ForegroundColor Yellow
+        $wsNeedsBuild = $true
+    }
+}
+
+if ($wsNeedsBuild) {
+    Write-Host "[2] Building workspace packages (foggy-chat-core, foggy-chat)..." -ForegroundColor Yellow
+    Set-Location "$chatCoreDir"
+    pnpm build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  foggy-chat-core build FAILED!" -ForegroundColor Red
+        Set-Location $PSScriptRoot
+        exit 1
+    }
+    Set-Location "$chatDir"
+    pnpm build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  foggy-chat build FAILED!" -ForegroundColor Red
+        Set-Location $PSScriptRoot
+        exit 1
+    }
+    Set-Location $PSScriptRoot
+} else {
+    Write-Host "[2] Workspace packages up-to-date" -ForegroundColor Gray
 }
 
 # ── Step 3: Build for Nginx（-Build 或 -BuildOnly 时执行）────────────────────
