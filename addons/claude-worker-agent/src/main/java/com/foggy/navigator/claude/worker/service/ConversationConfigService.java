@@ -305,6 +305,13 @@ public class ConversationConfigService {
     }
 
     /**
+     * 查询多个状态的 sessionIds（多选筛选）
+     */
+    public List<String> findSessionIdsByInteractionStates(String userId, List<String> states) {
+        return configRepository.findSessionIdsByInteractionStateIn(userId, states);
+    }
+
+    /**
      * 更新会话交互状态
      */
     @Transactional

@@ -21,6 +21,8 @@ export interface ChatMessage {
   planReview?: boolean
   /** Allowed tool prompts from ExitPlanMode */
   allowedPrompts?: AllowedPrompt[]
+  /** Execution plan content (Markdown) from ExitPlanMode */
+  plan?: string
   /** Populated from CONFIRMATION_RESPONSE: maps question index → answered value string */
   answeredValues?: Record<number, string>
   /** Whether this error supports manual reconnection */

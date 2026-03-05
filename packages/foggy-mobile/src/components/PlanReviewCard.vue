@@ -9,6 +9,10 @@
       <text class="plan-hint">
         {{ isPending ? 'Claude 已完成方案设计，请选择执行方式：' : resolvedHint }}
       </text>
+      <!-- plan content (plain text with pre-wrap) -->
+      <view v-if="planContent" class="plan-content-wrap">
+        <text class="plan-content">{{ planContent }}</text>
+      </view>
       <!-- allowedPrompts list -->
       <view v-if="isPending && allowedPrompts.length" class="prompts-list">
         <view v-for="(p, i) in allowedPrompts" :key="i" class="prompt-item">
@@ -61,6 +65,8 @@ const isPending = computed(() => props.message.permissionStatus === 'pending')
 const allowedPrompts = computed<AllowedPrompt[]>(() =>
   props.message.allowedPrompts || [],
 )
+
+const planContent = computed(() => props.message.plan || '')
 
 const statusClass = computed(() => {
   switch (props.message.permissionStatus) {
@@ -125,6 +131,24 @@ function handleReject() {
 
 .card-body { margin-top: 16rpx; }
 .plan-hint { font-size: 26rpx; color: #606266; }
+
+.plan-content-wrap {
+  margin-top: 16rpx;
+  max-height: 480rpx;
+  overflow: hidden;
+  padding: 16rpx 20rpx;
+  background: #fff;
+  border: 2rpx solid #e8daef;
+  border-radius: 12rpx;
+}
+
+.plan-content {
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: #303133;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 .prompts-list { margin-top: 16rpx; padding: 16rpx; background: rgba(155, 89, 182, 0.06); border-radius: 8rpx; }
 .prompt-item { display: flex; align-items: baseline; gap: 12rpx; margin-bottom: 8rpx; }

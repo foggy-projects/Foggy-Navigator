@@ -834,6 +834,7 @@ class SdkWrapper:
                             task_id=task_id,
                             permission_id=pid,
                             allowed_prompts=tool_input.get("allowedPrompts"),
+                            plan=tool_input.get("plan"),
                             session_id=current_session_id,
                         ))
                         logger.info(

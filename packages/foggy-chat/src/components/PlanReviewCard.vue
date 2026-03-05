@@ -9,6 +9,10 @@
       <p class="plan-hint">
         {{ isPending ? 'Claude 已完成方案设计，请选择执行方式：' : resolvedHint }}
       </p>
+      <!-- plan content (Markdown) -->
+      <div v-if="planContent" class="plan-content-wrap">
+        <div class="plan-content markdown-body" v-html="renderedPlan"></div>
+      </div>
       <!-- allowedPrompts list -->
       <div v-if="isPending && allowedPrompts.length" class="prompts-list">
         <div v-for="(p, i) in allowedPrompts" :key="i" class="prompt-item">
@@ -49,6 +53,13 @@
 import { computed, ref } from 'vue'
 import type { ChatMessage } from '../types/chat'
 import type { AllowedPrompt } from '../types/aip'
+import MarkdownIt from 'markdown-it'
+
+const md = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+})
 
 const props = defineProps<{
   message: ChatMessage
@@ -64,6 +75,9 @@ const isPending = computed(() => props.message.permissionStatus === 'pending')
 const allowedPrompts = computed<AllowedPrompt[]>(() =>
   props.message.allowedPrompts || [],
 )
+
+const planContent = computed(() => props.message.plan || '')
+const renderedPlan = computed(() => planContent.value ? md.render(planContent.value) : '')
 
 const statusClass = computed(() => {
   switch (props.message.permissionStatus) {
@@ -158,6 +172,43 @@ function handleReject() {
   font-size: 13px;
   color: #606266;
   margin: 0;
+}
+
+.plan-content-wrap {
+  margin-top: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #e8daef;
+  border-radius: 6px;
+}
+
+.plan-content {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #303133;
+}
+
+.plan-content :deep(h1) { font-size: 15px; margin: 4px 0 8px; }
+.plan-content :deep(h2) { font-size: 14px; margin: 4px 0 6px; }
+.plan-content :deep(h3) { font-size: 13px; margin: 4px 0 4px; }
+.plan-content :deep(p) { margin: 4px 0; }
+.plan-content :deep(ul),
+.plan-content :deep(ol) { margin: 4px 0; padding-left: 20px; }
+.plan-content :deep(li) { margin: 2px 0; }
+.plan-content :deep(code) {
+  font-size: 11px;
+  background: #f5f5f5;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.plan-content :deep(pre) {
+  background: #f5f5f5;
+  padding: 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 11px;
 }
 
 .prompts-list {

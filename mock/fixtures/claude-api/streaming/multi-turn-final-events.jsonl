@@ -1,0 +1,15 @@
+{"event":"message_start","data":{"message":{"model":"claude-sonnet-4-20250514","id":"msg_mock-multi-turn-001","role":"assistant","type":"message","content":[],"usage":{"input_tokens":385,"output_tokens":0}},"type":"message_start"}}
+{"event":"ping","data":{"type":"ping"}}
+{"event":"content_block_start","data":{"type":"content_block_start","content_block":{"type":"thinking","thinking":""},"index":0}}
+{"event":"content_block_delta","data":{"delta":{"type":"thinking_delta","thinking":"The tool returned weather data for Beijing: temperature is 22°C, partly cloudy, humidity 45%."},"type":"content_block_delta","index":0}}
+{"event":"content_block_delta","data":{"delta":{"type":"thinking_delta","thinking":" I should present this information clearly to the user."},"type":"content_block_delta","index":0}}
+{"event":"content_block_delta","data":{"delta":{"type":"signature_delta","signature":""},"type":"content_block_delta","index":0}}
+{"event":"content_block_stop","data":{"type":"content_block_stop","index":0}}
+{"event":"content_block_start","data":{"type":"content_block_start","content_block":{"type":"text","text":""},"index":1}}
+{"event":"content_block_delta","data":{"delta":{"type":"text_delta","text":"The current weather in Beijing is:\n\n"},"type":"content_block_delta","index":1}}
+{"event":"content_block_delta","data":{"delta":{"type":"text_delta","text":"- **Temperature**: 22°C\n- **Condition**: Partly cloudy\n"},"type":"content_block_delta","index":1}}
+{"event":"content_block_delta","data":{"delta":{"type":"text_delta","text":"- **Humidity**: 45%\n\n"},"type":"content_block_delta","index":1}}
+{"event":"content_block_delta","data":{"delta":{"type":"text_delta","text":"It's a pleasant day — comfortable temperature with moderate humidity. A good day to be outdoors!"},"type":"content_block_delta","index":1}}
+{"event":"content_block_stop","data":{"type":"content_block_stop","index":1}}
+{"event":"message_delta","data":{"delta":{"stop_reason":"end_turn"},"type":"message_delta","usage":{"output_tokens":89,"cache_creation_input_tokens":0,"input_tokens":385,"cache_read_input_tokens":0}}}
+{"event":"message_stop","data":{"type":"message_stop"}}

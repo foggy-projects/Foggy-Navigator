@@ -556,6 +556,9 @@ public class WorkerStreamRelay {
                 if (event.getAllowedPrompts() != null) {
                     payload.put("allowedPrompts", event.getAllowedPrompts());
                 }
+                if (event.getPlan() != null) {
+                    payload.put("plan", event.getPlan());
+                }
                 payload.put("taskId", taskId);
                 publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
                 taskService.setAwaitingPermission(taskId);
