@@ -35,9 +35,34 @@ if (-not (Test-Path "$FRONTEND_DIR\node_modules")) {
     Write-Host "[1] Dependencies ready" -ForegroundColor Gray
 }
 
-# ── Step 2: Build for Nginx（-Build 或 -BuildOnly 时执行）────────────────────
+# ── Step 2: Build workspace packages (foggy-chat-core, foggy-chat) ────────────
+$chatCoreDist = "$PSScriptRoot\packages\foggy-chat-core\dist"
+$chatDist = "$PSScriptRoot\packages\foggy-chat\dist"
+if (-not (Test-Path $chatCoreDist) -or -not (Test-Path $chatDist)) {
+    Write-Host "[2] Building workspace packages (foggy-chat-core, foggy-chat)..." -ForegroundColor Yellow
+    Push-Location "$PSScriptRoot\packages\foggy-chat-core"
+    pnpm build
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        Write-Host "  foggy-chat-core build failed!" -ForegroundColor Red
+        exit 1
+    }
+    Pop-Location
+    Push-Location "$PSScriptRoot\packages\foggy-chat"
+    pnpm build
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        Write-Host "  foggy-chat build failed!" -ForegroundColor Red
+        exit 1
+    }
+    Pop-Location
+} else {
+    Write-Host "[2] Workspace packages already built" -ForegroundColor Gray
+}
+
+# ── Step 3: Build for Nginx（-Build 或 -BuildOnly 时执行）────────────────────
 if ($Build -or $BuildOnly) {
-    Write-Host "[2] Building for Nginx (dist/nginx)..." -ForegroundColor Yellow
+    Write-Host "[3] Building for Nginx (dist/nginx)..." -ForegroundColor Yellow
     $buildStart = Get-Date
 
     Set-Location "$PSScriptRoot\$FRONTEND_DIR"
@@ -70,10 +95,10 @@ if ($Build -or $BuildOnly) {
         exit 0
     }
 } else {
-    Write-Host "[2] Skip build (use -Build to update Nginx dist)" -ForegroundColor Gray
+    Write-Host "[3] Skip build (use -Build to update Nginx dist)" -ForegroundColor Gray
 }
 
-# ── Step 3: Start dev server ───────────────────────────────────────────────────
+# ── Step 4: Start dev server ───────────────────────────────────────────────────
 $portConnection = Get-NetTCPConnection -LocalPort $FRONTEND_PORT -State Listen -ErrorAction SilentlyContinue
 if ($portConnection) {
     $procId = $portConnection.OwningProcess | Select-Object -First 1
@@ -90,7 +115,7 @@ if ($portConnection) {
     Start-Sleep -Seconds 2
 }
 
-Write-Host "[3] Starting dev server..." -ForegroundColor Yellow
+Write-Host "[4] Starting dev server..." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "  Dev  : http://localhost:$FRONTEND_PORT  (Vite hot-reload)" -ForegroundColor Cyan
 Write-Host "  Nginx: http://localhost:80              (needs -Build to update)" -ForegroundColor Cyan
