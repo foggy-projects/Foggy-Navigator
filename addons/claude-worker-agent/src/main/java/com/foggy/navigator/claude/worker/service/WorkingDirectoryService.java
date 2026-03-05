@@ -285,6 +285,17 @@ public class WorkingDirectoryService {
             throw new IllegalArgumentException("Worker not found: " + source.getWorkerId());
         }
 
+        // 检查是否已存在相同的 worktree（相同源目录和分支）
+        Optional<WorkingDirectoryEntity> existing = directoryRepository
+                .findBySourceDirectoryIdAndGitBranch(sourceDirectoryId, branch);
+        if (existing.isPresent()) {
+            WorkingDirectoryEntity existingWorktree = existing.get();
+            throw new IllegalArgumentException(
+                String.format("Worktree 已存在: 分支 '%s' 的 worktree 在目录 '%s' 中已创建 (directoryId: %s)",
+                    branch, existingWorktree.getPath(), existingWorktree.getDirectoryId())
+            );
+        }
+
         // 调用 Worker API 创建 worktree
         ClaudeWorkerClient client = workerService.createClient(worker);
         Map<String, Object> result;
