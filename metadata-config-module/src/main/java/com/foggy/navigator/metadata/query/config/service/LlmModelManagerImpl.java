@@ -13,6 +13,9 @@ import com.foggy.navigator.metadata.query.config.repository.AgentModelOverrideRe
 import com.foggy.navigator.metadata.query.config.repository.LlmModelConfigRepository;
 import com.foggy.navigator.metadata.query.config.repository.ModelWorkerAccessRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,6 +38,8 @@ import java.util.stream.Collectors;
 public class LlmModelManagerImpl implements LlmModelManager {
 
     private static final Duration TEST_TIMEOUT = Duration.ofSeconds(10);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final TypeReference<Map<String, String>> MAP_TYPE_REF = new TypeReference<>() {};
 
     private final LlmModelConfigRepository llmModelRepo;
     private final AgentModelOverrideRepository overrideRepo;
@@ -59,6 +64,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
         entity.setIsDefault(form.getIsDefault() != null ? form.getIsDefault() : false);
         entity.setScope(form.getScope() != null ? form.getScope() : ModelAccessScope.GLOBAL);
+        entity.setEnvVars(serializeEnvVars(form.getEnvVars()));
 
         // 新增项排在最后
         int maxSort = llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc(tenantId).stream()
@@ -102,6 +108,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
                 clearDefaultForCategory(entity.getTenantId(), entity.getCategory());
             }
             entity.setIsDefault(form.getIsDefault());
+        }
+        if (form.getEnvVars() != null) {
+            entity.setEnvVars(serializeEnvVars(form.getEnvVars()));
         }
 
         // scope 变化处理
@@ -415,8 +424,33 @@ public class LlmModelManagerImpl implements LlmModelManager {
         } else {
             dto.setAllowedWorkerIds(Collections.emptyList());
         }
+        dto.setEnvVars(deserializeEnvVars(entity.getEnvVars()));
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());
         return dto;
+    }
+
+    private String serializeEnvVars(Map<String, String> envVars) {
+        if (envVars == null || envVars.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(envVars);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize envVars: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private Map<String, String> deserializeEnvVars(String json) {
+        if (json == null || json.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.readValue(json, MAP_TYPE_REF);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to deserialize envVars: {}", e.getMessage());
+            return null;
+        }
     }
 }
