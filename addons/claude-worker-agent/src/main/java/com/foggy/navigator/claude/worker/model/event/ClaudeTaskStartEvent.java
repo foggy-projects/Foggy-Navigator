@@ -3,6 +3,8 @@ package com.foggy.navigator.claude.worker.model.event;
 import lombok.Getter;
 import org.springframework.context.ApplicationEvent;
 
+import java.util.Map;
+
 /**
  * Claude 任务启动事件
  * 发布后由 WorkerStreamRelay 监听并开始消费 Worker SSE 流
@@ -30,12 +32,14 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
     private final String permissionMode;
     /** Navigator platform API Key (plaintext) for injecting into CLI env */
     private final String navigatorApiKey;
+    /** Extra environment variables from LLM model config, injected into CLI subprocess */
+    private final Map<String, String> extraEnvVars;
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
                                  String workerId, String userId, String prompt,
                                  String cwd, String claudeSessionId) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -44,7 +48,7 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String model, Integer maxTurns, String agentTeamsJson,
                                  String apiKey, String authToken, String baseUrl) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                model, maxTurns, agentTeamsJson, null, apiKey, authToken, baseUrl, null, null);
+                model, maxTurns, agentTeamsJson, null, apiKey, authToken, baseUrl, null, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -54,7 +58,7 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String images,
                                  String apiKey, String authToken, String baseUrl) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
-                model, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl, null, null);
+                model, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl, null, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -66,7 +70,7 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String permissionMode) {
         this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
                 model, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl,
-                permissionMode, null);
+                permissionMode, null, null);
     }
 
     public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
@@ -76,6 +80,19 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
                                  String images,
                                  String apiKey, String authToken, String baseUrl,
                                  String permissionMode, String navigatorApiKey) {
+        this(source, taskId, sessionId, workerId, userId, prompt, cwd, claudeSessionId,
+                model, maxTurns, agentTeamsJson, images, apiKey, authToken, baseUrl,
+                permissionMode, navigatorApiKey, null);
+    }
+
+    public ClaudeTaskStartEvent(Object source, String taskId, String sessionId,
+                                 String workerId, String userId, String prompt,
+                                 String cwd, String claudeSessionId,
+                                 String model, Integer maxTurns, String agentTeamsJson,
+                                 String images,
+                                 String apiKey, String authToken, String baseUrl,
+                                 String permissionMode, String navigatorApiKey,
+                                 Map<String, String> extraEnvVars) {
         super(source);
         this.taskId = taskId;
         this.sessionId = sessionId;
@@ -93,5 +110,6 @@ public class ClaudeTaskStartEvent extends ApplicationEvent {
         this.baseUrl = baseUrl;
         this.permissionMode = permissionMode;
         this.navigatorApiKey = navigatorApiKey;
+        this.extraEnvVars = extraEnvVars;
     }
 }

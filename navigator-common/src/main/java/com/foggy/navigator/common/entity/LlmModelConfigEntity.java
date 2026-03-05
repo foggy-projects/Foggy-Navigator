@@ -86,6 +86,13 @@ public class LlmModelConfigEntity {
     private Integer sortOrder;
 
     /**
+     * 环境变量（JSON 格式存储，如 {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"80"}）
+     * 使用该模型启动 Claude Code 时注入到 CLI 子进程
+     */
+    @Column(columnDefinition = "TEXT")
+    private String envVars;
+
+    /**
      * 更新时间
      */
     @Column(nullable = false)

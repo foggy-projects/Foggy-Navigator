@@ -6,6 +6,7 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * LLM 模型配置 DTO（不含 API Key）
@@ -23,6 +24,7 @@ public class LlmModelConfigDTO {
     private Boolean hasApiKey;
     private ModelAccessScope scope;
     private List<String> allowedWorkerIds;
+    private Map<String, String> envVars;
     private Integer sortOrder;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

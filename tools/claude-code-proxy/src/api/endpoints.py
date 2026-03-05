@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from datetime import datetime
+import copy
 import json
 import uuid
 from typing import Dict, Optional, Tuple
@@ -11,6 +12,7 @@ from src.core.config import config
 from src.core.logging import logger
 from src.core.client import OpenAIClient
 from src.core.key_pool import BackendKey
+from src.core.truncation import truncate_for_retry
 from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
 from src.conversion.request_converter import convert_claude_to_openai
 from src.conversion.response_converter import (
@@ -18,6 +20,7 @@ from src.conversion.response_converter import (
     convert_openai_streaming_to_claude_with_cancellation,
 )
 from src.core.model_manager import model_manager
+from src.core.fixture_capture import fixture_capture
 
 router = APIRouter()
 
@@ -111,6 +114,14 @@ def _strip_thinking_blocks(body_json: dict):
         logger.info(f"Passthrough stripped {stripped} thinking block(s) from messages")
 
 
+def _is_input_length_error(status_code: int, error_text: str) -> bool:
+    """Check if the error is an input-length-exceeded error (e.g. DashScope 169984 limit)."""
+    if status_code != 400:
+        return False
+    lower = error_text.lower()
+    return "input length" in lower or "context length" in lower or "too many tokens" in lower
+
+
 async def _forward_passthrough(
     raw_body: bytes,
     backend_key: BackendKey,
@@ -122,6 +133,10 @@ async def _forward_passthrough(
 
     Model name mapping is still applied (e.g. claude-opus-4-6 -> glm-5) based on
     per-key BIG_MODEL/MIDDLE_MODEL/SMALL_MODEL config.
+
+    Error recovery: if the backend returns a 400 error related to input length,
+    the request body is truncated (tool_results first, then sliding window) and
+    retried once.  If the retry also fails, the original error is returned.
     """
     url = f"{backend_key.base_url.rstrip('/')}{target_path}"
 
@@ -132,6 +147,7 @@ async def _forward_passthrough(
         "temperature", "top_p", "top_k", "stop_sequences",
         "tools", "tool_choice", "metadata",
     }
+    body_json = None  # keep parsed body for potential truncation retry
     try:
         body_json = json.loads(raw_body)
         # Model name mapping (e.g. claude-opus-4-6 -> glm-5)
@@ -184,6 +200,39 @@ async def _forward_passthrough(
                             error_body = await resp.aread()
                             error_text = error_body.decode(errors="replace")
                             logger.error(f"Passthrough stream error {resp.status_code}: {error_text[:1000]}")
+
+                            # ── Truncation retry for input-length errors ──
+                            if body_json is not None and _is_input_length_error(resp.status_code, error_text):
+                                logger.warning("Input length exceeded — truncating and retrying once …")
+                                truncated = truncate_for_retry(
+                                    copy.deepcopy(body_json),
+                                    tool_result_limit=config.truncation_tool_result_limit,
+                                    keep_head=config.truncation_keep_head_messages,
+                                    keep_tail=config.truncation_keep_tail_messages,
+                                )
+                                retry_raw = json.dumps(truncated, ensure_ascii=False).encode("utf-8")
+                                logger.info(
+                                    "Retry body size: %d bytes (original %d bytes)",
+                                    len(retry_raw), len(raw_body),
+                                )
+                                async with client.stream("POST", url, content=retry_raw, headers=headers) as retry_resp:
+                                    if retry_resp.status_code != 200:
+                                        retry_err = await retry_resp.aread()
+                                        logger.error(
+                                            "Truncation retry also failed %d: %s",
+                                            retry_resp.status_code,
+                                            retry_err.decode(errors="replace")[:500],
+                                        )
+                                        # Fall through to return original error below
+                                    else:
+                                        logger.info("Truncation retry succeeded — streaming response")
+                                        async for chunk in retry_resp.aiter_bytes():
+                                            if await http_request.is_disconnected():
+                                                logger.info("Passthrough: client disconnected during retry stream")
+                                                break
+                                            yield chunk
+                                        return  # success — done
+
                             # Extract backend error message for client
                             backend_msg = f"Backend returned {resp.status_code}"
                             try:
@@ -239,8 +288,31 @@ async def _forward_passthrough(
                 error_text = resp.text[:500]
                 logger.error(f"Passthrough non-JSON response {resp.status_code}: {error_text}")
                 body = {"type": "error", "error": {"type": "api_error", "message": error_text}}
+
+            # ── Truncation retry for non-streaming input-length errors ──
             if resp.status_code != 200:
-                logger.error(f"Passthrough error {resp.status_code}: {json.dumps(body, ensure_ascii=False)[:1000]}")
+                error_str = json.dumps(body, ensure_ascii=False)[:1000]
+                logger.error(f"Passthrough error {resp.status_code}: {error_str}")
+
+                if body_json is not None and _is_input_length_error(resp.status_code, error_str):
+                    logger.warning("Input length exceeded (non-stream) — truncating and retrying once …")
+                    truncated = truncate_for_retry(
+                        copy.deepcopy(body_json),
+                        tool_result_limit=config.truncation_tool_result_limit,
+                        keep_head=config.truncation_keep_head_messages,
+                        keep_tail=config.truncation_keep_tail_messages,
+                    )
+                    retry_raw = json.dumps(truncated, ensure_ascii=False).encode("utf-8")
+                    retry_resp = await client.post(url, content=retry_raw, headers=headers)
+                    if retry_resp.status_code == 200:
+                        logger.info("Truncation retry succeeded (non-stream)")
+                        try:
+                            return JSONResponse(status_code=200, content=retry_resp.json())
+                        except Exception:
+                            return JSONResponse(status_code=200, content={"type": "message"})
+                    else:
+                        logger.error("Truncation retry also failed %d (non-stream)", retry_resp.status_code)
+
             return JSONResponse(status_code=resp.status_code, content=body)
 
 
@@ -253,27 +325,37 @@ async def create_message(
     backend_key, openai_client = _select_backend(client_api_key)
     raw_body = await http_request.body()
 
+    # ── Fixture Capture: start session ──
+    capture = fixture_capture.start_capture("messages")
+
     # Passthrough mode: bypass Pydantic validation entirely, forward raw request
     if backend_key.passthrough:
         try:
             body_json = json.loads(raw_body)
             model = body_json.get("model", "unknown")
             stream = body_json.get("stream", False)
+            capture.save_claude_request(body_json)
+            capture.meta["mode"] = "passthrough"
         except (json.JSONDecodeError, TypeError):
             model, stream = "unknown", False
         mapped = model_manager.map_claude_model_to_openai(model, backend_key)
         logger.info(
             f"Request: model={model} -> {backend_key.name}({mapped}) [PASSTHROUGH], stream={stream}"
         )
+        capture.finish()  # passthrough 采集仅保存请求（响应在 _forward_passthrough 中直接转发）
         return await _forward_passthrough(raw_body, backend_key, stream, http_request)
 
     # Non-passthrough: validate request body with Pydantic
     try:
         body_json = json.loads(raw_body)
+        capture.save_claude_request(body_json)
+        capture.meta["mode"] = "conversion"
         request = ClaudeMessagesRequest.model_validate(body_json)
     except json.JSONDecodeError as e:
+        capture.finish(error=f"Invalid JSON: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
     except Exception as e:
+        capture.finish(error=f"Validation: {e}")
         raise HTTPException(status_code=422, detail=str(e))
 
     logger.info(
@@ -286,26 +368,39 @@ async def create_message(
 
         # Convert Claude request to OpenAI format (with per-key model mapping)
         openai_request = convert_claude_to_openai(request, model_manager, backend_key)
+        capture.save_openai_request(openai_request)
 
         # Check if client disconnected before processing
         if await http_request.is_disconnected():
+            capture.finish(error="Client disconnected")
             raise HTTPException(status_code=499, detail="Client disconnected")
 
         if request.stream:
-            # Streaming response
+            # Streaming response — wrap generator to capture chunks
             try:
                 openai_stream = openai_client.create_chat_completion_stream(
                     openai_request, request_id
                 )
+
+                async def _capture_streaming_wrapper(inner_gen):
+                    """Wrap the Claude SSE generator to capture each event."""
+                    try:
+                        async for event_text in inner_gen:
+                            capture.save_claude_sse_event(event_text)
+                            yield event_text
+                    finally:
+                        capture.finish()
+
+                claude_stream = convert_openai_streaming_to_claude_with_cancellation(
+                    openai_stream,
+                    request,
+                    logger,
+                    http_request,
+                    openai_client,
+                    request_id,
+                )
                 return StreamingResponse(
-                    convert_openai_streaming_to_claude_with_cancellation(
-                        openai_stream,
-                        request,
-                        logger,
-                        http_request,
-                        openai_client,
-                        request_id,
-                    ),
+                    _capture_streaming_wrapper(claude_stream),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
@@ -324,17 +419,22 @@ async def create_message(
                     "type": "error",
                     "error": {"type": "api_error", "message": error_message},
                 }
+                capture.finish(error=f"Streaming error: {e.detail}")
                 return JSONResponse(status_code=e.status_code, content=error_response)
         else:
             # Non-streaming response
             openai_response = await openai_client.create_chat_completion(
                 openai_request, request_id
             )
+            capture.save_openai_response(openai_response)
             claude_response = convert_openai_to_claude_response(
                 openai_response, request
             )
+            capture.save_claude_response(claude_response)
+            capture.finish()
             return claude_response
     except HTTPException:
+        capture.finish(error="HTTPException")
         raise
     except Exception as e:
         import traceback
@@ -342,6 +442,7 @@ async def create_message(
         logger.error(f"Unexpected error processing request: {e}")
         logger.error(traceback.format_exc())
         error_message = openai_client.classify_openai_error(str(e))
+        capture.finish(error=str(e))
         raise HTTPException(status_code=500, detail=error_message)
 
 

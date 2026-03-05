@@ -136,6 +136,7 @@ public class ClaudeTaskService {
 
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
+        Map<String, String> extraEnvVars = resolveEnvVars(form.getModelConfigId(), directoryId, userId);
 
         // 5.5. 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
@@ -146,7 +147,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(),
                 authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey));
+                navigatorApiKey, extraEnvVars));
 
         return toDTO(entity);
     }
@@ -230,6 +231,7 @@ public class ClaudeTaskService {
 
         // 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
+        Map<String, String> extraEnvVars = resolveEnvVars(form.getModelConfigId(), directoryId, userId);
 
         // 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
@@ -239,7 +241,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
                 form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(), authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey));
+                navigatorApiKey, extraEnvVars));
 
         return toDTO(entity);
     }
@@ -874,6 +876,32 @@ public class ClaudeTaskService {
         }
 
         return new String[]{null, null, null};
+    }
+
+    /**
+     * 从 LLM 模型配置中解析环境变量
+     * 优先级：显式 modelConfigId → 目录默认 modelConfigId
+     */
+    private Map<String, String> resolveEnvVars(String modelConfigId, String directoryId, String userId) {
+        // 优先使用显式指定的 modelConfigId
+        if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            LlmModelConfigDTO config = llmModelManager.getModelConfig(modelConfigId).orElse(null);
+            if (config != null && config.getEnvVars() != null && !config.getEnvVars().isEmpty()) {
+                return config.getEnvVars();
+            }
+        }
+        // Fallback: 目录绑定的默认模型
+        if (directoryId != null && !directoryId.isEmpty()) {
+            WorkingDirectoryEntity dir = workingDirectoryRepository
+                    .findByDirectoryIdAndUserId(directoryId, userId).orElse(null);
+            if (dir != null && dir.getDefaultModelConfigId() != null) {
+                LlmModelConfigDTO config = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
+                if (config != null && config.getEnvVars() != null && !config.getEnvVars().isEmpty()) {
+                    return config.getEnvVars();
+                }
+            }
+        }
+        return null;
     }
 
     private LocalDateTime parseSessionDateTime(Object value) {

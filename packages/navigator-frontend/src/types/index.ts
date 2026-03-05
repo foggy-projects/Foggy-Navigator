@@ -261,6 +261,7 @@ export interface LlmModelConfig {
   hasApiKey: boolean
   scope: ModelAccessScope
   allowedWorkerIds?: string[]
+  envVars?: Record<string, string>
   sortOrder: number
   createdAt: string
   updatedAt: string
@@ -276,6 +277,7 @@ export interface LlmModelConfigForm {
   isDefault?: boolean
   scope?: ModelAccessScope
   allowedWorkerIds?: string[]
+  envVars?: Record<string, string>
 }
 
 /** Agent 模型覆盖 */

@@ -107,7 +107,8 @@ public class WorkerStreamRelay {
                     event.getAgentTeamsJson(), event.getImages(),
                     event.getApiKey(), event.getAuthToken(), event.getBaseUrl(),
                     event.getPermissionMode(), event.getNavigatorApiKey(),
-                    event.getTaskId(), event.getSessionId());
+                    event.getTaskId(), event.getSessionId(),
+                    event.getExtraEnvVars());
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, 0);

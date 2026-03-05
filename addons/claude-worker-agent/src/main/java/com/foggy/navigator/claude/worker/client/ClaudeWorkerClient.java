@@ -59,7 +59,7 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson) {
-        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null, null, null);
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -72,6 +72,21 @@ public class ClaudeWorkerClient {
                                                        String permissionMode,
                                                        String navigatorApiKey,
                                                        String foggyTaskId, String foggySessionId) {
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, images,
+                apiKey, authToken, baseUrl, permissionMode, navigatorApiKey, foggyTaskId, foggySessionId, null);
+    }
+
+    /**
+     * 流式查询（含 per-request auth 覆盖、图片附件、权限模式和额外环境变量）
+     */
+    public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
+                                                       String model, Integer maxTurns,
+                                                       String agentTeamsJson, String images,
+                                                       String apiKey, String authToken, String baseUrl,
+                                                       String permissionMode,
+                                                       String navigatorApiKey,
+                                                       String foggyTaskId, String foggySessionId,
+                                                       Map<String, String> extraEnvVars) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) {
@@ -124,6 +139,10 @@ public class ClaudeWorkerClient {
         }
         if (foggySessionId != null && !foggySessionId.isEmpty()) {
             body.put("foggy_session_id", foggySessionId);
+        }
+        // Extra environment variables from LLM model config
+        if (extraEnvVars != null && !extraEnvVars.isEmpty()) {
+            body.put("extra_env_vars", extraEnvVars);
         }
 
         return webClient.post()
