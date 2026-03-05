@@ -138,7 +138,8 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     try {
       const messages = await sessionApi.getMessages(sessionId)
       if (connectVersion !== myVersion) return
-      for (const msg of messages) {
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i]
         // Count USER/ASSISTANT messages (same口径 as JSONL count)
         if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
           dbMessageCount++
@@ -156,14 +157,23 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
             timestamp: ts,
           })
         } else if (msgType === 'STATE_SYNC' && meta?.subtype === 'waiting') {
-          // Render transient "waiting" hints as permanent text in history view,
-          // otherwise processAipMessage's removeWaitingHint() deletes them
-          // when the subsequent ERROR message is processed.
+          // Skip transient "waiting" hints when the next message supersedes them
+          // (e.g., ERROR, TEXT_COMPLETE, or another real event follows).
+          // Only render if this is the LAST message (task may still be in progress).
+          const next = messages[i + 1]
+          const nextType = next?.metadata?.type as string | undefined
+          if (next && (nextType === 'ERROR' || nextType === 'TEXT_COMPLETE'
+            || nextType === 'TASK_COMPLETED' || next.role === 'USER')) {
+            // Superseded by a subsequent event — skip to avoid confusing display
+            continue
+          }
+          // Last message or followed by non-terminal event — render as waiting hint
           chatState.messages.value.push({
             id: msg.id,
-            type: AipMessageType.TEXT_COMPLETE,
-            sender: 'assistant',
+            type: AipMessageType.STATE_SYNC,
+            sender: 'system',
             content: msg.content || 'Waiting for response...',
+            raw: { subtype: 'waiting' },
             timestamp: ts,
           })
         } else if (msgType && msgType in AipMessageType) {

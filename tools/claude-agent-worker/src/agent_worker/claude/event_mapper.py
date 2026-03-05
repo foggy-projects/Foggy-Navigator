@@ -188,3 +188,25 @@ def map_error(task_id: str, error: str, session_id: str | None = None) -> dict[s
         "task_id": task_id,
         "session_id": session_id,
     }
+
+
+def map_sync_checkpoint(
+    task_id: str,
+    latest_seq: int,
+    event_count: int,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Emit a sync checkpoint after result/error so Java can verify completeness.
+
+    Java uses the ``latest_seq`` and ``event_count`` fields to detect if any
+    events were lost during SSE streaming, and triggers a reconnect to recover
+    missed events if needed.
+    """
+
+    return {
+        "type": "sync_checkpoint",
+        "latest_seq": latest_seq,
+        "event_count": event_count,
+        "task_id": task_id,
+        "session_id": session_id,
+    }
