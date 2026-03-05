@@ -8,6 +8,7 @@
 #
 # Usage:
 #   ./start-build-frontend.sh              # full build + restart nginx
+#   ./start-build-frontend.sh --force      # clean workspace dist & rebuild all
 #   ./start-build-frontend.sh --skip-build # skip build, only restart nginx
 #   ./start-build-frontend.sh --build-only # build only, don't restart nginx
 
@@ -31,10 +32,12 @@ NC='\033[0m'
 # ── Parse args ────────────────────────────────────────────────────────────────
 SKIP_BUILD=false
 BUILD_ONLY=false
+FORCE_REBUILD=false
 for arg in "$@"; do
     case "$arg" in
         --skip-build|-s) SKIP_BUILD=true ;;
         --build-only|-b) BUILD_ONLY=true ;;
+        --force|-f)      FORCE_REBUILD=true ;;
     esac
 done
 
@@ -67,13 +70,40 @@ if [ "$SKIP_BUILD" = false ]; then
         echo -e "${GRAY}[1/3] Dependencies already installed, skipped${NC}"
     fi
 
-    # Build workspace packages if dist or .d.ts files are missing
-    if [ ! -d "$SCRIPT_DIR/packages/foggy-chat-core/dist" ] || [ ! -d "$SCRIPT_DIR/packages/foggy-chat/dist" ] || \
-       [ -z "$(find "$SCRIPT_DIR/packages/foggy-chat-core/dist" -name '*.d.ts' 2>/dev/null)" ] || \
-       [ -z "$(find "$SCRIPT_DIR/packages/foggy-chat/dist" -name '*.d.ts' 2>/dev/null)" ]; then
+    # Build workspace packages if dist is missing, stale, or --force
+    WS_NEEDS_BUILD=false
+    CHAT_CORE_DIR="$SCRIPT_DIR/packages/foggy-chat-core"
+    CHAT_DIR="$SCRIPT_DIR/packages/foggy-chat"
+
+    if [ "$FORCE_REBUILD" = true ]; then
+        echo -e "${YELLOW}  --force: cleaning workspace dist...${NC}"
+        rm -rf "$CHAT_CORE_DIR/dist" "$CHAT_DIR/dist"
+        WS_NEEDS_BUILD=true
+    elif [ ! -d "$CHAT_CORE_DIR/dist" ] || [ ! -d "$CHAT_DIR/dist" ] || \
+         [ -z "$(find "$CHAT_CORE_DIR/dist" -name '*.d.ts' 2>/dev/null)" ] || \
+         [ -z "$(find "$CHAT_DIR/dist" -name '*.d.ts' 2>/dev/null)" ]; then
+        WS_NEEDS_BUILD=true
+    else
+        # Check if any src file is newer than dist (stale detection)
+        CORE_NEWEST_SRC=$(find "$CHAT_CORE_DIR/src" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+        CORE_OLDEST_DIST=$(find "$CHAT_CORE_DIR/dist" -type f -printf '%T@\n' 2>/dev/null | sort -n | head -1)
+        CHAT_NEWEST_SRC=$(find "$CHAT_DIR/src" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+        CHAT_OLDEST_DIST=$(find "$CHAT_DIR/dist" -type f -printf '%T@\n' 2>/dev/null | sort -n | head -1)
+        if [ -n "$CORE_NEWEST_SRC" ] && [ -n "$CORE_OLDEST_DIST" ] && \
+           [ "$(echo "$CORE_NEWEST_SRC > $CORE_OLDEST_DIST" | bc 2>/dev/null)" = "1" ]; then
+            echo -e "${YELLOW}  foggy-chat-core src is newer than dist, rebuilding...${NC}"
+            WS_NEEDS_BUILD=true
+        elif [ -n "$CHAT_NEWEST_SRC" ] && [ -n "$CHAT_OLDEST_DIST" ] && \
+             [ "$(echo "$CHAT_NEWEST_SRC > $CHAT_OLDEST_DIST" | bc 2>/dev/null)" = "1" ]; then
+            echo -e "${YELLOW}  foggy-chat src is newer than dist, rebuilding...${NC}"
+            WS_NEEDS_BUILD=true
+        fi
+    fi
+
+    if [ "$WS_NEEDS_BUILD" = true ]; then
         echo -e "${YELLOW}[2/3] Building workspace packages (foggy-chat-core, foggy-chat)...${NC}"
-        (cd "$SCRIPT_DIR/packages/foggy-chat-core" && pnpm build) && \
-        (cd "$SCRIPT_DIR/packages/foggy-chat" && pnpm build)
+        (cd "$CHAT_CORE_DIR" && pnpm build) && \
+        (cd "$CHAT_DIR" && pnpm build)
         if [ $? -ne 0 ]; then
             echo -e "${RED}  Workspace package build failed!${NC}"
             exit 1
