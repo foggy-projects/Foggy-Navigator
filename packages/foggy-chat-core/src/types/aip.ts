@@ -121,6 +121,8 @@ export interface ConfirmationRequestPayload {
   planReview?: boolean
   /** Allowed tool prompts from ExitPlanMode */
   allowedPrompts?: AllowedPrompt[]
+  /** Execution plan content (Markdown) from ExitPlanMode */
+  plan?: string
 }
 
 export interface ConfirmationResponsePayload {

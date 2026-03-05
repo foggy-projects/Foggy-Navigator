@@ -4078,6 +4078,7 @@ async function handleArchiveConversation(conv: ConversationGroup) {
     )
     await workerState.archiveConversation(conv.sessionId)
     ElMessage.success('已归档')
+    reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('归档失败')
   }
@@ -4093,6 +4094,7 @@ async function handlePaneArchive(sessionId?: string) {
     )
     await workerState.archiveConversation(sessionId)
     ElMessage.success('已归档')
+    reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('归档失败')
   }
@@ -4102,6 +4104,7 @@ async function handleUnarchiveConversation(conv: ConversationGroup) {
   try {
     await workerState.unarchiveConversation(conv.sessionId)
     ElMessage.success('已取消归档')
+    reloadFilteredTasks()
   } catch {
     ElMessage.error('取消归档失败')
   }

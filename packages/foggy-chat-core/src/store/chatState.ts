@@ -330,6 +330,7 @@ export function createChatState(): ChatState {
           questions: p.questions,
           planReview: p.planReview,
           allowedPrompts: p.allowedPrompts,
+          plan: p.plan,
           raw: p,
           timestamp: aip.timestamp,
         })

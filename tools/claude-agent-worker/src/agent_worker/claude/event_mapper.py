@@ -137,6 +137,7 @@ def map_plan_review(
     task_id: str,
     permission_id: str,
     allowed_prompts: list[dict[str, Any]] | None = None,
+    plan: str | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Map an ExitPlanMode tool call to an SSE dict for plan review."""
@@ -145,6 +146,7 @@ def map_plan_review(
         "type": "plan_review",
         "permission_id": permission_id,
         "allowed_prompts": allowed_prompts or [],
+        "plan": plan or "",
         "task_id": task_id,
         "session_id": session_id,
     }
