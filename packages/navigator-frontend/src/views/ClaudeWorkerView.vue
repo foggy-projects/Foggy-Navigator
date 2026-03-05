@@ -831,7 +831,7 @@
               <!-- Action buttons -->
               <span class="conv-actions" @click.stop>
                 <el-button
-                  v-if="ac.latestTask.status !== 'RUNNING' && ac.claudeSessionId"
+                  v-if="!['RUNNING', 'AWAITING_PERMISSION'].includes(ac.latestTask.status) && ac.claudeSessionId"
                   type="primary"
                   size="small"
                   text
@@ -842,7 +842,7 @@
                   继续
                 </el-button>
                 <el-button
-                  v-if="ac.latestTask.status === 'RUNNING'"
+                  v-if="['RUNNING', 'AWAITING_PERMISSION'].includes(ac.latestTask.status)"
                   type="warning"
                   size="small"
                   text
@@ -3369,14 +3369,18 @@ function syncSidebarAfterRespond(pane: ReturnType<typeof createPane>, decision: 
   const sessionId = pane.task.value.sessionId
   if (decision === 'allow') {
     pane.task.value.status = 'RUNNING'
-    // Also update activeTasks so sidebar computed re-evaluates
+    // Update activeTasks — may be a different object if task was created via API
     const activeTask = workerState.activeTasks.value.find(t => t.taskId === pane.task.value!.taskId)
-    if (activeTask && activeTask !== pane.task.value) {
+    if (activeTask) {
       activeTask.status = 'RUNNING'
     }
     workerState.updateInteractionStateFromSSE(sessionId, 'PROCESSING')
   }
   if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+  // Force-reload from backend to guarantee sidebar consistency
+  // (reactive deep-property mutation may not trigger computed re-evaluation)
+  workerState.loadActiveTasks()
+  workerState.loadAwaitingReplyTasks()
 }
 
 async function handlePermissionRespond(paneId: string, permissionId: string, decision: string, scope: string) {
@@ -4062,12 +4066,13 @@ function interactionStateLabel(state: string): string {
 }
 
 function attentionStatusLabel(conv: ConversationGroup): string {
-  const state = conv.config?.interactionState
-  if (state === 'AWAITING_REPLY') return '待回复'
-  // Active task statuses
+  // Task-level status takes priority (more specific than interactionState)
   const status = conv.latestTask.status
   if (status === 'RUNNING') return '运行中'
   if (status === 'AWAITING_PERMISSION') return '等待授权'
+  // Fallback to interactionState for non-running tasks
+  const state = conv.config?.interactionState
+  if (state === 'AWAITING_REPLY') return '待回复'
   return interactionStateLabel(state || 'PROCESSING')
 }
 
