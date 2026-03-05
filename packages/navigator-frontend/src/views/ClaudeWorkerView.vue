@@ -2784,6 +2784,8 @@ function selectWorker(workerId: string) {
   workerActiveTab.value = 'processes'
   focusedPaneId.value = null
   exitBatchSelectMode()
+  // Load CLI processes when selecting a worker
+  loadCliProcesses()
   // Suspend SSE on other workspaces to free browser connections (HTTP/1.1 limit: 6)
   const newKey = `worker:${workerId}`
   suspendOtherWorkspaces(newKey)
