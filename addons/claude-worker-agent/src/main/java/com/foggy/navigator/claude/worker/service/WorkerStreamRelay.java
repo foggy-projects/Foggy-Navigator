@@ -27,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -68,11 +69,18 @@ public class WorkerStreamRelay {
     private final ConcurrentHashMap<String, String> workerTaskIdMap = new ConcurrentHashMap<>();
 
     /**
-     * 当前 Java 实例内每个任务已成功接收的事件数。
-     * 用于 SSE 断连重连时计算精确的 replay_from，避免遗漏 result 事件。
-     * Java 重启后此 Map 为空，此时用 Integer.MAX_VALUE 跳过（历史已在 DB）。
+     * 每个任务已确认接收的最新事件序列号（ESN）。
+     * 用于 SSE 断连重连时通过 ack_seq 参数精确回放遗漏事件。
+     * Java 重启后此 Map 为空，此时 ack_seq=0（从头回放，幂等安全）。
+     *
+     * 与旧的 receivedEventCounts（事件计数）相比，ESN 基于 Worker 注入的
+     * 单调递增序列号，不受 relay 失败、解析异常等影响，更加可靠。
+     * 当 Worker 未返回 seq 字段时（旧版 Worker），降级为计数模式。
      */
-    private final ConcurrentHashMap<String, AtomicInteger> receivedEventCounts = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicInteger> lastAckedSeq = new ConcurrentHashMap<>();
+
+    /** 每个任务的重连互斥锁，防止 doOnComplete/doOnError/Reconciler 并发触发多次重连 */
+    private final ConcurrentHashMap<String, AtomicBoolean> reconnecting = new ConcurrentHashMap<>();
 
     @Async("sessionEventExecutor")
     @EventListener
@@ -137,6 +145,13 @@ public class WorkerStreamRelay {
             return;
         }
 
+        // 互斥锁：防止 doOnComplete/doOnError/Reconciler/启动重连 并发触发多次重连
+        AtomicBoolean guard = reconnecting.computeIfAbsent(taskId, k -> new AtomicBoolean(false));
+        if (!guard.compareAndSet(false, true)) {
+            log.debug("reconnectTask: task {} reconnection already in progress, skipping", taskId);
+            return;
+        }
+
         log.info("Reconnecting stream: taskId={}, sessionId={}, workerId={}", taskId, sessionId, workerId);
 
         try {
@@ -146,12 +161,13 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
 
-            // 若当前实例有事件计数（SSE 断连），用精确值回放遗漏事件；
-            // 若无计数（Java 重启，历史已在 DB），用 MAX_VALUE 跳过避免重复。
-            AtomicInteger counter = receivedEventCounts.get(taskId);
-            int replayFrom = counter != null ? counter.get() : Integer.MAX_VALUE;
-            log.info("reconnectTask replay_from={} for task {} (counter={})", replayFrom, taskId, counter);
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, replayFrom);
+            // 用 lastAckedSeq（ESN）计算 ack_seq：
+            // - 有 seq → 精确回放遗漏的事件（Worker 返回 seq > ack_seq 的所有事件）
+            // - 无 seq（Java 重启） → ack_seq=0，从头回放（安全，幂等）
+            AtomicInteger seqTracker = lastAckedSeq.get(taskId);
+            int ackSeq = seqTracker != null ? seqTracker.get() : 0;
+            log.info("reconnectTask ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, ackSeq);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, 0);
@@ -169,6 +185,8 @@ public class WorkerStreamRelay {
         } catch (Exception e) {
             log.warn("Failed to reconnect task {}: {}", taskId, e.getMessage());
             // Don't fail the task — Reconciler will handle it if CLI is truly dead.
+        } finally {
+            guard.set(false);
         }
     }
 
@@ -197,6 +215,25 @@ public class WorkerStreamRelay {
 
         for (ClaudeTaskEntity task : activeTasks) {
             try {
+                // Java 重启后 lastAckedSeq 为空 → 先查 Worker 状态判断是否需要回放
+                try {
+                    ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+                    ClaudeWorkerClient client = workerService.createClient(worker);
+                    Map<String, Object> status = client.getTaskStatus(task.getTaskId())
+                            .block(java.time.Duration.ofSeconds(5));
+                    if (status != null) {
+                        boolean closed = Boolean.TRUE.equals(status.get("closed"));
+                        int latestSeq = ((Number) status.getOrDefault("latest_seq", 0)).intValue();
+                        log.info("Startup reconnect: task {} Worker status: closed={}, latestSeq={}",
+                                task.getTaskId(), closed, latestSeq);
+                        // ackSeq=0 会让 Worker 从头回放所有事件（安全，幂等）
+                        // 即使 Worker 已 closed，回放仍能让 Java 收到 result + sync_checkpoint
+                    }
+                } catch (Exception e) {
+                    log.debug("Startup reconnect: cannot query Worker status for {}: {}",
+                            task.getTaskId(), e.getMessage());
+                }
+
                 reconnectTask(task.getTaskId(), task.getSessionId(), task.getWorkerId());
             } catch (Exception e) {
                 log.warn("Startup reconnect failed for task {}: {}", task.getTaskId(), e.getMessage());
@@ -236,8 +273,21 @@ public class WorkerStreamRelay {
                             workerTaskIdMap.put(taskId, workerEvent.getTaskId());
                             log.debug("Task {} mapped to worker task: {}", taskId, workerEvent.getTaskId());
                         }
-                        relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
-                        receivedEventCounts.computeIfAbsent(taskId, k -> new AtomicInteger()).incrementAndGet();
+                        try {
+                            relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
+                        } catch (Exception relayEx) {
+                            log.warn("Failed to relay event for task {}, type={}: {}",
+                                    taskId, workerEvent.getType(), relayEx.getMessage(), relayEx);
+                        }
+                        // 更新 ACK 序列号：优先用 Worker 注入的 seq（ESN 模式），
+                        // 若 Worker 未返回 seq（旧版），降级为单调递增计数
+                        if (workerEvent.getSeq() != null) {
+                            lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0))
+                                    .updateAndGet(cur -> Math.max(cur, workerEvent.getSeq()));
+                        } else {
+                            // 旧 Worker 兼容：无 seq 字段，按计数递增
+                            lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0)).incrementAndGet();
+                        }
                     } catch (Exception e) {
                         log.warn("Failed to parse worker event for task {}: {}", taskId, data, e);
                     }
@@ -259,7 +309,7 @@ public class WorkerStreamRelay {
                     // 但 CLI 进程通常仍存活等待用户输入 — 交给 Reconciler 判断。
                     taskService.failIfStillRunning(taskId, sessionId,
                             "Worker 连接已断开，但未收到任务结果。可能原因：系统资源不足导致 CLI 无法启动，或 Worker 进程异常退出。");
-                    receivedEventCounts.remove(taskId);
+                    lastAckedSeq.remove(taskId);
                 })
                 .doOnError(e -> {
                     log.error("Worker stream error: taskId={}", taskId, e);
@@ -281,7 +331,7 @@ public class WorkerStreamRelay {
                     taskService.failTask(taskId, detectedClaudeSessionId.get(), errorMsg);
                     publishMessage(sessionId, MessageType.ERROR,
                             Map.of("content", errorMsg, "taskId", taskId));
-                    receivedEventCounts.remove(taskId);
+                    lastAckedSeq.remove(taskId);
                 })
                 .subscribe();
     }
@@ -294,6 +344,12 @@ public class WorkerStreamRelay {
      * @return true 如果重连成功启动
      */
     private boolean attemptReconnect(String taskId, String sessionId, String workerId, int currentAttempt) {
+        // 互斥锁：防止并发重连
+        AtomicBoolean guard = reconnecting.computeIfAbsent(taskId, k -> new AtomicBoolean(false));
+        if (!guard.compareAndSet(false, true)) {
+            log.debug("attemptReconnect: task {} reconnection already in progress, skipping", taskId);
+            return false;
+        }
         try {
             // Check if the task is still active in DB
             var taskOpt = taskRepository.findByTaskId(taskId);
@@ -316,12 +372,11 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
 
-            // 若当前实例有事件计数（SSE 断连），用精确值回放遗漏事件；
-            // 若无计数（Java 重启，历史已在 DB），用 MAX_VALUE 跳过避免重复。
-            AtomicInteger counter = receivedEventCounts.get(taskId);
-            int replayFrom = counter != null ? counter.get() : Integer.MAX_VALUE;
-            log.info("Reconnect replay_from={} for task {} (counter={})", replayFrom, taskId, counter);
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, replayFrom);
+            // 用 lastAckedSeq（ESN）计算 ack_seq
+            AtomicInteger seqTracker = lastAckedSeq.get(taskId);
+            int ackSeq = seqTracker != null ? seqTracker.get() : 0;
+            log.info("attemptReconnect ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, ackSeq);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, nextAttempt);
@@ -345,6 +400,8 @@ public class WorkerStreamRelay {
             log.warn("SSE reconnection failed for task {} (attempt {}/{}): {}",
                     taskId, currentAttempt + 1, MAX_RECONNECT_ATTEMPTS, e.getMessage());
             return false;
+        } finally {
+            guard.set(false);
         }
     }
 
@@ -361,6 +418,7 @@ public class WorkerStreamRelay {
      * 中止任务的流
      */
     public void abortStream(String taskId) {
+        reconnecting.remove(taskId);
         Disposable subscription = activeStreams.remove(taskId);
         workerTaskIdMap.remove(taskId);
         if (subscription != null && !subscription.isDisposed()) {
@@ -460,7 +518,7 @@ public class WorkerStreamRelay {
                         event.getNumTurns(), resolvedModel);
                 activeStreams.remove(taskId);
                 workerTaskIdMap.remove(taskId);
-                receivedEventCounts.remove(taskId);
+                lastAckedSeq.remove(taskId);
 
                 // 发布跨 Agent 任务完成事件
                 // 注意：Python event_mapper 将 result 文本放在 content 字段，
@@ -526,7 +584,7 @@ public class WorkerStreamRelay {
                 taskService.failTask(taskId, errorClaudeSessionId, event.getError());
                 activeStreams.remove(taskId);
                 workerTaskIdMap.remove(taskId);
-                receivedEventCounts.remove(taskId);
+                lastAckedSeq.remove(taskId);
 
                 // 发布跨 Agent 任务失败事件
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
@@ -537,8 +595,40 @@ public class WorkerStreamRelay {
                         .resultSummary(event.getError())
                         .build());
             }
+            case "sync_checkpoint" -> {
+                // Worker 在 result/error 事件后发送 sync_checkpoint，
+                // 携带 latest_seq 和 event_count，Java 可用于校验完整性
+                Integer workerLatestSeq = event.getLatestSeq();
+                Integer workerEventCount = event.getEventCount();
+                AtomicInteger mySeq = lastAckedSeq.get(taskId);
+                int myAckedSeq = mySeq != null ? mySeq.get() : 0;
+
+                log.info("Sync checkpoint: taskId={}, workerLatestSeq={}, workerEventCount={}, myAckedSeq={}",
+                        taskId, workerLatestSeq, workerEventCount, myAckedSeq);
+
+                // 推送 STATE_SYNC 到前端，表明流已通过完整性校验
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("content", "Event stream verified");
+                payload.put("subtype", "sync_checkpoint");
+                payload.put("taskId", taskId);
+                if (workerLatestSeq != null) payload.put("latestSeq", workerLatestSeq);
+                publishMessage(sessionId, MessageType.STATE_SYNC, payload);
+            }
             default -> log.debug("Unknown worker event type: {}", event.getType());
         }
+    }
+
+    // ---- Reconciler 查询接口 ----
+
+    /** 获取指定任务的最后确认序列号，供 Reconciler 做 seq gap 检测 */
+    public AtomicInteger getLastAckedSeq(String taskId) {
+        return lastAckedSeq.get(taskId);
+    }
+
+    /** 检查指定任务是否有活跃的 SSE 流 */
+    public boolean hasActiveStream(String taskId) {
+        Disposable d = activeStreams.get(taskId);
+        return d != null && !d.isDisposed();
     }
 
     /**

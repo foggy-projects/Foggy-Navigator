@@ -187,30 +187,48 @@ DISCONNECT_GRACE_SECONDS = int(os.environ.get("DISCONNECT_GRACE_SECONDS", "3600"
 # ---------------------------------------------------------------------------
 
 class EventBroadcast:
-    """Fan-out event distributor for SSE reconnection.
+    """Fan-out event distributor for SSE reconnection with ESN (Event Sequence Number).
 
     The producer pushes events via :meth:`put`.  Each SSE connection calls
     :meth:`subscribe` to get its own ``asyncio.Queue`` that receives a copy
     of every event.  Events are also stored in a replay buffer so that new
-    subscribers can catch up from a given index.
+    subscribers can catch up from a given sequence number.
+
+    Every event is assigned a monotonically increasing ``seq`` field (starting
+    at 1) before it enters the history buffer.  The Java backend uses this
+    seq to implement precise ACK-based replay on reconnection.
+
+    An optional :class:`~agent_worker.persistence.protocol.EventStore` backend
+    can be injected for durable event persistence (file / DB / etc.).
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        task_id: str | None = None,
+        event_store: Any | None = None,
+    ) -> None:
         self._subscribers: list[asyncio.Queue] = []
         self._history: list[dict[str, Any]] = []
         self._closed = False
+        self._seq_counter: int = 0
+        self._task_id = task_id
+        self._event_store = event_store  # EventStore protocol (persistence layer)
 
-    def subscribe(self, replay_from: int = 0) -> asyncio.Queue:
+    def subscribe(self, ack_seq: int = 0) -> asyncio.Queue:
         """Create a new subscriber queue.
 
-        If *replay_from* > 0, the returned queue is pre-filled with all
-        events from that index onward (so the new SSE connection can catch
-        up on missed events).
+        Replays all events whose ``seq > ack_seq`` so the subscriber can
+        catch up on missed events.  Use ``ack_seq=0`` (default) to replay
+        everything from the beginning (since seq starts at 1).
+
+        For backward compatibility, passing the old index-based value still
+        works because the seq values are sequential starting from 1.
         """
         q: asyncio.Queue = asyncio.Queue()
-        # Replay missed events
-        for evt in self._history[replay_from:]:
-            q.put_nowait(evt)
+        # Replay events with seq > ack_seq
+        for evt in self._history:
+            if evt.get("seq", 0) > ack_seq:
+                q.put_nowait(evt)
         if self._closed:
             q.put_nowait(None)  # Stream already done
         self._subscribers.append(q)
@@ -224,15 +242,39 @@ class EventBroadcast:
 
     async def put(self, item: dict[str, Any] | None) -> None:
         if item is not None:
+            self._seq_counter += 1
+            item["seq"] = self._seq_counter
             self._history.append(item)
+            # Persist to durable storage (fire-and-forget, errors logged inside)
+            if self._event_store and self._task_id:
+                try:
+                    self._event_store.append(self._task_id, item)
+                except Exception:
+                    logger.warning(
+                        "Event persistence failed for task %s seq %d",
+                        self._task_id, self._seq_counter, exc_info=True,
+                    )
         else:
             self._closed = True
+            if self._event_store and self._task_id:
+                try:
+                    self._event_store.mark_closed(self._task_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to mark task %s as closed in event store",
+                        self._task_id, exc_info=True,
+                    )
         for q in list(self._subscribers):  # snapshot to avoid mutation during iteration
             await q.put(item)
 
     @property
     def event_count(self) -> int:
         return len(self._history)
+
+    @property
+    def latest_seq(self) -> int:
+        """Return the sequence number of the most recent event, or 0 if empty."""
+        return self._seq_counter
 
     @property
     def closed(self) -> bool:
@@ -694,7 +736,11 @@ class SdkWrapper:
             #   Consumer: run_query() reads from Queue and yields (SSE stream)
             # This lets the SSE stream stay alive while can_use_tool blocks.
 
-            broadcast = EventBroadcast()
+            from ..persistence.factory import get_event_store as _get_event_store
+            broadcast = EventBroadcast(
+                task_id=task_id,
+                event_store=_get_event_store(),
+            )
             queue: asyncio.Queue[dict[str, Any] | None] = broadcast.subscribe()
 
             # Store broadcast in task_registry so the /subscribe endpoint
@@ -1106,6 +1152,15 @@ class SdkWrapper:
                             # CLI can exit cleanly (otherwise it waits for more
                             # input in stream-json mode).
                             if _ResultMessage is not None and isinstance(message, _ResultMessage):
+                                # Emit sync_checkpoint so Java can verify it received all events.
+                                # The checkpoint's own seq becomes the final "proof" that the
+                                # stream completed, enabling Java to detect missed result events.
+                                await broadcast.put(event_mapper.map_sync_checkpoint(
+                                    task_id=task_id,
+                                    latest_seq=broadcast.latest_seq,
+                                    event_count=broadcast.event_count,
+                                    session_id=current_session_id,
+                                ))
                                 stream_done_event.set()
                     except asyncio.CancelledError:
                         logger.info("Task %s producer: cancelled after %d msgs", task_id, _msg_count)

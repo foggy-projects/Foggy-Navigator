@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -26,7 +27,7 @@ import java.util.stream.Collectors;
  * │ DB 状态                   │ CLI 存活      │ 处理                                           │
  * ├──────────────────────────┼──────────────┼────────────────────────────────────────────────┤
  * │ RUNNING / AWAITING       │ ✓ 存活        │ touchAlive()，重置超时基准                      │
- * │ RUNNING / AWAITING       │ ✗ 已死亡      │ 连续 3 次未见后 reconcilerFailTask()            │
+ * │ RUNNING / AWAITING       │ ✗ 已死亡      │ 先查 Worker status：有未同步事件则 reconnect，否则连续 3 次 miss 后 FAIL │
  * │ COMPLETED / FAILED / ... │ ✓ 存活        │ 孤儿！记录首次发现时间，仅检测+日志（用户通过 UI 手动管理） │
  * │ COMPLETED / FAILED / ... │ ✗ 已死亡      │ 清理孤儿记录（如有）                            │
  * └──────────────────────────┴──────────────┴────────────────────────────────────────────────┘
@@ -65,6 +66,7 @@ public class TaskStateReconciler {
     private final ClaudeWorkerRepository workerRepository;
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
+    private final WorkerStreamRelay streamRelay;
 
     // -------------------------------------------------------------------------
     // 内存状态表
@@ -164,25 +166,89 @@ public class TaskStateReconciler {
                 orphanFirstSeen.remove(workerId + ":" + pid);
                 log.debug("Reconciler: task={} alive (pid={}), touched lastAliveAt", taskId, pid);
 
+                // ESN seq gap 检测：Worker 比 Java 多事件 + 无活跃 SSE 流 → 触发重连
+                if (!streamRelay.hasActiveStream(taskId)) {
+                    try {
+                        Map<String, Object> taskStatus = workerService.createClient(worker)
+                                .getTaskStatus(taskId)
+                                .block(Duration.ofSeconds(5));
+                        if (taskStatus != null) {
+                            int workerLatestSeq = ((Number) taskStatus.getOrDefault("latest_seq", 0)).intValue();
+                            AtomicInteger javaSeqTracker = streamRelay.getLastAckedSeq(taskId);
+                            int javaLatestSeq = javaSeqTracker != null ? javaSeqTracker.get() : 0;
+
+                            if (workerLatestSeq > javaLatestSeq) {
+                                log.warn("Reconciler: seq gap detected! task={}, worker_seq={}, java_seq={}, "
+                                         + "gap={}, triggering reconnect",
+                                        taskId, workerLatestSeq, javaLatestSeq, workerLatestSeq - javaLatestSeq);
+                                streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.debug("Reconciler: task status query failed for {}: {}", taskId, e.getMessage());
+                    }
+                }
+
             } else {
-                // 象限 2: DB 活跃 + CLI 已死亡 → 宽限计数
+                // 象限 2: DB 活跃 + CLI 已死亡
                 // 跳过刚创建的任务，避免 CLI 启动竞争
                 if (task.getCreatedAt().isAfter(LocalDateTime.now().minusMinutes(NEW_TASK_GRACE_MINUTES))) {
                     log.debug("Reconciler: task={} has no CLI but was just created (grace), skipping", taskId);
                     continue;
                 }
 
-                int misses = cliDeadMissCount.merge(taskId, 1, Integer::sum);
-                log.warn("Reconciler: task={} status={} but no live CLI process (miss={}/{})",
-                        taskId, task.getStatus(), misses, DEAD_CLI_MISS_THRESHOLD);
+                // ★ 先查 Worker 的 task status：CLI 可能正常完成后退出，Worker 持久化层仍有完整事件
+                boolean recoveredFromWorker = false;
+                try {
+                    Map<String, Object> taskStatus = workerService.createClient(worker)
+                            .getTaskStatus(taskId)
+                            .block(Duration.ofSeconds(5));
+                    if (taskStatus != null) {
+                        boolean closed = Boolean.TRUE.equals(taskStatus.get("closed"));
+                        int workerLatestSeq = ((Number) taskStatus.getOrDefault("latest_seq", 0)).intValue();
+                        AtomicInteger javaSeqTracker = streamRelay.getLastAckedSeq(taskId);
+                        int javaLatestSeq = javaSeqTracker != null ? javaSeqTracker.get() : 0;
 
-                if (misses >= DEAD_CLI_MISS_THRESHOLD) {
-                    log.warn("Reconciler: forcing task={} to FAILED (CLI dead {} consecutive checks)",
-                            taskId, misses);
-                    cliDeadMissCount.remove(taskId);
-                    taskService.reconcilerFailTask(taskId,
-                            "CLI process died unexpectedly (detected by reconciler after "
-                            + misses + " consecutive checks)");
+                        if (workerLatestSeq > javaLatestSeq) {
+                            // Worker 有 Java 未收到的事件 → 触发重连补数据（而非直接 FAIL）
+                            log.info("Reconciler: task={} CLI exited but Worker has unsync'd events "
+                                            + "(closed={}, worker_seq={}, java_seq={}, gap={}), "
+                                            + "triggering reconnect instead of FAIL",
+                                    taskId, closed, workerLatestSeq, javaLatestSeq,
+                                    workerLatestSeq - javaLatestSeq);
+                            cliDeadMissCount.remove(taskId);
+                            streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
+                            recoveredFromWorker = true;
+                        } else if (closed && workerLatestSeq > 0 && workerLatestSeq == javaLatestSeq) {
+                            // Worker 已 closed 且 seq 一致 → Java 已有全部事件，可能是 completion 处理延迟
+                            // 再给一次宽限（不累加 miss），让 Java 侧处理完成事件
+                            log.info("Reconciler: task={} CLI exited, Worker closed, seq aligned (seq={}), "
+                                            + "waiting for Java-side completion processing",
+                                    taskId, workerLatestSeq);
+                            cliDeadMissCount.remove(taskId);
+                            recoveredFromWorker = true;
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("Reconciler: Worker status query failed for dead-CLI task {}: {}",
+                            taskId, e.getMessage());
+                }
+
+                if (!recoveredFromWorker) {
+                    // Worker 也无数据或查询失败 → 走原有的宽限 miss 计数逻辑
+                    int misses = cliDeadMissCount.merge(taskId, 1, Integer::sum);
+                    log.warn("Reconciler: task={} status={} CLI dead, no Worker recovery possible (miss={}/{})",
+                            taskId, task.getStatus(), misses, DEAD_CLI_MISS_THRESHOLD);
+
+                    if (misses >= DEAD_CLI_MISS_THRESHOLD) {
+                        log.warn("Reconciler: forcing task={} to FAILED "
+                                        + "(CLI dead {} consecutive checks, Worker has no recovery data)",
+                                taskId, misses);
+                        cliDeadMissCount.remove(taskId);
+                        taskService.reconcilerFailTask(taskId,
+                                "CLI process died unexpectedly (detected by reconciler after "
+                                + misses + " consecutive checks)");
+                    }
                 }
             }
         }

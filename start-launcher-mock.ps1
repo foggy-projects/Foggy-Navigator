@@ -1,11 +1,44 @@
 # Mock LLM 测试启动脚本
 # 启动后端服务，使用 Mock LLM Service 进行测试
 
-$JAVA_PATH = "C:\Program Files\Java\jdk-17.0.1\bin\java.exe"
 $BACKEND_PORT = 8112
 $LOG_DIR = "logs"
 $JAR_PATH = "launcher\target\launcher-1.0.0-SNAPSHOT.jar"
 $MOCK_LLM_PORT = 8200
+$ENV_FILE = "launcher\.env"
+
+# Set defaults
+$JAVA_PATH = ""
+
+# Load environment variables from .env file if exists
+if (Test-Path $ENV_FILE) {
+    Write-Host "Loading configuration from $ENV_FILE" -ForegroundColor Gray
+    Get-Content $ENV_FILE | ForEach-Object {
+        if ($_ -notmatch '^#' -and $_ -match '^(.+?)=(.+)$') {
+            $name = $matches[1]
+            $value = $matches[2]
+            Set-Item -Path "env:$name" -Value $value
+        }
+    }
+    if ($env:JAVA_PATH) { $JAVA_PATH = $env:JAVA_PATH }
+} else {
+    Write-Host "Warning: $ENV_FILE not found, using defaults" -ForegroundColor Yellow
+}
+
+# Resolve Java path: env > system PATH
+if (-not $JAVA_PATH) {
+    $JAVA_PATH = (Get-Command java -ErrorAction SilentlyContinue).Source
+}
+if (-not $JAVA_PATH) {
+    Write-Host "ERROR: Java not found." -ForegroundColor Red
+    Write-Host "Please set JAVA_PATH in $ENV_FILE or ensure java is in your system PATH" -ForegroundColor Yellow
+    exit 1
+}
+if (-not (Test-Path $JAVA_PATH)) {
+    Write-Host "ERROR: Java not found at $JAVA_PATH" -ForegroundColor Red
+    Write-Host "Please update JAVA_PATH in $ENV_FILE" -ForegroundColor Yellow
+    exit 1
+}
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
