@@ -1,0 +1,128 @@
+# Anthropic Claude Messages API 响应配置
+#
+# 每个规则可以同时配置 response（OpenAI 格式）和 anthropic（Anthropic 格式），
+# 对应端点会自动选择正确格式。
+#
+# anthropic_stream.fixture_file 可指定 JSONL fixture 文件路径（相对于 MOCK_LLM_FIXTURES_DIR）
+
+responses:
+  # ========== 纯文本场景 ==========
+
+  - name: "anthropic-simple-text"
+    match:
+      keywords: ["hello world", "测试"]
+    response:
+      content: "Hello World Test"
+    anthropic:
+      thinking: "The user wants a specific string as a reply."
+      content: "Hello World Test"
+    anthropic_stream:
+      fixture_file: "claude-api/streaming/simple-text-events.jsonl"
+    stream:
+      chunk_size: 5
+      delay_ms: 30
+
+  # ========== 工具调用场景 ==========
+
+  - name: "anthropic-weather"
+    match:
+      keywords: ["天气", "weather", "beijing"]
+    response:
+      content: "I'll check the current weather in Beijing for you."
+      tool_calls:
+        - id: "call_mock-weather-001"
+          type: "function"
+          function:
+            name: "get_weather"
+            arguments:
+              location: "Beijing"
+    anthropic:
+      thinking: "The user is asking for the weather in Beijing. I have a get_weather function available."
+      content: "I'll check the current weather in Beijing for you."
+      tool_uses:
+        - id: "toolu_mock-weather-001"
+          name: "get_weather"
+          input:
+            location: "Beijing"
+    anthropic_stream:
+      fixture_file: "claude-api/streaming/tool-use-events.jsonl"
+
+  # ========== 并行工具调用 ==========
+
+  - name: "anthropic-parallel-weather"
+    match:
+      keywords: ["compare", "比较", "three cities", "三个城市"]
+    response:
+      content: "I'll check the weather for all three cities right away."
+    anthropic:
+      thinking: "The user wants weather for multiple cities. I should call get_weather for all cities simultaneously."
+      content: "I'll check the weather for all three cities right away."
+      tool_uses:
+        - id: "toolu_mock-parallel-001"
+          name: "get_weather"
+          input:
+            location: "Beijing"
+        - id: "toolu_mock-parallel-002"
+          name: "get_weather"
+          input:
+            location: "Shanghai"
+        - id: "toolu_mock-parallel-003"
+          name: "get_weather"
+          input:
+            location: "Tokyo"
+    anthropic_stream:
+      fixture_file: "claude-api/streaming/parallel-tool-use-events.jsonl"
+
+  # ========== 多轮对话（tool_result 后的最终响应） ==========
+
+  - name: "anthropic-multi-turn-final"
+    match:
+      pattern: "22.*celsius|partly cloudy|weather.*result"
+    response:
+      content: "The current weather in Beijing is 22°C, partly cloudy with 45% humidity."
+    anthropic:
+      thinking: "The tool returned weather data for Beijing. I should present this clearly."
+      content: |
+        The current weather in Beijing is:
+
+        - **Temperature**: 22°C
+        - **Condition**: Partly cloudy
+        - **Humidity**: 45%
+
+        It's a pleasant day — comfortable temperature with moderate humidity.
+    anthropic_stream:
+      fixture_file: "claude-api/streaming/multi-turn-final-events.jsonl"
+
+  # ========== 编程助手场景 ==========
+
+  - name: "anthropic-coding"
+    match:
+      keywords: ["写代码", "write code", "编程", "function", "代码"]
+    response:
+      content: "好的，下面是一个示例函数实现。"
+    anthropic:
+      thinking: "The user wants me to write code. Let me provide a well-structured implementation."
+      content: |
+        好的，下面是实现：
+
+        ```python
+        def example():
+            return "Hello from Mock LLM"
+        ```
+    anthropic_stream:
+      chunk_size: 15
+      delay_ms: 20
+
+  # ========== 默认响应 ==========
+
+  - name: "anthropic-default"
+    match:
+      default: true
+    response:
+      content: "收到您的消息。我是 Mock LLM 服务。"
+    anthropic:
+      thinking: "Processing the user's message."
+      content: "收到您的消息。我是 Mock Anthropic 服务，用于测试和开发。"
+    anthropic_stream:
+      chunk_size: 10
+      delay_ms: 25

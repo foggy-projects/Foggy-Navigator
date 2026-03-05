@@ -1,0 +1,38 @@
+{
+  "_fixture_meta": {
+    "source": "DashScope Anthropic-compatible API (passthrough)",
+    "captured_at": "2026-03-05T17:14:06",
+    "original_model_requested": "claude-sonnet-4-20250514",
+    "actual_model_returned": "glm-4.7",
+    "capture_id": "20260305-171402-002-messages"
+  },
+  "id": "msg_70cca3d8-e20e-4338-993b-21fc89d4a874",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-20250514",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "The user is asking for the weather in Beijing today. I have a get_weather function available that can get current weather for a location. The required parameter is \"location\" and the user has specified \"Beijing\". The optional parameter is \"unit\" with enum values of \"celsius\" or \"fahrenheit\", but since the user didn't specify a unit, I should not ask about it or make up a value - I'll just use the required parameter.\n\nI should call the get_weather function with location=\"Beijing\"."
+    },
+    {
+      "type": "text",
+      "text": "I'll check the current weather in Beijing for you."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_tool-e9c47aeefb654a958be82ce425af0779",
+      "name": "get_weather",
+      "input": {
+        "location": "Beijing"
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": {
+    "input_tokens": 192,
+    "output_tokens": 130,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+  }
+}

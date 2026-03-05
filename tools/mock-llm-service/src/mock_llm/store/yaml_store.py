@@ -1,7 +1,14 @@
 import yaml
 from pathlib import Path
 from typing import List, Optional
-from ..models import ResponseRule, MatchRule, MockResponseConfig, StreamConfig
+from ..models import (
+    ResponseRule,
+    MatchRule,
+    MockResponseConfig,
+    StreamConfig,
+    AnthropicResponseConfig,
+    AnthropicStreamConfig,
+)
 
 
 class YamlResponseStore:
@@ -35,6 +42,12 @@ class YamlResponseStore:
                 match=MatchRule(**item.get("match", {})),
                 response=MockResponseConfig(**item.get("response", {})),
                 stream=StreamConfig(**item["stream"]) if "stream" in item else None,
+                anthropic=AnthropicResponseConfig(**item["anthropic"])
+                if "anthropic" in item
+                else None,
+                anthropic_stream=AnthropicStreamConfig(**item["anthropic_stream"])
+                if "anthropic_stream" in item
+                else None,
             )
             self.rules.append(rule)
 

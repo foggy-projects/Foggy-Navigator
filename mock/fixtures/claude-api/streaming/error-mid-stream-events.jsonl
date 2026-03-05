@@ -1,0 +1,5 @@
+{"event":"message_start","data":{"message":{"model":"claude-sonnet-4-20250514","id":"msg_mock-error-midstream-001","role":"assistant","type":"message","content":[],"usage":{"input_tokens":12,"output_tokens":0}},"type":"message_start"}}
+{"event":"ping","data":{"type":"ping"}}
+{"event":"content_block_start","data":{"type":"content_block_start","content_block":{"type":"text","text":""},"index":0}}
+{"event":"content_block_delta","data":{"delta":{"type":"text_delta","text":"I'll help you with"},"type":"content_block_delta","index":0}}
+{"event":"error","data":{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}}
