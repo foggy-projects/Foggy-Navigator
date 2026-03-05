@@ -88,9 +88,14 @@ async def create_worktree(request: CreateWorktreeRequest) -> CreateWorktreeRespo
         wt_path = os.path.join(parent, f"{repo_name}-wt-{safe_branch}")
 
     if os.path.exists(wt_path):
+        # Check if it's already a valid git worktree for the same branch — reuse it
+        rc_check, branch_out = await run_git(wt_path, "rev-parse", "--abbrev-ref", "HEAD")
+        if rc_check == 0 and branch_out.strip() == request.branch:
+            logger.info("Reusing existing worktree: path=%s, branch=%s", wt_path, request.branch)
+            return CreateWorktreeResponse(path=wt_path, branch=request.branch)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Worktree path already exists: {wt_path}",
+            detail=f"Worktree path already exists (branch mismatch or not a git repo): {wt_path}",
         )
 
     # Strategy:

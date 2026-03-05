@@ -290,7 +290,7 @@ public class WorkingDirectoryService {
         Map<String, Object> result;
         try {
             result = client.createWorktree(source.getPath(), branch, null)
-                    .block(Duration.ofSeconds(30));
+                    .block(Duration.ofSeconds(90));
         } catch (WebClientResponseException e) {
             // 从 Worker 响应体中提取真实的 git 错误信息
             String body = e.getResponseBodyAsString();
