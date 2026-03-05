@@ -1735,7 +1735,7 @@ const paneAgentContext = ref<Map<string, Array<{ agentName: string; question: st
 const paneAgentContextIds = ref<Map<string, Map<string, string>>>(new Map())
 
 // --- Worker tabs state (Agents / CLI Processes) ---
-const workerActiveTab = ref('agents')
+const workerActiveTab = ref('processes')
 function handleWorkerTabChange(tab: string) {
   if (tab === 'processes' && cliProcesses.value.length === 0) {
     loadCliProcesses()
