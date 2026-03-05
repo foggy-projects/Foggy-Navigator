@@ -777,34 +777,34 @@
       <div class="history-filter-bar">
         <div class="filter-group">
           <span
-            :class="['filter-tag', { active: interactionStateFilter === 'ALL' }]"
-            @click="interactionStateFilter = 'ALL'"
+            :class="['filter-tag', { active: ALL_STATES.every((s) => interactionStateFilters.has(s)) }]"
+            @click="toggleAllStates()"
           >全部</span>
           <span
-            :class="['filter-tag awaiting', { active: interactionStateFilter === 'AWAITING_REPLY' }]"
-            @click="interactionStateFilter = 'AWAITING_REPLY'"
+            :class="['filter-tag awaiting', { active: interactionStateFilters.has('AWAITING_REPLY') }]"
+            @click="toggleStateFilter('AWAITING_REPLY')"
           >待回复</span>
           <span
-            :class="['filter-tag', { active: interactionStateFilter === 'PROCESSING' }]"
-            @click="interactionStateFilter = 'PROCESSING'"
+            :class="['filter-tag', { active: interactionStateFilters.has('PROCESSING') }]"
+            @click="toggleStateFilter('PROCESSING')"
           >处理中</span>
           <span
-            :class="['filter-tag', { active: interactionStateFilter === 'ARCHIVED' }]"
-            @click="interactionStateFilter = 'ARCHIVED'"
+            :class="['filter-tag', { active: interactionStateFilters.has('ARCHIVED') }]"
+            @click="toggleStateFilter('ARCHIVED')"
           >已归档</span>
         </div>
         <div class="filter-group">
           <span
-            :class="['filter-tag', { active: sessionSourceFilter === 'PLATFORM' }]"
-            @click="sessionSourceFilter = 'PLATFORM'"
+            :class="['filter-tag', { active: sessionSourceFilters.has('PLATFORM') }]"
+            @click="toggleSourceFilter('PLATFORM')"
           >平台</span>
           <span
-            :class="['filter-tag', { active: sessionSourceFilter === 'SYNCED' }]"
-            @click="sessionSourceFilter = 'SYNCED'"
+            :class="['filter-tag', { active: sessionSourceFilters.has('SYNCED') }]"
+            @click="toggleSourceFilter('SYNCED')"
           >同步</span>
           <span
-            :class="['filter-tag', { active: sessionSourceFilter === 'ALL' }]"
-            @click="sessionSourceFilter = 'ALL'"
+            :class="['filter-tag', { active: ALL_SOURCES.every((s) => sessionSourceFilters.has(s)) }]"
+            @click="toggleAllSources()"
           >全部来源</span>
         </div>
       </div>
@@ -1855,15 +1855,50 @@ const batchAuthSessionIds = ref<string[]>([])
 const batchSelectMode = ref(false)
 const selectedConvIds = ref<Set<string>>(new Set())
 
-// Session source filter: 'ALL' | 'PLATFORM' | 'SYNCED'
-const sessionSourceFilter = ref<'ALL' | 'PLATFORM' | 'SYNCED'>('PLATFORM')
+// Multi-select filter: interaction states (default: 待回复 + 处理中)
+const ALL_STATES = ['AWAITING_REPLY', 'PROCESSING', 'ARCHIVED'] as const
+const interactionStateFilters = ref<Set<string>>(new Set(['AWAITING_REPLY', 'PROCESSING']))
 
-// Interaction state filter
-const interactionStateFilter = ref<'ALL' | 'AWAITING_REPLY' | 'PROCESSING' | 'ARCHIVED'>('ALL')
+// Multi-select filter: session sources (default: 平台)
+const ALL_SOURCES = ['PLATFORM', 'SYNCED'] as const
+const sessionSourceFilters = ref<Set<string>>(new Set(['PLATFORM']))
 
-/** Compute the backend state param from the current filter */
+/** Toggle a state filter value */
+function toggleStateFilter(value: string) {
+  const s = new Set(interactionStateFilters.value)
+  if (s.has(value)) {
+    if (s.size > 1) s.delete(value) // 至少保留一个选中
+  } else {
+    s.add(value)
+  }
+  interactionStateFilters.value = s
+}
+/** Select all state filters */
+function toggleAllStates() {
+  if (ALL_STATES.every((v) => interactionStateFilters.value.has(v))) return
+  interactionStateFilters.value = new Set(ALL_STATES)
+}
+/** Toggle a source filter value */
+function toggleSourceFilter(value: string) {
+  const s = new Set(sessionSourceFilters.value)
+  if (s.has(value)) {
+    if (s.size > 1) s.delete(value)
+  } else {
+    s.add(value)
+  }
+  sessionSourceFilters.value = s
+}
+/** Select all source filters */
+function toggleAllSources() {
+  if (ALL_SOURCES.every((v) => sessionSourceFilters.value.has(v))) return
+  sessionSourceFilters.value = new Set(ALL_SOURCES)
+}
+
+/** Compute the backend state param from the current multi-select filter */
 function currentStateParam(): string | undefined {
-  return interactionStateFilter.value === 'ALL' ? undefined : interactionStateFilter.value
+  // 全部选中 → 无过滤
+  if (ALL_STATES.every((s) => interactionStateFilters.value.has(s))) return undefined
+  return [...interactionStateFilters.value].join(',')
 }
 
 /** Reload history tasks using the current interactionState filter */
@@ -1876,10 +1911,10 @@ function reloadFilteredTasks() {
   }
 }
 
-// When filter changes, reload from page 0 with new filter
-watch(interactionStateFilter, () => {
+// When state filter changes, reload from page 0 with new filter
+watch(interactionStateFilters, () => {
   reloadFilteredTasks()
-})
+}, { deep: true })
 
 // Tag dialog state
 const showTagDialog = ref(false)
@@ -2430,20 +2465,20 @@ const allConversations = computed(() =>
 const activeConversations = computed(() => {
   let list = allConversations.value
 
-  // Source filter (client-side, orthogonal to state)
-  const filter = sessionSourceFilter.value
-  if (filter !== 'ALL') {
+  // Source filter (client-side, multi-select)
+  const allSourcesSelected = ALL_SOURCES.every((s) => sessionSourceFilters.value.has(s))
+  if (!allSourcesSelected) {
     list = list.filter((conv) => {
       const isPlatform = conv.tasks.some((t) =>
         t.source === 'PLATFORM' || (t.source == null && t.fileCheckpointingEnabled === true),
       )
-      if (filter === 'PLATFORM') return isPlatform
-      return !isPlatform // SYNCED
+      if (sessionSourceFilters.value.has('PLATFORM') && !sessionSourceFilters.value.has('SYNCED')) return isPlatform
+      if (sessionSourceFilters.value.has('SYNCED') && !sessionSourceFilters.value.has('PLATFORM')) return !isPlatform
+      return true
     })
   }
 
-  // interactionState filtering is done by the backend API
-  // "全部" shows truly all conversations (backend handles exclusion/inclusion)
+  // interactionState filtering is done by the backend API (multi-select via comma-separated param)
 
   return list
 })
@@ -2550,6 +2585,7 @@ function handleTaskUpdateEvent(event: Event) {
         inTasks.status = newStatus as any
         if (detail.errorMessage) inTasks.errorMessage = detail.errorMessage
       }
+      workerState.loadAwaitingReplyTasks()
     }
   } else {
     workerState.loadActiveTasks() // Fallback for legacy format
@@ -2785,8 +2821,7 @@ function selectDirectory(workerId: string, directoryId: string) {
 
 async function loadDirectoryTasks() {
   if (!selectedDirectoryId.value) return
-  // Map filter to backend state param: ALL → undefined (backend hides archived by default)
-  const stateParam = interactionStateFilter.value === 'ALL' ? undefined : interactionStateFilter.value
+  const stateParam = currentStateParam()
   try {
     const result = await dirApi.listTasksByDirectoryPaged(
       selectedDirectoryId.value,
@@ -3692,8 +3727,12 @@ async function abortPane(paneId: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane?.task.value) return
   try {
-    await workerState.abortTask(pane.task.value.taskId)
+    const taskId = pane.task.value.taskId
+    await workerState.abortTask(taskId)
     pane.task.value.status = 'ABORTED'
+    // Immediately remove from activeTasks (don't wait for SSE)
+    workerState.activeTasks.value = workerState.activeTasks.value.filter(t => t.taskId !== taskId)
+    workerState.loadAwaitingReplyTasks()
     if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
     ElMessage.info('任务已中止')
   } catch {
@@ -3915,8 +3954,11 @@ async function handleAbortTask(taskId: string) {
     })
     await workerState.abortTask(taskId)
     ElMessage.success('任务已中止')
+    // Immediately remove from activeTasks (don't wait for SSE)
+    workerState.activeTasks.value = workerState.activeTasks.value.filter(t => t.taskId !== taskId)
     // Refresh task lists
     workerState.loadTasks()
+    workerState.loadAwaitingReplyTasks()
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
     }

@@ -7,6 +7,7 @@ import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import java.util.Arrays;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
@@ -374,9 +375,18 @@ public class ClaudeTaskService {
         long totalSessions;
 
         if (interactionState != null && !interactionState.isEmpty()) {
-            // 有 interactionState 筛选：先获取匹配的所有 sessionIds，再在其中分页
-            List<String> allMatchingSessionIds =
-                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState);
+            // 支持逗号分隔的多状态筛选（如 "AWAITING_REPLY,PROCESSING"）
+            List<String> states = Arrays.stream(interactionState.split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty()).toList();
+
+            List<String> allMatchingSessionIds;
+            if (states.size() == 1) {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionState(userId, states.get(0));
+            } else {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionStates(userId, states);
+            }
             if (allMatchingSessionIds.isEmpty()) {
                 return SessionPageDTO.builder()
                         .content(List.of()).totalSessions(0).page(page).size(size).build();
@@ -425,8 +435,18 @@ public class ClaudeTaskService {
         long totalSessions;
 
         if (interactionState != null && !interactionState.isEmpty()) {
-            List<String> allMatchingSessionIds =
-                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState);
+            // 支持逗号分隔的多状态筛选
+            List<String> states = Arrays.stream(interactionState.split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty()).toList();
+
+            List<String> allMatchingSessionIds;
+            if (states.size() == 1) {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionState(userId, states.get(0));
+            } else {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionStates(userId, states);
+            }
             if (allMatchingSessionIds.isEmpty()) {
                 return SessionPageDTO.builder()
                         .content(List.of()).totalSessions(0).page(page).size(size).build();
@@ -623,6 +643,7 @@ public class ClaudeTaskService {
             taskRepository.save(entity);
             log.info("Task aborted: taskId={}", taskId);
             publishStatusChange(entity, prev);
+            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
     }
 

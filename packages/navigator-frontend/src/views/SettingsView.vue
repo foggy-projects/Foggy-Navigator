@@ -714,7 +714,7 @@ function showLlmDialog(mode: 'add' | 'edit') {
   llmDialogMode.value = mode
   if (mode === 'add') {
     editingLlmId.value = ''
-    llmForm.value = { name: '', category: 'GENERAL', baseUrl: '', modelName: '', apiKey: '', isDefault: false, scope: 'GLOBAL', allowedWorkerIds: [] }
+    llmForm.value = { name: '', category: 'GENERAL', baseUrl: '', modelName: '', apiKey: '', isDefault: false, scope: 'GLOBAL', allowedWorkerIds: [], envVars: [] }
   }
   showLlmDialog_.value = true
 }
@@ -731,6 +731,7 @@ function applyPreset(preset: (typeof llmPresets)[number]) {
     isDefault: false,
     scope: 'GLOBAL',
     allowedWorkerIds: [],
+    envVars: [],
   }
   showLlmDialog_.value = true
 }
@@ -952,8 +953,9 @@ async function saveWorkerForm() {
     workerForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION' }
     ElMessage.success('保存成功')
     await loadWorkers()
-  } catch {
-    ElMessage.error('保存失败')
+  } catch (e: any) {
+    const errorMsg = e?.response?.data?.msg || e?.response?.data?.message || e?.message || '保存失败'
+    ElMessage.error(errorMsg)
   } finally {
     saving.value = false
   }
