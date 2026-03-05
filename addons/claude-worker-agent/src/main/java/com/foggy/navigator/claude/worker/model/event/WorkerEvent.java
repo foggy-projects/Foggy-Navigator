@@ -47,4 +47,18 @@ public class WorkerEvent {
     private Boolean isError;
     private String subtype;
     private Map<String, Object> data;
+
+    // --- ESN (Event Sequence Number) fields ---
+
+    /** Monotonically increasing sequence number injected by Worker EventBroadcast.
+     *  null for events from old Workers without ESN support (backward compat). */
+    private Integer seq;
+
+    /** sync_checkpoint 事件专用：Worker 上该任务的最新 seq */
+    @JsonProperty("latest_seq")
+    private Integer latestSeq;
+
+    /** sync_checkpoint 事件专用：Worker 上该任务的事件总数 */
+    @JsonProperty("event_count")
+    private Integer eventCount;
 }

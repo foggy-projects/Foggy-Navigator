@@ -351,16 +351,22 @@ def _resolve_task_entry(task_id: str) -> tuple[str, dict] | None:
 
 
 @router.get("/tasks/{task_id}/subscribe")
-async def subscribe_to_task(task_id: str, replay_from: int = 0):
+async def subscribe_to_task(
+    task_id: str,
+    ack_seq: int = 0,
+    replay_from: int | None = None,
+):
     """Subscribe to an existing task's SSE event stream.
 
     This endpoint enables reconnection after SSE disconnect or Java restart.
-    It creates a new subscriber on the task's ``EventBroadcast``, optionally
-    replaying events from a given index so the caller can catch up on missed
-    events.
+    It creates a new subscriber on the task's ``EventBroadcast``, replaying
+    events whose ``seq > ack_seq`` so the caller can catch up on missed events.
 
     Query parameters:
-        ``replay_from``: event index to replay from (0 = all events)
+        ``ack_seq``: last acknowledged sequence number (0 = replay all).
+            Java sends its last received seq; Worker replays everything after it.
+        ``replay_from``: **deprecated** — old index-based replay parameter.
+            Kept for backward compatibility with older Java backends.
     """
     resolved = _resolve_task_entry(task_id)
     if resolved is None:
@@ -377,15 +383,20 @@ async def subscribe_to_task(task_id: str, replay_from: int = 0):
             detail=f"Task '{task_id}' has no broadcast (non-interactive mode or already cleaned up)",
         )
 
+    # Backward compatibility: old Java sends replay_from (index), new Java sends ack_seq
+    effective_ack_seq = ack_seq
+    if replay_from is not None and ack_seq == 0:
+        effective_ack_seq = replay_from
+
     # Mark task as reconnected — exits grace period loop in run_query
     entry["connected"] = True
     entry["has_external_subscriber"] = True
     logger.info(
-        "Subscribe: task=%s (resolved=%s), replay_from=%d, total_events=%d",
-        task_id, real_task_id, replay_from, broadcast.event_count,
+        "Subscribe: task=%s (resolved=%s), ack_seq=%d, total_events=%d, latest_seq=%d",
+        task_id, real_task_id, effective_ack_seq, broadcast.event_count, broadcast.latest_seq,
     )
 
-    sub_queue = broadcast.subscribe(replay_from=replay_from)
+    sub_queue = broadcast.subscribe(ack_seq=effective_ack_seq)
 
     async def _subscribe_generator() -> AsyncGenerator[dict, None]:
         try:
@@ -422,4 +433,68 @@ async def subscribe_to_task(task_id: str, replay_from: int = 0):
         _subscribe_generator(),
         media_type="text/event-stream",
         ping=30,
+    )
+
+
+@router.get("/tasks/{task_id}/status")
+async def get_task_status(task_id: str):
+    """Query the Worker's real-time task state.
+
+    Java Reconciler calls this endpoint periodically to detect seq gaps
+    (Worker has more events than Java received) and trigger auto-reconnect.
+
+    Also useful after Java restart to determine whether to replay events.
+
+    Returns:
+        task_id: The resolved task ID
+        latest_seq: Latest event sequence number
+        event_count: Total events produced
+        closed: Whether the event stream has ended
+        cli_alive: Whether there are live CLI processes for this task
+        has_subscribers: Whether any SSE subscribers are connected
+        source: "registry" (live task) or "persistence" (completed task)
+    """
+    resolved = _resolve_task_entry(task_id)
+
+    if resolved is not None:
+        # Task is still live in registry
+        real_task_id, entry = resolved
+        broadcast: EventBroadcast | None = entry.get("broadcast")
+
+        # Check if CLI is alive via asyncio task
+        asyncio_task = entry.get("asyncio_task")
+        cli_alive = asyncio_task is not None and not asyncio_task.done() if asyncio_task else False
+
+        return {
+            "task_id": real_task_id,
+            "latest_seq": broadcast.latest_seq if broadcast else 0,
+            "event_count": broadcast.event_count if broadcast else 0,
+            "closed": broadcast.closed if broadcast else True,
+            "cli_alive": cli_alive,
+            "has_subscribers": len(broadcast._subscribers) > 0 if broadcast else False,
+            "connected": entry.get("connected", False),
+            "source": "registry",
+        }
+
+    # Task not in registry — check persistence layer for completed tasks
+    from ..persistence.factory import get_event_store
+    store = get_event_store()
+    latest_seq = store.get_latest_seq(task_id)
+    is_closed = store.is_closed(task_id)
+
+    if latest_seq > 0 or is_closed:
+        return {
+            "task_id": task_id,
+            "latest_seq": latest_seq,
+            "event_count": latest_seq,  # approximate (seq is 1-based monotonic)
+            "closed": is_closed,
+            "cli_alive": False,
+            "has_subscribers": False,
+            "connected": False,
+            "source": "persistence",
+        }
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Task '{task_id}' not found in registry or persistence store",
     )

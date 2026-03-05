@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # Navigator platform URL (injected into SKILL.md templates at deploy time)
     navigator_api_base: str = "http://localhost:8112"
 
+    # Event persistence — durable JSONL event log for ESN-based sync recovery
+    event_persistence_enabled: bool = True
+    event_store_dir: str = ""  # empty = default (logs/events/)
+
     # LLM config -- injected into Claude Code CLI subprocess via env
     # 二选一：api_key 或 auth_token（取决于你平时用哪个）
     anthropic_api_key: str = ""
