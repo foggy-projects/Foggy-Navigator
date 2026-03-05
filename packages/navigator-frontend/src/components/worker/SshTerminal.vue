@@ -1,6 +1,5 @@
 <template>
   <div
-    ref="wrapRef"
     class="ssh-terminal-wrap"
     v-show="active"
     @click="focusTerminal"
@@ -28,7 +27,6 @@ const props = defineProps<{
   workerId: string
 }>()
 
-const wrapRef = ref<HTMLElement | null>(null)
 const termRef = ref<HTMLElement | null>(null)
 const focused = ref(true) // optimistic; onBlur will set false
 let terminal: Terminal | null = null
