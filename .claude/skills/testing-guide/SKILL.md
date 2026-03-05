@@ -1,19 +1,33 @@
 ---
 name: testing-guide
-description: Foggy Navigator 全局测试规范与指导。定义测试分类、文件组织、命名规范、框架选择、覆盖目标。当用户需要编写测试、了解测试规范、查找测试文件位置、或使用 /testing-guide 时使用。触发词：/testing-guide, /tg, 提及"测试规范"、"编写测试"、"测试在哪"、"测试目标"。
+description: Foggy Navigator 全局测试规范与参考手册。查询测试分类标准、文件组织规范、命名约定、覆盖状态。不负责具体编写测试（由 Agent Teams 或模块专属技能执行）。触发词：/testing-guide, /tg, 提及"测试规范"、"测试在哪"、"测试标准"、"覆盖状态"。
 ---
 
 # Foggy Navigator 全局测试规范
 
 项目级测试标准、文件组织、命名约定和质量目标的统一定义。
 
+## ⚡ 技能选择指南
+
+> **本技能是"参考手册"，不负责具体执行。** 根据你的意图选择正确的技能/Agent：
+
+| 你想做什么 | 应该使用 | 触发词 |
+|-----------|---------|--------|
+| 查询测试规范、文件位置、覆盖状态 | **本技能**（testing-guide） | `/tg` |
+| 编写 Coding Agent 的 L3 API 集成测试 | coding-agent-integration-tests | `/ca-tests` |
+| 编写 Session Module 的 L3 API 集成测试 | session-integration-tests | `/st` |
+| 浏览器自动化测试 Coding Agent 前端 | coding-agent-e2e-browser | `/test-coding-agent` |
+| 规划某模块的测试方案 | test-planner Agent | Agent Teams 调用 |
+| 编写测试代码并红绿循环 | test-author Agent | Agent Teams 调用 |
+| 修复测试发现的生产代码 bug | prod-fixer Agent | Agent Teams 调用 |
+
 ## 使用场景
 
-- 为任何模块编写新的单元测试或集成测试
 - 了解测试文件放在哪、如何组织
 - 查阅测试框架和依赖版本
 - 确认命名规范和代码风格
 - 检查当前测试覆盖状态和下一步计划
+- 为 Agent Teams 和模块专属技能提供基础规范参考
 
 ## 测试分类
 
@@ -587,13 +601,23 @@ packages/navigator-frontend/
 - 如果编写 L3 集成测试 → 参考已有技能 `/ca-tests` 或 `/session-tests`
 - 如果需要数据库测试 → 使用 H2 内存数据库，不连接真实 MySQL
 
-## 相关技能
+## 相关技能与 Agent
 
-| 技能 | 触发词 | 职责 |
-|------|--------|------|
-| coding-agent-integration-tests | `/ca-tests` | Coding Agent L3 集成测试 |
-| session-integration-tests | `/session-tests` | Session Module L3 集成测试 |
-| test-coding-agent | `/test-coding-agent` | Playwright 自动化测试 Coding Agent 前端 |
+### 模块专属测试技能（负责具体执行）
+
+| 技能 | 触发词 | 层级 | 职责 |
+|------|--------|------|------|
+| coding-agent-integration-tests | `/ca-tests` | L3 API | Coding Agent REST + SSE 集成测试 |
+| session-integration-tests | `/st` | L3 API | Session Module REST + SSE 集成测试 |
+| coding-agent-e2e-browser | `/test-coding-agent` | L4 浏览器 | Playwright 自动化 Coding Agent 前端 |
+
+### Agent Teams（负责测试工作流编排）
+
+| Agent | 职责 | 配置文件 |
+|-------|------|---------|
+| test-planner | 读代码出测试计划（只读不写） | `.claude/agents/test-planner.md` |
+| test-author | 写测试 + 跑测试 + 修测试（不改生产代码） | `.claude/agents/test-author.md` |
+| prod-fixer | 修生产代码 bug（不写测试） | `.claude/agents/prod-fixer.md` |
 
 ## 常用命令速查
 

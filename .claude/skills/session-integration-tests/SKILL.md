@@ -1,15 +1,20 @@
 ---
 name: session-integration-tests
-description: Session Module 集成测试指导。编写、运行和调试 session-module 的 Vitest 集成测试。当用户需要对会话API做集成测试、验证SSE事件流、测试端到端会话流程时使用。触发词：/session-tests, /st, 提及"会话集成测试"、"session测试"、"session API测试"。
+description: Session Module L3 API 集成测试指导（会话 CRUD + SSE + Agent 委派）。当用户需要编写、运行或调试 session-module 模块专属的 L3 集成测试时使用。注意：本技能仅覆盖 session-module，coding-agent 请使用 /ca-tests。触发词：/session-tests, /st, 提及"session 集成测试"、"会话 API 测试"。
 ---
 
 # Session Module 集成测试指导
 
-为 session-module 的 REST API 和 SSE 事件流提供集成测试标准化指导。
+为 session-module 的 REST API 和 SSE 事件流提供 L3 集成测试标准化指导。
+
+> **范围限定**：本技能仅覆盖 session-module 模块。
+> - Coding Agent 集成测试 → `/ca-tests`（coding-agent-integration-tests）
+> - 全局测试规范 → `/tg`（testing-guide）
 
 ## 使用场景
 
-- 编写新的集成测试用例
+当用户明确针对 **session-module 模块** 进行以下操作时激活：
+- 编写 session-module 的 L3 集成测试用例
 - 运行和调试 session-module 集成测试
 - 验证会话 CRUD API
 - 测试 SSE 事件流推送
