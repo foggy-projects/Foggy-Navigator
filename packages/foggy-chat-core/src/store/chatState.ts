@@ -226,6 +226,10 @@ export function createChatState(): ChatState {
           })
           break
         }
+        if (subtype === 'sync_checkpoint' || subtype === 'reconnected') {
+          // Internal sync events — consume silently, do not render
+          break
+        }
         if (subtype === 'waiting') {
           // "Waiting for response" hint — replace previous waiting msg to avoid stacking
           const existingIdx = messages.value.findIndex(
