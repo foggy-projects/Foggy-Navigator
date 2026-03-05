@@ -209,7 +209,17 @@
               创建 Worktree
             </el-button>
             <el-button size="small" @click="openFileBrowser">浏览文件</el-button>
-            <el-button size="small" @click="openCodeServer">VS Code</el-button>
+            <el-dropdown size="small" trigger="click" @command="openCodeServer">
+              <el-button size="small">
+                VS Code<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="internal">内网访问</el-dropdown-item>
+                  <el-dropdown-item command="public">公网访问</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button size="small" @click="handleToggleTerminal">终端</el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
             <el-button
@@ -430,42 +440,8 @@
           </div>
         </div>
 
-        <!-- Worker Tabs: Agents & CLI Processes -->
+        <!-- Worker Tabs: CLI Processes & Agents -->
         <el-tabs v-model="workerActiveTab" class="worker-tabs" @tab-change="handleWorkerTabChange">
-          <el-tab-pane name="agents">
-            <template #label>
-              <span>Coding Agents</span>
-              <el-tag v-if="agentsForWorker.length > 0" size="small" type="info" style="margin-left: 6px;">{{ agentsForWorker.length }}</el-tag>
-            </template>
-            <div class="tab-pane-toolbar">
-              <el-button size="small" @click="openAgentRegisterDialog">+ 注册 Agent</el-button>
-            </div>
-            <div v-if="agentsForWorker.length === 0" class="agent-empty">
-              暂无 Agent，点击上方注册
-            </div>
-            <div v-for="agent in agentsForWorker" :key="agent.agentId" class="agent-card">
-              <div class="agent-card-info">
-                <div class="agent-card-name">{{ agent.name }}</div>
-                <div v-if="agent.description" class="agent-card-desc">{{ agent.description }}</div>
-                <div v-if="agent.projectSummary" class="agent-card-summary">{{ agent.projectSummary }}</div>
-                <div class="agent-card-meta">
-                  <span v-if="agent.defaultDirectoryId" class="agent-dir-tag">
-                    &#128193; {{ dirNameById(agent.defaultDirectoryId) }}
-                    <span v-if="dirBranchById(agent.defaultDirectoryId)" class="agent-branch">({{ dirBranchById(agent.defaultDirectoryId) }})</span>
-                  </span>
-                  <span v-if="agent.authorizedDirectories" class="agent-dir-count">
-                    {{ agent.authorizedDirectories.length }} 个授权目录
-                  </span>
-                </div>
-              </div>
-              <div class="agent-card-actions">
-                <el-button size="small" text @click="openAgentEditDialog(agent)">编辑</el-button>
-                <el-button size="small" text @click="openAgentBindingDialog(agent)">目录</el-button>
-                <el-button size="small" text type="danger" @click="handleDeleteAgent(agent)">删除</el-button>
-              </div>
-            </div>
-          </el-tab-pane>
-
           <el-tab-pane name="processes">
             <template #label>
               <span>CLI 进程</span>
@@ -523,6 +499,40 @@
                 </template>
               </el-table-column>
             </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane name="agents">
+            <template #label>
+              <span>Coding Agents</span>
+              <el-tag v-if="agentsForWorker.length > 0" size="small" type="info" style="margin-left: 6px;">{{ agentsForWorker.length }}</el-tag>
+            </template>
+            <div class="tab-pane-toolbar">
+              <el-button size="small" @click="openAgentRegisterDialog">+ 注册 Agent</el-button>
+            </div>
+            <div v-if="agentsForWorker.length === 0" class="agent-empty">
+              暂无 Agent，点击上方注册
+            </div>
+            <div v-for="agent in agentsForWorker" :key="agent.agentId" class="agent-card">
+              <div class="agent-card-info">
+                <div class="agent-card-name">{{ agent.name }}</div>
+                <div v-if="agent.description" class="agent-card-desc">{{ agent.description }}</div>
+                <div v-if="agent.projectSummary" class="agent-card-summary">{{ agent.projectSummary }}</div>
+                <div class="agent-card-meta">
+                  <span v-if="agent.defaultDirectoryId" class="agent-dir-tag">
+                    &#128193; {{ dirNameById(agent.defaultDirectoryId) }}
+                    <span v-if="dirBranchById(agent.defaultDirectoryId)" class="agent-branch">({{ dirBranchById(agent.defaultDirectoryId) }})</span>
+                  </span>
+                  <span v-if="agent.authorizedDirectories" class="agent-dir-count">
+                    {{ agent.authorizedDirectories.length }} 个授权目录
+                  </span>
+                </div>
+              </div>
+              <div class="agent-card-actions">
+                <el-button size="small" text @click="openAgentEditDialog(agent)">编辑</el-button>
+                <el-button size="small" text @click="openAgentBindingDialog(agent)">目录</el-button>
+                <el-button size="small" text type="danger" @click="handleDeleteAgent(agent)">删除</el-button>
+              </div>
+            </div>
           </el-tab-pane>
         </el-tabs>
 
@@ -1658,7 +1668,7 @@
 import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Back } from '@element-plus/icons-vue'
+import { ArrowDown, Back } from '@element-plus/icons-vue'
 import { useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useCodingAgent } from '@/composables/useCodingAgent'
 import { useInputMemory } from '@/composables/useInputMemory'
@@ -3070,7 +3080,7 @@ function openFileBrowser() {
   window.open(url, '_blank', 'width=1400,height=900')
 }
 
-async function openCodeServer() {
+async function openCodeServer(network: 'internal' | 'public') {
   if (!selectedDirectoryId.value) return
   const worker = selectedWorkerEntity.value
   if (!worker) return
@@ -3087,12 +3097,16 @@ async function openCodeServer() {
 
   const folder = folderPath ? encodeURIComponent(folderPath) : ''
 
-  // 根据当前访问网络选择公网/内网 URL
-  const internal = isInternalNetwork()
-  const base = internal
+  // 根据用户选择的网络类型选择公网/内网 URL
+  const base = network === 'internal'
     ? (worker.codeServerInternalUrl?.replace(/\/+$/, '') || '')
     : (worker.codeServerPublicUrl?.replace(/\/+$/, '') || '')
     || `${window.location.origin}/code`
+
+  if (!base) {
+    ElMessage.warning(`未配置${network === 'internal' ? '内网' : '公网'}地址，请先在编辑中配置`)
+    return
+  }
 
   // 密码 → 复制到剪贴板
   if (worker.codeServerPasswordConfigured && selectedWorkerId.value) {
