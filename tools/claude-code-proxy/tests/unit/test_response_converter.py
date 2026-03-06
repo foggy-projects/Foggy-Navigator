@@ -565,3 +565,226 @@ class TestResponseConverterEdgeCases:
         result = convert_openai_to_claude_response(openai_response, sample_claude_messages_request)
 
         assert result["stop_reason"] == Constants.STOP_TOOL_USE
+
+
+# ============================================================================
+# P6: Additional streaming edge-case tests
+# ============================================================================
+
+
+@pytest.mark.unit
+class TestStreamingEdgeCases:
+    """Test streaming conversion edge cases for uncovered lines."""
+
+    @pytest.mark.asyncio
+    async def test_empty_choices_skipped(self, sample_claude_messages_request):
+        """Chunk with empty choices is skipped (line 113 / 272)."""
+        async def mock_stream():
+            # Chunk with no choices
+            yield 'data: {"id":"x","choices":[]}'
+            # Then a valid chunk
+            yield 'data: {"choices":[{"delta":{"content":"OK"}}]}'
+            yield 'data: [DONE]'
+
+        logger = Mock()
+        events = []
+        async for event in convert_openai_streaming_to_claude(
+            mock_stream(), sample_claude_messages_request, logger
+        ):
+            events.append(event)
+
+        # Should still produce the "OK" text delta
+        assert any("OK" in e for e in events)
+
+    @pytest.mark.asyncio
+    async def test_empty_choices_skipped_with_cancellation(self, sample_claude_messages_request):
+        """Chunk with empty choices is skipped in with_cancellation (line 272)."""
+        async def mock_stream():
+            # Usage-only chunk (no choices)
+            yield 'data: {"usage":{"prompt_tokens":10,"completion_tokens":5},"choices":[]}'
+            # Then valid content
+            yield 'data: {"choices":[{"delta":{"content":"Fine"}}]}'
+            yield 'data: [DONE]'
+
+        mock_request = Mock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+        mock_client = Mock()
+
+        events = []
+        async for event in convert_openai_streaming_to_claude_with_cancellation(
+            mock_stream(), sample_claude_messages_request, Mock(),
+            mock_request, mock_client, "id-1"
+        ):
+            events.append(event)
+
+        assert any("Fine" in e for e in events)
+
+    @pytest.mark.asyncio
+    async def test_tool_call_without_id_defers_start(self, sample_claude_messages_request):
+        """Tool call with name but no id doesn't start content block (lines 172-174, 183-188)."""
+        async def mock_stream():
+            # Only name, no id → started remains False
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"search"}}]}}]}'
+            # Still no id → not started
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"arguments":"{\\"q\\":\\"test\\"}"}}]}}]}'
+            yield 'data: [DONE]'
+
+        events = []
+        async for event in convert_openai_streaming_to_claude(
+            mock_stream(), sample_claude_messages_request, Mock()
+        ):
+            events.append(event)
+
+        # Should NOT have content_block_start for tool_use since id was never provided
+        tool_start_events = [e for e in events if "tool_use" in e and "content_block_start" in e]
+        assert len(tool_start_events) == 0
+
+    @pytest.mark.asyncio
+    async def test_tool_call_id_then_name_starts_block(self, sample_claude_messages_request):
+        """Tool call: id in first delta, name in second → starts on second (lines 156-162)."""
+        async def mock_stream():
+            # First delta: id only
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{}}]}}]}'
+            # Second delta: name arrives → started
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"lookup"}}]}}]}'
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"arguments":"{}"}}]}}]}'
+            yield 'data: [DONE]'
+
+        events = []
+        async for event in convert_openai_streaming_to_claude(
+            mock_stream(), sample_claude_messages_request, Mock()
+        ):
+            events.append(event)
+
+        # Should have content_block_start with tool_use
+        tool_start_events = [e for e in events if "tool_use" in e and "content_block_start" in e]
+        assert len(tool_start_events) == 1
+        assert "lookup" in tool_start_events[0]
+
+    @pytest.mark.asyncio
+    async def test_incomplete_json_accumulation(self, sample_claude_messages_request):
+        """Incomplete JSON in tool args accumulates without sending delta (lines 334-336)."""
+        async def mock_stream():
+            # Start tool call
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"calc"}}]}}]}'
+            # Incomplete JSON fragment
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"arguments":"{\\"x\\":"}}]}}]}'
+            # Complete JSON
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"arguments":"42}"}}]}}]}'
+            yield 'data: [DONE]'
+
+        mock_request = Mock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+
+        events = []
+        async for event in convert_openai_streaming_to_claude_with_cancellation(
+            mock_stream(), sample_claude_messages_request, Mock(),
+            mock_request, Mock(), "r-1"
+        ):
+            events.append(event)
+
+        # Should have exactly one input_json delta (after JSON becomes complete)
+        json_deltas = [e for e in events if "input_json_delta" in e]
+        assert len(json_deltas) == 1
+
+    @pytest.mark.asyncio
+    async def test_finish_reason_length_with_cancellation(self, sample_claude_messages_request):
+        """finish_reason 'length' → STOP_MAX_TOKENS in with_cancellation (line 341)."""
+        async def mock_stream():
+            yield 'data: {"choices":[{"delta":{"content":"Trunc"},"finish_reason":"length"}]}'
+
+        mock_request = Mock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+
+        events = []
+        async for event in convert_openai_streaming_to_claude_with_cancellation(
+            mock_stream(), sample_claude_messages_request, Mock(),
+            mock_request, Mock(), "r-2"
+        ):
+            events.append(event)
+
+        delta_events = [e for e in events if "message_delta" in e]
+        assert len(delta_events) == 1
+        assert Constants.STOP_MAX_TOKENS in delta_events[0]
+
+    @pytest.mark.asyncio
+    async def test_finish_reason_tool_calls_with_cancellation(self, sample_claude_messages_request):
+        """finish_reason 'tool_calls' → STOP_TOOL_USE in with_cancellation (line 343)."""
+        async def mock_stream():
+            yield 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}'
+
+        mock_request = Mock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+
+        events = []
+        async for event in convert_openai_streaming_to_claude_with_cancellation(
+            mock_stream(), sample_claude_messages_request, Mock(),
+            mock_request, Mock(), "r-3"
+        ):
+            events.append(event)
+
+        delta_events = [e for e in events if "message_delta" in e]
+        assert Constants.STOP_TOOL_USE in delta_events[0]
+
+    @pytest.mark.asyncio
+    async def test_finish_reason_unknown_with_cancellation(self, sample_claude_messages_request):
+        """Unknown finish_reason → defaults to STOP_END_TURN (line 347)."""
+        async def mock_stream():
+            yield 'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}'
+
+        mock_request = Mock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+
+        events = []
+        async for event in convert_openai_streaming_to_claude_with_cancellation(
+            mock_stream(), sample_claude_messages_request, Mock(),
+            mock_request, Mock(), "r-4"
+        ):
+            events.append(event)
+
+        delta_events = [e for e in events if "message_delta" in e]
+        assert Constants.STOP_END_TURN in delta_events[0]
+
+    @pytest.mark.asyncio
+    async def test_httpexception_499_cancellation(self, sample_claude_messages_request):
+        """HTTPException(499) during stream iteration → cancelled event (lines 349-363)."""
+        async def mock_stream():
+            yield 'data: {"choices":[{"delta":{"content":"Hello"}}]}'
+            raise HTTPException(status_code=499, detail="Client disconnected")
+
+        mock_request = Mock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+        mock_logger = Mock()
+
+        events = []
+        async for event in convert_openai_streaming_to_claude_with_cancellation(
+            mock_stream(), sample_claude_messages_request, mock_logger,
+            mock_request, Mock(), "r-5"
+        ):
+            events.append(event)
+
+        # Should emit cancellation error event
+        error_events = [e for e in events if "cancelled" in e]
+        assert len(error_events) == 1
+        assert "Request was cancelled" in error_events[0]
+        # Should NOT have final events (message_stop etc.)
+        assert not any("message_stop" in e for e in events)
+
+    @pytest.mark.asyncio
+    async def test_httpexception_non_499_reraises(self, sample_claude_messages_request):
+        """HTTPException with status != 499 is re-raised (lines 362-363)."""
+        async def mock_stream():
+            yield 'data: {"choices":[{"delta":{"content":"Hi"}}]}'
+            raise HTTPException(status_code=502, detail="Bad Gateway")
+
+        mock_request = Mock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+
+        with pytest.raises(HTTPException) as exc_info:
+            async for _ in convert_openai_streaming_to_claude_with_cancellation(
+                mock_stream(), sample_claude_messages_request, Mock(),
+                mock_request, Mock(), "r-6"
+            ):
+                pass
+
+        assert exc_info.value.status_code == 502

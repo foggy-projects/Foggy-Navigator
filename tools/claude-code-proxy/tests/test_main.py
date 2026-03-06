@@ -1,11 +1,23 @@
-"""Test script for Claude to OpenAI proxy."""
+"""Manual test script for Claude to OpenAI proxy.
+
+This is NOT an automated test. It requires a running proxy server.
+Run manually with: python tests/test_main.py
+"""
 
 import asyncio
 import json
+import os
+import pytest
 import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Skip all tests in this module unless the proxy is actually running
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("PROXY_RUNNING"),
+    reason="Manual test — requires running proxy server (set PROXY_RUNNING=1 to enable)",
+)
 
 
 async def test_basic_chat():
