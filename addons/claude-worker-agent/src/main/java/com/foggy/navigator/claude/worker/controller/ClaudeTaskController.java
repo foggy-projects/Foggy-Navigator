@@ -2,6 +2,7 @@ package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.ConversationConfigDTO;
+import com.foggy.navigator.claude.worker.model.dto.ResyncResult;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
@@ -100,25 +101,12 @@ public class ClaudeTaskController {
     }
 
     /**
-     * 重新同步已失败但 CLI 还在运行的任务。
-     *
-     * 使用场景：Reconciler 检测到 CLI 还活着但已标记为 FAILED，用户通过进程列表手动触发重新同步。
-     *
-     * 与 /reconnect 的区别：
-     * - /reconnect：无条件重连（兼容旧版本）
-     * - /resync：先检查 Worker 侧 CLI 是否还活着，确保不会同步已死亡的进程
+     * 任务重新同步：智能探测 CLI 状态，自动选择重连 SSE 或从 Worker JSONL 补齐消息。
      */
     @PostMapping("/{taskId}/resync")
-    public RX<Map<String, Object>> resyncTask(@PathVariable String taskId) {
+    public RX<ResyncResult> resyncTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
-        var task = taskService.getTaskEntity(taskId);
-        if (!task.getUserId().equals(userId)) {
-            throw RX.throwB("Task not found");
-        }
-
-        taskService.resyncTask(taskId);
-
-        return RX.ok(Map.of("taskId", taskId, "status", "RESYNCED"));
+        return RX.ok(taskService.resync(taskId, userId));
     }
 
     @PostMapping("/{taskId}/abort")
@@ -471,6 +459,18 @@ public class ClaudeTaskController {
     public RX<ConversationConfigDTO> unarchiveConversation(@PathVariable String sessionId) {
         String userId = UserContext.getCurrentUserId();
         return RX.ok(configService.unarchiveConversation(sessionId, userId));
+    }
+
+    @PostMapping("/conversations/{sessionId}/hold")
+    public RX<ConversationConfigDTO> holdConversation(@PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.holdConversation(sessionId, userId));
+    }
+
+    @PostMapping("/conversations/{sessionId}/unhold")
+    public RX<ConversationConfigDTO> unholdConversation(@PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.unholdConversation(sessionId, userId));
     }
 
     @PostMapping("/conversations/batch-bind-auth")

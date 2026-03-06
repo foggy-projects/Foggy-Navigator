@@ -248,23 +248,28 @@
             <span v-if="s.pinned" class="pin-icon">&#128204;</span>{{ s.name }}
           </el-tag>
         </div>
-        <div v-if="parsedAgentTeams.length" class="agent-teams-bar">
-          <el-switch
-            v-model="taskForm.useTeams"
+        <div v-if="agentTeamsConfigs.length > 0" class="agent-teams-bar">
+          <span class="agent-teams-label">Agent Teams:</span>
+          <el-select
+            v-model="selectedAgentTeamsConfigId"
+            placeholder="不使用"
+            clearable
             size="small"
-            inline-prompt
-            active-text="ON"
-            inactive-text="OFF"
-            style="margin-right: 6px"
-          />
-          <span class="agent-teams-label" :style="{ opacity: taskForm.useTeams ? 1 : 0.4 }">Agent Teams:</span>
+            style="width: 180px; margin-right: 8px"
+          >
+            <el-option
+              v-for="cfg in agentTeamsConfigs"
+              :key="cfg.configId"
+              :label="cfg.name + (cfg.isDefault ? ' ★' : '')"
+              :value="cfg.configId"
+            />
+          </el-select>
           <el-tag
             v-for="agent in parsedAgentTeams"
             :key="agent"
             size="small"
-            :type="taskForm.useTeams ? 'info' : 'info'"
-            :effect="taskForm.useTeams ? 'light' : 'plain'"
-            :style="{ opacity: taskForm.useTeams ? 1 : 0.4 }"
+            type="info"
+            effect="light"
           >
             {{ agent }}
           </el-tag>
@@ -305,6 +310,7 @@
               <el-button
                 type="primary"
                 :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
+                :loading="creatingTask"
                 @click="handleCreateTask"
               >
                 运行任务
@@ -356,6 +362,7 @@
             <el-button
               size="small"
               :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE' || panes.length >= MAX_PANES"
+              :loading="creatingTask"
               @click="handleCreateTask"
             >
               运行
@@ -413,9 +420,24 @@
               v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
               size="small"
               text
+              title="搁置会话"
+              @click="handlePaneHold(paneState.task.value?.sessionId)"
+            >搁置</el-button>
+            <el-button
+              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              size="small"
+              text
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
+            <el-button
+              v-if="paneState.task.value?.status === 'FAILED'"
+              size="small"
+              text
+              title="重新同步失败的任务"
+              :loading="resyncingTaskId === paneState.task.value?.taskId"
+              @click="handlePaneResync(paneState)"
+            >重新同步</el-button>
           </template>
         </TaskPaneGrid>
       </template>
@@ -578,6 +600,7 @@
               <el-button
                 type="primary"
                 :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE'"
+                :loading="creatingTask"
                 @click="handleCreateTask"
               >
                 运行任务
@@ -629,6 +652,7 @@
             <el-button
               size="small"
               :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE' || panes.length >= MAX_PANES"
+              :loading="creatingTask"
               @click="handleCreateTask"
             >
               运行
@@ -686,9 +710,24 @@
               v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
               size="small"
               text
+              title="搁置会话"
+              @click="handlePaneHold(paneState.task.value?.sessionId)"
+            >搁置</el-button>
+            <el-button
+              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              size="small"
+              text
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
+            <el-button
+              v-if="paneState.task.value?.status === 'FAILED'"
+              size="small"
+              text
+              title="重新同步失败的任务"
+              :loading="resyncingTaskId === paneState.task.value?.taskId"
+              @click="handlePaneResync(paneState)"
+            >重新同步</el-button>
           </template>
         </TaskPaneGrid>
       </template>
@@ -793,6 +832,10 @@
             @click="toggleStateFilter('PROCESSING')"
           >处理中</span>
           <span
+            :class="['filter-tag', { active: interactionStateFilters.has('ON_HOLD') }]"
+            @click="toggleStateFilter('ON_HOLD')"
+          >已搁置</span>
+          <span
             :class="['filter-tag', { active: interactionStateFilters.has('ARCHIVED') }]"
             @click="toggleStateFilter('ARCHIVED')"
           >已归档</span>
@@ -822,10 +865,16 @@
           <div
             v-for="ac in globalAttentionConvs"
             :key="ac.sessionId"
-            :class="['active-conv-item', { 'conv-pane-focused': ac.sessionId === focusedSessionId }]"
+            :class="['active-conv-item', { 'conv-pane-focused': ac.sessionId === focusedSessionId, 'active-conv-pinned': ac.config?.pinned }]"
             @click="navigateToActiveSession(ac)"
           >
             <div class="conv-row-1">
+              <span
+                v-if="ac.config?.pinned"
+                class="conv-pin-icon active"
+                title="已置顶"
+                @click.stop="handleTogglePin(ac)"
+              >&#128204;</span>
               <span
                 v-if="paneSessionMap.has(ac.sessionId)"
                 :class="['sidebar-pane-letter', `pane-letter-${paneSessionMap.get(ac.sessionId)!.label.toLowerCase()}`]"
@@ -836,6 +885,9 @@
             </div>
             <div class="conv-row-1" style="margin-top: 2px;">
               <span class="conv-prompt" :title="ac.config?.customTitle || ac.firstPrompt">{{ truncate(ac.config?.customTitle || ac.firstPrompt, 30) }}</span>
+            </div>
+            <div v-if="ac.config?.customTitle" class="conv-row-subtitle">
+              <span class="conv-latest-prompt" :title="ac.latestTask.prompt">{{ truncate(ac.latestTask.prompt, 30) }}</span>
             </div>
             <div class="conv-row-2">
               <el-tag v-for="tag in (ac.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
@@ -880,6 +932,18 @@
                       </el-dropdown-item>
                       <el-dropdown-item @click="handleShowDetail(ac)">
                         详情
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="ac.config?.interactionState !== 'ARCHIVED' && ac.config?.interactionState !== 'ON_HOLD'"
+                        @click="handleHoldConversation(ac)"
+                      >
+                        搁置
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="ac.config?.interactionState === 'ON_HOLD'"
+                        @click="handleUnholdConversation(ac)"
+                      >
+                        取消搁置
                       </el-dropdown-item>
                       <el-dropdown-item
                         v-if="ac.config?.interactionState !== 'ARCHIVED'"
@@ -944,6 +1008,9 @@
               }}</span>
               <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
             </div>
+            <div v-if="conv.config?.customTitle" class="conv-row-subtitle">
+              <span class="conv-latest-prompt" :title="conv.latestTask.prompt">{{ truncate(conv.latestTask.prompt, 36) }}</span>
+            </div>
             <div class="conv-row-2">
               <el-tag v-for="tag in (conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
               <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }}轮</span>
@@ -983,6 +1050,18 @@
                         详情
                       </el-dropdown-item>
                       <el-dropdown-item
+                        v-if="conv.config?.interactionState !== 'ARCHIVED' && conv.config?.interactionState !== 'ON_HOLD'"
+                        @click="handleHoldConversation(conv)"
+                      >
+                        搁置
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="conv.config?.interactionState === 'ON_HOLD'"
+                        @click="handleUnholdConversation(conv)"
+                      >
+                        取消搁置
+                      </el-dropdown-item>
+                      <el-dropdown-item
                         v-if="conv.config?.interactionState !== 'ARCHIVED'"
                         @click="handleArchiveConversation(conv)"
                       >
@@ -1006,6 +1085,13 @@
                         @click="handleScanCheckpoints(conv.latestTask)"
                       >
                         {{ scanningTaskId === conv.latestTask.taskId ? '扫描中...' : '扫描' }}
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="conv.latestTask.status === 'FAILED'"
+                        :disabled="resyncingTaskId === conv.latestTask.taskId"
+                        @click="handleResyncFromList(conv)"
+                      >
+                        {{ resyncingTaskId === conv.latestTask.taskId ? '同步中...' : '重新同步' }}
                       </el-dropdown-item>
                       <el-dropdown-item
                         v-if="conv.latestTask.status !== 'RUNNING'"
@@ -1190,17 +1276,53 @@
         <el-form-item label="路径">
           <el-input v-model="editDirForm.path" />
         </el-form-item>
-        <el-form-item label="Agent Teams">
-          <el-input
-            v-model="editDirForm.agentTeamsConfig"
-            type="textarea"
-            :rows="6"
-            placeholder='{"reviewer": {"description": "...", "prompt": "..."}}'
-          />
+        <el-form-item label="Agent Teams 配置">
+          <div class="agent-teams-configs-panel">
+            <div v-if="agentTeamsConfigs.length === 0" class="form-tip" style="margin-bottom: 8px">
+              暂无配置，点击下方按钮创建。
+            </div>
+            <div v-for="cfg in agentTeamsConfigs" :key="cfg.configId" class="atc-row">
+              <el-tag v-if="cfg.isDefault" size="small" type="success" style="margin-right: 4px">默认</el-tag>
+              <span class="atc-name">{{ cfg.name }}</span>
+              <span class="atc-agents">{{ cfg.agentNames.join(', ') }}</span>
+              <el-button size="small" link @click="openEditAgentTeamsConfig(cfg)">编辑</el-button>
+              <el-button size="small" link type="danger" @click="handleDeleteAgentTeamsConfig(cfg.configId)">删除</el-button>
+            </div>
+            <el-button size="small" type="primary" @click="openCreateAgentTeamsConfig">+ 新建配置</el-button>
+          </div>
           <div class="form-tip">
-            JSON 格式定义子 Agent 团队。Claude 会自动分派子任务给团队成员。
+            JSON 格式定义子 Agent 团队。可创建多套配置，任务启动时选择。
           </div>
         </el-form-item>
+
+        <!-- Agent Teams Config 编辑子对话框 -->
+        <el-dialog
+          v-model="showAgentTeamsConfigDialog"
+          :title="agentTeamsConfigDialogMode === 'create' ? '新建 Agent Teams 配置' : '编辑 Agent Teams 配置'"
+          width="520px"
+          append-to-body
+        >
+          <el-form label-position="top">
+            <el-form-item label="配置名称" required>
+              <el-input v-model="agentTeamsConfigForm.name" placeholder="如：代码审查团队" />
+            </el-form-item>
+            <el-form-item label="Agent Teams JSON" required>
+              <el-input
+                v-model="agentTeamsConfigForm.config"
+                type="textarea"
+                :rows="8"
+                placeholder='{"reviewer": {"description": "...", "prompt": "..."}}'
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-checkbox v-model="agentTeamsConfigForm.isDefault">设为默认配置</el-checkbox>
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="showAgentTeamsConfigDialog = false">取消</el-button>
+            <el-button type="primary" @click="handleSaveAgentTeamsConfig">保存</el-button>
+          </template>
+        </el-dialog>
         <el-form-item v-if="selectedDirectory?.directoryType === 'PROJECT'" label="项目任务 Prompt">
           <el-input
             v-model="editDirForm.projectTaskPrompt"
@@ -1699,7 +1821,7 @@ import * as dirApi from '@/api/claudeWorker'
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig } from '@/types'
 import type { AipMessageType } from '@foggy/chat'
 
 const MAX_PANES = 4
@@ -1883,7 +2005,7 @@ const batchSelectMode = ref(false)
 const selectedConvIds = ref<Set<string>>(new Set())
 
 // Multi-select filter: interaction states (default: 待回复 + 处理中)
-const ALL_STATES = ['AWAITING_REPLY', 'PROCESSING', 'ARCHIVED'] as const
+const ALL_STATES = ['AWAITING_REPLY', 'PROCESSING', 'ON_HOLD', 'ARCHIVED'] as const
 const interactionStateFilters = ref<Set<string>>(new Set(['AWAITING_REPLY', 'PROCESSING']))
 
 // Multi-select filter: session sources (default: 平台)
@@ -1980,6 +2102,9 @@ const rewindCheckpoints = ref<{ id: string; turnIndex: number; timestamp: string
 // Scan checkpoints state
 const scanningTaskId = ref('')
 
+// Resync state
+const resyncingTaskId = ref('')
+
 // Directory task pagination (separate from global task pagination)
 const directoryTasks = ref<ClaudeTask[]>([])
 const dirTaskPage = ref(0)
@@ -2070,13 +2195,25 @@ const claudeModelOptions = [
   { value: 'haiku', label: 'Haiku' },
 ]
 
+const creatingTask = ref(false)
 const taskForm = ref({
   prompt: '',
   cwd: '',
   model: 'opus' as string,
   maxTurns: null as number | null,
-  useTeams: true,
   permissionMode: 'bypassPermissions' as string,
+})
+
+// --- Agent Teams 多配置支持 ---
+const agentTeamsConfigs = ref<AgentTeamsConfig[]>([])
+const selectedAgentTeamsConfigId = ref<string | null>(null)
+const showAgentTeamsConfigDialog = ref(false)
+const agentTeamsConfigDialogMode = ref<'create' | 'edit'>('create')
+const agentTeamsConfigForm = ref({
+  configId: '',
+  name: '',
+  config: '',
+  isDefault: false,
 })
 
 // --- 平台模型配置（供任务创建时选择 API 凭证） ---
@@ -2426,6 +2563,11 @@ const selectedDirectory = computed(() =>
 )
 
 const parsedAgentTeams = computed(() => {
+  if (selectedAgentTeamsConfigId.value) {
+    const config = agentTeamsConfigs.value.find(c => c.configId === selectedAgentTeamsConfigId.value)
+    return config?.agentNames ?? []
+  }
+  // Legacy fallback
   const dir = selectedDirectory.value
   if (!dir?.agentTeamsConfig) return []
   try { return Object.keys(JSON.parse(dir.agentTeamsConfig)) }
@@ -2522,8 +2664,22 @@ const awaitingReplyConvs = computed(() => {
   return awaitingConvs.filter(conv => !activeSessionIds.has(conv.sessionId))
 })
 
-// Combined "needs attention" section: active tasks + awaiting reply
-const globalAttentionConvs = computed(() => [...activeSessionConvs.value, ...awaitingReplyConvs.value])
+// Combined "needs attention" section: pinned + active tasks + awaiting reply (excluding ON_HOLD)
+const globalAttentionConvs = computed(() => {
+  const activeAndAwaiting = [...activeSessionConvs.value, ...awaitingReplyConvs.value]
+    .filter(conv => {
+      // Exclude ON_HOLD sessions from attention (even if they have active tasks)
+      const state = workerState.conversationConfigs.value.get(conv.sessionId)?.interactionState
+      return state !== 'ON_HOLD'
+    })
+  const existingIds = new Set(activeAndAwaiting.map(c => c.sessionId))
+  // Add pinned conversations from history that are not already in active/awaiting
+  const pinnedFromHistory = allConversations.value.filter(
+    c => c.config?.pinned && !existingIds.has(c.sessionId) && c.config?.interactionState !== 'ON_HOLD',
+  )
+  // Pinned first (sorted by pinnedAt desc), then active+awaiting
+  return [...pinnedFromHistory, ...activeAndAwaiting]
+})
 
 // Set of claudeSessionIds that currently have a RUNNING task (for concurrency protection)
 const runningClaudeSessionIds = computed(() => {
@@ -2844,6 +3000,7 @@ function selectDirectory(workerId: string, directoryId: string) {
   dirTaskPage.value = 0
   loadDirectoryTasks()
   loadDirectorySkills()
+  loadAgentTeamsConfigs()
   // Auto-sync SSH sessions from backend (once per directory per page load)
   syncSshSessions()
 }
@@ -3630,6 +3787,85 @@ async function loadDirectorySkills() {
   }
 }
 
+// ===== Agent Teams Config CRUD =====
+
+async function loadAgentTeamsConfigs() {
+  if (!selectedDirectoryId.value) {
+    agentTeamsConfigs.value = []
+    selectedAgentTeamsConfigId.value = null
+    return
+  }
+  try {
+    agentTeamsConfigs.value = await dirApi.listAgentTeamsConfigs(selectedDirectoryId.value)
+    // 自动选中默认配置
+    const defaultConfig = agentTeamsConfigs.value.find(c => c.isDefault)
+    selectedAgentTeamsConfigId.value = defaultConfig?.configId ?? null
+  } catch {
+    agentTeamsConfigs.value = []
+    selectedAgentTeamsConfigId.value = null
+  }
+}
+
+function openCreateAgentTeamsConfig() {
+  agentTeamsConfigDialogMode.value = 'create'
+  agentTeamsConfigForm.value = { configId: '', name: '', config: '', isDefault: false }
+  showAgentTeamsConfigDialog.value = true
+}
+
+function openEditAgentTeamsConfig(cfg: AgentTeamsConfig) {
+  agentTeamsConfigDialogMode.value = 'edit'
+  agentTeamsConfigForm.value = {
+    configId: cfg.configId,
+    name: cfg.name,
+    config: cfg.config,
+    isDefault: cfg.isDefault,
+  }
+  showAgentTeamsConfigDialog.value = true
+}
+
+async function handleSaveAgentTeamsConfig() {
+  if (!selectedDirectoryId.value) return
+  const f = agentTeamsConfigForm.value
+  if (!f.name.trim() || !f.config.trim()) {
+    ElMessage.warning('请填写名称和 JSON 配置')
+    return
+  }
+  try {
+    if (agentTeamsConfigDialogMode.value === 'create') {
+      await dirApi.createAgentTeamsConfig(selectedDirectoryId.value, {
+        name: f.name,
+        config: f.config,
+        isDefault: f.isDefault,
+      })
+      ElMessage.success('配置已创建')
+    } else {
+      await dirApi.updateAgentTeamsConfig(selectedDirectoryId.value, f.configId, {
+        name: f.name,
+        config: f.config,
+        isDefault: f.isDefault,
+      })
+      ElMessage.success('配置已更新')
+    }
+    showAgentTeamsConfigDialog.value = false
+    await loadAgentTeamsConfigs()
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    ElMessage.error('保存失败: ' + msg)
+  }
+}
+
+async function handleDeleteAgentTeamsConfig(configId: string) {
+  if (!selectedDirectoryId.value) return
+  try {
+    await ElMessageBox.confirm('确定删除此配置？已使用此配置的会话不受影响。', '删除确认', { type: 'warning' })
+    await dirApi.deleteAgentTeamsConfig(selectedDirectoryId.value, configId)
+    ElMessage.success('配置已删除')
+    await loadAgentTeamsConfigs()
+  } catch {
+    // cancelled
+  }
+}
+
 async function handleCreateTask() {
   if (!selectedWorkerId.value || !taskForm.value.prompt) return
   // Strip leading "/" to prevent Claude Code CLI from interpreting it as a slash command
@@ -3642,11 +3878,12 @@ async function handleCreateTask() {
     ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
     return
   }
+  creatingTask.value = true
   try {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
-      model?: string; maxTurns?: number; agentTeamsJson?: string; images?: string
-      permissionMode?: string; modelConfigId?: string
+      model?: string; maxTurns?: number; agentTeamsJson?: string; agentTeamsConfigId?: string
+      images?: string; permissionMode?: string; modelConfigId?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
@@ -3698,8 +3935,10 @@ async function handleCreateTask() {
     if (taskForm.value.maxTurns != null) {
       form.maxTurns = taskForm.value.maxTurns
     }
-    if (taskForm.value.useTeams && selectedDirectory.value?.agentTeamsConfig) {
-      form.agentTeamsJson = selectedDirectory.value.agentTeamsConfig
+    if (selectedAgentTeamsConfigId.value) {
+      form.agentTeamsConfigId = selectedAgentTeamsConfigId.value
+      const config = agentTeamsConfigs.value.find(c => c.configId === selectedAgentTeamsConfigId.value)
+      if (config) form.agentTeamsJson = config.config
     }
     if (taskForm.value.permissionMode) {
       form.permissionMode = taskForm.value.permissionMode
@@ -3728,6 +3967,8 @@ async function handleCreateTask() {
     await pane.connect(task.sessionId)
   } catch (e: unknown) {
     ElMessage.error('创建任务失败: ' + ((e as Error).message || '未知错误'))
+  } finally {
+    creatingTask.value = false
   }
 }
 
@@ -3797,6 +4038,125 @@ async function handlePaneReconnect(paneId: string, taskId: string) {
     ElMessage.error('重连失败')
   }
 }
+
+// ==================== Resync 任务重新同步 ====================
+
+/**
+ * 核心 resync 处理函数，从 TaskPane header 或侧栏列表共用。
+ */
+async function doResync(taskId: string, pane?: TaskPaneState) {
+  resyncingTaskId.value = taskId
+  try {
+    const result = await dirApi.resyncTask(taskId)
+
+    switch (result.action) {
+      case 'RECONNECTED': {
+        // 策略 A：CLI 活着，已重连 SSE
+        if (pane) {
+          if (pane.task.value) pane.task.value.status = 'RUNNING'
+          // 清除可重连的错误消息标记
+          const errorMsg = pane.chatState.messages.value.find(
+            (m) => m.reconnectable && (m.raw as Record<string, unknown>)?.taskId === taskId,
+          )
+          if (errorMsg) errorMsg.reconnectable = false
+          pane.chatState.messages.value.push({
+            id: `resync-reconnected-${Date.now()}`,
+            type: 'STATE_SYNC' as AipMessageType,
+            sender: 'system',
+            content: '已重新连接 Worker（CLI 仍存活）',
+            raw: { subtype: 'reconnected' },
+            timestamp: Date.now(),
+          })
+          pane.reconnectSse()
+          if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+        }
+        workerState.loadActiveTasks()
+        workerState.loadAwaitingReplyTasks()
+        ElMessage.success('已重新连接（CLI 存活）')
+        break
+      }
+      case 'MESSAGES_SYNCED': {
+        // 策略 B：CLI 已退出，从 Worker JSONL 补齐了消息
+        const imported = result.messageSync?.imported ?? 0
+        if (pane) {
+          if (pane.task.value) pane.task.value.status = 'COMPLETED'
+          await reloadPaneMessages(pane)
+          if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+        }
+        workerState.loadActiveTasks()
+        workerState.loadAwaitingReplyTasks()
+        workerState.loadTasksPage(0, undefined, currentStateParam())
+        ElMessage.success(`已同步 ${imported} 条消息`)
+        break
+      }
+      case 'ALREADY_ALIGNED': {
+        if (pane && pane.task.value) pane.task.value.status = 'COMPLETED'
+        workerState.loadActiveTasks()
+        workerState.loadAwaitingReplyTasks()
+        workerState.loadTasksPage(0, undefined, currentStateParam())
+        ElMessage.info('消息已完全一致，任务已标记为完成')
+        break
+      }
+      case 'NO_SESSION_DATA':
+        ElMessage.warning('Worker 中没有该会话的记录')
+        break
+      case 'WORKER_UNREACHABLE':
+        ElMessage.error('Worker 不可达：' + (result.cliStatus?.detail ?? ''))
+        break
+      default:
+        ElMessage.warning('未知操作: ' + result.action)
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '重新同步失败'
+    ElMessage.error(msg)
+  } finally {
+    resyncingTaskId.value = ''
+  }
+}
+
+/** 从 TaskPane header-extra 按钮触发 */
+async function handlePaneResync(paneState: TaskPaneState) {
+  const taskId = paneState.task.value?.taskId
+  if (!taskId) return
+  await doResync(taskId, paneState)
+}
+
+/** 从侧栏会话列表 dropdown 触发 */
+async function handleResyncFromList(conv: ConversationGroup) {
+  const taskId = conv.latestTask.taskId
+  // 查找已打开的 pane
+  const pane = panes.value.find((p) => p.task.value?.sessionId === conv.sessionId)
+  await doResync(taskId, pane)
+}
+
+/**
+ * 策略 B 同步后重新加载 pane 中的消息。
+ * 从 Worker JSONL 读取完整对话历史并替换 ChatPanel 显示。
+ */
+async function reloadPaneMessages(pane: TaskPaneState) {
+  const task = pane.task.value
+  if (!task?.claudeSessionId || !task?.workerId) return
+  try {
+    const workerMessages = await dirApi.getWorkerSessionMessages(task.workerId, task.claudeSessionId)
+    if (!workerMessages || workerMessages.length === 0) return
+
+    // 转换为 ChatMessage 格式
+    const chatMessages = workerMessages.map((m, idx) => ({
+      id: `resync-msg-${idx}-${Date.now()}`,
+      type: 'TEXT_COMPLETE' as AipMessageType,
+      sender: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: m.content || '',
+      raw: { resyncImported: true },
+      timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+    }))
+    // 替换消息列表
+    pane.chatState.messages.value = chatMessages
+  } catch (e) {
+    console.warn('Failed to reload pane messages after resync:', e)
+  }
+}
+
+// ==================== End Resync ====================
 
 /** Handle @agent ask — send question to an Agent via A2A, show response in pane chat */
 async function handleAskAgent(paneId: string, agent: { agentId: string; name: string }, question: string) {
@@ -4139,6 +4499,47 @@ async function handleUnarchiveConversation(conv: ConversationGroup) {
   }
 }
 
+async function handleHoldConversation(conv: ConversationGroup) {
+  try {
+    await ElMessageBox.confirm(
+      '确认搁置该会话？搁置后不再出现在"需要关注"区域，可通过"已搁置"筛选查看。',
+      '搁置会话',
+      { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
+    )
+    await workerState.holdConversation(conv.sessionId)
+    ElMessage.success('已搁置')
+    reloadFilteredTasks()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('搁置失败')
+  }
+}
+
+async function handlePaneHold(sessionId?: string) {
+  if (!sessionId) return
+  try {
+    await ElMessageBox.confirm(
+      '确认搁置该会话？搁置后不再出现在"需要关注"区域，可通过"已搁置"筛选查看。',
+      '搁置会话',
+      { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
+    )
+    await workerState.holdConversation(sessionId)
+    ElMessage.success('已搁置')
+    reloadFilteredTasks()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('搁置失败')
+  }
+}
+
+async function handleUnholdConversation(conv: ConversationGroup) {
+  try {
+    await workerState.unholdConversation(conv.sessionId)
+    ElMessage.success('已取消搁置')
+    reloadFilteredTasks()
+  } catch {
+    ElMessage.error('取消搁置失败')
+  }
+}
+
 function getInteractionState(sessionId?: string): string | undefined {
   if (!sessionId) return undefined
   return workerState.conversationConfigs.value.get(sessionId)?.interactionState
@@ -4148,6 +4549,7 @@ function interactionStateLabel(state: string): string {
   switch (state) {
     case 'PROCESSING': return '处理中'
     case 'AWAITING_REPLY': return '待回复'
+    case 'ON_HOLD': return '已搁置'
     case 'ARCHIVED': return '已归档'
     default: return state
   }
@@ -4243,6 +4645,8 @@ watch(showEditDirectoryDialog, (val) => {
       defaultBaseUrl: selectedDirectory.value.defaultBaseUrl || '',
       defaultModelConfigId: selectedDirectory.value.defaultModelConfigId || '',
     }
+    // 确保编辑对话框中加载最新的 Agent Teams 配置列表
+    loadAgentTeamsConfigs()
   }
 })
 
@@ -4916,6 +5320,34 @@ function handlePopOutTerminal() {
 .agent-teams-label {
   font-size: 12px;
   color: #909399;
+  margin-right: 4px;
+}
+
+.agent-teams-configs-panel {
+  width: 100%;
+}
+
+.atc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.atc-name {
+  font-weight: 500;
+  font-size: 13px;
+  min-width: 80px;
+}
+
+.atc-agents {
+  flex: 1;
+  font-size: 12px;
+  color: #909399;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .form-tip {
@@ -4992,6 +5424,23 @@ function handlePopOutTerminal() {
   min-width: 0;
 }
 
+.conv-row-subtitle {
+  display: flex;
+  align-items: center;
+  margin-top: 1px;
+  min-width: 0;
+}
+
+.conv-latest-prompt {
+  font-size: 11px;
+  color: #909399;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
 .conv-status-dot {
   width: 8px;
   height: 8px;
@@ -5012,6 +5461,7 @@ function handlePopOutTerminal() {
 }
 .conv-interaction-badge.processing { background: #409eff; animation: convPulse 1.5s infinite; }
 .conv-interaction-badge.awaiting_reply { background: #e6a23c; }
+.conv-interaction-badge.on_hold { background: #b88230; }
 .conv-interaction-badge.archived { background: #909399; }
 
 .pane-interaction-tag {
@@ -5023,6 +5473,7 @@ function handlePopOutTerminal() {
 }
 .pane-interaction-tag.processing { background: #ecf5ff; color: #409eff; }
 .pane-interaction-tag.awaiting_reply { background: #fdf6ec; color: #e6a23c; }
+.pane-interaction-tag.on_hold { background: #fdf0e0; color: #b88230; }
 .pane-interaction-tag.archived { background: #f4f4f5; color: #909399; }
 
 @keyframes convPulse {
@@ -5415,6 +5866,15 @@ function handlePopOutTerminal() {
 
 .active-conv-item:hover {
   background: #e1eeff;
+}
+
+.active-conv-pinned {
+  background: #fdf6ec;
+  border-left: 3px solid #e6a23c;
+}
+
+.active-conv-pinned:hover {
+  background: #faecd8;
 }
 
 .active-dir-tag {

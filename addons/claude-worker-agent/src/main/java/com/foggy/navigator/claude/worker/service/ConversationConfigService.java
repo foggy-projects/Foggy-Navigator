@@ -351,6 +351,34 @@ public class ConversationConfigService {
     }
 
     /**
+     * 搁置会话
+     */
+    @Transactional
+    public ConversationConfigDTO holdConversation(String sessionId, String userId) {
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+        if (!entity.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Access denied");
+        }
+        entity.setInteractionState("ON_HOLD");
+        configRepository.save(entity);
+        return toDTO(entity);
+    }
+
+    /**
+     * 取消搁置（恢复为 AWAITING_REPLY）
+     */
+    @Transactional
+    public ConversationConfigDTO unholdConversation(String sessionId, String userId) {
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+        if (!entity.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Access denied");
+        }
+        entity.setInteractionState("AWAITING_REPLY");
+        configRepository.save(entity);
+        return toDTO(entity);
+    }
+
+    /**
      * 获取实体（内部使用，用于解密 token）
      */
     public ConversationConfigEntity getConfigEntity(String sessionId) {

@@ -12,9 +12,9 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $EnvFile = Join-Path $ScriptDir ".env"
 $Port = 8443
 $Mode = "windows"  # windows | wsl
-$Install = "/mnt/d/foggy-tools/code-server"
-$Project = "D:\foggy-projects\Foggy-Navigator"
+$ProjectWin = "D:\foggy-projects\Foggy-Navigator"
 $ProjectWSL = "/mnt/d/foggy-projects/Foggy-Navigator"
+$Install = "/mnt/d/foggy-tools/code-server"
 $DataDir = "/mnt/d/foggy-tools/code-server-data"
 
 if (Test-Path $EnvFile) {
@@ -22,7 +22,18 @@ if (Test-Path $EnvFile) {
         if ($_ -match "^CODE_SERVER_PORT=(\d+)") { $Port = [int]$Matches[1] }
         if ($_ -match "^CODE_SERVER_MODE=(.+)") { $Mode = $Matches[1].Trim().ToLower() }
         if ($_ -match "^CODE_SERVER_INSTALL=(.+)") { $Install = $Matches[1].Trim() }
-        if ($_ -match "^CODE_SERVER_PROJECT=(.+)") { $Project = $Matches[1].Trim() }
+        if ($_ -match "^CODE_SERVER_PROJECT=(.+)") {
+            $ProjectWin = $Matches[1].Trim()
+            # Convert Windows path to WSL path (D:\ -> /mnt/d/)
+            if ($ProjectWin -match "^([A-Z]):\\(.*)$") {
+                $driveLetter = $Matches[1].ToLower()
+                $rest = $Matches[2] -replace '\\', '/'
+                $ProjectWSL = "/mnt/$driveLetter/$rest"
+            } else {
+                # Already in WSL format
+                $ProjectWSL = $ProjectWin
+            }
+        }
         if ($_ -match "^CODE_SERVER_DATA=(.+)") { $DataDir = $Matches[1].Trim() }
     }
 }
@@ -33,7 +44,7 @@ $ConfigWin = Join-Path $ScriptDir "config.yaml"
 Write-Host "=== Code Server (Web VS Code) ===" -ForegroundColor Cyan
 Write-Host "Mode:    $Mode" -ForegroundColor Cyan
 Write-Host "Port:    $Port" -ForegroundColor Cyan
-Write-Host "Project: $Project" -ForegroundColor Cyan
+Write-Host "Project: $ProjectWin" -ForegroundColor Cyan
 Write-Host ""
 
 # ---- Check if already running ----
@@ -79,7 +90,7 @@ if ($Mode -eq "windows") {
     $ErrorLog = Join-Path $LogDir "code-server-error.log"
     @"
 @echo off
-"$codeServerBin" --config "$ConfigWin" --bind-addr 0.0.0.0:$Port "$Project" > "$LogFile" 2> "$ErrorLog"
+"$codeServerBin" --config "$ConfigWin" --bind-addr 0.0.0.0:$Port "$ProjectWin" > "$LogFile" 2> "$ErrorLog"
 "@ | Out-File -FilePath $LauncherBat -Encoding ascii
 
     # Start the launcher batch file as a hidden background process
@@ -117,10 +128,19 @@ elseif ($Mode -eq "wsl") {
 
     Write-Host "Starting Code Server in WSL on port $Port..." -ForegroundColor Green
 
-    # Use Start-Process to keep WSL session alive (WSL2 kills background processes when session exits)
-    $proc = Start-Process -WindowStyle Hidden -FilePath "wsl" `
-        -ArgumentList "-d", "Ubuntu-24.04", "--", "bash", "-c", `
-            "mkdir -p $DataDir; export XDG_DATA_HOME=$DataDir; $Install/bin/code-server --config $ConfigWSL $ProjectWSL > $DataDir/code-server.log 2>&1" `
+    # 使用 wsl.exe 保持会话，确保 code-server 持续运行
+    # 创建一个保持活动的批处理文件
+    $KeepAliveBat = Join-Path $ScriptDir "keep-alive-wsl.bat"
+    @"
+@echo off
+title Code-Server-WSL
+wsl -d Ubuntu-24.04 -- bash -c "export XDG_DATA_HOME=$DataDir; $Install/bin/code-server --config $ConfigWSL $ProjectWSL > $DataDir/code-server.log 2>&1"
+"@ | Out-File -FilePath $KeepAliveBat -Encoding ascii
+
+    # 启动保持活动的 WSL 会话（最小化窗口）
+    $proc = Start-Process -FilePath "cmd.exe" `
+        -ArgumentList "/c", "`"$KeepAliveBat`"" `
+        -WindowStyle Minimized `
         -PassThru
 
     # Save PID for stop script

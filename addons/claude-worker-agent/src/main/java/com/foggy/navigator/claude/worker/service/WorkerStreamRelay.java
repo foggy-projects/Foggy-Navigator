@@ -474,7 +474,9 @@ public class WorkerStreamRelay {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("content", event.getContent());
                 payload.put("taskId", taskId);
-                publishMessage(sessionId, MessageType.TEXT_CHUNK, payload);
+                // assistant_text from Python Worker is a complete text block (not a streaming chunk),
+                // so emit TEXT_COMPLETE to ensure it gets persisted to the database.
+                publishMessage(sessionId, MessageType.TEXT_COMPLETE, payload);
             }
             case "tool_use" -> {
                 String toolCallId = event.getToolUseId() != null

@@ -33,6 +33,8 @@ public class TaskDTO {
     private Boolean fileCheckpointingEnabled;
     /** Task source: "PLATFORM" or "SYNCED" */
     private String source;
+    /** Agent Teams 配置 ID（任务创建时锁定） */
+    private String agentTeamsConfigId;
     /** 仅 /active 端点填充：工作目录名称 */
     private String directoryName;
     private LocalDateTime createdAt;

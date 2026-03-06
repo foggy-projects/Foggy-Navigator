@@ -79,6 +79,10 @@ public class ClaudeTaskEntity {
     @Column(length = 32)
     private String source;
 
+    /** Agent Teams 配置 ID（任务创建时锁定，不可变更） */
+    @Column(length = 64)
+    private String agentTeamsConfigId;
+
     /**
      * Reconciler 最后一次确认 CLI 进程存活的时间。
      * 超时检查用此字段替代 createdAt，保证真正运行中的任务不会被误判超时。

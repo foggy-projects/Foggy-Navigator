@@ -29,6 +29,14 @@ packages/
 └── navigator-frontend/     # Navigator 前端（Vue 3 + Element Plus）
 ```
 
+### 工具与测试支撑
+
+```
+tools/
+├── claude-agent-worker/    # Claude Worker Python 服务
+└── mock-llm-service/       # Mock Anthropic 端点（L3 集成测试用）
+```
+
 ## 项目启动
 
 ### 启动脚本一览

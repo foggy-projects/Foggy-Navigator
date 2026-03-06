@@ -91,6 +91,7 @@ export function useClaudeWorker() {
     model?: string
     maxTurns?: number
     agentTeamsJson?: string
+    agentTeamsConfigId?: string
     permissionMode?: string
     modelConfigId?: string
   }) {
@@ -109,6 +110,7 @@ export function useClaudeWorker() {
     model?: string
     maxTurns?: number
     agentTeamsJson?: string
+    agentTeamsConfigId?: string
     images?: string
     permissionMode?: string
     modelConfigId?: string
@@ -256,6 +258,18 @@ export function useClaudeWorker() {
     return config
   }
 
+  async function holdConversation(sessionId: string) {
+    const config = await api.holdConversation(sessionId)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
+  async function unholdConversation(sessionId: string) {
+    const config = await api.unholdConversation(sessionId)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
   function updateInteractionStateFromSSE(sessionId: string, interactionState: string) {
     const config = conversationConfigs.value.get(sessionId)
     if (config) {
@@ -304,6 +318,8 @@ export function useClaudeWorker() {
     batchBindAuth,
     archiveConversation,
     unarchiveConversation,
+    holdConversation,
+    unholdConversation,
     updateInteractionStateFromSSE,
   }
 }

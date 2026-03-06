@@ -67,6 +67,19 @@
               <span class="slash-desc">{{ item.description }}</span>
             </div>
           </div>
+          <div v-if="filteredCliSkills.length" class="slash-group">
+            <div class="slash-group-title">Claude Code</div>
+            <div
+              v-for="(item, i) in filteredCliSkills"
+              :key="'cli-' + item.name"
+              :class="['slash-item', { active: flatIndex('cli', i) === activeIndex }]"
+              @mousedown.prevent="selectItem(flatIndex('cli', i))"
+              @mouseenter="activeIndex = flatIndex('cli', i)"
+            >
+              <span class="slash-name">/{{ item.name }}</span>
+              <span class="slash-desc">{{ item.description }}</span>
+            </div>
+          </div>
           <div v-if="filteredSkills.length" class="slash-group">
             <div class="slash-group-title">技能</div>
             <div
@@ -81,7 +94,7 @@
               <span v-if="item.scope === 'user'" class="slash-scope">user</span>
             </div>
           </div>
-          <div v-if="!filteredCommands.length && !filteredSkills.length" class="slash-empty">
+          <div v-if="!filteredCommands.length && !filteredCliSkills.length && !filteredSkills.length" class="slash-empty">
             无匹配命令
           </div>
         </template>
@@ -132,6 +145,13 @@ interface SkillItem {
   scope: string
 }
 
+/** Claude Code CLI bundled skills — passed as prompt text with `/` prefix. */
+interface CliSkillItem {
+  name: string
+  description: string
+  group: 'cli'
+}
+
 const BUILT_IN: BuiltInCommand[] = [
   {
     name: 'model',
@@ -155,6 +175,20 @@ const BUILT_IN: BuiltInCommand[] = [
       { name: '200', label: '200 轮', value: 200 },
       { name: '999', label: '999 轮', value: 999 },
     ],
+  },
+]
+
+/** Claude Code CLI bundled skills — selecting inserts `/name ` into the input. */
+const CLI_SKILLS: CliSkillItem[] = [
+  {
+    name: 'simplify',
+    description: '审查代码变更（复用性、质量、效率）',
+    group: 'cli',
+  },
+  {
+    name: 'batch',
+    description: '批量并行修改（每个单元独立 worktree + PR）',
+    group: 'cli',
   },
 ]
 
@@ -280,6 +314,13 @@ const filteredCommands = computed(() => {
   return BUILT_IN.filter((c) => c.name.toLowerCase().includes(q))
 })
 
+const filteredCliSkills = computed(() => {
+  const q = slashQuery.value.toLowerCase()
+  return CLI_SKILLS.filter(
+    (s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
+  )
+})
+
 const filteredSkills = computed(() => {
   const q = slashQuery.value.toLowerCase()
   return skillItems.value.filter(
@@ -295,17 +336,25 @@ const filteredChildren = computed(() => {
   )
 })
 
-const totalItems = computed(() => filteredCommands.value.length + filteredSkills.value.length)
+const totalItems = computed(
+  () => filteredCommands.value.length + filteredCliSkills.value.length + filteredSkills.value.length,
+)
 
-function flatIndex(group: 'cmd' | 'skill', i: number): number {
-  return group === 'cmd' ? i : filteredCommands.value.length + i
+function flatIndex(group: 'cmd' | 'cli' | 'skill', i: number): number {
+  if (group === 'cmd') return i
+  if (group === 'cli') return filteredCommands.value.length + i
+  return filteredCommands.value.length + filteredCliSkills.value.length + i
 }
 
-function resolveFlat(idx: number): { type: 'cmd' | 'skill'; index: number } {
+function resolveFlat(idx: number): { type: 'cmd' | 'cli' | 'skill'; index: number } {
   if (idx < filteredCommands.value.length) {
     return { type: 'cmd', index: idx }
   }
-  return { type: 'skill', index: idx - filteredCommands.value.length }
+  const afterCmd = idx - filteredCommands.value.length
+  if (afterCmd < filteredCliSkills.value.length) {
+    return { type: 'cli', index: afterCmd }
+  }
+  return { type: 'skill', index: afterCmd - filteredCliSkills.value.length }
 }
 
 function openPanel() {
@@ -490,6 +539,13 @@ function selectItem(idx: number) {
     activeIndex.value = 0
     emit('update:modelValue', '/' + cmd.name + ' ')
     nextTick(updatePanelPosition)
+  } else if (resolved.type === 'cli') {
+    const cli = filteredCliSkills.value[resolved.index]
+    if (!cli) return
+    // CLI bundled skill — keep "/" prefix so the Claude Code CLI parses it
+    emit('update:modelValue', '/' + cli.name + ' ')
+    closePanel()
+    focusInput()
   } else {
     const skill = filteredSkills.value[resolved.index]
     if (!skill) return

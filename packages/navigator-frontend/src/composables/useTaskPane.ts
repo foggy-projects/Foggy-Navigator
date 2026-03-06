@@ -105,14 +105,19 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     if (raw.type === 'CONFIRMATION_REQUEST') {
       task.value.status = 'AWAITING_PERMISSION' as ClaudeTask['status']
     } else if (raw.type === 'TEXT_COMPLETE') {
-      task.value.status = 'COMPLETED'
-      if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
-      if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs
-      if (typeof payload.inputTokens === 'number') task.value.inputTokens = payload.inputTokens
-      if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
-      if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
-      if (typeof payload.model === 'string') task.value.model = payload.model
-      options?.onTaskFinished?.(paneId)
+      // Only treat as task completion when result-level metadata is present.
+      // The "result" event from Python Worker always includes numTurns/costUsd/durationMs.
+      // Intermediate "assistant_text" events (also TEXT_COMPLETE) only have content and taskId.
+      if (payload.numTurns != null || payload.costUsd != null || payload.durationMs != null) {
+        task.value.status = 'COMPLETED'
+        if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
+        if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs
+        if (typeof payload.inputTokens === 'number') task.value.inputTokens = payload.inputTokens
+        if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
+        if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
+        if (typeof payload.model === 'string') task.value.model = payload.model
+        options?.onTaskFinished?.(paneId)
+      }
     } else if (raw.type === 'ERROR') {
       task.value.status = 'FAILED'
       if (typeof payload.errorMessage === 'string')
