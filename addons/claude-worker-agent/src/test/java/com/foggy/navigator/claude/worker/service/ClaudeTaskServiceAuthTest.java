@@ -69,7 +69,8 @@ class ClaudeTaskServiceAuthTest {
                 deletedSessionRepository,
                 workerService, configService, agentTeamsConfigService, directoryService,
                 workingDirectoryRepository,
-                sessionManager, publisher, llmModelManager, userAuthService);
+                sessionManager, publisher, llmModelManager, userAuthService,
+                mock(org.springframework.transaction.support.TransactionTemplate.class));
 
         // Default worker mock (online)
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();

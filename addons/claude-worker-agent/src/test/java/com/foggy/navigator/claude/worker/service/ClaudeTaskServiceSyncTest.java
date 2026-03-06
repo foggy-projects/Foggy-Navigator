@@ -60,7 +60,8 @@ class ClaudeTaskServiceSyncTest {
         service = new ClaudeTaskService(
                 taskRepository, conversationConfigRepository, deletedSessionRepository, workerService, configService,
                 agentTeamsConfigService, dirService, directoryRepository, sessionManager, publisher, llmModelManager,
-                userAuthService);
+                userAuthService,
+                mock(org.springframework.transaction.support.TransactionTemplate.class));
 
         // Session creation returns a predictable ID
         when(sessionManager.createSession(any(SessionCreateRequest.class)))
