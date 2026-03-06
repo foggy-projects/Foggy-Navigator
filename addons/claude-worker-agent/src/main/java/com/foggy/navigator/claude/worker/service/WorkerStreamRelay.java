@@ -441,6 +441,13 @@ public class WorkerStreamRelay {
                 // 系统消息，携带 session_id 等元数据 — 尽早记住 claudeSessionId
                 if (event.getSessionId() != null) {
                     detectedClaudeSessionId.set(event.getSessionId());
+                    // 立即保存到数据库，防止任何情况下丢失（包括用户中止任务）
+                    try {
+                        taskService.updateClaudeSessionId(taskId, event.getSessionId());
+                        log.debug("Early saved claudeSessionId {} for task {}", event.getSessionId(), taskId);
+                    } catch (Exception e) {
+                        log.warn("Failed to early save claudeSessionId for task {}: {}", taskId, e.getMessage());
+                    }
                 }
                 String subtype = event.getSubtype();
                 if ("auto_compact".equals(subtype) || "context_compression".equals(subtype)) {
@@ -579,6 +586,13 @@ public class WorkerStreamRelay {
                 // 错误事件也可能携带 session_id
                 if (event.getSessionId() != null) {
                     detectedClaudeSessionId.set(event.getSessionId());
+                    // 立即保存到数据库，防止任何情况下丢失
+                    try {
+                        taskService.updateClaudeSessionId(taskId, event.getSessionId());
+                        log.debug("Early saved claudeSessionId {} for task {} (error event)", event.getSessionId(), taskId);
+                    } catch (Exception e) {
+                        log.warn("Failed to early save claudeSessionId for task {} (error): {}", taskId, e.getMessage());
+                    }
                 }
                 String errorClaudeSessionId = detectedClaudeSessionId.get();
                 Map<String, Object> payload = new LinkedHashMap<>();

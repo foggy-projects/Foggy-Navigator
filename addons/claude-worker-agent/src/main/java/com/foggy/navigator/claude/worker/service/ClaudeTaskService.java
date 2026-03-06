@@ -634,6 +634,21 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 幂等安全地更新任务的 claudeSessionId
+     * 仅在字段为 null 或值不同时更新，避免不必要的数据库写入
+     */
+    @Transactional
+    public void updateClaudeSessionId(String taskId, String claudeSessionId) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            if (entity.getClaudeSessionId() == null || !entity.getClaudeSessionId().equals(claudeSessionId)) {
+                entity.setClaudeSessionId(claudeSessionId);
+                taskRepository.save(entity);
+                log.debug("Updated claudeSessionId for task {}: {}", taskId, claudeSessionId);
+            }
+        });
+    }
+
+    /**
      * 标记任务失败（保留 claudeSessionId 以便后续继续会话）
      */
     @Transactional
@@ -718,6 +733,7 @@ public class ClaudeTaskService {
 
     /**
      * 标记任务已中止
+     * 保留 claudeSessionId 以便用户可以继续该会话，并通知 Worker 中止任务
      */
     @Transactional
     public void abortTask(String taskId) {
@@ -729,6 +745,20 @@ public class ClaudeTaskService {
             publishStatusChange(entity, prev);
             conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
+
+        // 在事务外调用 Worker abortTask API（避免网络 IO 阻塞事务）
+        try {
+            ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
+            if (task != null) {
+                ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+                ClaudeWorkerClient client = workerService.createClient(worker);
+                client.abortTask(taskId).block(Duration.ofSeconds(3));
+                log.info("Worker abort sent: taskId={}", taskId);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to notify worker for abort task {}: {}", taskId, e.getMessage());
+            // Worker 可能已经不可达或任务已结束，不抛出异常
+        }
     }
 
     /**
