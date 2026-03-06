@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "httpx", "pytest-asyncio"]
+dev = ["pytest", "httpx", "pytest-asyncio", "pyyaml"]
 
 [build-system]
 requires = ["hatchling>=1.8.0"]
@@ -22,3 +22,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_worker"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "e2e: full end-to-end tests requiring Claude CLI and mock-llm-service",
+]
