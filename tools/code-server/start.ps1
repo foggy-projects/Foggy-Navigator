@@ -157,6 +157,46 @@ wsl -d Ubuntu-24.04 -- bash -c "export XDG_DATA_HOME=$DataDir; $Install/bin/code
     if ($started) {
         Write-Host ""
         Write-Host "Code Server started! (PID: $($proc.Id))" -ForegroundColor Green
+
+        # ---- Auto-setup port forwarding (WSL2 needs portproxy to expose ports to host) ----
+        Write-Host ""
+        Write-Host "Checking port forwarding..." -ForegroundColor Yellow
+        $WSLIP = (wsl -d Ubuntu-24.04 -- bash -c "hostname -I" 2>$null) -split '\s+' | Select-Object -First 1
+
+        if ($WSLIP) {
+            # Check if portproxy already points to the current WSL IP
+            $existingRule = netsh interface portproxy show v4tov4 2>$null | Select-String "$Port\s+$([regex]::Escape($WSLIP))\s+$Port"
+
+            if ($existingRule) {
+                Write-Host "  Port forwarding OK (0.0.0.0:$Port -> ${WSLIP}:$Port)" -ForegroundColor Green
+            } else {
+                Write-Host "  Setting up port forwarding (0.0.0.0:$Port -> ${WSLIP}:$Port)..." -ForegroundColor Yellow
+                # Requires elevation - use Start-Process -Verb RunAs
+                $cmds = @(
+                    "netsh interface portproxy delete v4tov4 listenport=$Port listenaddress=0.0.0.0 2>`$null"
+                    "netsh interface portproxy add v4tov4 listenport=$Port listenaddress=0.0.0.0 connectport=$Port connectaddress=$WSLIP"
+                    # Firewall rule (idempotent: delete then add)
+                    "netsh advfirewall firewall delete rule name=`\"WSL code-server $Port`\" 2>`$null"
+                    "netsh advfirewall firewall add rule name=`\"WSL code-server $Port`\" dir=in action=allow protocol=TCP localport=$Port"
+                ) -join "; "
+                Start-Process -FilePath "powershell" `
+                    -ArgumentList "-Command", $cmds `
+                    -Verb RunAs -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
+
+                # Verify
+                $verifyRule = netsh interface portproxy show v4tov4 2>$null | Select-String "$Port"
+                if ($verifyRule) {
+                    Write-Host "  Port forwarding configured!" -ForegroundColor Green
+                } else {
+                    Write-Host "  WARNING: Port forwarding setup may have failed (UAC declined?)" -ForegroundColor Yellow
+                    Write-Host "  Run as admin: powershell -File `"$ScriptDir\setup-portforward.ps1`"" -ForegroundColor Gray
+                }
+            }
+        } else {
+            Write-Host "  WARNING: Could not detect WSL IP. Port forwarding skipped." -ForegroundColor Yellow
+        }
+
+        Write-Host ""
         Write-Host "URL:      http://localhost:$Port" -ForegroundColor Green
         Write-Host "Password: foggy123 (see config.yaml)" -ForegroundColor Yellow
         Write-Host ""

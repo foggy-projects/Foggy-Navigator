@@ -786,7 +786,7 @@ public class ClaudeTaskService {
             }
         }
 
-        // 同时删除关联的 Session 及其消息
+        // 同时删除关联的 Session 及其消息，以及 ConversationConfig
         String sessionId = entity.getSessionId();
         taskRepository.delete(entity);
         if (sessionId != null) {
@@ -795,6 +795,12 @@ public class ClaudeTaskService {
                 log.info("Associated session deleted: sessionId={}", sessionId);
             } catch (Exception e) {
                 log.warn("Failed to delete associated session: sessionId={}", sessionId, e);
+            }
+            try {
+                conversationConfigRepository.deleteBySessionId(sessionId);
+                log.info("Associated conversation config deleted: sessionId={}", sessionId);
+            } catch (Exception e) {
+                log.warn("Failed to delete conversation config: sessionId={}", sessionId, e);
             }
         }
         log.info("Task deleted: taskId={}, userId={}", taskId, userId);

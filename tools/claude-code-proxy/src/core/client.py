@@ -83,6 +83,8 @@ class OpenAIClient:
             # Convert to dict format that matches the original interface
             return completion.model_dump()
         
+        except HTTPException:
+            raise
         except AuthenticationError as e:
             raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
         except RateLimitError as e:
@@ -94,12 +96,12 @@ class OpenAIClient:
             raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-        
+
         finally:
             # Clean up active request tracking
             if request_id and request_id in self.active_requests:
                 del self.active_requests[request_id]
-    
+
     async def create_chat_completion_stream(self, request: Dict[str, Any], request_id: Optional[str] = None) -> AsyncGenerator[str, None]:
         """Send streaming chat completion to OpenAI API with cancellation support."""
         
@@ -132,6 +134,8 @@ class OpenAIClient:
             # Signal end of stream
             yield "data: [DONE]"
                 
+        except HTTPException:
+            raise
         except AuthenticationError as e:
             raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
         except RateLimitError as e:
@@ -143,7 +147,7 @@ class OpenAIClient:
             raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-        
+
         finally:
             # Clean up active request tracking
             if request_id and request_id in self.active_requests:

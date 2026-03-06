@@ -511,6 +511,7 @@ public class WorkerStreamRelay {
                 String resolvedModel = event.getModel() != null ? event.getModel() : detectedModel.get();
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("content", resultContent);
+                payload.put("isResult", true); // 标记为 result 事件，前端不再重复创建文本气泡
                 payload.put("taskId", taskId);
                 payload.put("costUsd", event.getCostUsd());
                 payload.put("durationMs", event.getDurationMs());
