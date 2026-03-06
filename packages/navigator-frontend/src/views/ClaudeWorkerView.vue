@@ -310,6 +310,7 @@
               <el-button
                 type="primary"
                 :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
+                :loading="creatingTask"
                 @click="handleCreateTask"
               >
                 运行任务
@@ -361,6 +362,7 @@
             <el-button
               size="small"
               :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE' || panes.length >= MAX_PANES"
+              :loading="creatingTask"
               @click="handleCreateTask"
             >
               运行
@@ -586,6 +588,7 @@
               <el-button
                 type="primary"
                 :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE'"
+                :loading="creatingTask"
                 @click="handleCreateTask"
               >
                 运行任务
@@ -637,6 +640,7 @@
             <el-button
               size="small"
               :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE' || panes.length >= MAX_PANES"
+              :loading="creatingTask"
               @click="handleCreateTask"
             >
               运行
@@ -2138,6 +2142,7 @@ const claudeModelOptions = [
   { value: 'haiku', label: 'Haiku' },
 ]
 
+const creatingTask = ref(false)
 const taskForm = ref({
   prompt: '',
   cwd: '',
@@ -3820,6 +3825,7 @@ async function handleCreateTask() {
     ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
     return
   }
+  creatingTask.value = true
   try {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
@@ -3908,6 +3914,8 @@ async function handleCreateTask() {
     await pane.connect(task.sessionId)
   } catch (e: unknown) {
     ElMessage.error('创建任务失败: ' + ((e as Error).message || '未知错误'))
+  } finally {
+    creatingTask.value = false
   }
 }
 
