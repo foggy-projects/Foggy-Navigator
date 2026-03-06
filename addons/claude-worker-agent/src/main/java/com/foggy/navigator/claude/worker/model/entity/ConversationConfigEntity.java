@@ -56,6 +56,10 @@ public class ConversationConfigEntity {
     @Column(length = 32)
     private String interactionState;
 
+    /** 会话绑定的 Agent Teams 配置 ID（创建后不可变更） */
+    @Column(length = 64)
+    private String agentTeamsConfigId;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

@@ -10,6 +10,7 @@ import com.foggy.navigator.agent.framework.session.SessionManager;
 import java.util.Arrays;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
+import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
@@ -42,6 +43,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import com.foggy.navigator.common.util.IdGenerator;
@@ -61,6 +63,7 @@ public class ClaudeTaskService {
     private final DeletedClaudeSessionRepository deletedSessionRepository;
     private final ClaudeWorkerService workerService;
     private final ConversationConfigService conversationConfigService;
+    private final AgentTeamsConfigService agentTeamsConfigService;
 
     /** @Lazy 打破 ClaudeTaskService ↔ WorkerStreamRelay 的循环依赖 */
     @Autowired @Lazy
@@ -90,14 +93,36 @@ public class ClaudeTaskService {
         String cwd = form.getCwd();
         String directoryId = form.getDirectoryId();
         String agentTeamsJson = form.getAgentTeamsJson();
+        String resolvedConfigId = null;
         if (directoryId != null && !directoryId.isEmpty()) {
             WorkingDirectoryEntity dir = workingDirectoryService.getDirectoryEntity(userId, directoryId);
             if (!dir.getWorkerId().equals(form.getWorkerId())) {
                 throw new IllegalArgumentException("Directory does not belong to the specified worker");
             }
             cwd = dir.getPath();
-            if ((agentTeamsJson == null || agentTeamsJson.isEmpty()) && dir.getAgentTeamsConfig() != null) {
-                agentTeamsJson = dir.getAgentTeamsConfig();
+            if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                // 优先级 2: 表单指定的命名配置 ID
+                if (form.getAgentTeamsConfigId() != null && !form.getAgentTeamsConfigId().isEmpty()) {
+                    AgentTeamsConfigEntity config = agentTeamsConfigService.getConfigEntity(form.getAgentTeamsConfigId());
+                    if (config != null && config.getDirectoryId().equals(directoryId)) {
+                        agentTeamsJson = config.getConfig();
+                        resolvedConfigId = config.getConfigId();
+                    }
+                }
+                // 优先级 3: 目录默认命名配置
+                if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                    Optional<AgentTeamsConfigEntity> defaultConfig = agentTeamsConfigService.getDefaultConfig(directoryId, userId);
+                    if (defaultConfig.isPresent()) {
+                        agentTeamsJson = defaultConfig.get().getConfig();
+                        resolvedConfigId = defaultConfig.get().getConfigId();
+                    }
+                }
+                // 优先级 4: 旧 legacy 字段（向后兼容）
+                if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                    if (dir.getAgentTeamsConfig() != null) {
+                        agentTeamsJson = dir.getAgentTeamsConfig();
+                    }
+                }
             }
         }
 
@@ -129,11 +154,19 @@ public class ClaudeTaskService {
         entity.setFileCheckpointingEnabled(true);
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
+        entity.setAgentTeamsConfigId(resolvedConfigId);
         taskRepository.save(entity);
 
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}", taskId, sessionId, form.getWorkerId(), userId);
         publishStatusChange(entity, null);
         conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
+
+        // 4.5. 锁定 Agent Teams 配置到会话
+        if (resolvedConfigId != null) {
+            ConversationConfigEntity convConfig = conversationConfigService.getOrCreate(sessionId, form.getWorkerId(), userId);
+            convConfig.setAgentTeamsConfigId(resolvedConfigId);
+            conversationConfigRepository.save(convConfig);
+        }
 
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
@@ -186,14 +219,48 @@ public class ClaudeTaskService {
         String cwd = form.getCwd();
         String directoryId = form.getDirectoryId();
         String agentTeamsJson = form.getAgentTeamsJson();
+        String resolvedConfigId = null;
+
+        // 优先从会话级 ConversationConfig 读取已锁定的配置（创建后不可变更）
+        ConversationConfigEntity existingConvConfig = conversationConfigService.getConfigEntity(form.getSessionId());
+        if (existingConvConfig != null && existingConvConfig.getAgentTeamsConfigId() != null) {
+            resolvedConfigId = existingConvConfig.getAgentTeamsConfigId();
+            AgentTeamsConfigEntity lockedConfig = agentTeamsConfigService.getConfigEntity(resolvedConfigId);
+            if (lockedConfig != null) {
+                agentTeamsJson = lockedConfig.getConfig();
+            }
+        }
+
         if (directoryId != null && !directoryId.isEmpty()) {
             WorkingDirectoryEntity dir = workingDirectoryService.getDirectoryEntity(userId, directoryId);
             if (!dir.getWorkerId().equals(form.getWorkerId())) {
                 throw new IllegalArgumentException("Directory does not belong to the specified worker");
             }
             cwd = dir.getPath();
-            if ((agentTeamsJson == null || agentTeamsJson.isEmpty()) && dir.getAgentTeamsConfig() != null) {
-                agentTeamsJson = dir.getAgentTeamsConfig();
+            // 仅在未锁定配置时才走解析链
+            if (resolvedConfigId == null && (agentTeamsJson == null || agentTeamsJson.isEmpty())) {
+                // 优先级 2: 表单指定的命名配置 ID
+                if (form.getAgentTeamsConfigId() != null && !form.getAgentTeamsConfigId().isEmpty()) {
+                    AgentTeamsConfigEntity config = agentTeamsConfigService.getConfigEntity(form.getAgentTeamsConfigId());
+                    if (config != null && config.getDirectoryId().equals(directoryId)) {
+                        agentTeamsJson = config.getConfig();
+                        resolvedConfigId = config.getConfigId();
+                    }
+                }
+                // 优先级 3: 目录默认命名配置
+                if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                    Optional<AgentTeamsConfigEntity> defaultConfig = agentTeamsConfigService.getDefaultConfig(directoryId, userId);
+                    if (defaultConfig.isPresent()) {
+                        agentTeamsJson = defaultConfig.get().getConfig();
+                        resolvedConfigId = defaultConfig.get().getConfigId();
+                    }
+                }
+                // 优先级 4: 旧 legacy 字段
+                if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                    if (dir.getAgentTeamsConfig() != null) {
+                        agentTeamsJson = dir.getAgentTeamsConfig();
+                    }
+                }
             }
         }
 
@@ -224,11 +291,18 @@ public class ClaudeTaskService {
         entity.setFileCheckpointingEnabled(true);
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
+        entity.setAgentTeamsConfigId(resolvedConfigId);
         taskRepository.save(entity);
 
         log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}", taskId, form.getClaudeSessionId(), directoryId);
         publishStatusChange(entity, null);
         conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
+
+        // 锁定 Agent Teams 配置到会话（仅首次，已锁定则跳过）
+        if (resolvedConfigId != null && existingConvConfig != null && existingConvConfig.getAgentTeamsConfigId() == null) {
+            existingConvConfig.setAgentTeamsConfigId(resolvedConfigId);
+            conversationConfigRepository.save(existingConvConfig);
+        }
 
         // 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
@@ -1234,6 +1308,7 @@ public class ClaudeTaskService {
                 .checkpoints(entity.getCheckpoints())
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .source(entity.getSource())
+                .agentTeamsConfigId(entity.getAgentTeamsConfigId())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

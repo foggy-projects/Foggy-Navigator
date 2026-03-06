@@ -248,23 +248,28 @@
             <span v-if="s.pinned" class="pin-icon">&#128204;</span>{{ s.name }}
           </el-tag>
         </div>
-        <div v-if="parsedAgentTeams.length" class="agent-teams-bar">
-          <el-switch
-            v-model="taskForm.useTeams"
+        <div v-if="agentTeamsConfigs.length > 0" class="agent-teams-bar">
+          <span class="agent-teams-label">Agent Teams:</span>
+          <el-select
+            v-model="selectedAgentTeamsConfigId"
+            placeholder="不使用"
+            clearable
             size="small"
-            inline-prompt
-            active-text="ON"
-            inactive-text="OFF"
-            style="margin-right: 6px"
-          />
-          <span class="agent-teams-label" :style="{ opacity: taskForm.useTeams ? 1 : 0.4 }">Agent Teams:</span>
+            style="width: 180px; margin-right: 8px"
+          >
+            <el-option
+              v-for="cfg in agentTeamsConfigs"
+              :key="cfg.configId"
+              :label="cfg.name + (cfg.isDefault ? ' ★' : '')"
+              :value="cfg.configId"
+            />
+          </el-select>
           <el-tag
             v-for="agent in parsedAgentTeams"
             :key="agent"
             size="small"
-            :type="taskForm.useTeams ? 'info' : 'info'"
-            :effect="taskForm.useTeams ? 'light' : 'plain'"
-            :style="{ opacity: taskForm.useTeams ? 1 : 0.4 }"
+            type="info"
+            effect="light"
           >
             {{ agent }}
           </el-tag>
@@ -1186,17 +1191,53 @@
         <el-form-item label="路径">
           <el-input v-model="editDirForm.path" />
         </el-form-item>
-        <el-form-item label="Agent Teams">
-          <el-input
-            v-model="editDirForm.agentTeamsConfig"
-            type="textarea"
-            :rows="6"
-            placeholder='{"reviewer": {"description": "...", "prompt": "..."}}'
-          />
+        <el-form-item label="Agent Teams 配置">
+          <div class="agent-teams-configs-panel">
+            <div v-if="agentTeamsConfigs.length === 0" class="form-tip" style="margin-bottom: 8px">
+              暂无配置，点击下方按钮创建。
+            </div>
+            <div v-for="cfg in agentTeamsConfigs" :key="cfg.configId" class="atc-row">
+              <el-tag v-if="cfg.isDefault" size="small" type="success" style="margin-right: 4px">默认</el-tag>
+              <span class="atc-name">{{ cfg.name }}</span>
+              <span class="atc-agents">{{ cfg.agentNames.join(', ') }}</span>
+              <el-button size="small" link @click="openEditAgentTeamsConfig(cfg)">编辑</el-button>
+              <el-button size="small" link type="danger" @click="handleDeleteAgentTeamsConfig(cfg.configId)">删除</el-button>
+            </div>
+            <el-button size="small" type="primary" @click="openCreateAgentTeamsConfig">+ 新建配置</el-button>
+          </div>
           <div class="form-tip">
-            JSON 格式定义子 Agent 团队。Claude 会自动分派子任务给团队成员。
+            JSON 格式定义子 Agent 团队。可创建多套配置，任务启动时选择。
           </div>
         </el-form-item>
+
+        <!-- Agent Teams Config 编辑子对话框 -->
+        <el-dialog
+          v-model="showAgentTeamsConfigDialog"
+          :title="agentTeamsConfigDialogMode === 'create' ? '新建 Agent Teams 配置' : '编辑 Agent Teams 配置'"
+          width="520px"
+          append-to-body
+        >
+          <el-form label-position="top">
+            <el-form-item label="配置名称" required>
+              <el-input v-model="agentTeamsConfigForm.name" placeholder="如：代码审查团队" />
+            </el-form-item>
+            <el-form-item label="Agent Teams JSON" required>
+              <el-input
+                v-model="agentTeamsConfigForm.config"
+                type="textarea"
+                :rows="8"
+                placeholder='{"reviewer": {"description": "...", "prompt": "..."}}'
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-checkbox v-model="agentTeamsConfigForm.isDefault">设为默认配置</el-checkbox>
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="showAgentTeamsConfigDialog = false">取消</el-button>
+            <el-button type="primary" @click="handleSaveAgentTeamsConfig">保存</el-button>
+          </template>
+        </el-dialog>
         <el-form-item v-if="selectedDirectory?.directoryType === 'PROJECT'" label="项目任务 Prompt">
           <el-input
             v-model="editDirForm.projectTaskPrompt"
@@ -1695,7 +1736,7 @@ import * as dirApi from '@/api/claudeWorker'
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig } from '@/types'
 import type { AipMessageType } from '@foggy/chat'
 
 const MAX_PANES = 4
@@ -2048,8 +2089,19 @@ const taskForm = ref({
   cwd: '',
   model: 'opus' as string,
   maxTurns: null as number | null,
-  useTeams: true,
   permissionMode: 'bypassPermissions' as string,
+})
+
+// --- Agent Teams 多配置支持 ---
+const agentTeamsConfigs = ref<AgentTeamsConfig[]>([])
+const selectedAgentTeamsConfigId = ref<string | null>(null)
+const showAgentTeamsConfigDialog = ref(false)
+const agentTeamsConfigDialogMode = ref<'create' | 'edit'>('create')
+const agentTeamsConfigForm = ref({
+  configId: '',
+  name: '',
+  config: '',
+  isDefault: false,
 })
 
 // --- 平台模型配置（供任务创建时选择 API 凭证） ---
@@ -2399,6 +2451,11 @@ const selectedDirectory = computed(() =>
 )
 
 const parsedAgentTeams = computed(() => {
+  if (selectedAgentTeamsConfigId.value) {
+    const config = agentTeamsConfigs.value.find(c => c.configId === selectedAgentTeamsConfigId.value)
+    return config?.agentNames ?? []
+  }
+  // Legacy fallback
   const dir = selectedDirectory.value
   if (!dir?.agentTeamsConfig) return []
   try { return Object.keys(JSON.parse(dir.agentTeamsConfig)) }
@@ -2817,6 +2874,7 @@ function selectDirectory(workerId: string, directoryId: string) {
   dirTaskPage.value = 0
   loadDirectoryTasks()
   loadDirectorySkills()
+  loadAgentTeamsConfigs()
   // Auto-sync SSH sessions from backend (once per directory per page load)
   syncSshSessions()
 }
@@ -3603,6 +3661,85 @@ async function loadDirectorySkills() {
   }
 }
 
+// ===== Agent Teams Config CRUD =====
+
+async function loadAgentTeamsConfigs() {
+  if (!selectedDirectoryId.value) {
+    agentTeamsConfigs.value = []
+    selectedAgentTeamsConfigId.value = null
+    return
+  }
+  try {
+    agentTeamsConfigs.value = await dirApi.listAgentTeamsConfigs(selectedDirectoryId.value)
+    // 自动选中默认配置
+    const defaultConfig = agentTeamsConfigs.value.find(c => c.isDefault)
+    selectedAgentTeamsConfigId.value = defaultConfig?.configId ?? null
+  } catch {
+    agentTeamsConfigs.value = []
+    selectedAgentTeamsConfigId.value = null
+  }
+}
+
+function openCreateAgentTeamsConfig() {
+  agentTeamsConfigDialogMode.value = 'create'
+  agentTeamsConfigForm.value = { configId: '', name: '', config: '', isDefault: false }
+  showAgentTeamsConfigDialog.value = true
+}
+
+function openEditAgentTeamsConfig(cfg: AgentTeamsConfig) {
+  agentTeamsConfigDialogMode.value = 'edit'
+  agentTeamsConfigForm.value = {
+    configId: cfg.configId,
+    name: cfg.name,
+    config: cfg.config,
+    isDefault: cfg.isDefault,
+  }
+  showAgentTeamsConfigDialog.value = true
+}
+
+async function handleSaveAgentTeamsConfig() {
+  if (!selectedDirectoryId.value) return
+  const f = agentTeamsConfigForm.value
+  if (!f.name.trim() || !f.config.trim()) {
+    ElMessage.warning('请填写名称和 JSON 配置')
+    return
+  }
+  try {
+    if (agentTeamsConfigDialogMode.value === 'create') {
+      await dirApi.createAgentTeamsConfig(selectedDirectoryId.value, {
+        name: f.name,
+        config: f.config,
+        isDefault: f.isDefault,
+      })
+      ElMessage.success('配置已创建')
+    } else {
+      await dirApi.updateAgentTeamsConfig(selectedDirectoryId.value, f.configId, {
+        name: f.name,
+        config: f.config,
+        isDefault: f.isDefault,
+      })
+      ElMessage.success('配置已更新')
+    }
+    showAgentTeamsConfigDialog.value = false
+    await loadAgentTeamsConfigs()
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    ElMessage.error('保存失败: ' + msg)
+  }
+}
+
+async function handleDeleteAgentTeamsConfig(configId: string) {
+  if (!selectedDirectoryId.value) return
+  try {
+    await ElMessageBox.confirm('确定删除此配置？已使用此配置的会话不受影响。', '删除确认', { type: 'warning' })
+    await dirApi.deleteAgentTeamsConfig(selectedDirectoryId.value, configId)
+    ElMessage.success('配置已删除')
+    await loadAgentTeamsConfigs()
+  } catch {
+    // cancelled
+  }
+}
+
 async function handleCreateTask() {
   if (!selectedWorkerId.value || !taskForm.value.prompt) return
   // Strip leading "/" to prevent Claude Code CLI from interpreting it as a slash command
@@ -3618,8 +3755,8 @@ async function handleCreateTask() {
   try {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
-      model?: string; maxTurns?: number; agentTeamsJson?: string; images?: string
-      permissionMode?: string; modelConfigId?: string
+      model?: string; maxTurns?: number; agentTeamsJson?: string; agentTeamsConfigId?: string
+      images?: string; permissionMode?: string; modelConfigId?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
@@ -3671,8 +3808,10 @@ async function handleCreateTask() {
     if (taskForm.value.maxTurns != null) {
       form.maxTurns = taskForm.value.maxTurns
     }
-    if (taskForm.value.useTeams && selectedDirectory.value?.agentTeamsConfig) {
-      form.agentTeamsJson = selectedDirectory.value.agentTeamsConfig
+    if (selectedAgentTeamsConfigId.value) {
+      form.agentTeamsConfigId = selectedAgentTeamsConfigId.value
+      const config = agentTeamsConfigs.value.find(c => c.configId === selectedAgentTeamsConfigId.value)
+      if (config) form.agentTeamsJson = config.config
     }
     if (taskForm.value.permissionMode) {
       form.permissionMode = taskForm.value.permissionMode
@@ -4216,6 +4355,8 @@ watch(showEditDirectoryDialog, (val) => {
       defaultBaseUrl: selectedDirectory.value.defaultBaseUrl || '',
       defaultModelConfigId: selectedDirectory.value.defaultModelConfigId || '',
     }
+    // 确保编辑对话框中加载最新的 Agent Teams 配置列表
+    loadAgentTeamsConfigs()
   }
 })
 
@@ -4889,6 +5030,34 @@ function handlePopOutTerminal() {
 .agent-teams-label {
   font-size: 12px;
   color: #909399;
+  margin-right: 4px;
+}
+
+.agent-teams-configs-panel {
+  width: 100%;
+}
+
+.atc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.atc-name {
+  font-weight: 500;
+  font-size: 13px;
+  min-width: 80px;
+}
+
+.atc-agents {
+  flex: 1;
+  font-size: 12px;
+  color: #909399;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .form-tip {

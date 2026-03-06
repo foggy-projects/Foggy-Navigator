@@ -56,9 +56,10 @@ class ClaudeTaskServiceSyncTest {
         LlmModelManager llmModelManager = mock(LlmModelManager.class);
         UserAuthService userAuthService = mock(UserAuthService.class);
         var conversationConfigRepository = mock(com.foggy.navigator.claude.worker.repository.ConversationConfigRepository.class);
+        var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
         service = new ClaudeTaskService(
                 taskRepository, conversationConfigRepository, deletedSessionRepository, workerService, configService,
-                dirService, directoryRepository, sessionManager, publisher, llmModelManager,
+                agentTeamsConfigService, dirService, directoryRepository, sessionManager, publisher, llmModelManager,
                 userAuthService);
 
         // Session creation returns a predictable ID

@@ -109,6 +109,8 @@ export interface ClaudeTask {
   fileCheckpointingEnabled?: boolean
   /** Task source: "PLATFORM" or "SYNCED" */
   source?: string
+  /** Agent Teams 配置 ID（任务创建时锁定） */
+  agentTeamsConfigId?: string
   /** 仅 /active 端点填充：工作目录名称 */
   directoryName?: string
   createdAt: string
@@ -137,6 +139,18 @@ export interface WorkingDirectory {
   maskedDefaultAuthToken?: string
   defaultModelConfigId?: string
   lastSyncedAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** Agent Teams 命名配置 */
+export interface AgentTeamsConfig {
+  configId: string
+  directoryId: string
+  name: string
+  config: string
+  isDefault: boolean
+  agentNames: string[]
   createdAt: string
   updatedAt: string
 }
