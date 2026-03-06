@@ -542,15 +542,15 @@ function selectItem(idx: number) {
   } else if (resolved.type === 'cli') {
     const cli = filteredCliSkills.value[resolved.index]
     if (!cli) return
-    // CLI bundled skill — keep "/" prefix so the Claude Code CLI parses it
-    emit('update:modelValue', '/' + cli.name + ' ')
+    // CLI bundled skill — same "name: " format as directory skills;
+    // Claude Code invokes skills via the Skill tool, not via "/" prefix.
+    emit('update:modelValue', cli.name + ': ')
     closePanel()
     focusInput()
   } else {
     const skill = filteredSkills.value[resolved.index]
     if (!skill) return
-    // Use "skill-name: " without "/" prefix — Claude Code auto-recognizes skills
-    // from .claude/skills/ directory; the "/" prefix would be intercepted by CLI
+    // Directory skill — "name: " format; Claude Code auto-recognizes skills
     emit('update:modelValue', skill.name + ': ')
     closePanel()
     focusInput()

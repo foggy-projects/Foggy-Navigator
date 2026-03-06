@@ -1855,7 +1855,7 @@ import * as agentApi from '@/api/codingAgent'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig } from '@/types'
 import type { AipMessageType } from '@foggy/chat'
 
-const MAX_PANES = 4
+const MAX_PANES = 1
 
 const router = useRouter()
 const workerState = useClaudeWorker()
