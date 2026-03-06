@@ -1203,8 +1203,16 @@ public class ClaudeTaskService {
      * 任务重新同步主入口。
      * - CLI 仍活着 → 策略 A：重置状态为 RUNNING，重连 SSE
      * - CLI 已退出 → 策略 B：从 Worker JSONL 补齐消息
+     *
+     * 注意：此方法不标 @Transactional，因为包含大量远程 HTTP 调用（healthCheck / getTaskStatus /
+     * listCliProcesses / getSessionMessages，最长可达 30s）。如果在事务内执行这些网络 IO，
+     * 会导致 DB 连接长时间被占用。各写操作已各自保证事务性：
+     * - resetToRunning() → @Transactional（外部调用时 Spring 代理生效；内部自调用时，
+     *   唯一写操作 taskRepository.save() 由 Spring Data JPA 自带事务保障）
+     * - sessionManager.addMessage() → JpaSessionManager 上有 @Transactional
+     * - markAsCompletedFromSync() → taskRepository.save() 由 Spring Data JPA 保障，
+     *   conversationConfigService.updateInteractionState() 有独立 @Transactional
      */
-    @Transactional
     public ResyncResult resync(String taskId, String userId) {
         ClaudeTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
