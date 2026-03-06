@@ -41,7 +41,9 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -81,6 +83,7 @@ public class ClaudeTaskService {
     private final ApplicationEventPublisher eventPublisher;
     private final LlmModelManager llmModelManager;
     private final UserAuthService userAuthService;
+    private final TransactionTemplate txTemplate;
 
     /**
      * 创建任务
@@ -1204,14 +1207,9 @@ public class ClaudeTaskService {
      * - CLI 仍活着 → 策略 A：重置状态为 RUNNING，重连 SSE
      * - CLI 已退出 → 策略 B：从 Worker JSONL 补齐消息
      *
-     * 注意：此方法不标 @Transactional，因为包含大量远程 HTTP 调用（healthCheck / getTaskStatus /
-     * listCliProcesses / getSessionMessages，最长可达 30s）。如果在事务内执行这些网络 IO，
-     * 会导致 DB 连接长时间被占用。各写操作已各自保证事务性：
-     * - resetToRunning() → @Transactional（外部调用时 Spring 代理生效；内部自调用时，
-     *   唯一写操作 taskRepository.save() 由 Spring Data JPA 自带事务保障）
-     * - sessionManager.addMessage() → JpaSessionManager 上有 @Transactional
-     * - markAsCompletedFromSync() → taskRepository.save() 由 Spring Data JPA 保障，
-     *   conversationConfigService.updateInteractionState() 有独立 @Transactional
+     * 不标 @Transactional：包含大量远程 HTTP 调用（healthCheck / getTaskStatus /
+     * listCliProcesses / getSessionMessages，最长可达 30s），避免长时间占用 DB 连接。
+     * 各写操作通过 txTemplate 显式划定事务边界。
      */
     public ResyncResult resync(String taskId, String userId) {
         ClaudeTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
@@ -1224,7 +1222,7 @@ public class ClaudeTaskService {
         ResyncResult result = new ResyncResult();
         result.setTaskId(taskId);
 
-        // 1. Worker 健康检查
+        // 1. Worker 健康检查（网络 IO，事务外）
         ClaudeWorkerEntity worker;
         ClaudeWorkerClient client;
         try {
@@ -1239,14 +1237,14 @@ public class ClaudeTaskService {
             return result;
         }
 
-        // 2. 三层探测 CLI 状态
+        // 2. 三层探测 CLI 状态（网络 IO，事务外）
         CliStatus cliStatus = detectCliStatus(client, entity);
         result.setCliStatus(cliStatus);
 
         if (cliStatus.isAlive()) {
             // 策略 A：CLI 存活 → 重连 SSE
             log.info("Resync: CLI alive for task {}, reconnecting SSE (Strategy A)", taskId);
-            resetToRunning(taskId);
+            txTemplate.executeWithoutResult(status -> resetToRunning(taskId));
             try {
                 streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
             } catch (Exception e) {
@@ -1380,16 +1378,12 @@ public class ClaudeTaskService {
             report.setMissingPreview(List.of());
             result.setMessageSync(report);
             // 即使消息已对齐，仍将 FAILED 任务标记为 COMPLETED
-            markAsCompletedFromSync(task);
+            txTemplate.executeWithoutResult(status -> markAsCompletedFromSync(task));
             result.setTaskStatusAfter("COMPLETED");
             return;
         }
 
-        // 导入缺失消息
-        importMessages(sessionId, missing);
-        report.setImported(missing.size());
-
-        // 构建预览（最多10条，content 截断200字）
+        // 构建预览（最多10条，content 截断200字）— 纯计算，事务外
         List<Map<String, Object>> preview = missing.stream()
                 .limit(10)
                 .map(m -> {
@@ -1402,13 +1396,19 @@ public class ClaudeTaskService {
                 .collect(Collectors.toList());
         report.setMissingPreview(preview);
 
-        // 同步后重新计数
+        // 导入缺失消息 + 标记完成 — 在同一个事务内，保证原子性
+        txTemplate.executeWithoutResult(status -> {
+            importMessages(sessionId, missing);
+            markAsCompletedFromSync(task);
+        });
+        report.setImported(missing.size());
+
+        // 同步后重新计数（事务已提交，读到最新数据）
         List<Message> platformAfter = sessionManager.getAllMessages(sessionId);
         report.setPlatformAfter(countMessages(platformAfter));
 
         result.setAction("MESSAGES_SYNCED");
         result.setMessageSync(report);
-        markAsCompletedFromSync(task);
         result.setTaskStatusAfter("COMPLETED");
         log.info("Resync: Synced {} messages for task {}", missing.size(), taskId);
     }
