@@ -418,6 +418,13 @@
               v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
               size="small"
               text
+              title="搁置会话"
+              @click="handlePaneHold(paneState.task.value?.sessionId)"
+            >搁置</el-button>
+            <el-button
+              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              size="small"
+              text
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
@@ -687,6 +694,13 @@
               v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
               size="small"
               text
+              title="搁置会话"
+              @click="handlePaneHold(paneState.task.value?.sessionId)"
+            >搁置</el-button>
+            <el-button
+              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              size="small"
+              text
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
@@ -794,6 +808,10 @@
             @click="toggleStateFilter('PROCESSING')"
           >处理中</span>
           <span
+            :class="['filter-tag', { active: interactionStateFilters.has('ON_HOLD') }]"
+            @click="toggleStateFilter('ON_HOLD')"
+          >已搁置</span>
+          <span
             :class="['filter-tag', { active: interactionStateFilters.has('ARCHIVED') }]"
             @click="toggleStateFilter('ARCHIVED')"
           >已归档</span>
@@ -823,10 +841,16 @@
           <div
             v-for="ac in globalAttentionConvs"
             :key="ac.sessionId"
-            :class="['active-conv-item', { 'conv-pane-focused': ac.sessionId === focusedSessionId }]"
+            :class="['active-conv-item', { 'conv-pane-focused': ac.sessionId === focusedSessionId, 'active-conv-pinned': ac.config?.pinned }]"
             @click="navigateToActiveSession(ac)"
           >
             <div class="conv-row-1">
+              <span
+                v-if="ac.config?.pinned"
+                class="conv-pin-icon active"
+                title="已置顶"
+                @click.stop="handleTogglePin(ac)"
+              >&#128204;</span>
               <span
                 v-if="paneSessionMap.has(ac.sessionId)"
                 :class="['sidebar-pane-letter', `pane-letter-${paneSessionMap.get(ac.sessionId)!.label.toLowerCase()}`]"
@@ -837,6 +861,9 @@
             </div>
             <div class="conv-row-1" style="margin-top: 2px;">
               <span class="conv-prompt" :title="ac.config?.customTitle || ac.firstPrompt">{{ truncate(ac.config?.customTitle || ac.firstPrompt, 30) }}</span>
+            </div>
+            <div v-if="ac.config?.customTitle" class="conv-row-subtitle">
+              <span class="conv-latest-prompt" :title="ac.latestTask.prompt">{{ truncate(ac.latestTask.prompt, 30) }}</span>
             </div>
             <div class="conv-row-2">
               <el-tag v-for="tag in (ac.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
@@ -881,6 +908,18 @@
                       </el-dropdown-item>
                       <el-dropdown-item @click="handleShowDetail(ac)">
                         详情
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="ac.config?.interactionState !== 'ARCHIVED' && ac.config?.interactionState !== 'ON_HOLD'"
+                        @click="handleHoldConversation(ac)"
+                      >
+                        搁置
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="ac.config?.interactionState === 'ON_HOLD'"
+                        @click="handleUnholdConversation(ac)"
+                      >
+                        取消搁置
                       </el-dropdown-item>
                       <el-dropdown-item
                         v-if="ac.config?.interactionState !== 'ARCHIVED'"
@@ -945,6 +984,9 @@
               }}</span>
               <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
             </div>
+            <div v-if="conv.config?.customTitle" class="conv-row-subtitle">
+              <span class="conv-latest-prompt" :title="conv.latestTask.prompt">{{ truncate(conv.latestTask.prompt, 36) }}</span>
+            </div>
             <div class="conv-row-2">
               <el-tag v-for="tag in (conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
               <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }}轮</span>
@@ -982,6 +1024,18 @@
                       </el-dropdown-item>
                       <el-dropdown-item @click="handleShowDetail(conv)">
                         详情
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="conv.config?.interactionState !== 'ARCHIVED' && conv.config?.interactionState !== 'ON_HOLD'"
+                        @click="handleHoldConversation(conv)"
+                      >
+                        搁置
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="conv.config?.interactionState === 'ON_HOLD'"
+                        @click="handleUnholdConversation(conv)"
+                      >
+                        取消搁置
                       </el-dropdown-item>
                       <el-dropdown-item
                         v-if="conv.config?.interactionState !== 'ARCHIVED'"
@@ -1897,7 +1951,7 @@ const batchSelectMode = ref(false)
 const selectedConvIds = ref<Set<string>>(new Set())
 
 // Multi-select filter: interaction states (default: 待回复 + 处理中)
-const ALL_STATES = ['AWAITING_REPLY', 'PROCESSING', 'ARCHIVED'] as const
+const ALL_STATES = ['AWAITING_REPLY', 'PROCESSING', 'ON_HOLD', 'ARCHIVED'] as const
 const interactionStateFilters = ref<Set<string>>(new Set(['AWAITING_REPLY', 'PROCESSING']))
 
 // Multi-select filter: session sources (default: 平台)
@@ -2552,8 +2606,22 @@ const awaitingReplyConvs = computed(() => {
   return awaitingConvs.filter(conv => !activeSessionIds.has(conv.sessionId))
 })
 
-// Combined "needs attention" section: active tasks + awaiting reply
-const globalAttentionConvs = computed(() => [...activeSessionConvs.value, ...awaitingReplyConvs.value])
+// Combined "needs attention" section: pinned + active tasks + awaiting reply (excluding ON_HOLD)
+const globalAttentionConvs = computed(() => {
+  const activeAndAwaiting = [...activeSessionConvs.value, ...awaitingReplyConvs.value]
+    .filter(conv => {
+      // Exclude ON_HOLD sessions from attention (even if they have active tasks)
+      const state = workerState.conversationConfigs.value.get(conv.sessionId)?.interactionState
+      return state !== 'ON_HOLD'
+    })
+  const existingIds = new Set(activeAndAwaiting.map(c => c.sessionId))
+  // Add pinned conversations from history that are not already in active/awaiting
+  const pinnedFromHistory = allConversations.value.filter(
+    c => c.config?.pinned && !existingIds.has(c.sessionId) && c.config?.interactionState !== 'ON_HOLD',
+  )
+  // Pinned first (sorted by pinnedAt desc), then active+awaiting
+  return [...pinnedFromHistory, ...activeAndAwaiting]
+})
 
 // Set of claudeSessionIds that currently have a RUNNING task (for concurrency protection)
 const runningClaudeSessionIds = computed(() => {
@@ -4251,6 +4319,47 @@ async function handleUnarchiveConversation(conv: ConversationGroup) {
   }
 }
 
+async function handleHoldConversation(conv: ConversationGroup) {
+  try {
+    await ElMessageBox.confirm(
+      '确认搁置该会话？搁置后不再出现在"需要关注"区域，可通过"已搁置"筛选查看。',
+      '搁置会话',
+      { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
+    )
+    await workerState.holdConversation(conv.sessionId)
+    ElMessage.success('已搁置')
+    reloadFilteredTasks()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('搁置失败')
+  }
+}
+
+async function handlePaneHold(sessionId?: string) {
+  if (!sessionId) return
+  try {
+    await ElMessageBox.confirm(
+      '确认搁置该会话？搁置后不再出现在"需要关注"区域，可通过"已搁置"筛选查看。',
+      '搁置会话',
+      { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
+    )
+    await workerState.holdConversation(sessionId)
+    ElMessage.success('已搁置')
+    reloadFilteredTasks()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('搁置失败')
+  }
+}
+
+async function handleUnholdConversation(conv: ConversationGroup) {
+  try {
+    await workerState.unholdConversation(conv.sessionId)
+    ElMessage.success('已取消搁置')
+    reloadFilteredTasks()
+  } catch {
+    ElMessage.error('取消搁置失败')
+  }
+}
+
 function getInteractionState(sessionId?: string): string | undefined {
   if (!sessionId) return undefined
   return workerState.conversationConfigs.value.get(sessionId)?.interactionState
@@ -4260,6 +4369,7 @@ function interactionStateLabel(state: string): string {
   switch (state) {
     case 'PROCESSING': return '处理中'
     case 'AWAITING_REPLY': return '待回复'
+    case 'ON_HOLD': return '已搁置'
     case 'ARCHIVED': return '已归档'
     default: return state
   }
@@ -5134,6 +5244,23 @@ function handlePopOutTerminal() {
   min-width: 0;
 }
 
+.conv-row-subtitle {
+  display: flex;
+  align-items: center;
+  margin-top: 1px;
+  min-width: 0;
+}
+
+.conv-latest-prompt {
+  font-size: 11px;
+  color: #909399;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
 .conv-status-dot {
   width: 8px;
   height: 8px;
@@ -5154,6 +5281,7 @@ function handlePopOutTerminal() {
 }
 .conv-interaction-badge.processing { background: #409eff; animation: convPulse 1.5s infinite; }
 .conv-interaction-badge.awaiting_reply { background: #e6a23c; }
+.conv-interaction-badge.on_hold { background: #b88230; }
 .conv-interaction-badge.archived { background: #909399; }
 
 .pane-interaction-tag {
@@ -5165,6 +5293,7 @@ function handlePopOutTerminal() {
 }
 .pane-interaction-tag.processing { background: #ecf5ff; color: #409eff; }
 .pane-interaction-tag.awaiting_reply { background: #fdf6ec; color: #e6a23c; }
+.pane-interaction-tag.on_hold { background: #fdf0e0; color: #b88230; }
 .pane-interaction-tag.archived { background: #f4f4f5; color: #909399; }
 
 @keyframes convPulse {
@@ -5557,6 +5686,15 @@ function handlePopOutTerminal() {
 
 .active-conv-item:hover {
   background: #e1eeff;
+}
+
+.active-conv-pinned {
+  background: #fdf6ec;
+  border-left: 3px solid #e6a23c;
+}
+
+.active-conv-pinned:hover {
+  background: #faecd8;
 }
 
 .active-dir-tag {

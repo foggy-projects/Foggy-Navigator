@@ -52,7 +52,7 @@ public class ConversationConfigEntity {
     @Column(columnDefinition = "TEXT")
     private String tags;
 
-    /** 交互状态：PROCESSING / AWAITING_REPLY / ARCHIVED */
+    /** 交互状态：PROCESSING / AWAITING_REPLY / ON_HOLD / ARCHIVED */
     @Column(length = 32)
     private String interactionState;
 

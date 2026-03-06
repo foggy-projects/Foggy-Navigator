@@ -451,6 +451,18 @@ public class ClaudeTaskController {
         return RX.ok(configService.unarchiveConversation(sessionId, userId));
     }
 
+    @PostMapping("/conversations/{sessionId}/hold")
+    public RX<ConversationConfigDTO> holdConversation(@PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.holdConversation(sessionId, userId));
+    }
+
+    @PostMapping("/conversations/{sessionId}/unhold")
+    public RX<ConversationConfigDTO> unholdConversation(@PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.unholdConversation(sessionId, userId));
+    }
+
     @PostMapping("/conversations/batch-bind-auth")
     public RX<Map<String, Object>> batchBindAuth(@RequestBody BatchBindAuthForm form) {
         String userId = UserContext.getCurrentUserId();

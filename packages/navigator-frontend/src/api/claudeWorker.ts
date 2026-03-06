@@ -481,3 +481,21 @@ export async function unarchiveConversation(
   )) as unknown as RX<ConversationConfig>
   return rx.data
 }
+
+export async function holdConversation(
+  sessionId: string,
+): Promise<ConversationConfig> {
+  const rx = (await client.post(
+    `/claude-tasks/conversations/${sessionId}/hold`,
+  )) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
+export async function unholdConversation(
+  sessionId: string,
+): Promise<ConversationConfig> {
+  const rx = (await client.post(
+    `/claude-tasks/conversations/${sessionId}/unhold`,
+  )) as unknown as RX<ConversationConfig>
+  return rx.data
+}
