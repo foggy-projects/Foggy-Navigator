@@ -361,7 +361,7 @@
             <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
             <el-button
               size="small"
-              :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE' || panes.length >= MAX_PANES"
+              :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
               :loading="creatingTask"
               @click="handleCreateTask"
             >
@@ -659,7 +659,7 @@
             <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
             <el-button
               size="small"
-              :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE' || panes.length >= MAX_PANES"
+              :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE'"
               :loading="creatingTask"
               @click="handleCreateTask"
             >
@@ -3972,9 +3972,9 @@ async function handleCreateTask() {
     prompt = prompt.slice(1)
   }
   if (!prompt.trim()) return
-  if (panes.value.length >= MAX_PANES) {
-    ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
-    return
+  // Auto-close oldest pane when limit reached
+  while (panes.value.length >= MAX_PANES) {
+    closePane(panes.value[0]!.paneId)
   }
   creatingTask.value = true
   try {
@@ -4402,9 +4402,9 @@ async function viewTask(task: ClaudeTask) {
     return
   }
 
-  if (panes.value.length >= MAX_PANES) {
-    ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
-    return
+  // Auto-close oldest pane when limit reached
+  while (panes.value.length >= MAX_PANES) {
+    closePane(panes.value[0]!.paneId)
   }
 
   const pane = createPane(task)
@@ -4703,9 +4703,9 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     if (existingPane) {
       existingPane.resumeInPlace(newTask)
     } else {
-      if (panes.value.length >= MAX_PANES) {
-        ElMessage.warning(`最多同时打开 ${MAX_PANES} 个面板，请先关闭一个`)
-        return
+      // Auto-close oldest pane when limit reached
+      while (panes.value.length >= MAX_PANES) {
+        closePane(panes.value[0]!.paneId)
       }
       const newPane = createPane(newTask)
       await newPane.connect(newTask.sessionId)  // load full history
