@@ -1235,8 +1235,9 @@ public class ClaudeTaskService {
         streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
 
         // 5. 发布恢复通知到会话
-        publishMessage(entity.getSessionId(), MessageType.STATE_SYNC,
-                Map.of("content", "Task resynced", "subtype", "resynced", "taskId", taskId));
+        eventPublisher.publishEvent(
+                AgentMessage.of(entity.getSessionId(), AGENT_ID, MessageType.STATE_SYNC,
+                        Map.of("content", "Task resynced", "subtype", "resynced", "taskId", taskId)));
     }
 
     /**
