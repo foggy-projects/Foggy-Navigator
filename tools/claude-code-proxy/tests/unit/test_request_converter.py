@@ -487,3 +487,98 @@ class TestParseToolResultContent:
         result = parse_tool_result_content({"obj": NotSerializable()})
         # Should return string representation
         assert "NotSerializable" in result or "obj" in result
+
+    def test_dict_content_with_text_type(self):
+        """Test dict content with type='text' returns text value (lines 253-255)."""
+        content = {"type": "text", "text": "Direct text from dict"}
+        result = parse_tool_result_content(content)
+        assert result == "Direct text from dict"
+
+    def test_dict_content_json_serializable(self):
+        """Test dict content that is JSON-serializable (lines 256-258)."""
+        content = {"key": "value", "count": 42}
+        result = parse_tool_result_content(content)
+        parsed = json.loads(result)
+        assert parsed == {"key": "value", "count": 42}
+
+    def test_list_with_dict_having_text_key(self):
+        """Test list item dict with 'text' key but no 'type' field (lines 244-245)."""
+        content = [{"text": "fallback text", "extra": "data"}]
+        result = parse_tool_result_content(content)
+        assert result == "fallback text"
+
+    def test_list_with_non_serializable_dict(self):
+        """Test list with dict that fails JSON serialization (lines 247-250)."""
+        class BadValue:
+            def __str__(self):
+                return "bad_value_str"
+
+        content = [{"key": BadValue()}]
+        result = parse_tool_result_content(content)
+        # Should fall back to str() representation
+        assert "bad_value_str" in result or "BadValue" in result
+
+
+# ============================================================================
+# P7: Additional request converter edge cases
+# ============================================================================
+
+
+@pytest.mark.unit
+class TestRequestConverterEdgeCases:
+    """Test remaining edge cases in request_converter.py."""
+
+    def test_system_as_dict_list(self, sample_model_manager):
+        """System as list of dicts (lines 33-37)."""
+        request = ClaudeMessagesRequest(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1000,
+            system=[
+                {"type": "text", "text": "You are a helpful assistant."},
+                {"type": "text", "text": "Be concise."},
+            ],
+            messages=[ClaudeMessage(role="user", content="Hello")],
+        )
+        result = convert_claude_to_openai(request, sample_model_manager)
+
+        # System message should be combined
+        system_msgs = [m for m in result["messages"] if m["role"] == "system"]
+        assert len(system_msgs) == 1
+        assert "helpful assistant" in system_msgs[0]["content"]
+        assert "concise" in system_msgs[0]["content"]
+
+    def test_tool_choice_unknown_type(self, sample_model_manager):
+        """Unknown tool_choice type falls back to 'auto' (line 127)."""
+        request = ClaudeMessagesRequest(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1000,
+            messages=[ClaudeMessage(role="user", content="Hello")],
+            tools=[
+                ClaudeTool(
+                    name="test",
+                    description="test tool",
+                    input_schema={"type": "object", "properties": {}},
+                )
+            ],
+            tool_choice={"type": "unknown_type"},
+        )
+        result = convert_claude_to_openai(request, sample_model_manager)
+        assert result["tool_choice"] == "auto"
+
+    def test_tool_choice_type_any(self, sample_model_manager):
+        """tool_choice type 'any' maps to 'auto' (line 120)."""
+        request = ClaudeMessagesRequest(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1000,
+            messages=[ClaudeMessage(role="user", content="Hello")],
+            tools=[
+                ClaudeTool(
+                    name="test",
+                    description="test tool",
+                    input_schema={"type": "object", "properties": {}},
+                )
+            ],
+            tool_choice={"type": "any"},
+        )
+        result = convert_claude_to_openai(request, sample_model_manager)
+        assert result["tool_choice"] == "auto"

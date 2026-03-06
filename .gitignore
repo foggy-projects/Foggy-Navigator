@@ -178,3 +178,6 @@ packages/foggy-mobile/uniCloud-aliyun/
 
 # PID files
 *.pid
+
+# Playwright CLI
+.playwright-cli/

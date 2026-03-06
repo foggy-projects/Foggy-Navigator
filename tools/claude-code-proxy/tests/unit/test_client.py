@@ -2,6 +2,7 @@
 
 import pytest
 import asyncio
+import httpx
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 from openai import AsyncOpenAI, AsyncAzureOpenAI
@@ -12,6 +13,17 @@ from openai._exceptions import (
     APIError,
 )
 from src.core.client import OpenAIClient
+
+
+def _make_response(status_code: int = 401) -> httpx.Response:
+    """Create a mock httpx.Response for OpenAI exception constructors."""
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return httpx.Response(status_code=status_code, request=request)
+
+
+def _make_request() -> httpx.Request:
+    """Create a mock httpx.Request for OpenAI APIError constructor."""
+    return httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
 
 
 @pytest.mark.unit
@@ -147,28 +159,35 @@ class TestCreateChatCompletion:
     @pytest.mark.asyncio
     async def test_completion_cancellation(self):
         """Test completion cancellation via request_id."""
-        cancel_event = asyncio.Event()
 
-        async def slow_completion():
-            await asyncio.sleep(0.2)
-            return MagicMock()
+        async def slow_completion(**kwargs):
+            await asyncio.sleep(0.5)
+            mock = MagicMock()
+            mock.model_dump = Mock(return_value={"id": "test"})
+            return mock
 
         with patch.object(OpenAIClient, '__init__', lambda self, *args, **kwargs: None):
             client = OpenAIClient.__new__(OpenAIClient)
             client.client = Mock()
             client.client.chat.completions.create = AsyncMock(side_effect=slow_completion)
             client.active_requests = {}
-            client.active_requests["test-id"] = cancel_event
 
-            # Cancel the request
-            client.cancel_request("test-id")
+            request_id = "test-cancel-id"
+
+            async def cancel_after_delay():
+                await asyncio.sleep(0.05)
+                client.cancel_request(request_id)
+
+            # Schedule cancellation while request is in progress
+            cancel_task = asyncio.create_task(cancel_after_delay())
 
             with pytest.raises(HTTPException) as exc_info:
                 await client.create_chat_completion(
                     {"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]},
-                    request_id="test-id",
+                    request_id=request_id,
                 )
 
+            await cancel_task
             assert exc_info.value.status_code == 499
             assert "cancelled" in exc_info.value.detail.lower()
 
@@ -179,7 +198,9 @@ class TestCreateChatCompletion:
             client = OpenAIClient.__new__(OpenAIClient)
             client.client = Mock()
             client.client.chat.completions.create = AsyncMock(
-                side_effect=AuthenticationError("Invalid API key")
+                side_effect=AuthenticationError(
+                    "Invalid API key", response=_make_response(401), body=None
+                )
             )
             client.active_requests = {}
 
@@ -198,7 +219,9 @@ class TestCreateChatCompletion:
             client = OpenAIClient.__new__(OpenAIClient)
             client.client = Mock()
             client.client.chat.completions.create = AsyncMock(
-                side_effect=RateLimitError("Rate limit exceeded")
+                side_effect=RateLimitError(
+                    "Rate limit exceeded", response=_make_response(429), body=None
+                )
             )
             client.active_requests = {}
 
@@ -217,7 +240,9 @@ class TestCreateChatCompletion:
             client = OpenAIClient.__new__(OpenAIClient)
             client.client = Mock()
             client.client.chat.completions.create = AsyncMock(
-                side_effect=BadRequestError("Invalid request")
+                side_effect=BadRequestError(
+                    "Invalid request", response=_make_response(400), body=None
+                )
             )
             client.active_requests = {}
 
@@ -232,7 +257,7 @@ class TestCreateChatCompletion:
     @pytest.mark.asyncio
     async def test_api_error_with_status_code(self):
         """Test handling of APIError with custom status code."""
-        error = APIError("API Error")
+        error = APIError("API Error", request=_make_request(), body=None)
         error.status_code = 502
 
         with patch.object(OpenAIClient, '__init__', lambda self, *args, **kwargs: None):
@@ -341,8 +366,12 @@ class TestCreateChatCompletionStream:
     @pytest.mark.asyncio
     async def test_streaming_adds_stream_options(self):
         """Test that streaming adds stream_options."""
+        async def empty_aiter(self_inner):
+            return
+            yield  # noqa: make it an async generator
+
         mock_completion = MagicMock()
-        mock_completion.__aiter__ = self._mock_empty_stream()
+        mock_completion.__aiter__ = empty_aiter
 
         with patch.object(OpenAIClient, '__init__', lambda self, *args, **kwargs: None):
             client = OpenAIClient.__new__(OpenAIClient)
@@ -367,46 +396,54 @@ class TestCreateChatCompletionStream:
     @pytest.mark.asyncio
     async def test_streaming_with_cancellation(self):
         """Test streaming cancellation via request_id."""
-        cancel_event = asyncio.Event()
+        request_id = "test-cancel-stream"
 
-        async def mock_stream():
+        async def mock_stream_gen(self_inner):
             chunk = MagicMock()
             chunk.model_dump = Mock(return_value={
                 "choices": [{"delta": {"content": "Hi"}}],
             })
             yield chunk
-            cancel_event.set()  # Cancel after first chunk
+            # Second chunk — by now the cancel event should be set
             await asyncio.sleep(0.1)
-            yield MagicMock()
+            chunk2 = MagicMock()
+            chunk2.model_dump = Mock(return_value={
+                "choices": [{"delta": {"content": " world"}}],
+            })
+            yield chunk2
 
         mock_completion = MagicMock()
-        mock_completion.__aiter__ = lambda self: mock_stream()
+        mock_completion.__aiter__ = mock_stream_gen
 
         with patch.object(OpenAIClient, '__init__', lambda self, *args, **kwargs: None):
             client = OpenAIClient.__new__(OpenAIClient)
             client.client = Mock()
             client.client.chat.completions.create = AsyncMock(return_value=mock_completion)
-            client.active_requests = {"test-id": cancel_event}
+            client.active_requests = {}
 
             chunks = []
             with pytest.raises(HTTPException) as exc_info:
                 async for chunk in client.create_chat_completion_stream(
                     {"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]},
-                    request_id="test-id",
+                    request_id=request_id,
                 ):
                     chunks.append(chunk)
-                    cancel_event.set()
+                    # Cancel after receiving first chunk
+                    client.cancel_request(request_id)
 
             assert exc_info.value.status_code == 499
 
     @pytest.mark.asyncio
     async def test_streaming_authentication_error(self):
         """Test handling of AuthenticationError in streaming."""
-        async def mock_stream():
-            raise AuthenticationError("Invalid API key")
+        async def mock_stream_gen(self_inner):
+            raise AuthenticationError(
+                "Invalid API key", response=_make_response(401), body=None
+            )
+            yield  # noqa: make it an async generator
 
         mock_completion = MagicMock()
-        mock_completion.__aiter__ = lambda self: mock_stream()
+        mock_completion.__aiter__ = mock_stream_gen
 
         with patch.object(OpenAIClient, '__init__', lambda self, *args, **kwargs: None):
             client = OpenAIClient.__new__(OpenAIClient)

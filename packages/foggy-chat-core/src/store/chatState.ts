@@ -92,6 +92,10 @@ export function createChatState(): ChatState {
       case AipMessageType.TEXT_COMPLETE: {
         const p = aip.payload as TextPayload
         isThinking.value = false
+        // Skip result events — their text content was already emitted by assistant_text.
+        // The result event still carries metadata (cost, tokens) handled by useTaskPane.
+        const raw = aip.payload as Record<string, unknown>
+        if (raw?.isResult === true) break
         const lastChunk = [...messages.value].reverse().find(
           (m) => m.type === AipMessageType.TEXT_CHUNK && m.sender === 'assistant',
         )
