@@ -1,9 +1,6 @@
 #!/bin/bash
 # Claude Agent Worker - Start Script (后台模式)
 # Usage: chmod +x start.sh && ./start.sh
-#
-# ⚠️  Mac 用户请优先使用 start-mac.sh（前台模式，使用 uv + venv）
-# ⚠️  本脚本也使用 venv，请确保先运行过 start-mac.sh 创建 venv 环境
 
 set -e
 
@@ -35,24 +32,50 @@ fi
 echo -e "${CYAN}=== Claude Agent Worker (后台模式) ===${NC}"
 echo -e "${CYAN}Port: $Port${NC}"
 
-# Check venv exists
-if [ ! -f "$VenvDir/bin/python" ]; then
-    echo -e "${RED}错误：未找到 venv 环境 ($VenvDir)${NC}"
-    echo -e "${YELLOW}请先运行 ./start-mac.sh 创建 venv，或手动执行：${NC}"
-    echo -e "${YELLOW}  uv venv --python 3.12 $VenvDir${NC}"
-    echo -e "${YELLOW}  uv pip install -e . --python $VenvDir/bin/python${NC}"
+# Find Python 3
+PYTHON_CMD=""
+for cmd in python3 python; do
+    if command -v $cmd &>/dev/null; then
+        PYTHON_CMD=$cmd
+        break
+    fi
+done
+
+if [ -z "$PYTHON_CMD" ]; then
+    echo -e "${RED}错误：未找到 Python 3${NC}"
+    echo -e "${YELLOW}请安装 Python 3.10+${NC}"
     exit 1
 fi
 
-# Verify uvicorn is available in venv
-if ! "$VenvDir/bin/python" -m uvicorn --version &>/dev/null; then
-    echo -e "${RED}错误：venv 中未安装 uvicorn${NC}"
-    echo -e "${YELLOW}请运行: uv pip install -e . --python $VenvDir/bin/python${NC}"
-    exit 1
+PYTHON_VERSION=$($PYTHON_CMD --version 2>&1)
+echo -e "${CYAN}System Python: $PYTHON_VERSION${NC}"
+
+# Check venv exists, create if not
+if [ ! -f "$VenvDir/bin/python" ]; then
+    echo -e "${YELLOW}创建 venv 环境 ($VenvDir)...${NC}"
+    $PYTHON_CMD -m venv "$VenvDir"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}创建 venv 失败${NC}"
+        exit 1
+    fi
 fi
 
 PYTHON="$VenvDir/bin/python"
-echo -e "${CYAN}Python: $($PYTHON --version) ($PYTHON)${NC}"
+PIP="$VenvDir/bin/pip"
+
+# Install dependencies if needed
+if ! "$PYTHON" -m uvicorn --version &>/dev/null; then
+    echo -e "${YELLOW}安装依赖...${NC}"
+    "$PIP" install --upgrade pip
+    "$PIP" install -e "$WorkerDir"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}依赖安装失败${NC}"
+        exit 1
+    fi
+fi
+
+echo -e "${CYAN}Using venv: $PYTHON${NC}"
+echo -e "${CYAN}Python version: $($PYTHON --version)${NC}"
 
 # Kill existing process on the port
 ExistingPid=$(lsof -ti:$Port 2>/dev/null || true)
