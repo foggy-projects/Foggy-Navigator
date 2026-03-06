@@ -72,7 +72,7 @@ if ($portConnection) {
 
 Write-Host ""
 
-# Step 2: Build (skip clean to avoid locked jar issues)
+# Step 2: Build (clean build to avoid stale compilation cache issues)
 if ($SkipBuild) {
     if (-not (Test-Path $JAR_PATH)) {
         Write-Host "[2/4] JAR not found, building anyway..." -ForegroundColor Yellow
@@ -83,10 +83,10 @@ if ($SkipBuild) {
 }
 
 if (-not $SkipBuild) {
-    Write-Host "[2/4] Building project (mvn package)..." -ForegroundColor Yellow
+    Write-Host "[2/4] Building project (mvn clean package)..." -ForegroundColor Yellow
     Write-Host "  This may take 30-60 seconds..." -ForegroundColor Gray
 
-    $buildOutput = & mvn package -pl launcher -am -DskipTests 2>&1
+    $buildOutput = & mvn clean package -pl launcher -am -DskipTests 2>&1
 
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  Build successful!" -ForegroundColor Green
