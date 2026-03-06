@@ -28,4 +28,6 @@ public interface ConversationConfigRepository extends JpaRepository<Conversation
            "WHERE c.userId = :userId AND c.interactionState IN :states")
     List<String> findSessionIdsByInteractionStateIn(@Param("userId") String userId,
                                                      @Param("states") List<String> states);
+
+    void deleteBySessionId(String sessionId);
 }
