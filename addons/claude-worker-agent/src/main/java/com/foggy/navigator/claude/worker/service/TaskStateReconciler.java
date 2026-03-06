@@ -241,13 +241,42 @@ public class TaskStateReconciler {
                             taskId, task.getStatus(), misses, DEAD_CLI_MISS_THRESHOLD);
 
                     if (misses >= DEAD_CLI_MISS_THRESHOLD) {
-                        log.warn("Reconciler: forcing task={} to FAILED "
-                                        + "(CLI dead {} consecutive checks, Worker has no recovery data)",
-                                taskId, misses);
-                        cliDeadMissCount.remove(taskId);
-                        taskService.reconcilerFailTask(taskId,
-                                "CLI process died unexpectedly (detected by reconciler after "
-                                + misses + " consecutive checks)");
+                        // ★ 在强制失败前，再次向 Worker 确认 CLI 是否真的已死
+                        boolean confirmedCliDead = false;
+                        try {
+                            Map<String, Object> taskStatus = workerService.createClient(worker)
+                                    .getTaskStatus(taskId)
+                                    .block(Duration.ofSeconds(5));
+                            if (taskStatus != null) {
+                                Boolean cliAlive = (Boolean) taskStatus.get("cli_alive");
+                                confirmedCliDead = Boolean.FALSE.equals(cliAlive);
+                                log.info("Reconciler: task={} Worker CLI alive check result: cli_alive={}, confirmedDead={}",
+                                        taskId, cliAlive, confirmedCliDead);
+                            }
+                        } catch (Exception e) {
+                            log.debug("Reconciler: Worker CLI alive check failed for {}: {}", taskId, e.getMessage());
+                            // 查询失败时保守处理，认为已死（避免留下僵尸任务）
+                            confirmedCliDead = true;
+                        }
+
+                        if (confirmedCliDead) {
+                            log.warn("Reconciler: forcing task={} to FAILED "
+                                            + "(CLI dead {} consecutive checks, Worker confirmed CLI dead)",
+                                    taskId, misses);
+                            cliDeadMissCount.remove(taskId);
+                            taskService.reconcilerFailTask(taskId,
+                                    "CLI process died unexpectedly (detected by reconciler after "
+                                    + misses + " consecutive checks)");
+                        } else {
+                            log.warn("Reconciler: task={} CLI still alive per Worker, marking FAILED without abort (user-managed)",
+                                    taskId);
+                            cliDeadMissCount.remove(taskId);
+                            // 只标记失败，不调用 Worker.abortTask（CLI 还在运行）
+                            taskService.reconcilerFailTask(taskId,
+                                    "CLI process unresponsive (detected by reconciler after "
+                                    + misses + " consecutive checks) - CLI still running on Worker, manage via process list",
+                                    false);
+                        }
                     }
                 }
             }

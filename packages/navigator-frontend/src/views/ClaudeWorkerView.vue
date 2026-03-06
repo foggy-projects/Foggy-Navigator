@@ -514,8 +514,12 @@
                   <el-tag v-else type="success" size="small">活跃</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="140" align="center">
+              <el-table-column label="操作" width="200" align="center">
                 <template #default="{ row }">
+                  <template v-if="row.foggy_task_id">
+                    <el-button text size="small" @click="handleResyncTask(row.foggy_task_id)">重新同步</el-button>
+                    <el-divider direction="vertical" style="margin: 0 4px;" />
+                  </template>
                   <el-button text size="small" @click="handleKillProcess(row.pid, false)">终止</el-button>
                   <el-button text size="small" type="danger" @click="handleKillProcess(row.pid, true)">强制</el-button>
                 </template>
@@ -1907,6 +1911,29 @@ async function handleKillProcess(pid: number, force = false) {
     await loadCliProcesses()
   } catch (e: unknown) {
     ElMessage.error(`${action}失败: ${e instanceof Error ? e.message : e}`)
+  }
+}
+
+/** 重新同步已失败但 CLI 还在运行的任务 */
+async function handleResyncTask(taskId: string) {
+  if (!selectedWorkerId.value) return
+  try {
+    await ElMessageBox.confirm(
+      '确定要重新同步此任务吗？\n\n这将恢复任务状态并拉取 CLI 产生的新事件。',
+      '重新同步任务',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
+    )
+  } catch {
+    return // cancelled
+  }
+  try {
+    const result = await dirApi.resyncTask(taskId)
+    if (result.status === 'RESYNCED') {
+      ElMessage.success('任务已重新同步')
+      // 不需要刷新进程列表，因为任务状态改变不影响 CLI 进程
+    }
+  } catch (e: unknown) {
+    ElMessage.error(`重新同步失败: ${e instanceof Error ? e.message : e}`)
   }
 }
 
