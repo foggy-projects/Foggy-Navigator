@@ -1,34 +1,62 @@
 #!/usr/bin/env bash
-# Code Server - Linux Installation Script (for production Worker machines)
-# Usage: bash install-linux.sh [--port PORT] [--install-dir DIR] [--data-dir DIR]
+# Code Server - Linux Installation Script
+# Usage: bash install-linux.sh [--from-env] [--port PORT] [--install-dir DIR] [--data-dir DIR]
 #
-# Installs code-server standalone to the specified directory.
-# Default port: 18443 (avoids conflict with local dev 8443)
+# Supports two scenarios:
+#   1. WSL dev machine:  bash install-linux.sh --from-env
+#      Reads INSTALL_DIR/DATA_DIR from .env (same dir as this script)
+#   2. Remote Linux:     bash install-linux.sh [--install-dir DIR] [--data-dir DIR]
+#      Uses defaults or explicit args
+#
+# Default port: 18443 (avoids conflict with local dev 8443/8444)
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # ---- Defaults ----
-VERSION="4.106.3"
+VERSION="4.109.2"
 PORT=18443
 INSTALL_DIR="$HOME/.local/lib/code-server"
 DATA_DIR="$HOME/.local/share/code-server"
 PASSWORD="foggy123"
+FROM_ENV=false
 
 # ---- Parse args ----
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --from-env) FROM_ENV=true; shift ;;
     --port) PORT="$2"; shift 2 ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --data-dir) DATA_DIR="$2"; shift 2 ;;
     --password) PASSWORD="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: $0 [--port PORT] [--install-dir DIR] [--data-dir DIR] [--password PWD] [--version VER]"
+      echo "Usage: $0 [--from-env] [--port PORT] [--install-dir DIR] [--data-dir DIR] [--password PWD] [--version VER]"
+      echo ""
+      echo "  --from-env   Read INSTALL_DIR, DATA_DIR, PORT from .env file (for WSL dev machines)"
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+# ---- Load from .env if requested ----
+if [ "$FROM_ENV" = true ]; then
+  ENV_FILE="$SCRIPT_DIR/.env"
+  if [ ! -f "$ENV_FILE" ]; then
+    echo "ERROR: .env not found at $ENV_FILE"
+    exit 1
+  fi
+  echo "Loading config from $ENV_FILE ..."
+  while IFS='=' read -r key value; do
+    case "$key" in
+      CODE_SERVER_PORT)    PORT="$value" ;;
+      CODE_SERVER_INSTALL) INSTALL_DIR="$value" ;;
+      CODE_SERVER_DATA)    DATA_DIR="$value" ;;
+    esac
+  done < <(grep -v '^\s*#' "$ENV_FILE" | grep '=')
+fi
 
 echo "=== Code Server Installation ==="
 echo "Version:     $VERSION"
