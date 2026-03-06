@@ -315,16 +315,6 @@ export async function abortTask(
   return rx.data
 }
 
-export async function resyncTask(
-  taskId: string,
-): Promise<{ taskId: string; status: string }> {
-  const rx = (await client.post(`/claude-tasks/${taskId}/resync`)) as unknown as RX<{
-    taskId: string
-    status: string
-  }>
-  return rx.data
-}
-
 export async function rewindTask(
   taskId: string,
   checkpointId: string | null,
