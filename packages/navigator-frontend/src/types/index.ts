@@ -186,6 +186,38 @@ export interface ConversationConfig {
   interactionState?: 'PROCESSING' | 'AWAITING_REPLY' | 'ON_HOLD' | 'ARCHIVED'
 }
 
+// ===== Resync 任务重新同步 =====
+
+export interface MessageCount {
+  user: number
+  assistant: number
+  total: number
+}
+
+export interface CliStatus {
+  alive: boolean
+  workerReachable: boolean
+  taskInRegistry: boolean
+  source: string
+  detail: string
+}
+
+export interface MessageSyncReport {
+  platformBefore: MessageCount
+  workerTotal: MessageCount
+  imported: number
+  platformAfter: MessageCount
+  missingPreview: Array<{ role: string; content: string }>
+}
+
+export interface ResyncResult {
+  taskId: string
+  action: 'RECONNECTED' | 'MESSAGES_SYNCED' | 'ALREADY_ALIGNED' | 'NO_SESSION_DATA' | 'WORKER_UNREACHABLE'
+  cliStatus: CliStatus
+  messageSync?: MessageSyncReport
+  taskStatusAfter: string
+}
+
 // ===== A2A 协议类型 =====
 
 export interface A2aPart {

@@ -2,6 +2,7 @@ package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.ConversationConfigDTO;
+import com.foggy.navigator.claude.worker.model.dto.ResyncResult;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
@@ -97,6 +98,15 @@ public class ClaudeTaskController {
         streamRelay.reconnectTask(taskId, task.getSessionId(), task.getWorkerId());
 
         return RX.ok(Map.of("taskId", taskId, "status", "RECONNECTED"));
+    }
+
+    /**
+     * 任务重新同步：智能探测 CLI 状态，自动选择重连 SSE 或从 Worker JSONL 补齐消息。
+     */
+    @PostMapping("/{taskId}/resync")
+    public RX<ResyncResult> resyncTask(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskService.resync(taskId, userId));
     }
 
     @PostMapping("/{taskId}/abort")

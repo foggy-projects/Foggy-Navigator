@@ -296,6 +296,15 @@ export async function reconnectTask(
   return rx.data
 }
 
+export async function resyncTask(
+  taskId: string,
+): Promise<import('@/types').ResyncResult> {
+  const rx = (await client.post(
+    `/claude-tasks/${taskId}/resync`,
+  )) as unknown as RX<import('@/types').ResyncResult>
+  return rx.data
+}
+
 export async function abortTask(
   taskId: string,
 ): Promise<{ taskId: string; status: string }> {

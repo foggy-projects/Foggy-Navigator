@@ -430,6 +430,14 @@
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
+            <el-button
+              v-if="paneState.task.value?.status === 'FAILED'"
+              size="small"
+              text
+              title="重新同步失败的任务"
+              :loading="resyncingTaskId === paneState.task.value?.taskId"
+              @click="handlePaneResync(paneState)"
+            >重新同步</el-button>
           </template>
         </TaskPaneGrid>
       </template>
@@ -708,6 +716,14 @@
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
+            <el-button
+              v-if="paneState.task.value?.status === 'FAILED'"
+              size="small"
+              text
+              title="重新同步失败的任务"
+              :loading="resyncingTaskId === paneState.task.value?.taskId"
+              @click="handlePaneResync(paneState)"
+            >重新同步</el-button>
           </template>
         </TaskPaneGrid>
       </template>
@@ -1065,6 +1081,13 @@
                         @click="handleScanCheckpoints(conv.latestTask)"
                       >
                         {{ scanningTaskId === conv.latestTask.taskId ? '扫描中...' : '扫描' }}
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="conv.latestTask.status === 'FAILED'"
+                        :disabled="resyncingTaskId === conv.latestTask.taskId"
+                        @click="handleResyncFromList(conv)"
+                      >
+                        {{ resyncingTaskId === conv.latestTask.taskId ? '同步中...' : '重新同步' }}
                       </el-dropdown-item>
                       <el-dropdown-item
                         v-if="conv.latestTask.status !== 'RUNNING'"
@@ -2051,6 +2074,9 @@ const rewindCheckpoints = ref<{ id: string; turnIndex: number; timestamp: string
 
 // Scan checkpoints state
 const scanningTaskId = ref('')
+
+// Resync state
+const resyncingTaskId = ref('')
 
 // Directory task pagination (separate from global task pagination)
 const directoryTasks = ref<ClaudeTask[]>([])
@@ -3985,6 +4011,125 @@ async function handlePaneReconnect(paneId: string, taskId: string) {
     ElMessage.error('重连失败')
   }
 }
+
+// ==================== Resync 任务重新同步 ====================
+
+/**
+ * 核心 resync 处理函数，从 TaskPane header 或侧栏列表共用。
+ */
+async function doResync(taskId: string, pane?: TaskPaneState) {
+  resyncingTaskId.value = taskId
+  try {
+    const result = await dirApi.resyncTask(taskId)
+
+    switch (result.action) {
+      case 'RECONNECTED': {
+        // 策略 A：CLI 活着，已重连 SSE
+        if (pane) {
+          if (pane.task.value) pane.task.value.status = 'RUNNING'
+          // 清除可重连的错误消息标记
+          const errorMsg = pane.chatState.messages.value.find(
+            (m) => m.reconnectable && (m.raw as Record<string, unknown>)?.taskId === taskId,
+          )
+          if (errorMsg) errorMsg.reconnectable = false
+          pane.chatState.messages.value.push({
+            id: `resync-reconnected-${Date.now()}`,
+            type: 'STATE_SYNC' as AipMessageType,
+            sender: 'system',
+            content: '已重新连接 Worker（CLI 仍存活）',
+            raw: { subtype: 'reconnected' },
+            timestamp: Date.now(),
+          })
+          pane.reconnectSse()
+          if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+        }
+        workerState.loadActiveTasks()
+        workerState.loadAwaitingReplyTasks()
+        ElMessage.success('已重新连接（CLI 存活）')
+        break
+      }
+      case 'MESSAGES_SYNCED': {
+        // 策略 B：CLI 已退出，从 Worker JSONL 补齐了消息
+        const imported = result.messageSync?.imported ?? 0
+        if (pane) {
+          if (pane.task.value) pane.task.value.status = 'COMPLETED'
+          await reloadPaneMessages(pane)
+          if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
+        }
+        workerState.loadActiveTasks()
+        workerState.loadAwaitingReplyTasks()
+        workerState.loadTasksPage(0, undefined, currentStateParam())
+        ElMessage.success(`已同步 ${imported} 条消息`)
+        break
+      }
+      case 'ALREADY_ALIGNED': {
+        if (pane && pane.task.value) pane.task.value.status = 'COMPLETED'
+        workerState.loadActiveTasks()
+        workerState.loadAwaitingReplyTasks()
+        workerState.loadTasksPage(0, undefined, currentStateParam())
+        ElMessage.info('消息已完全一致，任务已标记为完成')
+        break
+      }
+      case 'NO_SESSION_DATA':
+        ElMessage.warning('Worker 中没有该会话的记录')
+        break
+      case 'WORKER_UNREACHABLE':
+        ElMessage.error('Worker 不可达：' + (result.cliStatus?.detail ?? ''))
+        break
+      default:
+        ElMessage.warning('未知操作: ' + result.action)
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '重新同步失败'
+    ElMessage.error(msg)
+  } finally {
+    resyncingTaskId.value = ''
+  }
+}
+
+/** 从 TaskPane header-extra 按钮触发 */
+async function handlePaneResync(paneState: TaskPaneState) {
+  const taskId = paneState.task.value?.taskId
+  if (!taskId) return
+  await doResync(taskId, paneState)
+}
+
+/** 从侧栏会话列表 dropdown 触发 */
+async function handleResyncFromList(conv: ConversationGroup) {
+  const taskId = conv.latestTask.taskId
+  // 查找已打开的 pane
+  const pane = panes.value.find((p) => p.task.value?.sessionId === conv.sessionId)
+  await doResync(taskId, pane)
+}
+
+/**
+ * 策略 B 同步后重新加载 pane 中的消息。
+ * 从 Worker JSONL 读取完整对话历史并替换 ChatPanel 显示。
+ */
+async function reloadPaneMessages(pane: TaskPaneState) {
+  const task = pane.task.value
+  if (!task?.claudeSessionId || !task?.workerId) return
+  try {
+    const workerMessages = await dirApi.getWorkerSessionMessages(task.workerId, task.claudeSessionId)
+    if (!workerMessages || workerMessages.length === 0) return
+
+    // 转换为 ChatMessage 格式
+    const chatMessages = workerMessages.map((m, idx) => ({
+      id: `resync-msg-${idx}-${Date.now()}`,
+      type: 'TEXT_COMPLETE' as AipMessageType,
+      sender: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: m.content || '',
+      raw: { resyncImported: true },
+      timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+    }))
+    // 替换消息列表
+    pane.chatState.messages.value = chatMessages
+  } catch (e) {
+    console.warn('Failed to reload pane messages after resync:', e)
+  }
+}
+
+// ==================== End Resync ====================
 
 /** Handle @agent ask — send question to an Agent via A2A, show response in pane chat */
 async function handleAskAgent(paneId: string, agent: { agentId: string; name: string }, question: string) {
