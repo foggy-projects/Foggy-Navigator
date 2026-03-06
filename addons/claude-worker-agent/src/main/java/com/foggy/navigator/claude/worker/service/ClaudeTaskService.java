@@ -1016,10 +1016,21 @@ public class ClaudeTaskService {
      */
     @Transactional
     public void reconcilerFailTask(String taskId, String reason) {
+        reconcilerFailTask(taskId, reason, true);
+    }
+
+    /**
+     * Reconciler 调用：标记任务为失败。
+     *
+     * @param taskId 任务 ID
+     * @param reason 失败原因
+     * @param shouldAbortWorker 是否调用 Worker 的 abortTask API（仅在确认 CLI 已死时为 true）
+     */
+    public void reconcilerFailTask(String taskId, String reason, boolean shouldAbortWorker) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String status = entity.getStatus();
             if ("RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status)) {
-                failTimeout(entity, reason);
+                failTimeout(entity, reason, shouldAbortWorker);
             }
         });
     }
@@ -1088,6 +1099,63 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 重新同步已失败但 CLI 还在运行的任务。
+     *
+     * 使用场景：Reconciler 检测到 CLI 还活着但已标记为 FAILED，用户通过进程列表手动触发重新同步。
+     *
+     * 操作：
+     * 1. 验证任务状态为 FAILED
+     * 2. 查询 Worker 确认 CLI 还在运行（cli_alive=true）
+     * 3. 将数据库状态改为 RUNNING
+     * 4. 调用 streamRelay.reconnectTask() 复用消息对齐机制
+     * 5. 发布 STATE_SYNC 事件通知前端
+     *
+     * @param taskId 任务 ID
+     */
+    @Transactional
+    public void resyncTask(String taskId) {
+        ClaudeTaskEntity entity = getTaskEntity(taskId);
+
+        // 1. 检查：只有 FAILED 状态才能重新同步
+        if (!"FAILED".equals(entity.getStatus())) {
+            throw new IllegalStateException("Only FAILED tasks can be resynced, current status: " + entity.getStatus());
+        }
+
+        // 2. 检查：Worker 侧 CLI 必须还活着
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
+        Boolean cliAlive = false;
+        try {
+            Map<String, Object> status = workerService.createClient(worker)
+                    .getTaskStatus(taskId)
+                    .block(java.time.Duration.ofSeconds(5));
+            if (status != null) {
+                cliAlive = (Boolean) status.get("cli_alive");
+            }
+        } catch (Exception e) {
+            log.warn("Failed to query Worker status for resync task {}: {}", taskId, e.getMessage());
+        }
+
+        if (Boolean.FALSE.equals(cliAlive)) {
+            throw new IllegalStateException("CLI is already dead, cannot resync task: " + taskId);
+        }
+
+        // 3. 恢复任务状态
+        String prev = entity.getStatus();
+        entity.setStatus("RUNNING");
+        entity.setErrorMessage(null);
+        taskRepository.save(entity);
+        log.info("Task resynced: taskId={}, workerId={}", taskId, entity.getWorkerId());
+        publishStatusChange(entity, prev);
+
+        // 4. 触发重连拉取新事件（复用现有消息对齐机制）
+        streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
+
+        // 5. 发布恢复通知到会话
+        publishMessage(entity.getSessionId(), MessageType.STATE_SYNC,
+                Map.of("content", "Task resynced", "subtype", "resynced", "taskId", taskId));
+    }
+
+    /**
      * 检查 Worker 上的 CLI 进程是否仍然存活。
      * 通过 Worker API 列出进程，匹配 foggy_task_id。
      * 异常时返回 false（保守策略：无法确认存活则允许标记失败）。
@@ -1117,11 +1185,23 @@ public class ClaudeTaskService {
     }
 
     private void failTimeout(ClaudeTaskEntity entity, String reason) {
+        failTimeout(entity, reason, true);
+    }
+
+    /**
+     * 标记任务为失败。
+     *
+     * @param entity 任务实体
+     * @param reason 失败原因
+     * @param shouldAbortWorker 是否调用 Worker 的 abortTask API（仅在确认 CLI 已死时为 true）
+     */
+    private void failTimeout(ClaudeTaskEntity entity, String reason, boolean shouldAbortWorker) {
         String prev = entity.getStatus();
         entity.setStatus("FAILED");
         entity.setErrorMessage(reason);
         taskRepository.save(entity);
-        log.warn("Task timed out: taskId={}, createdAt={}, reason={}", entity.getTaskId(), entity.getCreatedAt(), reason);
+        log.warn("Task timed out: taskId={}, createdAt={}, reason={}, shouldAbortWorker={}",
+                entity.getTaskId(), entity.getCreatedAt(), reason, shouldAbortWorker);
         publishStatusChange(entity, prev);
         conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
 
@@ -1130,14 +1210,18 @@ public class ClaudeTaskService {
         // 推送错误消息到会话，让用户在聊天中看到失败原因
         publishSessionError(entity.getSessionId(), taskId, reason, false);
 
-        // 通知 Worker 中止任务（使用 foggy_task_id，Worker 端已支持按此字段查找）
-        try {
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            client.abortTask(taskId).block(Duration.ofSeconds(3));
-            log.info("Worker abort sent on timeout: taskId={}", taskId);
-        } catch (Exception e) {
-            log.warn("Failed to abort worker task on timeout: taskId={}, error={}", taskId, e.getMessage());
+        // 仅在确认 CLI 已死时通知 Worker 中止任务
+        if (shouldAbortWorker) {
+            try {
+                ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
+                ClaudeWorkerClient client = workerService.createClient(worker);
+                client.abortTask(taskId).block(Duration.ofSeconds(3));
+                log.info("Worker abort sent on timeout: taskId={}", taskId);
+            } catch (Exception e) {
+                log.warn("Failed to abort worker task on timeout: taskId={}, error={}", taskId, e.getMessage());
+            }
+        } else {
+            log.info("CLI still alive, skipping Worker abort for task={}: user can decide via process list", taskId);
         }
 
         // 清理本地 SSE 流订阅

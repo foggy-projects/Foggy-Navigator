@@ -99,6 +99,28 @@ public class ClaudeTaskController {
         return RX.ok(Map.of("taskId", taskId, "status", "RECONNECTED"));
     }
 
+    /**
+     * 重新同步已失败但 CLI 还在运行的任务。
+     *
+     * 使用场景：Reconciler 检测到 CLI 还活着但已标记为 FAILED，用户通过进程列表手动触发重新同步。
+     *
+     * 与 /reconnect 的区别：
+     * - /reconnect：无条件重连（兼容旧版本）
+     * - /resync：先检查 Worker 侧 CLI 是否还活着，确保不会同步已死亡的进程
+     */
+    @PostMapping("/{taskId}/resync")
+    public RX<Map<String, Object>> resyncTask(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        var task = taskService.getTaskEntity(taskId);
+        if (!task.getUserId().equals(userId)) {
+            throw RX.throwB("Task not found");
+        }
+
+        taskService.resyncTask(taskId);
+
+        return RX.ok(Map.of("taskId", taskId, "status", "RESYNCED"));
+    }
+
     @PostMapping("/{taskId}/abort")
     public RX<Map<String, Object>> abortTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
