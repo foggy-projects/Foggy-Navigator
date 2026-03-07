@@ -3251,46 +3251,29 @@ function handleAddCommand(command: string) {
   }
 }
 
+const defaultAddForm = () => ({ name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22 as number, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '', codeServerFolderPrefix: '' })
+
 async function handleAdd() {
-  if (addWorkerType.value === 'CODEX') {
-    // Codex Worker: only needs name + baseUrl
-    if (!addForm.value.name || !addForm.value.baseUrl) {
-      ElMessage.warning('请填写名称和地址')
-      return
-    }
-    saving.value = true
-    try {
-      await workerState.registerCodexWorker({
-        name: addForm.value.name,
-        baseUrl: addForm.value.baseUrl,
-        authToken: addForm.value.authToken || undefined,
-      })
-      showAddDialog.value = false
-      addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '', codeServerFolderPrefix: '' }
-      addWorkerType.value = 'CLAUDE'
-      ElMessage.success('Codex Worker 添加成功')
-    } catch {
-      ElMessage.error('添加失败')
-    } finally {
-      saving.value = false
-    }
-  } else {
-    // Claude Worker: needs name + baseUrl + authToken
-    if (!addForm.value.name || !addForm.value.baseUrl || !addForm.value.authToken) {
-      ElMessage.warning('请填写完整信息')
-      return
-    }
-    saving.value = true
-    try {
+  const isCodex = addWorkerType.value === 'CODEX'
+  if (!addForm.value.name || !addForm.value.baseUrl || (!isCodex && !addForm.value.authToken)) {
+    ElMessage.warning('请填写完整信息')
+    return
+  }
+  saving.value = true
+  try {
+    if (isCodex) {
+      await workerState.registerCodexWorker({ name: addForm.value.name, baseUrl: addForm.value.baseUrl, authToken: addForm.value.authToken || undefined })
+    } else {
       await workerState.registerWorker(addForm.value)
-      showAddDialog.value = false
-      addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '', codeServerFolderPrefix: '' }
-      ElMessage.success('Worker 添加成功')
-    } catch {
-      ElMessage.error('添加失败')
-    } finally {
-      saving.value = false
     }
+    showAddDialog.value = false
+    addForm.value = defaultAddForm()
+    addWorkerType.value = 'CLAUDE'
+    ElMessage.success('Worker 添加成功')
+  } catch {
+    ElMessage.error('添加失败')
+  } finally {
+    saving.value = false
   }
 }
 

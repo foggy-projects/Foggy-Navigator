@@ -19,31 +19,10 @@ export function useClaudeWorker() {
   const onlineWorkers = computed(() => workers.value.filter((w) => w.status === 'ONLINE'))
 
   /** 合并 Claude + Codex Workers 为统一列表 */
-  const allWorkers = computed<UnifiedWorker[]>(() => {
-    const claude: UnifiedWorker[] = workers.value.map(w => ({
-      workerId: w.workerId,
-      name: w.name,
-      baseUrl: w.baseUrl,
-      status: w.status,
-      hostname: w.hostname,
-      workerVersion: w.workerVersion,
-      lastHeartbeat: w.lastHeartbeat,
-      createdAt: w.createdAt,
-      workerType: 'CLAUDE' as const,
-    }))
-    const codex: UnifiedWorker[] = codexWorkers.value.map(w => ({
-      workerId: w.workerId,
-      name: w.name,
-      baseUrl: w.baseUrl,
-      status: w.status,
-      hostname: w.hostname,
-      workerVersion: w.workerVersion,
-      lastHeartbeat: w.lastHeartbeat,
-      createdAt: w.createdAt,
-      workerType: 'CODEX' as const,
-    }))
-    return [...claude, ...codex]
-  })
+  const allWorkers = computed<UnifiedWorker[]>(() => [
+    ...workers.value.map(w => ({ ...w, workerType: 'CLAUDE' as const })),
+    ...codexWorkers.value.map(w => ({ ...w, workerType: 'CODEX' as const })),
+  ])
 
   async function loadWorkers() {
     loading.value = true

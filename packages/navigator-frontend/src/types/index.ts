@@ -217,17 +217,7 @@ export interface CodexTask {
 export type WorkerType = 'CLAUDE' | 'CODEX'
 
 /** 统一 Worker 项（合并展示用） */
-export interface UnifiedWorker {
-  workerId: string
-  name: string
-  baseUrl: string
-  status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN'
-  hostname?: string
-  workerVersion?: string
-  lastHeartbeat?: string
-  createdAt: string
-  workerType: WorkerType
-}
+export type UnifiedWorker = CodexWorker & { workerType: WorkerType }
 
 /** 会话级配置（置顶、标题、Auth 绑定） */
 export interface ConversationConfig {
