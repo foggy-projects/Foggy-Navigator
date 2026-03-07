@@ -4805,20 +4805,11 @@ function getInteractionState(sessionId?: string): string | undefined {
   return workerState.conversationConfigs.value.get(sessionId)?.interactionState
 }
 
-/**
- * Derive the effective interaction state for a pane, prioritizing task.status
- * over the persisted interactionState (which may lag behind session SSE events).
- *
- * When session SSE delivers CONFIRMATION_REQUEST it immediately sets
- * task.status = 'AWAITING_PERMISSION', but the notification SSE carrying the
- * updated interactionState may arrive later.  Without this derivation the pane
- * header would still show "处理中" while the abort button has already vanished.
- */
-function paneInteractionState(paneState: { task: { value: { status?: string; sessionId?: string } | null } }): string | undefined {
+/** Derive interaction state from task.status (real-time) with interactionState fallback (may lag). */
+function paneInteractionState(paneState: TaskPaneState): string | undefined {
   const status = paneState.task.value?.status
   if (status === 'RUNNING') return 'PROCESSING'
   if (status === 'AWAITING_PERMISSION') return 'AWAITING_REPLY'
-  // For terminal / other states, fall back to the persisted interactionState
   return getInteractionState(paneState.task.value?.sessionId)
 }
 
