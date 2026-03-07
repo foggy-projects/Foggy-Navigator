@@ -4403,8 +4403,8 @@ async function viewTask(task: ClaudeTask) {
     // When switching back to a previously unfocused pane, do a full reload
     // to catch up on messages and task status changes that occurred while
     // the pane's SSE was suspended (e.g. task completed in the background).
-    if (!wasFocused && existing.task.value) {
-      await existing.connect(existing.task.value.sessionId)
+    if (!wasFocused) {
+      await existing.connect(task.sessionId)
       existing.syncTaskStatus()
     }
     return
