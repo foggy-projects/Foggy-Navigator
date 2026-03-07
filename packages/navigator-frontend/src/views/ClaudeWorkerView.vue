@@ -280,11 +280,13 @@
           <el-form :model="taskForm" label-position="top" size="default">
             <el-form-item label="Prompt">
               <SlashCommandInput
+                ref="dirFullInputRef"
                 v-model="taskForm.prompt"
                 :rows="3"
                 auto-grow
-                placeholder="输入任务描述... (可粘贴截图或拖拽图片)"
+                placeholder="输入任务描述... (可粘贴截图或拖拽图片, ./ 搜索文件)"
                 :skills="directorySkills"
+                :directory-id="selectedDirectoryId ?? undefined"
                 @submit="handleCreateTask"
                 @command="handleSlashCommand"
                 @history-prev="handleTaskHistoryPrev"
@@ -316,6 +318,7 @@
                 运行任务
               </el-button>
               <el-button text @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
+              <el-button text @click="insertDotSlash(dirFullInputRef)" title="搜索文件路径 (./)">&#128193;</el-button>
               <el-select v-model="taskForm.permissionMode" size="small" style="width: 150px; margin-left: 8px">
                 <el-option value="bypassPermissions" label="跳过权限" />
                 <el-option value="acceptEdits" label="自动接受编辑" />
@@ -346,19 +349,22 @@
         <div v-else class="new-task-mini">
           <div class="mini-input-row">
             <SlashCommandInput
+              ref="dirMiniInputRef"
               v-model="taskForm.prompt"
               :rows="1"
               auto-grow
               :max-rows="4"
               size="small"
-              placeholder="新建任务... (Shift+Enter 换行，可粘贴截图)"
+              placeholder="新建任务... (Shift+Enter 换行, ./ 搜索文件)"
               :skills="directorySkills"
+              :directory-id="selectedDirectoryId ?? undefined"
               @submit="handleCreateTask"
               @command="handleSlashCommand"
               @history-prev="handleTaskHistoryPrev"
               @history-next="handleTaskHistoryNext"
             />
             <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
+            <el-button text size="small" @click="insertDotSlash(dirMiniInputRef)" title="搜索文件路径 (./)">&#128193;</el-button>
             <el-button
               size="small"
               :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
@@ -1822,7 +1828,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch } from 'vue'
+import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Back } from '@element-plus/icons-vue'
@@ -2467,6 +2473,27 @@ interface ImageAttachment {
 }
 const attachedImages = ref<ImageAttachment[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// Refs for SlashCommandInput instances (used by insertDotSlash)
+const dirFullInputRef = ref<InstanceType<typeof SlashCommandInput> | null>(null)
+const dirMiniInputRef = ref<InstanceType<typeof SlashCommandInput> | null>(null)
+
+/** Insert "./" at cursor position to trigger file search */
+function insertDotSlash(inputCompRef: Ref<InstanceType<typeof SlashCommandInput> | null> | InstanceType<typeof SlashCommandInput> | null) {
+  const comp = inputCompRef && 'value' in inputCompRef ? inputCompRef.value : inputCompRef
+  if (!comp) return
+  const textarea = comp.getTextareaEl()
+  if (!textarea) return
+  const start = textarea.selectionStart ?? textarea.value.length
+  const text = taskForm.prompt
+  const newText = text.slice(0, start) + './' + text.slice(start)
+  taskForm.prompt = newText
+  nextTick(() => {
+    textarea.focus()
+    const newCursor = start + 2
+    textarea.setSelectionRange(newCursor, newCursor)
+  })
+}
 const MAX_IMAGES = 10
 const MAX_SINGLE_SIZE = 10 * 1024 * 1024 // 10MB per image before compression
 

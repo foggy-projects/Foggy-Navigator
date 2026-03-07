@@ -118,12 +118,45 @@
         </template>
       </div>
     </Teleport>
+
+    <!-- File path search palette — teleported to body (./ trigger) -->
+    <Teleport to="body">
+      <div
+        v-if="showFilePanel"
+        class="slash-panel file-panel"
+        ref="filePanelRef"
+        :style="panelStyle"
+      >
+        <div class="slash-group">
+          <div class="slash-group-title">
+            <span>文件</span>
+            <span v-if="fileLoading" class="file-loading">搜索中...</span>
+          </div>
+          <div
+            v-for="(f, i) in fileResults"
+            :key="f.relative_path"
+            :class="['slash-item', { active: i === fileActiveIndex }]"
+            @mousedown.prevent="selectFile(i)"
+            @mouseenter="fileActiveIndex = i"
+          >
+            <span class="file-icon">📄</span>
+            <span class="slash-name">{{ f.name }}</span>
+            <span class="slash-desc">{{ f.relative_path }}</span>
+          </div>
+        </div>
+        <div v-if="!fileLoading && fileResults.length === 0 && fileQuery" class="slash-empty">
+          无匹配文件
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { SkillInfo } from '@/types'
+import { searchFiles as searchFilesApi } from '@/api/fileBrowser'
+import type { FileSearchResult } from '@/api/fileBrowser'
 
 interface CommandChild {
   name: string
@@ -209,6 +242,8 @@ const props = withDefaults(
     agents?: AgentItem[]
     autoGrow?: boolean
     maxRows?: number
+    /** When set, enables ./ file path auto-complete for this directory */
+    directoryId?: string
   }>(),
   {
     rows: 3,
@@ -219,6 +254,7 @@ const props = withDefaults(
     agents: () => [],
     autoGrow: false,
     maxRows: 6,
+    directoryId: undefined,
   },
 )
 
@@ -236,6 +272,15 @@ const inputRef = ref()
 const wrapRef = ref<HTMLElement>()
 const panelRef = ref<HTMLElement>()
 const atPanelRef = ref<HTMLElement>()
+const filePanelRef = ref<HTMLElement>()
+
+/** Get the underlying textarea / input DOM element */
+function getTextareaEl(): HTMLTextAreaElement | HTMLInputElement | null {
+  const el = inputRef.value?.$el || inputRef.value
+  return el?.querySelector?.('textarea') || el?.querySelector?.('input') || null
+}
+
+defineExpose({ getTextareaEl })
 
 // --- @mention state ---
 const atPhase = ref(false)
@@ -404,6 +449,14 @@ function handleInput(val: string) {
     }
   }
   emit('update:modelValue', val)
+
+  // File path trigger detection (mid-text, cursor-based)
+  if (props.directoryId) {
+    nextTick(() => {
+      const textarea = getTextareaEl()
+      if (textarea) detectFileTrigger(val, textarea.selectionStart)
+    })
+  }
 }
 
 function handleFocus() {
@@ -412,6 +465,133 @@ function handleFocus() {
     slashQuery.value = props.modelValue.slice(1)
     openPanel()
   }
+}
+
+// --- file path search state (./ trigger) ---
+const filePhase = ref(false)
+const fileQuery = ref('')
+const fileTriggerPos = ref(0) // position of '.' in './' within the text
+const fileCursorPos = ref(0) // cursor position when trigger was detected
+const fileResults = ref<FileSearchResult[]>([])
+const fileActiveIndex = ref(0)
+const fileLoading = ref(false)
+const showFilePanel = computed(() => filePhase.value && !!props.directoryId)
+
+let fileSearchTimer: ReturnType<typeof setTimeout> | null = null
+
+function closeFilePanel() {
+  filePhase.value = false
+  fileQuery.value = ''
+  fileTriggerPos.value = 0
+  fileCursorPos.value = 0
+  fileResults.value = []
+  fileActiveIndex.value = 0
+  fileLoading.value = false
+  if (fileSearchTimer) {
+    clearTimeout(fileSearchTimer)
+    fileSearchTimer = null
+  }
+}
+
+/**
+ * Detect ./ trigger at any position in text (cursor-position-based).
+ * The ./ must be preceded by: start-of-text, whitespace, or opening delimiter.
+ * The text between ./ and cursor must not contain whitespace.
+ */
+function detectFileTrigger(text: string, cursor: number) {
+  if (!props.directoryId) {
+    if (filePhase.value) closeFilePanel()
+    return
+  }
+  // Scan backwards from cursor to find './'
+  const before = text.slice(0, cursor)
+  // Find the last occurrence of './' that forms a valid trigger
+  let triggerIdx = -1
+  let searchFrom = before.length
+  while (searchFrom > 0) {
+    const idx = before.lastIndexOf('./', searchFrom - 1)
+    if (idx === -1) break
+    searchFrom = idx // continue searching further left next iteration
+    // Check character before './' (must be word boundary)
+    if (idx > 0) {
+      const charBefore = before[idx - 1]
+      if (!/[\s"'`(\[{,;:]/.test(charBefore)) continue
+    }
+    // Check no whitespace between './' and cursor
+    const queryPart = before.slice(idx + 2)
+    if (/\s/.test(queryPart)) continue
+    triggerIdx = idx
+    break
+  }
+
+  if (triggerIdx >= 0) {
+    const query = before.slice(triggerIdx + 2)
+    fileQuery.value = query
+    fileTriggerPos.value = triggerIdx
+    fileCursorPos.value = cursor
+    if (!filePhase.value) {
+      filePhase.value = true
+      fileActiveIndex.value = 0
+      nextTick(updatePanelPosition)
+    }
+    // Close other panels
+    closePanel()
+    closeAtPanel()
+    // Debounced search
+    doFileSearch(query)
+  } else {
+    if (filePhase.value) closeFilePanel()
+  }
+}
+
+function doFileSearch(query: string) {
+  if (fileSearchTimer) clearTimeout(fileSearchTimer)
+  if (!props.directoryId) return
+  fileLoading.value = true
+  fileSearchTimer = setTimeout(async () => {
+    try {
+      const resp = await searchFilesApi(props.directoryId!, query || '.', 20)
+      // Only update if we're still in file phase and query matches
+      if (filePhase.value && fileQuery.value === query) {
+        fileResults.value = resp.results
+        fileActiveIndex.value = 0
+      }
+    } catch {
+      // Silently ignore search errors (e.g., network issues)
+    } finally {
+      if (filePhase.value) fileLoading.value = false
+    }
+  }, query ? 300 : 100) // shorter delay for initial './' with no query
+}
+
+function selectFile(idx: number) {
+  const file = fileResults.value[idx]
+  if (!file) return
+  const text = props.modelValue
+  const newText =
+    text.slice(0, fileTriggerPos.value) +
+    file.relative_path +
+    text.slice(fileCursorPos.value)
+  const newCursor = fileTriggerPos.value + file.relative_path.length
+  emit('update:modelValue', newText)
+  closeFilePanel()
+  // Restore cursor position after the inserted path
+  nextTick(() => {
+    const textarea = getTextareaEl()
+    if (textarea) {
+      textarea.focus()
+      textarea.setSelectionRange(newCursor, newCursor)
+    }
+  })
+}
+
+function scrollFileActiveIntoView() {
+  nextTick(() => {
+    const panel = filePanelRef.value
+    if (!panel) return
+    const active = panel.querySelector('.slash-item.active') as HTMLElement | null
+    active?.scrollIntoView({ block: 'nearest' })
+  })
 }
 
 function closePanel() {
@@ -424,6 +604,34 @@ function closePanel() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // Handle file search panel keyboard navigation
+  if (showFilePanel.value) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeFilePanel()
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      fileActiveIndex.value = Math.min(fileActiveIndex.value + 1, fileResults.value.length - 1)
+      scrollFileActiveIntoView()
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      fileActiveIndex.value = Math.max(fileActiveIndex.value - 1, 0)
+      scrollFileActiveIntoView()
+      return
+    }
+    if (e.key === 'Tab' || e.key === 'Enter') {
+      if (fileResults.value.length > 0) {
+        e.preventDefault()
+        selectFile(fileActiveIndex.value)
+        return
+      }
+    }
+  }
+
   // Handle @mention panel keyboard navigation
   if (showAtPanel.value) {
     if (e.key === 'Escape') {
@@ -582,6 +790,12 @@ function scrollActiveIntoView() {
 // Close panel when clicking outside
 function handleClickOutside(e: MouseEvent) {
   const inWrap = wrapRef.value?.contains(e.target as Node)
+  if (showFilePanel.value) {
+    const inFilePanel = filePanelRef.value?.contains(e.target as Node)
+    if (!inWrap && !inFilePanel) {
+      closeFilePanel()
+    }
+  }
   if (showAtPanel.value) {
     const inAtPanel = atPanelRef.value?.contains(e.target as Node)
     if (!inWrap && !inAtPanel) {
@@ -673,6 +887,29 @@ onUnmounted(() => document.removeEventListener('mousedown', handleClickOutside))
   text-align: center;
   font-size: 12px;
   color: #c0c4cc;
+}
+
+/* File search panel specific styles */
+.file-panel .file-icon {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.file-panel .slash-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-loading {
+  font-size: 11px;
+  color: #909399;
+  margin-left: 8px;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
 }
 </style>
 
