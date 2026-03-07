@@ -49,6 +49,14 @@ public class SessionEntity {
     @Column(columnDefinition = "TEXT")
     private String participatingAgentIds;
 
+    /** AI 生成的会话摘要，用于归档后检索 */
+    @Column(columnDefinition = "TEXT")
+    private String summary;
+
+    /** 摘要生成时间 */
+    @Column
+    private LocalDateTime summaryGeneratedAt;
+
     @Column(nullable = false)
     private LocalDateTime updatedAt;
 
