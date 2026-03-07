@@ -145,7 +145,7 @@ interface SkillItem {
   scope: string
 }
 
-/** Claude Code CLI bundled skills — passed as prompt text with `/` prefix. */
+/** Claude Code CLI bundled skills — selecting inserts "name: " into the input (same as directory skills). */
 interface CliSkillItem {
   name: string
   description: string
@@ -178,7 +178,7 @@ const BUILT_IN: BuiltInCommand[] = [
   },
 ]
 
-/** Claude Code CLI bundled skills — selecting inserts `/name ` into the input. */
+/** Claude Code CLI bundled skills — always available regardless of directory. */
 const CLI_SKILLS: CliSkillItem[] = [
   {
     name: 'simplify',
@@ -539,19 +539,15 @@ function selectItem(idx: number) {
     activeIndex.value = 0
     emit('update:modelValue', '/' + cmd.name + ' ')
     nextTick(updatePanelPosition)
-  } else if (resolved.type === 'cli') {
-    const cli = filteredCliSkills.value[resolved.index]
-    if (!cli) return
-    // CLI bundled skill — same "name: " format as directory skills;
-    // Claude Code invokes skills via the Skill tool, not via "/" prefix.
-    emit('update:modelValue', cli.name + ': ')
-    closePanel()
-    focusInput()
   } else {
-    const skill = filteredSkills.value[resolved.index]
-    if (!skill) return
-    // Directory skill — "name: " format; Claude Code auto-recognizes skills
-    emit('update:modelValue', skill.name + ': ')
+    // CLI bundled skill or directory skill — both use "name: " format;
+    // Claude Code invokes skills via the Skill tool, not via "/" prefix.
+    const item =
+      resolved.type === 'cli'
+        ? filteredCliSkills.value[resolved.index]
+        : filteredSkills.value[resolved.index]
+    if (!item) return
+    emit('update:modelValue', item.name + ': ')
     closePanel()
     focusInput()
   }

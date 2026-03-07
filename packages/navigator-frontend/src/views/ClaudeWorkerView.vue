@@ -4398,7 +4398,15 @@ async function viewTask(task: ClaudeTask) {
   // Per-conversation: match by sessionId (same conversation = same pane)
   const existing = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
   if (existing) {
+    const wasFocused = focusedPaneId.value === existing.paneId
     focusedPaneId.value = existing.paneId
+    // When switching back to a previously unfocused pane, do a full reload
+    // to catch up on messages and task status changes that occurred while
+    // the pane's SSE was suspended (e.g. task completed in the background).
+    if (!wasFocused && existing.task.value) {
+      await existing.connect(existing.task.value.sessionId)
+      existing.syncTaskStatus()
+    }
     return
   }
 
@@ -4410,6 +4418,8 @@ async function viewTask(task: ClaudeTask) {
   const pane = createPane(task)
   focusedPaneId.value = pane.paneId
   await pane.connect(task.sessionId)
+  // Sync task metadata — the `task` param may be stale from the cached conversation list
+  pane.syncTaskStatus()
 
   // For synced tasks: if Navigator session was empty, load JSONL history from Worker
   if (pane.chatState.messages.value.length === 0 && task.claudeSessionId && task.workerId) {

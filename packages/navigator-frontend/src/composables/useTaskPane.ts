@@ -70,11 +70,10 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     if (['COMPLETED', 'FAILED', 'ABORTED'].includes(task.value.status)) return
     try {
       const fresh = await workerApi.getTask(task.value.taskId)
-      if (fresh.status !== task.value.status) {
-        Object.assign(task.value, fresh)
-        if (['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
-          options?.onTaskFinished?.(paneId)
-        }
+      const prevStatus = task.value.status
+      Object.assign(task.value, fresh)
+      if (prevStatus !== fresh.status && ['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
+        options?.onTaskFinished?.(paneId)
       }
     } catch {
       /* task deleted or inaccessible — ignore */
