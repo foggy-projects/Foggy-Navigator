@@ -2,14 +2,13 @@ package com.foggy.navigator.codex.worker.spi;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
+import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
-import com.foggy.navigator.codex.worker.model.dto.CodexWorkerDTO;
-import com.foggy.navigator.codex.worker.model.entity.CodexWorkerEntity;
 import com.foggy.navigator.codex.worker.model.event.WorkerEvent;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
-import com.foggy.navigator.codex.worker.service.CodexWorkerService;
 import com.foggy.navigator.codex.worker.service.CodexStreamRelay;
-import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.codex.CodexWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,28 +19,20 @@ import java.util.*;
 
 /**
  * CodexWorkerFacade SPI 实现
+ * <p>
+ * Codex 配置（baseUrl/authToken/model）从 ClaudeWorkerEntity.codexConfig 获取，
+ * 通过 ClaudeWorkerFacade.getCodexConfig(workerId) 解密后使用。
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
 
-    private final CodexWorkerService workerService;
+    private final ClaudeWorkerFacade claudeWorkerFacade;
+    private final CodexWorkerClientFactory clientFactory;
     private final CodexTaskService taskService;
     private final CodexStreamRelay streamRelay;
     private final ObjectMapper objectMapper;
-
-    @Override
-    public List<Map<String, Object>> listWorkers(String userId) {
-        return workerService.listWorkers(userId).stream()
-                .map(this::workerToMap)
-                .toList();
-    }
-
-    @Override
-    public Map<String, Object> getWorker(String userId, String workerId) {
-        return workerToMap(workerService.getWorker(userId, workerId));
-    }
 
     @Override
     public Map<String, Object> createTask(String userId, Map<String, Object> params) {
@@ -75,21 +66,17 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
     public Map<String, Object> syncQuery(String userId, String workerId, String prompt,
                                           String cwd, String codexThreadId, int maxTurns,
                                           String model) {
-        CodexWorkerEntity worker = workerService.getWorkerEntity(workerId);
-        if (!worker.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Codex Worker not found: " + workerId);
-        }
-        return doSyncQuery(worker, prompt, cwd, codexThreadId, model, maxTurns, null);
+        claudeWorkerFacade.validateWorkerOwnership(userId, workerId);
+        CodexConfig codexConfig = getRequiredCodexConfig(workerId);
+        return doSyncQuery(workerId, codexConfig, prompt, cwd, codexThreadId, model, maxTurns, null);
     }
 
     @Override
     public Map<String, Object> syncQueryTracked(String userId, String workerId, String prompt,
                                                  String cwd, String codexThreadId, int maxTurns,
                                                  String model, String sessionId) {
-        CodexWorkerEntity worker = workerService.getWorkerEntity(workerId);
-        if (!worker.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Codex Worker not found: " + workerId);
-        }
+        claudeWorkerFacade.validateWorkerOwnership(userId, workerId);
+        CodexConfig codexConfig = getRequiredCodexConfig(workerId);
 
         // 创建 codex_tasks 记录
         String taskId = taskService.createTrackedSyncTask(
@@ -97,7 +84,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
 
         Map<String, Object> result;
         try {
-            result = doSyncQuery(worker, prompt, cwd, codexThreadId, model, maxTurns, null);
+            result = doSyncQuery(workerId, codexConfig, prompt, cwd, codexThreadId, model, maxTurns, null);
 
             String error = (String) result.get("error");
             String newCodexThreadId = (String) result.get("codexThreadId");
@@ -124,18 +111,23 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
     /**
      * 内部 syncQuery 实现
      */
-    private Map<String, Object> doSyncQuery(CodexWorkerEntity worker, String prompt, String cwd,
+    private Map<String, Object> doSyncQuery(String workerId, CodexConfig codexConfig,
+                                             String prompt, String cwd,
                                              String codexThreadId, String model, int maxTurns,
                                              String apiKey) {
         Map<String, Object> result = new LinkedHashMap<>();
         long startTime = System.currentTimeMillis();
 
         try {
-            CodexWorkerClient client = workerService.createClient(worker);
+            CodexWorkerClient client = clientFactory.getOrCreate(
+                    workerId + ":codex", codexConfig.getBaseUrl(), codexConfig.getAuthToken());
             long timeoutSeconds = Math.max(60, maxTurns * 30L);
 
+            // 优先使用入参 model，其次使用 codexConfig 中配置的默认 model
+            String effectiveModel = model != null ? model : codexConfig.getModel();
+
             List<WorkerEvent> events = client.streamQuery(
-                            prompt, cwd, codexThreadId, model, maxTurns, apiKey)
+                            prompt, cwd, codexThreadId, effectiveModel, maxTurns, apiKey)
                     .mapNotNull(sse -> {
                         String data = sse.data();
                         if (data == null || data.isEmpty()) return null;
@@ -181,10 +173,10 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             result.put("codexThreadId", newSessionId);
 
             log.info("doSyncQuery completed: workerId={}, events={}, hasResult={}, hasError={}",
-                    worker.getWorkerId(), events.size(), resultText != null, result.containsKey("error"));
+                    workerId, events.size(), resultText != null, result.containsKey("error"));
 
         } catch (Exception e) {
-            log.error("syncQuery failed: workerId={}, error={}", worker.getWorkerId(), e.getMessage(), e);
+            log.error("syncQuery failed: workerId={}, error={}", workerId, e.getMessage(), e);
             result.put("error", e.getMessage());
             result.put("durationMs", System.currentTimeMillis() - startTime);
         }
@@ -192,17 +184,15 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         return result;
     }
 
-    private Map<String, Object> workerToMap(CodexWorkerDTO dto) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        map.put("workerId", dto.getWorkerId());
-        map.put("name", dto.getName());
-        map.put("baseUrl", dto.getBaseUrl());
-        map.put("status", dto.getStatus());
-        map.put("hostname", dto.getHostname());
-        map.put("workerVersion", dto.getWorkerVersion());
-        map.put("lastHeartbeat", dto.getLastHeartbeat());
-        map.put("createdAt", dto.getCreatedAt());
-        return map;
+    /**
+     * 获取 Codex 配置（必须存在）
+     */
+    CodexConfig getRequiredCodexConfig(String workerId) {
+        CodexConfig config = claudeWorkerFacade.getCodexConfig(workerId);
+        if (config == null || config.getBaseUrl() == null || config.getBaseUrl().isBlank()) {
+            throw new IllegalArgumentException("Codex not configured for worker: " + workerId);
+        }
+        return config;
     }
 
     private Map<String, Object> taskToMap(CodexTaskDTO dto) {

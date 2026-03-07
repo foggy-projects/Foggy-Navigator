@@ -1,23 +1,15 @@
 package com.foggy.navigator.spi.codex;
 
-import java.util.List;
 import java.util.Map;
 
 /**
  * Codex Worker 门面接口
  * 供其他模块通过 SPI 调用 Codex Worker 功能
+ * <p>
+ * Codex 配置（baseUrl/authToken/model）存储在 ClaudeWorkerEntity.codexConfig JSON 列中，
+ * 通过 ClaudeWorkerFacade.getCodexConfig(workerId) 获取解密后的配置。
  */
 public interface CodexWorkerFacade {
-
-    /**
-     * 列出用户的所有 Codex Worker
-     */
-    List<Map<String, Object>> listWorkers(String userId);
-
-    /**
-     * 获取 Codex Worker 详情
-     */
-    Map<String, Object> getWorker(String userId, String workerId);
 
     /**
      * 创建任务

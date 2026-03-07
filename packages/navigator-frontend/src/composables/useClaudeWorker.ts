@@ -1,10 +1,8 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
-import * as codexApi from '@/api/codexWorker'
-import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig, CodexWorker, UnifiedWorker } from '@/types'
+import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
 
 const workers = ref<ClaudeWorker[]>([])
-const codexWorkers = ref<CodexWorker[]>([])
 const tasks = ref<ClaudeTask[]>([])
 const directories = ref<WorkingDirectory[]>([])
 const loading = ref(false)
@@ -18,21 +16,10 @@ const awaitingReplyTasks = ref<ClaudeTask[]>([])
 export function useClaudeWorker() {
   const onlineWorkers = computed(() => workers.value.filter((w) => w.status === 'ONLINE'))
 
-  /** 合并 Claude + Codex Workers 为统一列表 */
-  const allWorkers = computed<UnifiedWorker[]>(() => [
-    ...workers.value.map(w => ({ ...w, workerType: 'CLAUDE' as const })),
-    ...codexWorkers.value.map(w => ({ ...w, workerType: 'CODEX' as const })),
-  ])
-
   async function loadWorkers() {
     loading.value = true
     try {
-      const [claudeList, codexList] = await Promise.all([
-        api.listWorkers(),
-        codexApi.listCodexWorkers().catch(() => [] as CodexWorker[]),
-      ])
-      workers.value = claudeList
-      codexWorkers.value = codexList
+      workers.value = await api.listWorkers()
     } finally {
       loading.value = false
     }
@@ -64,6 +51,7 @@ export function useClaudeWorker() {
     sshUsername?: string
     sshPort?: number
     sshPassword?: string
+    codexConfig?: { baseUrl?: string; authToken?: string; model?: string }
   }) {
     const worker = await api.registerWorker(form)
     workers.value.push(worker)
@@ -72,7 +60,7 @@ export function useClaudeWorker() {
 
   async function updateWorker(
     workerId: string,
-    form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string },
+    form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string; codexConfig?: { baseUrl?: string; authToken?: string; model?: string } },
   ) {
     const updated = await api.updateWorker(workerId, form)
     const idx = workers.value.findIndex((w) => w.workerId === workerId)
@@ -179,33 +167,6 @@ export function useClaudeWorker() {
   async function syncSessions(workerId: string) {
     const result = await api.syncWorkerSessions(workerId)
     return result
-  }
-
-  // ===== Codex Worker methods =====
-
-  async function registerCodexWorker(form: { name: string; baseUrl: string; authToken?: string }) {
-    const worker = await codexApi.registerCodexWorker(form)
-    codexWorkers.value.push(worker)
-    return worker
-  }
-
-  async function updateCodexWorker(workerId: string, form: { name?: string; baseUrl?: string; authToken?: string }) {
-    const updated = await codexApi.updateCodexWorker(workerId, form)
-    const idx = codexWorkers.value.findIndex(w => w.workerId === workerId)
-    if (idx >= 0) codexWorkers.value[idx] = updated
-    return updated
-  }
-
-  async function deleteCodexWorker(workerId: string) {
-    await codexApi.deleteCodexWorker(workerId)
-    codexWorkers.value = codexWorkers.value.filter(w => w.workerId !== workerId)
-  }
-
-  async function refreshCodexWorkerStatus(workerId: string) {
-    const updated = await codexApi.triggerCodexHealthCheck(workerId)
-    const idx = codexWorkers.value.findIndex(w => w.workerId === workerId)
-    if (idx >= 0) codexWorkers.value[idx] = updated
-    return updated
   }
 
   // ===== Active tasks =====
@@ -319,8 +280,6 @@ export function useClaudeWorker() {
 
   return {
     workers,
-    codexWorkers,
-    allWorkers,
     tasks,
     directories,
     loading,
@@ -346,10 +305,6 @@ export function useClaudeWorker() {
     deleteDirectory,
     syncGitInfo,
     syncSessions,
-    registerCodexWorker,
-    updateCodexWorker,
-    deleteCodexWorker,
-    refreshCodexWorkerStatus,
     activeTasks,
     loadActiveTasks,
     awaitingReplyTasks,

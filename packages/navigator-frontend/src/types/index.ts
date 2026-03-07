@@ -89,6 +89,10 @@ export interface ClaudeWorker {
   codeServerInternalUrl?: string
   codeServerPasswordConfigured?: boolean
   codeServerFolderPrefix?: string
+  /** Codex Worker 配置 */
+  codexBaseUrl?: string
+  codexModel?: string
+  codexAuthTokenConfigured?: boolean
 }
 
 /** Claude 任务 */
@@ -176,48 +180,6 @@ export interface SkillInfo {
   description: string
   scope: 'project' | 'user'
 }
-
-// ===== Codex Worker 类型 =====
-
-/** Codex Agent Worker */
-export interface CodexWorker {
-  workerId: string
-  name: string
-  baseUrl: string
-  status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN'
-  hostname?: string
-  workerVersion?: string
-  lastHeartbeat?: string
-  createdAt: string
-}
-
-/** Codex 任务 */
-export interface CodexTask {
-  taskId: string
-  sessionId?: string
-  workerId: string
-  prompt: string
-  cwd?: string
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED'
-  codexThreadId?: string
-  costUsd?: number
-  inputTokens?: number
-  outputTokens?: number
-  durationMs?: number
-  numTurns?: number
-  model?: string
-  resultText?: string
-  errorMessage?: string
-  source?: string
-  createdAt: string
-  updatedAt: string
-}
-
-/** 统一 Worker 类型（用于混合列表） */
-export type WorkerType = 'CLAUDE' | 'CODEX'
-
-/** 统一 Worker 项（合并展示用） */
-export type UnifiedWorker = CodexWorker & { workerType: WorkerType }
 
 /** 会话级配置（置顶、标题、Auth 绑定） */
 export interface ConversationConfig {

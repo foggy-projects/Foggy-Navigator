@@ -2,11 +2,11 @@ package com.foggy.navigator.codex.worker.service;
 
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
-import com.foggy.navigator.codex.worker.model.entity.CodexWorkerEntity;
 import com.foggy.navigator.codex.worker.model.event.CodexTaskStartEvent;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +28,7 @@ import java.util.List;
 public class CodexTaskService {
 
     private final CodexTaskRepository taskRepository;
-    private final CodexWorkerService workerService;
+    private final ClaudeWorkerFacade claudeWorkerFacade;
     private final ApplicationEventPublisher eventPublisher;
 
     @Autowired(required = false)
@@ -47,11 +47,8 @@ public class CodexTaskService {
             throw new IllegalArgumentException("prompt is required");
         }
 
-        // 验证 Worker 存在且属于该用户
-        CodexWorkerEntity worker = workerService.getWorkerEntity(form.getWorkerId());
-        if (!worker.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Codex Worker not found: " + form.getWorkerId());
-        }
+        // 验证 Worker 存在且属于该用户（通过 ClaudeWorkerFacade SPI）
+        claudeWorkerFacade.validateWorkerOwnership(userId, form.getWorkerId());
 
         String taskId = IdGenerator.shortId();
         String sessionId = IdGenerator.shortId();

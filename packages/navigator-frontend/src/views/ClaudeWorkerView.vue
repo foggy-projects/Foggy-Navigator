@@ -9,10 +9,10 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="worker">添加 Worker</el-dropdown-item>
-              <el-dropdown-item command="directory" :disabled="!selectedWorkerId || selectedWorkerType === 'CODEX'">
+              <el-dropdown-item command="directory" :disabled="!selectedWorkerId">
                 添加工作目录
               </el-dropdown-item>
-              <el-dropdown-item command="project" :disabled="!selectedWorkerId || selectedWorkerType === 'CODEX'">
+              <el-dropdown-item command="project" :disabled="!selectedWorkerId">
                 添加项目目录
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -20,7 +20,7 @@
         </el-dropdown>
       </div>
       <div class="worker-list">
-        <template v-for="worker in workerState.allWorkers.value" :key="worker.workerId">
+        <template v-for="worker in workerState.workers.value" :key="worker.workerId">
           <!-- Worker node (Level 1) -->
           <div
             :class="[
@@ -31,28 +31,18 @@
           >
             <div class="worker-info">
               <span
-                v-if="worker.workerType === 'CLAUDE'"
                 class="expand-icon"
                 @click.stop="toggleExpand(worker.workerId)"
               >
                 {{ expandedWorkerIds.has(worker.workerId) ? '▼' : '▶' }}
               </span>
-              <span v-else class="expand-icon" style="visibility: hidden">▶</span>
               <span :class="['status-dot', worker.status?.toLowerCase()]" />
               <span class="worker-name">{{ worker.name }}</span>
-              <el-tag
-                :type="worker.workerType === 'CODEX' ? 'success' : ''"
-                size="small"
-                effect="plain"
-                style="margin-left: 4px; font-size: 10px; padding: 0 4px; height: 18px; line-height: 18px"
-              >
-                {{ worker.workerType === 'CODEX' ? 'Codex' : 'Claude' }}
-              </el-tag>
             </div>
             <div class="worker-meta">{{ worker.hostname || worker.baseUrl }}</div>
           </div>
-          <!-- Directory nodes (Level 2): PROJECT dirs first, then orphan STANDARD dirs (Claude only) -->
-          <template v-if="worker.workerType === 'CLAUDE' && expandedWorkerIds.has(worker.workerId)">
+          <!-- Directory nodes (Level 2): PROJECT dirs first, then orphan STANDARD dirs -->
+          <template v-if="expandedWorkerIds.has(worker.workerId)">
             <!-- PROJECT directories -->
             <template v-for="dir in projectDirectoriesForWorker(worker.workerId)" :key="dir.directoryId">
               <div
@@ -163,7 +153,7 @@
             </div>
           </template>
         </template>
-        <div v-if="workerState.allWorkers.value.length === 0" class="empty-hint">
+        <div v-if="workerState.workers.value.length === 0" class="empty-hint">
           暂无 Worker，点击上方添加
         </div>
       </div>
@@ -474,37 +464,20 @@
             <el-tag :type="statusTagType(selectedWorkerEntity.status)" size="small">
               {{ selectedWorkerEntity.status }}
             </el-tag>
-            <el-tag
-              :type="selectedWorkerType === 'CODEX' ? 'success' : ''"
-              size="small"
-              style="margin-left: 4px"
-            >
-              {{ selectedWorkerType === 'CODEX' ? 'Codex' : 'Claude' }}
-            </el-tag>
             <span v-if="selectedWorkerEntity.workerVersion" class="version-tag">
               v{{ selectedWorkerEntity.workerVersion }}
             </span>
           </div>
           <div class="header-actions">
             <el-button size="small" @click="handleRefreshStatus">刷新状态</el-button>
-            <el-button v-if="selectedWorkerType === 'CLAUDE'" size="small" :loading="syncingSkills" @click="handleSyncSkills">同步 Skills</el-button>
-            <el-button v-if="selectedWorkerType === 'CLAUDE'" size="small" @click="showEditDialog = true">编辑</el-button>
+            <el-button size="small" :loading="syncingSkills" @click="handleSyncSkills">同步 Skills</el-button>
+            <el-button size="small" @click="showEditDialog = true">编辑</el-button>
             <el-button size="small" type="danger" text @click="handleDelete">删除</el-button>
           </div>
         </div>
 
-        <!-- Codex Worker: minimal info -->
-        <div v-if="selectedWorkerType === 'CODEX'" class="codex-worker-info" style="padding: 16px; color: #606266;">
-          <p><strong>地址：</strong>{{ selectedWorkerEntity.baseUrl }}</p>
-          <p v-if="selectedWorkerEntity.hostname"><strong>主机名：</strong>{{ selectedWorkerEntity.hostname }}</p>
-          <p v-if="selectedWorkerEntity.lastHeartbeat"><strong>最后心跳：</strong>{{ selectedWorkerEntity.lastHeartbeat }}</p>
-          <p style="margin-top: 16px; color: #909399; font-size: 13px">
-            Codex Worker 仅提供编程执行能力，不支持目录管理、SSH 终端和文件浏览。
-          </p>
-        </div>
-
-        <!-- Worker Tabs: CLI Processes & Agents (Claude only) -->
-        <el-tabs v-if="selectedWorkerType === 'CLAUDE'" v-model="workerActiveTab" class="worker-tabs" @tab-change="handleWorkerTabChange">
+        <!-- Worker Tabs: CLI Processes & Agents -->
+        <el-tabs v-model="workerActiveTab" class="worker-tabs" @tab-change="handleWorkerTabChange">
           <el-tab-pane name="processes">
             <template #label>
               <span>CLI 进程</span>
@@ -1190,19 +1163,13 @@
     <!-- Add Worker Dialog -->
     <el-dialog v-model="showAddDialog" title="添加 Worker" width="480px">
       <el-form :model="addForm" label-position="top">
-        <el-form-item label="Worker 类型">
-          <el-radio-group v-model="addWorkerType">
-            <el-radio-button value="CLAUDE">Claude Code</el-radio-button>
-            <el-radio-button value="CODEX">OpenAI Codex</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
         <el-form-item label="名称" required>
-          <el-input v-model="addForm.name" :placeholder="addWorkerType === 'CODEX' ? '如：Codex Worker' : '如：我的家庭机'" />
+          <el-input v-model="addForm.name" placeholder="如：我的家庭机" />
         </el-form-item>
         <el-form-item label="地址" required>
-          <el-input v-model="addForm.baseUrl" :placeholder="addWorkerType === 'CODEX' ? '如：http://localhost:3032' : '如：http://192.168.1.100:3031'" />
+          <el-input v-model="addForm.baseUrl" placeholder="如：http://192.168.1.100:3031" />
         </el-form-item>
-        <el-form-item label="认证令牌" :required="addWorkerType === 'CLAUDE'">
+        <el-form-item label="认证令牌" required>
           <el-input
             v-model="addForm.authToken"
             type="password"
@@ -1210,8 +1177,7 @@
             placeholder="Worker 预共享令牌"
           />
         </el-form-item>
-        <!-- Claude-specific fields -->
-        <template v-if="addWorkerType === 'CLAUDE'">
+        <template>
           <el-form-item label="认证模式">
             <el-select v-model="addForm.authMode" style="width: 100%">
               <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
@@ -1243,6 +1209,16 @@
             <el-input v-model="addForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
           </el-form-item>
         </template>
+        <el-divider content-position="left">Codex 配置（可选）</el-divider>
+        <el-form-item label="Codex 地址">
+          <el-input v-model="addForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
+        </el-form-item>
+        <el-form-item label="Codex 认证令牌">
+          <el-input v-model="addForm.codexAuthToken" type="password" show-password placeholder="Codex Worker 令牌" />
+        </el-form-item>
+        <el-form-item label="Codex 默认模型">
+          <el-input v-model="addForm.codexModel" placeholder="如：codex-mini-latest" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAddDialog = false">取消</el-button>
@@ -1306,6 +1282,21 @@
         </el-form-item>
         <el-form-item label="Folder 前缀">
           <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
+        </el-form-item>
+        <el-divider content-position="left">Codex 配置（可选）</el-divider>
+        <el-form-item label="Codex 地址">
+          <el-input v-model="editForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
+        </el-form-item>
+        <el-form-item label="Codex 认证令牌">
+          <el-input
+            v-model="editForm.codexAuthToken"
+            type="password"
+            show-password
+            :placeholder="selectedWorkerEntity?.codexAuthTokenConfigured ? '已保存，留空不改' : 'Codex Worker 令牌'"
+          />
+        </el-form-item>
+        <el-form-item label="Codex 默认模型">
+          <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1900,7 +1891,7 @@ import * as dirApi from '@/api/claudeWorker'
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, WorkerType } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig } from '@/types'
 import type { AipMessageType } from '@foggy/chat'
 
 const MAX_PANES = 1
@@ -2056,16 +2047,6 @@ const selectedDirectoryId = ref<string | null>(null)
 const expandedWorkerIds = reactive(new Set<string>())
 const expandedProjectIds = reactive(new Set<string>())
 
-/** 判断选中 Worker 的类型 */
-const selectedWorkerType = computed<WorkerType | null>(() => {
-  if (!selectedWorkerId.value) return null
-  if (workerState.codexWorkers.value.some(w => w.workerId === selectedWorkerId.value)) return 'CODEX'
-  return 'CLAUDE'
-})
-
-/** Codex Workers 是否为空 */
-const isCodexWorker = (workerId: string) =>
-  workerState.codexWorkers.value.some(w => w.workerId === workerId)
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
 const showAddDirectoryDialog = ref(false)
@@ -2239,9 +2220,6 @@ const showSshDialog = ref(false)
 const sshForm = ref({ host: '', port: 22, username: '', password: '' })
 const sshConnecting = ref(false)
 
-/** Worker 类型选择（添加对话框） */
-const addWorkerType = ref<WorkerType>('CLAUDE')
-
 const addForm = ref({
   name: '',
   baseUrl: '',
@@ -2254,6 +2232,9 @@ const addForm = ref({
   codeServerInternalUrl: '',
   codeServerPassword: '',
   codeServerFolderPrefix: '',
+  codexBaseUrl: '',
+  codexAuthToken: '',
+  codexModel: '',
 })
 
 const editForm = ref({
@@ -2268,6 +2249,9 @@ const editForm = ref({
   codeServerInternalUrl: '',
   codeServerPassword: '',
   codeServerFolderPrefix: '',
+  codexBaseUrl: '',
+  codexAuthToken: '',
+  codexModel: '',
 })
 
 const addDirForm = ref({
@@ -2675,10 +2659,7 @@ function clearAttachedImages() {
 }
 
 const selectedWorkerEntity = computed(() => {
-  const claude = workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value)
-  if (claude) return claude
-  // Also check Codex workers (they have compatible basic fields)
-  return workerState.codexWorkers.value.find((w) => w.workerId === selectedWorkerId.value) as typeof claude
+  return workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value)
 })
 
 const selectedDirectory = computed(() =>
@@ -3158,12 +3139,6 @@ function selectWorker(workerId: string) {
   focusedPaneId.value = null
   exitBatchSelectMode()
 
-  if (isCodexWorker(workerId)) {
-    // Codex Worker: no CLI processes, directories, or workspace management
-    return
-  }
-
-  // Claude Worker: full feature set
   // Load CLI processes when selecting a worker
   loadCliProcesses()
   // Suspend SSE on other workspaces to free browser connections (HTTP/1.1 limit: 6)
@@ -3251,24 +3226,22 @@ function handleAddCommand(command: string) {
   }
 }
 
-const defaultAddForm = () => ({ name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22 as number, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '', codeServerFolderPrefix: '' })
+const defaultAddForm = () => ({ name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22 as number, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '', codeServerFolderPrefix: '', codexBaseUrl: '', codexAuthToken: '', codexModel: '' })
 
 async function handleAdd() {
-  const isCodex = addWorkerType.value === 'CODEX'
-  if (!addForm.value.name || !addForm.value.baseUrl || (!isCodex && !addForm.value.authToken)) {
+  if (!addForm.value.name || !addForm.value.baseUrl || !addForm.value.authToken) {
     ElMessage.warning('请填写完整信息')
     return
   }
   saving.value = true
   try {
-    if (isCodex) {
-      await workerState.registerCodexWorker({ name: addForm.value.name, baseUrl: addForm.value.baseUrl, authToken: addForm.value.authToken || undefined })
-    } else {
-      await workerState.registerWorker(addForm.value)
-    }
+    const { codexBaseUrl, codexAuthToken, codexModel, ...baseForm } = addForm.value
+    await workerState.registerWorker({
+      ...baseForm,
+      ...(codexBaseUrl ? { codexConfig: { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined } } : {}),
+    })
     showAddDialog.value = false
     addForm.value = defaultAddForm()
-    addWorkerType.value = 'CLAUDE'
     ElMessage.success('Worker 添加成功')
   } catch {
     ElMessage.error('添加失败')
@@ -3301,6 +3274,13 @@ async function handleEdit() {
     if (editForm.value.codeServerPassword) {
       form.codeServerPassword = editForm.value.codeServerPassword
     }
+    // codexConfig：有值 → 发送完整对象；原来有值现在清空 → 发送 {baseUrl:''} 清除
+    const { codexBaseUrl, codexAuthToken, codexModel } = editForm.value
+    if (codexBaseUrl) {
+      form.codexConfig = { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined }
+    } else if (selectedWorkerEntity.value?.codexBaseUrl) {
+      form.codexConfig = { baseUrl: '' }
+    }
     await workerState.updateWorker(selectedWorkerId.value, form)
     showEditDialog.value = false
     ElMessage.success('更新成功')
@@ -3319,21 +3299,14 @@ async function handleDelete() {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
-    if (isCodexWorker(selectedWorkerId.value)) {
-      // Codex Worker: no directories to clean up
-      taskMemory.deleteDraft('task-worker-' + selectedWorkerId.value)
-      await workerState.deleteCodexWorker(selectedWorkerId.value)
-    } else {
-      // Claude Worker: clean up workspaces and directories
-      disposeWorkspace(`worker:${selectedWorkerId.value}`)
-      const dirs = workerState.directories.value.filter(d => d.workerId === selectedWorkerId.value)
-      for (const dir of dirs) {
-        disposeWorkspace(dir.directoryId)
-        taskMemory.deleteDraft('task-' + dir.directoryId)
-      }
-      taskMemory.deleteDraft('task-worker-' + selectedWorkerId.value)
-      await workerState.deleteWorker(selectedWorkerId.value)
+    disposeWorkspace(`worker:${selectedWorkerId.value}`)
+    const dirs = workerState.directories.value.filter(d => d.workerId === selectedWorkerId.value)
+    for (const dir of dirs) {
+      disposeWorkspace(dir.directoryId)
+      taskMemory.deleteDraft('task-' + dir.directoryId)
     }
+    taskMemory.deleteDraft('task-worker-' + selectedWorkerId.value)
+    await workerState.deleteWorker(selectedWorkerId.value)
     selectedWorkerId.value = null
     selectedDirectoryId.value = null
     ElMessage.success('已删除')
@@ -3345,11 +3318,7 @@ async function handleDelete() {
 async function handleRefreshStatus() {
   if (!selectedWorkerId.value) return
   try {
-    if (isCodexWorker(selectedWorkerId.value)) {
-      await workerState.refreshCodexWorkerStatus(selectedWorkerId.value)
-    } else {
-      await workerState.refreshWorkerStatus(selectedWorkerId.value)
-    }
+    await workerState.refreshWorkerStatus(selectedWorkerId.value)
     ElMessage.success('状态已刷新')
   } catch {
     ElMessage.error('刷新失败')
@@ -4880,6 +4849,9 @@ watch(showEditDialog, (val) => {
       codeServerInternalUrl: selectedWorkerEntity.value.codeServerInternalUrl || '',
       codeServerPassword: '',
       codeServerFolderPrefix: selectedWorkerEntity.value.codeServerFolderPrefix || '',
+      codexBaseUrl: selectedWorkerEntity.value.codexBaseUrl || '',
+      codexAuthToken: '',
+      codexModel: selectedWorkerEntity.value.codexModel || '',
     }
   }
 })

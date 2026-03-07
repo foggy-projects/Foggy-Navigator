@@ -120,40 +120,30 @@
 
         <div v-for="(worker, idx) in claudeWorkers" :key="idx" class="model-block">
           <div class="provider-header">
-            <span>
-              <el-tag :type="worker.workerType === 'CODEX' ? 'success' : ''" size="small" style="margin-right: 6px">
-                {{ worker.workerType === 'CODEX' ? 'Codex' : 'Claude' }}
-              </el-tag>
-              Worker #{{ idx + 1 }}
-            </span>
+            <span>Worker #{{ idx + 1 }}</span>
             <el-button text type="danger" size="small" @click="claudeWorkers.splice(idx, 1)">移除</el-button>
           </div>
           <el-form :model="worker" label-position="top" size="default">
             <el-form-item label="名称" required>
-              <el-input v-model="worker.name" :placeholder="worker.workerType === 'CODEX' ? '如：Codex Worker' : '如：我的家庭机'" />
+              <el-input v-model="worker.name" placeholder="如：我的家庭机" />
             </el-form-item>
             <el-form-item label="地址" required>
-              <el-input v-model="worker.baseUrl" :placeholder="worker.workerType === 'CODEX' ? '如：http://localhost:3032' : '如：http://192.168.1.100:3031'" />
+              <el-input v-model="worker.baseUrl" placeholder="如：http://192.168.1.100:3031" />
             </el-form-item>
-            <el-form-item label="认证令牌" :required="worker.workerType === 'CLAUDE'">
+            <el-form-item label="认证令牌" required>
               <el-input v-model="worker.authToken" type="password" show-password placeholder="Worker 预共享令牌" />
             </el-form-item>
-            <template v-if="worker.workerType === 'CLAUDE'">
-              <el-form-item label="认证模式">
-                <el-select v-model="worker.authMode" style="width: 100%">
-                  <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
-                  <el-option label="API Key 模式" value="API_KEY" />
-                  <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
-                </el-select>
-              </el-form-item>
-            </template>
+            <el-form-item label="认证模式">
+              <el-select v-model="worker.authMode" style="width: 100%">
+                <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
+                <el-option label="API Key 模式" value="API_KEY" />
+                <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
+              </el-select>
+            </el-form-item>
           </el-form>
         </div>
 
-        <div style="display: flex; gap: 8px">
-          <el-button type="primary" plain @click="addClaudeWorker">+ Claude Worker</el-button>
-          <el-button type="success" plain @click="addCodexWorker">+ Codex Worker</el-button>
-        </div>
+        <el-button type="primary" plain @click="addClaudeWorker">+ 添加 Worker</el-button>
       </div>
 
       <!-- Footer Buttons -->
@@ -190,8 +180,7 @@ import { resetSetupStatus } from '@/router'
 import { ElMessage } from 'element-plus'
 import { saveGitProvider, saveModelConfig, testLlmConnection } from '@/api/platform'
 import { registerWorker } from '@/api/claudeWorker'
-import { registerCodexWorker } from '@/api/codexWorker'
-import type { GitProviderType, LlmModelCategory, WorkerType } from '@/types'
+import type { GitProviderType, LlmModelCategory } from '@/types'
 
 const router = useRouter()
 const currentStep = ref(0)
@@ -303,10 +292,9 @@ async function handleTestModel(model: LlmForm) {
   }
 }
 
-// ===== Step 3: Workers (Claude + Codex) =====
+// ===== Step 3: Workers =====
 
 interface WorkerForm {
-  workerType: WorkerType
   name: string
   baseUrl: string
   authToken: string
@@ -317,21 +305,10 @@ const claudeWorkers = ref<WorkerForm[]>([])
 
 function addClaudeWorker() {
   claudeWorkers.value.push({
-    workerType: 'CLAUDE',
     name: '',
     baseUrl: '',
     authToken: '',
     authMode: 'SUBSCRIPTION',
-  })
-}
-
-function addCodexWorker() {
-  claudeWorkers.value.push({
-    workerType: 'CODEX',
-    name: '',
-    baseUrl: 'http://localhost:3032',
-    authToken: '',
-    authMode: '',
   })
 }
 
@@ -396,14 +373,8 @@ async function handleFinish() {
   saving.value = true
   try {
     for (const w of claudeWorkers.value) {
-      if (w.workerType === 'CODEX') {
-        if (w.name && w.baseUrl) {
-          await registerCodexWorker({ name: w.name, baseUrl: w.baseUrl, authToken: w.authToken || undefined })
-        }
-      } else {
-        if (w.name && w.baseUrl && w.authToken) {
-          await registerWorker(w)
-        }
+      if (w.name && w.baseUrl && w.authToken) {
+        await registerWorker(w)
       }
     }
     ElMessage.success('配置完成！')

@@ -11,11 +11,8 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
-import com.foggy.navigator.spi.codex.CodexWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,11 +33,6 @@ public class CodingAgentService {
     private final ClaudeWorkerService workerService;
     private final WorkingDirectoryRepository directoryRepository;
     private final ClaudeWorkerFacade claudeWorkerFacade;
-
-    /** Codex Worker 门面（可选依赖，codex-worker-agent 模块加载后才有） */
-    @Autowired(required = false)
-    @Nullable
-    private CodexWorkerFacade codexWorkerFacade;
 
     /**
      * 注册新 Agent
@@ -76,10 +68,8 @@ public class CodingAgentService {
             if (form.getWorkerId() == null || form.getWorkerId().isBlank()) {
                 throw new IllegalArgumentException("workerId is required for LOCAL_CODEX_WORKER agent");
             }
-            // 通过 CodexWorkerFacade 验证 Worker 存在
-            if (codexWorkerFacade != null) {
-                codexWorkerFacade.getWorker(userId, form.getWorkerId());
-            }
+            // 通过 ClaudeWorkerFacade 验证 Worker 存在且属于该用户（codex 配置挂在 Claude Worker 上）
+            claudeWorkerFacade.validateWorkerOwnership(userId, form.getWorkerId());
             // defaultDirectoryId 可选，复用 Claude Worker 的目录
             if (form.getDefaultDirectoryId() != null && !form.getDefaultDirectoryId().isBlank()) {
                 directoryRepository.findByDirectoryIdAndUserId(form.getDefaultDirectoryId(), userId)

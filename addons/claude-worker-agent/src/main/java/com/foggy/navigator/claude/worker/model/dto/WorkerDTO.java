@@ -27,4 +27,10 @@ public class WorkerDTO {
     private String codeServerInternalUrl;
     private boolean codeServerPasswordConfigured;
     private String codeServerFolderPrefix;
+    /** Codex 配置 URL */
+    private String codexBaseUrl;
+    /** Codex 默认模型 */
+    private String codexModel;
+    /** Codex 认证令牌是否已配置 */
+    private boolean codexAuthTokenConfigured;
 }

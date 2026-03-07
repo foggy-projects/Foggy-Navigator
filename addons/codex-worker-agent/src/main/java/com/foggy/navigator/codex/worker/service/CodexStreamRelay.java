@@ -6,11 +6,13 @@ import com.foggy.navigator.agent.framework.event.TaskStartedEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
+import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
-import com.foggy.navigator.codex.worker.model.entity.CodexWorkerEntity;
 import com.foggy.navigator.codex.worker.model.event.CodexTaskStartEvent;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.codex.worker.model.event.WorkerEvent;
+import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -48,7 +50,8 @@ public class CodexStreamRelay {
     private static final int MAX_RECONNECT_ATTEMPTS = 3;
     private static final long RECONNECT_BASE_DELAY_MS = 2000;
 
-    private final CodexWorkerService workerService;
+    private final ClaudeWorkerFacade claudeWorkerFacade;
+    private final CodexWorkerClientFactory clientFactory;
     private final CodexTaskService taskService;
     private final CodexTaskRepository taskRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -77,8 +80,7 @@ public class CodexStreamRelay {
                 Map.of("content", "Connecting to Codex worker...", "taskId", taskId));
 
         try {
-            CodexWorkerEntity worker = workerService.getWorkerEntity(workerId);
-            CodexWorkerClient client = workerService.createClient(worker);
+            CodexWorkerClient client = getCodexClient(workerId);
 
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(event.getCodexThreadId());
@@ -127,8 +129,7 @@ public class CodexStreamRelay {
         log.info("Reconnecting Codex stream: taskId={}, sessionId={}, workerId={}", taskId, sessionId, workerId);
 
         try {
-            CodexWorkerEntity worker = workerService.getWorkerEntity(workerId);
-            CodexWorkerClient client = workerService.createClient(worker);
+            CodexWorkerClient client = getCodexClient(workerId);
 
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>();
@@ -344,5 +345,16 @@ public class CodexStreamRelay {
     private String truncateResult(String text) {
         if (text == null) return null;
         return text.length() > 200 ? text.substring(0, 200) + "..." : text;
+    }
+
+    /**
+     * 通过 ClaudeWorkerFacade 获取 CodexConfig 并创建 Client
+     */
+    private CodexWorkerClient getCodexClient(String workerId) {
+        CodexConfig config = claudeWorkerFacade.getCodexConfig(workerId);
+        if (config == null || config.getBaseUrl() == null || config.getBaseUrl().isBlank()) {
+            throw new IllegalStateException("Codex not configured for worker: " + workerId);
+        }
+        return clientFactory.getOrCreate(workerId + ":codex", config.getBaseUrl(), config.getAuthToken());
     }
 }

@@ -14,6 +14,7 @@ import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
 import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -375,6 +376,17 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         log.info("Registered working directory: directoryId={}, path={}", entity.getDirectoryId(), path);
 
         return entity.getDirectoryId();
+    }
+
+    @Override
+    public void validateWorkerOwnership(String userId, String workerId) {
+        workerService.getWorker(userId, workerId); // throws if not found or not owned
+    }
+
+    @Override
+    public CodexConfig getCodexConfig(String workerId) {
+        ClaudeWorkerEntity entity = workerService.getWorkerEntity(workerId);
+        return workerService.getDecryptedCodexConfig(entity);
     }
 
     private Map<String, Object> workerToMap(WorkerDTO dto) {

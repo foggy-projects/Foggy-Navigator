@@ -1,5 +1,7 @@
 package com.foggy.navigator.claude.worker.model.entity;
 
+import com.foggy.navigator.claude.worker.model.converter.CodexConfigConverter;
+import com.foggy.navigator.common.model.CodexConfig;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -80,6 +82,11 @@ public class ClaudeWorkerEntity {
     /** SSH 密码（加密存储） */
     @Column(columnDefinition = "TEXT")
     private String sshPassword;
+
+    /** Codex Worker 配置（JSON 存储：baseUrl, authToken, model） */
+    @Convert(converter = CodexConfigConverter.class)
+    @Column(columnDefinition = "TEXT")
+    private CodexConfig codexConfig;
 
     @Column(nullable = false)
     private LocalDateTime updatedAt;
