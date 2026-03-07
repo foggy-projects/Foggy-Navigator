@@ -1,4 +1,4 @@
-bind-addr: 0.0.0.0:8444
+bind-addr: 127.0.0.1:8544
 auth: password
 password: foggy123
 cert: false

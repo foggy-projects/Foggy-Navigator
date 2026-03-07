@@ -433,7 +433,9 @@ def _capture_child_pids(task_id: str) -> None:
         for child in me.children(recursive=True):
             try:
                 name = child.name()
-                if name in ("node", "claude"):
+                # On Windows psutil returns "node.exe" / "claude.exe"
+                basename = name.rsplit(".", 1)[0] if name.endswith(".exe") else name
+                if basename in ("node", "claude"):
                     register_pid(child.pid, task_id)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
@@ -899,14 +901,19 @@ class SdkWrapper:
                         if entry.get("is_question"):
                             answers = entry.get("answers") or {}
                             logger.info(
-                                "Task %s question answered: pid=%s, answers=%d",
-                                task_id, pid, len(answers),
+                                "Task %s question answered: pid=%s, answers=%s",
+                                task_id, pid, answers,
+                            )
+                            updated = {
+                                "questions": entry.get("questions") or [],
+                                "answers": answers,
+                            }
+                            logger.info(
+                                "Task %s returning updated_input to SDK: %s",
+                                task_id, updated,
                             )
                             return _PermissionResultAllow(
-                                updated_input={
-                                    "questions": entry.get("questions") or [],
-                                    "answers": answers,
-                                },
+                                updated_input=updated,
                             )
 
                         # ExitPlanMode: allow with original input, update permission mode
@@ -1432,8 +1439,9 @@ class SdkWrapper:
                 for pid in list(permission_pending):
                     if permission_pending[pid].get("task_id") == task_id:
                         permission_pending.pop(pid, None)
-                # Log surviving CLI processes for diagnostics (no auto-kill —
-                # orphans are managed manually via the UI process list).
+                # Log surviving CLI processes for diagnostics.  Active abort
+                # kills processes via abort_query(); any survivors here are
+                # true orphans manageable via the UI process list.
                 try:
                     surviving = _find_sdk_cli_pids()
                     if surviving:

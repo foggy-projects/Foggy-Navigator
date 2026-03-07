@@ -65,6 +65,10 @@ export interface RoutePayload {
   context?: Record<string, unknown>
 }
 
+// ===== Worker 后端类型 =====
+
+export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX'
+
 // ===== Claude Worker 类型 =====
 
 /** Claude Agent Worker */
@@ -84,6 +88,11 @@ export interface ClaudeWorker {
   codeServerPublicUrl?: string
   codeServerInternalUrl?: string
   codeServerPasswordConfigured?: boolean
+  codeServerFolderPrefix?: string
+  /** Codex Worker 配置 */
+  codexBaseUrl?: string
+  codexModel?: string
+  codexAuthTokenConfigured?: boolean
 }
 
 /** Claude 任务 */
@@ -308,6 +317,7 @@ export interface LlmModelConfig {
   scope: ModelAccessScope
   allowedWorkerIds?: string[]
   envVars?: Record<string, string>
+  workerBackend?: WorkerBackend
   sortOrder: number
   createdAt: string
   updatedAt: string
@@ -324,6 +334,7 @@ export interface LlmModelConfigForm {
   scope?: ModelAccessScope
   allowedWorkerIds?: string[]
   envVars?: Record<string, string>
+  workerBackend?: WorkerBackend
 }
 
 /** Agent 模型覆盖 */
@@ -397,7 +408,7 @@ export interface ApiCredentialForm {
 
 // ===== 编程 Agent 类型 =====
 
-export type CodingAgentType = 'LOCAL_CLAUDE_WORKER' | 'EXTERNAL_A2A'
+export type CodingAgentType = 'LOCAL_CLAUDE_WORKER' | 'LOCAL_CODEX_WORKER' | 'EXTERNAL_A2A'
 
 /** 编程 Agent */
 export interface CodingAgent {

@@ -10,7 +10,9 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.event.WorkerEvent;
+import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -58,6 +60,7 @@ public class WorkerStreamRelay {
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
     private final ClaudeTaskRepository taskRepository;
+    private final WorkingDirectoryRepository workingDirectoryRepository;
     private final ConversationConfigService conversationConfigService;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
@@ -121,6 +124,7 @@ public class WorkerStreamRelay {
                     .parentSessionId(sessionId)
                     .targetAgentId(AGENT_ID)
                     .prompt(truncateResult(event.getPrompt()))
+                    .extData(buildEventExtData(taskId))
                     .build());
 
         } catch (Exception e) {
@@ -540,6 +544,7 @@ public class WorkerStreamRelay {
                         .targetAgentId(AGENT_ID)
                         .status("COMPLETED")
                         .resultSummary(truncateResult(resultContent))
+                        .extData(buildEventExtData(taskId))
                         .build());
             }
             case "permission_request" -> {
@@ -614,6 +619,7 @@ public class WorkerStreamRelay {
                         .targetAgentId(AGENT_ID)
                         .status("FAILED")
                         .resultSummary(event.getError())
+                        .extData(buildEventExtData(taskId))
                         .build());
             }
             case "sync_checkpoint" -> {
@@ -691,5 +697,47 @@ public class WorkerStreamRelay {
     private String truncateResult(String result) {
         if (result == null) return null;
         return result.length() > 500 ? result.substring(0, 500) + "..." : result;
+    }
+
+    /**
+     * 构建跨 Agent 事件的扩展数据（项目上下文）。
+     * 从 ClaudeTaskEntity → WorkingDirectoryEntity 解析项目名称、Git 分支等信息。
+     * 异常时返回空 map，不影响事件发布。
+     */
+    private Map<String, Object> buildEventExtData(String taskId) {
+        Map<String, Object> ext = new LinkedHashMap<>();
+        try {
+            ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
+            if (task == null) return ext;
+
+            // 会话上下文
+            if (task.getSessionId() != null) {
+                ext.put("sessionId", task.getSessionId());
+            }
+
+            // 项目上下文 — 从 WorkingDirectory 获取
+            if (task.getDirectoryId() != null) {
+                workingDirectoryRepository.findByDirectoryId(task.getDirectoryId())
+                        .ifPresent(dir -> {
+                            ext.put("projectName", dir.getProjectName());
+                            if (dir.getGitBranch() != null) {
+                                ext.put("gitBranch", dir.getGitBranch());
+                            }
+                            if (dir.getGitRemoteUrl() != null) {
+                                ext.put("gitRemoteUrl", dir.getGitRemoteUrl());
+                            }
+                        });
+            } else if (task.getCwd() != null) {
+                // Fallback: 从 cwd 路径末段推导项目名称
+                String cwd = task.getCwd();
+                int lastSlash = Math.max(cwd.lastIndexOf('/'), cwd.lastIndexOf('\\'));
+                if (lastSlash >= 0 && lastSlash < cwd.length() - 1) {
+                    ext.put("projectName", cwd.substring(lastSlash + 1));
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to build extData for taskId={}: {}", taskId, e.getMessage());
+        }
+        return ext;
     }
 }

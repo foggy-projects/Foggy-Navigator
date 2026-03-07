@@ -390,6 +390,16 @@ def unregister_pids_for_task(task_id: str) -> None:
         logger.info("Unregistered %d tracked PID(s) for task %s: %s", len(to_remove), task_id, to_remove)
 
 
+def get_pids_for_task(task_id: str) -> list[int]:
+    """Return all tracked PIDs associated with the given task (read-only snapshot).
+
+    Unlike ``unregister_pids_for_task`` this does **not** mutate ``_tracked_pids``.
+    Used by ``abort_query()`` to snapshot PIDs before cancellation so they can
+    be killed even after the asyncio finally block unregisters them.
+    """
+    return [pid for pid, tid in _tracked_pids.items() if tid == task_id]
+
+
 def get_detector() -> ProcessDetector:
     """Return the platform-appropriate ``ProcessDetector`` singleton."""
     global _detector

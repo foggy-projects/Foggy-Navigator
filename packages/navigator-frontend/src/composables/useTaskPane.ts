@@ -70,11 +70,10 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     if (['COMPLETED', 'FAILED', 'ABORTED'].includes(task.value.status)) return
     try {
       const fresh = await workerApi.getTask(task.value.taskId)
-      if (fresh.status !== task.value.status) {
-        Object.assign(task.value, fresh)
-        if (['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
-          options?.onTaskFinished?.(paneId)
-        }
+      const prevStatus = task.value.status
+      Object.assign(task.value, fresh)
+      if (prevStatus !== fresh.status && ['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
+        options?.onTaskFinished?.(paneId)
       }
     } catch {
       /* task deleted or inaccessible — ignore */
@@ -211,9 +210,12 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     createSseSubscription(sessionId)
     attachTaskUpdateListener()
 
-    // Non-blocking: detect and load JSONL delta messages
+    // Non-blocking: detect and load JSONL delta messages.
+    // Skip for ABORTED tasks — the delta is typically caused by the CLI
+    // continuing to run after abort (undelivered SSE events), not by real
+    // external conversations.
     if (connectVersion !== myVersion) return
-    if (task.value?.claudeSessionId && task.value?.workerId) {
+    if (task.value?.claudeSessionId && task.value?.workerId && task.value?.status !== 'ABORTED') {
       detectAndLoadDelta(task.value.workerId, task.value.claudeSessionId, dbMessageCount, myVersion)
     }
   }

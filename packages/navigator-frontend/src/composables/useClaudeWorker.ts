@@ -51,6 +51,7 @@ export function useClaudeWorker() {
     sshUsername?: string
     sshPort?: number
     sshPassword?: string
+    codexConfig?: { baseUrl?: string; authToken?: string; model?: string }
   }) {
     const worker = await api.registerWorker(form)
     workers.value.push(worker)
@@ -59,7 +60,7 @@ export function useClaudeWorker() {
 
   async function updateWorker(
     workerId: string,
-    form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string },
+    form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string; codexConfig?: { baseUrl?: string; authToken?: string; model?: string } },
   ) {
     const updated = await api.updateWorker(workerId, form)
     const idx = workers.value.findIndex((w) => w.workerId === workerId)

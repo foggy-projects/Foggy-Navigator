@@ -8,6 +8,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.RegisterWorkerForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkerForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
+import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -64,6 +65,14 @@ public class ClaudeWorkerService {
         if (form.getCodeServerPassword() != null && !form.getCodeServerPassword().isEmpty()) {
             entity.setCodeServerPassword(encrypt(form.getCodeServerPassword()));
         }
+        if (form.getCodeServerFolderPrefix() != null && !form.getCodeServerFolderPrefix().isEmpty()) {
+            entity.setCodeServerFolderPrefix(form.getCodeServerFolderPrefix());
+        }
+
+        // Codex 配置
+        if (form.getCodexConfig() != null) {
+            entity.setCodexConfig(encryptCodexConfig(form.getCodexConfig()));
+        }
 
         workerRepository.save(entity);
         log.info("Worker registered: workerId={}, name={}, userId={}", entity.getWorkerId(), entity.getName(), userId);
@@ -118,6 +127,19 @@ public class ClaudeWorkerService {
                 entity.setCodeServerPassword(null);
             } else {
                 entity.setCodeServerPassword(encrypt(form.getCodeServerPassword()));
+            }
+        }
+        // codeServerFolderPrefix: null 不改，空串清除，有值则存入
+        if (form.getCodeServerFolderPrefix() != null) {
+            entity.setCodeServerFolderPrefix(form.getCodeServerFolderPrefix().isEmpty() ? null : form.getCodeServerFolderPrefix());
+        }
+
+        // Codex 配置: null=不修改，baseUrl 为空=清除整个配置
+        if (form.getCodexConfig() != null) {
+            if (form.getCodexConfig().getBaseUrl() == null || form.getCodexConfig().getBaseUrl().isBlank()) {
+                entity.setCodexConfig(null);
+            } else {
+                entity.setCodexConfig(encryptCodexConfig(form.getCodexConfig()));
             }
         }
 
@@ -189,6 +211,20 @@ public class ClaudeWorkerService {
     }
 
     /**
+     * 获取解密后的 Codex 配置
+     */
+    public CodexConfig getDecryptedCodexConfig(ClaudeWorkerEntity entity) {
+        CodexConfig stored = entity.getCodexConfig();
+        if (stored == null) return null;
+        return CodexConfig.builder()
+                .baseUrl(stored.getBaseUrl())
+                .authToken(stored.getAuthToken() != null && !stored.getAuthToken().isBlank()
+                        ? decrypt(stored.getAuthToken()) : null)
+                .model(stored.getModel())
+                .build();
+    }
+
+    /**
      * 创建 Worker 客户端
      */
     public ClaudeWorkerClient createClient(ClaudeWorkerEntity entity) {
@@ -223,7 +259,20 @@ public class ClaudeWorkerService {
         return credentialEncryptor.decrypt(ciphertext);
     }
 
+    /**
+     * 加密 Codex 配置中的 authToken
+     */
+    private CodexConfig encryptCodexConfig(CodexConfig input) {
+        return CodexConfig.builder()
+                .baseUrl(input.getBaseUrl() != null ? input.getBaseUrl().replaceAll("/+$", "") : null)
+                .authToken(input.getAuthToken() != null && !input.getAuthToken().isBlank()
+                        ? encrypt(input.getAuthToken()) : null)
+                .model(input.getModel())
+                .build();
+    }
+
     private WorkerDTO toDTO(ClaudeWorkerEntity entity) {
+        CodexConfig cc = entity.getCodexConfig();
         return WorkerDTO.builder()
                 .workerId(entity.getWorkerId())
                 .name(entity.getName())
@@ -240,6 +289,10 @@ public class ClaudeWorkerService {
                 .codeServerPublicUrl(entity.getCodeServerPublicUrl())
                 .codeServerInternalUrl(entity.getCodeServerInternalUrl())
                 .codeServerPasswordConfigured(entity.getCodeServerPassword() != null)
+                .codeServerFolderPrefix(entity.getCodeServerFolderPrefix())
+                .codexBaseUrl(cc != null ? cc.getBaseUrl() : null)
+                .codexModel(cc != null ? cc.getModel() : null)
+                .codexAuthTokenConfigured(cc != null && cc.getAuthToken() != null && !cc.getAuthToken().isBlank())
                 .build();
     }
 }

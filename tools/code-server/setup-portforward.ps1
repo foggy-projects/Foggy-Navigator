@@ -10,12 +10,30 @@
 $ErrorActionPreference = "Stop"
 
 # ============================================================
+# Load HTTPS port from .env (if configured)
+# ============================================================
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$EnvFile = Join-Path $ScriptDir ".env"
+$HttpsPort = 0
+
+if (Test-Path $EnvFile) {
+    Get-Content $EnvFile | ForEach-Object {
+        if ($_ -match "^CODE_SERVER_HTTPS_PORT=(\d+)") { $HttpsPort = [int]$Matches[1] }
+    }
+}
+
+# ============================================================
 # 端口配置（在这里统一管理所有需要转发的端口）
 # ============================================================
 $Ports = @(
     @{ Port = 8443; Name = "code-server-windows"; Desc = "Code Server (Windows mode)" }
-    @{ Port = 8444; Name = "code-server-wsl";     Desc = "Code Server (WSL mode)" }
+    @{ Port = 8444; Name = "code-server-wsl";     Desc = "Code Server HTTP (WSL mode)" }
 )
+
+# Dynamically add HTTPS port if configured
+if ($HttpsPort -gt 0) {
+    $Ports += @{ Port = $HttpsPort; Name = "code-server-wsl-https"; Desc = "Code Server HTTPS (WSL mode)" }
+}
 
 Write-Host "=== WSL Port Forwarding & Firewall Setup ===" -ForegroundColor Cyan
 Write-Host "Ports: $($Ports | ForEach-Object { $_.Port }) " -ForegroundColor Cyan
@@ -114,9 +132,10 @@ Write-Host "=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Access URLs:" -ForegroundColor Green
 foreach ($entry in $Ports) {
+    $protocol = if ($entry.Name -like "*https*") { "https" } else { "http" }
     Write-Host "  $($entry.Desc):" -ForegroundColor White
-    Write-Host "    Local:  http://localhost:$($entry.Port)" -ForegroundColor Green
-    Write-Host "    LAN:    http://<Windows_IP>:$($entry.Port)" -ForegroundColor Green
+    Write-Host "    Local:  ${protocol}://localhost:$($entry.Port)" -ForegroundColor Green
+    Write-Host "    LAN:    ${protocol}://<Windows_IP>:$($entry.Port)" -ForegroundColor Green
 }
 Write-Host ""
 Write-Host "Password: foggy123 (see config.yaml)" -ForegroundColor Yellow

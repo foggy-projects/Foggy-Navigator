@@ -172,7 +172,7 @@ async function handleDeleteSession(id: string) {
     })
     await sessionStore.deleteSession(id)
     if (sessionStore.activeSessionId === null) {
-      router.push('/')
+      router.push('/chat')
     }
   } catch {
     // 用户取消

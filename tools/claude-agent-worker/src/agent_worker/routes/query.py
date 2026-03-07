@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import subprocess
 import uuid
 from typing import AsyncGenerator
@@ -229,8 +230,8 @@ async def respond_to_permission(task_id: str, body: PermissionResponse):
     entry["event"].set()
 
     logger.info(
-        "Permission responded: task_id=%s, permission_id=%s, decision=%s",
-        task_id, body.permission_id, body.decision,
+        "Permission responded: task_id=%s, permission_id=%s, decision=%s, answers=%s",
+        task_id, body.permission_id, body.decision, body.answers,
     )
 
     return {"task_id": task_id, "permission_id": body.permission_id, "status": "responded"}
@@ -304,41 +305,46 @@ async def rewind_files(body: RewindRequest):
 
 @router.post("/query/{task_id}/abort", response_model=AbortResponse)
 async def abort_query(task_id: str) -> AbortResponse:
-    """Cancel a running query by its ``task_id``.
+    """Cancel a running query and kill its CLI process(es).
 
     Accepts either the Worker's internal UUID *or* the Foggy platform
-    ``foggy_task_id`` (injected at task creation).  The latter allows the
-    Java backend to abort tasks using its own task ID without maintaining
-    a separate ID-mapping table.
-
-    If the task is still active its underlying asyncio task will be cancelled
-    and cleaned up.
+    ``foggy_task_id``.  Snapshots tracked PIDs before any mutation so
+    they survive the asyncio finally-block cleanup.
     """
+    from ..claude.process_detection import get_pids_for_task
 
-    entry = task_registry.pop(task_id, None)
+    # -- Resolve task (by worker task_id or foggy_task_id) --
+    result = _resolve_task_entry(task_id)
+    if result is None:
+        logger.info("Abort: task '%s' already gone from registry", task_id)
+        return AbortResponse(task_id=task_id, status="cancelled")
+    resolved_id, _ = result
 
-    if entry is None:
-        # Fallback: search by foggy_task_id so the Java backend can abort
-        # using its own task ID (YYYYMMDD-xxxx format) without needing the
-        # Worker's internal UUID.
-        resolved_id = None
-        for tid, e in list(task_registry.items()):
-            if e.get("foggy_task_id") == task_id:
-                resolved_id = tid
-                break
-        if resolved_id is not None:
-            entry = task_registry.pop(resolved_id, None)
-            logger.info("Abort: resolved foggy_task_id '%s' → worker task_id '%s'", task_id, resolved_id)
-        else:
-            # Task already finished or was never registered — treat as idempotent success
-            logger.info("Abort called for task '%s' but already gone from registry", task_id)
-            return AbortResponse(task_id=task_id, status="cancelled")
+    # Snapshot PIDs *before* pop / cancel (finally block would unregister them).
+    pids_to_kill = get_pids_for_task(resolved_id)
 
-    asyncio_task: asyncio.Task | None = entry.get("asyncio_task")
-    if asyncio_task is not None and not asyncio_task.done():
-        asyncio_task.cancel()
+    # -- Cancel asyncio task --
+    entry = task_registry.pop(resolved_id, None)
+    if resolved_id != task_id:
+        logger.info("Abort: resolved foggy_task_id '%s' → worker '%s'", task_id, resolved_id)
 
-    return AbortResponse(task_id=task_id, status="cancelled")
+    atask: asyncio.Task | None = entry.get("asyncio_task") if entry else None
+    if atask is not None and not atask.done():
+        atask.cancel()
+
+    # -- Kill CLI processes --
+    killed: list[int] = []
+    for pid in pids_to_kill:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed.append(pid)
+            logger.info("Abort: killed CLI pid=%d for task %s", pid, resolved_id)
+        except ProcessLookupError:
+            logger.info("Abort: pid=%d already exited", pid)
+        except OSError as exc:
+            logger.warning("Abort: failed to kill pid=%d: %s", pid, exc)
+
+    return AbortResponse(task_id=task_id, status="cancelled", killed_pids=killed)
 
 
 def _resolve_task_entry(task_id: str) -> tuple[str, dict] | None:
