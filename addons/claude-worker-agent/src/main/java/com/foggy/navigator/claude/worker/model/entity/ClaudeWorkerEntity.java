@@ -66,6 +66,10 @@ public class ClaudeWorkerEntity {
     @Column(columnDefinition = "TEXT")
     private String codeServerPassword;
 
+    /** Code Server folder 路径前缀（用于 Windows→WSL 路径转换，如 /mnt/{drive}） */
+    @Column(length = 256)
+    private String codeServerFolderPrefix;
+
     /** SSH 用户名 */
     @Column(length = 128)
     private String sshUsername;

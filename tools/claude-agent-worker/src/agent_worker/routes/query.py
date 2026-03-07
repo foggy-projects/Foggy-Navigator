@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import subprocess
 import uuid
 from typing import AsyncGenerator
@@ -304,41 +305,92 @@ async def rewind_files(body: RewindRequest):
 
 @router.post("/query/{task_id}/abort", response_model=AbortResponse)
 async def abort_query(task_id: str) -> AbortResponse:
-    """Cancel a running query by its ``task_id``.
+    """Cancel a running query and kill its CLI process(es).
 
     Accepts either the Worker's internal UUID *or* the Foggy platform
     ``foggy_task_id`` (injected at task creation).  The latter allows the
     Java backend to abort tasks using its own task ID without maintaining
     a separate ID-mapping table.
 
-    If the task is still active its underlying asyncio task will be cancelled
-    and cleaned up.
+    The abort flow:
+      1. Snapshot tracked PIDs **before** any mutation
+      2. Cancel the asyncio producer task
+      3. Kill CLI processes (Layer 1 tracked PIDs, then Layer 2 env-var fallback)
     """
+    from ..claude.process_detection import get_pids_for_task
 
-    entry = task_registry.pop(task_id, None)
-
-    if entry is None:
+    # --- Phase 1: Resolve task and snapshot PIDs BEFORE any mutation ---
+    resolved_id: str | None = None
+    entry = task_registry.get(task_id)
+    if entry is not None:
+        resolved_id = task_id
+    else:
         # Fallback: search by foggy_task_id so the Java backend can abort
         # using its own task ID (YYYYMMDD-xxxx format) without needing the
         # Worker's internal UUID.
-        resolved_id = None
         for tid, e in list(task_registry.items()):
             if e.get("foggy_task_id") == task_id:
                 resolved_id = tid
                 break
-        if resolved_id is not None:
-            entry = task_registry.pop(resolved_id, None)
-            logger.info("Abort: resolved foggy_task_id '%s' → worker task_id '%s'", task_id, resolved_id)
-        else:
-            # Task already finished or was never registered — treat as idempotent success
-            logger.info("Abort called for task '%s' but already gone from registry", task_id)
-            return AbortResponse(task_id=task_id, status="cancelled")
 
-    asyncio_task: asyncio.Task | None = entry.get("asyncio_task")
+    # Snapshot PIDs while they are still in the tracking registry
+    # (before asyncio finally block runs unregister_pids_for_task).
+    pids_to_kill: list[int] = []
+    if resolved_id:
+        pids_to_kill = get_pids_for_task(resolved_id)
+        logger.info("Abort: snapshotted %d PID(s) for task %s: %s", len(pids_to_kill), resolved_id, pids_to_kill)
+
+    if resolved_id is None:
+        # Task already finished or was never registered — treat as idempotent success
+        logger.info("Abort called for task '%s' but already gone from registry", task_id)
+        return AbortResponse(task_id=task_id, status="cancelled")
+
+    # --- Phase 2: Cancel asyncio task (existing behavior) ---
+    entry = task_registry.pop(resolved_id, None)
+    if resolved_id != task_id:
+        logger.info("Abort: resolved foggy_task_id '%s' → worker task_id '%s'", task_id, resolved_id)
+
+    asyncio_task: asyncio.Task | None = entry.get("asyncio_task") if entry else None
     if asyncio_task is not None and not asyncio_task.done():
         asyncio_task.cancel()
 
-    return AbortResponse(task_id=task_id, status="cancelled")
+    # --- Phase 3: Kill CLI processes ---
+    killed: list[int] = []
+    for pid in pids_to_kill:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed.append(pid)
+            logger.info("Abort: killed CLI process pid=%d for task %s", pid, resolved_id)
+        except ProcessLookupError:
+            logger.info("Abort: pid=%d already exited", pid)
+        except OSError as exc:
+            logger.warning("Abort: failed to kill pid=%d: %s", pid, exc)
+
+    # Layer 2 fallback: if Layer 1 found nothing, search by FOGGY_TASK_ID env var
+    if not killed and not pids_to_kill:
+        foggy_tid = entry.get("foggy_task_id") if entry else task_id
+        if foggy_tid:
+            try:
+                all_cli_pids = _find_sdk_cli_pids()
+                for pid in all_cli_pids:
+                    try:
+                        import psutil
+                        proc_env = psutil.Process(pid).environ()
+                        if proc_env.get("FOGGY_TASK_ID") == foggy_tid:
+                            os.kill(pid, signal.SIGTERM)
+                            killed.append(pid)
+                            logger.info("Abort: killed untracked CLI pid=%d (matched FOGGY_TASK_ID=%s)", pid, foggy_tid)
+                    except (ProcessLookupError, OSError):
+                        pass
+                    except Exception:
+                        pass  # psutil.NoSuchProcess, AccessDenied, etc.
+            except Exception as exc:
+                logger.warning("Abort: Layer 2 fallback failed: %s", exc)
+
+    if killed:
+        logger.info("Abort: total %d CLI process(es) killed for task %s: %s", len(killed), task_id, killed)
+
+    return AbortResponse(task_id=task_id, status="cancelled", killed_pids=killed)
 
 
 def _resolve_task_entry(task_id: str) -> tuple[str, dict] | None:

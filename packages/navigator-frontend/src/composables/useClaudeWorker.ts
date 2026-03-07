@@ -1,8 +1,10 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
-import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
+import * as codexApi from '@/api/codexWorker'
+import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig, CodexWorker, UnifiedWorker } from '@/types'
 
 const workers = ref<ClaudeWorker[]>([])
+const codexWorkers = ref<CodexWorker[]>([])
 const tasks = ref<ClaudeTask[]>([])
 const directories = ref<WorkingDirectory[]>([])
 const loading = ref(false)
@@ -16,10 +18,42 @@ const awaitingReplyTasks = ref<ClaudeTask[]>([])
 export function useClaudeWorker() {
   const onlineWorkers = computed(() => workers.value.filter((w) => w.status === 'ONLINE'))
 
+  /** 合并 Claude + Codex Workers 为统一列表 */
+  const allWorkers = computed<UnifiedWorker[]>(() => {
+    const claude: UnifiedWorker[] = workers.value.map(w => ({
+      workerId: w.workerId,
+      name: w.name,
+      baseUrl: w.baseUrl,
+      status: w.status,
+      hostname: w.hostname,
+      workerVersion: w.workerVersion,
+      lastHeartbeat: w.lastHeartbeat,
+      createdAt: w.createdAt,
+      workerType: 'CLAUDE' as const,
+    }))
+    const codex: UnifiedWorker[] = codexWorkers.value.map(w => ({
+      workerId: w.workerId,
+      name: w.name,
+      baseUrl: w.baseUrl,
+      status: w.status,
+      hostname: w.hostname,
+      workerVersion: w.workerVersion,
+      lastHeartbeat: w.lastHeartbeat,
+      createdAt: w.createdAt,
+      workerType: 'CODEX' as const,
+    }))
+    return [...claude, ...codex]
+  })
+
   async function loadWorkers() {
     loading.value = true
     try {
-      workers.value = await api.listWorkers()
+      const [claudeList, codexList] = await Promise.all([
+        api.listWorkers(),
+        codexApi.listCodexWorkers().catch(() => [] as CodexWorker[]),
+      ])
+      workers.value = claudeList
+      codexWorkers.value = codexList
     } finally {
       loading.value = false
     }
@@ -168,6 +202,33 @@ export function useClaudeWorker() {
     return result
   }
 
+  // ===== Codex Worker methods =====
+
+  async function registerCodexWorker(form: { name: string; baseUrl: string; authToken?: string }) {
+    const worker = await codexApi.registerCodexWorker(form)
+    codexWorkers.value.push(worker)
+    return worker
+  }
+
+  async function updateCodexWorker(workerId: string, form: { name?: string; baseUrl?: string; authToken?: string }) {
+    const updated = await codexApi.updateCodexWorker(workerId, form)
+    const idx = codexWorkers.value.findIndex(w => w.workerId === workerId)
+    if (idx >= 0) codexWorkers.value[idx] = updated
+    return updated
+  }
+
+  async function deleteCodexWorker(workerId: string) {
+    await codexApi.deleteCodexWorker(workerId)
+    codexWorkers.value = codexWorkers.value.filter(w => w.workerId !== workerId)
+  }
+
+  async function refreshCodexWorkerStatus(workerId: string) {
+    const updated = await codexApi.triggerCodexHealthCheck(workerId)
+    const idx = codexWorkers.value.findIndex(w => w.workerId === workerId)
+    if (idx >= 0) codexWorkers.value[idx] = updated
+    return updated
+  }
+
   // ===== Active tasks =====
 
   async function loadActiveTasks() {
@@ -279,6 +340,8 @@ export function useClaudeWorker() {
 
   return {
     workers,
+    codexWorkers,
+    allWorkers,
     tasks,
     directories,
     loading,
@@ -304,6 +367,10 @@ export function useClaudeWorker() {
     deleteDirectory,
     syncGitInfo,
     syncSessions,
+    registerCodexWorker,
+    updateCodexWorker,
+    deleteCodexWorker,
+    refreshCodexWorkerStatus,
     activeTasks,
     loadActiveTasks,
     awaitingReplyTasks,

@@ -210,9 +210,12 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     createSseSubscription(sessionId)
     attachTaskUpdateListener()
 
-    // Non-blocking: detect and load JSONL delta messages
+    // Non-blocking: detect and load JSONL delta messages.
+    // Skip for ABORTED tasks — the delta is typically caused by the CLI
+    // continuing to run after abort (undelivered SSE events), not by real
+    // external conversations.
     if (connectVersion !== myVersion) return
-    if (task.value?.claudeSessionId && task.value?.workerId) {
+    if (task.value?.claudeSessionId && task.value?.workerId && task.value?.status !== 'ABORTED') {
       detectAndLoadDelta(task.value.workerId, task.value.claudeSessionId, dbMessageCount, myVersion)
     }
   }

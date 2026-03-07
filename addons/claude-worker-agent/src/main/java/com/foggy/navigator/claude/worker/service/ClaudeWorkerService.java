@@ -64,6 +64,9 @@ public class ClaudeWorkerService {
         if (form.getCodeServerPassword() != null && !form.getCodeServerPassword().isEmpty()) {
             entity.setCodeServerPassword(encrypt(form.getCodeServerPassword()));
         }
+        if (form.getCodeServerFolderPrefix() != null && !form.getCodeServerFolderPrefix().isEmpty()) {
+            entity.setCodeServerFolderPrefix(form.getCodeServerFolderPrefix());
+        }
 
         workerRepository.save(entity);
         log.info("Worker registered: workerId={}, name={}, userId={}", entity.getWorkerId(), entity.getName(), userId);
@@ -119,6 +122,10 @@ public class ClaudeWorkerService {
             } else {
                 entity.setCodeServerPassword(encrypt(form.getCodeServerPassword()));
             }
+        }
+        // codeServerFolderPrefix: null 不改，空串清除，有值则存入
+        if (form.getCodeServerFolderPrefix() != null) {
+            entity.setCodeServerFolderPrefix(form.getCodeServerFolderPrefix().isEmpty() ? null : form.getCodeServerFolderPrefix());
         }
 
         workerRepository.save(entity);
@@ -240,6 +247,7 @@ public class ClaudeWorkerService {
                 .codeServerPublicUrl(entity.getCodeServerPublicUrl())
                 .codeServerInternalUrl(entity.getCodeServerInternalUrl())
                 .codeServerPasswordConfigured(entity.getCodeServerPassword() != null)
+                .codeServerFolderPrefix(entity.getCodeServerFolderPrefix())
                 .build();
     }
 }

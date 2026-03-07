@@ -17,4 +17,5 @@ public class UpdateWorkerForm {
     private String codeServerPublicUrl;
     private String codeServerInternalUrl;
     private String codeServerPassword;
+    private String codeServerFolderPrefix;
 }

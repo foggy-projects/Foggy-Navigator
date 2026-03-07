@@ -433,7 +433,9 @@ def _capture_child_pids(task_id: str) -> None:
         for child in me.children(recursive=True):
             try:
                 name = child.name()
-                if name in ("node", "claude"):
+                # On Windows psutil returns "node.exe" / "claude.exe"
+                basename = name.rsplit(".", 1)[0] if name.endswith(".exe") else name
+                if basename in ("node", "claude"):
                     register_pid(child.pid, task_id)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
@@ -1432,8 +1434,9 @@ class SdkWrapper:
                 for pid in list(permission_pending):
                     if permission_pending[pid].get("task_id") == task_id:
                         permission_pending.pop(pid, None)
-                # Log surviving CLI processes for diagnostics (no auto-kill —
-                # orphans are managed manually via the UI process list).
+                # Log surviving CLI processes for diagnostics.  Active abort
+                # kills processes via abort_query(); any survivors here are
+                # true orphans manageable via the UI process list.
                 try:
                     surviving = _find_sdk_cli_pids()
                     if surviving:

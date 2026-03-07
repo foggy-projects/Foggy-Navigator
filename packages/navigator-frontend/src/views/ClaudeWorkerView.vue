@@ -9,10 +9,10 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="worker">添加 Worker</el-dropdown-item>
-              <el-dropdown-item command="directory" :disabled="!selectedWorkerId">
+              <el-dropdown-item command="directory" :disabled="!selectedWorkerId || selectedWorkerType === 'CODEX'">
                 添加工作目录
               </el-dropdown-item>
-              <el-dropdown-item command="project" :disabled="!selectedWorkerId">
+              <el-dropdown-item command="project" :disabled="!selectedWorkerId || selectedWorkerType === 'CODEX'">
                 添加项目目录
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -20,7 +20,7 @@
         </el-dropdown>
       </div>
       <div class="worker-list">
-        <template v-for="worker in workerState.workers.value" :key="worker.workerId">
+        <template v-for="worker in workerState.allWorkers.value" :key="worker.workerId">
           <!-- Worker node (Level 1) -->
           <div
             :class="[
@@ -31,18 +31,28 @@
           >
             <div class="worker-info">
               <span
+                v-if="worker.workerType === 'CLAUDE'"
                 class="expand-icon"
                 @click.stop="toggleExpand(worker.workerId)"
               >
                 {{ expandedWorkerIds.has(worker.workerId) ? '▼' : '▶' }}
               </span>
+              <span v-else class="expand-icon" style="visibility: hidden">▶</span>
               <span :class="['status-dot', worker.status?.toLowerCase()]" />
               <span class="worker-name">{{ worker.name }}</span>
+              <el-tag
+                :type="worker.workerType === 'CODEX' ? 'success' : ''"
+                size="small"
+                effect="plain"
+                style="margin-left: 4px; font-size: 10px; padding: 0 4px; height: 18px; line-height: 18px"
+              >
+                {{ worker.workerType === 'CODEX' ? 'Codex' : 'Claude' }}
+              </el-tag>
             </div>
             <div class="worker-meta">{{ worker.hostname || worker.baseUrl }}</div>
           </div>
-          <!-- Directory nodes (Level 2): PROJECT dirs first, then orphan STANDARD dirs -->
-          <template v-if="expandedWorkerIds.has(worker.workerId)">
+          <!-- Directory nodes (Level 2): PROJECT dirs first, then orphan STANDARD dirs (Claude only) -->
+          <template v-if="worker.workerType === 'CLAUDE' && expandedWorkerIds.has(worker.workerId)">
             <!-- PROJECT directories -->
             <template v-for="dir in projectDirectoriesForWorker(worker.workerId)" :key="dir.directoryId">
               <div
@@ -153,12 +163,12 @@
             </div>
           </template>
         </template>
-        <div v-if="workerState.workers.value.length === 0" class="empty-hint">
+        <div v-if="workerState.allWorkers.value.length === 0" class="empty-hint">
           暂无 Worker，点击上方添加
         </div>
       </div>
       <div class="sidebar-footer">
-        <el-button text size="small" @click="router.push('/')">
+        <el-button text size="small" @click="router.push('/chat')">
           <el-icon><Back /></el-icon> 返回会话
         </el-button>
       </div>
@@ -419,25 +429,25 @@
         >
           <template #header-extra="{ paneState }">
             <span
-              v-if="getInteractionState(paneState.task.value?.sessionId)"
-              :class="['pane-interaction-tag', getInteractionState(paneState.task.value?.sessionId)!.toLowerCase()]"
-            >{{ interactionStateLabel(getInteractionState(paneState.task.value?.sessionId)!) }}</span>
+              v-if="paneInteractionState(paneState)"
+              :class="['pane-interaction-tag', paneInteractionState(paneState)!.toLowerCase()]"
+            >{{ interactionStateLabel(paneInteractionState(paneState)!) }}</span>
             <el-button
-              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
               text
               title="搁置会话"
               @click="handlePaneHold(paneState.task.value?.sessionId)"
             >搁置</el-button>
             <el-button
-              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
               text
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
             <el-button
-              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
               text
               type="danger"
@@ -464,20 +474,37 @@
             <el-tag :type="statusTagType(selectedWorkerEntity.status)" size="small">
               {{ selectedWorkerEntity.status }}
             </el-tag>
+            <el-tag
+              :type="selectedWorkerType === 'CODEX' ? 'success' : ''"
+              size="small"
+              style="margin-left: 4px"
+            >
+              {{ selectedWorkerType === 'CODEX' ? 'Codex' : 'Claude' }}
+            </el-tag>
             <span v-if="selectedWorkerEntity.workerVersion" class="version-tag">
               v{{ selectedWorkerEntity.workerVersion }}
             </span>
           </div>
           <div class="header-actions">
             <el-button size="small" @click="handleRefreshStatus">刷新状态</el-button>
-            <el-button size="small" :loading="syncingSkills" @click="handleSyncSkills">同步 Skills</el-button>
-            <el-button size="small" @click="showEditDialog = true">编辑</el-button>
+            <el-button v-if="selectedWorkerType === 'CLAUDE'" size="small" :loading="syncingSkills" @click="handleSyncSkills">同步 Skills</el-button>
+            <el-button v-if="selectedWorkerType === 'CLAUDE'" size="small" @click="showEditDialog = true">编辑</el-button>
             <el-button size="small" type="danger" text @click="handleDelete">删除</el-button>
           </div>
         </div>
 
-        <!-- Worker Tabs: CLI Processes & Agents -->
-        <el-tabs v-model="workerActiveTab" class="worker-tabs" @tab-change="handleWorkerTabChange">
+        <!-- Codex Worker: minimal info -->
+        <div v-if="selectedWorkerType === 'CODEX'" class="codex-worker-info" style="padding: 16px; color: #606266;">
+          <p><strong>地址：</strong>{{ selectedWorkerEntity.baseUrl }}</p>
+          <p v-if="selectedWorkerEntity.hostname"><strong>主机名：</strong>{{ selectedWorkerEntity.hostname }}</p>
+          <p v-if="selectedWorkerEntity.lastHeartbeat"><strong>最后心跳：</strong>{{ selectedWorkerEntity.lastHeartbeat }}</p>
+          <p style="margin-top: 16px; color: #909399; font-size: 13px">
+            Codex Worker 仅提供编程执行能力，不支持目录管理、SSH 终端和文件浏览。
+          </p>
+        </div>
+
+        <!-- Worker Tabs: CLI Processes & Agents (Claude only) -->
+        <el-tabs v-if="selectedWorkerType === 'CLAUDE'" v-model="workerActiveTab" class="worker-tabs" @tab-change="handleWorkerTabChange">
           <el-tab-pane name="processes">
             <template #label>
               <span>CLI 进程</span>
@@ -717,25 +744,25 @@
         >
           <template #header-extra="{ paneState }">
             <span
-              v-if="getInteractionState(paneState.task.value?.sessionId)"
-              :class="['pane-interaction-tag', getInteractionState(paneState.task.value?.sessionId)!.toLowerCase()]"
-            >{{ interactionStateLabel(getInteractionState(paneState.task.value?.sessionId)!) }}</span>
+              v-if="paneInteractionState(paneState)"
+              :class="['pane-interaction-tag', paneInteractionState(paneState)!.toLowerCase()]"
+            >{{ interactionStateLabel(paneInteractionState(paneState)!) }}</span>
             <el-button
-              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
               text
               title="搁置会话"
               @click="handlePaneHold(paneState.task.value?.sessionId)"
             >搁置</el-button>
             <el-button
-              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
               text
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
             <el-button
-              v-if="getInteractionState(paneState.task.value?.sessionId) === 'AWAITING_REPLY'"
+              v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
               text
               type="danger"
@@ -1163,13 +1190,19 @@
     <!-- Add Worker Dialog -->
     <el-dialog v-model="showAddDialog" title="添加 Worker" width="480px">
       <el-form :model="addForm" label-position="top">
+        <el-form-item label="Worker 类型">
+          <el-radio-group v-model="addWorkerType">
+            <el-radio-button value="CLAUDE">Claude Code</el-radio-button>
+            <el-radio-button value="CODEX">OpenAI Codex</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="名称" required>
-          <el-input v-model="addForm.name" placeholder="如：我的家庭机" />
+          <el-input v-model="addForm.name" :placeholder="addWorkerType === 'CODEX' ? '如：Codex Worker' : '如：我的家庭机'" />
         </el-form-item>
         <el-form-item label="地址" required>
-          <el-input v-model="addForm.baseUrl" placeholder="如：http://192.168.1.100:3001" />
+          <el-input v-model="addForm.baseUrl" :placeholder="addWorkerType === 'CODEX' ? '如：http://localhost:3032' : '如：http://192.168.1.100:3031'" />
         </el-form-item>
-        <el-form-item label="认证令牌" required>
+        <el-form-item label="认证令牌" :required="addWorkerType === 'CLAUDE'">
           <el-input
             v-model="addForm.authToken"
             type="password"
@@ -1177,33 +1210,39 @@
             placeholder="Worker 预共享令牌"
           />
         </el-form-item>
-        <el-form-item label="认证模式">
-          <el-select v-model="addForm.authMode" style="width: 100%">
-            <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
-            <el-option label="API Key 模式" value="API_KEY" />
-            <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
-          </el-select>
-        </el-form-item>
-        <el-divider content-position="left">SSH 终端（可选）</el-divider>
-        <el-form-item label="SSH 用户名">
-          <el-input v-model="addForm.sshUsername" placeholder="如 root" />
-        </el-form-item>
-        <el-form-item label="SSH 端口">
-          <el-input-number v-model="addForm.sshPort" :min="1" :max="65535" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="SSH 密码">
-          <el-input v-model="addForm.sshPassword" type="password" show-password placeholder="SSH 登录密码" />
-        </el-form-item>
-        <el-divider content-position="left">Code Server（可选）</el-divider>
-        <el-form-item label="公网地址">
-          <el-input v-model="addForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
-        </el-form-item>
-        <el-form-item label="内网地址">
-          <el-input v-model="addForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input v-model="addForm.codeServerPassword" type="password" show-password placeholder="code-server 登录密码" />
-        </el-form-item>
+        <!-- Claude-specific fields -->
+        <template v-if="addWorkerType === 'CLAUDE'">
+          <el-form-item label="认证模式">
+            <el-select v-model="addForm.authMode" style="width: 100%">
+              <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
+              <el-option label="API Key 模式" value="API_KEY" />
+              <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
+            </el-select>
+          </el-form-item>
+          <el-divider content-position="left">SSH 终端（可选）</el-divider>
+          <el-form-item label="SSH 用户名">
+            <el-input v-model="addForm.sshUsername" placeholder="如 root" />
+          </el-form-item>
+          <el-form-item label="SSH 端口">
+            <el-input-number v-model="addForm.sshPort" :min="1" :max="65535" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="SSH 密码">
+            <el-input v-model="addForm.sshPassword" type="password" show-password placeholder="SSH 登录密码" />
+          </el-form-item>
+          <el-divider content-position="left">Code Server（可选）</el-divider>
+          <el-form-item label="公网地址">
+            <el-input v-model="addForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
+          </el-form-item>
+          <el-form-item label="内网地址">
+            <el-input v-model="addForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input v-model="addForm.codeServerPassword" type="password" show-password placeholder="code-server 登录密码" />
+          </el-form-item>
+          <el-form-item label="Folder 前缀">
+            <el-input v-model="addForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="showAddDialog = false">取消</el-button>
@@ -1264,6 +1303,9 @@
             show-password
             :placeholder="selectedWorkerEntity?.codeServerPasswordConfigured ? '已保存，留空不改' : 'code-server 登录密码'"
           />
+        </el-form-item>
+        <el-form-item label="Folder 前缀">
+          <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1828,7 +1870,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick, type Ref } from 'vue'
+import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Back } from '@element-plus/icons-vue'
@@ -1858,7 +1900,7 @@ import * as dirApi from '@/api/claudeWorker'
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, WorkerType } from '@/types'
 import type { AipMessageType } from '@foggy/chat'
 
 const MAX_PANES = 1
@@ -2013,6 +2055,17 @@ const selectedWorkerId = ref<string | null>(null)
 const selectedDirectoryId = ref<string | null>(null)
 const expandedWorkerIds = reactive(new Set<string>())
 const expandedProjectIds = reactive(new Set<string>())
+
+/** 判断选中 Worker 的类型 */
+const selectedWorkerType = computed<WorkerType | null>(() => {
+  if (!selectedWorkerId.value) return null
+  if (workerState.codexWorkers.value.some(w => w.workerId === selectedWorkerId.value)) return 'CODEX'
+  return 'CLAUDE'
+})
+
+/** Codex Workers 是否为空 */
+const isCodexWorker = (workerId: string) =>
+  workerState.codexWorkers.value.some(w => w.workerId === workerId)
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
 const showAddDirectoryDialog = ref(false)
@@ -2085,6 +2138,11 @@ function currentStateParam(): string | undefined {
   // 全部选中 → 无过滤
   if (ALL_STATES.every((s) => interactionStateFilters.value.has(s))) return undefined
   return [...interactionStateFilters.value].join(',')
+}
+
+/** Reload worker-level tasks respecting the current filter */
+function reloadWorkerTasks() {
+  return workerState.loadTasks(currentStateParam())
 }
 
 /** Reload history tasks using the current interactionState filter */
@@ -2181,6 +2239,9 @@ const showSshDialog = ref(false)
 const sshForm = ref({ host: '', port: 22, username: '', password: '' })
 const sshConnecting = ref(false)
 
+/** Worker 类型选择（添加对话框） */
+const addWorkerType = ref<WorkerType>('CLAUDE')
+
 const addForm = ref({
   name: '',
   baseUrl: '',
@@ -2192,6 +2253,7 @@ const addForm = ref({
   codeServerPublicUrl: '',
   codeServerInternalUrl: '',
   codeServerPassword: '',
+  codeServerFolderPrefix: '',
 })
 
 const editForm = ref({
@@ -2205,6 +2267,7 @@ const editForm = ref({
   codeServerPublicUrl: '',
   codeServerInternalUrl: '',
   codeServerPassword: '',
+  codeServerFolderPrefix: '',
 })
 
 const addDirForm = ref({
@@ -2479,8 +2542,7 @@ const dirFullInputRef = ref<InstanceType<typeof SlashCommandInput> | null>(null)
 const dirMiniInputRef = ref<InstanceType<typeof SlashCommandInput> | null>(null)
 
 /** Insert "./" at cursor position to trigger file search */
-function insertDotSlash(inputCompRef: Ref<InstanceType<typeof SlashCommandInput> | null> | InstanceType<typeof SlashCommandInput> | null) {
-  const comp = inputCompRef && 'value' in inputCompRef ? inputCompRef.value : inputCompRef
+function insertDotSlash(comp: InstanceType<typeof SlashCommandInput> | null) {
   if (!comp) return
   const textarea = comp.getTextareaEl()
   if (!textarea) return
@@ -2612,9 +2674,12 @@ function clearAttachedImages() {
   attachedImages.value = []
 }
 
-const selectedWorkerEntity = computed(() =>
-  workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value),
-)
+const selectedWorkerEntity = computed(() => {
+  const claude = workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value)
+  if (claude) return claude
+  // Also check Codex workers (they have compatible basic fields)
+  return workerState.codexWorkers.value.find((w) => w.workerId === selectedWorkerId.value) as typeof claude
+})
 
 const selectedDirectory = computed(() =>
   workerState.directories.value.find((d) => d.directoryId === selectedDirectoryId.value),
@@ -2912,7 +2977,7 @@ onMounted(async () => {
   // Listen for SSE-driven task updates (from useNotifications)
   window.addEventListener('task-update', handleTaskUpdateEvent)
   window.addEventListener('notification-reconnected', handleNotificationReconnected)
-  await Promise.all([workerState.loadWorkers(), workerState.loadTasks(), workerState.loadActiveTasks(), workerState.loadAwaitingReplyTasks(), loadPlatformModelConfig(), agentState.loadAgents()])
+  await Promise.all([workerState.loadWorkers(), reloadWorkerTasks(), workerState.loadActiveTasks(), workerState.loadAwaitingReplyTasks(), loadPlatformModelConfig(), agentState.loadAgents()])
   // Load conversation configs for all loaded tasks (including active and awaiting reply)
   const allSessionIds = [
     ...workerState.tasks.value.map((t) => t.sessionId),
@@ -3056,7 +3121,7 @@ function handleRunFavScript(s: FavoriteScript) {
 
 /** Called when any pane's task reaches a terminal state */
 function handleTaskFinished(_paneId: string) {
-  workerState.loadTasks()
+  reloadWorkerTasks()
   if (selectedDirectoryId.value) {
     loadDirectoryTasks()
   }
@@ -3092,6 +3157,13 @@ function selectWorker(workerId: string) {
   workerActiveTab.value = 'processes'
   focusedPaneId.value = null
   exitBatchSelectMode()
+
+  if (isCodexWorker(workerId)) {
+    // Codex Worker: no CLI processes, directories, or workspace management
+    return
+  }
+
+  // Claude Worker: full feature set
   // Load CLI processes when selecting a worker
   loadCliProcesses()
   // Suspend SSE on other workspaces to free browser connections (HTTP/1.1 limit: 6)
@@ -3180,20 +3252,45 @@ function handleAddCommand(command: string) {
 }
 
 async function handleAdd() {
-  if (!addForm.value.name || !addForm.value.baseUrl || !addForm.value.authToken) {
-    ElMessage.warning('请填写完整信息')
-    return
-  }
-  saving.value = true
-  try {
-    await workerState.registerWorker(addForm.value)
-    showAddDialog.value = false
-    addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '' }
-    ElMessage.success('Worker 添加成功')
-  } catch {
-    ElMessage.error('添加失败')
-  } finally {
-    saving.value = false
+  if (addWorkerType.value === 'CODEX') {
+    // Codex Worker: only needs name + baseUrl
+    if (!addForm.value.name || !addForm.value.baseUrl) {
+      ElMessage.warning('请填写名称和地址')
+      return
+    }
+    saving.value = true
+    try {
+      await workerState.registerCodexWorker({
+        name: addForm.value.name,
+        baseUrl: addForm.value.baseUrl,
+        authToken: addForm.value.authToken || undefined,
+      })
+      showAddDialog.value = false
+      addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '', codeServerFolderPrefix: '' }
+      addWorkerType.value = 'CLAUDE'
+      ElMessage.success('Codex Worker 添加成功')
+    } catch {
+      ElMessage.error('添加失败')
+    } finally {
+      saving.value = false
+    }
+  } else {
+    // Claude Worker: needs name + baseUrl + authToken
+    if (!addForm.value.name || !addForm.value.baseUrl || !addForm.value.authToken) {
+      ElMessage.warning('请填写完整信息')
+      return
+    }
+    saving.value = true
+    try {
+      await workerState.registerWorker(addForm.value)
+      showAddDialog.value = false
+      addForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '', codeServerFolderPrefix: '' }
+      ElMessage.success('Worker 添加成功')
+    } catch {
+      ElMessage.error('添加失败')
+    } finally {
+      saving.value = false
+    }
   }
 }
 
@@ -3209,6 +3306,7 @@ async function handleEdit() {
       sshPort: editForm.value.sshPort,
       codeServerPublicUrl: editForm.value.codeServerPublicUrl || null,
       codeServerInternalUrl: editForm.value.codeServerInternalUrl || null,
+      codeServerFolderPrefix: editForm.value.codeServerFolderPrefix || null,
     }
     // 密码类字段：有值才发送，空串不发（避免清空已保存的密码）
     if (editForm.value.authToken) {
@@ -3238,18 +3336,21 @@ async function handleDelete() {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
-    // Dispose workspace for this worker
-    disposeWorkspace(`worker:${selectedWorkerId.value}`)
-    // Also dispose all directory workspaces under this worker
-    const dirs = workerState.directories.value.filter(d => d.workerId === selectedWorkerId.value)
-    for (const dir of dirs) {
-      disposeWorkspace(dir.directoryId)
-      // Clean up drafts for directories under this worker
-      taskMemory.deleteDraft('task-' + dir.directoryId)
+    if (isCodexWorker(selectedWorkerId.value)) {
+      // Codex Worker: no directories to clean up
+      taskMemory.deleteDraft('task-worker-' + selectedWorkerId.value)
+      await workerState.deleteCodexWorker(selectedWorkerId.value)
+    } else {
+      // Claude Worker: clean up workspaces and directories
+      disposeWorkspace(`worker:${selectedWorkerId.value}`)
+      const dirs = workerState.directories.value.filter(d => d.workerId === selectedWorkerId.value)
+      for (const dir of dirs) {
+        disposeWorkspace(dir.directoryId)
+        taskMemory.deleteDraft('task-' + dir.directoryId)
+      }
+      taskMemory.deleteDraft('task-worker-' + selectedWorkerId.value)
+      await workerState.deleteWorker(selectedWorkerId.value)
     }
-    // Clean up draft for this worker
-    taskMemory.deleteDraft('task-worker-' + selectedWorkerId.value)
-    await workerState.deleteWorker(selectedWorkerId.value)
     selectedWorkerId.value = null
     selectedDirectoryId.value = null
     ElMessage.success('已删除')
@@ -3261,7 +3362,11 @@ async function handleDelete() {
 async function handleRefreshStatus() {
   if (!selectedWorkerId.value) return
   try {
-    await workerState.refreshWorkerStatus(selectedWorkerId.value)
+    if (isCodexWorker(selectedWorkerId.value)) {
+      await workerState.refreshCodexWorkerStatus(selectedWorkerId.value)
+    } else {
+      await workerState.refreshWorkerStatus(selectedWorkerId.value)
+    }
     ElMessage.success('状态已刷新')
   } catch {
     ElMessage.error('刷新失败')
@@ -3434,11 +3539,22 @@ async function openCodeServer(network: 'internal' | 'public') {
   const dir = selectedDirectory.value
   let folderPath = dir?.path || ''
 
-  // 本地开发 (WSL): Windows 路径 → /mnt/d/...
-  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  if (isLocal && /^[A-Za-z]:[\\\/]/.test(folderPath)) {
+  // Windows 路径转换（如 D:\foo\bar → /mnt/d/foo/bar）
+  // 优先使用 worker 配置的 codeServerFolderPrefix，否则本地自动检测
+  if (/^[A-Za-z]:[\\\/]/.test(folderPath)) {
     const drive = folderPath[0]!.toLowerCase()
-    folderPath = '/mnt/' + drive + folderPath.slice(2).replace(/\\/g, '/')
+    const rest = folderPath.slice(2).replace(/\\/g, '/')
+    if (worker.codeServerFolderPrefix) {
+      // 使用配置的前缀，{drive} 占位符替换为实际盘符
+      const prefix = worker.codeServerFolderPrefix.replace('{drive}', drive)
+      folderPath = prefix + rest
+    } else {
+      // 回退：本地开发时自动转换
+      const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+      if (isLocal) {
+        folderPath = '/mnt/' + drive + rest
+      }
+    }
   }
 
   const folder = folderPath ? encodeURIComponent(folderPath) : ''
@@ -3493,7 +3609,7 @@ async function handleSyncSessions() {
     const result = await workerState.syncSessions(selectedWorkerId.value)
     ElMessage.success(`已同步 ${result.synced} 个新会话，共 ${result.total} 个`)
     // Refresh task lists to show newly synced sessions
-    await workerState.loadTasks()
+    await reloadWorkerTasks()
     if (selectedDirectoryId.value) {
       await loadDirectoryTasks()
     }
@@ -3611,7 +3727,7 @@ async function handleRefreshConversations() {
   if (selectedDirectoryId.value) {
     await loadDirectoryTasks()
   } else {
-    await workerState.loadTasks()
+    await reloadWorkerTasks()
   }
 }
 
@@ -3672,7 +3788,7 @@ async function handleBatchDelete() {
     }
     ElMessage.success(`已删除 ${deleted} 个任务`)
     exitBatchSelectMode()
-    workerState.loadTasks()
+    reloadWorkerTasks()
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
     }
@@ -3878,7 +3994,7 @@ async function executePaneRewind() {
       ElMessage.success('会话已回退，请编辑提示词后发送')
     } else {
       ElMessage.success('文件已回退')
-      workerState.loadTasks()
+      reloadWorkerTasks()
       if (selectedDirectoryId.value) loadDirectoryTasks()
     }
     paneRewindVisible.value = false
@@ -4403,7 +4519,7 @@ async function handlePaneSend(paneId: string, content: string) {
 
     pane.resumeInPlace(newTask)
 
-    workerState.loadTasks()
+    reloadWorkerTasks()
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
     }
@@ -4481,7 +4597,7 @@ async function handleAbortTask(taskId: string) {
     // Immediately remove from activeTasks (don't wait for SSE)
     workerState.activeTasks.value = workerState.activeTasks.value.filter(t => t.taskId !== taskId)
     // Refresh task lists
-    workerState.loadTasks()
+    reloadWorkerTasks()
     workerState.loadAwaitingReplyTasks()
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
@@ -4530,7 +4646,7 @@ async function handleRewind() {
     if (rewindMode.value === 'conversation_fork') {
       ElMessage.success('会话已 fork，新任务已创建')
       // Refresh task list to show new task
-      workerState.loadTasks()
+      reloadWorkerTasks()
       if (selectedDirectoryId.value) loadDirectoryTasks()
     } else {
       ElMessage.success('文件已回退')
@@ -4582,7 +4698,7 @@ async function handleDeleteConversation(conv: ConversationGroup) {
     // Clean up draft for this conversation (session)
     taskMemory.deleteDraft('pane-' + conv.sessionId)
     ElMessage.success('会话已删除')
-    workerState.loadTasks()
+    reloadWorkerTasks()
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
     }
@@ -4689,6 +4805,23 @@ function getInteractionState(sessionId?: string): string | undefined {
   return workerState.conversationConfigs.value.get(sessionId)?.interactionState
 }
 
+/**
+ * Derive the effective interaction state for a pane, prioritizing task.status
+ * over the persisted interactionState (which may lag behind session SSE events).
+ *
+ * When session SSE delivers CONFIRMATION_REQUEST it immediately sets
+ * task.status = 'AWAITING_PERMISSION', but the notification SSE carrying the
+ * updated interactionState may arrive later.  Without this derivation the pane
+ * header would still show "处理中" while the abort button has already vanished.
+ */
+function paneInteractionState(paneState: { task: { value: { status?: string; sessionId?: string } | null } }): string | undefined {
+  const status = paneState.task.value?.status
+  if (status === 'RUNNING') return 'PROCESSING'
+  if (status === 'AWAITING_PERMISSION') return 'AWAITING_REPLY'
+  // For terminal / other states, fall back to the persisted interactionState
+  return getInteractionState(paneState.task.value?.sessionId)
+}
+
 function interactionStateLabel(state: string): string {
   switch (state) {
     case 'PROCESSING': return '处理中'
@@ -4748,7 +4881,7 @@ async function handleResumeFromHistory(task: ClaudeTask) {
       await newPane.connect(newTask.sessionId)  // load full history
     }
 
-    workerState.loadTasks()
+    reloadWorkerTasks()
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
     }
@@ -4772,6 +4905,7 @@ watch(showEditDialog, (val) => {
       codeServerPublicUrl: selectedWorkerEntity.value.codeServerPublicUrl || '',
       codeServerInternalUrl: selectedWorkerEntity.value.codeServerInternalUrl || '',
       codeServerPassword: '',
+      codeServerFolderPrefix: selectedWorkerEntity.value.codeServerFolderPrefix || '',
     }
   }
 })

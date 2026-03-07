@@ -1,7 +1,7 @@
 <template>
   <div class="app-layout">
     <header class="app-header">
-      <div class="header-brand" @click="router.push('/')">Foggy Navigator</div>
+      <div class="header-brand" @click="router.push('/workers')">Foggy Navigator</div>
       <el-menu
         :default-active="activeMenu"
         mode="horizontal"
@@ -9,9 +9,9 @@
         class="header-menu"
         router
       >
-        <el-menu-item index="/">会话</el-menu-item>
-        <el-menu-item index="/tasks">任务</el-menu-item>
         <el-menu-item index="/workers">Workers</el-menu-item>
+        <el-menu-item index="/chat">会话</el-menu-item>
+        <el-menu-item index="/tasks">任务</el-menu-item>
         <el-menu-item index="/cross-tasks">跨项目</el-menu-item>
         <el-menu-item index="/monitoring">监控</el-menu-item>
         <el-menu-item index="/settings">设置</el-menu-item>
@@ -60,8 +60,8 @@ const { unreadCount, connect: connectNotifications, markAllRead, requestPermissi
 
 const activeMenu = computed(() => {
   const path = route.path
-  // For /c/:id routes, highlight the home menu item
-  if (path.startsWith('/c/')) return '/'
+  // For /c/:id routes, highlight the chat menu item
+  if (path.startsWith('/c/')) return '/chat'
   return path
 })
 

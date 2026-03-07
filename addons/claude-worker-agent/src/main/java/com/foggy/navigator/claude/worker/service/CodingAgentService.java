@@ -11,8 +11,10 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.spi.codex.CodexWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +36,11 @@ public class CodingAgentService {
     private final ClaudeWorkerService workerService;
     private final WorkingDirectoryRepository directoryRepository;
     private final ClaudeWorkerFacade claudeWorkerFacade;
+
+    /** Codex Worker 门面（可选依赖，codex-worker-agent 模块加载后才有） */
+    @Autowired(required = false)
+    @Nullable
+    private CodexWorkerFacade codexWorkerFacade;
 
     /**
      * 注册新 Agent
@@ -62,6 +69,22 @@ public class CodingAgentService {
             // 验证目录归属
             directoryRepository.findByDirectoryIdAndUserId(form.getDefaultDirectoryId(), userId)
                     .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + form.getDefaultDirectoryId()));
+        }
+
+        // 验证 LOCAL_CODEX_WORKER 必须有 workerId，目录复用 Claude Worker 管理的目录
+        if ("LOCAL_CODEX_WORKER".equals(agentType)) {
+            if (form.getWorkerId() == null || form.getWorkerId().isBlank()) {
+                throw new IllegalArgumentException("workerId is required for LOCAL_CODEX_WORKER agent");
+            }
+            // 通过 CodexWorkerFacade 验证 Worker 存在
+            if (codexWorkerFacade != null) {
+                codexWorkerFacade.getWorker(userId, form.getWorkerId());
+            }
+            // defaultDirectoryId 可选，复用 Claude Worker 的目录
+            if (form.getDefaultDirectoryId() != null && !form.getDefaultDirectoryId().isBlank()) {
+                directoryRepository.findByDirectoryIdAndUserId(form.getDefaultDirectoryId(), userId)
+                        .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + form.getDefaultDirectoryId()));
+            }
         }
 
         CodingAgentEntity entity = new CodingAgentEntity();

@@ -23,6 +23,15 @@ const routes = [
     children: [
       {
         path: '',
+        redirect: '/workers',
+      },
+      {
+        path: 'workers',
+        name: 'Workers',
+        component: () => import('@/views/ClaudeWorkerView.vue'),
+      },
+      {
+        path: 'chat',
         name: 'Home',
         component: () => import('@/views/ChatView.vue'),
       },
@@ -30,11 +39,6 @@ const routes = [
         path: 'c/:id',
         name: 'Chat',
         component: () => import('@/views/ChatView.vue'),
-      },
-      {
-        path: 'workers',
-        name: 'Workers',
-        component: () => import('@/views/ClaudeWorkerView.vue'),
       },
       {
         path: 'tasks',
@@ -92,7 +96,7 @@ router.beforeEach(async (to, _from, next) => {
   }
   // 2. 已登录访问登录页 → 去首页
   if (to.path === '/login' && isLoggedIn()) {
-    next('/')
+    next('/workers')
     return
   }
   // 3. 已登录 + 需要检查 setup 状态的页面

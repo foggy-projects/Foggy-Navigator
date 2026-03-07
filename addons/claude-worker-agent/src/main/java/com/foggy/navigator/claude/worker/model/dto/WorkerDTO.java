@@ -26,4 +26,5 @@ public class WorkerDTO {
     private String codeServerPublicUrl;
     private String codeServerInternalUrl;
     private boolean codeServerPasswordConfigured;
+    private String codeServerFolderPrefix;
 }

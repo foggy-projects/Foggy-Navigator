@@ -20,7 +20,7 @@
           {{ (paneState.task.value.durationMs / 1000).toFixed(1) }}s
         </span>
         <el-button
-          v-if="paneState.task.value?.status === 'RUNNING'"
+          v-if="['RUNNING', 'AWAITING_PERMISSION'].includes(paneState.task.value?.status ?? '')"
           size="small"
           type="danger"
           text

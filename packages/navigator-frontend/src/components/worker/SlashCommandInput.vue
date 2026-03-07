@@ -585,9 +585,10 @@ function selectFile(idx: number) {
   })
 }
 
-function scrollFileActiveIntoView() {
+/** Scroll the .active item into view within the given panel ref */
+function scrollPanelActiveIntoView(panelEl: typeof panelRef) {
   nextTick(() => {
-    const panel = filePanelRef.value
+    const panel = panelEl.value
     if (!panel) return
     const active = panel.querySelector('.slash-item.active') as HTMLElement | null
     active?.scrollIntoView({ block: 'nearest' })
@@ -614,13 +615,13 @@ function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       fileActiveIndex.value = Math.min(fileActiveIndex.value + 1, fileResults.value.length - 1)
-      scrollFileActiveIntoView()
+      scrollPanelActiveIntoView(filePanelRef)
       return
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
       fileActiveIndex.value = Math.max(fileActiveIndex.value - 1, 0)
-      scrollFileActiveIntoView()
+      scrollPanelActiveIntoView(filePanelRef)
       return
     }
     if (e.key === 'Tab' || e.key === 'Enter') {
@@ -671,8 +672,7 @@ function handleKeydown(e: KeyboardEvent) {
     }
     // ArrowUp/Down → history navigation (only when cursor is at boundary)
     if (e.key === 'ArrowUp') {
-      const el = inputRef.value?.$el || inputRef.value
-      const textarea = el?.querySelector?.('textarea') || el?.querySelector?.('input')
+      const textarea = getTextareaEl()
       if (textarea && textarea.selectionStart === 0) {
         e.preventDefault()
         emit('history-prev')
@@ -680,8 +680,7 @@ function handleKeydown(e: KeyboardEvent) {
       return
     }
     if (e.key === 'ArrowDown') {
-      const el = inputRef.value?.$el || inputRef.value
-      const textarea = el?.querySelector?.('textarea') || el?.querySelector?.('input')
+      const textarea = getTextareaEl()
       if (textarea && textarea.selectionStart === textarea.value.length) {
         e.preventDefault()
         emit('history-next')
@@ -713,14 +712,14 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'ArrowDown') {
     e.preventDefault()
     activeIndex.value = Math.min(activeIndex.value + 1, maxIdx)
-    scrollActiveIntoView()
+    scrollPanelActiveIntoView(panelRef)
     return
   }
 
   if (e.key === 'ArrowUp') {
     e.preventDefault()
     activeIndex.value = Math.max(activeIndex.value - 1, 0)
-    scrollActiveIntoView()
+    scrollPanelActiveIntoView(panelRef)
     return
   }
 
@@ -771,21 +770,10 @@ function selectChild(idx: number) {
 }
 
 function focusInput() {
-  nextTick(() => {
-    const el = inputRef.value?.$el || inputRef.value
-    const textarea = el?.querySelector?.('textarea') || el?.querySelector?.('input')
-    textarea?.focus()
-  })
+  nextTick(() => getTextareaEl()?.focus())
 }
 
-function scrollActiveIntoView() {
-  nextTick(() => {
-    const panel = panelRef.value
-    if (!panel) return
-    const active = panel.querySelector('.slash-item.active') as HTMLElement | null
-    active?.scrollIntoView({ block: 'nearest' })
-  })
-}
+// scrollActiveIntoView is now handled by the shared scrollPanelActiveIntoView
 
 // Close panel when clicking outside
 function handleClickOutside(e: MouseEvent) {

@@ -86,6 +86,15 @@ public class LlmModelConfigEntity {
     private Integer sortOrder;
 
     /**
+     * Worker 后端类型
+     * CLAUDE_CODE = 由 Claude Worker 执行
+     * OPENAI_CODEX = 由 Codex Worker 执行
+     * null = 普通 LLM 配置（Tutor/Agent Framework 用，不涉及 Worker 执行）
+     */
+    @Column(length = 32)
+    private String workerBackend;
+
+    /**
      * 环境变量（JSON 格式存储，如 {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"80"}）
      * 使用该模型启动 Claude Code 时注入到 CLI 子进程
      */

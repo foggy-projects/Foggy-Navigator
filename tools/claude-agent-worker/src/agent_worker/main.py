@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import __version__
 from .config import settings
 from .routes import auth, files, git_info, git_log, health, init_directory, platform_skills, processes, query, sessions, skills, ssh, worktree
 from .platform_skills.deployer import deploy_platform_skills
@@ -18,7 +19,8 @@ from .ssh.session_manager import start_cleanup_task, stop_cleanup_and_close_all
 import sys
 
 # -- Logging ----------------------------------------------------------------
-_LOG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "logs"
+# __file__ = src/agent_worker/main.py → 3 parents = worker root (claude-agent-worker/)
+_LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
 
 _fmt = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
@@ -99,7 +101,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Claude Agent Worker",
     description="REST/SSE bridge between Foggy Navigator and the Claude Code SDK",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
 

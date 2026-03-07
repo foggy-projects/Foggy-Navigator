@@ -110,6 +110,7 @@ class AbortResponse(BaseModel):
 
     task_id: str
     status: str
+    killed_pids: list[int] = Field(default_factory=list, description="PIDs of CLI processes that were killed")
 
 
 class PermissionResponse(BaseModel):
