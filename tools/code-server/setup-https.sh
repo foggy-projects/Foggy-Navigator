@@ -158,6 +158,10 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+
+        # WebSocket long-lived connections (code-server needs persistent WS)
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
     }
 }
 
@@ -181,6 +185,10 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+
+        # WebSocket long-lived connections (code-server needs persistent WS)
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
     }
 }
 NGINX_EOF
