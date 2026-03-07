@@ -189,7 +189,11 @@ echo "  Config written to $NGINX_CONF"
 
 # Enable (symlink) if using sites-available pattern
 if [ "$NGINX_STYLE" = "sites" ]; then
-  # Remove default site if it conflicts on port 80 (leave it alone otherwise)
+  # Remove default site to avoid port 80 conflict (we only use custom ports)
+  if [ -f "/etc/nginx/sites-enabled/default" ]; then
+    sudo rm -f /etc/nginx/sites-enabled/default
+    echo "  Removed default site (avoids port 80 conflict)"
+  fi
   sudo ln -sf "$NGINX_CONF" "$NGINX_ENABLED"
   echo "  Enabled: $NGINX_ENABLED"
 fi

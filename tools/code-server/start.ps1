@@ -64,12 +64,25 @@ Write-Host "Project: $ProjectWin" -ForegroundColor Cyan
 Write-Host ""
 
 # ---- Check if already running ----
-$existingPid = (netstat -ano 2>$null | Select-String ":$Port\s+.*LISTENING" | ForEach-Object {
-    ($_ -split '\s+')[-1]
-} | Select-Object -First 1)
+# For WSL mode, check the actual code-server process inside WSL (not the portproxy svchost).
+# For Windows mode, check the port on the host.
+$alreadyRunning = $false
 
-if ($existingPid) {
-    Write-Host "Code Server already running on port $Port (PID: $existingPid)" -ForegroundColor Yellow
+if ($Mode -eq "wsl") {
+    # [g] trick prevents pgrep from matching its own command line
+    $wslCheck = wsl -d Ubuntu-24.04 -- bash -c "pgrep -f 'code-server.*--confi[g]' > /dev/null 2>&1 && echo RUNNING" 2>$null
+    if ($wslCheck -match "RUNNING") {
+        $alreadyRunning = $true
+    }
+} else {
+    $existingPid = (netstat -ano 2>$null | Select-String ":$Port\s+.*LISTENING" | ForEach-Object {
+        ($_ -split '\s+')[-1]
+    } | Select-Object -First 1)
+    if ($existingPid) { $alreadyRunning = $true }
+}
+
+if ($alreadyRunning) {
+    Write-Host "Code Server already running on port $Port" -ForegroundColor Yellow
     Write-Host "HTTP:  http://localhost:$Port" -ForegroundColor Green
     if ($UseHttpsProxy) {
         Write-Host "HTTPS: https://localhost:$HttpsPort" -ForegroundColor Green
@@ -194,8 +207,21 @@ wsl -d Ubuntu-24.04 -- bash -c "export XDG_DATA_HOME=$DataDir; $Install/bin/code
         if ($UseHttpsProxy) {
             Write-Host ""
             Write-Host "Setting up HTTPS proxy (nginx)..." -ForegroundColor Yellow
-            $setupResult = wsl -d Ubuntu-24.04 -- bash -c "bash '$ScriptDirWSL/setup-https.sh' --http-port $Port --https-port $HttpsPort --internal-port $InternalPort --data-dir '$DataDir'" 2>&1
-            Write-Host $setupResult
+            # Use $ErrorActionPreference to suppress stderr noise from WSL/apt
+            $prevEAP = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            wsl -d Ubuntu-24.04 -- bash -c "bash '$ScriptDirWSL/setup-https.sh' --http-port $Port --https-port $HttpsPort --internal-port $InternalPort --data-dir '$DataDir'" 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                    # Filter noisy stderr lines (debconf, dpkg, etc.) — show only actual errors
+                    $msg = $_.ToString()
+                    if ($msg -match "emerg|ERROR|FAILED") {
+                        Write-Host "  ERROR: $msg" -ForegroundColor Red
+                    }
+                } else {
+                    Write-Host $_
+                }
+            }
+            $ErrorActionPreference = $prevEAP
         }
 
         # ---- Auto-setup port forwarding (WSL2 needs portproxy to expose ports to host) ----
