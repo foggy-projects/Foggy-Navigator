@@ -219,12 +219,13 @@ wsl -d Ubuntu-24.04 -- bash -c "export XDG_DATA_HOME=$DataDir; $Install/bin/code
                 } else {
                     Write-Host "  Setting up port forwarding (0.0.0.0:$fwdPort -> ${WSLIP}:$fwdPort)..." -ForegroundColor Yellow
                     # Requires elevation - use Start-Process -Verb RunAs
+                    $ruleName = "WSL code-server $fwdPort"
                     $cmds = @(
                         "netsh interface portproxy delete v4tov4 listenport=$fwdPort listenaddress=0.0.0.0 2>`$null"
                         "netsh interface portproxy add v4tov4 listenport=$fwdPort listenaddress=0.0.0.0 connectport=$fwdPort connectaddress=$WSLIP"
                         # Firewall rule (idempotent: delete then add)
-                        "netsh advfirewall firewall delete rule name=`\"WSL code-server $fwdPort`\" 2>`$null"
-                        "netsh advfirewall firewall add rule name=`\"WSL code-server $fwdPort`\" dir=in action=allow protocol=TCP localport=$fwdPort"
+                        "netsh advfirewall firewall delete rule name='$ruleName' 2>`$null"
+                        "netsh advfirewall firewall add rule name='$ruleName' dir=in action=allow protocol=TCP localport=$fwdPort"
                     ) -join "; "
                     Start-Process -FilePath "powershell" `
                         -ArgumentList "-Command", $cmds `
