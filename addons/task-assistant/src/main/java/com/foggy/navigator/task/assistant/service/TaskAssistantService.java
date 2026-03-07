@@ -38,6 +38,13 @@ public class TaskAssistantService implements TaskAssistantFacade {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final int PROMPT_SUMMARY_MAX_LENGTH = 200;
 
+    /** 事件 Markdown 格式化时的已知字段集合，不在此集合中的字段归入"其他信息" */
+    private static final Set<String> KNOWN_EVENT_FIELDS = Set.of(
+            "type", "taskId", "externalTaskId", "status", "agent",
+            "summary", "prompt", "timestamp",
+            "projectName", "gitBranch", "gitRemoteUrl", "sessionId"
+    );
+
     private final TaskAssistantConfigRepository configRepository;
     private final UserNotificationSender notificationSender;
     @Nullable
@@ -91,9 +98,9 @@ public class TaskAssistantService implements TaskAssistantFacade {
         }
 
         try {
-            // 2. 构建 prompt + 调用 syncQuery
-            String eventJson = OBJECT_MAPPER.writeValueAsString(events);
-            String prompt = "分析以下平台事件并生成通知：\n\n" + eventJson;
+            // 2. 构建 prompt（Markdown 格式化） + 调用 syncQuery
+            String eventMarkdown = formatEventsAsMarkdown(events);
+            String prompt = "分析以下平台事件并生成通知：\n\n" + eventMarkdown;
 
             Map<String, Object> result = claudeWorkerFacade.syncQueryTracked(
                     userId, config.getWorkerId(), prompt,
@@ -372,6 +379,70 @@ public class TaskAssistantService implements TaskAssistantFacade {
     }
 
     // --- Private helpers ---
+
+    /**
+     * 将事件列表格式化为 Markdown，供 AI 更高效地理解。
+     * 已知字段结构化渲染，未识别字段归入 extData JSON 块。
+     */
+    private String formatEventsAsMarkdown(List<Map<String, Object>> events) {
+        StringBuilder sb = new StringBuilder("# 平台事件通知\n\n共 ")
+                .append(events.size()).append(" 个事件：\n\n");
+
+        for (int i = 0; i < events.size(); i++) {
+            Map<String, Object> e = events.get(i);
+            String type = str(e, "type", "unknown");
+
+            // 标题行
+            sb.append("## ").append(i + 1).append(". ");
+            if ("task_completed".equals(type)) {
+                sb.append("任务完成 (").append(str(e, "status", "?")).append(")");
+            } else if ("task_started".equals(type)) {
+                sb.append("任务开始");
+            } else {
+                sb.append(type);
+            }
+            sb.append("\n\n");
+
+            // 项目 + 分支（合并一行）
+            String proj = str(e, "projectName", null);
+            String branch = str(e, "gitBranch", null);
+            if (proj != null) {
+                sb.append("- **项目**: ").append(proj);
+                if (branch != null) sb.append(" (`").append(branch).append("`)");
+                sb.append("\n");
+            }
+
+            // 核心元数据
+            field(sb, "任务ID", e, "taskId");
+            field(sb, "Agent", e, "agent");
+            field(sb, "会话", e, "sessionId");
+            field(sb, "时间", e, "timestamp");
+
+            // 内容（摘要 / 指令）
+            String summary = str(e, "summary", null);
+            String prompt = str(e, "prompt", null);
+            if (summary != null) sb.append("\n> **摘要**: ").append(summary.replace("\n", "\n> ")).append("\n");
+            if (prompt != null) sb.append("\n> **指令**: ").append(prompt.replace("\n", "\n> ")).append("\n");
+
+            // 未识别的扩展字段
+            Map<String, Object> ext = new LinkedHashMap<>();
+            e.forEach((k, v) -> { if (v != null && !KNOWN_EVENT_FIELDS.contains(k)) ext.put(k, v); });
+            if (!ext.isEmpty()) {
+                try { sb.append("\n```json\n").append(OBJECT_MAPPER.writeValueAsString(ext)).append("\n```\n"); }
+                catch (Exception ignored) { /* best-effort */ }
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    private static String str(Map<String, Object> m, String k, String def) {
+        Object v = m.get(k); return v != null ? v.toString() : def;
+    }
+
+    private static void field(StringBuilder sb, String label, Map<String, Object> m, String key) {
+        Object v = m.get(key); if (v != null) sb.append("- **").append(label).append("**: ").append(v).append("\n");
+    }
 
     /**
      * 确保 config 持有一个有效的 Foggy 会话 ID。
