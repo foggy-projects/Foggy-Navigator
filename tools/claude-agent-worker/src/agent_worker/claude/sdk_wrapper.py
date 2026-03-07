@@ -901,14 +901,19 @@ class SdkWrapper:
                         if entry.get("is_question"):
                             answers = entry.get("answers") or {}
                             logger.info(
-                                "Task %s question answered: pid=%s, answers=%d",
-                                task_id, pid, len(answers),
+                                "Task %s question answered: pid=%s, answers=%s",
+                                task_id, pid, answers,
+                            )
+                            updated = {
+                                "questions": entry.get("questions") or [],
+                                "answers": answers,
+                            }
+                            logger.info(
+                                "Task %s returning updated_input to SDK: %s",
+                                task_id, updated,
                             )
                             return _PermissionResultAllow(
-                                updated_input={
-                                    "questions": entry.get("questions") or [],
-                                    "answers": answers,
-                                },
+                                updated_input=updated,
                             )
 
                         # ExitPlanMode: allow with original input, update permission mode

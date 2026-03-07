@@ -230,8 +230,8 @@ async def respond_to_permission(task_id: str, body: PermissionResponse):
     entry["event"].set()
 
     logger.info(
-        "Permission responded: task_id=%s, permission_id=%s, decision=%s",
-        task_id, body.permission_id, body.decision,
+        "Permission responded: task_id=%s, permission_id=%s, decision=%s, answers=%s",
+        task_id, body.permission_id, body.decision, body.answers,
     )
 
     return {"task_id": task_id, "permission_id": body.permission_id, "status": "responded"}
