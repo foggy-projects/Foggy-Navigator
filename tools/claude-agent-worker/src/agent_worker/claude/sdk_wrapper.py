@@ -42,6 +42,15 @@ _TextBlock = None
 _ToolUseBlock = None
 _ToolResultBlock = None
 
+# Known CLI help/error text signatures.  When a ``ResultMessage`` contains
+# one of these strings *and* consumed zero tokens, the prompt was likely
+# misinterpreted as a CLI slash-command rather than sent to the LLM.
+_CLI_ERROR_SIGNATURES = (
+    "Commands are in the form",
+    "Available commands:",
+    "Unknown command",
+)
+
 # Error types -- for structured error reporting.
 _ProcessError = None
 _CLIConnectionError = None
@@ -635,6 +644,13 @@ class SdkWrapper:
             except Exception as exc:
                 logger.warning("Task %s: failed to save images: %s", task_id, exc)
 
+        # Escape prompts starting with "/" to prevent the CLI from
+        # interpreting them as slash commands (e.g. "/help", "/clear").
+        # A leading newline breaks the pattern without altering semantics.
+        if prompt.startswith("/"):
+            prompt = "\n" + prompt
+            logger.info("Task %s: escaped leading '/' in prompt to avoid CLI slash-command interpretation", task_id)
+
         # Register the task so that it can be observed / cancelled.
         task_registry[task_id] = {
             "prompt": prompt,
@@ -1060,18 +1076,44 @@ class SdkWrapper:
                         output_tokens = usage.get("output_tokens")
 
                     num_turns = getattr(message, "num_turns", None)
+                    result_text = getattr(message, "result", None)
 
-                    events.append(event_mapper.map_result(
-                        task_id=task_id,
-                        result_text=getattr(message, "result", None),
-                        cost_usd=getattr(message, "total_cost_usd", None),
-                        duration_ms=getattr(message, "duration_ms", None),
-                        session_id=current_session_id,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        num_turns=num_turns,
-                        model=current_model,
-                    ))
+                    # Detect CLI help/error responses that indicate the prompt
+                    # was misinterpreted (e.g. treated as a slash command).
+                    # Zero tokens + known CLI help text → emit an error event
+                    # *instead of* a result so Java treats this as a failure
+                    # (emitting both would cause double cleanup in WorkerStreamRelay).
+                    _is_cli_error = (
+                        result_text
+                        and input_tokens in (None, 0)
+                        and output_tokens in (None, 0)
+                        and any(sig in result_text for sig in _CLI_ERROR_SIGNATURES)
+                    )
+                    if _is_cli_error:
+                        logger.warning(
+                            "Task %s: CLI returned help/error text instead of LLM response: %s",
+                            task_id, result_text[:200],
+                        )
+                        events.append(event_mapper.map_error(
+                            task_id=task_id,
+                            error=(
+                                f"CLI 未执行任务，返回了帮助文本: \"{result_text[:120]}\"\n"
+                                "可能原因: 提示词以 / 开头被 CLI 误解为斜杠命令。请重试。"
+                            ),
+                            session_id=current_session_id,
+                        ))
+                    else:
+                        events.append(event_mapper.map_result(
+                            task_id=task_id,
+                            result_text=result_text,
+                            cost_usd=getattr(message, "total_cost_usd", None),
+                            duration_ms=getattr(message, "duration_ms", None),
+                            session_id=current_session_id,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            num_turns=num_turns,
+                            model=current_model,
+                        ))
 
                 elif _UserMessage is not None and isinstance(message, _UserMessage):
                     msg_uuid = getattr(message, "uuid", None)
