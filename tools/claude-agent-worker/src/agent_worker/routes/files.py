@@ -263,8 +263,13 @@ def _get_exclude_patterns(cwd: str) -> list[str]:
 
 
 def _build_pathspec_excludes(patterns: list[str]) -> list[str]:
-    """Convert exclude patterns to git pathspec format ':!pattern'."""
-    return [f":!{p}" for p in patterns]
+    """Convert exclude patterns to git pathspec long-form ``:(exclude)pattern``.
+
+    The short form ``:!pattern`` breaks on Git ≤ 2.37 (Windows) when the
+    pattern starts with characters that git misinterprets as pathspec magic
+    letters (e.g. ``_`` in ``__pycache__``).
+    """
+    return [f":(exclude){p}" for p in patterns]
 
 
 def _should_skip_file(filename: str, patterns: list[str]) -> bool:
@@ -318,7 +323,13 @@ async def search_files(
             for fname in files:
                 if _should_skip_file(fname, excludes):
                     continue
-                rel = os.path.relpath(os.path.join(root, fname), resolved).replace("\\", "/")
+                try:
+                    rel = os.path.relpath(os.path.join(root, fname), resolved).replace("\\", "/")
+                except ValueError:
+                    # On Windows, reserved device names (nul, con, prn, aux …)
+                    # resolve to a different mount (\\.\nul) causing relpath to
+                    # raise ValueError.  Skip these entries silently.
+                    continue
                 all_files.append(rel)
                 if len(all_files) >= 10000:
                     break
@@ -505,7 +516,11 @@ def _fallback_content_search(
             if file_pattern and not fnmatch.fnmatch(fname, file_pattern):
                 continue
             abs_path = os.path.join(root, fname)
-            rel_path = os.path.relpath(abs_path, base_dir).replace("\\", "/")
+            try:
+                rel_path = os.path.relpath(abs_path, base_dir).replace("\\", "/")
+            except ValueError:
+                # Windows reserved device names (nul, con, …) → skip
+                continue
 
             try:
                 with open(abs_path, "r", encoding="utf-8", errors="ignore") as fh:
