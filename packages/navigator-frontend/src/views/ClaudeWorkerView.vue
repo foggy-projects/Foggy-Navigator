@@ -2531,9 +2531,9 @@ function insertDotSlash(comp: InstanceType<typeof SlashCommandInput> | null) {
   const textarea = comp.getTextareaEl()
   if (!textarea) return
   const start = textarea.selectionStart ?? textarea.value.length
-  const text = taskForm.prompt
+  const text = taskForm.value.prompt
   const newText = text.slice(0, start) + './' + text.slice(start)
-  taskForm.prompt = newText
+  taskForm.value.prompt = newText
   nextTick(() => {
     textarea.focus()
     const newCursor = start + 2
