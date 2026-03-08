@@ -31,14 +31,15 @@ defineEmits<{
 
 <style scoped>
 .worker-card {
-  background: #ffffff;
+  background-color: #ffffff;
   border-radius: 16rpx;
   padding: 28rpx 32rpx;
   margin-bottom: 20rpx;
-  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.06);
+  border: 1rpx solid #e8e8e8;
 }
 .worker-header {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16rpx;
@@ -47,20 +48,23 @@ defineEmits<{
   font-size: 32rpx;
   color: #303133;
   font-weight: 600;
+  flex: 1;
 }
 .worker-info {
   display: flex;
-  gap: 16rpx;
+  flex-direction: row;
+  align-items: center;
   margin-bottom: 8rpx;
 }
 .worker-hostname {
   font-size: 26rpx;
   color: #606266;
+  margin-right: 16rpx;
 }
 .worker-version {
   font-size: 24rpx;
   color: #909399;
-  background: #f0f0f0;
+  background-color: #f0f0f0;
   padding: 2rpx 12rpx;
   border-radius: 8rpx;
 }
