@@ -237,27 +237,30 @@ function onSent(content: string) {
 }
 .task-status-bar {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 16rpx;
   padding: 16rpx 24rpx;
-  background: #ffffff;
+  background-color: #ffffff;
   border-bottom: 2rpx solid #f0f0f0;
   flex-wrap: wrap;
 }
 .status-model {
   font-size: 24rpx;
   color: #909399;
-  background: #f0f0f0;
+  background-color: #f0f0f0;
   padding: 4rpx 12rpx;
   border-radius: 8rpx;
+  margin-right: 16rpx;
 }
 .status-cost {
   font-size: 24rpx;
   color: #e6a23c;
+  margin-right: 16rpx;
 }
 .status-duration {
   font-size: 24rpx;
   color: #909399;
+  margin-right: 16rpx;
 }
 .message-area {
   flex: 1;
@@ -286,11 +289,14 @@ function onSent(content: string) {
 }
 .connection-banner {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 16rpx;
   padding: 12rpx 24rpx;
   font-size: 24rpx;
+}
+.connection-text {
+  margin-left: 16rpx;
 }
 .connection-banner.connecting {
   background: #fdf6ec;

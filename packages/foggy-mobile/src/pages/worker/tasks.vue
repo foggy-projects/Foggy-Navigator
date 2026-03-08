@@ -349,16 +349,18 @@ function showPermissionPicker() {
 }
 .input-row {
   display: flex;
+  flex-direction: row;
   align-items: flex-end;
-  gap: 16rpx;
 }
 .history-btn {
   width: 64rpx;
   height: 64rpx;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  margin-right: 16rpx;
 }
 .history-icon {
   font-size: 36rpx;
@@ -369,19 +371,21 @@ function showPermissionPicker() {
   max-height: 200rpx;
   padding: 16rpx 24rpx;
   font-size: 28rpx;
-  background: #f5f5f5;
+  background-color: #f5f5f5;
   border-radius: 16rpx;
   line-height: 1.5;
+  margin-right: 16rpx;
 }
 .run-btn {
   width: 120rpx;
   height: 68rpx;
   font-size: 28rpx;
-  background: #667eea;
+  background-color: #667eea;
   color: #ffffff;
   border-radius: 16rpx;
   border: none;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
@@ -391,17 +395,19 @@ function showPermissionPicker() {
 }
 .option-row {
   display: flex;
-  gap: 16rpx;
+  flex-direction: row;
   margin-top: 16rpx;
   flex-wrap: wrap;
 }
 .option-tag {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 8rpx;
   padding: 8rpx 20rpx;
-  background: #f0f2f5;
+  background-color: #f0f2f5;
   border-radius: 24rpx;
+  margin-right: 16rpx;
+  margin-bottom: 8rpx;
 }
 .option-tag--api {
   background: #e8f5e9;
@@ -412,6 +418,7 @@ function showPermissionPicker() {
 .option-label {
   font-size: 24rpx;
   color: #606266;
+  margin-right: 8rpx;
 }
 .option-clear {
   font-size: 22rpx;

@@ -30,14 +30,15 @@ defineEmits<{
 
 <style scoped>
 .task-card {
-  background: #ffffff;
+  background-color: #ffffff;
   border-radius: 16rpx;
   padding: 24rpx 28rpx;
   margin-bottom: 16rpx;
-  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+  border: 1rpx solid #e8e8e8;
 }
 .task-header {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12rpx;
@@ -45,7 +46,7 @@ defineEmits<{
 .task-model {
   font-size: 22rpx;
   color: #909399;
-  background: #f0f0f0;
+  background-color: #f0f0f0;
   padding: 4rpx 12rpx;
   border-radius: 8rpx;
 }
@@ -61,13 +62,14 @@ defineEmits<{
 }
 .task-footer {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 20rpx;
   margin-top: 16rpx;
 }
 .task-time, .task-cost, .task-duration {
   font-size: 24rpx;
   color: #c0c4cc;
+  margin-right: 20rpx;
 }
 .task-cost { color: #e6a23c; }
 </style>

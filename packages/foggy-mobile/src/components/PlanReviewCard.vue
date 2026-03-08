@@ -121,13 +121,13 @@ function handleReject() {
 .plan-review-card.approved { border-left-color: #67c23a; background: #f0f9eb; }
 .plan-review-card.denied { border-left-color: #f56c6c; background: #fef0f0; }
 
-.card-header { display: flex; align-items: center; gap: 12rpx; }
-.card-icon { font-size: 32rpx; }
+.card-header { display: flex; flex-direction: row; align-items: center; }
+.card-icon { font-size: 32rpx; margin-right: 12rpx; }
 .card-title { font-size: 28rpx; font-weight: 600; color: #303133; flex: 1; }
 .status-badge { font-size: 22rpx; padding: 4rpx 16rpx; border-radius: 20rpx; }
-.status-badge.pending { background: #e8daef; color: #9b59b6; }
-.status-badge.approved { background: #e1f3d8; color: #67c23a; }
-.status-badge.denied { background: #fde2e2; color: #f56c6c; }
+.status-badge.pending { background-color: #e8daef; color: #9b59b6; }
+.status-badge.approved { background-color: #e1f3d8; color: #67c23a; }
+.status-badge.denied { background-color: #fde2e2; color: #f56c6c; }
 
 .card-body { margin-top: 16rpx; }
 .plan-hint { font-size: 26rpx; color: #606266; }
@@ -137,7 +137,7 @@ function handleReject() {
   max-height: 480rpx;
   overflow-y: auto;
   padding: 16rpx 20rpx;
-  background: #fff;
+  background-color: #ffffff;
   border: 2rpx solid #e8daef;
   border-radius: 12rpx;
 }
@@ -150,12 +150,12 @@ function handleReject() {
   word-break: break-word;
 }
 
-.prompts-list { margin-top: 16rpx; padding: 16rpx; background: rgba(155, 89, 182, 0.06); border-radius: 8rpx; }
-.prompt-item { display: flex; align-items: baseline; gap: 12rpx; margin-bottom: 8rpx; }
-.prompt-tool { font-size: 22rpx; background: #e8daef; padding: 4rpx 10rpx; border-radius: 6rpx; color: #9b59b6; }
+.prompts-list { margin-top: 16rpx; padding: 16rpx; background-color: rgba(155, 89, 182, 0.06); border-radius: 8rpx; }
+.prompt-item { display: flex; flex-direction: row; align-items: baseline; margin-bottom: 8rpx; }
+.prompt-tool { font-size: 22rpx; background-color: #e8daef; padding: 4rpx 10rpx; border-radius: 6rpx; color: #9b59b6; margin-right: 12rpx; }
 .prompt-text { font-size: 24rpx; color: #606266; }
 
-.plan-options { margin-top: 20rpx; display: flex; flex-direction: column; gap: 12rpx; }
+.plan-options { margin-top: 20rpx; display: flex; flex-direction: column; }
 .option-btn {
   width: 100%;
   height: 72rpx;
@@ -163,31 +163,35 @@ function handleReject() {
   border-radius: 12rpx;
   border: none;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
+  margin-bottom: 12rpx;
 }
-.bypass-btn { background: #f5eef8; color: #9b59b6; border: 2rpx solid #d2b4de; }
-.approve-btn { background: #9b59b6; color: #fff; }
+.bypass-btn { background-color: #f5eef8; color: #9b59b6; border: 2rpx solid #d2b4de; }
+.approve-btn { background-color: #9b59b6; color: #ffffff; }
 
-.reject-wrap { margin-top: 16rpx; display: flex; gap: 12rpx; align-items: center; }
+.reject-wrap { margin-top: 16rpx; display: flex; flex-direction: row; align-items: center; }
 .reject-input {
   flex: 1;
   height: 64rpx;
   padding: 0 20rpx;
   font-size: 26rpx;
-  background: #fff;
+  background-color: #ffffff;
   border: 2rpx solid #dcdfe6;
   border-radius: 12rpx;
+  margin-right: 12rpx;
 }
 .reject-btn {
   width: 160rpx;
   height: 64rpx;
   font-size: 24rpx;
-  background: #fff;
+  background-color: #ffffff;
   color: #f56c6c;
   border: 2rpx solid #f56c6c;
   border-radius: 12rpx;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;

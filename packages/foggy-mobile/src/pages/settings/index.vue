@@ -258,6 +258,7 @@ async function handleCheckUpgrade() {
 }
 .section-header {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
   padding: 20rpx 32rpx 12rpx;
@@ -277,6 +278,7 @@ async function handleCheckUpgrade() {
 }
 .setting-item {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
   padding: 24rpx 32rpx;
@@ -318,8 +320,8 @@ async function handleCheckUpgrade() {
 }
 .server-name-row {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 12rpx;
   margin-bottom: 6rpx;
 }
 .server-name {
@@ -330,9 +332,10 @@ async function handleCheckUpgrade() {
 .server-badge {
   font-size: 20rpx;
   color: #667eea;
-  background: #eef2ff;
+  background-color: #eef2ff;
   padding: 2rpx 12rpx;
   border-radius: 16rpx;
+  margin-left: 12rpx;
 }
 .server-url {
   font-size: 24rpx;
@@ -343,9 +346,12 @@ async function handleCheckUpgrade() {
 }
 .server-actions {
   display: flex;
-  gap: 20rpx;
+  flex-direction: row;
   flex-shrink: 0;
   margin-left: 16rpx;
+}
+.server-actions > text {
+  margin-right: 20rpx;
 }
 .action-btn {
   font-size: 24rpx;
@@ -389,8 +395,11 @@ async function handleCheckUpgrade() {
 }
 .form-buttons {
   display: flex;
-  gap: 20rpx;
+  flex-direction: row;
   margin-top: 32rpx;
+}
+.form-buttons > :first-child {
+  margin-right: 20rpx;
 }
 
 /* 退出登录 */
