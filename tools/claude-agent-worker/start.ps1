@@ -51,7 +51,7 @@ Start-Process python `
     -WorkingDirectory $WorkerDir `
     -RedirectStandardOutput (Join-Path $LogDir "worker.log") `
     -RedirectStandardError (Join-Path $LogDir "worker-error.log") `
-    -NoNewWindow
+    -WindowStyle Hidden
 
 # Wait for service to be ready
 $maxWait = 30

@@ -170,40 +170,6 @@ public class JpaSessionManager implements SessionManager {
                 .collect(Collectors.toList());
     }
 
-    @Override
-    @Transactional(readOnly = true)
-    public List<Message> getFirstAndRecentMessages(String sessionId, int recentCount) {
-        List<SessionMessageEntity> all = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
-        if (all.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        List<Message> result = new ArrayList<>();
-        result.add(toMessage(all.get(0))); // 首条消息
-
-        // 取最后 recentCount 条（跳过首条避免重复）
-        int start = Math.max(1, all.size() - recentCount);
-        for (int i = start; i < all.size(); i++) {
-            result.add(toMessage(all.get(i)));
-        }
-        return result;
-    }
-
-    @Override
-    @Transactional
-    public void updateSessionSummary(String sessionId, String summary) {
-        sessionRepository.updateSummary(sessionId, summary, LocalDateTime.now());
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<String> findSessionIdsWithoutSummary(List<String> sessionIds) {
-        if (sessionIds == null || sessionIds.isEmpty()) {
-            return List.of();
-        }
-        return sessionRepository.findIdsWithoutSummary(sessionIds);
-    }
-
     // ===== Entity ↔ POJO 转换 =====
 
     private Session toSession(SessionEntity entity) {

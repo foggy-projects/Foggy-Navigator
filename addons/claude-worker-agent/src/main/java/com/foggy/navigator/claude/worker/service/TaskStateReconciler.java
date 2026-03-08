@@ -182,12 +182,6 @@ public class TaskStateReconciler {
                                          + "gap={}, triggering reconnect",
                                         taskId, workerLatestSeq, javaLatestSeq, workerLatestSeq - javaLatestSeq);
                                 streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
-                            } else if (workerLatestSeq > 0) {
-                                // seq 相等但 SSE 流已断 → 重连恢复事件消费（CLI 可能在 AWAITING_PERMISSION 空闲）
-                                log.info("Reconciler: no seq gap but SSE stream lost for task={} (seq={}), "
-                                         + "reconnecting to restore event stream",
-                                        taskId, workerLatestSeq);
-                                streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
                             }
                         }
                     } catch (Exception e) {
@@ -274,20 +268,14 @@ public class TaskStateReconciler {
                                     "CLI process died unexpectedly (detected by reconciler after "
                                     + misses + " consecutive checks)");
                         } else {
-                            // CLI 仍存活但 SSE 流断了 → 尝试重连而非直接 FAIL
-                            log.info("Reconciler: task={} CLI alive per Worker but SSE lost after {} misses, "
-                                    + "attempting reconnect instead of FAIL", taskId, misses);
+                            log.warn("Reconciler: task={} CLI still alive per Worker, marking FAILED without abort (user-managed)",
+                                    taskId);
                             cliDeadMissCount.remove(taskId);
-                            try {
-                                streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
-                            } catch (Exception e) {
-                                log.warn("Reconciler: reconnect failed for task={}, marking FAILED: {}",
-                                        taskId, e.getMessage());
-                                taskService.reconcilerFailTask(taskId,
-                                        "CLI process alive but reconnect failed after "
-                                        + misses + " consecutive checks: " + e.getMessage(),
-                                        false);
-                            }
+                            // 只标记失败，不调用 Worker.abortTask（CLI 还在运行）
+                            taskService.reconcilerFailTask(taskId,
+                                    "CLI process unresponsive (detected by reconciler after "
+                                    + misses + " consecutive checks) - CLI still running on Worker, manage via process list",
+                                    false);
                         }
                     }
                 }

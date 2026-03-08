@@ -15,7 +15,6 @@
         <el-menu-item index="/cross-tasks">跨项目</el-menu-item>
         <el-menu-item index="/monitoring">监控</el-menu-item>
         <el-menu-item index="/settings">设置</el-menu-item>
-        <el-menu-item v-if="isAdmin" index="/users">用户</el-menu-item>
       </el-menu>
       <div class="header-right">
         <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99" class="notification-badge">
@@ -30,8 +29,7 @@
           </span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="profile">个人设置</el-dropdown-item>
-              <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+              <el-dropdown-item command="logout">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -60,11 +58,6 @@ const router = useRouter()
 const userInfo = getUserInfo()
 const { unreadCount, connect: connectNotifications, markAllRead, requestPermission } = useNotifications()
 
-const isAdmin = (() => {
-  const roles = userInfo?.roles ?? []
-  return roles.includes('SUPER_ADMIN') || roles.includes('TENANT_ADMIN')
-})()
-
 const activeMenu = computed(() => {
   const path = route.path
   // For /c/:id routes, highlight the chat menu item
@@ -89,9 +82,7 @@ function handleNotificationClick() {
 }
 
 function handleCommand(command: string) {
-  if (command === 'profile') {
-    router.push('/profile')
-  } else if (command === 'logout') {
+  if (command === 'logout') {
     clearAuth()
     resetSetupStatus()
     router.push('/login')

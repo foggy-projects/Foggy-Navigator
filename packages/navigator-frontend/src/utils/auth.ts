@@ -5,7 +5,6 @@ export interface UserInfo {
   userId: string
   username: string
   roles: string[]
-  tenantId?: string
 }
 
 export function setToken(token: string): void {

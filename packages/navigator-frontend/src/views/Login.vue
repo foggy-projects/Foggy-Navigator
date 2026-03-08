@@ -90,7 +90,6 @@ async function handleLogin() {
         userId: response.userId,
         username: response.username,
         roles: response.roles,
-        tenantId: response.tenantId,
       })
 
       ElMessage.success('登录成功')

@@ -61,37 +61,6 @@ public interface SessionManager {
     }
 
     /**
-     * 获取会话的首条消息和最近 N 条消息（用于摘要生成）
-     *
-     * @param sessionId   会话ID
-     * @param recentCount 最近消息条数
-     * @return 首条 + 最近N条消息（去重）
-     */
-    default List<Message> getFirstAndRecentMessages(String sessionId, int recentCount) {
-        return getRecentMessages(sessionId, recentCount);
-    }
-
-    /**
-     * 更新会话摘要
-     *
-     * @param sessionId 会话ID
-     * @param summary   AI 生成的摘要文本
-     */
-    default void updateSessionSummary(String sessionId, String summary) {
-        // Default no-op
-    }
-
-    /**
-     * 批量查询 summary 为 null 的会话ID
-     *
-     * @param sessionIds 候选会话ID列表
-     * @return summary 为 null 的会话ID列表
-     */
-    default List<String> findSessionIdsWithoutSummary(List<String> sessionIds) {
-        return List.of();
-    }
-
-    /**
      * 查找用户的待办会话
      */
     List<Session> findPendingByUser(String userId);
