@@ -1,3 +1,15 @@
-# Ensure shell scripts always use LF line endings, even on Windows
+# Force LF line endings for files that run on Linux
+# Shell scripts
 *.sh text eol=lf
 *.bash text eol=lf
+
+# Python
+*.py text eol=lf
+
+# Docker
+Dockerfile text eol=lf
+
+# Config files
+*.yml text eol=lf
+*.yaml text eol=lf
+*.conf text eol=lf
