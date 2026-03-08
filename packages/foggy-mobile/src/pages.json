@@ -22,7 +22,8 @@
     {
       "path": "pages/worker/tasks",
       "style": {
-        "navigationBarTitleText": "任务列表"
+        "navigationBarTitleText": "任务列表",
+        "enablePullDownRefresh": true
       }
     },
     {
