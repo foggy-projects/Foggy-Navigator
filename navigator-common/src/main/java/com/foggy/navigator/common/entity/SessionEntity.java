@@ -49,6 +49,10 @@ public class SessionEntity {
     @Column(columnDefinition = "TEXT")
     private String participatingAgentIds;
 
+    /** AI 生成的会话摘要 */
+    @Column(columnDefinition = "TEXT")
+    private String summary;
+
     @Column(nullable = false)
     private LocalDateTime updatedAt;
 
