@@ -78,6 +78,13 @@
             <artifactId>monitoring-module</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <!-- Code Review Agent - GitLab MR AI 代码审核模块 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>code-review-agent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>
