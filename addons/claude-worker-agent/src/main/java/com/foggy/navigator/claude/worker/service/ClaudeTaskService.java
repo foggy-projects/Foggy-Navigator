@@ -130,7 +130,9 @@ public class ClaudeTaskService {
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
 
-        log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}", taskId, sessionId, form.getWorkerId(), userId);
+        log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}, agentTeams={}",
+                taskId, sessionId, form.getWorkerId(), userId,
+                agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
         publishStatusChange(entity, null);
         conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 
@@ -224,7 +226,9 @@ public class ClaudeTaskService {
         entity.setStatus("RUNNING");
         taskRepository.save(entity);
 
-        log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}", taskId, form.getClaudeSessionId(), directoryId);
+        log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}, agentTeams={}",
+                taskId, form.getClaudeSessionId(), directoryId,
+                agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
         publishStatusChange(entity, null);
         conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 

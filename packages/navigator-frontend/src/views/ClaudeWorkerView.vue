@@ -3811,6 +3811,9 @@ async function handlePaneSend(paneId: string, content: string) {
     if (taskForm.value.maxTurns != null) {
       resumeForm.maxTurns = taskForm.value.maxTurns
     }
+    if (taskForm.value.useTeams && selectedDirectory.value?.agentTeamsConfig) {
+      resumeForm.agentTeamsJson = selectedDirectory.value.agentTeamsConfig
+    }
     if (taskForm.value.permissionMode) {
       (resumeForm as Record<string, unknown>).permissionMode = taskForm.value.permissionMode
     }
@@ -4093,6 +4096,9 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     }
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
+    }
+    if (taskForm.value.useTeams && selectedDirectory.value?.agentTeamsConfig) {
+      resumeForm.agentTeamsJson = selectedDirectory.value.agentTeamsConfig
     }
     const newTask = await workerState.resumeTask(resumeForm)
 
