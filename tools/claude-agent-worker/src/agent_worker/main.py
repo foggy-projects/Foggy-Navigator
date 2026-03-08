@@ -18,16 +18,36 @@ from .ssh.session_manager import start_cleanup_task, stop_cleanup_and_close_all
 
 import sys
 
-# -- Windows: prevent CTRL_C_EVENT from child processes killing the worker --
-# The Claude Agent SDK spawns claude.exe without CREATE_NEW_PROCESS_GROUP,
-# so git network operations (push/pull) that crash can propagate CTRL_C
-# to the entire process group, killing the worker.  SetConsoleCtrlHandler
-# with (None, True) ignores CTRL_C_EVENT while still allowing CTRL_CLOSE,
-# CTRL_LOGOFF, and CTRL_SHUTDOWN events for graceful shutdown.
-# The worker is stopped via taskkill (stop.ps1), not Ctrl+C.
+# -- Windows: isolate child processes from the worker's console signals ------
+# Problem: The Claude Agent SDK spawns claude.exe via anyio.open_process
+# without CREATE_NEW_PROCESS_GROUP.  When the CLI's child (bash/git) triggers
+# a CTRL_C_EVENT it propagates to every process in the group — including this
+# worker — causing an unrecoverable shutdown.
+#
+# Fix (two layers):
+#   1. SetConsoleCtrlHandler(None, True) — makes the worker itself ignore
+#      CTRL_C_EVENT (CTRL_CLOSE / LOGOFF / SHUTDOWN still work; stop.ps1
+#      uses taskkill which sends SIGTERM, unaffected).
+#   2. Monkey-patch asyncio.create_subprocess_exec to inject
+#      CREATE_NEW_PROCESS_GROUP into every subprocess call.  This isolates
+#      the CLI (and its children) in a separate process group so their
+#      console signals never reach the worker in the first place.
 if sys.platform == "win32":
+    import asyncio
     import ctypes
+    import subprocess
+
     ctypes.windll.kernel32.SetConsoleCtrlHandler(None, True)
+
+    _orig_create_subprocess_exec = asyncio.create_subprocess_exec
+
+    async def _patched_create_subprocess_exec(*args, **kwargs):
+        flags = kwargs.get("creationflags", 0)
+        flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+        kwargs["creationflags"] = flags
+        return await _orig_create_subprocess_exec(*args, **kwargs)
+
+    asyncio.create_subprocess_exec = _patched_create_subprocess_exec
 
 # -- Logging ----------------------------------------------------------------
 # __file__ = src/agent_worker/main.py → 3 parents = worker root (claude-agent-worker/)
