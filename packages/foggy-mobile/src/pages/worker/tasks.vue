@@ -52,7 +52,12 @@
     </view>
 
     <!-- 任务列表 -->
-    <scroll-view scroll-y class="task-list" @scrolltolower="loadMore">
+    <scroll-view scroll-y class="task-list"
+      :refresher-enabled="true"
+      :refresher-triggered="refreshing"
+      @refresherrefresh="onRefresh"
+      @scrolltolower="loadMore"
+    >
       <view v-if="loading && tasks.length === 0" class="loading-wrap">
         <text class="loading-text">加载中...</text>
       </view>
@@ -62,6 +67,7 @@
           :key="task.taskId"
           :task="task"
           @tap="openTask(task)"
+          @longpress="showTaskActions(task)"
         />
         <view v-if="hasMore" class="load-more">
           <text class="load-more-text" @tap="loadMore">加载更多</text>
@@ -79,7 +85,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import * as workerApi from '@/api/claudeWorker'
 import { listModelConfigs, listAgentModelOverrides } from '@/api/platform'
 import type { ClaudeTask, LlmModelConfig } from '@/api/types'
@@ -93,6 +99,7 @@ const projectName = ref('')
 const promptInput = ref('')
 const creating = ref(false)
 const loading = ref(false)
+const refreshing = ref(false)
 const tasks = ref<ClaudeTask[]>([])
 const page = ref(0)
 const totalPages = ref(0)
@@ -140,6 +147,18 @@ onLoad((options) => {
   loadTasks()
   loadPlatformModels()
 })
+
+onShow(() => {
+  if (directoryId.value) {
+    loadTasks()
+  }
+})
+
+async function onRefresh() {
+  refreshing.value = true
+  await loadTasks()
+  refreshing.value = false
+}
 
 async function loadPlatformModels() {
   try {
@@ -226,6 +245,31 @@ async function handleCreateTask() {
 function openTask(task: ClaudeTask) {
   uni.navigateTo({
     url: `/pages/worker/task-detail?taskId=${task.taskId}&sessionId=${task.sessionId}`,
+  })
+}
+
+function showTaskActions(task: ClaudeTask) {
+  uni.showActionSheet({
+    itemList: ['删除任务'],
+    success: async (res) => {
+      if (res.tapIndex === 0) {
+        uni.showModal({
+          title: '确认删除',
+          content: '确定删除此任务？',
+          success: async (modalRes) => {
+            if (modalRes.confirm) {
+              try {
+                await workerApi.deleteTask(task.taskId)
+                tasks.value = tasks.value.filter(t => t.taskId !== task.taskId)
+                uni.showToast({ title: '已删除', icon: 'success' })
+              } catch {
+                uni.showToast({ title: '删除失败', icon: 'error' })
+              }
+            }
+          },
+        })
+      }
+    },
   })
 }
 

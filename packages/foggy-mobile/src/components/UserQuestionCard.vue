@@ -2,7 +2,7 @@
   <view :class="['question-card', statusClass]">
     <view class="card-header">
       <text class="card-icon">{{ statusIcon }}</text>
-      <text class="card-title">Claude asks</text>
+      <text class="card-title">Claude 提问</text>
       <text :class="['status-badge', statusClass]">{{ statusLabel }}</text>
     </view>
     <view v-if="isPending" class="questions-body">
@@ -24,18 +24,18 @@
             :class="['option-item', { selected: isOther(qi) }]"
             @tap="toggleOther(qi)"
           >
-            <text class="option-label">Other</text>
+            <text class="option-label">其他</text>
           </view>
           <input
             v-if="isOther(qi)"
             v-model="otherTexts[qi]"
             class="other-input"
-            placeholder="Enter your answer..."
+            placeholder="输入回答..."
           />
         </view>
       </view>
       <button class="submit-btn" :disabled="!canSubmit" @tap="handleSubmit">
-        Submit
+        提交
       </button>
     </view>
   </view>
@@ -130,9 +130,9 @@ const statusClass = computed(() => {
 
 const statusLabel = computed(() => {
   switch (props.message.permissionStatus) {
-    case 'approved': return 'Answered'
-    case 'denied': return 'Dismissed'
-    default: return 'Pending'
+    case 'approved': return '已回答'
+    case 'denied': return '已忽略'
+    default: return '待回答'
   }
 })
 

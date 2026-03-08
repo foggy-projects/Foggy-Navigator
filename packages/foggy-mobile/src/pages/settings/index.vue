@@ -111,6 +111,7 @@ import {
   updateServer,
   removeServer,
 } from '@/utils/config'
+import { useUnifiedSse } from '@/composables/useUnifiedSse'
 // #ifdef APP-PLUS
 import { checkUpgradeManual } from '@/utils/upgrade'
 import UpgradePopup from '@/components/UpgradePopup.vue'
@@ -153,7 +154,10 @@ function switchServer(id: string) {
   if (id === activeServerId.value) return
   setActiveServerId(id)
   activeServerId.value = id
-  uni.showToast({ title: '已切换服务器', icon: 'success' })
+  // 切换服务器需要重新登录（旧 token 对新服务器无效）
+  const { disconnect } = useUnifiedSse()
+  disconnect()
+  authStore.logout()
 }
 
 function showAddServer() {

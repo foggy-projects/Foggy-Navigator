@@ -6,10 +6,10 @@
       <text :class="['status-badge', statusClass]">{{ statusLabel }}</text>
     </view>
     <view v-if="isPending" class="card-actions">
-      <button class="action-btn allow-btn" @tap="handleRespond('allow', 'once')">Allow</button>
-      <button class="action-btn allow-session-btn" @tap="handleRespond('allow', 'session')">Allow (Session)</button>
-      <button class="action-btn allow-always-btn" @tap="handleRespond('allow', 'always')">Always Allow</button>
-      <button class="action-btn deny-btn" @tap="handleRespond('deny', 'once')">Deny</button>
+      <button class="action-btn allow-btn" @tap="handleRespond('allow', 'once')">允许</button>
+      <button class="action-btn allow-session-btn" @tap="handleRespond('allow', 'session')">本次会话</button>
+      <button class="action-btn allow-always-btn" @tap="handleRespond('allow', 'always')">始终允许</button>
+      <button class="action-btn deny-btn" @tap="handleRespond('deny', 'once')">拒绝</button>
     </view>
   </view>
 </template>
@@ -30,7 +30,7 @@ const isPending = computed(() => props.message.permissionStatus === 'pending')
 
 const toolLabel = computed(() => {
   const name = props.message.toolName || 'Tool'
-  return `Permission: ${name}`
+  return `权限: ${name}`
 })
 
 const statusClass = computed(() => {
@@ -43,9 +43,9 @@ const statusClass = computed(() => {
 
 const statusLabel = computed(() => {
   switch (props.message.permissionStatus) {
-    case 'approved': return 'Allowed'
-    case 'denied': return 'Denied'
-    default: return 'Pending'
+    case 'approved': return '已允许'
+    case 'denied': return '已拒绝'
+    default: return '待处理'
   }
 })
 

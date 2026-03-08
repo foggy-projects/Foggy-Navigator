@@ -9,7 +9,7 @@
       <text v-if="worker.workerVersion" class="worker-version">v{{ worker.workerVersion }}</text>
     </view>
     <view v-if="worker.lastHeartbeat" class="worker-heartbeat">
-      <text class="heartbeat-text">上次心跳: {{ formatTime(worker.lastHeartbeat) }}</text>
+      <text class="heartbeat-text">上次心跳: {{ relativeTimeWithAbsolute(worker.lastHeartbeat) }}</text>
     </view>
   </view>
 </template>
@@ -17,6 +17,7 @@
 <script setup lang="ts">
 import type { ClaudeWorker } from '@/api/types'
 import StatusBadge from './StatusBadge.vue'
+import { relativeTimeWithAbsolute } from '@/utils/time'
 
 defineProps<{
   worker: ClaudeWorker
@@ -26,17 +27,6 @@ defineEmits<{
   tap: []
 }>()
 
-function formatTime(dateStr: string): string {
-  const date = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const minutes = Math.floor(diff / 60000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes}分钟前`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}小时前`
-  return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`
-}
 </script>
 
 <style scoped>

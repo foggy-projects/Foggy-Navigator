@@ -20,8 +20,8 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
     userInfo.value = null
     clearAuth()
-    // 切到会话 tab，onShow 检测到无 token 会显示内嵌登录界面
-    uni.switchTab({ url: '/pages/chat/index' })
+    // 切到 Workers tab，onShow 检测到无 token 会跳转登录页
+    uni.switchTab({ url: '/pages/worker/index' })
   }
 
   return {

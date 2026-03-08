@@ -151,7 +151,7 @@ async function handleLogin() {
     }
 
     uni.showToast({ title: '登录成功', icon: 'success' })
-    uni.switchTab({ url: '/pages/chat/index' })
+    uni.switchTab({ url: '/pages/worker/index' })
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } } }
     uni.showToast({

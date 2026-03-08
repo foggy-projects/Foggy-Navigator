@@ -8,6 +8,7 @@ import * as sessionApi from '@/api/session'
 import type { AgentMessage } from '@/api/types'
 
 let unsubscribeSse: (() => void) | null = null
+let stopConnWatch: (() => void) | null = null
 let connectVersion = 0
 const connectedSessionId = ref<string | null>(null)
 
@@ -64,7 +65,8 @@ export function useSession() {
     })
 
     chatStore.setConnectionStatus(connected.value ? 'connected' : 'connecting')
-    watch(connected, (val) => {
+    stopConnWatch?.()
+    stopConnWatch = watch(connected, (val) => {
       chatStore.setConnectionStatus(val ? 'connected' : 'connecting')
     })
   }
@@ -81,6 +83,8 @@ export function useSession() {
   }
 
   function disconnectSession() {
+    stopConnWatch?.()
+    stopConnWatch = null
     connectVersion++
     if (unsubscribeSse) {
       unsubscribeSse()

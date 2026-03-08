@@ -98,6 +98,7 @@ function doConnect() {
     onError: () => {
       if (manuallyClosed) return
       connected.value = false
+      scheduleReconnect()
     },
     onClose: () => {
       if (!manuallyClosed) {
@@ -173,6 +174,22 @@ export function useUnifiedSse() {
     }
   }
 
+  function forceReconnect() {
+    // 强制重连：关闭当前连接，重置重试计数，重新建立连接
+    if (transport) {
+      transport.close()
+      transport = null
+    }
+    if (retryTimer != null) {
+      clearTimeout(retryTimer)
+      retryTimer = null
+    }
+    manuallyClosed = false
+    retryCount = 0
+    connected.value = false
+    doConnect()
+  }
+
   function subscribeSession(
     sessionId: string,
     callback: SessionCallback,
@@ -221,6 +238,7 @@ export function useUnifiedSse() {
     connected,
     connect,
     disconnect,
+    forceReconnect,
     subscribeSession,
     addNotificationListener,
   }
