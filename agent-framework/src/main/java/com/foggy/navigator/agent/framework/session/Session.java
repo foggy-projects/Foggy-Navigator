@@ -22,6 +22,7 @@ public class Session {
     private String parentSessionId;
     private SessionStatus status;
     private String taskName;
+    private String summary;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

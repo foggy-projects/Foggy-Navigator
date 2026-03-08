@@ -153,6 +153,47 @@ public class JpaSessionManager implements SessionManager {
 
     @Override
     @Transactional(readOnly = true)
+    public List<String> findSessionIdsWithoutSummary(List<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return List.of();
+        }
+        return sessionRepository.findAllById(sessionIds).stream()
+                .filter(e -> e.getSummary() == null || e.getSummary().isBlank())
+                .map(SessionEntity::getId)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<Message> getFirstAndRecentMessages(String sessionId, int recentCount) {
+        List<SessionMessageEntity> all = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        if (all.isEmpty()) {
+            return List.of();
+        }
+        // First message
+        SessionMessageEntity first = all.get(0);
+        // Recent N messages (from the end)
+        int startIndex = Math.max(1, all.size() - recentCount);
+        List<Message> result = new ArrayList<>();
+        result.add(toMessage(first));
+        for (int i = startIndex; i < all.size(); i++) {
+            if (i == 0) continue; // skip first, already added
+            result.add(toMessage(all.get(i)));
+        }
+        return result;
+    }
+
+    @Override
+    @Transactional
+    public void updateSessionSummary(String sessionId, String summary) {
+        sessionRepository.findById(sessionId).ifPresent(entity -> {
+            entity.setSummary(summary);
+            sessionRepository.save(entity);
+        });
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<Session> findPendingByUser(String userId) {
         List<String> statuses = List.of(SessionStatus.ACTIVE.name(), SessionStatus.PAUSED.name());
         return sessionRepository.findByUserIdAndStatusInOrderByUpdatedAtDesc(userId, statuses)
@@ -181,6 +222,7 @@ public class JpaSessionManager implements SessionManager {
                 .parentSessionId(entity.getParentSessionId())
                 .status(SessionStatus.valueOf(entity.getStatus()))
                 .taskName(entity.getTitle())
+                .summary(entity.getSummary())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

@@ -61,6 +61,27 @@ public interface SessionManager {
     }
 
     /**
+     * 从给定的 sessionId 列表中筛选出 summary 为空的会话ID
+     */
+    default List<String> findSessionIdsWithoutSummary(List<String> sessionIds) {
+        return List.of();
+    }
+
+    /**
+     * 获取会话的首条消息 + 最近 N 条消息（去重）
+     */
+    default List<Message> getFirstAndRecentMessages(String sessionId, int recentCount) {
+        return getRecentMessages(sessionId, recentCount);
+    }
+
+    /**
+     * 更新会话摘要
+     */
+    default void updateSessionSummary(String sessionId, String summary) {
+        // no-op by default
+    }
+
+    /**
      * 查找用户的待办会话
      */
     List<Session> findPendingByUser(String userId);
