@@ -260,12 +260,13 @@ class FileDiffResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class FileSearchResult(BaseModel):
-    """A single file matching the search query."""
+    """A single file or directory matching the search query."""
 
     name: str
     relative_path: str
     size: int = 0
     modified: str = ""
+    type: str = "file"  # "file" | "directory"
 
 
 class FileSearchResponse(BaseModel):

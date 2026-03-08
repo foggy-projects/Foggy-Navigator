@@ -55,7 +55,7 @@
               @click="selectFileResult(item)"
               @mouseenter="activeIndex = i"
             >
-              <span class="result-icon">&#x1F4C4;</span>
+              <span class="result-icon">{{ item.type === 'directory' ? '\uD83D\uDCC1' : '\uD83D\uDCC4' }}</span>
               <div class="result-info">
                 <span class="result-name" v-html="highlightMatch(item.name, queryText)"></span>
                 <span class="result-path">{{ item.relative_path }}</span>
@@ -127,6 +127,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'select-file', relativePath: string): void
+  (e: 'select-directory', relativePath: string): void
   (e: 'select-content', file: string, lineNumber: number): void
 }>()
 
@@ -260,7 +261,11 @@ function scrollActiveIntoView() {
 }
 
 function selectFileResult(item: FileSearchResult) {
-  emit('select-file', item.relative_path)
+  if (item.type === 'directory') {
+    emit('select-directory', item.relative_path)
+  } else {
+    emit('select-file', item.relative_path)
+  }
   close()
 }
 

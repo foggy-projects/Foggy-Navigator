@@ -298,7 +298,12 @@ async def search_files(
     query: str = Query(..., min_length=1, max_length=200, description="Filename substring to search for"),
     max_results: int = Query(50, ge=1, le=_MAX_SEARCH_RESULTS),
 ) -> FileSearchResponse:
-    """Search for files by name. Uses ``git ls-files`` in git repos, falls back to os.walk."""
+    """Search for files and directories by name.
+
+    Uses ``git ls-files`` in git repos for file discovery, falls back to
+    ``os.walk``.  Directories are always collected via ``os.walk`` (git does
+    not track directories).  Matching directories are listed before files.
+    """
     resolved = validate_path(path)
 
     if not os.path.isdir(resolved):
@@ -307,8 +312,12 @@ async def search_files(
             detail=f"Path is not a directory: {path}",
         )
 
-    # Try git ls-files first
     excludes = _get_exclude_patterns(resolved)
+    skip_dirs = _skip_dirs_from_patterns(excludes)
+
+    # ------------------------------------------------------------------
+    # Collect file paths (git ls-files or os.walk fallback)
+    # ------------------------------------------------------------------
     git_args = ["ls-files", "--cached", "--others", "--exclude-standard", "--"]
     git_args.extend(_build_pathspec_excludes(excludes))
     rc, output = await run_git(resolved, *git_args)
@@ -316,7 +325,6 @@ async def search_files(
         all_files = output.splitlines()
     else:
         # Fallback: os.walk (limited to 10k files to avoid hanging)
-        skip_dirs = _skip_dirs_from_patterns(excludes)
         all_files = []
         for root, dirs, files in os.walk(resolved):
             dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
@@ -336,19 +344,63 @@ async def search_files(
             if len(all_files) >= 10000:
                 break
 
+    # ------------------------------------------------------------------
+    # Collect directory paths via os.walk (git does not track dirs)
+    # ------------------------------------------------------------------
+    all_dirs: list[str] = []
+    for root, dirs, _files in os.walk(resolved):
+        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
+        for d in dirs:
+            try:
+                rel = os.path.relpath(os.path.join(root, d), resolved).replace("\\", "/")
+            except ValueError:
+                continue
+            all_dirs.append(rel)
+            if len(all_dirs) >= 10000:
+                break
+        if len(all_dirs) >= 10000:
+            break
+
+    # ------------------------------------------------------------------
+    # Match: directories first, then files
+    # ------------------------------------------------------------------
     q_lower = query.lower()
     results: list[FileSearchResult] = []
-    for rel_path in all_files:
+
+    # Directories
+    for rel_path in all_dirs:
+        if len(results) >= max_results:
+            break
         name = rel_path.rsplit("/", 1)[-1] if "/" in rel_path else rel_path
         if q_lower in name.lower():
-            # Try to get size and mtime
+            abs_path = os.path.join(resolved, rel_path.replace("/", os.sep))
+            modified = ""
+            try:
+                st = os.stat(abs_path)
+                modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+            except OSError:
+                pass
+            results.append(FileSearchResult(
+                name=name,
+                relative_path=rel_path,
+                size=0,
+                modified=modified,
+                type="directory",
+            ))
+
+    # Files
+    for rel_path in all_files:
+        if len(results) >= max_results:
+            break
+        name = rel_path.rsplit("/", 1)[-1] if "/" in rel_path else rel_path
+        if q_lower in name.lower():
             abs_path = os.path.join(resolved, rel_path.replace("/", os.sep))
             size = 0
             modified = ""
             try:
-                stat = os.stat(abs_path)
-                size = stat.st_size
-                modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+                st = os.stat(abs_path)
+                size = st.st_size
+                modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
             except OSError:
                 pass
             results.append(FileSearchResult(
@@ -356,9 +408,8 @@ async def search_files(
                 relative_path=rel_path,
                 size=size,
                 modified=modified,
+                type="file",
             ))
-            if len(results) >= max_results:
-                break
 
     return FileSearchResponse(query=query, results=results, total=len(results))
 
