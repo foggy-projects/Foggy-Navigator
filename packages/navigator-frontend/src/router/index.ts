@@ -63,6 +63,16 @@ const routes = [
         component: () => import('@/views/SettingsView.vue'),
         meta: { skipSetupCheck: true },
       },
+      {
+        path: 'users',
+        name: 'Users',
+        component: () => import('@/views/UsersView.vue'),
+      },
+      {
+        path: 'profile',
+        name: 'Profile',
+        component: () => import('@/views/ProfileView.vue'),
+      },
     ],
   },
 ]

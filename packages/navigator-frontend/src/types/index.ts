@@ -518,3 +518,60 @@ export interface CrossProjectPhase {
   createdAt?: string
   updatedAt?: string
 }
+
+// ===== 用户管理类型 =====
+
+export type UserRole = 'SUPER_ADMIN' | 'TENANT_ADMIN' | 'DEVELOPER' | 'VIEWER'
+export type UserStatus = 'ACTIVE' | 'DISABLED' | 'DELETED'
+
+/** 用户 DTO */
+export interface UserDTO {
+  id: string
+  tenantId: string
+  username: string
+  email?: string
+  displayName?: string
+  roles: string // 逗号分隔，如 "DEVELOPER,VIEWER"
+  status: UserStatus
+  lastLoginAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** 用户注册表单 */
+export interface UserRegisterForm {
+  tenantId?: string
+  username: string
+  password: string
+  email?: string
+  displayName?: string
+  roles?: string
+}
+
+/** 用户更新表单 */
+export interface UserUpdateForm {
+  email?: string
+  displayName?: string
+  roles?: string
+  status?: UserStatus
+  newPassword?: string
+}
+
+/** API Key DTO */
+export interface ApiKeyDTO {
+  id: string
+  userId: string
+  name: string
+  apiKey?: string // 仅创建时返回明文
+  maskedApiKey?: string
+  enabled: boolean
+  expiresAt?: string
+  lastUsedAt?: string
+  createdAt: string
+}
+
+/** API Key 创建表单 */
+export interface ApiKeyCreateForm {
+  name: string
+  expiresAt?: string
+}

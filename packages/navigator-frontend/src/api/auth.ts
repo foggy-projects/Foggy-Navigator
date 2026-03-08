@@ -20,6 +20,7 @@ export interface LoginResultDTO {
     username: string
     email?: string
     roles: string[]
+    tenantId: string
   }
 }
 
@@ -28,6 +29,7 @@ export interface LoginResponse {
   userId: string
   username: string
   roles: string[]
+  tenantId: string
 }
 
 export async function login(request: LoginRequest): Promise<LoginResponse> {
@@ -39,5 +41,6 @@ export async function login(request: LoginRequest): Promise<LoginResponse> {
     userId: result.user.id,
     username: result.user.username,
     roles: result.user.roles,
+    tenantId: result.user.tenantId,
   }
 }
