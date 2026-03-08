@@ -75,6 +75,9 @@ function dispatchEvent(eventType: string, data: string) {
         retryCount = 0
         // Re-subscribe all sessions after reconnect
         resubscribeAll()
+        // Notify listeners (e.g. ClaudeWorkerView) to reload task lists,
+        // compensating for any task_status_change events lost during disconnect.
+        window.dispatchEvent(new Event('notification-reconnected'))
       }
     }
   } catch {
