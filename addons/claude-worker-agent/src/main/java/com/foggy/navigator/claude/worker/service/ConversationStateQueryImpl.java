@@ -34,7 +34,7 @@ public class ConversationStateQueryImpl implements ConversationStateQuery {
         if (states == null || states.isEmpty()) {
             return Map.of();
         }
-        List<ConversationConfigEntity> configs = configRepository.findByInteractionStates(states);
+        List<ConversationConfigEntity> configs = configRepository.findByInteractionStateIn(states);
         Map<String, List<String>> result = new LinkedHashMap<>();
         for (ConversationConfigEntity c : configs) {
             result.computeIfAbsent(c.getUserId(), k -> new ArrayList<>()).add(c.getSessionId());
