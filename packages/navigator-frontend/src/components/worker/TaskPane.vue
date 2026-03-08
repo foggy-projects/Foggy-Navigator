@@ -20,7 +20,7 @@
           {{ (paneState.task.value.durationMs / 1000).toFixed(1) }}s
         </span>
         <el-button
-          v-if="paneState.task.value?.status === 'RUNNING'"
+          v-if="['RUNNING', 'AWAITING_PERMISSION'].includes(paneState.task.value?.status ?? '')"
           size="small"
           type="danger"
           text
@@ -65,9 +65,10 @@
               auto-grow
               :max-rows="4"
               :disabled="false"
-              placeholder="输入后续指令... (Shift+Enter 换行, / 命令, @ 提及 Agent)"
+              placeholder="输入后续指令... (Shift+Enter 换行, / 命令, @ 提及 Agent, ./ 搜索文件)"
               :skills="skills || []"
               :agents="agents || []"
+              :directory-id="paneState.task.value?.directoryId"
               @submit="handleSend()"
               @command="handleCommand"
               @history-prev="handlePaneHistoryPrev"

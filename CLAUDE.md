@@ -29,6 +29,14 @@ packages/
 └── navigator-frontend/     # Navigator 前端（Vue 3 + Element Plus）
 ```
 
+### 工具与测试支撑
+
+```
+tools/
+├── claude-agent-worker/    # Claude Worker Python 服务
+└── mock-llm-service/       # Mock Anthropic 端点（L3 集成测试用）
+```
+
 ## 项目启动
 
 ### 启动脚本一览
@@ -108,3 +116,4 @@ Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实
 5. **先调研再实现**：集成外部系统（Claude Code SDK、OpenHands 等）的功能时，必须先调研目标系统的已有机制和内部数据结构，再设计实现方案。禁止在不了解底层机制的情况下"猜测式"实现。
 6. **语义对齐**：实现涉及用户交互的功能前，先明确关键语义（操作是否产生新实体、是否等待用户确认、UI 状态如何变化），必要时主动向用户确认，避免多轮返工。
 7. **SecurityConfig.java**：增加新的http端口注意更新权限
+8. **前端构建验证**：修改完前端代码后，务必运行 `bash scripts/build-frontend.sh` 确保可以正确构建（含 TypeScript 类型检查）

@@ -12,6 +12,13 @@
       </text>
     </view>
 
+    <!-- 连接状态横幅 -->
+    <view v-if="connectionBannerStatus !== 'connected'" class="connection-banner" :class="connectionBannerStatus">
+      <text class="connection-text">
+        {{ connectionBannerStatus === 'connecting' ? '连接中...' : '连接断开' }}
+      </text>
+    </view>
+
     <!-- 消息流 -->
     <view class="message-area">
       <MessageList
@@ -56,6 +63,7 @@ import * as workerApi from '@/api/claudeWorker'
 import StatusBadge from '@/components/StatusBadge.vue'
 import MessageList from '@/components/MessageList.vue'
 import ChatInput from '@/components/ChatInput.vue'
+import { formatDuration } from '@/utils/time'
 
 const taskId = ref('')
 const sessionId = ref('')
@@ -87,6 +95,8 @@ const isRunning = computed(() => {
   const status = taskStream.task.value?.status
   return status === 'RUNNING' || status === 'PENDING' || status === 'AWAITING_PERMISSION'
 })
+
+const connectionBannerStatus = computed(() => taskStream.chatState.connectionStatus.value)
 
 const canResume = computed(() => {
   const status = taskStream.task.value?.status
@@ -216,13 +226,6 @@ function onSent(content: string) {
   resumeInput.value = ''
 }
 
-function formatDuration(ms: number): string {
-  const s = Math.round(ms / 1000)
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  const rem = s % 60
-  return `${m}m${rem}s`
-}
 </script>
 
 <style scoped>
@@ -234,27 +237,30 @@ function formatDuration(ms: number): string {
 }
 .task-status-bar {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 16rpx;
   padding: 16rpx 24rpx;
-  background: #ffffff;
+  background-color: #ffffff;
   border-bottom: 2rpx solid #f0f0f0;
   flex-wrap: wrap;
 }
 .status-model {
   font-size: 24rpx;
   color: #909399;
-  background: #f0f0f0;
+  background-color: #f0f0f0;
   padding: 4rpx 12rpx;
   border-radius: 8rpx;
+  margin-right: 16rpx;
 }
 .status-cost {
   font-size: 24rpx;
   color: #e6a23c;
+  margin-right: 16rpx;
 }
 .status-duration {
   font-size: 24rpx;
   color: #909399;
+  margin-right: 16rpx;
 }
 .message-area {
   flex: 1;
@@ -280,5 +286,27 @@ function formatDuration(ms: number): string {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.connection-banner {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  padding: 12rpx 24rpx;
+  font-size: 24rpx;
+}
+.connection-text {
+  margin-left: 16rpx;
+}
+.connection-banner.connecting {
+  background: #fdf6ec;
+  color: #e6a23c;
+}
+.connection-banner.disconnected {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+.connection-text {
+  font-size: 24rpx;
 }
 </style>

@@ -42,6 +42,15 @@ _TextBlock = None
 _ToolUseBlock = None
 _ToolResultBlock = None
 
+# Known CLI help/error text signatures.  When a ``ResultMessage`` contains
+# one of these strings *and* consumed zero tokens, the prompt was likely
+# misinterpreted as a CLI slash-command rather than sent to the LLM.
+_CLI_ERROR_SIGNATURES = (
+    "Commands are in the form",
+    "Available commands:",
+    "Unknown command",
+)
+
 # Error types -- for structured error reporting.
 _ProcessError = None
 _CLIConnectionError = None
@@ -183,34 +192,153 @@ DISCONNECT_GRACE_SECONDS = int(os.environ.get("DISCONNECT_GRACE_SECONDS", "3600"
 
 
 # ---------------------------------------------------------------------------
+# Grace period watcher — runs as independent asyncio.Task
+# ---------------------------------------------------------------------------
+
+async def _grace_period_watcher(
+    task_id: str,
+    producer_task: asyncio.Task,
+    grace_seconds: int,
+) -> None:
+    """Background task: keeps CLI alive while waiting for SSE subscriber reconnection.
+
+    Spawned as an independent ``asyncio.Task`` when the original SSE consumer
+    disconnects but the CLI process is still alive.  This avoids the problem
+    where ``await asyncio.sleep()`` inside a cancelled generator's ``finally``
+    block raises ``CancelledError`` immediately, defeating the grace period.
+
+    Lifecycle:
+      1. Polls ``task_registry[task_id]["connected"]`` every 30s.
+      2. If a new subscriber reconnects (via ``/subscribe``), exits cleanly
+         — the new subscriber's generator now owns the task lifecycle.
+      3. If ``producer_task`` finishes on its own (CLI exited), exits cleanly.
+      4. If grace period expires with no reconnection, cancels ``producer_task``
+         and cleans up the registry entry.
+    """
+    check_interval = 30
+    grace_remaining = grace_seconds
+
+    try:
+        while grace_remaining > 0 and not producer_task.done():
+            await asyncio.sleep(min(check_interval, grace_remaining))
+            grace_remaining -= check_interval
+
+            entry = task_registry.get(task_id)
+            if entry is None:
+                # Registry entry was removed externally (e.g. abort) — stop watching
+                logger.info(
+                    "Grace watcher: task %s registry entry gone, stopping", task_id
+                )
+                return
+
+            if entry.get("connected"):
+                # A new subscriber reconnected via /subscribe — exit cleanly
+                logger.info(
+                    "Grace watcher: task %s reconnected during grace period! "
+                    "CLI kept alive.",
+                    task_id,
+                )
+                return
+
+        # Grace period expired or producer finished
+        if not producer_task.done():
+            # Rule 2: Only user can kill CLI — do NOT cancel producer_task.
+            # Just clean up registry to release memory; CLI continues running.
+            logger.warning(
+                "Grace watcher: task %s grace period expired with no reconnection. "
+                "Cleaning up registry only — CLI continues running (Rule 2).",
+                task_id,
+            )
+            entry = task_registry.get(task_id)
+            if entry:
+                entry["orphaned"] = True  # Mark for status endpoint reporting
+        else:
+            logger.info(
+                "Grace watcher: task %s producer finished during grace period",
+                task_id,
+            )
+
+    except asyncio.CancelledError:
+        logger.info("Grace watcher: task %s watcher cancelled", task_id)
+    except Exception as exc:
+        logger.warning("Grace watcher: task %s unexpected error: %s", task_id, exc)
+    finally:
+        # Cleanup — but only if no subscriber took over
+        entry = task_registry.get(task_id)
+        if entry and not entry.get("has_external_subscriber"):
+            task_registry.pop(task_id, None)
+            # Clean up any pending permissions for this task
+            for pid in list(permission_pending):
+                if permission_pending[pid].get("task_id") == task_id:
+                    permission_pending.pop(pid, None)
+            logger.info(
+                "Grace watcher: task %s cleaned up registry (no subscriber took over)",
+                task_id,
+            )
+            # Log surviving CLI processes for diagnostics
+            try:
+                surviving = _find_sdk_cli_pids()
+                if surviving:
+                    logger.info(
+                        "Grace watcher: task %s ended — %d CLI process(es) still alive: %s",
+                        task_id, len(surviving), surviving,
+                    )
+            except Exception:
+                pass
+        elif entry and entry.get("has_external_subscriber"):
+            logger.info(
+                "Grace watcher: task %s subscriber active, skipping cleanup",
+                task_id,
+            )
+
+
+# ---------------------------------------------------------------------------
 # Event broadcast — replaces single asyncio.Queue for multi-subscriber SSE
 # ---------------------------------------------------------------------------
 
 class EventBroadcast:
-    """Fan-out event distributor for SSE reconnection.
+    """Fan-out event distributor for SSE reconnection with ESN (Event Sequence Number).
 
     The producer pushes events via :meth:`put`.  Each SSE connection calls
     :meth:`subscribe` to get its own ``asyncio.Queue`` that receives a copy
     of every event.  Events are also stored in a replay buffer so that new
-    subscribers can catch up from a given index.
+    subscribers can catch up from a given sequence number.
+
+    Every event is assigned a monotonically increasing ``seq`` field (starting
+    at 1) before it enters the history buffer.  The Java backend uses this
+    seq to implement precise ACK-based replay on reconnection.
+
+    An optional :class:`~agent_worker.persistence.protocol.EventStore` backend
+    can be injected for durable event persistence (file / DB / etc.).
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        task_id: str | None = None,
+        event_store: Any | None = None,
+    ) -> None:
         self._subscribers: list[asyncio.Queue] = []
         self._history: list[dict[str, Any]] = []
         self._closed = False
+        self._seq_counter: int = 0
+        self._task_id = task_id
+        self._event_store = event_store  # EventStore protocol (persistence layer)
 
-    def subscribe(self, replay_from: int = 0) -> asyncio.Queue:
+    def subscribe(self, ack_seq: int = 0) -> asyncio.Queue:
         """Create a new subscriber queue.
 
-        If *replay_from* > 0, the returned queue is pre-filled with all
-        events from that index onward (so the new SSE connection can catch
-        up on missed events).
+        Replays all events whose ``seq > ack_seq`` so the subscriber can
+        catch up on missed events.  Use ``ack_seq=0`` (default) to replay
+        everything from the beginning (since seq starts at 1).
+
+        For backward compatibility, passing the old index-based value still
+        works because the seq values are sequential starting from 1.
         """
         q: asyncio.Queue = asyncio.Queue()
-        # Replay missed events
-        for evt in self._history[replay_from:]:
-            q.put_nowait(evt)
+        # Replay events with seq > ack_seq
+        for evt in self._history:
+            if evt.get("seq", 0) > ack_seq:
+                q.put_nowait(evt)
         if self._closed:
             q.put_nowait(None)  # Stream already done
         self._subscribers.append(q)
@@ -224,15 +352,39 @@ class EventBroadcast:
 
     async def put(self, item: dict[str, Any] | None) -> None:
         if item is not None:
+            self._seq_counter += 1
+            item["seq"] = self._seq_counter
             self._history.append(item)
+            # Persist to durable storage (fire-and-forget, errors logged inside)
+            if self._event_store and self._task_id:
+                try:
+                    self._event_store.append(self._task_id, item)
+                except Exception:
+                    logger.warning(
+                        "Event persistence failed for task %s seq %d",
+                        self._task_id, self._seq_counter, exc_info=True,
+                    )
         else:
             self._closed = True
+            if self._event_store and self._task_id:
+                try:
+                    self._event_store.mark_closed(self._task_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to mark task %s as closed in event store",
+                        self._task_id, exc_info=True,
+                    )
         for q in list(self._subscribers):  # snapshot to avoid mutation during iteration
             await q.put(item)
 
     @property
     def event_count(self) -> int:
         return len(self._history)
+
+    @property
+    def latest_seq(self) -> int:
+        """Return the sequence number of the most recent event, or 0 if empty."""
+        return self._seq_counter
 
     @property
     def closed(self) -> bool:
@@ -382,7 +534,9 @@ def _capture_child_pids(task_id: str) -> None:
         for child in me.children(recursive=True):
             try:
                 name = child.name()
-                if name in ("node", "claude"):
+                # On Windows psutil returns "node.exe" / "claude.exe"
+                basename = name.rsplit(".", 1)[0] if name.endswith(".exe") else name
+                if basename in ("node", "claude"):
                     register_pid(child.pid, task_id)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
@@ -404,6 +558,7 @@ class SdkWrapper:
         auth_token: str | None = None,
         base_url: str | None = None,
         navigator_api_key: str | None = None,
+        extra_env_vars: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Build an environment-variable dict to inject into the CLI subprocess.
 
@@ -431,6 +586,9 @@ class SdkWrapper:
         # Navigator service token — allows CLI skills to call Navigator API
         if navigator_api_key:
             env["NAVIGATOR_TOKEN"] = navigator_api_key
+        # Extra env vars from LLM model config (e.g. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)
+        if extra_env_vars:
+            env.update(extra_env_vars)
         return env
 
     # -- Agent Teams ---------------------------------------------------------
@@ -560,6 +718,7 @@ class SdkWrapper:
         disallowed_tools: list[str] | None = None,
         foggy_task_id: str | None = None,
         foggy_session_id: str | None = None,
+        extra_env_vars: dict[str, str] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run a Claude Code query and yield mapped SSE event dicts.
 
@@ -593,6 +752,13 @@ class SdkWrapper:
             except Exception as exc:
                 logger.warning("Task %s: failed to save images: %s", task_id, exc)
 
+        # Escape prompts starting with "/" to prevent the CLI from
+        # interpreting them as slash commands (e.g. "/help", "/clear").
+        # A leading newline breaks the pattern without altering semantics.
+        if prompt.startswith("/"):
+            prompt = "\n" + prompt
+            logger.info("Task %s: escaped leading '/' in prompt to avoid CLI slash-command interpretation", task_id)
+
         # Register the task so that it can be observed / cancelled.
         task_registry[task_id] = {
             "prompt": prompt,
@@ -610,7 +776,8 @@ class SdkWrapper:
 
         try:
             env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url,
-                                  navigator_api_key=navigator_api_key)
+                                  navigator_api_key=navigator_api_key,
+                                  extra_env_vars=extra_env_vars)
 
             # Inject Foggy platform tracking IDs as environment variables.
             # These don't affect CLI behavior but appear in process listings
@@ -699,7 +866,17 @@ class SdkWrapper:
             #   Consumer: run_query() reads from Queue and yields (SSE stream)
             # This lets the SSE stream stay alive while can_use_tool blocks.
 
-            broadcast = EventBroadcast()
+            from ..persistence.factory import get_event_store as _get_event_store
+            _event_store = _get_event_store()
+            broadcast = EventBroadcast(
+                task_id=task_id,
+                event_store=_event_store,
+            )
+            # Register foggy_task_id → worker task_id alias so that
+            # persistence lookups by foggy_task_id work even after
+            # the in-memory registry has been cleaned up.
+            if foggy_task_id and hasattr(_event_store, "register_alias"):
+                _event_store.register_alias(foggy_task_id, task_id)
             queue: asyncio.Queue[dict[str, Any] | None] = broadcast.subscribe()
 
             # Store broadcast in task_registry so the /subscribe endpoint
@@ -787,6 +964,7 @@ class SdkWrapper:
                             task_id=task_id,
                             permission_id=pid,
                             allowed_prompts=tool_input.get("allowedPrompts"),
+                            plan=tool_input.get("plan"),
                             session_id=current_session_id,
                         ))
                         logger.info(
@@ -835,14 +1013,19 @@ class SdkWrapper:
                         if entry.get("is_question"):
                             answers = entry.get("answers") or {}
                             logger.info(
-                                "Task %s question answered: pid=%s, answers=%d",
-                                task_id, pid, len(answers),
+                                "Task %s question answered: pid=%s, answers=%s",
+                                task_id, pid, answers,
+                            )
+                            updated = {
+                                "questions": entry.get("questions") or [],
+                                "answers": answers,
+                            }
+                            logger.info(
+                                "Task %s returning updated_input to SDK: %s",
+                                task_id, updated,
                             )
                             return _PermissionResultAllow(
-                                updated_input={
-                                    "questions": entry.get("questions") or [],
-                                    "answers": answers,
-                                },
+                                updated_input=updated,
                             )
 
                         # ExitPlanMode: allow with original input, update permission mode
@@ -1012,18 +1195,44 @@ class SdkWrapper:
                         output_tokens = usage.get("output_tokens")
 
                     num_turns = getattr(message, "num_turns", None)
+                    result_text = getattr(message, "result", None)
 
-                    events.append(event_mapper.map_result(
-                        task_id=task_id,
-                        result_text=getattr(message, "result", None),
-                        cost_usd=getattr(message, "total_cost_usd", None),
-                        duration_ms=getattr(message, "duration_ms", None),
-                        session_id=current_session_id,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        num_turns=num_turns,
-                        model=current_model,
-                    ))
+                    # Detect CLI help/error responses that indicate the prompt
+                    # was misinterpreted (e.g. treated as a slash command).
+                    # Zero tokens + known CLI help text → emit an error event
+                    # *instead of* a result so Java treats this as a failure
+                    # (emitting both would cause double cleanup in WorkerStreamRelay).
+                    _is_cli_error = (
+                        result_text
+                        and input_tokens in (None, 0)
+                        and output_tokens in (None, 0)
+                        and any(sig in result_text for sig in _CLI_ERROR_SIGNATURES)
+                    )
+                    if _is_cli_error:
+                        logger.warning(
+                            "Task %s: CLI returned help/error text instead of LLM response: %s",
+                            task_id, result_text[:200],
+                        )
+                        events.append(event_mapper.map_error(
+                            task_id=task_id,
+                            error=(
+                                f"CLI 未执行任务，返回了帮助文本: \"{result_text[:120]}\"\n"
+                                "可能原因: 提示词以 / 开头被 CLI 误解为斜杠命令。请重试。"
+                            ),
+                            session_id=current_session_id,
+                        ))
+                    else:
+                        events.append(event_mapper.map_result(
+                            task_id=task_id,
+                            result_text=result_text,
+                            cost_usd=getattr(message, "total_cost_usd", None),
+                            duration_ms=getattr(message, "duration_ms", None),
+                            session_id=current_session_id,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            num_turns=num_turns,
+                            model=current_model,
+                        ))
 
                 elif _UserMessage is not None and isinstance(message, _UserMessage):
                     msg_uuid = getattr(message, "uuid", None)
@@ -1116,6 +1325,15 @@ class SdkWrapper:
                             # CLI can exit cleanly (otherwise it waits for more
                             # input in stream-json mode).
                             if _ResultMessage is not None and isinstance(message, _ResultMessage):
+                                # Emit sync_checkpoint so Java can verify it received all events.
+                                # The checkpoint's own seq becomes the final "proof" that the
+                                # stream completed, enabling Java to detect missed result events.
+                                await broadcast.put(event_mapper.map_sync_checkpoint(
+                                    task_id=task_id,
+                                    latest_seq=broadcast.latest_seq,
+                                    event_count=broadcast.event_count,
+                                    session_id=current_session_id,
+                                ))
                                 stream_done_event.set()
                     except asyncio.CancelledError:
                         logger.info("Task %s producer: cancelled after %d msgs", task_id, _msg_count)
@@ -1158,17 +1376,21 @@ class SdkWrapper:
                     # Use shorter polling interval so we can emit "waiting" hints
                     poll_interval = 60  # seconds
                     silence_elapsed = 0
+                    _warned_hard_timeout = False
                     while True:
                         now = asyncio.get_event_loop().time()
-                        if now - started_at > hard_timeout:
-                            logger.warning("Task %s exceeded hard timeout (%ss)", task_id, hard_timeout)
-                            yield event_mapper.map_error(
+                        if now - started_at > hard_timeout and not _warned_hard_timeout:
+                            # Advisory warning only — do NOT cancel CLI (Rule 2: only user can kill CLI)
+                            _warned_hard_timeout = True
+                            logger.warning("Task %s exceeded hard timeout (%ss) — advisory only, CLI continues",
+                                           task_id, hard_timeout)
+                            yield event_mapper.map_system(
                                 task_id=task_id,
-                                error=f"Task exceeded maximum duration ({hard_timeout // 3600}h)",
+                                subtype="hard_timeout_warning",
+                                data={"elapsed_seconds": int(now - started_at),
+                                      "timeout_seconds": hard_timeout},
                                 session_id=current_session_id,
                             )
-                            producer_task.cancel()
-                            return
 
                         try:
                             evt = await asyncio.wait_for(queue.get(), timeout=poll_interval)
@@ -1189,14 +1411,18 @@ class SdkWrapper:
 
                             silence_elapsed += poll_interval
                             if silence_elapsed >= heartbeat_timeout:
-                                logger.warning("Task %s no events for %ss (heartbeat timeout)", task_id, heartbeat_timeout)
-                                yield event_mapper.map_error(
+                                # Advisory warning only — do NOT cancel CLI (Rule 2: only user can kill CLI)
+                                logger.warning("Task %s no events for %ss (heartbeat threshold) — advisory only, CLI continues",
+                                               task_id, heartbeat_timeout)
+                                yield event_mapper.map_system(
                                     task_id=task_id,
-                                    error=f"Task stalled (no events for {heartbeat_timeout // 60}min)",
+                                    subtype="heartbeat_warning",
+                                    data={"silence_seconds": silence_elapsed,
+                                          "threshold_seconds": heartbeat_timeout},
                                     session_id=current_session_id,
                                 )
-                                producer_task.cancel()
-                                return
+                                silence_elapsed = 0  # Reset — will warn again after another full interval
+                                continue
                             # Emit a "waiting" hint so the UI knows we're still alive
                             logger.info("Task %s no events for %ss, emitting waiting hint", task_id, silence_elapsed)
                             yield event_mapper.map_system(
@@ -1228,51 +1454,33 @@ class SdkWrapper:
                             pass
                     else:
                         # SSE consumer disconnected but producer (CLI) still alive.
-                        # Enter grace period — keep CLI running for reconnection.
+                        # Spawn an independent asyncio.Task for the grace period
+                        # because this finally block is being unwound by CancelledError
+                        # — any `await` here would immediately re-raise CancelledError,
+                        # defeating the grace period entirely.
                         logger.warning(
                             "Task %s SSE consumer disconnected, CLI still alive. "
-                            "Entering grace period (%ds) for reconnection...",
+                            "Spawning grace period watcher (%ds)...",
                             task_id, DISCONNECT_GRACE_SECONDS,
                         )
                         task_registry_entry = task_registry.get(task_id)
                         if task_registry_entry:
                             task_registry_entry["connected"] = False
+                            task_registry_entry["grace_period_active"] = True
 
-                        grace_remaining = DISCONNECT_GRACE_SECONDS
-                        check_interval = 30  # seconds
-                        while grace_remaining > 0 and not producer_task.done():
-                            await asyncio.sleep(min(check_interval, grace_remaining))
-                            grace_remaining -= check_interval
-
-                            entry = task_registry.get(task_id)
-                            if entry and entry.get("connected"):
-                                # A new subscriber reconnected — exit grace loop
-                                logger.info(
-                                    "Task %s reconnected during grace period! "
-                                    "CLI kept alive.",
-                                    task_id,
-                                )
-                                # Do NOT cancel producer — the new SSE consumer
-                                # is now reading from broadcast via subscribe.
-                                # We can exit this generator cleanly.
-                                return
-
-                        if not producer_task.done():
-                            logger.warning(
-                                "Task %s grace period expired with no reconnection. "
-                                "Cancelling CLI...",
-                                task_id,
-                            )
-                            producer_task.cancel()
-                            try:
-                                await producer_task
-                            except (asyncio.CancelledError, RuntimeError, Exception):
-                                pass
+                        asyncio.create_task(
+                            _grace_period_watcher(
+                                task_id, producer_task, DISCONNECT_GRACE_SECONDS,
+                            ),
+                            name=f"grace-period-{task_id[:8]}",
+                        )
 
             else:
                 # Direct iteration (no can_use_tool callback needed)
                 _capture_child_pids(task_id)  # snapshot before first message
                 _direct_msg_count = 0
+                _direct_warned_hard_timeout = False
+                _direct_warned_heartbeat = False
                 _direct_last_pid_capture = asyncio.get_event_loop().time()
                 _DIRECT_PID_CAPTURE_INTERVAL = 60  # re-scan for Agent Teams sub-CLIs
                 async for message in _query_fn(prompt=prompt, options=options):
@@ -1284,36 +1492,55 @@ class SdkWrapper:
                         _direct_last_pid_capture = asyncio.get_event_loop().time()
                     now = asyncio.get_event_loop().time()
 
-                    if now - started_at > hard_timeout:
-                        logger.warning("Task %s exceeded hard timeout (%ss)", task_id, hard_timeout)
-                        yield event_mapper.map_error(
+                    if now - started_at > hard_timeout and not _direct_warned_hard_timeout:
+                        # Advisory warning only — do NOT kill CLI (Rule 2)
+                        _direct_warned_hard_timeout = True
+                        logger.warning("Task %s exceeded hard timeout (%ss) — advisory only, CLI continues",
+                                       task_id, hard_timeout)
+                        yield event_mapper.map_system(
                             task_id=task_id,
-                            error=f"Task exceeded maximum duration ({hard_timeout // 3600}h)",
+                            subtype="hard_timeout_warning",
+                            data={"elapsed_seconds": int(now - started_at),
+                                  "timeout_seconds": hard_timeout},
                             session_id=current_session_id,
                         )
-                        return
 
-                    if now - last_event_at > heartbeat_timeout:
-                        logger.warning("Task %s no events for %ss (heartbeat timeout)", task_id, heartbeat_timeout)
-                        yield event_mapper.map_error(
+                    if now - last_event_at > heartbeat_timeout and not _direct_warned_heartbeat:
+                        # Advisory warning only — do NOT kill CLI (Rule 2)
+                        _direct_warned_heartbeat = True
+                        logger.warning("Task %s no events for %ss (heartbeat threshold) — advisory only, CLI continues",
+                                       task_id, heartbeat_timeout)
+                        yield event_mapper.map_system(
                             task_id=task_id,
-                            error=f"Task stalled (no events for {heartbeat_timeout // 60}min)",
+                            subtype="heartbeat_warning",
+                            data={"silence_seconds": int(now - last_event_at),
+                                  "threshold_seconds": heartbeat_timeout},
                             session_id=current_session_id,
                         )
-                        return
 
                     last_event_at = now
+                    _direct_warned_heartbeat = False  # Reset on each real event
 
                     for evt in _process_message(message):
                         yield evt
 
         except asyncio.CancelledError:
-            logger.info("Task %s was cancelled", task_id)
-            yield event_mapper.map_error(
-                task_id=task_id,
-                error="Task was cancelled",
-                session_id=current_session_id,
-            )
+            # If grace period is active, the CancelledError is from SSE disconnect
+            # (not a real cancellation) — don't emit error event.
+            _grace_entry = task_registry.get(task_id)
+            if _grace_entry and _grace_entry.get("grace_period_active"):
+                logger.info(
+                    "Task %s CancelledError during grace period — "
+                    "suppressing error event (grace watcher handles lifecycle)",
+                    task_id,
+                )
+            else:
+                logger.info("Task %s was cancelled", task_id)
+                yield event_mapper.map_error(
+                    task_id=task_id,
+                    error="Task was cancelled",
+                    session_id=current_session_id,
+                )
 
         except Exception as exc:
             error_detail = _extract_error_detail(exc, task_id)
@@ -1324,27 +1551,37 @@ class SdkWrapper:
             )
 
         finally:
-            # If a new subscriber reconnected via /subscribe endpoint during
-            # grace period, the task is still alive — do NOT clean up registry
-            # or kill CLI.  The subscriber's finally block will handle cleanup.
-            # NOTE: We check "has_external_subscriber" (set by /subscribe)
-            # instead of "connected" (set True at creation) to avoid leaking
-            # registry entries when no subscriber ever connected.
-            # Unregister tracked PIDs for this task (Layer 1 cleanup)
+            # Unregister tracked PIDs for this task (Layer 1 cleanup).
+            # Safe to do even during grace period — process enrichment
+            # falls back to environment variable reading (Layer 2).
             from .process_detection import unregister_pids_for_task
             unregister_pids_for_task(task_id)
 
             entry = task_registry.get(task_id)
-            if entry and entry.get("has_external_subscriber"):
-                logger.info("Task %s exiting original generator — reconnected subscriber active, skipping cleanup", task_id)
+            if entry and entry.get("grace_period_active"):
+                # Grace period watcher is running as an independent asyncio.Task.
+                # It will handle registry cleanup when it finishes.
+                logger.info(
+                    "Task %s exiting generator — grace period watcher active, "
+                    "deferring cleanup",
+                    task_id,
+                )
+            elif entry and entry.get("has_external_subscriber"):
+                # A subscriber reconnected via /subscribe — it owns the lifecycle.
+                logger.info(
+                    "Task %s exiting original generator — reconnected subscriber "
+                    "active, skipping cleanup",
+                    task_id,
+                )
             else:
                 task_registry.pop(task_id, None)
                 # Clean up any pending permissions for this task
                 for pid in list(permission_pending):
                     if permission_pending[pid].get("task_id") == task_id:
                         permission_pending.pop(pid, None)
-                # Log surviving CLI processes for diagnostics (no auto-kill —
-                # orphans are managed manually via the UI process list).
+                # Log surviving CLI processes for diagnostics.  Active abort
+                # kills processes via abort_query(); any survivors here are
+                # true orphans manageable via the UI process list.
                 try:
                     surviving = _find_sdk_cli_pids()
                     if surviving:

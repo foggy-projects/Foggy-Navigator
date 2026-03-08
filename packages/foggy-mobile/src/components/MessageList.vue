@@ -89,6 +89,7 @@ watch(
 .thinking-wrap {
   padding: 8rpx 24rpx;
   display: flex;
+  flex-direction: row;
   justify-content: flex-start;
 }
 </style>

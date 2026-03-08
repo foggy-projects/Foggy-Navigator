@@ -5,6 +5,7 @@ import com.foggy.navigator.common.enums.ModelAccessScope;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * LLM 模型配置表单
@@ -51,4 +52,9 @@ public class LlmModelConfigForm {
      * 限定访问的 Worker ID 列表（scope=RESTRICTED 时有效）
      */
     private List<String> allowedWorkerIds;
+
+    /**
+     * 环境变量（K-V 对），使用该模型启动 Claude Code 时注入到 CLI 子进程
+     */
+    private Map<String, String> envVars;
 }

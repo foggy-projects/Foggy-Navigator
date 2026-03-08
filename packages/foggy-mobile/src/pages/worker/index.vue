@@ -1,9 +1,5 @@
 <template>
   <view class="worker-page">
-    <view class="page-header">
-      <text class="header-title">Workers</text>
-    </view>
-
     <scroll-view
       scroll-y
       class="worker-list"
@@ -207,16 +203,6 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
   height: calc(100vh - var(--window-top, 0px));
   background: #f5f5f5;
 }
-.page-header {
-  padding: 24rpx 32rpx;
-  background: #ffffff;
-  border-bottom: 2rpx solid #f0f0f0;
-}
-.header-title {
-  font-size: 36rpx;
-  font-weight: 600;
-  color: #303133;
-}
 .worker-list {
   flex: 1;
   padding: 20rpx 24rpx;
@@ -289,9 +275,12 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
 }
 .dir-info {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 12rpx;
   margin-bottom: 8rpx;
+}
+.dir-info > text + text {
+  margin-left: 12rpx;
 }
 .dir-name {
   font-size: 28rpx;

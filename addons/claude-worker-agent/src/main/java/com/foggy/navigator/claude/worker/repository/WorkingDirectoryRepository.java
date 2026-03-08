@@ -21,4 +21,9 @@ public interface WorkingDirectoryRepository extends JpaRepository<WorkingDirecto
             String parentProjectId, String userId);
 
     Optional<WorkingDirectoryEntity> findByDirectoryId(String directoryId);
+
+    /**
+     * 查找已存在的 worktree（相同源目录和分支）
+     */
+    Optional<WorkingDirectoryEntity> findBySourceDirectoryIdAndGitBranch(String sourceDirectoryId, String gitBranch);
 }

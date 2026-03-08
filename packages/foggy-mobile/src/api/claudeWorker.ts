@@ -65,9 +65,12 @@ export async function listTasksByDirectoryPaged(
   directoryId: string,
   page: number,
   size: number,
+  state?: string,
 ): Promise<PageResult<ClaudeTask>> {
+  const params: Record<string, unknown> = { page, size }
+  if (state) params.state = state
   const rx = (await client.get(`/claude-tasks/directory/${directoryId}/page`, {
-    params: { page, size },
+    params,
   })) as unknown as RX<PageResult<ClaudeTask>>
   return rx.data
 }

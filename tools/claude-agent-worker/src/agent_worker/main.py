@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import __version__
 from .config import settings
 from .routes import auth, files, git_info, git_log, health, init_directory, platform_skills, processes, query, sessions, skills, ssh, worktree
 from .platform_skills.deployer import deploy_platform_skills
@@ -17,8 +18,40 @@ from .ssh.session_manager import start_cleanup_task, stop_cleanup_and_close_all
 
 import sys
 
+# -- Windows: isolate child processes from the worker's console signals ------
+# Problem: The Claude Agent SDK spawns claude.exe via anyio.open_process
+# without CREATE_NEW_PROCESS_GROUP.  When the CLI's child (bash/git) triggers
+# a CTRL_C_EVENT it propagates to every process in the group — including this
+# worker — causing an unrecoverable shutdown.
+#
+# Fix (two layers):
+#   1. SetConsoleCtrlHandler(None, True) — makes the worker itself ignore
+#      CTRL_C_EVENT (CTRL_CLOSE / LOGOFF / SHUTDOWN still work; stop.ps1
+#      uses taskkill which sends SIGTERM, unaffected).
+#   2. Monkey-patch asyncio.create_subprocess_exec to inject
+#      CREATE_NEW_PROCESS_GROUP into every subprocess call.  This isolates
+#      the CLI (and its children) in a separate process group so their
+#      console signals never reach the worker in the first place.
+if sys.platform == "win32":
+    import asyncio
+    import ctypes
+    import subprocess
+
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(None, True)
+
+    _orig_create_subprocess_exec = asyncio.create_subprocess_exec
+
+    async def _patched_create_subprocess_exec(*args, **kwargs):
+        flags = kwargs.get("creationflags", 0)
+        flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+        kwargs["creationflags"] = flags
+        return await _orig_create_subprocess_exec(*args, **kwargs)
+
+    asyncio.create_subprocess_exec = _patched_create_subprocess_exec
+
 # -- Logging ----------------------------------------------------------------
-_LOG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "logs"
+# __file__ = src/agent_worker/main.py → 3 parents = worker root (claude-agent-worker/)
+_LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
 
 _fmt = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
@@ -99,7 +132,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Claude Agent Worker",
     description="REST/SSE bridge between Foggy Navigator and the Claude Code SDK",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
 

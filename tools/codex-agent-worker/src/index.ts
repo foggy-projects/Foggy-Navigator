@@ -1,0 +1,51 @@
+import express from 'express'
+import cors from 'cors'
+import { config } from './config.js'
+import { authMiddleware } from './auth.js'
+import healthRouter from './routes/health.js'
+import queryRouter from './routes/query.js'
+import tasksRouter from './routes/tasks.js'
+import sessionsRouter from './routes/sessions.js'
+
+const app = express()
+
+// Middleware
+app.use(cors())
+app.use(express.json({ limit: '10mb' }))
+app.use(authMiddleware)
+
+// Routes
+app.use(healthRouter)
+app.use(queryRouter)
+app.use(tasksRouter)
+app.use(sessionsRouter)
+
+// Error handler
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('Unhandled error:', err)
+  res.status(500).json({ error: err.message || 'Internal server error' })
+})
+
+// Start server
+const server = app.listen(config.port, config.host, () => {
+  console.log('='.repeat(60))
+  console.log(`Codex Agent Worker started`)
+  console.log(`  URL:    http://${config.host}:${config.port}`)
+  console.log(`  Name:   ${config.workerName}`)
+  console.log(`  Auth:   ${config.workerToken ? 'Enabled' : 'Disabled'}`)
+  console.log(`  CWDs:   ${config.allowedCwds.length > 0 ? config.allowedCwds.join(', ') : 'All allowed'}`)
+  console.log('='.repeat(60))
+})
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down...')
+  server.close(() => process.exit(0))
+})
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down...')
+  server.close(() => process.exit(0))
+})
+
+export default app

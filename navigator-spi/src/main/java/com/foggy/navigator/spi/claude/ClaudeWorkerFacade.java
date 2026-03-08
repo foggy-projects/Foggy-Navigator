@@ -1,5 +1,7 @@
 package com.foggy.navigator.spi.claude;
 
+import com.foggy.navigator.common.model.CodexConfig;
+
 import java.util.List;
 import java.util.Map;
 
@@ -94,5 +96,24 @@ public interface ClaudeWorkerFacade {
      */
     default String getDirectoryPath(String userId, String directoryId) {
         return null;
+    }
+
+    /**
+     * 获取 Worker 的 Codex 配置（authToken 已解密）
+     *
+     * @param workerId Worker ID
+     * @return 解密后的 CodexConfig，若未配置则返回 null
+     */
+    default CodexConfig getCodexConfig(String workerId) {
+        return null;
+    }
+
+    /**
+     * 验证 Worker 属于指定用户
+     *
+     * @throws IllegalArgumentException 若 Worker 不存在或不属于该用户
+     */
+    default void validateWorkerOwnership(String userId, String workerId) {
+        getWorker(userId, workerId); // 默认走 getWorker 校验
     }
 }

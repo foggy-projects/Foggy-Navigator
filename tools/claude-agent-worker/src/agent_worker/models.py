@@ -45,6 +45,8 @@ class QueryRequest(BaseModel):
     # Foggy platform tracking IDs (injected as env vars into CLI subprocess)
     foggy_task_id: str | None = Field(None, description="Foggy platform task ID for tracking/correlation")
     foggy_session_id: str | None = Field(None, description="Foggy platform session ID for tracking/correlation")
+    # Extra environment variables from LLM model config (injected into CLI subprocess)
+    extra_env_vars: dict[str, str] | None = Field(None, description="Extra env vars to inject into CLI subprocess")
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +110,7 @@ class AbortResponse(BaseModel):
 
     task_id: str
     status: str
+    killed_pids: list[int] = Field(default_factory=list, description="PIDs of CLI processes that were killed")
 
 
 class PermissionResponse(BaseModel):
@@ -257,12 +260,13 @@ class FileDiffResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class FileSearchResult(BaseModel):
-    """A single file matching the search query."""
+    """A single file or directory matching the search query."""
 
     name: str
     relative_path: str
     size: int = 0
     modified: str = ""
+    type: str = "file"  # "file" | "directory"
 
 
 class FileSearchResponse(BaseModel):

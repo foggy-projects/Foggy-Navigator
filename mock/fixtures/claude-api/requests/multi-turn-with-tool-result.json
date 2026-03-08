@@ -1,0 +1,59 @@
+{
+  "_description": "Multi-turn request: user asked about weather → assistant called get_weather → user provides tool_result → expecting final text response",
+  "model": "claude-sonnet-4-20250514",
+  "max_tokens": 4096,
+  "stream": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather in Beijing today?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "I'll check the current weather in Beijing for you."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_mock-tool-001",
+          "name": "get_weather",
+          "input": {
+            "location": "Beijing"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_mock-tool-001",
+          "content": "{\"location\": \"Beijing\", \"temperature\": 22, \"unit\": \"celsius\", \"condition\": \"Partly cloudy\", \"humidity\": 45}"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get the current weather for a given location",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city name"
+          },
+          "unit": {
+            "type": "string",
+            "enum": ["celsius", "fahrenheit"]
+          }
+        },
+        "required": ["location"]
+      }
+    }
+  ]
+}

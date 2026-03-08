@@ -2,10 +2,12 @@ package com.foggy.navigator.claude.worker.service;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
+import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
+import com.foggy.navigator.claude.worker.repository.AgentTeamsConfigRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+
+import java.util.Optional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -33,6 +37,7 @@ import com.foggy.navigator.common.util.IdGenerator;
 public class WorkingDirectoryService {
 
     private final WorkingDirectoryRepository directoryRepository;
+    private final AgentTeamsConfigRepository agentTeamsConfigRepository;
     private final ClaudeWorkerService workerService;
     private final CredentialEncryptor credentialEncryptor;
 
@@ -62,6 +67,27 @@ public class WorkingDirectoryService {
         }
         if (fixed > 0) {
             log.info("Migrated {} working directory records (set default directoryType/worktree)", fixed);
+        }
+
+        // 将旧 agentTeamsConfig 迁移为 AgentTeamsConfigEntity（命名配置）
+        int migrated = 0;
+        for (WorkingDirectoryEntity e : all) {
+            if (e.getAgentTeamsConfig() != null && !e.getAgentTeamsConfig().isBlank()) {
+                if (!agentTeamsConfigRepository.existsByDirectoryIdAndUserId(e.getDirectoryId(), e.getUserId())) {
+                    AgentTeamsConfigEntity config = new AgentTeamsConfigEntity();
+                    config.setConfigId(IdGenerator.shortId());
+                    config.setDirectoryId(e.getDirectoryId());
+                    config.setUserId(e.getUserId());
+                    config.setName("默认配置");
+                    config.setConfig(e.getAgentTeamsConfig());
+                    config.setIsDefault(true);
+                    agentTeamsConfigRepository.save(config);
+                    migrated++;
+                }
+            }
+        }
+        if (migrated > 0) {
+            log.info("Migrated {} legacy agentTeamsConfig into named AgentTeamsConfig entities", migrated);
         }
     }
 
@@ -283,6 +309,17 @@ public class WorkingDirectoryService {
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(source.getWorkerId());
         if (!worker.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Worker not found: " + source.getWorkerId());
+        }
+
+        // 检查是否已存在相同的 worktree（相同源目录和分支）
+        Optional<WorkingDirectoryEntity> existing = directoryRepository
+                .findBySourceDirectoryIdAndGitBranch(sourceDirectoryId, branch);
+        if (existing.isPresent()) {
+            WorkingDirectoryEntity existingWorktree = existing.get();
+            throw new IllegalArgumentException(
+                String.format("Worktree 已存在: 分支 '%s' 的 worktree 在目录 '%s' 中已创建 (directoryId: %s)",
+                    branch, existingWorktree.getPath(), existingWorktree.getDirectoryId())
+            );
         }
 
         // 调用 Worker API 创建 worktree

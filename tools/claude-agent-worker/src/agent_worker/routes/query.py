@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import subprocess
 import uuid
 from typing import AsyncGenerator
@@ -104,6 +105,7 @@ async def _event_generator(
     disallowed_tools: list[str] | None = None,
     foggy_task_id: str | None = None,
     foggy_session_id: str | None = None,
+    extra_env_vars: dict[str, str] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Yield SSE-compatible ``dict`` payloads from the SDK wrapper stream."""
 
@@ -125,6 +127,7 @@ async def _event_generator(
             disallowed_tools=disallowed_tools,
             foggy_task_id=foggy_task_id,
             foggy_session_id=foggy_session_id,
+            extra_env_vars=extra_env_vars,
         ):
             yield {"event": "message", "data": json.dumps(event)}
     except asyncio.CancelledError:
@@ -187,6 +190,7 @@ async def query(body: QueryRequest):
             disallowed_tools=body.disallowed_tools,
             foggy_task_id=body.foggy_task_id,
             foggy_session_id=body.foggy_session_id,
+            extra_env_vars=body.extra_env_vars,
         ),
         media_type="text/event-stream",
         ping=30,  # SSE keepalive every 30s — prevents proxies/WebClient idle timeout
@@ -226,8 +230,8 @@ async def respond_to_permission(task_id: str, body: PermissionResponse):
     entry["event"].set()
 
     logger.info(
-        "Permission responded: task_id=%s, permission_id=%s, decision=%s",
-        task_id, body.permission_id, body.decision,
+        "Permission responded: task_id=%s, permission_id=%s, decision=%s, answers=%s",
+        task_id, body.permission_id, body.decision, body.answers,
     )
 
     return {"task_id": task_id, "permission_id": body.permission_id, "status": "responded"}
@@ -301,41 +305,46 @@ async def rewind_files(body: RewindRequest):
 
 @router.post("/query/{task_id}/abort", response_model=AbortResponse)
 async def abort_query(task_id: str) -> AbortResponse:
-    """Cancel a running query by its ``task_id``.
+    """Cancel a running query and kill its CLI process(es).
 
     Accepts either the Worker's internal UUID *or* the Foggy platform
-    ``foggy_task_id`` (injected at task creation).  The latter allows the
-    Java backend to abort tasks using its own task ID without maintaining
-    a separate ID-mapping table.
-
-    If the task is still active its underlying asyncio task will be cancelled
-    and cleaned up.
+    ``foggy_task_id``.  Snapshots tracked PIDs before any mutation so
+    they survive the asyncio finally-block cleanup.
     """
+    from ..claude.process_detection import get_pids_for_task
 
-    entry = task_registry.pop(task_id, None)
+    # -- Resolve task (by worker task_id or foggy_task_id) --
+    result = _resolve_task_entry(task_id)
+    if result is None:
+        logger.info("Abort: task '%s' already gone from registry", task_id)
+        return AbortResponse(task_id=task_id, status="cancelled")
+    resolved_id, _ = result
 
-    if entry is None:
-        # Fallback: search by foggy_task_id so the Java backend can abort
-        # using its own task ID (YYYYMMDD-xxxx format) without needing the
-        # Worker's internal UUID.
-        resolved_id = None
-        for tid, e in list(task_registry.items()):
-            if e.get("foggy_task_id") == task_id:
-                resolved_id = tid
-                break
-        if resolved_id is not None:
-            entry = task_registry.pop(resolved_id, None)
-            logger.info("Abort: resolved foggy_task_id '%s' → worker task_id '%s'", task_id, resolved_id)
-        else:
-            # Task already finished or was never registered — treat as idempotent success
-            logger.info("Abort called for task '%s' but already gone from registry", task_id)
-            return AbortResponse(task_id=task_id, status="cancelled")
+    # Snapshot PIDs *before* pop / cancel (finally block would unregister them).
+    pids_to_kill = get_pids_for_task(resolved_id)
 
-    asyncio_task: asyncio.Task | None = entry.get("asyncio_task")
-    if asyncio_task is not None and not asyncio_task.done():
-        asyncio_task.cancel()
+    # -- Cancel asyncio task --
+    entry = task_registry.pop(resolved_id, None)
+    if resolved_id != task_id:
+        logger.info("Abort: resolved foggy_task_id '%s' → worker '%s'", task_id, resolved_id)
 
-    return AbortResponse(task_id=task_id, status="cancelled")
+    atask: asyncio.Task | None = entry.get("asyncio_task") if entry else None
+    if atask is not None and not atask.done():
+        atask.cancel()
+
+    # -- Kill CLI processes --
+    killed: list[int] = []
+    for pid in pids_to_kill:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed.append(pid)
+            logger.info("Abort: killed CLI pid=%d for task %s", pid, resolved_id)
+        except ProcessLookupError:
+            logger.info("Abort: pid=%d already exited", pid)
+        except OSError as exc:
+            logger.warning("Abort: failed to kill pid=%d: %s", pid, exc)
+
+    return AbortResponse(task_id=task_id, status="cancelled", killed_pids=killed)
 
 
 def _resolve_task_entry(task_id: str) -> tuple[str, dict] | None:
@@ -351,16 +360,22 @@ def _resolve_task_entry(task_id: str) -> tuple[str, dict] | None:
 
 
 @router.get("/tasks/{task_id}/subscribe")
-async def subscribe_to_task(task_id: str, replay_from: int = 0):
+async def subscribe_to_task(
+    task_id: str,
+    ack_seq: int = 0,
+    replay_from: int | None = None,
+):
     """Subscribe to an existing task's SSE event stream.
 
     This endpoint enables reconnection after SSE disconnect or Java restart.
-    It creates a new subscriber on the task's ``EventBroadcast``, optionally
-    replaying events from a given index so the caller can catch up on missed
-    events.
+    It creates a new subscriber on the task's ``EventBroadcast``, replaying
+    events whose ``seq > ack_seq`` so the caller can catch up on missed events.
 
     Query parameters:
-        ``replay_from``: event index to replay from (0 = all events)
+        ``ack_seq``: last acknowledged sequence number (0 = replay all).
+            Java sends its last received seq; Worker replays everything after it.
+        ``replay_from``: **deprecated** — old index-based replay parameter.
+            Kept for backward compatibility with older Java backends.
     """
     resolved = _resolve_task_entry(task_id)
     if resolved is None:
@@ -377,15 +392,20 @@ async def subscribe_to_task(task_id: str, replay_from: int = 0):
             detail=f"Task '{task_id}' has no broadcast (non-interactive mode or already cleaned up)",
         )
 
+    # Backward compatibility: old Java sends replay_from (index), new Java sends ack_seq
+    effective_ack_seq = ack_seq
+    if replay_from is not None and ack_seq == 0:
+        effective_ack_seq = replay_from
+
     # Mark task as reconnected — exits grace period loop in run_query
     entry["connected"] = True
     entry["has_external_subscriber"] = True
     logger.info(
-        "Subscribe: task=%s (resolved=%s), replay_from=%d, total_events=%d",
-        task_id, real_task_id, replay_from, broadcast.event_count,
+        "Subscribe: task=%s (resolved=%s), ack_seq=%d, total_events=%d, latest_seq=%d",
+        task_id, real_task_id, effective_ack_seq, broadcast.event_count, broadcast.latest_seq,
     )
 
-    sub_queue = broadcast.subscribe(replay_from=replay_from)
+    sub_queue = broadcast.subscribe(ack_seq=effective_ack_seq)
 
     async def _subscribe_generator() -> AsyncGenerator[dict, None]:
         try:
@@ -422,4 +442,75 @@ async def subscribe_to_task(task_id: str, replay_from: int = 0):
         _subscribe_generator(),
         media_type="text/event-stream",
         ping=30,
+    )
+
+
+@router.get("/tasks/{task_id}/status")
+async def get_task_status(task_id: str):
+    """Query the Worker's real-time task state.
+
+    Java Reconciler calls this endpoint periodically to detect seq gaps
+    (Worker has more events than Java received) and trigger auto-reconnect.
+
+    Also useful after Java restart to determine whether to replay events.
+
+    Returns:
+        task_id: The resolved task ID
+        latest_seq: Latest event sequence number
+        event_count: Total events produced
+        closed: Whether the event stream has ended
+        cli_alive: Whether there are live CLI processes for this task
+        has_subscribers: Whether any SSE subscribers are connected
+        source: "registry" (live task) or "persistence" (completed task)
+    """
+    resolved = _resolve_task_entry(task_id)
+
+    if resolved is not None:
+        # Task is still live in registry
+        real_task_id, entry = resolved
+        broadcast: EventBroadcast | None = entry.get("broadcast")
+
+        # Check if CLI is alive via asyncio task
+        asyncio_task = entry.get("asyncio_task")
+        cli_alive = asyncio_task is not None and not asyncio_task.done() if asyncio_task else False
+
+        return {
+            "task_id": real_task_id,
+            "latest_seq": broadcast.latest_seq if broadcast else 0,
+            "event_count": broadcast.event_count if broadcast else 0,
+            "closed": broadcast.closed if broadcast else True,
+            "cli_alive": cli_alive,
+            "has_subscribers": len(broadcast._subscribers) > 0 if broadcast else False,
+            "connected": entry.get("connected", False),
+            "source": "registry",
+        }
+
+    # Task not in registry — check persistence layer for completed tasks.
+    # Resolve alias (foggy_task_id → worker task_id) since JSONL is stored
+    # under worker task_id, not foggy_task_id.
+    from ..persistence.factory import get_event_store
+    store = get_event_store()
+    resolved_persistence_id = (
+        store.resolve_alias(task_id)
+        if hasattr(store, "resolve_alias")
+        else task_id
+    )
+    latest_seq = store.get_latest_seq(resolved_persistence_id)
+    is_closed = store.is_closed(resolved_persistence_id)
+
+    if latest_seq > 0 or is_closed:
+        return {
+            "task_id": task_id,
+            "latest_seq": latest_seq,
+            "event_count": latest_seq,  # approximate (seq is 1-based monotonic)
+            "closed": is_closed,
+            "cli_alive": False,
+            "has_subscribers": False,
+            "connected": False,
+            "source": "persistence",
+        }
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Task '{task_id}' not found in registry or persistence store",
     )

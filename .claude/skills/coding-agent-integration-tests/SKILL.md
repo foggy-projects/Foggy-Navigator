@@ -1,21 +1,25 @@
 ---
 name: coding-agent-integration-tests
-description: Coding Agent 集成测试开发指导。当用户需要编写、运行或调试 coding-agent 的集成测试、端到端测试、API 测试时使用。触发词：/ca-tests, /dev-tests, 提及"集成测试"、"端到端测试"、"E2E"、"API测试"。
+description: Coding Agent L3 API 集成测试开发指导（REST + SSE + OpenHands）。当用户需要编写、运行或调试 coding-agent 模块专属的 L3 集成测试时使用。注意：本技能仅覆盖 coding-agent 模块，session-module 请使用 /st。触发词：/ca-tests, 提及"coding-agent 集成测试"、"coding-agent API 测试"。
 ---
 
 # Coding Agent 集成测试指导
 
-为 `addons/coding-agent/integration-tests` 模块提供集成测试编写、运行、调试的标准化指导。
+为 `addons/coding-agent/integration-tests` 模块提供 L3 API 集成测试编写、运行、调试的标准化指导。
+
+> **范围限定**：本技能仅覆盖 coding-agent 模块。
+> - Session Module 集成测试 → `/st`（session-integration-tests）
+> - 浏览器 E2E 测试 → `/test-coding-agent`（coding-agent-e2e-browser）
+> - 全局测试规范 → `/tg`（testing-guide）
 
 ## 使用场景
 
-当用户需要以下操作时激活：
-- 编写新的集成测试用例
-- 运行和调试集成测试
-- 验证 API 端点功能
-- 测试 SSE 事件流
-- 测试并发和错误处理场景
-- 补充测试覆盖率
+当用户明确针对 **coding-agent 模块** 进行以下操作时激活：
+- 编写 coding-agent 的 L3 集成测试用例
+- 运行和调试 coding-agent 集成测试
+- 验证 coding-agent REST API 端点
+- 测试 coding-agent SSE 事件流
+- 测试 OpenHands 集成场景
 
 ## 模块结构
 

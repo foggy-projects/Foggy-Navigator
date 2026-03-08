@@ -62,6 +62,7 @@ out/
 bin/
 !**/src/main/**/bin/
 !**/src/test/**/bin/
+!tools/claude-agent-worker/dist/bin/
 
 # NetBeans
 /nbproject/private/
@@ -100,6 +101,7 @@ pnpm-lock.yaml
 
 # Frontend build
 dist/
+!tools/claude-agent-worker/dist/
 build/
 .next/
 .nuxt/
@@ -178,3 +180,6 @@ packages/foggy-mobile/uniCloud-aliyun/
 
 # PID files
 *.pid
+
+# Playwright CLI
+.playwright-cli/

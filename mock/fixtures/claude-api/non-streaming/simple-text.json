@@ -1,0 +1,30 @@
+{
+  "_fixture_meta": {
+    "source": "DashScope Anthropic-compatible API (passthrough)",
+    "captured_at": "2026-03-05T17:13:02",
+    "original_model_requested": "claude-sonnet-4-20250514",
+    "actual_model_returned": "glm-4.7",
+    "capture_id": "20260305-171259-001-messages"
+  },
+  "id": "msg_58227d15-b989-4603-9056-1af645644a4f",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-20250514",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "The user wants a specific string as a reply: \"Hello World Test\".\n\n1.  **Analyze the Request:**\n    *   User Input: \"Reply with exactly: Hello World Test\"\n    *   Constraint: \"exactly\"\n    *   Target String: \"Hello World Test\"\n\n2.  **Formulate the Output:**\n    *   The desired output is the target string itself, without any additional text, punctuation (unless part of the string), or formatting.\n\n3.  **Verification:**\n    *   Target: \"Hello World Test\"\n    *   Draft: \"Hello World Test\"\n    *   Does the draft match the target? Yes.\n    *   Is there any extra fluff? No.\n\n4.  **Final Output Generation:**\n    *   Output: Hello World Test"
+    },
+    {
+      "type": "text",
+      "text": "Hello World Test"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 171,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+  }
+}

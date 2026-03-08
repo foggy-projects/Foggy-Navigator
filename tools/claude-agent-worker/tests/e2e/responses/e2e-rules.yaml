@@ -1,0 +1,50 @@
+# E2E test response rules for mock-llm-service
+#
+# These rules use dynamic SSE generation (no fixture files) with fast
+# chunk_size and minimal delay to keep tests snappy.
+#
+# Keywords are unique prefixes ("e2e-*") so they never collide with
+# real Anthropic traffic or the Claude CLI's internal system prompts.
+
+responses:
+  # ---- Simple text greeting ----
+  - name: "e2e-greeting"
+    match:
+      keywords: ["e2e-greeting-test"]
+    response:
+      content: "Hello from E2E mock!"
+    anthropic:
+      content: "Hello! This is an E2E test response from the mock LLM service."
+    anthropic_stream:
+      chunk_size: 200
+      delay_ms: 3
+
+  # ---- Coding response ----
+  - name: "e2e-coding"
+    match:
+      keywords: ["e2e-coding-test"]
+    response:
+      content: "E2E coding response"
+    anthropic:
+      content: |
+        Here is the implementation:
+
+        ```python
+        def hello():
+            return "Hello from E2E test"
+        ```
+    anthropic_stream:
+      chunk_size: 200
+      delay_ms: 3
+
+  # ---- Default fallback ----
+  - name: "e2e-default"
+    match:
+      default: true
+    response:
+      content: "E2E default response"
+    anthropic:
+      content: "This is the default E2E test response from the mock LLM service."
+    anthropic_stream:
+      chunk_size: 200
+      delay_ms: 3

@@ -51,6 +51,7 @@ export function useClaudeWorker() {
     sshUsername?: string
     sshPort?: number
     sshPassword?: string
+    codexConfig?: { baseUrl?: string; authToken?: string; model?: string }
   }) {
     const worker = await api.registerWorker(form)
     workers.value.push(worker)
@@ -59,7 +60,7 @@ export function useClaudeWorker() {
 
   async function updateWorker(
     workerId: string,
-    form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string },
+    form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string; codexConfig?: { baseUrl?: string; authToken?: string; model?: string } },
   ) {
     const updated = await api.updateWorker(workerId, form)
     const idx = workers.value.findIndex((w) => w.workerId === workerId)
@@ -91,6 +92,7 @@ export function useClaudeWorker() {
     model?: string
     maxTurns?: number
     agentTeamsJson?: string
+    agentTeamsConfigId?: string
     permissionMode?: string
     modelConfigId?: string
   }) {
@@ -109,6 +111,7 @@ export function useClaudeWorker() {
     model?: string
     maxTurns?: number
     agentTeamsJson?: string
+    agentTeamsConfigId?: string
     images?: string
     permissionMode?: string
     modelConfigId?: string
@@ -256,6 +259,18 @@ export function useClaudeWorker() {
     return config
   }
 
+  async function holdConversation(sessionId: string) {
+    const config = await api.holdConversation(sessionId)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
+  async function unholdConversation(sessionId: string) {
+    const config = await api.unholdConversation(sessionId)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
   function updateInteractionStateFromSSE(sessionId: string, interactionState: string) {
     const config = conversationConfigs.value.get(sessionId)
     if (config) {
@@ -304,6 +319,8 @@ export function useClaudeWorker() {
     batchBindAuth,
     archiveConversation,
     unarchiveConversation,
+    holdConversation,
+    unholdConversation,
     updateInteractionStateFromSSE,
   }
 }

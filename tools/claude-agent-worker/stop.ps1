@@ -18,9 +18,9 @@ $pids = (netstat -ano | Select-String ":$Port\s+.*LISTENING" | ForEach-Object {
 } | Sort-Object -Unique)
 
 if ($pids) {
-    foreach ($pid in $pids) {
-        Write-Host "Stopping Agent Worker on port $Port (PID: $pid)..." -ForegroundColor Yellow
-        taskkill /F /PID $pid 2>$null
+    foreach ($p in $pids) {
+        Write-Host "Stopping Agent Worker on port $Port (PID: $p)..." -ForegroundColor Yellow
+        taskkill /F /PID $p 2>$null
     }
     Write-Host "Agent Worker stopped." -ForegroundColor Green
 } else {

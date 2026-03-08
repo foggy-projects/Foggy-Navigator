@@ -108,16 +108,18 @@ function showHistory() {
 }
 .chat-input-inner {
   display: flex;
+  flex-direction: row;
   align-items: flex-end;
-  gap: 16rpx;
 }
 .history-btn {
   width: 64rpx;
   height: 64rpx;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  margin-right: 16rpx;
 }
 .history-icon {
   font-size: 36rpx;
@@ -128,9 +130,10 @@ function showHistory() {
   max-height: 200rpx;
   padding: 16rpx 24rpx;
   font-size: 28rpx;
-  background: #f5f5f5;
+  background-color: #f5f5f5;
   border-radius: 32rpx;
   line-height: 1.5;
+  margin-right: 16rpx;
 }
 .send-btn {
   width: 100rpx;

@@ -89,6 +89,10 @@ public class TaskAssistantEventBridge {
         eventData.put("agent", event.getTargetAgentId());
         eventData.put("summary", event.getResultSummary());
         eventData.put("timestamp", Instant.now().toString());
+        // 透传扩展数据（项目上下文等）
+        if (event.getExtData() != null && !event.getExtData().isEmpty()) {
+            eventData.putAll(event.getExtData());
+        }
 
         addEvent(userId, eventData);
     }
@@ -118,6 +122,10 @@ public class TaskAssistantEventBridge {
         eventData.put("agent", event.getTargetAgentId());
         eventData.put("prompt", event.getPrompt());
         eventData.put("timestamp", Instant.now().toString());
+        // 透传扩展数据（项目上下文等）
+        if (event.getExtData() != null && !event.getExtData().isEmpty()) {
+            eventData.putAll(event.getExtData());
+        }
 
         addEvent(userId, eventData);
     }

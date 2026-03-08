@@ -62,13 +62,15 @@ class ClaudeTaskServiceAuthTest {
         when(userAuthService.generateServiceToken(anyString())).thenReturn("mock-jwt-token");
 
         var conversationConfigRepository = mock(com.foggy.navigator.claude.worker.repository.ConversationConfigRepository.class);
+        var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
         service = new ClaudeTaskService(
                 taskRepository,
                 conversationConfigRepository,
                 deletedSessionRepository,
-                workerService, configService, directoryService,
+                workerService, configService, agentTeamsConfigService, directoryService,
                 workingDirectoryRepository,
-                sessionManager, publisher, llmModelManager, userAuthService);
+                sessionManager, publisher, llmModelManager, userAuthService,
+                mock(org.springframework.transaction.support.TransactionTemplate.class));
 
         // Default worker mock (online)
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();

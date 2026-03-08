@@ -18,7 +18,7 @@ class ClaudeContentBlockToolUse(BaseModel):
 class ClaudeContentBlockToolResult(BaseModel):
     type: Literal["tool_result"]
     tool_use_id: str
-    content: Union[str, List[Dict[str, Any]], Dict[str, Any]]
+    content: Union[str, Dict[str, Any]]
 
 class ClaudeSystemContent(BaseModel):
     type: Literal["text"]
@@ -26,7 +26,7 @@ class ClaudeSystemContent(BaseModel):
 
 class ClaudeMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: Union[str, List[Union[ClaudeContentBlockText, ClaudeContentBlockImage, ClaudeContentBlockToolUse, ClaudeContentBlockToolResult]]]
+    content: Optional[Union[str, List[Union[ClaudeContentBlockText, ClaudeContentBlockImage, ClaudeContentBlockToolUse, ClaudeContentBlockToolResult]]]] = None
 
 class ClaudeTool(BaseModel):
     name: str

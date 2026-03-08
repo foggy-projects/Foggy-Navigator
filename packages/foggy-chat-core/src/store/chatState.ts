@@ -92,6 +92,10 @@ export function createChatState(): ChatState {
       case AipMessageType.TEXT_COMPLETE: {
         const p = aip.payload as TextPayload
         isThinking.value = false
+        // Skip result events — their text content was already emitted by assistant_text.
+        // The result event still carries metadata (cost, tokens) handled by useTaskPane.
+        const raw = aip.payload as Record<string, unknown>
+        if (raw?.isResult === true) break
         const lastChunk = [...messages.value].reverse().find(
           (m) => m.type === AipMessageType.TEXT_CHUNK && m.sender === 'assistant',
         )
@@ -226,6 +230,10 @@ export function createChatState(): ChatState {
           })
           break
         }
+        if (subtype === 'sync_checkpoint' || subtype === 'reconnected') {
+          // Internal sync events — consume silently, do not render
+          break
+        }
         if (subtype === 'waiting') {
           // "Waiting for response" hint — replace previous waiting msg to avoid stacking
           const existingIdx = messages.value.findIndex(
@@ -326,6 +334,7 @@ export function createChatState(): ChatState {
           questions: p.questions,
           planReview: p.planReview,
           allowedPrompts: p.allowedPrompts,
+          plan: p.plan,
           raw: p,
           timestamp: aip.timestamp,
         })

@@ -4,11 +4,19 @@ import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
+import com.foggy.navigator.agent.framework.session.Message;
+import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import java.util.Arrays;
+import com.foggy.navigator.claude.worker.model.dto.CliStatus;
+import com.foggy.navigator.claude.worker.model.dto.MessageCount;
+import com.foggy.navigator.claude.worker.model.dto.MessageSyncReport;
+import com.foggy.navigator.claude.worker.model.dto.ResyncResult;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
+import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
@@ -33,14 +41,18 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import com.foggy.navigator.common.util.IdGenerator;
@@ -60,6 +72,7 @@ public class ClaudeTaskService {
     private final DeletedClaudeSessionRepository deletedSessionRepository;
     private final ClaudeWorkerService workerService;
     private final ConversationConfigService conversationConfigService;
+    private final AgentTeamsConfigService agentTeamsConfigService;
 
     /** @Lazy 打破 ClaudeTaskService ↔ WorkerStreamRelay 的循环依赖 */
     @Autowired @Lazy
@@ -70,6 +83,7 @@ public class ClaudeTaskService {
     private final ApplicationEventPublisher eventPublisher;
     private final LlmModelManager llmModelManager;
     private final UserAuthService userAuthService;
+    private final TransactionTemplate txTemplate;
 
     /**
      * 创建任务
@@ -89,14 +103,36 @@ public class ClaudeTaskService {
         String cwd = form.getCwd();
         String directoryId = form.getDirectoryId();
         String agentTeamsJson = form.getAgentTeamsJson();
+        String resolvedConfigId = null;
         if (directoryId != null && !directoryId.isEmpty()) {
             WorkingDirectoryEntity dir = workingDirectoryService.getDirectoryEntity(userId, directoryId);
             if (!dir.getWorkerId().equals(form.getWorkerId())) {
                 throw new IllegalArgumentException("Directory does not belong to the specified worker");
             }
             cwd = dir.getPath();
-            if ((agentTeamsJson == null || agentTeamsJson.isEmpty()) && dir.getAgentTeamsConfig() != null) {
-                agentTeamsJson = dir.getAgentTeamsConfig();
+            if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                // 优先级 2: 表单指定的命名配置 ID
+                if (form.getAgentTeamsConfigId() != null && !form.getAgentTeamsConfigId().isEmpty()) {
+                    AgentTeamsConfigEntity config = agentTeamsConfigService.getConfigEntity(form.getAgentTeamsConfigId());
+                    if (config != null && config.getDirectoryId().equals(directoryId)) {
+                        agentTeamsJson = config.getConfig();
+                        resolvedConfigId = config.getConfigId();
+                    }
+                }
+                // 优先级 3: 目录默认命名配置
+                if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                    Optional<AgentTeamsConfigEntity> defaultConfig = agentTeamsConfigService.getDefaultConfig(directoryId, userId);
+                    if (defaultConfig.isPresent()) {
+                        agentTeamsJson = defaultConfig.get().getConfig();
+                        resolvedConfigId = defaultConfig.get().getConfigId();
+                    }
+                }
+                // 优先级 4: 旧 legacy 字段（向后兼容）
+                if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                    if (dir.getAgentTeamsConfig() != null) {
+                        agentTeamsJson = dir.getAgentTeamsConfig();
+                    }
+                }
             }
         }
 
@@ -128,6 +164,7 @@ public class ClaudeTaskService {
         entity.setFileCheckpointingEnabled(true);
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
+        entity.setAgentTeamsConfigId(resolvedConfigId);
         taskRepository.save(entity);
 
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}, agentTeams={}",
@@ -136,8 +173,16 @@ public class ClaudeTaskService {
         publishStatusChange(entity, null);
         conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 
+        // 4.5. 锁定 Agent Teams 配置到会话
+        if (resolvedConfigId != null) {
+            ConversationConfigEntity convConfig = conversationConfigService.getOrCreate(sessionId, form.getWorkerId(), userId);
+            convConfig.setAgentTeamsConfigId(resolvedConfigId);
+            conversationConfigRepository.save(convConfig);
+        }
+
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
+        Map<String, String> extraEnvVars = resolveEnvVars(form.getModelConfigId(), directoryId, userId);
 
         // 5.5. 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
@@ -148,7 +193,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(),
                 authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey));
+                navigatorApiKey, extraEnvVars));
 
         return toDTO(entity);
     }
@@ -186,14 +231,48 @@ public class ClaudeTaskService {
         String cwd = form.getCwd();
         String directoryId = form.getDirectoryId();
         String agentTeamsJson = form.getAgentTeamsJson();
+        String resolvedConfigId = null;
+
+        // 优先从会话级 ConversationConfig 读取已锁定的配置（创建后不可变更）
+        ConversationConfigEntity existingConvConfig = conversationConfigService.getConfigEntity(form.getSessionId());
+        if (existingConvConfig != null && existingConvConfig.getAgentTeamsConfigId() != null) {
+            resolvedConfigId = existingConvConfig.getAgentTeamsConfigId();
+            AgentTeamsConfigEntity lockedConfig = agentTeamsConfigService.getConfigEntity(resolvedConfigId);
+            if (lockedConfig != null) {
+                agentTeamsJson = lockedConfig.getConfig();
+            }
+        }
+
         if (directoryId != null && !directoryId.isEmpty()) {
             WorkingDirectoryEntity dir = workingDirectoryService.getDirectoryEntity(userId, directoryId);
             if (!dir.getWorkerId().equals(form.getWorkerId())) {
                 throw new IllegalArgumentException("Directory does not belong to the specified worker");
             }
             cwd = dir.getPath();
-            if ((agentTeamsJson == null || agentTeamsJson.isEmpty()) && dir.getAgentTeamsConfig() != null) {
-                agentTeamsJson = dir.getAgentTeamsConfig();
+            // 仅在未锁定配置时才走解析链
+            if (resolvedConfigId == null && (agentTeamsJson == null || agentTeamsJson.isEmpty())) {
+                // 优先级 2: 表单指定的命名配置 ID
+                if (form.getAgentTeamsConfigId() != null && !form.getAgentTeamsConfigId().isEmpty()) {
+                    AgentTeamsConfigEntity config = agentTeamsConfigService.getConfigEntity(form.getAgentTeamsConfigId());
+                    if (config != null && config.getDirectoryId().equals(directoryId)) {
+                        agentTeamsJson = config.getConfig();
+                        resolvedConfigId = config.getConfigId();
+                    }
+                }
+                // 优先级 3: 目录默认命名配置
+                if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                    Optional<AgentTeamsConfigEntity> defaultConfig = agentTeamsConfigService.getDefaultConfig(directoryId, userId);
+                    if (defaultConfig.isPresent()) {
+                        agentTeamsJson = defaultConfig.get().getConfig();
+                        resolvedConfigId = defaultConfig.get().getConfigId();
+                    }
+                }
+                // 优先级 4: 旧 legacy 字段
+                if (agentTeamsJson == null || agentTeamsJson.isEmpty()) {
+                    if (dir.getAgentTeamsConfig() != null) {
+                        agentTeamsJson = dir.getAgentTeamsConfig();
+                    }
+                }
             }
         }
 
@@ -224,6 +303,7 @@ public class ClaudeTaskService {
         entity.setFileCheckpointingEnabled(true);
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
+        entity.setAgentTeamsConfigId(resolvedConfigId);
         taskRepository.save(entity);
 
         log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}, agentTeams={}",
@@ -232,8 +312,15 @@ public class ClaudeTaskService {
         publishStatusChange(entity, null);
         conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 
+        // 锁定 Agent Teams 配置到会话（仅首次，已锁定则跳过）
+        if (resolvedConfigId != null && existingConvConfig != null && existingConvConfig.getAgentTeamsConfigId() == null) {
+            existingConvConfig.setAgentTeamsConfigId(resolvedConfigId);
+            conversationConfigRepository.save(existingConvConfig);
+        }
+
         // 解析 per-conversation auth（含平台模型配置 fallback）
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
+        Map<String, String> extraEnvVars = resolveEnvVars(form.getModelConfigId(), directoryId, userId);
 
         // 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
@@ -243,7 +330,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
                 form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(), authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey));
+                navigatorApiKey, extraEnvVars));
 
         return toDTO(entity);
     }
@@ -376,9 +463,18 @@ public class ClaudeTaskService {
         long totalSessions;
 
         if (interactionState != null && !interactionState.isEmpty()) {
-            // 有 interactionState 筛选：先获取匹配的所有 sessionIds，再在其中分页
-            List<String> allMatchingSessionIds =
-                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState);
+            // 支持逗号分隔的多状态筛选（如 "AWAITING_REPLY,PROCESSING"）
+            List<String> states = Arrays.stream(interactionState.split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty()).toList();
+
+            List<String> allMatchingSessionIds;
+            if (states.size() == 1) {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionState(userId, states.get(0));
+            } else {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionStates(userId, states);
+            }
             if (allMatchingSessionIds.isEmpty()) {
                 return SessionPageDTO.builder()
                         .content(List.of()).totalSessions(0).page(page).size(size).build();
@@ -427,8 +523,18 @@ public class ClaudeTaskService {
         long totalSessions;
 
         if (interactionState != null && !interactionState.isEmpty()) {
-            List<String> allMatchingSessionIds =
-                    conversationConfigService.findSessionIdsByInteractionState(userId, interactionState);
+            // 支持逗号分隔的多状态筛选
+            List<String> states = Arrays.stream(interactionState.split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty()).toList();
+
+            List<String> allMatchingSessionIds;
+            if (states.size() == 1) {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionState(userId, states.get(0));
+            } else {
+                allMatchingSessionIds =
+                        conversationConfigService.findSessionIdsByInteractionStates(userId, states);
+            }
             if (allMatchingSessionIds.isEmpty()) {
                 return SessionPageDTO.builder()
                         .content(List.of()).totalSessions(0).page(page).size(size).build();
@@ -532,6 +638,21 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 幂等安全地更新任务的 claudeSessionId
+     * 仅在字段为 null 或值不同时更新，避免不必要的数据库写入
+     */
+    @Transactional
+    public void updateClaudeSessionId(String taskId, String claudeSessionId) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            if (entity.getClaudeSessionId() == null || !entity.getClaudeSessionId().equals(claudeSessionId)) {
+                entity.setClaudeSessionId(claudeSessionId);
+                taskRepository.save(entity);
+                log.debug("Updated claudeSessionId for task {}: {}", taskId, claudeSessionId);
+            }
+        });
+    }
+
+    /**
      * 标记任务失败（保留 claudeSessionId 以便后续继续会话）
      */
     @Transactional
@@ -566,24 +687,39 @@ public class ClaudeTaskService {
     }
 
     /**
-     * 从等待权限恢复为运行中
+     * 从等待权限恢复为运行中。
+     *
+     * @return true 如果成功将状态从 AWAITING_PERMISSION 更新为 RUNNING
      */
     @Transactional
-    public void resumeFromPermission(String taskId, String permissionId, String decision,
-                                      Map<String, String> answers) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
-            if ("AWAITING_PERMISSION".equals(entity.getStatus())) {
-                String prev = entity.getStatus();
-                entity.setStatus("RUNNING");
-                taskRepository.save(entity);
-                log.info("Task resumed from permission: taskId={}", taskId);
-                publishStatusChange(entity, prev);
-                conversationConfigService.updateInteractionState(entity.getSessionId(), "PROCESSING");
+    public boolean resumeFromPermission(String taskId, String permissionId, String decision,
+                                         Map<String, String> answers) {
+        var opt = taskRepository.findByTaskId(taskId);
+        if (opt.isEmpty()) {
+            log.warn("resumeFromPermission: task not found: taskId={}", taskId);
+            return false;
+        }
+        ClaudeTaskEntity entity = opt.get();
+        String currentStatus = entity.getStatus();
+        if (!"AWAITING_PERMISSION".equals(currentStatus)) {
+            log.warn("resumeFromPermission: task status is '{}', expected AWAITING_PERMISSION — "
+                    + "forcing to RUNNING anyway (permission was already relayed to Worker): taskId={}",
+                    currentStatus, taskId);
+            // 即使状态不是 AWAITING_PERMISSION，也强制恢复为 RUNNING。
+            // 因为 Worker 已经收到了 approve 响应，CLI 会继续执行。
+            // 典型场景：SSE 竞态导致 status 被短暂改为其他值。
+        }
+        String prev = entity.getStatus();
+        entity.setStatus("RUNNING");
+        entity.setErrorMessage(null); // 清除之前可能的错误信息
+        taskRepository.save(entity);
+        log.info("Task resumed from permission: taskId={}, prev={}", taskId, prev);
+        publishStatusChange(entity, prev);
+        conversationConfigService.updateInteractionState(entity.getSessionId(), "PROCESSING");
 
-                // Persist the user's response so it survives page refresh
-                publishConfirmationResponse(entity.getSessionId(), taskId, permissionId, decision, answers);
-            }
-        });
+        // Persist the user's response so it survives page refresh
+        publishConfirmationResponse(entity.getSessionId(), taskId, permissionId, decision, answers);
+        return true;
     }
 
     private void publishConfirmationResponse(String sessionId, String taskId, String permissionId,
@@ -601,6 +737,7 @@ public class ClaudeTaskService {
 
     /**
      * 标记任务已中止
+     * 保留 claudeSessionId 以便用户可以继续该会话，并通知 Worker 中止任务
      */
     @Transactional
     public void abortTask(String taskId) {
@@ -610,7 +747,22 @@ public class ClaudeTaskService {
             taskRepository.save(entity);
             log.info("Task aborted: taskId={}", taskId);
             publishStatusChange(entity, prev);
+            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
+
+        // 在事务外调用 Worker abortTask API（避免网络 IO 阻塞事务）
+        try {
+            ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
+            if (task != null) {
+                ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+                ClaudeWorkerClient client = workerService.createClient(worker);
+                client.abortTask(taskId).block(Duration.ofSeconds(3));
+                log.info("Worker abort sent: taskId={}", taskId);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to notify worker for abort task {}: {}", taskId, e.getMessage());
+            // Worker 可能已经不可达或任务已结束，不抛出异常
+        }
     }
 
     /**
@@ -638,7 +790,7 @@ public class ClaudeTaskService {
             }
         }
 
-        // 同时删除关联的 Session 及其消息
+        // 同时删除关联的 Session 及其消息，以及 ConversationConfig
         String sessionId = entity.getSessionId();
         taskRepository.delete(entity);
         if (sessionId != null) {
@@ -647,6 +799,12 @@ public class ClaudeTaskService {
                 log.info("Associated session deleted: sessionId={}", sessionId);
             } catch (Exception e) {
                 log.warn("Failed to delete associated session: sessionId={}", sessionId, e);
+            }
+            try {
+                conversationConfigRepository.deleteBySessionId(sessionId);
+                log.info("Associated conversation config deleted: sessionId={}", sessionId);
+            } catch (Exception e) {
+                log.warn("Failed to delete conversation config: sessionId={}", sessionId, e);
             }
         }
         log.info("Task deleted: taskId={}, userId={}", taskId, userId);
@@ -865,6 +1023,32 @@ public class ClaudeTaskService {
         return new String[]{null, null, null};
     }
 
+    /**
+     * 从 LLM 模型配置中解析环境变量
+     * 优先级：显式 modelConfigId → 目录默认 modelConfigId
+     */
+    private Map<String, String> resolveEnvVars(String modelConfigId, String directoryId, String userId) {
+        // 优先使用显式指定的 modelConfigId
+        if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            LlmModelConfigDTO config = llmModelManager.getModelConfig(modelConfigId).orElse(null);
+            if (config != null && config.getEnvVars() != null && !config.getEnvVars().isEmpty()) {
+                return config.getEnvVars();
+            }
+        }
+        // Fallback: 目录绑定的默认模型
+        if (directoryId != null && !directoryId.isEmpty()) {
+            WorkingDirectoryEntity dir = workingDirectoryRepository
+                    .findByDirectoryIdAndUserId(directoryId, userId).orElse(null);
+            if (dir != null && dir.getDefaultModelConfigId() != null) {
+                LlmModelConfigDTO config = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
+                if (config != null && config.getEnvVars() != null && !config.getEnvVars().isEmpty()) {
+                    return config.getEnvVars();
+                }
+            }
+        }
+        return null;
+    }
+
     private LocalDateTime parseSessionDateTime(Object value) {
         if (value == null) return null;
         try {
@@ -881,60 +1065,59 @@ public class ClaudeTaskService {
     }
 
     /**
-     * 定时检查超时任务（每5分钟）
-     * - 交互式任务（fileCheckpointingEnabled=true）：4 小时超时（与 Worker hard timeout 对齐）
-     *   使用 lastAliveAt（Reconciler 心跳时间）作为基准，避免误判仍在运行的长任务
-     * - Tracked sync 任务（fileCheckpointingEnabled=false）：10 分钟超时（syncQuery 正常 < 2 分钟）
-     * - AWAITING_PERMISSION 任务：4 小时超时（同样使用 lastAliveAt 基准，用户可能长时间不在）
+     * [DISABLED] 超时检查 — 仅记录警告日志，不再自动标记 FAILED。
+     *
+     * 设计原则简化（Rule 2: 只有用户能终止 CLI）：
+     * - CLI alive = task alive（唯一真相源）
+     * - 超时由 Reconciler 检测 CLI 存活状态决定，不再主动标记 FAILED
+     * - 原 @Scheduled 注解已移除，此方法仅供调试时手动调用
      */
-    @Scheduled(fixedDelay = 300000)
-    @Transactional
-    public void checkTimeoutTasks() {
+    // @Scheduled removed — timeout checks are advisory only, Reconciler handles lifecycle
+    @Transactional(readOnly = true)
+    public void logTimeoutWarnings() {
         LocalDateTime now = LocalDateTime.now();
-        int timedOutCount = 0;
+        int warnCount = 0;
 
-        // 交互式编程任务：4 小时超时
-        // 先用 createdAt 过滤出候选任务，再用 lastAliveAt（Reconciler 更新）作为真正基准，
-        // 避免误杀 Reconciler 近期确认存活的任务。
+        // 交互式编程任务：4 小时阈值
         LocalDateTime runningCutoff = now.minusHours(4);
         List<ClaudeTaskEntity> runningOld = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", runningCutoff);
         for (ClaudeTaskEntity entity : runningOld) {
             if (Boolean.FALSE.equals(entity.getFileCheckpointingEnabled())) {
-                continue; // sync tasks handled separately below
+                continue;
             }
             LocalDateTime baseline = entity.getLastAliveAt() != null ? entity.getLastAliveAt() : entity.getCreatedAt();
             if (baseline.isBefore(runningCutoff)) {
-                failTimeout(entity, "Task timed out (exceeded 4 hours without CLI activity)");
-                timedOutCount++;
+                log.warn("[Advisory] Task {} running > 4h (baseline={}), CLI lifecycle managed by Reconciler",
+                        entity.getTaskId(), baseline);
+                warnCount++;
             }
         }
 
-        // Tracked sync tasks: 10 minute timeout (syncQuery should complete in < 2 min)
-        // Sync tasks are short-lived, Reconciler does not track them — use createdAt directly.
+        // Tracked sync 任务：10 分钟阈值
         LocalDateTime syncCutoff = now.minusMinutes(10);
         List<ClaudeTaskEntity> syncOld = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", syncCutoff);
         for (ClaudeTaskEntity entity : syncOld) {
             if (Boolean.FALSE.equals(entity.getFileCheckpointingEnabled())) {
-                failTimeout(entity, "Sync task timed out (exceeded 10 minutes)");
-                timedOutCount++;
+                log.warn("[Advisory] Sync task {} running > 10min (created={}), CLI lifecycle managed by Reconciler",
+                        entity.getTaskId(), entity.getCreatedAt());
+                warnCount++;
             }
         }
 
-        // AWAITING_PERMISSION tasks: 4 hour timeout (aligned with interactive tasks).
-        // Users may step away while a question/permission is pending — use a generous window.
-        // Use lastAliveAt as baseline if Reconciler has confirmed the CLI is alive recently.
+        // AWAITING_PERMISSION 任务：4 小时阈值
         LocalDateTime permissionCutoff = now.minusHours(4);
         List<ClaudeTaskEntity> permOld = taskRepository.findByStatusAndCreatedAtBefore("AWAITING_PERMISSION", permissionCutoff);
         for (ClaudeTaskEntity entity : permOld) {
             LocalDateTime baseline = entity.getLastAliveAt() != null ? entity.getLastAliveAt() : entity.getCreatedAt();
             if (baseline.isBefore(permissionCutoff)) {
-                failTimeout(entity, "Permission request timed out (exceeded 4 hours without CLI activity)");
-                timedOutCount++;
+                log.warn("[Advisory] Permission task {} waiting > 4h (baseline={}), CLI lifecycle managed by Reconciler",
+                        entity.getTaskId(), baseline);
+                warnCount++;
             }
         }
 
-        if (timedOutCount > 0) {
-            log.info("Marked {} timed-out tasks as FAILED", timedOutCount);
+        if (warnCount > 0) {
+            log.info("[Advisory] {} tasks exceed timeout thresholds (no action taken — CLI lifecycle managed by Reconciler)", warnCount);
         }
     }
 
@@ -951,59 +1134,56 @@ public class ClaudeTaskService {
     }
 
     /**
-     * Reconciler 专用：按 taskId 强制将任务标记为 FAILED。
+     * Reconciler 专用：CLI 已确认退出时，将任务标记为 COMPLETED。
+     * Rule 1: CLI alive = task alive → CLI 退出 = 任务完成。
      * 仅对仍处于活跃状态（RUNNING / AWAITING_PERMISSION）的任务生效，幂等安全。
      */
     @Transactional
-    public void reconcilerFailTask(String taskId, String reason) {
+    public void reconcilerCompleteTask(String taskId, String reason) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String status = entity.getStatus();
             if ("RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status)) {
-                failTimeout(entity, reason);
+                completeWithReason(entity, reason);
             }
         });
     }
 
     /**
-     * 流正常结束但任务仍在 RUNNING 时调用（未收到 result/error 事件）。
-     * 典型场景：系统资源不足导致 CLI 无法启动，Worker 进程异常退出。
-     * 标记任务失败 + 推送友好错误消息到会话。
+     * SSE 流断开时调用（未收到 result/error 事件，且重连已失败）。
      *
-     * 注意：AWAITING_PERMISSION 任务不立即失败 — SSE 流在等待用户授权期间空闲易超时断开，
-     * 但 CLI 进程通常仍然存活。由 TaskStateReconciler 定期检测 CLI 存活状态来处理。
+     * 简化原则（Rule 1: CLI alive = task alive）：
+     * - CLI 仍存活 → defer to Reconciler（不标记任何终态）
+     * - CLI 已死 → 标记 COMPLETED（CLI 退出 = 任务完成）
+     * - AWAITING_PERMISSION → defer to Reconciler（CLI 通常仍存活等待用户输入）
      */
     @Transactional
-    public void failIfStillRunning(String taskId, String sessionId, String reason) {
+    public void handleStreamDisconnect(String taskId, String sessionId, String reason) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String status = entity.getStatus();
             if ("AWAITING_PERMISSION".equals(status)) {
-                // SSE 流断开但 CLI 可能仍在等待用户输入，不立即失败。
-                // Reconciler 会检测 CLI 进程存活状态，真正死亡时会 reconcilerFailTask。
                 log.info("SSE stream ended while task awaiting permission — deferring to Reconciler: taskId={}", taskId);
                 return;
             }
             if ("RUNNING".equals(status)) {
-                // 在标记 FAILED 之前，检查 CLI 进程是否仍然存活
                 if (isCliProcessAlive(entity)) {
                     log.info("CLI process still alive — deferring to Reconciler: taskId={}", taskId);
                     return;
                 }
 
+                // CLI dead + stream disconnected → mark COMPLETED (Rule 1: CLI exited = task done)
                 String prev = entity.getStatus();
-                entity.setStatus("FAILED");
+                entity.setStatus("COMPLETED");
                 entity.setErrorMessage(reason);
                 taskRepository.save(entity);
-                log.warn("Task stream ended without result: taskId={}, reason={}", taskId, reason);
+                log.info("Task stream ended, CLI exited — marking COMPLETED: taskId={}, reason={}", taskId, reason);
                 publishStatusChange(entity, prev);
                 conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
-                publishSessionError(sessionId, taskId, reason, true);
 
-                // 发布跨 Agent 任务失败事件
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
                         .externalTaskId(taskId)
                         .parentSessionId(sessionId)
                         .targetAgentId(AGENT_ID)
-                        .status("FAILED")
+                        .status("COMPLETED")
                         .resultSummary(reason)
                         .build());
             }
@@ -1025,6 +1205,64 @@ public class ClaudeTaskService {
         taskRepository.save(entity);
         log.info("Task reset to RUNNING for reconnect: taskId={}", taskId);
         publishStatusChange(entity, prev);
+    }
+
+    /**
+     * 重新同步已失败但 CLI 还在运行的任务。
+     *
+     * 使用场景：Reconciler 检测到 CLI 还活着但已标记为 FAILED，用户通过进程列表手动触发重新同步。
+     *
+     * 操作：
+     * 1. 验证任务状态为 FAILED
+     * 2. 查询 Worker 确认 CLI 还在运行（cli_alive=true）
+     * 3. 将数据库状态改为 RUNNING
+     * 4. 调用 streamRelay.reconnectTask() 复用消息对齐机制
+     * 5. 发布 STATE_SYNC 事件通知前端
+     *
+     * @param taskId 任务 ID
+     */
+    @Transactional
+    public void resyncTask(String taskId) {
+        ClaudeTaskEntity entity = getTaskEntity(taskId);
+
+        // 1. 检查：只有 FAILED 状态才能重新同步
+        if (!"FAILED".equals(entity.getStatus())) {
+            throw new IllegalStateException("Only FAILED tasks can be resynced, current status: " + entity.getStatus());
+        }
+
+        // 2. 检查：Worker 侧 CLI 必须还活着
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
+        Boolean cliAlive = false;
+        try {
+            Map<String, Object> status = workerService.createClient(worker)
+                    .getTaskStatus(taskId)
+                    .block(java.time.Duration.ofSeconds(5));
+            if (status != null) {
+                cliAlive = (Boolean) status.get("cli_alive");
+            }
+        } catch (Exception e) {
+            log.warn("Failed to query Worker status for resync task {}: {}", taskId, e.getMessage());
+        }
+
+        if (Boolean.FALSE.equals(cliAlive)) {
+            throw new IllegalStateException("CLI is already dead, cannot resync task: " + taskId);
+        }
+
+        // 3. 恢复任务状态
+        String prev = entity.getStatus();
+        entity.setStatus("RUNNING");
+        entity.setErrorMessage(null);
+        taskRepository.save(entity);
+        log.info("Task resynced: taskId={}, workerId={}", taskId, entity.getWorkerId());
+        publishStatusChange(entity, prev);
+
+        // 4. 触发重连拉取新事件（复用现有消息对齐机制）
+        streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
+
+        // 5. 发布恢复通知到会话
+        eventPublisher.publishEvent(
+                AgentMessage.of(entity.getSessionId(), AGENT_ID, MessageType.STATE_SYNC,
+                        Map.of("content", "Task resynced", "subtype", "resynced", "taskId", taskId)));
     }
 
     /**
@@ -1056,36 +1294,357 @@ public class ClaudeTaskService {
         }
     }
 
-    private void failTimeout(ClaudeTaskEntity entity, String reason) {
+    // ==================== Resync 任务重新同步 ====================
+
+    /**
+     * 任务重新同步主入口。
+     * - CLI 仍活着 → 策略 A：重置状态为 RUNNING，重连 SSE
+     * - CLI 已退出 → 策略 B：从 Worker JSONL 补齐消息
+     *
+     * 不标 @Transactional：包含大量远程 HTTP 调用（healthCheck / getTaskStatus /
+     * listCliProcesses / getSessionMessages，最长可达 30s），避免长时间占用 DB 连接。
+     * 各写操作通过 txTemplate 显式划定事务边界。
+     */
+    public ResyncResult resync(String taskId, String userId) {
+        ClaudeTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+
+        if (!"FAILED".equals(entity.getStatus())) {
+            throw new IllegalStateException("Only FAILED tasks can be resynced, current status: " + entity.getStatus());
+        }
+
+        ResyncResult result = new ResyncResult();
+        result.setTaskId(taskId);
+
+        // 1. Worker 健康检查（网络 IO，事务外）
+        ClaudeWorkerEntity worker;
+        ClaudeWorkerClient client;
+        try {
+            worker = workerService.getWorkerEntity(entity.getWorkerId());
+            client = workerService.createClient(worker);
+            client.healthCheck().block(Duration.ofSeconds(5));
+        } catch (Exception e) {
+            log.warn("Resync: Worker unreachable for task {}: {}", taskId, e.getMessage());
+            result.setAction("WORKER_UNREACHABLE");
+            result.setCliStatus(CliStatus.unreachable(e.getMessage()));
+            result.setTaskStatusAfter(entity.getStatus());
+            return result;
+        }
+
+        // 2. 三层探测 CLI 状态（网络 IO，事务外）
+        CliStatus cliStatus = detectCliStatus(client, entity);
+        result.setCliStatus(cliStatus);
+
+        if (cliStatus.isAlive()) {
+            // 策略 A：CLI 存活 → 重连 SSE
+            log.info("Resync: CLI alive for task {}, reconnecting SSE (Strategy A)", taskId);
+            txTemplate.executeWithoutResult(status -> resetToRunning(taskId));
+            try {
+                streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
+            } catch (Exception e) {
+                log.warn("Resync: SSE reconnect failed for task {}: {}", taskId, e.getMessage());
+            }
+            result.setAction("RECONNECTED");
+            result.setTaskStatusAfter("RUNNING");
+        } else {
+            // 策略 B：CLI 已退出 → 从 Worker JSONL 补齐消息
+            log.info("Resync: CLI dead for task {}, syncing messages from Worker (Strategy B)", taskId);
+            syncMessagesFromWorker(entity, client, result);
+        }
+
+        return result;
+    }
+
+    /**
+     * 三层探测 CLI 进程存活状态。
+     * 层1: task_registry / persistence (getTaskStatus)
+     * 层2: 进程列表匹配 foggy_task_id
+     * 层3: 都失败 → alive=false
+     */
+    @SuppressWarnings("unchecked")
+    private CliStatus detectCliStatus(ClaudeWorkerClient client, ClaudeTaskEntity task) {
+        String taskId = task.getTaskId();
+
+        // 层1: 查询 Worker task_registry
+        try {
+            Map<String, Object> status = client.getTaskStatus(taskId).block(Duration.ofSeconds(5));
+            if (status != null) {
+                Boolean cliAlive = (Boolean) status.get("cli_alive");
+                Boolean closed = (Boolean) status.get("closed");
+                String source = (String) status.get("source");
+
+                if (Boolean.TRUE.equals(cliAlive)) {
+                    return CliStatus.builder()
+                            .alive(true).workerReachable(true).taskInRegistry(true)
+                            .source("task_status").detail("CLI alive via " + source)
+                            .build();
+                }
+                if (Boolean.TRUE.equals(closed)) {
+                    return CliStatus.builder()
+                            .alive(false).workerReachable(true).taskInRegistry(true)
+                            .source("task_status").detail("Task closed via " + source)
+                            .build();
+                }
+                // 有记录但 cli_alive 不确定，继续层2
+            }
+        } catch (Exception e) {
+            log.debug("Resync: Layer1 task_status check failed for task {}: {}", taskId, e.getMessage());
+        }
+
+        // 层2: 进程列表匹配
+        try {
+            Map<String, Object> processInfo = client.listCliProcesses().block(Duration.ofSeconds(5));
+            if (processInfo != null) {
+                Object processesList = processInfo.get("processes");
+                if (processesList instanceof List<?> processes) {
+                    boolean found = processes.stream()
+                            .filter(p -> p instanceof Map)
+                            .map(p -> (Map<String, Object>) p)
+                            .anyMatch(p -> taskId.equals(p.get("foggy_task_id")));
+                    if (found) {
+                        return CliStatus.builder()
+                                .alive(true).workerReachable(true).taskInRegistry(false)
+                                .source("process_list").detail("CLI process found in process list")
+                                .build();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Resync: Layer2 process_list check failed for task {}: {}", taskId, e.getMessage());
+        }
+
+        // 层3: 兜底 — 都无法确认存活
+        return CliStatus.builder()
+                .alive(false).workerReachable(true).taskInRegistry(false)
+                .source("fallback").detail("CLI not found in task_registry or process list")
+                .build();
+    }
+
+    /**
+     * 策略 B：从 Worker JSONL 补齐平台侧缺失的消息。
+     */
+    @SuppressWarnings("unchecked")
+    private void syncMessagesFromWorker(ClaudeTaskEntity task, ClaudeWorkerClient client, ResyncResult result) {
+        String claudeSessionId = task.getClaudeSessionId();
+        String sessionId = task.getSessionId();
+        String taskId = task.getTaskId();
+
+        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
+            log.warn("Resync: No claudeSessionId for task {}, cannot sync messages", taskId);
+            result.setAction("NO_SESSION_DATA");
+            result.setTaskStatusAfter(task.getStatus());
+            return;
+        }
+
+        // 获取 Worker 侧消息
+        List<Map<String, Object>> workerMessages;
+        try {
+            workerMessages = client.getSessionMessages(claudeSessionId).block(Duration.ofSeconds(15));
+        } catch (Exception e) {
+            log.warn("Resync: Failed to get Worker messages for session {}: {}", claudeSessionId, e.getMessage());
+            result.setAction("NO_SESSION_DATA");
+            result.setTaskStatusAfter(task.getStatus());
+            return;
+        }
+        if (workerMessages == null || workerMessages.isEmpty()) {
+            log.info("Resync: No messages found on Worker for session {}", claudeSessionId);
+            result.setAction("NO_SESSION_DATA");
+            result.setTaskStatusAfter(task.getStatus());
+            return;
+        }
+
+        // 获取平台侧消息
+        List<Message> platformMessages = sessionManager.getAllMessages(sessionId);
+
+        // 构建同步报告
+        MessageSyncReport report = new MessageSyncReport();
+        report.setPlatformBefore(countMessages(platformMessages));
+        report.setWorkerTotal(countWorkerMessages(workerMessages));
+
+        // 计算缺失消息
+        List<Map<String, Object>> missing = computeMissing(platformMessages, workerMessages);
+
+        if (missing.isEmpty()) {
+            log.info("Resync: Messages already aligned for task {}", taskId);
+            result.setAction("ALREADY_ALIGNED");
+            report.setImported(0);
+            report.setPlatformAfter(report.getPlatformBefore());
+            report.setMissingPreview(List.of());
+            result.setMessageSync(report);
+            // 即使消息已对齐，仍将 FAILED 任务标记为 COMPLETED
+            txTemplate.executeWithoutResult(status -> markAsCompletedFromSync(task));
+            result.setTaskStatusAfter("COMPLETED");
+            return;
+        }
+
+        // 构建预览（最多10条，content 截断200字）— 纯计算，事务外
+        List<Map<String, Object>> preview = missing.stream()
+                .limit(10)
+                .map(m -> {
+                    Map<String, Object> p = new LinkedHashMap<>();
+                    p.put("role", m.get("role"));
+                    String content = m.get("content") != null ? m.get("content").toString() : "";
+                    p.put("content", content.length() > 200 ? content.substring(0, 200) + "..." : content);
+                    return p;
+                })
+                .collect(Collectors.toList());
+        report.setMissingPreview(preview);
+
+        // 导入缺失消息 + 标记完成 — 在同一个事务内，保证原子性
+        txTemplate.executeWithoutResult(status -> {
+            importMessages(sessionId, missing);
+            markAsCompletedFromSync(task);
+        });
+        report.setImported(missing.size());
+
+        // 同步后重新计数（事务已提交，读到最新数据）
+        List<Message> platformAfter = sessionManager.getAllMessages(sessionId);
+        report.setPlatformAfter(countMessages(platformAfter));
+
+        result.setAction("MESSAGES_SYNCED");
+        result.setMessageSync(report);
+        result.setTaskStatusAfter("COMPLETED");
+        log.info("Resync: Synced {} messages for task {}", missing.size(), taskId);
+    }
+
+    /**
+     * 有序指纹匹配：找出 Worker 中有而平台中缺失的消息。
+     * 指纹 = role:content前200字符(strip后)
+     * 顺序匹配而非集合差集，正确处理重复内容（如多次"继续"）。
+     */
+    private List<Map<String, Object>> computeMissing(List<Message> platformMessages, List<Map<String, Object>> workerMessages) {
+        // 构建平台消息指纹列表（保持顺序）
+        List<String> platformFingerprints = platformMessages.stream()
+                .map(m -> fingerprint(m.getRole() != null ? m.getRole().name().toLowerCase() : "unknown", m.getContent()))
+                .collect(Collectors.toList());
+
+        List<Map<String, Object>> missing = new ArrayList<>();
+        int platformIdx = 0;
+
+        for (Map<String, Object> wm : workerMessages) {
+            String role = wm.get("role") != null ? wm.get("role").toString() : "unknown";
+            String content = wm.get("content") != null ? wm.get("content").toString() : "";
+            String wFingerprint = fingerprint(role, content);
+
+            // 尝试在平台指纹列表中从当前位置开始匹配
+            boolean matched = false;
+            while (platformIdx < platformFingerprints.size()) {
+                if (platformFingerprints.get(platformIdx).equals(wFingerprint)) {
+                    platformIdx++;
+                    matched = true;
+                    break;
+                }
+                // 平台有多余消息（如 ERROR/STATE_SYNC），跳过
+                platformIdx++;
+            }
+
+            if (!matched) {
+                missing.add(wm);
+            }
+        }
+
+        return missing;
+    }
+
+    private String fingerprint(String role, String content) {
+        String trimmed = content != null ? content.strip() : "";
+        String truncated = trimmed.length() > 200 ? trimmed.substring(0, 200) : trimmed;
+        return role + ":" + truncated;
+    }
+
+    /**
+     * 将缺失消息导入到平台会话中。
+     */
+    private void importMessages(String sessionId, List<Map<String, Object>> messages) {
+        for (Map<String, Object> m : messages) {
+            String role = m.get("role") != null ? m.get("role").toString() : "assistant";
+            String content = m.get("content") != null ? m.get("content").toString() : "";
+            MessageRole messageRole = "user".equalsIgnoreCase(role) ? MessageRole.USER : MessageRole.ASSISTANT;
+
+            Message message = Message.builder()
+                    .sessionId(sessionId)
+                    .role(messageRole)
+                    .content(content)
+                    .build();
+
+            // 保留 Worker 侧的原始时间戳
+            if (m.get("timestamp") != null) {
+                try {
+                    message.setCreatedAt(java.time.LocalDateTime.parse(m.get("timestamp").toString()));
+                } catch (Exception e) {
+                    // 解析失败则使用当前时间
+                    log.debug("Resync: Failed to parse timestamp '{}', using now", m.get("timestamp"));
+                }
+            }
+
+            sessionManager.addMessage(sessionId, message);
+        }
+    }
+
+    /**
+     * 将 FAILED 任务标记为 COMPLETED（策略 B 同步后）。
+     */
+    private void markAsCompletedFromSync(ClaudeTaskEntity task) {
+        String prev = task.getStatus();
+        task.setStatus("COMPLETED");
+        task.setErrorMessage(null);
+        taskRepository.save(task);
+        log.info("Resync: Task marked as COMPLETED from sync: taskId={}", task.getTaskId());
+        publishStatusChange(task, prev);
+        conversationConfigService.updateInteractionState(task.getSessionId(), "AWAITING_REPLY");
+    }
+
+    private MessageCount countMessages(List<Message> messages) {
+        int user = (int) messages.stream().filter(m -> m.getRole() == MessageRole.USER).count();
+        int assistant = (int) messages.stream().filter(m -> m.getRole() == MessageRole.ASSISTANT).count();
+        return new MessageCount(user, assistant, messages.size());
+    }
+
+    private MessageCount countWorkerMessages(List<Map<String, Object>> messages) {
+        int user = (int) messages.stream().filter(m -> "user".equals(m.get("role"))).count();
+        int assistant = (int) messages.stream().filter(m -> "assistant".equals(m.get("role"))).count();
+        return new MessageCount(user, assistant, messages.size());
+    }
+
+    // ==================== End Resync ====================
+
+    /**
+     * 标记任务为 COMPLETED（CLI 已退出，任务完成）。
+     *
+     * Rule 1: CLI alive = task alive → CLI 退出 = 任务完成。
+     * 不再自动 abort Worker（Rule 2: 只有用户能杀 CLI）。
+     * 保留本地 SSE 流清理（释放 Java 侧资源）。
+     */
+    private void completeWithReason(ClaudeTaskEntity entity, String reason) {
         String prev = entity.getStatus();
-        entity.setStatus("FAILED");
+        entity.setStatus("COMPLETED");
         entity.setErrorMessage(reason);
         taskRepository.save(entity);
-        log.warn("Task timed out: taskId={}, createdAt={}, reason={}", entity.getTaskId(), entity.getCreatedAt(), reason);
+        log.info("Task completed (CLI exited): taskId={}, createdAt={}, reason={}",
+                entity.getTaskId(), entity.getCreatedAt(), reason);
         publishStatusChange(entity, prev);
         conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
 
         String taskId = entity.getTaskId();
 
-        // 推送错误消息到会话，让用户在聊天中看到失败原因
+        // 推送信息消息到会话（非错误，仅通知）
         publishSessionError(entity.getSessionId(), taskId, reason, false);
 
-        // 通知 Worker 中止任务（使用 foggy_task_id，Worker 端已支持按此字段查找）
-        try {
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            client.abortTask(taskId).block(Duration.ofSeconds(3));
-            log.info("Worker abort sent on timeout: taskId={}", taskId);
-        } catch (Exception e) {
-            log.warn("Failed to abort worker task on timeout: taskId={}, error={}", taskId, e.getMessage());
-        }
-
-        // 清理本地 SSE 流订阅
+        // 清理本地 SSE 流订阅（释放 Java 侧资源，不影响 CLI）
         try {
             streamRelay.abortStream(taskId);
         } catch (Exception e) {
-            log.warn("Failed to abort local stream on timeout: taskId={}", taskId, e.getMessage());
+            log.warn("Failed to abort local stream on completion: taskId={}", taskId, e.getMessage());
         }
+
+        // 发布跨 Agent 任务完成事件
+        eventPublisher.publishEvent(TaskCompletionEvent.builder()
+                .externalTaskId(taskId)
+                .parentSessionId(entity.getSessionId())
+                .targetAgentId(AGENT_ID)
+                .status("COMPLETED")
+                .resultSummary(reason)
+                .build());
     }
 
     /**
@@ -1174,6 +1733,7 @@ public class ClaudeTaskService {
                 .checkpoints(entity.getCheckpoints())
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .source(entity.getSource())
+                .agentTeamsConfigId(entity.getAgentTeamsConfigId())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

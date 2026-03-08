@@ -1,0 +1,13 @@
+{
+  "_description": "Request with system prompt - Anthropic format uses top-level 'system' parameter (not a system message in messages array)",
+  "model": "claude-sonnet-4-20250514",
+  "max_tokens": 4096,
+  "stream": true,
+  "system": "You are a helpful coding assistant. Always respond in Chinese. When providing code, include comments explaining each step.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Write a Python function to check if a number is prime."
+    }
+  ]
+}

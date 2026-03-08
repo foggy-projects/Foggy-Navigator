@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .store.yaml_store import YamlResponseStore
 from .strategies.keyword import KeywordMatchStrategy
-from .routes import openai, admin
+from .routes import openai, admin, anthropic
 from .config import settings
 
 # 初始化存储和策略
@@ -16,6 +16,11 @@ async def lifespan(app: FastAPI):
     # Startup
     print(f"Mock LLM Service started")
     print(f"Loaded {len(response_store.get_rules())} response rules")
+    anthropic_rules = sum(1 for r in response_store.get_rules() if r.anthropic)
+    print(f"  - OpenAI rules: {len(response_store.get_rules()) - anthropic_rules}")
+    print(f"  - Anthropic-enabled rules: {anthropic_rules}")
+    if settings.fixtures_dir:
+        print(f"  - Fixtures dir: {settings.fixtures_dir}")
     yield
     # Shutdown
     print("Mock LLM Service stopped")
@@ -23,8 +28,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Mock LLM Service",
-    description="OpenAI API 兼容的 Mock LLM 服务，用于测试和开发",
-    version="1.0.0",
+    description="OpenAI API + Anthropic Messages API 兼容的 Mock LLM 服务",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -40,10 +45,12 @@ app.add_middleware(
 # 注入到路由
 openai.init_router(response_store, match_strategy)
 admin.init_router(response_store)
+anthropic.init_router(response_store, match_strategy, settings.fixtures_dir or None)
 
 # 注册路由
 app.include_router(openai.router)
 app.include_router(admin.router)
+app.include_router(anthropic.router)
 
 if __name__ == "__main__":
     import uvicorn

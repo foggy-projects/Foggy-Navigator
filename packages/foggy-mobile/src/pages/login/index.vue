@@ -151,7 +151,7 @@ async function handleLogin() {
     }
 
     uni.showToast({ title: '登录成功', icon: 'success' })
-    uni.switchTab({ url: '/pages/chat/index' })
+    uni.switchTab({ url: '/pages/worker/index' })
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } } }
     uni.showToast({
@@ -195,7 +195,7 @@ async function handleLogin() {
   background: #ffffff;
   border-radius: 24rpx;
   padding: 48rpx 40rpx;
-  box-shadow: 0 16rpx 64rpx rgba(0, 0, 0, 0.15);
+  border: 2rpx solid #e0e0e0;
 }
 .form-item {
   margin-bottom: 36rpx;
@@ -219,6 +219,7 @@ async function handleLogin() {
 /* 服务器选择器 */
 .server-selector {
   display: flex;
+  flex-direction: row;
   align-items: center;
   height: 80rpx;
   padding: 0 24rpx;
@@ -250,6 +251,7 @@ async function handleLogin() {
 /* 服务器选择弹窗 */
 .picker-header {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
   padding: 28rpx 32rpx;
@@ -270,6 +272,7 @@ async function handleLogin() {
 }
 .picker-item {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
   padding: 28rpx 32rpx;
@@ -319,7 +322,7 @@ async function handleLogin() {
 .login-btn {
   width: 100%;
   height: 88rpx;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background-color: #667eea;
   color: #ffffff;
   font-size: 32rpx;
   font-weight: 600;
@@ -327,6 +330,7 @@ async function handleLogin() {
   border: none;
   margin-top: 16rpx;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
 }

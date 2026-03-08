@@ -53,47 +53,47 @@ services:
       timeout: 5s
       retries: 3
 
-  # GitLab 服务（移除 80 端口映射，使用 8080）
-  gitlab:
-    image: gitlab/gitlab-ce:latest
-    container_name: foggy-navigator-gitlab
-    restart: unless-stopped
-    hostname: gitlab.foggy.local
-    ports:
-      - "8080:80"
-      - "443:443"
-      - "2222:22"
-    environment:
-      GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://gitlab.foggy.local'
-        gitlab_rails['time_zone'] = 'Asia/Shanghai'
-        gitlab_rails['gitlab_shell_ssh_port'] = 2222
-
-        # 邮件配置（可选）
-        # gitlab_rails['smtp_enable'] = true
-        # gitlab_rails['smtp_address'] = "smtp.gmail.com"
-        # gitlab_rails['smtp_port'] = 587
-
-        # 性能优化
-        puma['worker_processes'] = 2
-        sidekiq['max_concurrency'] = 10
-
-        # 禁用不需要的服务以节省资源
-        prometheus_monitoring['enable'] = false
-        grafana['enable'] = false
-    volumes:
-      - gitlab_config:/etc/gitlab
-      - gitlab_logs:/var/log/gitlab
-      - gitlab_data:/var/opt/gitlab
-    networks:
-      - foggy-network
-    healthcheck:
-      test: ["CMD", "gitlab-ctl", "status"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-    shm_size: '256m'
+  # GitLab 服务（已停用）
+  # gitlab:
+  #   image: gitlab/gitlab-ce:latest
+  #   container_name: foggy-navigator-gitlab
+  #   restart: unless-stopped
+  #   hostname: gitlab.foggy.local
+  #   ports:
+  #     - "8080:80"
+  #     - "443:443"
+  #     - "2222:22"
+  #   environment:
+  #     GITLAB_OMNIBUS_CONFIG: |
+  #       external_url 'http://gitlab.foggy.local'
+  #       gitlab_rails['time_zone'] = 'Asia/Shanghai'
+  #       gitlab_rails['gitlab_shell_ssh_port'] = 2222
+  #
+  #       # 邮件配置（可选）
+  #       # gitlab_rails['smtp_enable'] = true
+  #       # gitlab_rails['smtp_address'] = "smtp.gmail.com"
+  #       # gitlab_rails['smtp_port'] = 587
+  #
+  #       # 性能优化
+  #       puma['worker_processes'] = 2
+  #       sidekiq['max_concurrency'] = 10
+  #
+  #       # 禁用不需要的服务以节省资源
+  #       prometheus_monitoring['enable'] = false
+  #       grafana['enable'] = false
+  #   volumes:
+  #     - gitlab_config:/etc/gitlab
+  #     - gitlab_logs:/var/log/gitlab
+  #     - gitlab_data:/var/opt/gitlab
+  #   networks:
+  #     - foggy-network
+  #   healthcheck:
+  #     test: ["CMD", "gitlab-ctl", "status"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 120s
+  #   shm_size: '256m'
 
   # RabbitMQ 消息队列（监控事件总线）
   rabbitmq:
@@ -116,37 +116,37 @@ services:
       timeout: 5s
       retries: 5
 
-  # phpMyAdmin（可选，用于管理 MySQL）
-  phpmyadmin:
-    image: phpmyadmin:latest
-    container_name: foggy-navigator-phpmyadmin
-    restart: unless-stopped
-    ports:
-      - "8081:80"
-    environment:
-      PMA_HOST: mysql
-      PMA_PORT: 3306
-      PMA_USER: root
-      PMA_PASSWORD: foggy@root123
-      UPLOAD_LIMIT: 100M
-    depends_on:
-      - mysql
-    networks:
-      - foggy-network
+  # phpMyAdmin（已停用，用于管理 MySQL）
+  # phpmyadmin:
+  #   image: phpmyadmin:latest
+  #   container_name: foggy-navigator-phpmyadmin
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8081:80"
+  #   environment:
+  #     PMA_HOST: mysql
+  #     PMA_PORT: 3306
+  #     PMA_USER: root
+  #     PMA_PASSWORD: foggy@root123
+  #     UPLOAD_LIMIT: 100M
+  #   depends_on:
+  #     - mysql
+  #   networks:
+  #     - foggy-network
 
 volumes:
   mysql_data:
     name: foggy-navigator-mysql-data
     driver: local
-  gitlab_config:
-    name: foggy-navigator-gitlab-config
-    driver: local
-  gitlab_logs:
-    name: foggy-navigator-gitlab-logs
-    driver: local
-  gitlab_data:
-    name: foggy-navigator-gitlab-data
-    driver: local
+  # gitlab_config:
+  #   name: foggy-navigator-gitlab-config
+  #   driver: local
+  # gitlab_logs:
+  #   name: foggy-navigator-gitlab-logs
+  #   driver: local
+  # gitlab_data:
+  #   name: foggy-navigator-gitlab-data
+  #   driver: local
   rabbitmq_data:
     name: foggy-navigator-rabbitmq-data
     driver: local

@@ -1,0 +1,8 @@
+{
+  "type": "error",
+  "error": {
+    "type": "api_error",
+    "message": "An unexpected error has occurred internal to Anthropic's systems."
+  },
+  "request_id": "req_mock-error-500-001"
+}

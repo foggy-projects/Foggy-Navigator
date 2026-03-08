@@ -137,6 +137,7 @@ def map_plan_review(
     task_id: str,
     permission_id: str,
     allowed_prompts: list[dict[str, Any]] | None = None,
+    plan: str | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Map an ExitPlanMode tool call to an SSE dict for plan review."""
@@ -145,6 +146,7 @@ def map_plan_review(
         "type": "plan_review",
         "permission_id": permission_id,
         "allowed_prompts": allowed_prompts or [],
+        "plan": plan or "",
         "task_id": task_id,
         "session_id": session_id,
     }
@@ -185,6 +187,28 @@ def map_error(task_id: str, error: str, session_id: str | None = None) -> dict[s
     return {
         "type": "error",
         "error": error,
+        "task_id": task_id,
+        "session_id": session_id,
+    }
+
+
+def map_sync_checkpoint(
+    task_id: str,
+    latest_seq: int,
+    event_count: int,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Emit a sync checkpoint after result/error so Java can verify completeness.
+
+    Java uses the ``latest_seq`` and ``event_count`` fields to detect if any
+    events were lost during SSE streaming, and triggers a reconnect to recover
+    missed events if needed.
+    """
+
+    return {
+        "type": "sync_checkpoint",
+        "latest_seq": latest_seq,
+        "event_count": event_count,
         "task_id": task_id,
         "session_id": session_id,
     }

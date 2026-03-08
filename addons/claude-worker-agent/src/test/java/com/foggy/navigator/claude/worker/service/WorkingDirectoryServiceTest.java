@@ -41,7 +41,8 @@ class WorkingDirectoryServiceTest {
             String val = inv.getArgument(0);
             return val.startsWith("enc:") ? val.substring(4) : val;
         });
-        service = new WorkingDirectoryService(repository, workerService, credentialEncryptor);
+        var agentTeamsConfigRepository = mock(com.foggy.navigator.claude.worker.repository.AgentTeamsConfigRepository.class);
+        service = new WorkingDirectoryService(repository, agentTeamsConfigRepository, workerService, credentialEncryptor);
 
         // Default: worker belongs to user
         ClaudeWorkerEntity worker = createWorker();

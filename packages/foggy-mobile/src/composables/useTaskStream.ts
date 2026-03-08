@@ -18,6 +18,7 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
   const task = ref<ClaudeTask | null>(null)
   const chatState = createChatState()
   let unsubscribeSse: (() => void) | null = null
+  let stopConnWatch: (() => void) | null = null
 
   const { subscribeSession, connected } = useUnifiedSse()
 
@@ -61,7 +62,8 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
     unsubscribeSse = subscribeSession(sessionId, handleSseEvent)
     chatState.setConnectionStatus(connected.value ? 'connected' : 'connecting')
     // 监听连接状态变化，实时同步给 chatState
-    watch(connected, (val) => {
+    stopConnWatch?.()
+    stopConnWatch = watch(connected, (val) => {
       chatState.setConnectionStatus(val ? 'connected' : 'connecting')
     })
   }
@@ -103,6 +105,8 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
   }
 
   function disconnect() {
+    stopConnWatch?.()
+    stopConnWatch = null
     if (unsubscribeSse) {
       unsubscribeSse()
       unsubscribeSse = null

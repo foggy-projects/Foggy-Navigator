@@ -1,0 +1,8 @@
+{
+  "type": "error",
+  "error": {
+    "type": "invalid_request_error",
+    "message": "messages: Required parameter is missing: messages"
+  },
+  "request_id": "req_mock-error-400-001"
+}

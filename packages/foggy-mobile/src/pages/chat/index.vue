@@ -3,8 +3,8 @@
     <!-- 头部 -->
     <view class="page-header">
       <text class="header-title">会话</text>
-      <view class="header-action" @tap="createNewSession">
-        <text class="action-icon">+</text>
+      <view class="header-action" :class="{ disabled: creating }" @tap="createNewSession">
+        <text class="action-icon">{{ creating ? '...' : '+' }}</text>
       </view>
     </view>
 
@@ -24,6 +24,7 @@
           <SessionItem
             :session="session"
             @tap="openSession(session)"
+            @longpress="showSessionActions(session)"
           />
         </view>
       </view>
@@ -54,6 +55,7 @@ import UpgradePopup from '@/components/UpgradePopup.vue'
 
 const sessionStore = useSessionStore()
 const refreshing = ref(false)
+const creating = ref(false)
 const loading = computed(() => sessionStore.loading)
 
 const sessions = computed(() =>
@@ -73,14 +75,40 @@ async function onRefresh() {
 }
 
 async function createNewSession() {
-  const session = await sessionStore.createSession('新会话')
-  if (session) {
-    uni.navigateTo({ url: `/pages/chat/detail?id=${session.id}` })
+  if (creating.value) return
+  creating.value = true
+  try {
+    const session = await sessionStore.createSession('新会话')
+    if (session) {
+      uni.navigateTo({ url: `/pages/chat/detail?id=${session.id}` })
+    }
+  } finally {
+    creating.value = false
   }
 }
 
 function openSession(session: Session) {
   uni.navigateTo({ url: `/pages/chat/detail?id=${session.id}` })
+}
+
+function showSessionActions(session: Session) {
+  uni.showActionSheet({
+    itemList: ['删除会话'],
+    success: async (res) => {
+      if (res.tapIndex === 0) {
+        uni.showModal({
+          title: '确认删除',
+          content: `确定删除「${session.taskName || '新会话'}」？`,
+          success: async (modalRes) => {
+            if (modalRes.confirm) {
+              await sessionStore.removeSession(session.id)
+              uni.showToast({ title: '已删除', icon: 'success' })
+            }
+          },
+        })
+      }
+    },
+  })
 }
 </script>
 
@@ -95,18 +123,18 @@ function openSession(session: Session) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 24rpx 32rpx;
   background: #ffffff;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 2rpx solid #f0f0f0;
 }
 .header-title {
-  font-size: 18px;
+  font-size: 36rpx;
   font-weight: 600;
   color: #303133;
 }
 .header-action {
-  width: 28px;
-  height: 28px;
+  width: 56rpx;
+  height: 56rpx;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -114,22 +142,25 @@ function openSession(session: Session) {
   border-radius: 50%;
 }
 .action-icon {
-  font-size: 18px;
+  font-size: 36rpx;
   color: #ffffff;
   font-weight: 300;
+}
+.header-action.disabled {
+  opacity: 0.5;
 }
 .session-list {
   flex: 1;
 }
 .empty-wrap {
-  padding: 24px;
+  padding: 48rpx;
 }
 .loading-wrap {
-  padding: 24px;
+  padding: 48rpx;
   text-align: center;
 }
 .loading-text {
-  font-size: 14px;
+  font-size: 28rpx;
   color: #909399;
 }
 </style>

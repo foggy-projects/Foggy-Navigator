@@ -59,7 +59,7 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson) {
-        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null, null, null);
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -72,6 +72,21 @@ public class ClaudeWorkerClient {
                                                        String permissionMode,
                                                        String navigatorApiKey,
                                                        String foggyTaskId, String foggySessionId) {
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, images,
+                apiKey, authToken, baseUrl, permissionMode, navigatorApiKey, foggyTaskId, foggySessionId, null);
+    }
+
+    /**
+     * 流式查询（含 per-request auth 覆盖、图片附件、权限模式和额外环境变量）
+     */
+    public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
+                                                       String model, Integer maxTurns,
+                                                       String agentTeamsJson, String images,
+                                                       String apiKey, String authToken, String baseUrl,
+                                                       String permissionMode,
+                                                       String navigatorApiKey,
+                                                       String foggyTaskId, String foggySessionId,
+                                                       Map<String, String> extraEnvVars) {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) {
@@ -124,6 +139,10 @@ public class ClaudeWorkerClient {
         }
         if (foggySessionId != null && !foggySessionId.isEmpty()) {
             body.put("foggy_session_id", foggySessionId);
+        }
+        // Extra environment variables from LLM model config
+        if (extraEnvVars != null && !extraEnvVars.isEmpty()) {
+            body.put("extra_env_vars", extraEnvVars);
         }
 
         return webClient.post()
@@ -707,19 +726,40 @@ public class ClaudeWorkerClient {
     }
 
     /**
-     * 订阅已存在任务的 SSE 事件流（用于 Java 重启后重连）。
-     * 支持通过 foggyTaskId 或 Worker 内部 taskId 查找。
+     * 订阅已存在任务的 SSE 事件流（用于 SSE 断连或 Java 重启后重连）。
+     * 使用 ESN（Event Sequence Number）的 ack_seq 参数精确回放遗漏事件。
      *
-     * @param taskId     foggyTaskId 或 Worker 内部 task UUID
-     * @param replayFrom 从第几个事件开始重放（0 = 全部重放）
+     * @param taskId foggyTaskId 或 Worker 内部 task UUID
+     * @param ackSeq 最后确认的事件序列号（0 = 全部重放）。
+     *               Worker 返回 seq &gt; ackSeq 的所有事件。
+     *               同时传 replay_from 参数兼容旧版 Worker。
      */
-    public Flux<ServerSentEvent<String>> subscribeToTask(String taskId, int replayFrom) {
+    public Flux<ServerSentEvent<String>> subscribeToTask(String taskId, int ackSeq) {
         return webClient.get()
                 .uri(uriBuilder -> uriBuilder.path("/api/v1/tasks/{taskId}/subscribe")
-                        .queryParam("replay_from", replayFrom)
+                        .queryParam("ack_seq", ackSeq)
+                        .queryParam("replay_from", ackSeq)  // 向后兼容旧 Worker
                         .build(taskId))
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {});
+    }
+
+    /**
+     * 查询 Worker 侧任务的实时状态（latest_seq、closed、cli_alive 等）。
+     * 用于 Reconciler seq gap 检测和 Java 重启后的状态判断。
+     *
+     * @param taskId foggyTaskId
+     * @return 任务状态 Map，如果查询失败返回 empty Mono
+     */
+    @SuppressWarnings("unchecked")
+    public reactor.core.publisher.Mono<Map<String, Object>> getTaskStatus(String taskId) {
+        return webClient.get()
+                .uri("/api/v1/tasks/{taskId}/status", taskId)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .doOnError(e -> log.debug("Task status query failed for worker {}, task {}: {}",
+                        workerId, taskId, e.getMessage()));
     }
 
     public String getWorkerId() {

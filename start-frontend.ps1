@@ -3,10 +3,12 @@
 # Options:
 #   -Build        先编译前端（更新 dist/nginx，供 Nginx/内网访问用）
 #   -BuildOnly    仅编译，不启动 dev server
+#   -Force        强制重建 workspace 依赖包（foggy-chat-core, foggy-chat）
 
 param(
     [switch]$Build,
-    [switch]$BuildOnly
+    [switch]$BuildOnly,
+    [switch]$Force
 )
 
 $FRONTEND_PORT = 5174
@@ -35,9 +37,60 @@ if (-not (Test-Path "$FRONTEND_DIR\node_modules")) {
     Write-Host "[1] Dependencies ready" -ForegroundColor Gray
 }
 
-# ── Step 2: Build for Nginx（-Build 或 -BuildOnly 时执行）────────────────────
+# ── Step 2: Build workspace packages (foggy-chat-core, foggy-chat) ────────────
+$chatCoreDir = "$PSScriptRoot\packages\foggy-chat-core"
+$chatDir     = "$PSScriptRoot\packages\foggy-chat"
+$wsNeedsBuild = $false
+
+if ($Force) {
+    Write-Host "[2] -Force: cleaning workspace dist..." -ForegroundColor Yellow
+    Remove-Item "$chatCoreDir\dist" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item "$chatDir\dist" -Recurse -Force -ErrorAction SilentlyContinue
+    $wsNeedsBuild = $true
+} elseif (-not (Test-Path "$chatCoreDir\dist") -or -not (Test-Path "$chatDir\dist") -or
+          -not (Get-ChildItem "$chatCoreDir\dist" -Filter "*.d.ts" -Recurse -ErrorAction SilentlyContinue) -or
+          -not (Get-ChildItem "$chatDir\dist" -Filter "*.d.ts" -Recurse -ErrorAction SilentlyContinue)) {
+    $wsNeedsBuild = $true
+} else {
+    # Stale detection: compare newest src file vs oldest dist file
+    $coreNewestSrc  = (Get-ChildItem "$chatCoreDir\src" -Recurse -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+    $coreOldestDist = (Get-ChildItem "$chatCoreDir\dist" -Recurse -File | Sort-Object LastWriteTime | Select-Object -First 1).LastWriteTime
+    $chatNewestSrc  = (Get-ChildItem "$chatDir\src" -Recurse -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+    $chatOldestDist = (Get-ChildItem "$chatDir\dist" -Recurse -File | Sort-Object LastWriteTime | Select-Object -First 1).LastWriteTime
+
+    if ($coreNewestSrc -and $coreOldestDist -and $coreNewestSrc -gt $coreOldestDist) {
+        Write-Host "  foggy-chat-core src is newer than dist, rebuilding..." -ForegroundColor Yellow
+        $wsNeedsBuild = $true
+    } elseif ($chatNewestSrc -and $chatOldestDist -and $chatNewestSrc -gt $chatOldestDist) {
+        Write-Host "  foggy-chat src is newer than dist, rebuilding..." -ForegroundColor Yellow
+        $wsNeedsBuild = $true
+    }
+}
+
+if ($wsNeedsBuild) {
+    Write-Host "[2] Building workspace packages (foggy-chat-core, foggy-chat)..." -ForegroundColor Yellow
+    Set-Location "$chatCoreDir"
+    pnpm build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  foggy-chat-core build FAILED!" -ForegroundColor Red
+        Set-Location $PSScriptRoot
+        exit 1
+    }
+    Set-Location "$chatDir"
+    pnpm build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  foggy-chat build FAILED!" -ForegroundColor Red
+        Set-Location $PSScriptRoot
+        exit 1
+    }
+    Set-Location $PSScriptRoot
+} else {
+    Write-Host "[2] Workspace packages up-to-date" -ForegroundColor Gray
+}
+
+# ── Step 3: Build for Nginx（-Build 或 -BuildOnly 时执行）────────────────────
 if ($Build -or $BuildOnly) {
-    Write-Host "[2] Building for Nginx (dist/nginx)..." -ForegroundColor Yellow
+    Write-Host "[3] Building for Nginx (dist/nginx)..." -ForegroundColor Yellow
     $buildStart = Get-Date
 
     Set-Location "$PSScriptRoot\$FRONTEND_DIR"
@@ -70,10 +123,10 @@ if ($Build -or $BuildOnly) {
         exit 0
     }
 } else {
-    Write-Host "[2] Skip build (use -Build to update Nginx dist)" -ForegroundColor Gray
+    Write-Host "[3] Skip build (use -Build to update Nginx dist)" -ForegroundColor Gray
 }
 
-# ── Step 3: Start dev server ───────────────────────────────────────────────────
+# ── Step 4: Start dev server ───────────────────────────────────────────────────
 $portConnection = Get-NetTCPConnection -LocalPort $FRONTEND_PORT -State Listen -ErrorAction SilentlyContinue
 if ($portConnection) {
     $procId = $portConnection.OwningProcess | Select-Object -First 1
@@ -90,7 +143,7 @@ if ($portConnection) {
     Start-Sleep -Seconds 2
 }
 
-Write-Host "[3] Starting dev server..." -ForegroundColor Yellow
+Write-Host "[4] Starting dev server..." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "  Dev  : http://localhost:$FRONTEND_PORT  (Vite hot-reload)" -ForegroundColor Cyan
 Write-Host "  Nginx: http://localhost:80              (needs -Build to update)" -ForegroundColor Cyan

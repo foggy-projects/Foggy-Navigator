@@ -70,11 +70,10 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     if (['COMPLETED', 'FAILED', 'ABORTED'].includes(task.value.status)) return
     try {
       const fresh = await workerApi.getTask(task.value.taskId)
-      if (fresh.status !== task.value.status) {
-        Object.assign(task.value, fresh)
-        if (['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
-          options?.onTaskFinished?.(paneId)
-        }
+      const prevStatus = task.value.status
+      Object.assign(task.value, fresh)
+      if (prevStatus !== fresh.status && ['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
+        options?.onTaskFinished?.(paneId)
       }
     } catch {
       /* task deleted or inaccessible — ignore */
@@ -105,14 +104,19 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     if (raw.type === 'CONFIRMATION_REQUEST') {
       task.value.status = 'AWAITING_PERMISSION' as ClaudeTask['status']
     } else if (raw.type === 'TEXT_COMPLETE') {
-      task.value.status = 'COMPLETED'
-      if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
-      if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs
-      if (typeof payload.inputTokens === 'number') task.value.inputTokens = payload.inputTokens
-      if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
-      if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
-      if (typeof payload.model === 'string') task.value.model = payload.model
-      options?.onTaskFinished?.(paneId)
+      // Only treat as task completion when result-level metadata is present.
+      // The "result" event from Python Worker always includes numTurns/costUsd/durationMs.
+      // Intermediate "assistant_text" events (also TEXT_COMPLETE) only have content and taskId.
+      if (payload.numTurns != null || payload.costUsd != null || payload.durationMs != null) {
+        task.value.status = 'COMPLETED'
+        if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
+        if (typeof payload.durationMs === 'number') task.value.durationMs = payload.durationMs
+        if (typeof payload.inputTokens === 'number') task.value.inputTokens = payload.inputTokens
+        if (typeof payload.outputTokens === 'number') task.value.outputTokens = payload.outputTokens
+        if (typeof payload.numTurns === 'number') task.value.numTurns = payload.numTurns
+        if (typeof payload.model === 'string') task.value.model = payload.model
+        options?.onTaskFinished?.(paneId)
+      }
     } else if (raw.type === 'ERROR') {
       task.value.status = 'FAILED'
       if (typeof payload.errorMessage === 'string')
@@ -138,7 +142,9 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     try {
       const messages = await sessionApi.getMessages(sessionId)
       if (connectVersion !== myVersion) return
-      for (const msg of messages) {
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i]
+        if (!msg) continue
         // Count USER/ASSISTANT messages (same口径 as JSONL count)
         if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
           dbMessageCount++
@@ -156,14 +162,23 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
             timestamp: ts,
           })
         } else if (msgType === 'STATE_SYNC' && meta?.subtype === 'waiting') {
-          // Render transient "waiting" hints as permanent text in history view,
-          // otherwise processAipMessage's removeWaitingHint() deletes them
-          // when the subsequent ERROR message is processed.
+          // Skip transient "waiting" hints when the next message supersedes them
+          // (e.g., ERROR, TEXT_COMPLETE, or another real event follows).
+          // Only render if this is the LAST message (task may still be in progress).
+          const next = messages[i + 1]
+          const nextType = next?.metadata?.type as string | undefined
+          if (next && (nextType === 'ERROR' || nextType === 'TEXT_COMPLETE'
+            || nextType === 'TASK_COMPLETED' || next.role === 'USER')) {
+            // Superseded by a subsequent event — skip to avoid confusing display
+            continue
+          }
+          // Last message or followed by non-terminal event — render as waiting hint
           chatState.messages.value.push({
             id: msg.id,
-            type: AipMessageType.TEXT_COMPLETE,
-            sender: 'assistant',
+            type: AipMessageType.STATE_SYNC,
+            sender: 'system',
             content: msg.content || 'Waiting for response...',
+            raw: { subtype: 'waiting' },
             timestamp: ts,
           })
         } else if (msgType && msgType in AipMessageType) {
@@ -195,9 +210,12 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     createSseSubscription(sessionId)
     attachTaskUpdateListener()
 
-    // Non-blocking: detect and load JSONL delta messages
+    // Non-blocking: detect and load JSONL delta messages.
+    // Skip for ABORTED tasks — the delta is typically caused by the CLI
+    // continuing to run after abort (undelivered SSE events), not by real
+    // external conversations.
     if (connectVersion !== myVersion) return
-    if (task.value?.claudeSessionId && task.value?.workerId) {
+    if (task.value?.claudeSessionId && task.value?.workerId && task.value?.status !== 'ABORTED') {
       detectAndLoadDelta(task.value.workerId, task.value.claudeSessionId, dbMessageCount, myVersion)
     }
   }

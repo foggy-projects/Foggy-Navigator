@@ -10,7 +10,9 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.event.WorkerEvent;
+import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -27,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -49,14 +52,15 @@ public class WorkerStreamRelay {
     /** 启动后延迟多少毫秒再尝试重连（等 Worker 健康检查完成） */
     private static final long STARTUP_RECONNECT_DELAY_MS = 10_000;
 
-    /** SSE 断连后最大重连次数 */
-    private static final int MAX_RECONNECT_ATTEMPTS = 3;
     /** 重连退避基础延迟（毫秒），实际延迟 = 2^attempt * BASE */
     private static final long RECONNECT_BASE_DELAY_MS = 2000;
+    /** 重连退避上限（毫秒），避免无限增长 */
+    private static final long MAX_RECONNECT_BACKOFF_MS = 300_000;  // 5 minutes
 
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
     private final ClaudeTaskRepository taskRepository;
+    private final WorkingDirectoryRepository workingDirectoryRepository;
     private final ConversationConfigService conversationConfigService;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
@@ -68,11 +72,18 @@ public class WorkerStreamRelay {
     private final ConcurrentHashMap<String, String> workerTaskIdMap = new ConcurrentHashMap<>();
 
     /**
-     * 当前 Java 实例内每个任务已成功接收的事件数。
-     * 用于 SSE 断连重连时计算精确的 replay_from，避免遗漏 result 事件。
-     * Java 重启后此 Map 为空，此时用 Integer.MAX_VALUE 跳过（历史已在 DB）。
+     * 每个任务已确认接收的最新事件序列号（ESN）。
+     * 用于 SSE 断连重连时通过 ack_seq 参数精确回放遗漏事件。
+     * Java 重启后此 Map 为空，此时 ack_seq=0（从头回放，幂等安全）。
+     *
+     * 与旧的 receivedEventCounts（事件计数）相比，ESN 基于 Worker 注入的
+     * 单调递增序列号，不受 relay 失败、解析异常等影响，更加可靠。
+     * 当 Worker 未返回 seq 字段时（旧版 Worker），降级为计数模式。
      */
-    private final ConcurrentHashMap<String, AtomicInteger> receivedEventCounts = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicInteger> lastAckedSeq = new ConcurrentHashMap<>();
+
+    /** 每个任务的重连互斥锁，防止 doOnComplete/doOnError/Reconciler 并发触发多次重连 */
+    private final ConcurrentHashMap<String, AtomicBoolean> reconnecting = new ConcurrentHashMap<>();
 
     @Async("sessionEventExecutor")
     @EventListener
@@ -99,7 +110,8 @@ public class WorkerStreamRelay {
                     event.getAgentTeamsJson(), event.getImages(),
                     event.getApiKey(), event.getAuthToken(), event.getBaseUrl(),
                     event.getPermissionMode(), event.getNavigatorApiKey(),
-                    event.getTaskId(), event.getSessionId());
+                    event.getTaskId(), event.getSessionId(),
+                    event.getExtraEnvVars());
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, 0);
@@ -112,6 +124,7 @@ public class WorkerStreamRelay {
                     .parentSessionId(sessionId)
                     .targetAgentId(AGENT_ID)
                     .prompt(truncateResult(event.getPrompt()))
+                    .extData(buildEventExtData(taskId))
                     .build());
 
         } catch (Exception e) {
@@ -137,6 +150,13 @@ public class WorkerStreamRelay {
             return;
         }
 
+        // 互斥锁：防止 doOnComplete/doOnError/Reconciler/启动重连 并发触发多次重连
+        AtomicBoolean guard = reconnecting.computeIfAbsent(taskId, k -> new AtomicBoolean(false));
+        if (!guard.compareAndSet(false, true)) {
+            log.debug("reconnectTask: task {} reconnection already in progress, skipping", taskId);
+            return;
+        }
+
         log.info("Reconnecting stream: taskId={}, sessionId={}, workerId={}", taskId, sessionId, workerId);
 
         try {
@@ -146,12 +166,13 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
 
-            // 若当前实例有事件计数（SSE 断连），用精确值回放遗漏事件；
-            // 若无计数（Java 重启，历史已在 DB），用 MAX_VALUE 跳过避免重复。
-            AtomicInteger counter = receivedEventCounts.get(taskId);
-            int replayFrom = counter != null ? counter.get() : Integer.MAX_VALUE;
-            log.info("reconnectTask replay_from={} for task {} (counter={})", replayFrom, taskId, counter);
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, replayFrom);
+            // 用 lastAckedSeq（ESN）计算 ack_seq：
+            // - 有 seq → 精确回放遗漏的事件（Worker 返回 seq > ack_seq 的所有事件）
+            // - 无 seq（Java 重启） → ack_seq=0，从头回放（安全，幂等）
+            AtomicInteger seqTracker = lastAckedSeq.get(taskId);
+            int ackSeq = seqTracker != null ? seqTracker.get() : 0;
+            log.info("reconnectTask ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, ackSeq);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, 0);
@@ -159,7 +180,7 @@ public class WorkerStreamRelay {
             activeStreams.put(taskId, subscription);
 
             // Reset interactionState to PROCESSING — the previous SSE disconnect
-            // may have left it as AWAITING_REPLY via failIfStillRunning path.
+            // may have left it as AWAITING_REPLY via handleStreamDisconnect path.
             conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 
             // Push a STATE_SYNC so the frontend knows the task stream is reconnected
@@ -169,6 +190,8 @@ public class WorkerStreamRelay {
         } catch (Exception e) {
             log.warn("Failed to reconnect task {}: {}", taskId, e.getMessage());
             // Don't fail the task — Reconciler will handle it if CLI is truly dead.
+        } finally {
+            guard.set(false);
         }
     }
 
@@ -197,6 +220,25 @@ public class WorkerStreamRelay {
 
         for (ClaudeTaskEntity task : activeTasks) {
             try {
+                // Java 重启后 lastAckedSeq 为空 → 先查 Worker 状态判断是否需要回放
+                try {
+                    ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+                    ClaudeWorkerClient client = workerService.createClient(worker);
+                    Map<String, Object> status = client.getTaskStatus(task.getTaskId())
+                            .block(java.time.Duration.ofSeconds(5));
+                    if (status != null) {
+                        boolean closed = Boolean.TRUE.equals(status.get("closed"));
+                        int latestSeq = ((Number) status.getOrDefault("latest_seq", 0)).intValue();
+                        log.info("Startup reconnect: task {} Worker status: closed={}, latestSeq={}",
+                                task.getTaskId(), closed, latestSeq);
+                        // ackSeq=0 会让 Worker 从头回放所有事件（安全，幂等）
+                        // 即使 Worker 已 closed，回放仍能让 Java 收到 result + sync_checkpoint
+                    }
+                } catch (Exception e) {
+                    log.debug("Startup reconnect: cannot query Worker status for {}: {}",
+                            task.getTaskId(), e.getMessage());
+                }
+
                 reconnectTask(task.getTaskId(), task.getSessionId(), task.getWorkerId());
             } catch (Exception e) {
                 log.warn("Startup reconnect failed for task {}: {}", task.getTaskId(), e.getMessage());
@@ -212,7 +254,7 @@ public class WorkerStreamRelay {
      * 创建 SSE Flux 的通用订阅逻辑（新任务和重连共用）。
      *
      * @param reconnectAttempt 当前是第几次重连（0=首次连接），
-     *                         超过 MAX_RECONNECT_ATTEMPTS 后不再重试。
+     *                         无上限重试，退避指数增长至 MAX_RECONNECT_BACKOFF_MS 封顶。
      */
     private Disposable subscribeSseFlux(Flux<ServerSentEvent<String>> sseFlux,
                                          String taskId, String sessionId, String workerId,
@@ -236,30 +278,50 @@ public class WorkerStreamRelay {
                             workerTaskIdMap.put(taskId, workerEvent.getTaskId());
                             log.debug("Task {} mapped to worker task: {}", taskId, workerEvent.getTaskId());
                         }
-                        relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
-                        receivedEventCounts.computeIfAbsent(taskId, k -> new AtomicInteger()).incrementAndGet();
+                        try {
+                            relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
+                        } catch (Exception relayEx) {
+                            log.warn("Failed to relay event for task {}, type={}: {}",
+                                    taskId, workerEvent.getType(), relayEx.getMessage(), relayEx);
+                        }
+                        // 更新 ACK 序列号：优先用 Worker 注入的 seq（ESN 模式），
+                        // 若 Worker 未返回 seq（旧版），降级为单调递增计数
+                        if (workerEvent.getSeq() != null) {
+                            lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0))
+                                    .updateAndGet(cur -> Math.max(cur, workerEvent.getSeq()));
+                        } else {
+                            // 旧 Worker 兼容：无 seq 字段，按计数递增
+                            lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0)).incrementAndGet();
+                        }
                     } catch (Exception e) {
                         log.warn("Failed to parse worker event for task {}: {}", taskId, data, e);
                     }
                 })
                 .doOnComplete(() -> {
-                    log.info("Worker stream completed: taskId={}, reconnectAttempt={}/{}", taskId, reconnectAttempt, MAX_RECONNECT_ATTEMPTS);
+                    log.info("Worker stream completed: taskId={}, reconnectAttempt={}", taskId, reconnectAttempt);
                     activeStreams.remove(taskId);
 
-                    if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
-                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
-                        if (reconnected) {
+                    // Check if task is already in a terminal state — no need to reconnect
+                    var taskOpt = taskRepository.findByTaskId(taskId);
+                    if (taskOpt.isPresent()) {
+                        String status = taskOpt.get().getStatus();
+                        if ("COMPLETED".equals(status) || "FAILED".equals(status) || "ABORTED".equals(status)) {
+                            log.info("Task {} already in terminal state ({}), skipping reconnect", taskId, status);
+                            lastAckedSeq.remove(taskId);
                             return;
                         }
                     }
 
-                    // 如果流正常结束但任务仍在 RUNNING（没收到 result/error 事件），
-                    // 说明 CLI 可能因资源不足未能启动，或 Worker 异常断开。
-                    // 对于 AWAITING_PERMISSION 任务，SSE 空闲期间连接易超时断开，
-                    // 但 CLI 进程通常仍存活等待用户输入 — 交给 Reconciler 判断。
-                    taskService.failIfStillRunning(taskId, sessionId,
-                            "Worker 连接已断开，但未收到任务结果。可能原因：系统资源不足导致 CLI 无法启动，或 Worker 进程异常退出。");
-                    receivedEventCounts.remove(taskId);
+                    // Infinite reconnect with capped exponential backoff (Rule 2: never auto-fail)
+                    boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
+                    if (reconnected) {
+                        return;
+                    }
+
+                    // Reconnect failed — defer to Reconciler for lifecycle management.
+                    // Do NOT call handleStreamDisconnect here; Reconciler will detect CLI state.
+                    log.info("SSE reconnect attempt failed for task {} — Reconciler will manage lifecycle", taskId);
+                    // Keep lastAckedSeq for future reconnect by Reconciler
                 })
                 .doOnError(e -> {
                     log.error("Worker stream error: taskId={}", taskId, e);
@@ -270,18 +332,25 @@ public class WorkerStreamRelay {
                     boolean isClientError = e instanceof WebClientResponseException wce
                             && wce.getStatusCode().is4xxClientError();
 
-                    if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS && !isClientError) {
-                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
-                        if (reconnected) {
-                            return;
-                        }
+                    if (isClientError) {
+                        // Genuine startup failure — keep failTask for 4xx errors
+                        String errorMsg = extractWorkerErrorMessage(e);
+                        taskService.failTask(taskId, detectedClaudeSessionId.get(), errorMsg);
+                        publishMessage(sessionId, MessageType.ERROR,
+                                Map.of("content", errorMsg, "taskId", taskId));
+                        lastAckedSeq.remove(taskId);
+                        return;
                     }
 
-                    String errorMsg = extractWorkerErrorMessage(e);
-                    taskService.failTask(taskId, detectedClaudeSessionId.get(), errorMsg);
-                    publishMessage(sessionId, MessageType.ERROR,
-                            Map.of("content", errorMsg, "taskId", taskId));
-                    receivedEventCounts.remove(taskId);
+                    // Transient error — infinite reconnect with capped backoff (Rule 2: never auto-fail)
+                    boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
+                    if (reconnected) {
+                        return;
+                    }
+
+                    // Reconnect failed — defer to Reconciler for lifecycle management.
+                    log.info("SSE reconnect attempt failed for task {} after error — Reconciler will manage lifecycle", taskId);
+                    // Keep lastAckedSeq for future reconnect by Reconciler
                 })
                 .subscribe();
     }
@@ -294,6 +363,12 @@ public class WorkerStreamRelay {
      * @return true 如果重连成功启动
      */
     private boolean attemptReconnect(String taskId, String sessionId, String workerId, int currentAttempt) {
+        // 互斥锁：防止并发重连
+        AtomicBoolean guard = reconnecting.computeIfAbsent(taskId, k -> new AtomicBoolean(false));
+        if (!guard.compareAndSet(false, true)) {
+            log.debug("attemptReconnect: task {} reconnection already in progress, skipping", taskId);
+            return false;
+        }
         try {
             // Check if the task is still active in DB
             var taskOpt = taskRepository.findByTaskId(taskId);
@@ -304,9 +379,9 @@ public class WorkerStreamRelay {
             }
 
             int nextAttempt = currentAttempt + 1;
-            long delayMs = (long) Math.pow(2, currentAttempt) * RECONNECT_BASE_DELAY_MS;
-            log.info("Attempting SSE reconnection (attempt {}/{}) for task {} (status={}), backoff={}ms",
-                    nextAttempt, MAX_RECONNECT_ATTEMPTS, taskId, status, delayMs);
+            long delayMs = Math.min((long) Math.pow(2, currentAttempt) * RECONNECT_BASE_DELAY_MS, MAX_RECONNECT_BACKOFF_MS);
+            log.info("Attempting SSE reconnection (attempt {}) for task {} (status={}), backoff={}ms",
+                    nextAttempt, taskId, status, delayMs);
 
             Thread.sleep(delayMs);
 
@@ -316,12 +391,11 @@ public class WorkerStreamRelay {
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
 
-            // 若当前实例有事件计数（SSE 断连），用精确值回放遗漏事件；
-            // 若无计数（Java 重启，历史已在 DB），用 MAX_VALUE 跳过避免重复。
-            AtomicInteger counter = receivedEventCounts.get(taskId);
-            int replayFrom = counter != null ? counter.get() : Integer.MAX_VALUE;
-            log.info("Reconnect replay_from={} for task {} (counter={})", replayFrom, taskId, counter);
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, replayFrom);
+            // 用 lastAckedSeq（ESN）计算 ack_seq
+            AtomicInteger seqTracker = lastAckedSeq.get(taskId);
+            int ackSeq = seqTracker != null ? seqTracker.get() : 0;
+            log.info("attemptReconnect ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, ackSeq);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, nextAttempt);
@@ -334,7 +408,7 @@ public class WorkerStreamRelay {
             publishMessage(sessionId, MessageType.STATE_SYNC,
                     Map.of("content", "Task stream reconnected", "subtype", "reconnected", "taskId", taskId));
 
-            log.info("SSE reconnection successful for task {} (attempt {}/{})", taskId, nextAttempt, MAX_RECONNECT_ATTEMPTS);
+            log.info("SSE reconnection successful for task {} (attempt {})", taskId, nextAttempt);
             return true;
 
         } catch (InterruptedException ie) {
@@ -342,9 +416,11 @@ public class WorkerStreamRelay {
             log.warn("SSE reconnection interrupted for task {}", taskId);
             return false;
         } catch (Exception e) {
-            log.warn("SSE reconnection failed for task {} (attempt {}/{}): {}",
-                    taskId, currentAttempt + 1, MAX_RECONNECT_ATTEMPTS, e.getMessage());
+            log.warn("SSE reconnection failed for task {} (attempt {}): {}",
+                    taskId, currentAttempt + 1, e.getMessage());
             return false;
+        } finally {
+            guard.set(false);
         }
     }
 
@@ -361,6 +437,7 @@ public class WorkerStreamRelay {
      * 中止任务的流
      */
     public void abortStream(String taskId) {
+        reconnecting.remove(taskId);
         Disposable subscription = activeStreams.remove(taskId);
         workerTaskIdMap.remove(taskId);
         if (subscription != null && !subscription.isDisposed()) {
@@ -382,6 +459,13 @@ public class WorkerStreamRelay {
                 // 系统消息，携带 session_id 等元数据 — 尽早记住 claudeSessionId
                 if (event.getSessionId() != null) {
                     detectedClaudeSessionId.set(event.getSessionId());
+                    // 立即保存到数据库，防止任何情况下丢失（包括用户中止任务）
+                    try {
+                        taskService.updateClaudeSessionId(taskId, event.getSessionId());
+                        log.debug("Early saved claudeSessionId {} for task {}", event.getSessionId(), taskId);
+                    } catch (Exception e) {
+                        log.warn("Failed to early save claudeSessionId for task {}: {}", taskId, e.getMessage());
+                    }
                 }
                 String subtype = event.getSubtype();
                 if ("auto_compact".equals(subtype) || "context_compression".equals(subtype)) {
@@ -415,7 +499,9 @@ public class WorkerStreamRelay {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("content", event.getContent());
                 payload.put("taskId", taskId);
-                publishMessage(sessionId, MessageType.TEXT_CHUNK, payload);
+                // assistant_text from Python Worker is a complete text block (not a streaming chunk),
+                // so emit TEXT_COMPLETE to ensure it gets persisted to the database.
+                publishMessage(sessionId, MessageType.TEXT_COMPLETE, payload);
             }
             case "tool_use" -> {
                 String toolCallId = event.getToolUseId() != null
@@ -443,6 +529,7 @@ public class WorkerStreamRelay {
                 String resolvedModel = event.getModel() != null ? event.getModel() : detectedModel.get();
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("content", resultContent);
+                payload.put("isResult", true); // 标记为 result 事件，前端不再重复创建文本气泡
                 payload.put("taskId", taskId);
                 payload.put("costUsd", event.getCostUsd());
                 payload.put("durationMs", event.getDurationMs());
@@ -460,7 +547,7 @@ public class WorkerStreamRelay {
                         event.getNumTurns(), resolvedModel);
                 activeStreams.remove(taskId);
                 workerTaskIdMap.remove(taskId);
-                receivedEventCounts.remove(taskId);
+                lastAckedSeq.remove(taskId);
 
                 // 发布跨 Agent 任务完成事件
                 // 注意：Python event_mapper 将 result 文本放在 content 字段，
@@ -471,6 +558,7 @@ public class WorkerStreamRelay {
                         .targetAgentId(AGENT_ID)
                         .status("COMPLETED")
                         .resultSummary(truncateResult(resultContent))
+                        .extData(buildEventExtData(taskId))
                         .build());
             }
             case "permission_request" -> {
@@ -497,6 +585,9 @@ public class WorkerStreamRelay {
                 if (event.getAllowedPrompts() != null) {
                     payload.put("allowedPrompts", event.getAllowedPrompts());
                 }
+                if (event.getPlan() != null) {
+                    payload.put("plan", event.getPlan());
+                }
                 payload.put("taskId", taskId);
                 publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
                 taskService.setAwaitingPermission(taskId);
@@ -515,6 +606,13 @@ public class WorkerStreamRelay {
                 // 错误事件也可能携带 session_id
                 if (event.getSessionId() != null) {
                     detectedClaudeSessionId.set(event.getSessionId());
+                    // 立即保存到数据库，防止任何情况下丢失
+                    try {
+                        taskService.updateClaudeSessionId(taskId, event.getSessionId());
+                        log.debug("Early saved claudeSessionId {} for task {} (error event)", event.getSessionId(), taskId);
+                    } catch (Exception e) {
+                        log.warn("Failed to early save claudeSessionId for task {} (error): {}", taskId, e.getMessage());
+                    }
                 }
                 String errorClaudeSessionId = detectedClaudeSessionId.get();
                 Map<String, Object> payload = new LinkedHashMap<>();
@@ -526,7 +624,7 @@ public class WorkerStreamRelay {
                 taskService.failTask(taskId, errorClaudeSessionId, event.getError());
                 activeStreams.remove(taskId);
                 workerTaskIdMap.remove(taskId);
-                receivedEventCounts.remove(taskId);
+                lastAckedSeq.remove(taskId);
 
                 // 发布跨 Agent 任务失败事件
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
@@ -535,10 +633,43 @@ public class WorkerStreamRelay {
                         .targetAgentId(AGENT_ID)
                         .status("FAILED")
                         .resultSummary(event.getError())
+                        .extData(buildEventExtData(taskId))
                         .build());
+            }
+            case "sync_checkpoint" -> {
+                // Worker 在 result/error 事件后发送 sync_checkpoint，
+                // 携带 latest_seq 和 event_count，Java 可用于校验完整性
+                Integer workerLatestSeq = event.getLatestSeq();
+                Integer workerEventCount = event.getEventCount();
+                AtomicInteger mySeq = lastAckedSeq.get(taskId);
+                int myAckedSeq = mySeq != null ? mySeq.get() : 0;
+
+                log.info("Sync checkpoint: taskId={}, workerLatestSeq={}, workerEventCount={}, myAckedSeq={}",
+                        taskId, workerLatestSeq, workerEventCount, myAckedSeq);
+
+                // 推送 STATE_SYNC 到前端，表明流已通过完整性校验
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("content", "Event stream verified");
+                payload.put("subtype", "sync_checkpoint");
+                payload.put("taskId", taskId);
+                if (workerLatestSeq != null) payload.put("latestSeq", workerLatestSeq);
+                publishMessage(sessionId, MessageType.STATE_SYNC, payload);
             }
             default -> log.debug("Unknown worker event type: {}", event.getType());
         }
+    }
+
+    // ---- Reconciler 查询接口 ----
+
+    /** 获取指定任务的最后确认序列号，供 Reconciler 做 seq gap 检测 */
+    public AtomicInteger getLastAckedSeq(String taskId) {
+        return lastAckedSeq.get(taskId);
+    }
+
+    /** 检查指定任务是否有活跃的 SSE 流 */
+    public boolean hasActiveStream(String taskId) {
+        Disposable d = activeStreams.get(taskId);
+        return d != null && !d.isDisposed();
     }
 
     /**
@@ -580,5 +711,47 @@ public class WorkerStreamRelay {
     private String truncateResult(String result) {
         if (result == null) return null;
         return result.length() > 500 ? result.substring(0, 500) + "..." : result;
+    }
+
+    /**
+     * 构建跨 Agent 事件的扩展数据（项目上下文）。
+     * 从 ClaudeTaskEntity → WorkingDirectoryEntity 解析项目名称、Git 分支等信息。
+     * 异常时返回空 map，不影响事件发布。
+     */
+    private Map<String, Object> buildEventExtData(String taskId) {
+        Map<String, Object> ext = new LinkedHashMap<>();
+        try {
+            ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
+            if (task == null) return ext;
+
+            // 会话上下文
+            if (task.getSessionId() != null) {
+                ext.put("sessionId", task.getSessionId());
+            }
+
+            // 项目上下文 — 从 WorkingDirectory 获取
+            if (task.getDirectoryId() != null) {
+                workingDirectoryRepository.findByDirectoryId(task.getDirectoryId())
+                        .ifPresent(dir -> {
+                            ext.put("projectName", dir.getProjectName());
+                            if (dir.getGitBranch() != null) {
+                                ext.put("gitBranch", dir.getGitBranch());
+                            }
+                            if (dir.getGitRemoteUrl() != null) {
+                                ext.put("gitRemoteUrl", dir.getGitRemoteUrl());
+                            }
+                        });
+            } else if (task.getCwd() != null) {
+                // Fallback: 从 cwd 路径末段推导项目名称
+                String cwd = task.getCwd();
+                int lastSlash = Math.max(cwd.lastIndexOf('/'), cwd.lastIndexOf('\\'));
+                if (lastSlash >= 0 && lastSlash < cwd.length() - 1) {
+                    ext.put("projectName", cwd.substring(lastSlash + 1));
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to build extData for taskId={}: {}", taskId, e.getMessage());
+        }
+        return ext;
     }
 }

@@ -58,6 +58,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Codex Worker Agent - OpenAI Codex 远程控制模块 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>codex-worker-agent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Task Assistant - AI 任务通知助手模块 -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>

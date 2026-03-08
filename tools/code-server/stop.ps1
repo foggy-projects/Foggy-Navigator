@@ -6,14 +6,19 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Load config from .env
 $EnvFile = Join-Path $ScriptDir ".env"
 $Port = 8443
+$HttpsPort = 0
 $Mode = "windows"
 
 if (Test-Path $EnvFile) {
     Get-Content $EnvFile | ForEach-Object {
         if ($_ -match "^CODE_SERVER_PORT=(\d+)") { $Port = [int]$Matches[1] }
+        if ($_ -match "^CODE_SERVER_HTTPS_PORT=(\d+)") { $HttpsPort = [int]$Matches[1] }
         if ($_ -match "^CODE_SERVER_MODE=(.+)") { $Mode = $Matches[1].Trim().ToLower() }
     }
 }
+
+$UseHttpsProxy = ($HttpsPort -gt 0)
+$InternalPort = $Port + 100
 
 Write-Host "Stopping Code Server on port $Port..." -ForegroundColor Yellow
 
@@ -65,14 +70,27 @@ elseif ($Mode -eq "wsl") {
     # Also kill code-server inside WSL
     wsl -d Ubuntu-24.04 -- bash -c "pkill -f 'code-server.*--config' 2>/dev/null; sleep 0.5; pkill -9 -f 'code-server' 2>/dev/null"
 
+    # Stop nginx if HTTPS proxy was enabled
+    if ($UseHttpsProxy) {
+        Write-Host "Stopping nginx proxy..." -ForegroundColor Yellow
+        wsl -d Ubuntu-24.04 -- bash -c "sudo nginx -s stop 2>/dev/null || true"
+    }
+
     Start-Sleep -Seconds 1
 
-    # Force kill by port if still alive
-    $check = netstat -ano 2>$null | Select-String ":$Port\s+.*LISTENING"
-    if ($check) {
-        $procId = ($check -split '\s+')[-1]
-        if ($procId -and $procId -ne "0") {
-            taskkill /F /PID $procId /T 2>$null | Out-Null
+    # Force kill by port if still alive (check both HTTP and internal ports)
+    $portsToCheck = @($Port)
+    if ($UseHttpsProxy) {
+        $portsToCheck += @($HttpsPort, $InternalPort)
+    }
+
+    foreach ($checkPort in $portsToCheck) {
+        $check = netstat -ano 2>$null | Select-String ":$checkPort\s+.*LISTENING"
+        if ($check) {
+            $procId = ($check -split '\s+')[-1]
+            if ($procId -and $procId -ne "0") {
+                taskkill /F /PID $procId /T 2>$null | Out-Null
+            }
         }
     }
 }
@@ -85,4 +103,12 @@ if ($check) {
     Write-Host "WARNING: Port $Port still in use." -ForegroundColor Yellow
 } else {
     Write-Host "Code Server stopped." -ForegroundColor Green
+    if ($UseHttpsProxy) {
+        $httpsCheck = netstat -ano 2>$null | Select-String ":$HttpsPort\s+.*LISTENING"
+        if ($httpsCheck) {
+            Write-Host "WARNING: HTTPS port $HttpsPort still in use." -ForegroundColor Yellow
+        } else {
+            Write-Host "HTTPS proxy (nginx) stopped." -ForegroundColor Green
+        }
+    }
 }

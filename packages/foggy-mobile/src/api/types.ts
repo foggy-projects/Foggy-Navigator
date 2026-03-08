@@ -64,7 +64,7 @@ export interface ClaudeTask {
   prompt: string
   cwd?: string
   directoryId?: string
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED'
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED' | 'AWAITING_PERMISSION'
   claudeSessionId?: string
   costUsd?: number
   inputTokens?: number
@@ -73,6 +73,7 @@ export interface ClaudeTask {
   numTurns?: number
   model?: string
   errorMessage?: string
+  source?: 'PLATFORM' | 'SYNCED'
   createdAt: string
   updatedAt: string
 }

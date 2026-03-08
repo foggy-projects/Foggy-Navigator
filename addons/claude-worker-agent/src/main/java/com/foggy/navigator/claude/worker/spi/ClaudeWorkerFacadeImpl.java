@@ -14,6 +14,7 @@ import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
 import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -120,7 +121,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         if (!worker.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Worker not found: " + workerId);
         }
-        return doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns, null, null, null);
+        return doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns, null, null, null, null);
     }
 
     @Override
@@ -138,12 +139,13 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
         Map<String, Object> result;
         try {
-            // 2. 解析目录绑定的 LLM 配置 auth
+            // 2. 解析目录绑定的 LLM 配置 auth + envVars
             String[] auth = resolveDirectoryAuth(directoryId, userId);
+            Map<String, String> envVars = resolveDirectoryEnvVars(directoryId, userId);
 
-            // 3. 执行 syncQuery（带 auth）
+            // 3. 执行 syncQuery（带 auth + envVars）
             result = doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns,
-                    auth[0], auth[1], auth[2]);
+                    auth[0], auth[1], auth[2], envVars);
 
             // 4. 持久化 prompt + result 到 Session（使历史会话面板能显示对话内容）
             String resultText = (String) result.get("resultText");
@@ -211,7 +213,8 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
      */
     private Map<String, Object> doSyncQuery(ClaudeWorkerEntity worker, String prompt, String cwd,
                                              String claudeSessionId, String model, int maxTurns,
-                                             String apiKey, String authToken, String baseUrl) {
+                                             String apiKey, String authToken, String baseUrl,
+                                             Map<String, String> extraEnvVars) {
         Map<String, Object> result = new LinkedHashMap<>();
         long startTime = System.currentTimeMillis();
 
@@ -225,7 +228,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             List<WorkerEvent> events = client.streamQuery(
                             prompt, cwd, claudeSessionId, model, maxTurns,
                             null, null, apiKey, authToken, baseUrl, "bypassPermissions", null,
-                            null, null)
+                            null, null, extraEnvVars)
                     .mapNotNull(sse -> {
                         String data = sse.data();
                         if (data == null || data.isEmpty()) return null;
@@ -306,6 +309,24 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         return new String[]{apiKey, null, config.getBaseUrl()};
     }
 
+    /**
+     * 从工作目录的 defaultModelConfigId 解析环境变量
+     */
+    private Map<String, String> resolveDirectoryEnvVars(String directoryId, String userId) {
+        if (directoryId == null || directoryId.isEmpty()) {
+            return null;
+        }
+        WorkingDirectoryEntity dir = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId).orElse(null);
+        if (dir == null || dir.getDefaultModelConfigId() == null) {
+            return null;
+        }
+        LlmModelConfigDTO config = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
+        if (config == null || config.getEnvVars() == null || config.getEnvVars().isEmpty()) {
+            return null;
+        }
+        return config.getEnvVars();
+    }
+
     @Override
     public String initDirectory(String userId, String workerId, String path, Map<String, String> files) {
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
@@ -355,6 +376,17 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         log.info("Registered working directory: directoryId={}, path={}", entity.getDirectoryId(), path);
 
         return entity.getDirectoryId();
+    }
+
+    @Override
+    public void validateWorkerOwnership(String userId, String workerId) {
+        workerService.getWorker(userId, workerId); // throws if not found or not owned
+    }
+
+    @Override
+    public CodexConfig getCodexConfig(String workerId) {
+        ClaudeWorkerEntity entity = workerService.getWorkerEntity(workerId);
+        return workerService.getDecryptedCodexConfig(entity);
     }
 
     private Map<String, Object> workerToMap(WorkerDTO dto) {

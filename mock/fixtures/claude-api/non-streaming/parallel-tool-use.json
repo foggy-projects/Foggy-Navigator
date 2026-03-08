@@ -1,0 +1,53 @@
+{
+  "_fixture_meta": {
+    "source": "constructed based on verified Anthropic API format",
+    "created_at": "2026-03-05",
+    "scenario": "Parallel tool calls - 3 simultaneous get_weather calls for different cities"
+  },
+  "id": "msg_mock-parallel-tool-001",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-20250514",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "The user wants weather for Beijing, Shanghai, and Tokyo. I should call get_weather for all three cities simultaneously."
+    },
+    {
+      "type": "text",
+      "text": "I'll check the weather for all three cities right away."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_mock-parallel-001",
+      "name": "get_weather",
+      "input": {
+        "location": "Beijing"
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_mock-parallel-002",
+      "name": "get_weather",
+      "input": {
+        "location": "Shanghai"
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_mock-parallel-003",
+      "name": "get_weather",
+      "input": {
+        "location": "Tokyo"
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 210,
+    "output_tokens": 195,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+  }
+}

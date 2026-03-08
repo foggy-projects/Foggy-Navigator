@@ -1,6 +1,6 @@
 [project]
 name = "claude-agent-worker"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Claude Code Agent Worker for Foggy Navigator"
 requires-python = ">=3.10"
 dependencies = [
@@ -14,11 +14,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "httpx", "pytest-asyncio"]
+dev = ["pytest", "httpx", "pytest-asyncio", "pyyaml"]
 
 [build-system]
 requires = ["hatchling>=1.8.0"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+path = "src/agent_worker/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_worker"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "e2e: full end-to-end tests requiring Claude CLI and mock-llm-service",
+]

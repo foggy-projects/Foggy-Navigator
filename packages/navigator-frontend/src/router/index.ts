@@ -23,6 +23,11 @@ const routes = [
     children: [
       {
         path: '',
+        name: 'Workers',
+        component: () => import('@/views/ClaudeWorkerView.vue'),
+      },
+      {
+        path: 'chat',
         name: 'Home',
         component: () => import('@/views/ChatView.vue'),
       },
@@ -30,11 +35,6 @@ const routes = [
         path: 'c/:id',
         name: 'Chat',
         component: () => import('@/views/ChatView.vue'),
-      },
-      {
-        path: 'workers',
-        name: 'Workers',
-        component: () => import('@/views/ClaudeWorkerView.vue'),
       },
       {
         path: 'tasks',

@@ -305,6 +305,13 @@ public class ConversationConfigService {
     }
 
     /**
+     * 查询多个状态的 sessionIds（多选筛选）
+     */
+    public List<String> findSessionIdsByInteractionStates(String userId, List<String> states) {
+        return configRepository.findSessionIdsByInteractionStateIn(userId, states);
+    }
+
+    /**
      * 更新会话交互状态
      */
     @Transactional
@@ -334,6 +341,34 @@ public class ConversationConfigService {
      */
     @Transactional
     public ConversationConfigDTO unarchiveConversation(String sessionId, String userId) {
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+        if (!entity.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Access denied");
+        }
+        entity.setInteractionState("AWAITING_REPLY");
+        configRepository.save(entity);
+        return toDTO(entity);
+    }
+
+    /**
+     * 搁置会话
+     */
+    @Transactional
+    public ConversationConfigDTO holdConversation(String sessionId, String userId) {
+        ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
+        if (!entity.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Access denied");
+        }
+        entity.setInteractionState("ON_HOLD");
+        configRepository.save(entity);
+        return toDTO(entity);
+    }
+
+    /**
+     * 取消搁置（恢复为 AWAITING_REPLY）
+     */
+    @Transactional
+    public ConversationConfigDTO unholdConversation(String sessionId, String userId) {
         ConversationConfigEntity entity = getOrCreateBySessionId(sessionId, userId);
         if (!entity.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Access denied");

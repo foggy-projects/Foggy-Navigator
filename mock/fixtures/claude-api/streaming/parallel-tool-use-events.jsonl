@@ -1,0 +1,24 @@
+{"event":"message_start","data":{"message":{"model":"claude-sonnet-4-20250514","id":"msg_mock-parallel-tool-001","role":"assistant","type":"message","content":[],"usage":{"input_tokens":210,"output_tokens":0}},"type":"message_start"}}
+{"event":"ping","data":{"type":"ping"}}
+{"event":"content_block_start","data":{"type":"content_block_start","content_block":{"type":"thinking","thinking":""},"index":0}}
+{"event":"content_block_delta","data":{"delta":{"type":"thinking_delta","thinking":"The user wants weather for Beijing, Shanghai, and Tokyo. I should call get_weather for all three cities simultaneously."},"type":"content_block_delta","index":0}}
+{"event":"content_block_delta","data":{"delta":{"type":"signature_delta","signature":""},"type":"content_block_delta","index":0}}
+{"event":"content_block_stop","data":{"type":"content_block_stop","index":0}}
+{"event":"content_block_start","data":{"type":"content_block_start","content_block":{"type":"text","text":""},"index":1}}
+{"event":"content_block_delta","data":{"delta":{"type":"text_delta","text":"I'll check the weather for all three cities right away."},"type":"content_block_delta","index":1}}
+{"event":"content_block_stop","data":{"type":"content_block_stop","index":1}}
+{"event":"content_block_start","data":{"type":"content_block_start","content_block":{"name":"get_weather","input":{},"id":"toolu_mock-parallel-001","type":"tool_use"},"index":2}}
+{"event":"content_block_delta","data":{"delta":{"partial_json":"","type":"input_json_delta"},"type":"content_block_delta","index":2}}
+{"event":"content_block_delta","data":{"delta":{"partial_json":"{\"location\"","type":"input_json_delta"},"type":"content_block_delta","index":2}}
+{"event":"content_block_delta","data":{"delta":{"partial_json":": \"Beijing\"}","type":"input_json_delta"},"type":"content_block_delta","index":2}}
+{"event":"content_block_stop","data":{"type":"content_block_stop","index":2}}
+{"event":"content_block_start","data":{"type":"content_block_start","content_block":{"name":"get_weather","input":{},"id":"toolu_mock-parallel-002","type":"tool_use"},"index":3}}
+{"event":"content_block_delta","data":{"delta":{"partial_json":"","type":"input_json_delta"},"type":"content_block_delta","index":3}}
+{"event":"content_block_delta","data":{"delta":{"partial_json":"{\"location\": \"Shanghai\"}","type":"input_json_delta"},"type":"content_block_delta","index":3}}
+{"event":"content_block_stop","data":{"type":"content_block_stop","index":3}}
+{"event":"content_block_start","data":{"type":"content_block_start","content_block":{"name":"get_weather","input":{},"id":"toolu_mock-parallel-003","type":"tool_use"},"index":4}}
+{"event":"content_block_delta","data":{"delta":{"partial_json":"","type":"input_json_delta"},"type":"content_block_delta","index":4}}
+{"event":"content_block_delta","data":{"delta":{"partial_json":"{\"location\": \"Tokyo\"}","type":"input_json_delta"},"type":"content_block_delta","index":4}}
+{"event":"content_block_stop","data":{"type":"content_block_stop","index":4}}
+{"event":"message_delta","data":{"delta":{"stop_reason":"tool_use"},"type":"message_delta","usage":{"output_tokens":195,"cache_creation_input_tokens":0,"input_tokens":210,"cache_read_input_tokens":0}}}
+{"event":"message_stop","data":{"type":"message_stop"}}

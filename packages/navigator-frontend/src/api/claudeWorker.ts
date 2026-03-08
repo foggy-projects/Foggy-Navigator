@@ -1,5 +1,5 @@
 import client from './client'
-import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse } from '@/types'
+import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig } from '@/types'
 
 // ===== Worker API =====
 
@@ -24,6 +24,8 @@ export async function registerWorker(form: {
   codeServerPublicUrl?: string
   codeServerInternalUrl?: string
   codeServerPassword?: string
+  codeServerFolderPrefix?: string
+  codexConfig?: { baseUrl?: string; authToken?: string; model?: string }
 }): Promise<ClaudeWorker> {
   const rx = (await client.post('/claude-workers', form)) as unknown as RX<ClaudeWorker>
   return rx.data
@@ -31,7 +33,7 @@ export async function registerWorker(form: {
 
 export async function updateWorker(
   workerId: string,
-  form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string; codeServerPublicUrl?: string; codeServerInternalUrl?: string; codeServerPassword?: string },
+  form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string; codeServerPublicUrl?: string; codeServerInternalUrl?: string; codeServerPassword?: string; codeServerFolderPrefix?: string; codexConfig?: { baseUrl?: string; authToken?: string; model?: string } },
 ): Promise<ClaudeWorker> {
   const rx = (await client.put(`/claude-workers/${workerId}`, form)) as unknown as RX<ClaudeWorker>
   return rx.data
@@ -152,6 +154,45 @@ export async function removeWorktree(directoryId: string): Promise<void> {
   await client.delete(`/working-directories/${directoryId}/worktree`)
 }
 
+// ===== Agent Teams Config API =====
+
+export async function listAgentTeamsConfigs(directoryId: string): Promise<AgentTeamsConfig[]> {
+  const rx = (await client.get(
+    `/working-directories/${directoryId}/agent-teams-configs`,
+  )) as unknown as RX<AgentTeamsConfig[]>
+  return rx.data
+}
+
+export async function createAgentTeamsConfig(
+  directoryId: string,
+  form: { name: string; config: string; isDefault?: boolean },
+): Promise<AgentTeamsConfig> {
+  const rx = (await client.post(
+    `/working-directories/${directoryId}/agent-teams-configs`,
+    form,
+  )) as unknown as RX<AgentTeamsConfig>
+  return rx.data
+}
+
+export async function updateAgentTeamsConfig(
+  directoryId: string,
+  configId: string,
+  form: { name?: string; config?: string; isDefault?: boolean },
+): Promise<AgentTeamsConfig> {
+  const rx = (await client.put(
+    `/working-directories/${directoryId}/agent-teams-configs/${configId}`,
+    form,
+  )) as unknown as RX<AgentTeamsConfig>
+  return rx.data
+}
+
+export async function deleteAgentTeamsConfig(
+  directoryId: string,
+  configId: string,
+): Promise<void> {
+  await client.delete(`/working-directories/${directoryId}/agent-teams-configs/${configId}`)
+}
+
 // ===== Task API =====
 
 export async function createTask(form: {
@@ -162,6 +203,7 @@ export async function createTask(form: {
   model?: string
   maxTurns?: number
   agentTeamsJson?: string
+  agentTeamsConfigId?: string
   images?: string
   permissionMode?: string
   modelConfigId?: string
@@ -180,6 +222,7 @@ export async function resumeTask(form: {
   model?: string
   maxTurns?: number
   agentTeamsJson?: string
+  agentTeamsConfigId?: string
   images?: string
   permissionMode?: string
   modelConfigId?: string
@@ -252,6 +295,15 @@ export async function reconnectTask(
     taskId: string
     status: string
   }>
+  return rx.data
+}
+
+export async function resyncTask(
+  taskId: string,
+): Promise<import('@/types').ResyncResult> {
+  const rx = (await client.post(
+    `/claude-tasks/${taskId}/resync`,
+  )) as unknown as RX<import('@/types').ResyncResult>
   return rx.data
 }
 
@@ -437,6 +489,24 @@ export async function unarchiveConversation(
 ): Promise<ConversationConfig> {
   const rx = (await client.post(
     `/claude-tasks/conversations/${sessionId}/unarchive`,
+  )) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
+export async function holdConversation(
+  sessionId: string,
+): Promise<ConversationConfig> {
+  const rx = (await client.post(
+    `/claude-tasks/conversations/${sessionId}/hold`,
+  )) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
+export async function unholdConversation(
+  sessionId: string,
+): Promise<ConversationConfig> {
+  const rx = (await client.post(
+    `/claude-tasks/conversations/${sessionId}/unhold`,
   )) as unknown as RX<ConversationConfig>
   return rx.data
 }

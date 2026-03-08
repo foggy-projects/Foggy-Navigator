@@ -1,20 +1,24 @@
 ---
-name: test-coding-agent
-description: 使用 playwright-cli 自动化测试 coding-agent 前端管理控制台的基础功能和 API 可用性。当用户要求测试 coding-agent、验证前端功能、或使用 /test-coding-agent 时使用。
+name: coding-agent-e2e-browser
+description: L4 浏览器自动化测试 — 使用 Playwright 测试 coding-agent 前端管理控制台的页面功能和 API 可用性。注意：这是浏览器 E2E 测试（L4），不是 API 集成测试（L3），API 集成测试请使用 /ca-tests。触发词：/test-coding-agent, 提及"浏览器测试 coding-agent"、"coding-agent 前端测试"、"coding-agent E2E"。
 allowed-tools: Bash, Read, Write, Edit
 ---
 
-# Coding Agent 自动化测试
+# Coding Agent 浏览器 E2E 测试（L4）
 
-使用 playwright-cli 自动化测试 coding-agent 前端管理控制台，验证基础功能和 API 可用性。
+使用 Playwright 自动化测试 coding-agent 前端管理控制台，验证页面功能和 API 可用性。
+
+> **层级说明**：这是 **L4 浏览器 E2E 测试**，通过真实浏览器操作验证前端 UI。
+> - API 级别的 L3 集成测试 → `/ca-tests`（coding-agent-integration-tests）
+> - 全局测试规范 → `/tg`（testing-guide）
 
 ## 使用场景
 
 当用户需要以下操作时使用：
-- 验证 coding-agent 前端是否正常工作
-- 测试登录、页面导航、API 调用
+- 通过浏览器验证 coding-agent 前端是否正常工作
+- 测试登录、页面导航、API 调用的 UI 交互
 - 生成页面截图用于文档
-- 执行自定义测试场景
+- 执行自定义浏览器测试场景
 
 ## 执行流程
 

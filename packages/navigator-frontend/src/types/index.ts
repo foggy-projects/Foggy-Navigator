@@ -65,6 +65,10 @@ export interface RoutePayload {
   context?: Record<string, unknown>
 }
 
+// ===== Worker 后端类型 =====
+
+export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX'
+
 // ===== Claude Worker 类型 =====
 
 /** Claude Agent Worker */
@@ -84,6 +88,11 @@ export interface ClaudeWorker {
   codeServerPublicUrl?: string
   codeServerInternalUrl?: string
   codeServerPasswordConfigured?: boolean
+  codeServerFolderPrefix?: string
+  /** Codex Worker 配置 */
+  codexBaseUrl?: string
+  codexModel?: string
+  codexAuthTokenConfigured?: boolean
 }
 
 /** Claude 任务 */
@@ -109,6 +118,8 @@ export interface ClaudeTask {
   fileCheckpointingEnabled?: boolean
   /** Task source: "PLATFORM" or "SYNCED" */
   source?: string
+  /** Agent Teams 配置 ID（任务创建时锁定） */
+  agentTeamsConfigId?: string
   /** 仅 /active 端点填充：工作目录名称 */
   directoryName?: string
   createdAt: string
@@ -141,6 +152,18 @@ export interface WorkingDirectory {
   updatedAt: string
 }
 
+/** Agent Teams 命名配置 */
+export interface AgentTeamsConfig {
+  configId: string
+  directoryId: string
+  name: string
+  config: string
+  isDefault: boolean
+  agentNames: string[]
+  createdAt: string
+  updatedAt: string
+}
+
 /** Worker 上的 Claude Code 本地会话 */
 export interface WorkerSession {
   session_id: string
@@ -169,7 +192,39 @@ export interface ConversationConfig {
   baseUrl?: string
   maskedAuthToken?: string
   tags?: string[]
-  interactionState?: 'PROCESSING' | 'AWAITING_REPLY' | 'ARCHIVED'
+  interactionState?: 'PROCESSING' | 'AWAITING_REPLY' | 'ON_HOLD' | 'ARCHIVED'
+}
+
+// ===== Resync 任务重新同步 =====
+
+export interface MessageCount {
+  user: number
+  assistant: number
+  total: number
+}
+
+export interface CliStatus {
+  alive: boolean
+  workerReachable: boolean
+  taskInRegistry: boolean
+  source: string
+  detail: string
+}
+
+export interface MessageSyncReport {
+  platformBefore: MessageCount
+  workerTotal: MessageCount
+  imported: number
+  platformAfter: MessageCount
+  missingPreview: Array<{ role: string; content: string }>
+}
+
+export interface ResyncResult {
+  taskId: string
+  action: 'RECONNECTED' | 'MESSAGES_SYNCED' | 'ALREADY_ALIGNED' | 'NO_SESSION_DATA' | 'WORKER_UNREACHABLE'
+  cliStatus: CliStatus
+  messageSync?: MessageSyncReport
+  taskStatusAfter: string
 }
 
 // ===== A2A 协议类型 =====
@@ -261,6 +316,8 @@ export interface LlmModelConfig {
   hasApiKey: boolean
   scope: ModelAccessScope
   allowedWorkerIds?: string[]
+  envVars?: Record<string, string>
+  workerBackend?: WorkerBackend
   sortOrder: number
   createdAt: string
   updatedAt: string
@@ -276,6 +333,8 @@ export interface LlmModelConfigForm {
   isDefault?: boolean
   scope?: ModelAccessScope
   allowedWorkerIds?: string[]
+  envVars?: Record<string, string>
+  workerBackend?: WorkerBackend
 }
 
 /** Agent 模型覆盖 */
@@ -349,7 +408,7 @@ export interface ApiCredentialForm {
 
 // ===== 编程 Agent 类型 =====
 
-export type CodingAgentType = 'LOCAL_CLAUDE_WORKER' | 'EXTERNAL_A2A'
+export type CodingAgentType = 'LOCAL_CLAUDE_WORKER' | 'LOCAL_CODEX_WORKER' | 'EXTERNAL_A2A'
 
 /** 编程 Agent */
 export interface CodingAgent {

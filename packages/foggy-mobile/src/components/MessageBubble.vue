@@ -98,10 +98,12 @@ const taskStatusClass = computed(() =>
 }
 .sender-user {
   display: flex;
+  flex-direction: row;
   justify-content: flex-end;
 }
 .sender-assistant, .sender-tool, .sender-system {
   display: flex;
+  flex-direction: row;
   justify-content: flex-start;
 }
 .bubble {
@@ -110,7 +112,8 @@ const taskStatusClass = computed(() =>
   border-radius: 20rpx;
   font-size: 28rpx;
   line-height: 1.6;
-  word-break: break-all;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .user-bubble {
   background: #667eea;
@@ -118,10 +121,10 @@ const taskStatusClass = computed(() =>
   border-bottom-right-radius: 6rpx;
 }
 .assistant-bubble {
-  background: #ffffff;
+  background-color: #ffffff;
   color: #303133;
   border-bottom-left-radius: 6rpx;
-  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.06);
+  border: 1rpx solid #e8e8e8;
 }
 .tool-area {
   width: 85%;

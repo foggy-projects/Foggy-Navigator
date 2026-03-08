@@ -13,7 +13,6 @@ import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -62,6 +61,20 @@ public class CodingAgentService {
             // 验证目录归属
             directoryRepository.findByDirectoryIdAndUserId(form.getDefaultDirectoryId(), userId)
                     .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + form.getDefaultDirectoryId()));
+        }
+
+        // 验证 LOCAL_CODEX_WORKER 必须有 workerId，目录复用 Claude Worker 管理的目录
+        if ("LOCAL_CODEX_WORKER".equals(agentType)) {
+            if (form.getWorkerId() == null || form.getWorkerId().isBlank()) {
+                throw new IllegalArgumentException("workerId is required for LOCAL_CODEX_WORKER agent");
+            }
+            // 通过 ClaudeWorkerFacade 验证 Worker 存在且属于该用户（codex 配置挂在 Claude Worker 上）
+            claudeWorkerFacade.validateWorkerOwnership(userId, form.getWorkerId());
+            // defaultDirectoryId 可选，复用 Claude Worker 的目录
+            if (form.getDefaultDirectoryId() != null && !form.getDefaultDirectoryId().isBlank()) {
+                directoryRepository.findByDirectoryIdAndUserId(form.getDefaultDirectoryId(), userId)
+                        .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + form.getDefaultDirectoryId()));
+            }
         }
 
         CodingAgentEntity entity = new CodingAgentEntity();

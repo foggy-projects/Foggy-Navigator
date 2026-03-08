@@ -8,7 +8,7 @@
       <el-steps :active="currentStep" finish-status="success" align-center class="setup-steps">
         <el-step title="Git 提供者" />
         <el-step title="AI 模型" />
-        <el-step title="Claude Worker" />
+        <el-step title="Workers" />
       </el-steps>
 
       <!-- Step 1: Git Provider -->
@@ -112,10 +112,10 @@
         <el-button type="primary" plain @click="addLlmModel">+ 添加模型</el-button>
       </div>
 
-      <!-- Step 3: Claude Worker (Optional) -->
+      <!-- Step 3: Workers (Claude + Codex, Optional) -->
       <div v-show="currentStep === 2" class="step-content">
         <p class="step-hint">
-          配置 Claude Worker 以集成远程 Claude Code 实例（可选，可稍后在设置中配置）
+          配置 Worker 以集成远程编程能力（可选，可稍后在设置中配置）
         </p>
 
         <div v-for="(worker, idx) in claudeWorkers" :key="idx" class="model-block">
@@ -292,7 +292,7 @@ async function handleTestModel(model: LlmForm) {
   }
 }
 
-// ===== Step 3: Claude Worker =====
+// ===== Step 3: Workers =====
 
 interface WorkerForm {
   name: string

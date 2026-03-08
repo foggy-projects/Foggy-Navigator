@@ -1,0 +1,28 @@
+{
+  "_description": "Request designed to trigger parallel tool calls - asking about weather in multiple cities",
+  "model": "claude-sonnet-4-20250514",
+  "max_tokens": 4096,
+  "stream": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather like right now in Beijing, Shanghai, and Tokyo? Compare them."
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get the current weather for a given location",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city name"
+          }
+        },
+        "required": ["location"]
+      }
+    }
+  ]
+}

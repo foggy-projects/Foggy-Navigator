@@ -85,6 +85,13 @@
               <el-tag v-else size="small">全局</el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="后端" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.workerBackend === 'OPENAI_CODEX'" type="success" size="small">Codex</el-tag>
+              <el-tag v-else-if="row.workerBackend === 'CLAUDE_CODE'" size="small">Claude</el-tag>
+              <span v-else style="color: #c0c4cc">-</span>
+            </template>
+          </el-table-column>
           <el-table-column label="API Key" width="80" align="center">
             <template #default="{ row }">
               <el-tag :type="row.hasApiKey ? 'success' : 'danger'" size="small">
@@ -398,6 +405,25 @@
         <el-form-item>
           <el-checkbox v-model="llmForm.isDefault">设为该类别的默认模型</el-checkbox>
         </el-form-item>
+        <el-form-item v-if="llmForm.category === 'CODING'" label="Worker 后端">
+          <el-radio-group v-model="llmForm.workerBackend">
+            <el-radio-button value="CLAUDE_CODE">Claude Code</el-radio-button>
+            <el-radio-button value="OPENAI_CODEX">OpenAI Codex</el-radio-button>
+          </el-radio-group>
+          <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
+            指定此编程模型由哪个 Worker 后端执行
+          </div>
+        </el-form-item>
+        <el-form-item label="环境变量">
+          <div style="width: 100%">
+            <div v-for="(item, idx) in llmForm.envVars" :key="idx" style="display: flex; gap: 8px; margin-bottom: 8px; width: 100%">
+              <el-input v-model="item.key" placeholder="变量名，如 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" style="flex: 1" />
+              <el-input v-model="item.value" placeholder="值" style="width: 120px" />
+              <el-button size="small" type="danger" text @click="llmForm.envVars.splice(idx, 1)">删除</el-button>
+            </div>
+            <el-button size="small" @click="llmForm.envVars.push({ key: '', value: '' })">+ 添加变量</el-button>
+          </div>
+        </el-form-item>
         <el-form-item label="访问范围">
           <el-radio-group v-model="llmForm.scope">
             <el-radio value="GLOBAL">全局（所有 Worker 可用）</el-radio>
@@ -691,6 +717,8 @@ const llmForm = ref({
   isDefault: false,
   scope: 'GLOBAL' as ModelAccessScope,
   allowedWorkerIds: [] as string[],
+  envVars: [] as Array<{ key: string; value: string }>,
+  workerBackend: undefined as import('@/types').WorkerBackend | undefined,
 })
 
 const llmPresets = [
@@ -703,7 +731,7 @@ function showLlmDialog(mode: 'add' | 'edit') {
   llmDialogMode.value = mode
   if (mode === 'add') {
     editingLlmId.value = ''
-    llmForm.value = { name: '', category: 'GENERAL', baseUrl: '', modelName: '', apiKey: '', isDefault: false, scope: 'GLOBAL', allowedWorkerIds: [] }
+    llmForm.value = { name: '', category: 'GENERAL', baseUrl: '', modelName: '', apiKey: '', isDefault: false, scope: 'GLOBAL', allowedWorkerIds: [], envVars: [], workerBackend: undefined }
   }
   showLlmDialog_.value = true
 }
@@ -720,6 +748,8 @@ function applyPreset(preset: (typeof llmPresets)[number]) {
     isDefault: false,
     scope: 'GLOBAL',
     allowedWorkerIds: [],
+    envVars: [],
+    workerBackend: undefined,
   }
   showLlmDialog_.value = true
 }
@@ -736,6 +766,8 @@ function editLlmModel(row: LlmModelConfig) {
     isDefault: row.isDefault,
     scope: row.scope || 'GLOBAL',
     allowedWorkerIds: row.allowedWorkerIds ? [...row.allowedWorkerIds] : [],
+    envVars: row.envVars ? Object.entries(row.envVars).map(([key, value]) => ({ key, value })) : [],
+    workerBackend: row.workerBackend,
   }
   showLlmDialog_.value = true
 }
@@ -756,6 +788,9 @@ async function saveLlm() {
   saving.value = true
   try {
     if (llmDialogMode.value === 'add') {
+      const envVarsMap = Object.fromEntries(
+        llmForm.value.envVars.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value])
+      )
       await apiSaveLlm({
         name: llmForm.value.name,
         category: llmForm.value.category,
@@ -765,8 +800,13 @@ async function saveLlm() {
         isDefault: llmForm.value.isDefault,
         scope: llmForm.value.scope,
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : undefined,
+        envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
+        workerBackend: llmForm.value.category === 'CODING' ? llmForm.value.workerBackend : undefined,
       })
     } else {
+      const envVarsMap = Object.fromEntries(
+        llmForm.value.envVars.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value])
+      )
       const form: Record<string, unknown> = {
         name: llmForm.value.name,
         category: llmForm.value.category,
@@ -775,6 +815,8 @@ async function saveLlm() {
         isDefault: llmForm.value.isDefault,
         scope: llmForm.value.scope,
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : [],
+        envVars: envVarsMap,
+        workerBackend: llmForm.value.category === 'CODING' ? (llmForm.value.workerBackend || null) : null,
       }
       if (llmForm.value.apiKey) form.apiKey = llmForm.value.apiKey
       await apiUpdateLlm(editingLlmId.value, form)
@@ -932,8 +974,9 @@ async function saveWorkerForm() {
     workerForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION' }
     ElMessage.success('保存成功')
     await loadWorkers()
-  } catch {
-    ElMessage.error('保存失败')
+  } catch (e: any) {
+    const errorMsg = e?.response?.data?.msg || e?.response?.data?.message || e?.message || '保存失败'
+    ElMessage.error(errorMsg)
   } finally {
     saving.value = false
   }

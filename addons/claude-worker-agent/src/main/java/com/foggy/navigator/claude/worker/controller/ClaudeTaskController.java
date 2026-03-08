@@ -2,6 +2,7 @@ package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.ConversationConfigDTO;
+import com.foggy.navigator.claude.worker.model.dto.ResyncResult;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
@@ -99,6 +100,15 @@ public class ClaudeTaskController {
         return RX.ok(Map.of("taskId", taskId, "status", "RECONNECTED"));
     }
 
+    /**
+     * 任务重新同步：智能探测 CLI 状态，自动选择重连 SSE 或从 Worker JSONL 补齐消息。
+     */
+    @PostMapping("/{taskId}/resync")
+    public RX<ResyncResult> resyncTask(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskService.resync(taskId, userId));
+    }
+
     @PostMapping("/{taskId}/abort")
     public RX<Map<String, Object>> abortTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
@@ -148,11 +158,14 @@ public class ClaudeTaskController {
                     .block(java.time.Duration.ofSeconds(10));
 
             // Resume task from AWAITING_PERMISSION to RUNNING + persist response
-            taskService.resumeFromPermission(taskId, form.getPermissionId(),
+            boolean resumed = taskService.resumeFromPermission(taskId, form.getPermissionId(),
                     form.getDecision(), form.getAnswers());
+            if (!resumed) {
+                log.warn("respondToPermission: Worker relay succeeded but DB update failed: taskId={}", taskId);
+            }
 
             return RX.ok(Map.of("taskId", taskId, "permissionId", form.getPermissionId(),
-                    "decision", form.getDecision()));
+                    "decision", form.getDecision(), "resumed", resumed));
         } catch (Exception e) {
             log.warn("Failed to respond to permission: taskId={}, error={}", taskId, e.getMessage());
             return RX.failB("响应权限请求失败: " + e.getMessage());
@@ -446,6 +459,18 @@ public class ClaudeTaskController {
     public RX<ConversationConfigDTO> unarchiveConversation(@PathVariable String sessionId) {
         String userId = UserContext.getCurrentUserId();
         return RX.ok(configService.unarchiveConversation(sessionId, userId));
+    }
+
+    @PostMapping("/conversations/{sessionId}/hold")
+    public RX<ConversationConfigDTO> holdConversation(@PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.holdConversation(sessionId, userId));
+    }
+
+    @PostMapping("/conversations/{sessionId}/unhold")
+    public RX<ConversationConfigDTO> unholdConversation(@PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(configService.unholdConversation(sessionId, userId));
     }
 
     @PostMapping("/conversations/batch-bind-auth")
