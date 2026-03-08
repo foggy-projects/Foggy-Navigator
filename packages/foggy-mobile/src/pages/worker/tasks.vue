@@ -51,6 +51,26 @@
       </view>
     </view>
 
+    <!-- 过滤栏 -->
+    <view class="filter-bar">
+      <view class="filter-group">
+        <text
+          v-for="opt in STATE_FILTERS"
+          :key="opt.value"
+          :class="['filter-tag', opt.cls || '', { active: stateFilter === opt.value }]"
+          @tap="setStateFilter(opt.value)"
+        >{{ opt.label }}</text>
+      </view>
+      <view class="filter-group">
+        <text
+          v-for="opt in SOURCE_FILTERS"
+          :key="opt.value"
+          :class="['filter-tag', { active: sourceFilter === opt.value }]"
+          @tap="setSourceFilter(opt.value)"
+        >{{ opt.label }}</text>
+      </view>
+    </view>
+
     <!-- 任务列表 -->
     <scroll-view scroll-y class="task-list"
       :refresher-enabled="true"
@@ -58,12 +78,12 @@
       @refresherrefresh="onRefresh"
       @scrolltolower="loadMore"
     >
-      <view v-if="loading && tasks.length === 0" class="loading-wrap">
+      <view v-if="loading && filteredTasks.length === 0" class="loading-wrap">
         <text class="loading-text">加载中...</text>
       </view>
-      <template v-else-if="tasks.length > 0">
+      <template v-else-if="filteredTasks.length > 0">
         <TaskCard
-          v-for="task in tasks"
+          v-for="task in filteredTasks"
           :key="task.taskId"
           :task="task"
           @tap="openTask(task)"
@@ -77,7 +97,7 @@
         v-else
         icon="📋"
         title="暂无任务"
-        description="输入任务描述并点击运行"
+        :description="stateFilter === 'ALL' ? '输入任务描述并点击运行' : '当前筛选条件下暂无任务'"
       />
     </scroll-view>
   </view>
@@ -125,12 +145,50 @@ const selectedModel = ref('')
 const selectedTurns = ref(0)
 const selectedPermission = ref<string>('bypassPermissions')
 
+// Filter state
+const STATE_FILTERS = [
+  { label: '全部', value: 'ALL', cls: '' },
+  { label: '待回复', value: 'AWAITING_REPLY', cls: 'filter-tag--awaiting' },
+  { label: '处理中', value: 'PROCESSING', cls: 'filter-tag--processing' },
+  { label: '已搁置', value: 'ON_HOLD', cls: '' },
+  { label: '已归档', value: 'ARCHIVED', cls: '' },
+]
+const SOURCE_FILTERS = [
+  { label: '平台', value: 'PLATFORM' },
+  { label: '同步', value: 'SYNCED' },
+  { label: '全部来源', value: 'ALL' },
+]
+const stateFilter = ref('ALL')
+const sourceFilter = ref('PLATFORM')
+
 // Draft & history
 const memoryScope = computed(() => directoryId.value ? 'task-' + directoryId.value : '')
 const { saveDraft, loadDraft, clearDraft, addToHistory, recentItems } = useInputMemory(memoryScope)
 
 const historyItems = computed(() => recentItems(10))
 const hasMore = computed(() => page.value + 1 < totalPages.value)
+
+// Source filter is client-side
+const filteredTasks = computed(() => {
+  if (sourceFilter.value === 'ALL') return tasks.value
+  return tasks.value.filter(t => {
+    const isPlatform = t.source === 'PLATFORM' || t.source == null
+    return sourceFilter.value === 'PLATFORM' ? isPlatform : !isPlatform
+  })
+})
+
+function currentStateParam(): string | undefined {
+  return stateFilter.value === 'ALL' ? undefined : stateFilter.value
+}
+
+function setStateFilter(val: string) {
+  stateFilter.value = val
+  loadTasks()
+}
+
+function setSourceFilter(val: string) {
+  sourceFilter.value = val
+}
 
 // Auto-save draft on input change
 watch(promptInput, (val) => {
@@ -183,7 +241,7 @@ async function loadTasks() {
   if (!directoryId.value) return
   loading.value = true
   try {
-    const result = await workerApi.listTasksByDirectoryPaged(directoryId.value, 0, 20)
+    const result = await workerApi.listTasksByDirectoryPaged(directoryId.value, 0, 20, currentStateParam())
     tasks.value = result.content
     totalPages.value = result.totalPages
     page.value = 0
@@ -199,7 +257,7 @@ async function loadMore() {
   loading.value = true
   try {
     const nextPage = page.value + 1
-    const result = await workerApi.listTasksByDirectoryPaged(directoryId.value, nextPage, 20)
+    const result = await workerApi.listTasksByDirectoryPaged(directoryId.value, nextPage, 20, currentStateParam())
     tasks.value.push(...result.content)
     page.value = nextPage
     totalPages.value = result.totalPages
@@ -349,16 +407,18 @@ function showPermissionPicker() {
 }
 .input-row {
   display: flex;
+  flex-direction: row;
   align-items: flex-end;
-  gap: 16rpx;
 }
 .history-btn {
   width: 64rpx;
   height: 64rpx;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  margin-right: 16rpx;
 }
 .history-icon {
   font-size: 36rpx;
@@ -369,19 +429,21 @@ function showPermissionPicker() {
   max-height: 200rpx;
   padding: 16rpx 24rpx;
   font-size: 28rpx;
-  background: #f5f5f5;
+  background-color: #f5f5f5;
   border-radius: 16rpx;
   line-height: 1.5;
+  margin-right: 16rpx;
 }
 .run-btn {
   width: 120rpx;
   height: 68rpx;
   font-size: 28rpx;
-  background: #667eea;
+  background-color: #667eea;
   color: #ffffff;
   border-radius: 16rpx;
   border: none;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
@@ -391,17 +453,19 @@ function showPermissionPicker() {
 }
 .option-row {
   display: flex;
-  gap: 16rpx;
+  flex-direction: row;
   margin-top: 16rpx;
   flex-wrap: wrap;
 }
 .option-tag {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 8rpx;
   padding: 8rpx 20rpx;
-  background: #f0f2f5;
+  background-color: #f0f2f5;
   border-radius: 24rpx;
+  margin-right: 16rpx;
+  margin-bottom: 8rpx;
 }
 .option-tag--api {
   background: #e8f5e9;
@@ -412,11 +476,49 @@ function showPermissionPicker() {
 .option-label {
   font-size: 24rpx;
   color: #606266;
+  margin-right: 8rpx;
 }
 .option-clear {
   font-size: 22rpx;
   color: #909399;
   padding: 0 4rpx;
+}
+/* 过滤栏 */
+.filter-bar {
+  padding: 16rpx 24rpx;
+  background-color: #ffffff;
+  border-bottom: 2rpx solid #f0f0f0;
+}
+.filter-group {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin-bottom: 8rpx;
+}
+.filter-group:last-child {
+  margin-bottom: 0;
+}
+.filter-tag {
+  font-size: 24rpx;
+  color: #909399;
+  padding: 6rpx 20rpx;
+  border-radius: 24rpx;
+  background-color: transparent;
+  margin-right: 8rpx;
+  margin-bottom: 4rpx;
+}
+.filter-tag.active {
+  color: #667eea;
+  background-color: #ecf0ff;
+  font-weight: 600;
+}
+.filter-tag--awaiting.active {
+  color: #e6a23c;
+  background-color: #fdf6ec;
+}
+.filter-tag--processing.active {
+  color: #409eff;
+  background-color: #ecf5ff;
 }
 .task-list {
   flex: 1;

@@ -151,11 +151,11 @@ function handleReconnect() {
   text-align: center;
 }
 .guide-card {
-  background: #ffffff;
+  background-color: #ffffff;
   border-radius: 16rpx;
   padding: 24rpx 28rpx;
   margin-bottom: 16rpx;
-  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+  border: 1rpx solid #e8e8e8;
 }
 .guide-card-title {
   font-size: 28rpx;
@@ -170,11 +170,14 @@ function handleReconnect() {
 }
 .connection-banner {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 16rpx;
   padding: 12rpx 24rpx;
   font-size: 24rpx;
+}
+.connection-banner > text {
+  margin-right: 16rpx;
 }
 .connection-banner.connecting {
   background: #fdf6ec;

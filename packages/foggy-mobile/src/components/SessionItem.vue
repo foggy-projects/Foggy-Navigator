@@ -34,12 +34,13 @@ defineEmits<{
 .session-content {
   display: flex;
   flex-direction: column;
-  gap: 12rpx;
 }
 .session-header {
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 12rpx;
 }
 .session-title {
   font-size: 30rpx;

@@ -9,9 +9,12 @@
 <style scoped>
 .thinking-dots {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 8rpx;
   padding: 16rpx 0;
+}
+.dot + .dot {
+  margin-left: 8rpx;
 }
 .dot {
   width: 14rpx;

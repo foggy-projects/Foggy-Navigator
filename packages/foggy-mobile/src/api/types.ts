@@ -73,6 +73,7 @@ export interface ClaudeTask {
   numTurns?: number
   model?: string
   errorMessage?: string
+  source?: 'PLATFORM' | 'SYNCED'
   createdAt: string
   updatedAt: string
 }

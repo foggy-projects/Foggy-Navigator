@@ -626,6 +626,11 @@ class SdkWrapper:
                     for name, defn in agents_raw.items()
                 }
                 options_kwargs["agents"] = agents
+                # Auto-enable the experimental Agent Teams feature flag
+                # so the CLI spawns teammates without requiring manual env setup.
+                env = options_kwargs.get("env")
+                if isinstance(env, dict):
+                    env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
                 logger.info("Agent Teams configured: %s", list(agents.keys()))
             except (json.JSONDecodeError, TypeError, KeyError) as exc:
                 logger.warning("Failed to parse agents config, using extra_args fallback: %s", exc)
@@ -831,7 +836,7 @@ class SdkWrapper:
             logger.info(
                 "Task %s SDK call: prompt=%s, cwd=%s, session_id=%s, model=%s, "
                 "auth_mode=%s, auth_hint=%s, base_url=%s, "
-                "has_agents=%s, has_env=%s, disallowed_tools=%s, "
+                "agents=%s, has_env=%s, disallowed_tools=%s, "
                 "hard_timeout=%ss, heartbeat_timeout=%ss, "
                 "foggy_task_id=%s, foggy_session_id=%s",
                 task_id,
@@ -842,7 +847,7 @@ class SdkWrapper:
                 auth_mode,
                 auth_hint,
                 eff_url or "(default)",
-                "agents" in options_kwargs,
+                list(options_kwargs["agents"].keys()) if "agents" in options_kwargs else "disabled",
                 bool(env),
                 disallowed_tools or "(none)",
                 hard_timeout,
@@ -1296,6 +1301,8 @@ class SdkWrapper:
                 # the sentinel is always pushed.
                 async def _producer() -> None:
                     _msg_count = 0
+                    _last_pid_capture = asyncio.get_event_loop().time()
+                    _PID_CAPTURE_INTERVAL = 60  # re-scan children every 60s for Agent Teams sub-CLIs
                     try:
                         logger.info("Task %s producer: starting SDK iteration", task_id)
                         _capture_child_pids(task_id)  # snapshot before first message
@@ -1303,6 +1310,9 @@ class SdkWrapper:
                             _msg_count += 1
                             if _msg_count == 1:
                                 _capture_child_pids(task_id)  # capture after first message
+                            elif (asyncio.get_event_loop().time() - _last_pid_capture) >= _PID_CAPTURE_INTERVAL:
+                                _capture_child_pids(task_id)  # periodic re-scan for late-spawned sub-CLIs
+                                _last_pid_capture = asyncio.get_event_loop().time()
                             msg_type = type(message).__name__
                             logger.info(
                                 "Task %s producer msg #%d: %s",
@@ -1471,10 +1481,15 @@ class SdkWrapper:
                 _direct_msg_count = 0
                 _direct_warned_hard_timeout = False
                 _direct_warned_heartbeat = False
+                _direct_last_pid_capture = asyncio.get_event_loop().time()
+                _DIRECT_PID_CAPTURE_INTERVAL = 60  # re-scan for Agent Teams sub-CLIs
                 async for message in _query_fn(prompt=prompt, options=options):
                     _direct_msg_count += 1
                     if _direct_msg_count == 1:
                         _capture_child_pids(task_id)  # capture after first message
+                    elif (asyncio.get_event_loop().time() - _direct_last_pid_capture) >= _DIRECT_PID_CAPTURE_INTERVAL:
+                        _capture_child_pids(task_id)  # periodic re-scan for late-spawned sub-CLIs
+                        _direct_last_pid_capture = asyncio.get_event_loop().time()
                     now = asyncio.get_event_loop().time()
 
                     if now - started_at > hard_timeout and not _direct_warned_hard_timeout:

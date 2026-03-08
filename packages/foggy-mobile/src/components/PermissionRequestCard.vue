@@ -75,31 +75,35 @@ function handleRespond(decision: string, scope: string) {
 .permission-card.approved { border-left-color: #67c23a; background: #f0f9eb; }
 .permission-card.denied { border-left-color: #f56c6c; background: #fef0f0; }
 
-.card-header { display: flex; align-items: center; gap: 12rpx; }
-.card-icon { font-size: 32rpx; }
+.card-header { display: flex; flex-direction: row; align-items: center; }
+.card-icon { font-size: 32rpx; margin-right: 12rpx; }
 .card-title { font-size: 26rpx; font-weight: 600; color: #303133; flex: 1; }
 .status-badge { font-size: 22rpx; padding: 4rpx 16rpx; border-radius: 20rpx; }
-.status-badge.pending { background: #faecd8; color: #e6a23c; }
-.status-badge.approved { background: #e1f3d8; color: #67c23a; }
-.status-badge.denied { background: #fde2e2; color: #f56c6c; }
+.status-badge.pending { background-color: #faecd8; color: #e6a23c; }
+.status-badge.approved { background-color: #e1f3d8; color: #67c23a; }
+.status-badge.denied { background-color: #fde2e2; color: #f56c6c; }
 
 .card-actions {
   margin-top: 20rpx;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12rpx;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
 }
 .action-btn {
+  width: 48%;
   height: 68rpx;
   font-size: 24rpx;
   border-radius: 12rpx;
   border: none;
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
+  margin-right: 2%;
+  margin-bottom: 12rpx;
 }
-.allow-btn { background: #67c23a; color: #fff; }
-.allow-session-btn { background: #409eff; color: #fff; }
-.allow-always-btn { background: #e6a23c; color: #fff; }
-.deny-btn { background: #fff; color: #f56c6c; border: 2rpx solid #f56c6c; }
+.allow-btn { background-color: #67c23a; color: #ffffff; }
+.allow-session-btn { background-color: #409eff; color: #ffffff; }
+.allow-always-btn { background-color: #e6a23c; color: #ffffff; }
+.deny-btn { background-color: #ffffff; color: #f56c6c; border: 2rpx solid #f56c6c; }
 </style>

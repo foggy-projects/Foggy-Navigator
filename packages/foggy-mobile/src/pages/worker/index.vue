@@ -275,9 +275,12 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
 }
 .dir-info {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 12rpx;
   margin-bottom: 8rpx;
+}
+.dir-info > text + text {
+  margin-left: 12rpx;
 }
 .dir-name {
   font-size: 28rpx;

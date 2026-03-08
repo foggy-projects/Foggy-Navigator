@@ -61,10 +61,10 @@ const truncatedOutput = computed(() => {
 }
 .tool-header {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 12rpx;
 }
-.tool-icon { font-size: 28rpx; }
+.tool-icon { font-size: 28rpx; margin-right: 12rpx; }
 .tool-name {
   font-size: 26rpx;
   color: #606266;

@@ -157,25 +157,26 @@ const statusIcon = computed(() => {
 .question-card.approved { border-left-color: #67c23a; background: #f0f9eb; }
 .question-card.denied { border-left-color: #f56c6c; background: #fef0f0; }
 
-.card-header { display: flex; align-items: center; gap: 12rpx; }
-.card-icon { font-size: 32rpx; }
+.card-header { display: flex; flex-direction: row; align-items: center; }
+.card-icon { font-size: 32rpx; margin-right: 12rpx; }
 .card-title { font-size: 28rpx; font-weight: 600; color: #303133; flex: 1; }
 .status-badge { font-size: 22rpx; padding: 4rpx 16rpx; border-radius: 20rpx; }
-.status-badge.pending { background: #d9ecff; color: #409eff; }
-.status-badge.approved { background: #e1f3d8; color: #67c23a; }
-.status-badge.denied { background: #fde2e2; color: #f56c6c; }
+.status-badge.pending { background-color: #d9ecff; color: #409eff; }
+.status-badge.approved { background-color: #e1f3d8; color: #67c23a; }
+.status-badge.denied { background-color: #fde2e2; color: #f56c6c; }
 
 .questions-body { margin-top: 16rpx; }
 .question-block { margin-bottom: 20rpx; }
 .question-header { font-size: 24rpx; color: #409eff; font-weight: 600; display: block; margin-bottom: 8rpx; }
 .question-text { font-size: 26rpx; color: #303133; display: block; margin-bottom: 12rpx; }
 
-.option-list { display: flex; flex-direction: column; gap: 8rpx; }
+.option-list { display: flex; flex-direction: column; }
 .option-item {
   padding: 16rpx 20rpx;
-  background: #fff;
+  background-color: #ffffff;
   border: 2rpx solid #dcdfe6;
   border-radius: 12rpx;
+  margin-bottom: 8rpx;
 }
 .option-item.selected {
   border-color: #409eff;
