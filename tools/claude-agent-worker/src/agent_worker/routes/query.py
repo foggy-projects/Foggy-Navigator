@@ -485,11 +485,18 @@ async def get_task_status(task_id: str):
             "source": "registry",
         }
 
-    # Task not in registry — check persistence layer for completed tasks
+    # Task not in registry — check persistence layer for completed tasks.
+    # Resolve alias (foggy_task_id → worker task_id) since JSONL is stored
+    # under worker task_id, not foggy_task_id.
     from ..persistence.factory import get_event_store
     store = get_event_store()
-    latest_seq = store.get_latest_seq(task_id)
-    is_closed = store.is_closed(task_id)
+    resolved_persistence_id = (
+        store.resolve_alias(task_id)
+        if hasattr(store, "resolve_alias")
+        else task_id
+    )
+    latest_seq = store.get_latest_seq(resolved_persistence_id)
+    is_closed = store.is_closed(resolved_persistence_id)
 
     if latest_seq > 0 or is_closed:
         return {

@@ -15,9 +15,9 @@ class Settings(BaseSettings):
     allowed_cwds: list[str] = []
     max_concurrent_tasks: int = 3
 
-    # Timeout settings
-    task_hard_timeout_seconds: int = 14400     # 4 hours — absolute max task duration
-    task_heartbeat_timeout_seconds: int = 600  # 10 minutes — no events → kill
+    # Timeout settings (advisory warning thresholds — CLI is never auto-killed)
+    task_hard_timeout_seconds: int = 14400     # 4 hours — emits warning event, CLI continues
+    task_heartbeat_timeout_seconds: int = 600  # 10 minutes — emits warning event, CLI continues
     git_timeout_seconds: int = 60              # git subprocess timeout
 
     # SSH settings

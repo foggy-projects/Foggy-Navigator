@@ -1061,60 +1061,59 @@ public class ClaudeTaskService {
     }
 
     /**
-     * 定时检查超时任务（每5分钟）
-     * - 交互式任务（fileCheckpointingEnabled=true）：4 小时超时（与 Worker hard timeout 对齐）
-     *   使用 lastAliveAt（Reconciler 心跳时间）作为基准，避免误判仍在运行的长任务
-     * - Tracked sync 任务（fileCheckpointingEnabled=false）：10 分钟超时（syncQuery 正常 < 2 分钟）
-     * - AWAITING_PERMISSION 任务：4 小时超时（同样使用 lastAliveAt 基准，用户可能长时间不在）
+     * [DISABLED] 超时检查 — 仅记录警告日志，不再自动标记 FAILED。
+     *
+     * 设计原则简化（Rule 2: 只有用户能终止 CLI）：
+     * - CLI alive = task alive（唯一真相源）
+     * - 超时由 Reconciler 检测 CLI 存活状态决定，不再主动标记 FAILED
+     * - 原 @Scheduled 注解已移除，此方法仅供调试时手动调用
      */
-    @Scheduled(fixedDelay = 300000)
-    @Transactional
-    public void checkTimeoutTasks() {
+    // @Scheduled removed — timeout checks are advisory only, Reconciler handles lifecycle
+    @Transactional(readOnly = true)
+    public void logTimeoutWarnings() {
         LocalDateTime now = LocalDateTime.now();
-        int timedOutCount = 0;
+        int warnCount = 0;
 
-        // 交互式编程任务：4 小时超时
-        // 先用 createdAt 过滤出候选任务，再用 lastAliveAt（Reconciler 更新）作为真正基准，
-        // 避免误杀 Reconciler 近期确认存活的任务。
+        // 交互式编程任务：4 小时阈值
         LocalDateTime runningCutoff = now.minusHours(4);
         List<ClaudeTaskEntity> runningOld = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", runningCutoff);
         for (ClaudeTaskEntity entity : runningOld) {
             if (Boolean.FALSE.equals(entity.getFileCheckpointingEnabled())) {
-                continue; // sync tasks handled separately below
+                continue;
             }
             LocalDateTime baseline = entity.getLastAliveAt() != null ? entity.getLastAliveAt() : entity.getCreatedAt();
             if (baseline.isBefore(runningCutoff)) {
-                failTimeout(entity, "Task timed out (exceeded 4 hours without CLI activity)");
-                timedOutCount++;
+                log.warn("[Advisory] Task {} running > 4h (baseline={}), CLI lifecycle managed by Reconciler",
+                        entity.getTaskId(), baseline);
+                warnCount++;
             }
         }
 
-        // Tracked sync tasks: 10 minute timeout (syncQuery should complete in < 2 min)
-        // Sync tasks are short-lived, Reconciler does not track them — use createdAt directly.
+        // Tracked sync 任务：10 分钟阈值
         LocalDateTime syncCutoff = now.minusMinutes(10);
         List<ClaudeTaskEntity> syncOld = taskRepository.findByStatusAndCreatedAtBefore("RUNNING", syncCutoff);
         for (ClaudeTaskEntity entity : syncOld) {
             if (Boolean.FALSE.equals(entity.getFileCheckpointingEnabled())) {
-                failTimeout(entity, "Sync task timed out (exceeded 10 minutes)");
-                timedOutCount++;
+                log.warn("[Advisory] Sync task {} running > 10min (created={}), CLI lifecycle managed by Reconciler",
+                        entity.getTaskId(), entity.getCreatedAt());
+                warnCount++;
             }
         }
 
-        // AWAITING_PERMISSION tasks: 4 hour timeout (aligned with interactive tasks).
-        // Users may step away while a question/permission is pending — use a generous window.
-        // Use lastAliveAt as baseline if Reconciler has confirmed the CLI is alive recently.
+        // AWAITING_PERMISSION 任务：4 小时阈值
         LocalDateTime permissionCutoff = now.minusHours(4);
         List<ClaudeTaskEntity> permOld = taskRepository.findByStatusAndCreatedAtBefore("AWAITING_PERMISSION", permissionCutoff);
         for (ClaudeTaskEntity entity : permOld) {
             LocalDateTime baseline = entity.getLastAliveAt() != null ? entity.getLastAliveAt() : entity.getCreatedAt();
             if (baseline.isBefore(permissionCutoff)) {
-                failTimeout(entity, "Permission request timed out (exceeded 4 hours without CLI activity)");
-                timedOutCount++;
+                log.warn("[Advisory] Permission task {} waiting > 4h (baseline={}), CLI lifecycle managed by Reconciler",
+                        entity.getTaskId(), baseline);
+                warnCount++;
             }
         }
 
-        if (timedOutCount > 0) {
-            log.info("Marked {} timed-out tasks as FAILED", timedOutCount);
+        if (warnCount > 0) {
+            log.info("[Advisory] {} tasks exceed timeout thresholds (no action taken — CLI lifecycle managed by Reconciler)", warnCount);
         }
     }
 
@@ -1131,70 +1130,56 @@ public class ClaudeTaskService {
     }
 
     /**
-     * Reconciler 专用：按 taskId 强制将任务标记为 FAILED。
+     * Reconciler 专用：CLI 已确认退出时，将任务标记为 COMPLETED。
+     * Rule 1: CLI alive = task alive → CLI 退出 = 任务完成。
      * 仅对仍处于活跃状态（RUNNING / AWAITING_PERMISSION）的任务生效，幂等安全。
      */
     @Transactional
-    public void reconcilerFailTask(String taskId, String reason) {
-        reconcilerFailTask(taskId, reason, true);
-    }
-
-    /**
-     * Reconciler 调用：标记任务为失败。
-     *
-     * @param taskId 任务 ID
-     * @param reason 失败原因
-     * @param shouldAbortWorker 是否调用 Worker 的 abortTask API（仅在确认 CLI 已死时为 true）
-     */
-    public void reconcilerFailTask(String taskId, String reason, boolean shouldAbortWorker) {
+    public void reconcilerCompleteTask(String taskId, String reason) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String status = entity.getStatus();
             if ("RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status)) {
-                failTimeout(entity, reason, shouldAbortWorker);
+                completeWithReason(entity, reason);
             }
         });
     }
 
     /**
-     * 流正常结束但任务仍在 RUNNING 时调用（未收到 result/error 事件）。
-     * 典型场景：系统资源不足导致 CLI 无法启动，Worker 进程异常退出。
-     * 标记任务失败 + 推送友好错误消息到会话。
+     * SSE 流断开时调用（未收到 result/error 事件，且重连已失败）。
      *
-     * 注意：AWAITING_PERMISSION 任务不立即失败 — SSE 流在等待用户授权期间空闲易超时断开，
-     * 但 CLI 进程通常仍然存活。由 TaskStateReconciler 定期检测 CLI 存活状态来处理。
+     * 简化原则（Rule 1: CLI alive = task alive）：
+     * - CLI 仍存活 → defer to Reconciler（不标记任何终态）
+     * - CLI 已死 → 标记 COMPLETED（CLI 退出 = 任务完成）
+     * - AWAITING_PERMISSION → defer to Reconciler（CLI 通常仍存活等待用户输入）
      */
     @Transactional
-    public void failIfStillRunning(String taskId, String sessionId, String reason) {
+    public void handleStreamDisconnect(String taskId, String sessionId, String reason) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String status = entity.getStatus();
             if ("AWAITING_PERMISSION".equals(status)) {
-                // SSE 流断开但 CLI 可能仍在等待用户输入，不立即失败。
-                // Reconciler 会检测 CLI 进程存活状态，真正死亡时会 reconcilerFailTask。
                 log.info("SSE stream ended while task awaiting permission — deferring to Reconciler: taskId={}", taskId);
                 return;
             }
             if ("RUNNING".equals(status)) {
-                // 在标记 FAILED 之前，检查 CLI 进程是否仍然存活
                 if (isCliProcessAlive(entity)) {
                     log.info("CLI process still alive — deferring to Reconciler: taskId={}", taskId);
                     return;
                 }
 
+                // CLI dead + stream disconnected → mark COMPLETED (Rule 1: CLI exited = task done)
                 String prev = entity.getStatus();
-                entity.setStatus("FAILED");
+                entity.setStatus("COMPLETED");
                 entity.setErrorMessage(reason);
                 taskRepository.save(entity);
-                log.warn("Task stream ended without result: taskId={}, reason={}", taskId, reason);
+                log.info("Task stream ended, CLI exited — marking COMPLETED: taskId={}, reason={}", taskId, reason);
                 publishStatusChange(entity, prev);
                 conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
-                publishSessionError(sessionId, taskId, reason, true);
 
-                // 发布跨 Agent 任务失败事件
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
                         .externalTaskId(taskId)
                         .parentSessionId(sessionId)
                         .targetAgentId(AGENT_ID)
-                        .status("FAILED")
+                        .status("COMPLETED")
                         .resultSummary(reason)
                         .build());
             }
@@ -1619,52 +1604,43 @@ public class ClaudeTaskService {
 
     // ==================== End Resync ====================
 
-    private void failTimeout(ClaudeTaskEntity entity, String reason) {
-        failTimeout(entity, reason, true);
-    }
-
     /**
-     * 标记任务为失败。
+     * 标记任务为 COMPLETED（CLI 已退出，任务完成）。
      *
-     * @param entity 任务实体
-     * @param reason 失败原因
-     * @param shouldAbortWorker 是否调用 Worker 的 abortTask API（仅在确认 CLI 已死时为 true）
+     * Rule 1: CLI alive = task alive → CLI 退出 = 任务完成。
+     * 不再自动 abort Worker（Rule 2: 只有用户能杀 CLI）。
+     * 保留本地 SSE 流清理（释放 Java 侧资源）。
      */
-    private void failTimeout(ClaudeTaskEntity entity, String reason, boolean shouldAbortWorker) {
+    private void completeWithReason(ClaudeTaskEntity entity, String reason) {
         String prev = entity.getStatus();
-        entity.setStatus("FAILED");
+        entity.setStatus("COMPLETED");
         entity.setErrorMessage(reason);
         taskRepository.save(entity);
-        log.warn("Task timed out: taskId={}, createdAt={}, reason={}, shouldAbortWorker={}",
-                entity.getTaskId(), entity.getCreatedAt(), reason, shouldAbortWorker);
+        log.info("Task completed (CLI exited): taskId={}, createdAt={}, reason={}",
+                entity.getTaskId(), entity.getCreatedAt(), reason);
         publishStatusChange(entity, prev);
         conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
 
         String taskId = entity.getTaskId();
 
-        // 推送错误消息到会话，让用户在聊天中看到失败原因
+        // 推送信息消息到会话（非错误，仅通知）
         publishSessionError(entity.getSessionId(), taskId, reason, false);
 
-        // 仅在确认 CLI 已死时通知 Worker 中止任务
-        if (shouldAbortWorker) {
-            try {
-                ClaudeWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
-                ClaudeWorkerClient client = workerService.createClient(worker);
-                client.abortTask(taskId).block(Duration.ofSeconds(3));
-                log.info("Worker abort sent on timeout: taskId={}", taskId);
-            } catch (Exception e) {
-                log.warn("Failed to abort worker task on timeout: taskId={}, error={}", taskId, e.getMessage());
-            }
-        } else {
-            log.info("CLI still alive, skipping Worker abort for task={}: user can decide via process list", taskId);
-        }
-
-        // 清理本地 SSE 流订阅
+        // 清理本地 SSE 流订阅（释放 Java 侧资源，不影响 CLI）
         try {
             streamRelay.abortStream(taskId);
         } catch (Exception e) {
-            log.warn("Failed to abort local stream on timeout: taskId={}", taskId, e.getMessage());
+            log.warn("Failed to abort local stream on completion: taskId={}", taskId, e.getMessage());
         }
+
+        // 发布跨 Agent 任务完成事件
+        eventPublisher.publishEvent(TaskCompletionEvent.builder()
+                .externalTaskId(taskId)
+                .parentSessionId(entity.getSessionId())
+                .targetAgentId(AGENT_ID)
+                .status("COMPLETED")
+                .resultSummary(reason)
+                .build());
     }
 
     /**

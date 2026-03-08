@@ -52,10 +52,10 @@ public class WorkerStreamRelay {
     /** 启动后延迟多少毫秒再尝试重连（等 Worker 健康检查完成） */
     private static final long STARTUP_RECONNECT_DELAY_MS = 10_000;
 
-    /** SSE 断连后最大重连次数 */
-    private static final int MAX_RECONNECT_ATTEMPTS = 3;
     /** 重连退避基础延迟（毫秒），实际延迟 = 2^attempt * BASE */
     private static final long RECONNECT_BASE_DELAY_MS = 2000;
+    /** 重连退避上限（毫秒），避免无限增长 */
+    private static final long MAX_RECONNECT_BACKOFF_MS = 300_000;  // 5 minutes
 
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
@@ -180,7 +180,7 @@ public class WorkerStreamRelay {
             activeStreams.put(taskId, subscription);
 
             // Reset interactionState to PROCESSING — the previous SSE disconnect
-            // may have left it as AWAITING_REPLY via failIfStillRunning path.
+            // may have left it as AWAITING_REPLY via handleStreamDisconnect path.
             conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
 
             // Push a STATE_SYNC so the frontend knows the task stream is reconnected
@@ -254,7 +254,7 @@ public class WorkerStreamRelay {
      * 创建 SSE Flux 的通用订阅逻辑（新任务和重连共用）。
      *
      * @param reconnectAttempt 当前是第几次重连（0=首次连接），
-     *                         超过 MAX_RECONNECT_ATTEMPTS 后不再重试。
+     *                         无上限重试，退避指数增长至 MAX_RECONNECT_BACKOFF_MS 封顶。
      */
     private Disposable subscribeSseFlux(Flux<ServerSentEvent<String>> sseFlux,
                                          String taskId, String sessionId, String workerId,
@@ -298,23 +298,30 @@ public class WorkerStreamRelay {
                     }
                 })
                 .doOnComplete(() -> {
-                    log.info("Worker stream completed: taskId={}, reconnectAttempt={}/{}", taskId, reconnectAttempt, MAX_RECONNECT_ATTEMPTS);
+                    log.info("Worker stream completed: taskId={}, reconnectAttempt={}", taskId, reconnectAttempt);
                     activeStreams.remove(taskId);
 
-                    if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
-                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
-                        if (reconnected) {
+                    // Check if task is already in a terminal state — no need to reconnect
+                    var taskOpt = taskRepository.findByTaskId(taskId);
+                    if (taskOpt.isPresent()) {
+                        String status = taskOpt.get().getStatus();
+                        if ("COMPLETED".equals(status) || "FAILED".equals(status) || "ABORTED".equals(status)) {
+                            log.info("Task {} already in terminal state ({}), skipping reconnect", taskId, status);
+                            lastAckedSeq.remove(taskId);
                             return;
                         }
                     }
 
-                    // 如果流正常结束但任务仍在 RUNNING（没收到 result/error 事件），
-                    // 说明 CLI 可能因资源不足未能启动，或 Worker 异常断开。
-                    // 对于 AWAITING_PERMISSION 任务，SSE 空闲期间连接易超时断开，
-                    // 但 CLI 进程通常仍存活等待用户输入 — 交给 Reconciler 判断。
-                    taskService.failIfStillRunning(taskId, sessionId,
-                            "Worker 连接已断开，但未收到任务结果。可能原因：系统资源不足导致 CLI 无法启动，或 Worker 进程异常退出。");
-                    lastAckedSeq.remove(taskId);
+                    // Infinite reconnect with capped exponential backoff (Rule 2: never auto-fail)
+                    boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
+                    if (reconnected) {
+                        return;
+                    }
+
+                    // Reconnect failed — defer to Reconciler for lifecycle management.
+                    // Do NOT call handleStreamDisconnect here; Reconciler will detect CLI state.
+                    log.info("SSE reconnect attempt failed for task {} — Reconciler will manage lifecycle", taskId);
+                    // Keep lastAckedSeq for future reconnect by Reconciler
                 })
                 .doOnError(e -> {
                     log.error("Worker stream error: taskId={}", taskId, e);
@@ -325,18 +332,25 @@ public class WorkerStreamRelay {
                     boolean isClientError = e instanceof WebClientResponseException wce
                             && wce.getStatusCode().is4xxClientError();
 
-                    if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS && !isClientError) {
-                        boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
-                        if (reconnected) {
-                            return;
-                        }
+                    if (isClientError) {
+                        // Genuine startup failure — keep failTask for 4xx errors
+                        String errorMsg = extractWorkerErrorMessage(e);
+                        taskService.failTask(taskId, detectedClaudeSessionId.get(), errorMsg);
+                        publishMessage(sessionId, MessageType.ERROR,
+                                Map.of("content", errorMsg, "taskId", taskId));
+                        lastAckedSeq.remove(taskId);
+                        return;
                     }
 
-                    String errorMsg = extractWorkerErrorMessage(e);
-                    taskService.failTask(taskId, detectedClaudeSessionId.get(), errorMsg);
-                    publishMessage(sessionId, MessageType.ERROR,
-                            Map.of("content", errorMsg, "taskId", taskId));
-                    lastAckedSeq.remove(taskId);
+                    // Transient error — infinite reconnect with capped backoff (Rule 2: never auto-fail)
+                    boolean reconnected = attemptReconnect(taskId, sessionId, workerId, reconnectAttempt);
+                    if (reconnected) {
+                        return;
+                    }
+
+                    // Reconnect failed — defer to Reconciler for lifecycle management.
+                    log.info("SSE reconnect attempt failed for task {} after error — Reconciler will manage lifecycle", taskId);
+                    // Keep lastAckedSeq for future reconnect by Reconciler
                 })
                 .subscribe();
     }
@@ -365,9 +379,9 @@ public class WorkerStreamRelay {
             }
 
             int nextAttempt = currentAttempt + 1;
-            long delayMs = (long) Math.pow(2, currentAttempt) * RECONNECT_BASE_DELAY_MS;
-            log.info("Attempting SSE reconnection (attempt {}/{}) for task {} (status={}), backoff={}ms",
-                    nextAttempt, MAX_RECONNECT_ATTEMPTS, taskId, status, delayMs);
+            long delayMs = Math.min((long) Math.pow(2, currentAttempt) * RECONNECT_BASE_DELAY_MS, MAX_RECONNECT_BACKOFF_MS);
+            log.info("Attempting SSE reconnection (attempt {}) for task {} (status={}), backoff={}ms",
+                    nextAttempt, taskId, status, delayMs);
 
             Thread.sleep(delayMs);
 
@@ -394,7 +408,7 @@ public class WorkerStreamRelay {
             publishMessage(sessionId, MessageType.STATE_SYNC,
                     Map.of("content", "Task stream reconnected", "subtype", "reconnected", "taskId", taskId));
 
-            log.info("SSE reconnection successful for task {} (attempt {}/{})", taskId, nextAttempt, MAX_RECONNECT_ATTEMPTS);
+            log.info("SSE reconnection successful for task {} (attempt {})", taskId, nextAttempt);
             return true;
 
         } catch (InterruptedException ie) {
@@ -402,8 +416,8 @@ public class WorkerStreamRelay {
             log.warn("SSE reconnection interrupted for task {}", taskId);
             return false;
         } catch (Exception e) {
-            log.warn("SSE reconnection failed for task {} (attempt {}/{}): {}",
-                    taskId, currentAttempt + 1, MAX_RECONNECT_ATTEMPTS, e.getMessage());
+            log.warn("SSE reconnection failed for task {} (attempt {}): {}",
+                    taskId, currentAttempt + 1, e.getMessage());
             return false;
         } finally {
             guard.set(false);
