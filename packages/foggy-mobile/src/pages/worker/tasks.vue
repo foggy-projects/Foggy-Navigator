@@ -1,19 +1,17 @@
 <template>
   <view class="tasks-page">
-    <!-- 顶部信息 -->
-    <view class="task-header-bar">
-      <text class="project-name">{{ projectName }}</text>
-    </view>
-
     <!-- 创建任务输入栏 -->
     <view class="task-input-bar">
+      <view class="project-name-row">
+        <text class="project-name">{{ projectName }}</text>
+      </view>
       <view class="input-row">
         <view
           v-if="historyItems.length > 0"
           class="history-btn"
           @tap="showHistory"
         >
-          <text class="history-icon">⏱</text>
+          <text class="history-icon">&#x23F1;</text>
         </view>
         <textarea
           v-model="promptInput"
@@ -35,15 +33,15 @@
       <view class="option-row">
         <view v-if="platformModels.length > 0" class="option-tag option-tag--api" @tap="showApiModelPicker">
           <text class="option-label">{{ selectedModelName ? 'API: ' + selectedModelName : 'API 凭证' }}</text>
-          <text v-if="selectedModelConfigId" class="option-clear" @tap.stop="selectedModelConfigId = ''">✕</text>
+          <text v-if="selectedModelConfigId" class="option-clear" @tap.stop="selectedModelConfigId = ''">&#x2715;</text>
         </view>
         <view class="option-tag" @tap="showModelPicker">
           <text class="option-label">{{ selectedModel || '默认模型' }}</text>
-          <text v-if="selectedModel" class="option-clear" @tap.stop="selectedModel = ''">✕</text>
+          <text v-if="selectedModel" class="option-clear" @tap.stop="selectedModel = ''">&#x2715;</text>
         </view>
         <view class="option-tag" @tap="showTurnsPicker">
           <text class="option-label">{{ selectedTurns ? selectedTurns + ' 轮' : '默认轮次' }}</text>
-          <text v-if="selectedTurns" class="option-clear" @tap.stop="selectedTurns = 0">✕</text>
+          <text v-if="selectedTurns" class="option-clear" @tap.stop="selectedTurns = 0">&#x2715;</text>
         </view>
         <view class="option-tag" @tap="showPermissionPicker">
           <text class="option-label">{{ PERMISSION_LABELS[selectedPermission] }}</text>
@@ -71,19 +69,14 @@
       </view>
     </view>
 
-    <!-- 任务列表 -->
-    <scroll-view scroll-y class="task-list"
-      :refresher-enabled="true"
-      :refresher-triggered="refreshing"
-      @refresherrefresh="onRefresh"
-      @scrolltolower="loadMore"
-    >
-      <view v-if="loading && filteredTasks.length === 0" class="loading-wrap">
+    <!-- 任务列表 (使用原生页面滚动) -->
+    <view class="task-list">
+      <view v-if="loading && displayTasks.length === 0" class="loading-wrap">
         <text class="loading-text">加载中...</text>
       </view>
-      <template v-else-if="filteredTasks.length > 0">
+      <template v-else-if="displayTasks.length > 0">
         <TaskCard
-          v-for="task in filteredTasks"
+          v-for="task in displayTasks"
           :key="task.taskId"
           :task="task"
           @tap="openTask(task)"
@@ -94,18 +87,18 @@
         </view>
       </template>
       <EmptyState
-        v-else
-        icon="📋"
+        v-else-if="!loading"
+        icon="&#x1F4CB;"
         title="暂无任务"
         :description="stateFilter === 'ALL' ? '输入任务描述并点击运行' : '当前筛选条件下暂无任务'"
       />
-    </scroll-view>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { onLoad, onShow } from '@dcloudio/uni-app'
+import { onLoad, onShow, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app'
 import * as workerApi from '@/api/claudeWorker'
 import { listModelConfigs, listAgentModelOverrides } from '@/api/platform'
 import type { ClaudeTask, LlmModelConfig } from '@/api/types'
@@ -119,7 +112,6 @@ const projectName = ref('')
 const promptInput = ref('')
 const creating = ref(false)
 const loading = ref(false)
-const refreshing = ref(false)
 const tasks = ref<ClaudeTask[]>([])
 const page = ref(0)
 const totalPages = ref(0)
@@ -145,21 +137,25 @@ const selectedModel = ref('')
 const selectedTurns = ref(0)
 const selectedPermission = ref<string>('bypassPermissions')
 
-// Filter state
+// Filter state — "活跃" (ACTIVE) is default: shows 待回复 + 处理中
 const STATE_FILTERS = [
-  { label: '全部', value: 'ALL', cls: '' },
+  { label: '活跃', value: 'ACTIVE', cls: 'filter-tag--active' },
   { label: '待回复', value: 'AWAITING_REPLY', cls: 'filter-tag--awaiting' },
   { label: '处理中', value: 'PROCESSING', cls: 'filter-tag--processing' },
   { label: '已搁置', value: 'ON_HOLD', cls: '' },
   { label: '已归档', value: 'ARCHIVED', cls: '' },
+  { label: '全部', value: 'ALL', cls: '' },
 ]
 const SOURCE_FILTERS = [
   { label: '平台', value: 'PLATFORM' },
   { label: '同步', value: 'SYNCED' },
   { label: '全部来源', value: 'ALL' },
 ]
-const stateFilter = ref('ALL')
+const stateFilter = ref('ACTIVE')
 const sourceFilter = ref('PLATFORM')
+
+// Active status set for client-side filtering
+const ACTIVE_STATUSES = new Set(['AWAITING_PERMISSION', 'PENDING', 'RUNNING'])
 
 // Draft & history
 const memoryScope = computed(() => directoryId.value ? 'task-' + directoryId.value : '')
@@ -168,17 +164,30 @@ const { saveDraft, loadDraft, clearDraft, addToHistory, recentItems } = useInput
 const historyItems = computed(() => recentItems(10))
 const hasMore = computed(() => page.value + 1 < totalPages.value)
 
-// Source filter is client-side
-const filteredTasks = computed(() => {
-  if (sourceFilter.value === 'ALL') return tasks.value
-  return tasks.value.filter(t => {
-    const isPlatform = t.source === 'PLATFORM' || t.source == null
-    return sourceFilter.value === 'PLATFORM' ? isPlatform : !isPlatform
-  })
+// Combined filter: server-side state + client-side source + client-side active
+const displayTasks = computed(() => {
+  let list = tasks.value
+
+  // Client-side "ACTIVE" filter: only show active tasks (待回复 + 处理中)
+  if (stateFilter.value === 'ACTIVE') {
+    list = list.filter(t => ACTIVE_STATUSES.has(t.status))
+  }
+
+  // Client-side source filter
+  if (sourceFilter.value !== 'ALL') {
+    list = list.filter(t => {
+      const isPlatform = t.source === 'PLATFORM' || t.source == null
+      return sourceFilter.value === 'PLATFORM' ? isPlatform : !isPlatform
+    })
+  }
+
+  return list
 })
 
 function currentStateParam(): string | undefined {
-  return stateFilter.value === 'ALL' ? undefined : stateFilter.value
+  // ACTIVE and ALL: fetch all from server, filter client-side
+  if (stateFilter.value === 'ALL' || stateFilter.value === 'ACTIVE') return undefined
+  return stateFilter.value
 }
 
 function setStateFilter(val: string) {
@@ -212,11 +221,16 @@ onShow(() => {
   }
 })
 
-async function onRefresh() {
-  refreshing.value = true
+// 原生下拉刷新
+onPullDownRefresh(async () => {
   await loadTasks()
-  refreshing.value = false
-}
+  uni.stopPullDownRefresh()
+})
+
+// 原生触底加载更多
+onReachBottom(() => {
+  loadMore()
+})
 
 async function loadPlatformModels() {
   try {
@@ -385,25 +399,21 @@ function showPermissionPicker() {
 
 <style scoped>
 .tasks-page {
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - var(--window-top, 0px));
-  background: #f5f5f5;
+  background-color: #f5f5f5;
+  min-height: 100vh;
 }
-.task-header-bar {
-  padding: 20rpx 32rpx;
-  background: #ffffff;
+.task-input-bar {
+  padding: 20rpx 24rpx;
+  background-color: #ffffff;
   border-bottom: 2rpx solid #f0f0f0;
+}
+.project-name-row {
+  margin-bottom: 16rpx;
 }
 .project-name {
   font-size: 30rpx;
   color: #303133;
   font-weight: 600;
-}
-.task-input-bar {
-  padding: 20rpx 24rpx;
-  background: #ffffff;
-  border-bottom: 2rpx solid #f0f0f0;
 }
 .input-row {
   display: flex;
@@ -468,7 +478,7 @@ function showPermissionPicker() {
   margin-bottom: 8rpx;
 }
 .option-tag--api {
-  background: #e8f5e9;
+  background-color: #e8f5e9;
 }
 .option-tag--api .option-label {
   color: #2e7d32;
@@ -512,6 +522,10 @@ function showPermissionPicker() {
   background-color: #ecf0ff;
   font-weight: 600;
 }
+.filter-tag--active.active {
+  color: #67c23a;
+  background-color: #f0f9eb;
+}
 .filter-tag--awaiting.active {
   color: #e6a23c;
   background-color: #fdf6ec;
@@ -520,8 +534,8 @@ function showPermissionPicker() {
   color: #409eff;
   background-color: #ecf5ff;
 }
+/* 任务列表 */
 .task-list {
-  flex: 1;
   padding: 20rpx 24rpx;
 }
 .loading-wrap {

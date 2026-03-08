@@ -4,7 +4,7 @@
       <span class="sender-label">{{ senderLabel }}</span>
       <span class="timestamp">{{ formattedTime }}</span>
     </div>
-    <div class="bubble-content markdown-body" v-html="renderedContent"></div>
+    <div ref="contentRef" class="bubble-content markdown-body" v-html="renderedContent"></div>
     <div class="bubble-actions">
       <span class="action-btn" title="复制" @click.stop="handleCopy">
         {{ copied ? '&#10003; 已复制' : '&#128203; 复制' }}
@@ -20,7 +20,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -34,6 +34,7 @@ import xml from 'highlight.js/lib/languages/xml'
 import css from 'highlight.js/lib/languages/css'
 import 'highlight.js/styles/github-dark.css'
 import type { ChatMessage } from '../types/chat'
+import { copyToClipboard } from '../utils/clipboard'
 
 // Register commonly used languages
 hljs.registerLanguage('javascript', javascript)
@@ -52,6 +53,16 @@ hljs.registerLanguage('html', xml)
 hljs.registerLanguage('xml', xml)
 hljs.registerLanguage('css', css)
 
+// HTML-escape for storing raw code in data attribute
+function escapeAttr(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function wrapCodeBlock(highlightedHtml: string, rawCode: string, lang: string): string {
+  const langLabel = lang ? `<span class="code-lang-label">${lang}</span>` : ''
+  return `<div class="code-block-wrapper">${langLabel}<button class="code-copy-btn" data-code="${escapeAttr(rawCode)}">复制</button><pre class="hljs"><code>${highlightedHtml}</code></pre></div>`
+}
+
 const md = new MarkdownIt({
   html: false,
   linkify: true,
@@ -59,14 +70,14 @@ const md = new MarkdownIt({
   highlight: (str: string, lang: string): string => {
     if (lang && hljs.getLanguage(lang)) {
       try {
-        return `<pre class="hljs"><code>${hljs.highlight(str, { language: lang }).value}</code></pre>`
+        return wrapCodeBlock(hljs.highlight(str, { language: lang }).value, str, lang)
       } catch {
         // ignore
       }
     }
     // Auto-detect if no language specified
     try {
-      return `<pre class="hljs"><code>${hljs.highlightAuto(str).value}</code></pre>`
+      return wrapCodeBlock(hljs.highlightAuto(str).value, str, '')
     } catch {
       return ''
     }
@@ -114,38 +125,41 @@ const renderedContent = computed(() => {
 const copied = ref(false)
 async function handleCopy() {
   const text = props.message.content || ''
-
-  try {
-    // 优先尝试使用 Clipboard API
-    await navigator.clipboard.writeText(text)
+  const ok = await copyToClipboard(text)
+  if (ok) {
     copied.value = true
     setTimeout(() => { copied.value = false }, 1500)
-  } catch (err) {
-    // 如果 Clipboard API 失败，使用传统方法作为后备
-    const textArea = document.createElement('textarea')
-    textArea.value = text
-    textArea.style.position = 'fixed'
-    textArea.style.left = '-999999px'
-    textArea.style.top = '-999999px'
-    document.body.appendChild(textArea)
-    textArea.focus()
-    textArea.select()
-
-    try {
-      const successful = document.execCommand('copy')
-      if (successful) {
-        copied.value = true
-        setTimeout(() => { copied.value = false }, 1500)
-      } else {
-        console.error('复制失败：document.execCommand 返回 false')
-      }
-    } catch (err) {
-      console.error('复制失败：', err)
-    } finally {
-      document.body.removeChild(textArea)
-    }
   }
 }
+
+// 代码块复制按钮 — 事件委托
+const contentRef = ref<HTMLElement | null>(null)
+
+function handleContentClick(e: Event) {
+  const target = e.target as HTMLElement
+  if (!target.classList.contains('code-copy-btn')) return
+
+  e.preventDefault()
+  e.stopPropagation()
+
+  const code = target.getAttribute('data-code')
+  if (!code) return
+
+  copyToClipboard(code).then((ok) => {
+    if (ok) {
+      target.textContent = '✓ 已复制'
+      setTimeout(() => { target.textContent = '复制' }, 1500)
+    }
+  })
+}
+
+onMounted(() => {
+  contentRef.value?.addEventListener('click', handleContentClick)
+})
+
+onBeforeUnmount(() => {
+  contentRef.value?.removeEventListener('click', handleContentClick)
+})
 </script>
 
 <style scoped>
@@ -239,6 +253,58 @@ async function handleCopy() {
   background: none;
   padding: 0;
   font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
+/* Code block wrapper with copy button */
+.bubble-content :deep(.code-block-wrapper) {
+  position: relative;
+  margin: 8px 0;
+}
+
+.bubble-content :deep(.code-block-wrapper pre),
+.bubble-content :deep(.code-block-wrapper pre.hljs) {
+  margin: 0;
+}
+
+.bubble-content :deep(.code-lang-label) {
+  position: absolute;
+  top: 6px;
+  left: 12px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  pointer-events: none;
+  z-index: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.bubble-content :deep(.code-copy-btn) {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 2px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  z-index: 2;
+  white-space: nowrap;
+}
+
+.bubble-content :deep(.code-block-wrapper:hover .code-copy-btn) {
+  opacity: 1;
+}
+
+.bubble-content :deep(.code-copy-btn:hover) {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
 }
 
 .bubble-content :deep(strong) {
