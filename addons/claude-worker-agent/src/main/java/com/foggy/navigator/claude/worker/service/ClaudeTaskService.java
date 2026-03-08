@@ -739,30 +739,46 @@ public class ClaudeTaskService {
      * 标记任务已中止
      * 保留 claudeSessionId 以便用户可以继续该会话，并通知 Worker 中止任务
      */
-    @Transactional
+    /**
+     * 中止任务 — 统一入口（Controller 和 A2aAgent 共用）。
+     *
+     * 执行顺序：
+     * 1. 获取 Worker 内部 task ID（精确映射，必须在 abortStream 之前）
+     * 2. 通知 Worker 中止 CLI 进程（SIGTERM）
+     * 3. 清理本地 SSE 流订阅
+     * 4. 更新 DB 状态 → ABORTED
+     */
     public void abortTask(String taskId) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
-            String prev = entity.getStatus();
-            entity.setStatus("ABORTED");
-            taskRepository.save(entity);
-            log.info("Task aborted: taskId={}", taskId);
-            publishStatusChange(entity, prev);
-            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
-        });
+        // 1. 获取 Worker 内部 task ID（优先使用 streamRelay 的精确映射）
+        String workerTaskId = streamRelay.getWorkerTaskId(taskId);
 
-        // 在事务外调用 Worker abortTask API（避免网络 IO 阻塞事务）
+        // 2. 通知 Worker 中止 CLI（在清理流之前，确保 Worker task 还在 registry）
         try {
             ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
             if (task != null) {
                 ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
                 ClaudeWorkerClient client = workerService.createClient(worker);
-                client.abortTask(taskId).block(Duration.ofSeconds(3));
-                log.info("Worker abort sent: taskId={}", taskId);
+                client.abortTask(workerTaskId).block(Duration.ofSeconds(5));
+                log.info("Worker abort sent: taskId={}, workerTaskId={}", taskId, workerTaskId);
             }
         } catch (Exception e) {
             log.warn("Failed to notify worker for abort task {}: {}", taskId, e.getMessage());
-            // Worker 可能已经不可达或任务已结束，不抛出异常
         }
+
+        // 3. 清理本地 SSE 流订阅（停止重连、dispose Flux、清除映射）
+        streamRelay.abortStream(taskId);
+
+        // 4. 更新 DB 状态 → ABORTED（单独事务，避免网络 IO 阻塞事务）
+        txTemplate.executeWithoutResult(status -> {
+            taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+                String prev = entity.getStatus();
+                entity.setStatus("ABORTED");
+                taskRepository.save(entity);
+                log.info("Task aborted: taskId={}", taskId);
+                publishStatusChange(entity, prev);
+                conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+            });
+        });
     }
 
     /**
