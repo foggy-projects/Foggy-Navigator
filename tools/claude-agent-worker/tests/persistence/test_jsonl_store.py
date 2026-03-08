@@ -296,3 +296,63 @@ class TestFailSafe:
         # Use a path inside tmp_path that definitely does not exist
         store = JsonlEventStore(tmp_path / "does_not_exist")
         assert store.load_events("no-such-task") == []
+
+
+# ---------------------------------------------------------------------------
+# Alias mapping (foggy_task_id → worker task_id)
+# ---------------------------------------------------------------------------
+
+class TestAliasMapping:
+    """register_alias() / resolve_alias() provide ID translation."""
+
+    def test_register_and_resolve(self, store: JsonlEventStore, tmp_path: Path):
+        store.register_alias("20260308-6b78", "6eef49a6-fa82-477b-9a71-cd2331e9b71a")
+
+        resolved = store.resolve_alias("20260308-6b78")
+        assert resolved == "6eef49a6-fa82-477b-9a71-cd2331e9b71a"
+
+        # Alias file should exist
+        alias_file = tmp_path / "aliases" / "20260308-6b78.alias"
+        assert alias_file.exists()
+
+    def test_resolve_unknown_returns_input(self, store: JsonlEventStore):
+        """resolve_alias() returns the input unchanged if no alias exists."""
+        resolved = store.resolve_alias("no-such-alias")
+        assert resolved == "no-such-alias"
+
+    def test_resolve_after_register_enables_persistence_lookup(
+        self, store: JsonlEventStore
+    ):
+        """End-to-end: register alias, append events under worker ID,
+        then query by foggy_task_id via alias resolution."""
+        worker_id = "6eef49a6-fa82-477b-9a71-cd2331e9b71a"
+        foggy_id = "20260308-6b78"
+
+        # Register alias and store events under worker ID
+        store.register_alias(foggy_id, worker_id)
+        store.append(worker_id, {"seq": 1, "type": "text", "content": "hello"})
+        store.append(worker_id, {"seq": 2, "type": "text", "content": "world"})
+        store.mark_closed(worker_id)
+
+        # Query by foggy_task_id — resolve alias first
+        resolved = store.resolve_alias(foggy_id)
+        assert resolved == worker_id
+        assert store.get_latest_seq(resolved) == 2
+        assert store.is_closed(resolved) is True
+        events = store.load_events(resolved, after_seq=0)
+        assert len(events) == 2
+
+    def test_register_alias_idempotent(self, store: JsonlEventStore):
+        """Re-registering the same alias overwrites cleanly."""
+        store.register_alias("my-alias", "task-v1")
+        store.register_alias("my-alias", "task-v2")
+
+        assert store.resolve_alias("my-alias") == "task-v2"
+
+    def test_multiple_aliases_independent(self, store: JsonlEventStore):
+        """Different aliases can point to different tasks."""
+        store.register_alias("alias-a", "task-1")
+        store.register_alias("alias-b", "task-2")
+
+        assert store.resolve_alias("alias-a") == "task-1"
+        assert store.resolve_alias("alias-b") == "task-2"

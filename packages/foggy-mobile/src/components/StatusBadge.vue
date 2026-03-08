@@ -40,13 +40,14 @@ const label = computed(() => {
 <style scoped>
 .status-badge {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 8rpx;
 }
 .status-dot {
   width: 16rpx;
   height: 16rpx;
   border-radius: 50%;
+  margin-right: 8rpx;
 }
 .status-label {
   font-size: 24rpx;

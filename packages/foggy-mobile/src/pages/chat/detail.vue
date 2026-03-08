@@ -1,5 +1,15 @@
 <template>
   <view class="chat-detail-page">
+    <!-- 连接状态横幅 -->
+    <view v-if="connectionStatus !== 'connected'" class="connection-banner" :class="connectionStatus">
+      <text class="connection-text">
+        {{ connectionStatus === 'connecting' ? '连接中...' : '连接断开' }}
+      </text>
+      <text v-if="connectionStatus === 'disconnected'" class="connection-retry" @tap="handleReconnect">
+        重试
+      </text>
+    </view>
+
     <!-- 消息列表 -->
     <view class="message-area">
       <MessageList
@@ -67,6 +77,7 @@ watch(chatInput, (val) => {
 const sortedMessages = computed(() => chatStore.sortedMessages)
 const isThinking = computed(() => chatStore.isThinking)
 const isConnected = computed(() => chatStore.connectionStatus === 'connected')
+const connectionStatus = computed(() => chatStore.connectionStatus)
 
 onLoad((options) => {
   sessionId.value = options?.id || ''
@@ -76,6 +87,8 @@ onLoad((options) => {
     // Restore draft
     const draft = loadDraft()
     if (draft) chatInput.value = draft
+    // 动态设置导航栏标题
+    uni.setNavigationBarTitle({ title: '对话' })
   }
 })
 
@@ -105,6 +118,14 @@ function onSent(content: string) {
 function sendGuideMessage(content: string) {
   handleSend(content)
   addToHistory(content)
+  clearDraft()
+  chatInput.value = ''
+}
+
+function handleReconnect() {
+  if (sessionId.value) {
+    connectToSession(sessionId.value)
+  }
 }
 </script>
 
@@ -146,5 +167,29 @@ function sendGuideMessage(content: string) {
 .guide-card-desc {
   font-size: 26rpx;
   color: #909399;
+}
+.connection-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16rpx;
+  padding: 12rpx 24rpx;
+  font-size: 24rpx;
+}
+.connection-banner.connecting {
+  background: #fdf6ec;
+  color: #e6a23c;
+}
+.connection-banner.disconnected {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+.connection-text {
+  font-size: 24rpx;
+}
+.connection-retry {
+  font-size: 24rpx;
+  color: #409eff;
+  text-decoration: underline;
 }
 </style>

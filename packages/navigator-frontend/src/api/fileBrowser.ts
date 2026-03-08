@@ -55,6 +55,7 @@ export interface FileSearchResult {
   relative_path: string
   size: number
   modified: string
+  type?: 'file' | 'directory'
 }
 
 export interface FileSearchResponse {
@@ -175,7 +176,7 @@ export async function getFileDiff(directoryId: string, file: string): Promise<Fi
 export async function searchFiles(
   directoryId: string,
   query: string,
-  maxResults = 50,
+  maxResults = 40,
 ): Promise<FileSearchResponse> {
   const rx = (await client.get('/file-browser/search', {
     params: { directoryId, query, maxResults },

@@ -37,6 +37,9 @@ class JsonlEventStore:
 
     # ---- path helpers ----
 
+    def _alias_file(self, alias_id: str) -> Path:
+        return self._base_dir / "aliases" / f"{alias_id}.alias"
+
     def _task_dir(self, task_id: str) -> Path:
         return self._base_dir / "events" / task_id
 
@@ -133,3 +136,25 @@ class JsonlEventStore:
                 logger.debug("Cleaned up event store for task %s", task_id)
             except OSError as exc:
                 logger.warning("Failed to cleanup task %s: %s", task_id, exc)
+
+    def register_alias(self, alias_id: str, task_id: str) -> None:
+        """Create a mapping from alias_id (e.g. foggy_task_id) to task_id."""
+        alias_file = self._alias_file(alias_id)
+        try:
+            alias_file.parent.mkdir(parents=True, exist_ok=True)
+            alias_file.write_text(task_id, encoding="utf-8")
+            logger.debug("Registered alias %s -> %s", alias_id, task_id)
+        except OSError as exc:
+            logger.warning("Failed to register alias %s -> %s: %s", alias_id, task_id, exc)
+
+    def resolve_alias(self, maybe_alias: str) -> str:
+        """If maybe_alias has an alias file, return the real task_id."""
+        alias_file = self._alias_file(maybe_alias)
+        if alias_file.exists():
+            try:
+                real_id = alias_file.read_text(encoding="utf-8").strip()
+                if real_id:
+                    return real_id
+            except OSError:
+                pass
+        return maybe_alias

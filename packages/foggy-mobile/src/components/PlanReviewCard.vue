@@ -2,7 +2,7 @@
   <view :class="['plan-review-card', statusClass]">
     <view class="card-header">
       <text class="card-icon">{{ statusIcon }}</text>
-      <text class="card-title">Plan Mode</text>
+      <text class="card-title">方案审查</text>
       <text :class="['status-badge', statusClass]">{{ statusLabel }}</text>
     </view>
     <view class="card-body">
@@ -78,9 +78,9 @@ const statusClass = computed(() => {
 
 const statusLabel = computed(() => {
   switch (props.message.permissionStatus) {
-    case 'approved': return 'Approved'
-    case 'denied': return 'Rejected'
-    default: return 'Awaiting review'
+    case 'approved': return '已批准'
+    case 'denied': return '已拒绝'
+    default: return '待审批'
   }
 })
 
@@ -135,7 +135,7 @@ function handleReject() {
 .plan-content-wrap {
   margin-top: 16rpx;
   max-height: 480rpx;
-  overflow: hidden;
+  overflow-y: auto;
   padding: 16rpx 20rpx;
   background: #fff;
   border: 2rpx solid #e8daef;

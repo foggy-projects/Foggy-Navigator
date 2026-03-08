@@ -6,7 +6,7 @@
     </view>
     <text class="task-prompt">{{ task.prompt }}</text>
     <view class="task-footer">
-      <text class="task-time">{{ formatTime(task.createdAt) }}</text>
+      <text class="task-time">{{ shortDateTime(task.createdAt) }}</text>
       <text v-if="task.costUsd != null" class="task-cost">${{ task.costUsd.toFixed(4) }}</text>
       <text v-if="task.durationMs != null" class="task-duration">{{ formatDuration(task.durationMs) }}</text>
     </view>
@@ -16,6 +16,7 @@
 <script setup lang="ts">
 import type { ClaudeTask } from '@/api/types'
 import StatusBadge from './StatusBadge.vue'
+import { shortDateTime, formatDuration } from '@/utils/time'
 
 defineProps<{
   task: ClaudeTask
@@ -25,18 +26,6 @@ defineEmits<{
   tap: []
 }>()
 
-function formatTime(dateStr: string): string {
-  const date = new Date(dateStr)
-  return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-function formatDuration(ms: number): string {
-  const s = Math.round(ms / 1000)
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  const rem = s % 60
-  return `${m}m${rem}s`
-}
 </script>
 
 <style scoped>

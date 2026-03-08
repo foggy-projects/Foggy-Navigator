@@ -223,6 +223,7 @@
       :directory-id="directoryId"
       @close="searchDialogVisible = false"
       @select-file="handleSearchSelectFile"
+      @select-directory="handleSearchSelectDirectory"
       @select-content="handleSearchSelectContent"
     />
   </div>
@@ -596,6 +597,11 @@ function handleSearchSelectFile(relativePath: string) {
   if (rootDir) {
     loadFile(rootDir + '/' + relativePath)
   }
+}
+
+function handleSearchSelectDirectory(relativePath: string) {
+  if (!directoryId.value) return
+  loadDirectory(relativePath)
 }
 
 async function handleSearchSelectContent(file: string, lineNumber: number) {

@@ -54,3 +54,19 @@ class EventStore(Protocol):
     def cleanup(self, task_id: str) -> None:
         """Remove all persisted data for the given task."""
         ...
+
+    def register_alias(self, alias_id: str, task_id: str) -> None:
+        """Create a mapping from alias_id (e.g. foggy_task_id) to task_id.
+
+        Used so that external systems querying by foggy_task_id can be
+        resolved to the Worker-internal task_id even after the in-memory
+        registry has been cleaned up.
+        """
+        ...
+
+    def resolve_alias(self, maybe_alias: str) -> str:
+        """If maybe_alias has a registered alias mapping, return the real task_id.
+
+        Returns the input unchanged if no alias is found.
+        """
+        ...

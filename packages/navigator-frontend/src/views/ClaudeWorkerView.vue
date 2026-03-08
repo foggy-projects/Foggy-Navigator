@@ -4190,6 +4190,11 @@ async function abortPane(paneId: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane?.task.value) return
   try {
+    await ElMessageBox.confirm('确认中止该任务？', '提示', {
+      type: 'warning',
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+    })
     const taskId = pane.task.value.taskId
     await workerState.abortTask(taskId)
     pane.task.value.status = 'ABORTED'
@@ -4198,8 +4203,8 @@ async function abortPane(paneId: string) {
     workerState.loadAwaitingReplyTasks()
     if (activeWorkspace.value) triggerRef(activeWorkspace.value.panes)
     ElMessage.info('任务已中止')
-  } catch {
-    ElMessage.error('中止失败')
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('中止失败')
   }
 }
 

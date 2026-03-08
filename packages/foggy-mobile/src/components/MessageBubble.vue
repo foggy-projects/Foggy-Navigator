@@ -110,7 +110,8 @@ const taskStatusClass = computed(() =>
   border-radius: 20rpx;
   font-size: 28rpx;
   line-height: 1.6;
-  word-break: break-all;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .user-bubble {
   background: #667eea;

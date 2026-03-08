@@ -1,9 +1,5 @@
 <template>
   <view class="worker-page">
-    <view class="page-header">
-      <text class="header-title">Workers</text>
-    </view>
-
     <scroll-view
       scroll-y
       class="worker-list"
@@ -206,16 +202,6 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
   flex-direction: column;
   height: calc(100vh - var(--window-top, 0px));
   background: #f5f5f5;
-}
-.page-header {
-  padding: 24rpx 32rpx;
-  background: #ffffff;
-  border-bottom: 2rpx solid #f0f0f0;
-}
-.header-title {
-  font-size: 36rpx;
-  font-weight: 600;
-  color: #303133;
 }
 .worker-list {
   flex: 1;

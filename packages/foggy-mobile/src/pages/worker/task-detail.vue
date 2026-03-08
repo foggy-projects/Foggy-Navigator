@@ -12,6 +12,13 @@
       </text>
     </view>
 
+    <!-- 连接状态横幅 -->
+    <view v-if="connectionBannerStatus !== 'connected'" class="connection-banner" :class="connectionBannerStatus">
+      <text class="connection-text">
+        {{ connectionBannerStatus === 'connecting' ? '连接中...' : '连接断开' }}
+      </text>
+    </view>
+
     <!-- 消息流 -->
     <view class="message-area">
       <MessageList
@@ -56,6 +63,7 @@ import * as workerApi from '@/api/claudeWorker'
 import StatusBadge from '@/components/StatusBadge.vue'
 import MessageList from '@/components/MessageList.vue'
 import ChatInput from '@/components/ChatInput.vue'
+import { formatDuration } from '@/utils/time'
 
 const taskId = ref('')
 const sessionId = ref('')
@@ -87,6 +95,8 @@ const isRunning = computed(() => {
   const status = taskStream.task.value?.status
   return status === 'RUNNING' || status === 'PENDING' || status === 'AWAITING_PERMISSION'
 })
+
+const connectionBannerStatus = computed(() => taskStream.chatState.connectionStatus.value)
 
 const canResume = computed(() => {
   const status = taskStream.task.value?.status
@@ -216,13 +226,6 @@ function onSent(content: string) {
   resumeInput.value = ''
 }
 
-function formatDuration(ms: number): string {
-  const s = Math.round(ms / 1000)
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  const rem = s % 60
-  return `${m}m${rem}s`
-}
 </script>
 
 <style scoped>
@@ -280,5 +283,24 @@ function formatDuration(ms: number): string {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.connection-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16rpx;
+  padding: 12rpx 24rpx;
+  font-size: 24rpx;
+}
+.connection-banner.connecting {
+  background: #fdf6ec;
+  color: #e6a23c;
+}
+.connection-banner.disconnected {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+.connection-text {
+  font-size: 24rpx;
 }
 </style>

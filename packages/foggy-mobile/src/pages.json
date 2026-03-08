@@ -1,6 +1,12 @@
 {
   "pages": [
     {
+      "path": "pages/worker/index",
+      "style": {
+        "navigationBarTitleText": "Workers"
+      }
+    },
+    {
       "path": "pages/chat/index",
       "style": {
         "navigationBarTitleText": "会话"
@@ -11,12 +17,6 @@
       "style": {
         "navigationBarTitleText": "对话",
         "enablePullDownRefresh": false
-      }
-    },
-    {
-      "path": "pages/worker/index",
-      "style": {
-        "navigationBarTitleText": "Workers"
       }
     },
     {
@@ -59,16 +59,16 @@
     "backgroundColor": "#ffffff",
     "list": [
       {
-        "pagePath": "pages/chat/index",
-        "text": "会话",
-        "iconPath": "static/tab-chat.png",
-        "selectedIconPath": "static/tab-chat-active.png"
-      },
-      {
         "pagePath": "pages/worker/index",
         "text": "Workers",
         "iconPath": "static/tab-worker.png",
         "selectedIconPath": "static/tab-worker-active.png"
+      },
+      {
+        "pagePath": "pages/chat/index",
+        "text": "会话",
+        "iconPath": "static/tab-chat.png",
+        "selectedIconPath": "static/tab-chat-active.png"
       },
       {
         "pagePath": "pages/settings/index",
