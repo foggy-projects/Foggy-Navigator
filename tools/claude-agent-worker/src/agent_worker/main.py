@@ -18,6 +18,17 @@ from .ssh.session_manager import start_cleanup_task, stop_cleanup_and_close_all
 
 import sys
 
+# -- Windows: prevent CTRL_C_EVENT from child processes killing the worker --
+# The Claude Agent SDK spawns claude.exe without CREATE_NEW_PROCESS_GROUP,
+# so git network operations (push/pull) that crash can propagate CTRL_C
+# to the entire process group, killing the worker.  SetConsoleCtrlHandler
+# with (None, True) ignores CTRL_C_EVENT while still allowing CTRL_CLOSE,
+# CTRL_LOGOFF, and CTRL_SHUTDOWN events for graceful shutdown.
+# The worker is stopped via taskkill (stop.ps1), not Ctrl+C.
+if sys.platform == "win32":
+    import ctypes
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(None, True)
+
 # -- Logging ----------------------------------------------------------------
 # __file__ = src/agent_worker/main.py → 3 parents = worker root (claude-agent-worker/)
 _LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
