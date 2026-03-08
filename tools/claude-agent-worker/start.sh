@@ -50,24 +50,33 @@ fi
 PYTHON_VERSION=$($PYTHON_CMD --version 2>&1)
 echo -e "${CYAN}System Python: $PYTHON_VERSION${NC}"
 
-# Check venv exists, create if not
+# Check venv exists and is healthy, create/recreate if needed
+NEED_CREATE_VENV=false
 if [ ! -f "$VenvDir/bin/python" ]; then
+    NEED_CREATE_VENV=true
+elif ! "$VenvDir/bin/python" -c "import pip" &>/dev/null; then
+    echo -e "${YELLOW}venv 已损坏（pip 不可用），重新创建...${NC}"
+    rm -rf "$VenvDir"
+    NEED_CREATE_VENV=true
+fi
+
+if [ "$NEED_CREATE_VENV" = true ]; then
     echo -e "${YELLOW}创建 venv 环境 ($VenvDir)...${NC}"
     $PYTHON_CMD -m venv "$VenvDir"
     if [ $? -ne 0 ]; then
         echo -e "${RED}创建 venv 失败${NC}"
         exit 1
     fi
+    echo -e "${GREEN}venv 创建成功${NC}"
 fi
 
 PYTHON="$VenvDir/bin/python"
-PIP="$VenvDir/bin/pip"
 
 # Install dependencies if needed
 if ! "$PYTHON" -m uvicorn --version &>/dev/null; then
     echo -e "${YELLOW}安装依赖...${NC}"
-    "$PIP" install --upgrade pip
-    "$PIP" install -e "$WorkerDir"
+    "$PYTHON" -m pip install --upgrade pip
+    "$PYTHON" -m pip install -e "$WorkerDir"
     if [ $? -ne 0 ]; then
         echo -e "${RED}依赖安装失败${NC}"
         exit 1
