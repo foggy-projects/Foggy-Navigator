@@ -160,8 +160,8 @@ async function handleResume(prompt: string) {
     taskStream.resumeInPlace(newTask)
     taskId.value = newTask.taskId
   } catch (e) {
+    // 不再显示 toast — client.ts 拦截器已自动展示后端错误信息
     console.error('Failed to resume task:', e)
-    uni.showToast({ title: '续对失败', icon: 'error' })
   }
 }
 
