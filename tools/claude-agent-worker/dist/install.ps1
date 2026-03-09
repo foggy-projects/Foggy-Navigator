@@ -134,6 +134,22 @@ elseif (-not (Test-Path $EnvPath)) {
     Write-Host "  -> Please edit: $EnvPath" -ForegroundColor Yellow
 }
 
+# --- Write CLAUDE_WORKER_URL to .env if provided --------------------------
+if ($env:CLAUDE_WORKER_URL) {
+    $envContent = if (Test-Path $EnvPath) { Get-Content $EnvPath -Raw } else { "" }
+    if ($envContent -match "(?m)^CLAUDE_WORKER_URL=") {
+        # Update existing value
+        $envContent = $envContent -replace "(?m)^CLAUDE_WORKER_URL=.*", "CLAUDE_WORKER_URL=$($env:CLAUDE_WORKER_URL)"
+        $envContent | Set-Content $EnvPath -NoNewline
+    }
+    else {
+        # Append
+        Add-Content $EnvPath "`n# Auto-upgrade URL (set by remote installer)"
+        Add-Content $EnvPath "CLAUDE_WORKER_URL=$($env:CLAUDE_WORKER_URL)"
+    }
+    Write-Host "Saved CLAUDE_WORKER_URL to .env" -ForegroundColor Green
+}
+
 # --- Clean __pycache__ and .egg-info --------------------------------------
 Get-ChildItem -Path (Join-Path $InstallDir "src") -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force 2>$null

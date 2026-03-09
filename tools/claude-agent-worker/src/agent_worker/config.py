@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     anthropic_auth_token: str = ""
     anthropic_base_url: str = ""
 
+    # Company Skill Marketplace configuration
+    marketplace_enabled: bool = True
+    marketplace_url: str = "http://gitlab.foggysource.com/foggy-tools/company-skill-marketplace.git"
+
     model_config = SettingsConfigDict(env_prefix="AGENT_WORKER_", env_file=".env", env_file_encoding="utf-8")
 
 

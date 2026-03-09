@@ -72,7 +72,6 @@ cmd_logs() {
 }
 
 cmd_upgrade() {
-    GITHUB_REPO="${CLAUDE_WORKER_REPO:-}"
     CURRENT_VERSION="$VERSION"
 
     echo -e "${CYAN}Claude Agent Worker Upgrade${NC}"
@@ -84,19 +83,89 @@ cmd_upgrade() {
         return
     fi
 
-    # Try GitHub Releases API (requires CLAUDE_WORKER_REPO to be set)
-    if [ -z "$GITHUB_REPO" ]; then
-        echo -e "${YELLOW}Usage:${NC}"
-        echo -e "  claude-worker upgrade /path/to/claude-worker-X.Y.Z.tar.gz"
-        echo ""
-        echo -e "${YELLOW}To enable auto-upgrade from GitHub Releases, set:${NC}"
-        echo -e "  export CLAUDE_WORKER_REPO=your-org/your-repo"
+    # Load CLAUDE_WORKER_URL from .env if not already set
+    if [ -z "$CLAUDE_WORKER_URL" ] && [ -f "$INSTALL_DIR/.env" ]; then
+        CLAUDE_WORKER_URL=$(grep "^CLAUDE_WORKER_URL=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2)
+    fi
+
+    # --- Priority 1: OBS / custom URL (CLAUDE_WORKER_URL) ---
+    if [ -n "$CLAUDE_WORKER_URL" ]; then
+        _upgrade_from_obs "$CLAUDE_WORKER_URL"
+        return
+    fi
+
+    # --- Priority 2: GitHub Releases (CLAUDE_WORKER_REPO) ---
+    GITHUB_REPO="${CLAUDE_WORKER_REPO:-}"
+    if [ -n "$GITHUB_REPO" ]; then
+        _upgrade_from_github "$GITHUB_REPO"
+        return
+    fi
+
+    # --- No source configured ---
+    echo -e "${YELLOW}Usage:${NC}"
+    echo -e "  claude-worker upgrade /path/to/claude-worker-X.Y.Z.tar.gz"
+    echo ""
+    echo -e "${YELLOW}To enable auto-upgrade, set one of:${NC}"
+    echo -e "  CLAUDE_WORKER_URL   OBS/HTTP base URL (in .env or environment)"
+    echo -e "  CLAUDE_WORKER_REPO  GitHub repo (e.g. your-org/repo)"
+    return 1
+}
+
+_upgrade_from_obs() {
+    local BASE_URL="$1"
+    echo -e "${CYAN}Checking latest version from $BASE_URL ...${NC}"
+
+    LATEST_JSON=$(curl -s --max-time 15 "$BASE_URL/latest.json" 2>/dev/null || echo "")
+    if [ -z "$LATEST_JSON" ]; then
+        echo -e "${RED}Could not fetch $BASE_URL/latest.json${NC}"
         return 1
     fi
 
+    LATEST_VERSION=$(echo "$LATEST_JSON" | grep '"version"' | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+    if [ -z "$LATEST_VERSION" ]; then
+        echo -e "${RED}Could not parse version from latest.json${NC}"
+        return 1
+    fi
+
+    if [ "$LATEST_VERSION" = "$CURRENT_VERSION" ]; then
+        echo -e "${GREEN}Already up to date (v${CURRENT_VERSION}).${NC}"
+        return 0
+    fi
+
+    echo -e "${CYAN}New version available: $CURRENT_VERSION -> $LATEST_VERSION${NC}"
+
+    # Determine OS
+    case "$(uname -s)" in
+        Linux*)  OS_TAG="linux";;
+        Darwin*) OS_TAG="macos";;
+        *)       OS_TAG="linux";;
+    esac
+
+    # Extract file path from latest.json
+    FILE_PATH=$(echo "$LATEST_JSON" | grep "\"$OS_TAG\"" | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+    if [ -z "$FILE_PATH" ]; then
+        echo -e "${RED}No $OS_TAG release found in latest.json${NC}"
+        return 1
+    fi
+
+    DOWNLOAD_URL="$BASE_URL/$FILE_PATH"
+    echo -e "${CYAN}Downloading: $DOWNLOAD_URL${NC}"
+
+    TMPDIR=$(mktemp -d)
+    local ARCHIVE_FILE="$TMPDIR/$(basename "$FILE_PATH")"
+    curl -L --max-time 120 -o "$ARCHIVE_FILE" "$DOWNLOAD_URL"
+
+    # Pass through CLAUDE_WORKER_URL so install.sh can preserve it
+    export CLAUDE_WORKER_URL="$BASE_URL"
+
+    _upgrade_from_archive "$ARCHIVE_FILE"
+    rm -rf "$TMPDIR"
+}
+
+_upgrade_from_github() {
+    local GITHUB_REPO="$1"
     echo -e "${CYAN}Checking GitHub Releases ($GITHUB_REPO)...${NC}"
 
-    # Support private repos with GITHUB_TOKEN
     AUTH_HEADER=""
     if [ -n "$GITHUB_TOKEN" ]; then
         AUTH_HEADER="Authorization: token $GITHUB_TOKEN"
@@ -122,21 +191,18 @@ cmd_upgrade() {
 
     echo -e "${CYAN}New version available: $CURRENT_VERSION -> $LATEST_VERSION${NC}"
 
-    # Determine OS
     case "$(uname -s)" in
         Linux*)  OS_TAG="linux";;
         Darwin*) OS_TAG="macos";;
         *)       OS_TAG="linux";;
     esac
 
-    # Find download URL for this OS
     DOWNLOAD_URL=$(echo "$LATEST_JSON" | grep "browser_download_url.*${OS_TAG}" | head -1 | sed 's/.*"\(https:[^"]*\)".*/\1/')
     if [ -z "$DOWNLOAD_URL" ]; then
         echo -e "${RED}No release artifact found for $OS_TAG${NC}"
         return 1
     fi
 
-    # Download and install
     TMPDIR=$(mktemp -d)
     echo -e "${CYAN}Downloading...${NC}"
     curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} -o "$TMPDIR/release.tar.gz" "$DOWNLOAD_URL"
@@ -188,12 +254,13 @@ cmd_help() {
     echo "  status             Show worker status and health"
     echo "  version            Show installed version"
     echo "  logs               Tail worker log output"
-    echo "  upgrade [archive]  Upgrade from local .tar.gz/.zip or GitHub Release"
+    echo "  upgrade [archive]  Upgrade from OBS/GitHub or local .tar.gz/.zip"
     echo "  help               Show this help message"
     echo ""
     echo "Environment:"
     echo "  CLAUDE_WORKER_HOME    Install directory (default: ~/.claude-worker)"
-    echo "  CLAUDE_WORKER_REPO    GitHub repo for auto-upgrade (e.g. your-org/repo)"
+    echo "  CLAUDE_WORKER_URL     OBS/HTTP base URL for auto-upgrade (preferred)"
+    echo "  CLAUDE_WORKER_REPO    GitHub repo for auto-upgrade (fallback)"
     echo "  GITHUB_TOKEN          Token for private GitHub repos"
     echo ""
     echo "Config: $INSTALL_DIR/.env"

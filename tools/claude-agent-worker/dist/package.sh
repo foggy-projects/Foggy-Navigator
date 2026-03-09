@@ -8,6 +8,7 @@
 #   bash dist/package.sh macos        # Force macOS build
 #   bash dist/package.sh windows      # Force Windows build (.zip)
 #   bash dist/package.sh all          # Build for all platforms
+#   bash dist/package.sh all --upload # Build all + upload to OBS
 #
 # Output: dist/output/claude-worker-{version}-{os}.tar.gz (or .zip)
 
@@ -15,6 +16,18 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# --- Parse --upload flag --------------------------------------------------
+DO_UPLOAD=false
+ARGS=()
+for arg in "$@"; do
+    if [ "$arg" = "--upload" ]; then
+        DO_UPLOAD=true
+    else
+        ARGS+=("$arg")
+    fi
+done
+set -- "${ARGS[@]}"
 
 # --- Read version from __init__.py (single source of truth) ---------------
 VERSION=$(grep '__version__' "$WORKER_DIR/src/agent_worker/__init__.py" | sed 's/.*"\(.*\)".*/\1/')
@@ -122,3 +135,15 @@ esac
 echo ""
 echo "Done! Archives are in: $WORKER_DIR/dist/output/"
 ls -lh "$WORKER_DIR/dist/output/" 2>/dev/null || true
+
+# --- Upload to OBS if requested -------------------------------------------
+if [ "$DO_UPLOAD" = true ]; then
+    echo ""
+    UPLOAD_SCRIPT="$SCRIPT_DIR/upload.sh"
+    if [ -f "$UPLOAD_SCRIPT" ]; then
+        echo -e "${CYAN:-}Uploading to OBS...${NC:-}"
+        bash "$UPLOAD_SCRIPT" "$VERSION"
+    else
+        echo "WARNING: dist/upload.sh not found, skipping upload."
+    fi
+fi

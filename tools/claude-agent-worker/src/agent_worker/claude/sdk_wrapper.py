@@ -1128,6 +1128,9 @@ class SdkWrapper:
                     msg_model = getattr(message, "model", None)
                     if msg_model:
                         current_model = msg_model
+                        # Sync model to task_registry for process list enrichment
+                        if task_id in task_registry:
+                            task_registry[task_id]["model"] = msg_model
 
                     for block in message.content:
                         if _TextBlock is not None and isinstance(block, _TextBlock):
@@ -1173,6 +1176,13 @@ class SdkWrapper:
 
                 elif _ResultMessage is not None and isinstance(message, _ResultMessage):
                     current_session_id = getattr(message, "session_id", current_session_id)
+
+                    # Sync session_id back to task_registry so that process
+                    # listings can correlate this CLI process with its session
+                    # even for newly created sessions (where the initial
+                    # session_id was None).
+                    if current_session_id and task_id in task_registry:
+                        task_registry[task_id]["session_id"] = current_session_id
 
                     if current_session_id:
                         now_dt = datetime.now(timezone.utc)
@@ -1251,6 +1261,9 @@ class SdkWrapper:
                         init_session_id = data.get("session_id")
                         if init_session_id:
                             current_session_id = init_session_id
+                            # Sync to task_registry (same rationale as ResultMessage above)
+                            if task_id in task_registry:
+                                task_registry[task_id]["session_id"] = init_session_id
 
                     if subtype in ("hook_started", "hook_response"):
                         return events

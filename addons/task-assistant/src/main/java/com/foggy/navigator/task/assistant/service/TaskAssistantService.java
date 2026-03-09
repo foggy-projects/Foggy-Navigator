@@ -270,6 +270,19 @@ public class TaskAssistantService implements TaskAssistantFacade {
 
     @Override
     @Transactional
+    public void setAutoSummaryEnabled(String userId, boolean autoSummaryEnabled) {
+        TaskAssistantConfigEntity entity = configRepository.findByUserId(userId)
+                .orElseGet(() -> {
+                    TaskAssistantConfigEntity e = new TaskAssistantConfigEntity();
+                    e.setUserId(userId);
+                    return e;
+                });
+        entity.setAutoSummaryEnabled(autoSummaryEnabled);
+        configRepository.save(entity);
+    }
+
+    @Override
+    @Transactional
     public void delete(String userId) {
         configRepository.findByUserId(userId).ifPresent(configRepository::delete);
     }
@@ -592,6 +605,7 @@ public class TaskAssistantService implements TaskAssistantFacade {
                 .cwd(entity.getCwd())
                 .modelConfigId(entity.getModelConfigId())
                 .model(entity.getModel())
+                .autoSummaryEnabled(entity.getAutoSummaryEnabled())
                 .build();
     }
 }

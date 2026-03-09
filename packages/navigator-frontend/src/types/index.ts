@@ -448,6 +448,8 @@ export interface CliProcessInfo {
   claude_session_id?: string
   foggy_task_id?: string
   foggy_session_id?: string
+  /** LLM model used by this process (e.g. claude-sonnet-4-20250514) */
+  model?: string
   /** Reconciler 首次发现该进程为孤儿的时间（ISO-8601），null 表示非孤儿 */
   orphan_first_seen_at?: string
   /** 孤儿进程预计自动杀死时间（ISO-8601）= orphan_first_seen_at + 10 min */

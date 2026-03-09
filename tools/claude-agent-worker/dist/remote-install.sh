@@ -1,0 +1,86 @@
+#!/bin/bash
+# Claude Agent Worker — Remote Bootstrap Installer (Linux / macOS)
+# This script is hosted on OBS and run via: curl -sSL <url>/install.sh | bash
+#
+# It downloads the latest release archive and runs the bundled install.sh.
+# The RELEASE_BASE_URL is injected by upload.sh before uploading to OBS.
+
+set -e
+
+RELEASE_BASE_URL="__RELEASE_BASE_URL__"
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; NC='\033[0m'
+
+echo -e "${CYAN}=== Claude Agent Worker — Remote Installer ===${NC}"
+echo ""
+
+# --- Validate BASE_URL ---------------------------------------------------
+if [ "$RELEASE_BASE_URL" = "__RELEASE_BASE_URL__" ] || [ -z "$RELEASE_BASE_URL" ]; then
+    echo -e "${RED}ERROR: This script has not been configured with a release URL.${NC}"
+    echo -e "${YELLOW}The upload.sh script should inject RELEASE_BASE_URL before uploading.${NC}"
+    exit 1
+fi
+
+# --- Fetch latest.json ---------------------------------------------------
+echo -e "${CYAN}Fetching latest version info...${NC}"
+LATEST_JSON=$(curl -sS --fail "$RELEASE_BASE_URL/latest.json" 2>/dev/null || echo "")
+
+if [ -z "$LATEST_JSON" ]; then
+    echo -e "${RED}ERROR: Could not fetch $RELEASE_BASE_URL/latest.json${NC}"
+    exit 1
+fi
+
+# Parse version (simple grep, no jq dependency)
+VERSION=$(echo "$LATEST_JSON" | grep '"version"' | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+if [ -z "$VERSION" ]; then
+    echo -e "${RED}ERROR: Could not parse version from latest.json${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}Latest version: $VERSION${NC}"
+
+# --- Determine OS ---------------------------------------------------------
+case "$(uname -s)" in
+    Linux*)  OS_TAG="linux";;
+    Darwin*) OS_TAG="macos";;
+    *)       OS_TAG="linux";;
+esac
+
+# Parse download path for this OS
+FILE_PATH=$(echo "$LATEST_JSON" | grep "\"$OS_TAG\"" | head -1 | sed 's/.*"\([^"]*claude-worker[^"]*\)".*/\1/')
+if [ -z "$FILE_PATH" ]; then
+    echo -e "${RED}ERROR: No release found for $OS_TAG in latest.json${NC}"
+    exit 1
+fi
+
+DOWNLOAD_URL="$RELEASE_BASE_URL/$FILE_PATH"
+echo -e "${CYAN}Downloading: $DOWNLOAD_URL${NC}"
+
+# --- Download and extract -------------------------------------------------
+TMPDIR=$(mktemp -d)
+trap "rm -rf '$TMPDIR'" EXIT
+
+ARCHIVE_FILE="$TMPDIR/$(basename "$FILE_PATH")"
+curl -sSL --fail -o "$ARCHIVE_FILE" "$DOWNLOAD_URL"
+
+echo -e "${CYAN}Extracting...${NC}"
+if [[ "$ARCHIVE_FILE" == *.zip ]]; then
+    unzip -q "$ARCHIVE_FILE" -d "$TMPDIR"
+else
+    tar xzf "$ARCHIVE_FILE" -C "$TMPDIR"
+fi
+
+# --- Find and run install.sh from the extracted archive -------------------
+INSTALL_SCRIPT=$(find "$TMPDIR" -name "install.sh" -maxdepth 2 | head -1)
+if [ -z "$INSTALL_SCRIPT" ]; then
+    echo -e "${RED}ERROR: No install.sh found in archive${NC}"
+    exit 1
+fi
+
+chmod +x "$INSTALL_SCRIPT"
+
+# Pass through CLAUDE_WORKER_URL so install.sh can write it to .env
+export CLAUDE_WORKER_URL="$RELEASE_BASE_URL"
+
+bash "$INSTALL_SCRIPT"

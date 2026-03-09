@@ -49,6 +49,9 @@ public class TaskAssistantController {
         if (form.getEnabled() != null) {
             assistantFacade.setEnabled(userId, form.getEnabled());
         }
+        if (form.getAutoSummaryEnabled() != null) {
+            assistantFacade.setAutoSummaryEnabled(userId, form.getAutoSummaryEnabled());
+        }
         return RX.ok(assistantFacade.getConfig(userId).orElse(null));
     }
 
@@ -98,5 +101,7 @@ public class TaskAssistantController {
     @Data
     public static class UpdateForm {
         private Boolean enabled;
+        /** 是否启用自动摘要（归档/搁置会话自动生成 AI 摘要） */
+        private Boolean autoSummaryEnabled;
     }
 }

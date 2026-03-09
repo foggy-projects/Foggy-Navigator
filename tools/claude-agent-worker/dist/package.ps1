@@ -4,10 +4,13 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File dist\package.ps1              # Windows .zip
 #   powershell -ExecutionPolicy Bypass -File dist\package.ps1 -OS all     # All platforms
+#   powershell -ExecutionPolicy Bypass -File dist\package.ps1 -OS all -Upload  # Package + upload to OBS
 
 param(
     [ValidateSet("auto", "windows", "linux", "macos", "all")]
-    [string]$OS = "auto"
+    [string]$OS = "auto",
+
+    [switch]$Upload
 )
 
 $ErrorActionPreference = "Stop"
@@ -122,3 +125,16 @@ switch ($OS) {
 Write-Host ""
 Write-Host "Done! Archives are in: $WorkerDir\dist\output\" -ForegroundColor Green
 Get-ChildItem (Join-Path $WorkerDir "dist\output") | Format-Table Name, Length -AutoSize
+
+# --- Upload to OBS if requested -------------------------------------------
+if ($Upload) {
+    Write-Host ""
+    $uploadScript = Join-Path $ScriptDir "upload.ps1"
+    if (Test-Path $uploadScript) {
+        Write-Host "Uploading to OBS..." -ForegroundColor Cyan
+        & powershell -ExecutionPolicy Bypass -File $uploadScript $Version
+    }
+    else {
+        Write-Host "WARNING: dist\upload.ps1 not found, skipping upload." -ForegroundColor Yellow
+    }
+}

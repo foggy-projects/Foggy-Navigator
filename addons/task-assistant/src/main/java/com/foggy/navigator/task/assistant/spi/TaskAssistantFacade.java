@@ -53,6 +53,11 @@ public interface TaskAssistantFacade {
     void setEnabled(String userId, boolean enabled);
 
     /**
+     * 启用/禁用自动摘要（归档/搁置会话自动生成 AI 摘要）
+     */
+    void setAutoSummaryEnabled(String userId, boolean autoSummaryEnabled);
+
+    /**
      * 删除助手配置
      */
     void delete(String userId);

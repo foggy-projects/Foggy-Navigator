@@ -437,6 +437,13 @@
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
             <el-button
+              v-if="paneInteractionState(paneState) === 'ARCHIVED'"
+              size="small"
+              text
+              title="取消归档会话"
+              @click="handlePaneUnarchive(paneState.task.value?.sessionId)"
+            >取消归档</el-button>
+            <el-button
               v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
               text
@@ -504,14 +511,28 @@
               </el-table-column>
               <el-table-column label="会话" width="120">
                 <template #default="{ row }">
-                  <el-link
-                    v-if="row.foggy_session_id"
-                    type="primary"
-                    :underline="false"
-                    @click="navigateToProcessSession(row)"
+                  <el-tooltip
+                    v-if="row.foggy_session_id && row.claude_session_id"
+                    :content="row.claude_session_id"
+                    placement="top"
                   >
-                    {{ row.claude_session_id?.slice(0, 8) || '-' }}
-                  </el-link>
+                    <el-link
+                      type="primary"
+                      :underline="false"
+                      @click="navigateToProcessSession(row)"
+                    >
+                      {{ row.claude_session_id.slice(0, 8) }}
+                    </el-link>
+                  </el-tooltip>
+                  <el-tag v-else-if="!row.is_orphan" size="small" type="info">新会话</el-tag>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="模型" width="100">
+                <template #default="{ row }">
+                  <el-tooltip v-if="row.model" :content="row.model" placement="top">
+                    <el-tag size="small" type="" :disable-transitions="true">{{ formatModelShort(row.model) }}</el-tag>
+                  </el-tooltip>
                   <span v-else>-</span>
                 </template>
               </el-table-column>
@@ -734,6 +755,13 @@
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
+            <el-button
+              v-if="paneInteractionState(paneState) === 'ARCHIVED'"
+              size="small"
+              text
+              title="取消归档会话"
+              @click="handlePaneUnarchive(paneState.task.value?.sessionId)"
+            >取消归档</el-button>
             <el-button
               v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
@@ -2043,6 +2071,21 @@ function orphanTooltip(process: CliProcessInfo): string {
     ? new Date(process.orphan_auto_kill_at).toLocaleString()
     : '-'
   return `首次发现：${firstSeen}\n预计自动关闭：${autoKill}`
+}
+
+/** Format model name to short display form (e.g. "claude-sonnet-4-20250514" → "Sonnet 4") */
+function formatModelShort(model: string): string {
+  if (!model) return '-'
+  const lower = model.toLowerCase()
+  if (lower.includes('opus')) return 'Opus'
+  if (lower.includes('sonnet')) {
+    const m4 = lower.match(/sonnet[- ]?(\d)/)
+    return m4 ? `Sonnet ${m4[1]}` : 'Sonnet'
+  }
+  if (lower.includes('haiku')) return 'Haiku'
+  // Fallback: return last meaningful segment
+  const parts = model.split('-')
+  return parts.length > 1 ? parts.slice(0, 2).join('-') : model
 }
 
 function navigateToProcessSession(process: CliProcessInfo) {
@@ -4771,6 +4814,17 @@ async function handlePaneArchive(sessionId?: string) {
     reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('归档失败')
+  }
+}
+
+async function handlePaneUnarchive(sessionId?: string) {
+  if (!sessionId) return
+  try {
+    await workerState.unarchiveConversation(sessionId)
+    ElMessage.success('已取消归档')
+    reloadFilteredTasks()
+  } catch {
+    ElMessage.error('取消归档失败')
   }
 }
 

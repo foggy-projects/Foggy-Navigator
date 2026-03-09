@@ -374,6 +374,7 @@ class CliProcessInfo(BaseModel):
     claude_session_id: str | None = Field(None, description="Claude session ID parsed from --resume flag")
     foggy_task_id: str | None = Field(None, description="Foggy platform task ID from task_registry")
     foggy_session_id: str | None = Field(None, description="Foggy platform session ID from task_registry")
+    model: str | None = Field(None, description="LLM model used by this process (e.g. claude-sonnet-4-20250514)")
 
 
 class CliProcessListResponse(BaseModel):

@@ -13,6 +13,7 @@ public class TaskAssistantConfig {
     private String cwd;
     private String modelConfigId;
     private String model;
+    private Boolean autoSummaryEnabled;
 
     public TaskAssistantConfig() {}
 
@@ -43,6 +44,9 @@ public class TaskAssistantConfig {
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; }
 
+    public Boolean getAutoSummaryEnabled() { return autoSummaryEnabled; }
+    public void setAutoSummaryEnabled(Boolean autoSummaryEnabled) { this.autoSummaryEnabled = autoSummaryEnabled; }
+
     public static Builder builder() { return new Builder(); }
 
     public static class Builder {
@@ -55,6 +59,7 @@ public class TaskAssistantConfig {
         private String cwd;
         private String modelConfigId;
         private String model;
+        private Boolean autoSummaryEnabled;
 
         public Builder userId(String userId) { this.userId = userId; return this; }
         public Builder enabled(Boolean enabled) { this.enabled = enabled; return this; }
@@ -65,6 +70,7 @@ public class TaskAssistantConfig {
         public Builder cwd(String cwd) { this.cwd = cwd; return this; }
         public Builder modelConfigId(String modelConfigId) { this.modelConfigId = modelConfigId; return this; }
         public Builder model(String model) { this.model = model; return this; }
+        public Builder autoSummaryEnabled(Boolean autoSummaryEnabled) { this.autoSummaryEnabled = autoSummaryEnabled; return this; }
 
         public TaskAssistantConfig build() {
             TaskAssistantConfig config = new TaskAssistantConfig();
@@ -77,6 +83,7 @@ public class TaskAssistantConfig {
             config.cwd = cwd;
             config.modelConfigId = modelConfigId;
             config.model = model;
+            config.autoSummaryEnabled = autoSummaryEnabled;
             return config;
         }
     }

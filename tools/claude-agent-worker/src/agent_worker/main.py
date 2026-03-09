@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .routes import auth, files, git_info, git_log, health, init_directory, platform_skills, processes, query, sessions, skills, ssh, worktree
+from .marketplace import setup_marketplace
 from .platform_skills.deployer import deploy_platform_skills
 from .ssh.session_manager import start_cleanup_task, stop_cleanup_and_close_all
 
@@ -116,6 +117,9 @@ async def lifespan(app: FastAPI):
 
     # Deploy platform skills to ~/.claude/skills/
     deploy_platform_skills()
+
+    # Setup company-skill-marketplace in settings.json
+    await setup_marketplace()
 
     # SSH idle-cleanup background task
     start_cleanup_task()

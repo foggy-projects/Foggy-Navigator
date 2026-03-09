@@ -48,6 +48,10 @@ public class TaskAssistantConfigEntity {
     @Column(length = 128)
     private String model;
 
+    /** 是否启用自动摘要（归档/搁置会话自动生成 AI 摘要），默认关闭 */
+    @Column(nullable = false)
+    private Boolean autoSummaryEnabled = false;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -64,6 +68,9 @@ public class TaskAssistantConfigEntity {
         }
         if (enabled == null) {
             enabled = false;
+        }
+        if (autoSummaryEnabled == null) {
+            autoSummaryEnabled = false;
         }
     }
 
