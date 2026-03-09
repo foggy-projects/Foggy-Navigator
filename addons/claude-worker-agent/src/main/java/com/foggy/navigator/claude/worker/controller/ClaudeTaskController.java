@@ -4,6 +4,7 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.ConversationConfigDTO;
 import com.foggy.navigator.claude.worker.model.dto.ResyncResult;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
+import com.foggy.navigator.claude.worker.model.dto.SessionSearchResultDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.*;
@@ -75,6 +76,17 @@ public class ClaudeTaskController {
             @RequestParam(required = false) String state) {
         String userId = UserContext.getCurrentUserId();
         return RX.ok(taskService.listTasksBySession(userId, page, size, state));
+    }
+
+    @GetMapping("/search")
+    public RX<SessionSearchResultDTO.Page> searchSessions(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String workerId,
+            @RequestParam(required = false) String directoryId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskService.searchSessions(userId, keyword, workerId, directoryId, page, size));
     }
 
     @GetMapping("/{taskId}")

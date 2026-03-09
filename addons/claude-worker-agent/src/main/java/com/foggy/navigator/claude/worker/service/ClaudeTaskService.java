@@ -15,6 +15,7 @@ import com.foggy.navigator.claude.worker.model.dto.MessageCount;
 import com.foggy.navigator.claude.worker.model.dto.MessageSyncReport;
 import com.foggy.navigator.claude.worker.model.dto.ResyncResult;
 import com.foggy.navigator.claude.worker.model.dto.SessionPageDTO;
+import com.foggy.navigator.claude.worker.model.dto.SessionSearchResultDTO;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
@@ -49,7 +50,9 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -1727,6 +1730,135 @@ public class ClaudeTaskService {
             return "AWAITING_REPLY";
         }
         return null;
+    }
+
+    // ===== 会话搜索 =====
+
+    /**
+     * 搜索会话：支持关键词（标题/提示词/标签）+ Worker/目录过滤。
+     * 关键词在 prompt、customTitle、tags 三个字段上做 union 匹配；
+     * Worker/目录过滤做 intersect 取交集。
+     */
+    public SessionSearchResultDTO.Page searchSessions(
+            String userId, String keyword, String workerId,
+            String directoryId, int page, int size) {
+
+        Set<String> candidateSessionIds = null; // null = 尚未设置任何过滤条件
+
+        // 1. 关键词搜索：union(prompt ∪ customTitle ∪ tags)
+        if (keyword != null && !keyword.isBlank()) {
+            String trimmed = keyword.trim();
+            Set<String> textMatches = new LinkedHashSet<>();
+            textMatches.addAll(taskRepository.findSessionIdsByPromptKeyword(userId, trimmed));
+            textMatches.addAll(conversationConfigRepository.findSessionIdsByTitleKeyword(userId, trimmed));
+            textMatches.addAll(conversationConfigRepository.findSessionIdsByTagKeyword(userId, trimmed));
+            candidateSessionIds = textMatches;
+        }
+
+        // 2. Worker 过滤：intersect
+        if (workerId != null && !workerId.isBlank()) {
+            Set<String> workerSessions = new LinkedHashSet<>(
+                    taskRepository.findSessionIdsByWorker(userId, workerId));
+            candidateSessionIds = (candidateSessionIds == null)
+                    ? workerSessions
+                    : intersect(candidateSessionIds, workerSessions);
+        }
+
+        // 3. 目录过滤：intersect
+        if (directoryId != null && !directoryId.isBlank()) {
+            Set<String> dirSessions = new LinkedHashSet<>(
+                    taskRepository.findSessionIdsByDirectory(userId, directoryId));
+            candidateSessionIds = (candidateSessionIds == null)
+                    ? dirSessions
+                    : intersect(candidateSessionIds, dirSessions);
+        }
+
+        // 4. 无过滤条件 → 返回空（搜索弹窗至少需要输入关键词或选择过滤条件）
+        if (candidateSessionIds == null || candidateSessionIds.isEmpty()) {
+            return SessionSearchResultDTO.Page.builder()
+                    .results(List.of()).total(0).page(page).size(size).build();
+        }
+
+        long total = candidateSessionIds.size();
+
+        // 5. 分页排序：按最新任务时间 desc
+        List<String> pagedSessionIds = taskRepository.findDistinctSessionIdsByUserFilteredBySessionIds(
+                userId, new ArrayList<>(candidateSessionIds), PageRequest.of(page, size));
+
+        if (pagedSessionIds.isEmpty()) {
+            return SessionSearchResultDTO.Page.builder()
+                    .results(List.of()).total(total).page(page).size(size).build();
+        }
+
+        // 6. 获取每个 session 的所有任务（用于计算费用和取 firstPrompt）
+        List<ClaudeTaskEntity> allTasks = taskRepository
+                .findBySessionIdInAndUserIdOrderByCreatedAtDesc(pagedSessionIds, userId);
+
+        // 7. 获取每个 session 的最新任务
+        List<ClaudeTaskEntity> latestTasks = taskRepository.findLatestBySessionIdIn(pagedSessionIds);
+
+        // 8. 获取会话配置
+        List<ConversationConfigEntity> configs = conversationConfigRepository
+                .findBySessionIdIn(pagedSessionIds);
+        Map<String, ConversationConfigEntity> configMap = configs.stream()
+                .collect(Collectors.toMap(ConversationConfigEntity::getSessionId, c -> c));
+
+        // 9. 计算每个 session 的总费用
+        Map<String, BigDecimal> costMap = allTasks.stream()
+                .collect(Collectors.groupingBy(ClaudeTaskEntity::getSessionId,
+                        Collectors.reducing(BigDecimal.ZERO,
+                                t -> t.getCostUsd() != null ? t.getCostUsd() : BigDecimal.ZERO,
+                                BigDecimal::add)));
+
+        // 10. 按 session 分组取 firstPrompt（最早任务的 prompt）
+        Map<String, String> firstPromptMap = allTasks.stream()
+                .collect(Collectors.groupingBy(ClaudeTaskEntity::getSessionId,
+                        Collectors.collectingAndThen(
+                                Collectors.minBy((a, b) -> a.getCreatedAt().compareTo(b.getCreatedAt())),
+                                opt -> opt.map(ClaudeTaskEntity::getPrompt).orElse(""))));
+
+        // 11. 构建结果
+        List<SessionSearchResultDTO> results = latestTasks.stream().map(task -> {
+            ConversationConfigEntity config = configMap.get(task.getSessionId());
+            String firstPrompt = firstPromptMap.getOrDefault(task.getSessionId(), task.getPrompt());
+
+            return SessionSearchResultDTO.builder()
+                    .sessionId(task.getSessionId())
+                    .workerId(task.getWorkerId())
+                    .directoryId(task.getDirectoryId())
+                    .firstPrompt(truncate(firstPrompt, 200))
+                    .customTitle(config != null ? config.getCustomTitle() : null)
+                    .tags(config != null ? parseTagsJson(config.getTags()) : List.of())
+                    .interactionState(config != null ? config.getInteractionState() : null)
+                    .latestTaskId(task.getTaskId())
+                    .latestStatus(task.getStatus())
+                    .model(task.getModel())
+                    .cwd(task.getCwd())
+                    .source(task.getSource())
+                    .totalCost(costMap.getOrDefault(task.getSessionId(), BigDecimal.ZERO))
+                    .createdAt(task.getCreatedAt())
+                    .updatedAt(task.getUpdatedAt())
+                    .build();
+        }).toList();
+
+        return SessionSearchResultDTO.Page.builder()
+                .results(results).total(total).page(page).size(size).build();
+    }
+
+    private <T> Set<T> intersect(Set<T> a, Set<T> b) {
+        Set<T> result = new LinkedHashSet<>(a);
+        result.retainAll(b);
+        return result;
+    }
+
+    private List<String> parseTagsJson(String tagsJson) {
+        if (tagsJson == null || tagsJson.isBlank()) return Collections.emptyList();
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(tagsJson, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            return Collections.emptyList();
+        }
     }
 
     private TaskDTO toDTO(ClaudeTaskEntity entity) {

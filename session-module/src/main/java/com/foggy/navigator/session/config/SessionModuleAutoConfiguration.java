@@ -1,8 +1,6 @@
 package com.foggy.navigator.session.config;
 
-import com.foggy.navigator.agent.framework.config.AgentFrameworkAutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
-import org.springframework.boot.autoconfigure.AutoConfigureBefore;
 import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.context.annotation.Bean;
@@ -14,10 +12,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 /**
  * Session Module 自动配置
- * 确保 JpaSessionManager 先于 InMemorySessionManager 注册
  */
 @AutoConfiguration(after = JpaRepositoriesAutoConfiguration.class)
-@AutoConfigureBefore(AgentFrameworkAutoConfiguration.class)
 @ComponentScan(basePackages = {
     "com.foggy.navigator.session.service",
     "com.foggy.navigator.session.controller",

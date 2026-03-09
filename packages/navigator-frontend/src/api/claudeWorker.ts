@@ -1,5 +1,5 @@
 import client from './client'
-import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig } from '@/types'
+import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig, SessionSearchPage } from '@/types'
 
 // ===== Worker API =====
 
@@ -251,6 +251,19 @@ export async function listTasksPaged(
   const rx = (await client.get('/claude-tasks/page', {
     params,
   })) as unknown as RX<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }>
+  return rx.data
+}
+
+export async function searchSessions(params: {
+  keyword?: string
+  workerId?: string
+  directoryId?: string
+  page?: number
+  size?: number
+}): Promise<SessionSearchPage> {
+  const rx = (await client.get('/claude-tasks/search', {
+    params,
+  })) as unknown as RX<SessionSearchPage>
   return rx.data
 }
 

@@ -87,7 +87,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <mainClass>com.foggy.navigator.coding.agent.CodingAgentApplication</mainClass>
+                    <mainClass>com.foggy.navigator.launcher.FogyNavigatorApplication</mainClass>
                     <fork>true</fork>
                     <addResources>true</addResources>
                     <useTestClasspath>false</useTestClasspath>
