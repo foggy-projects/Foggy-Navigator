@@ -20,9 +20,13 @@ export interface TaskPaneState {
   loadingMore: Ref<boolean>
   /** Whether there are older messages available to load */
   hasMoreHistory: Ref<boolean>
+  /** Total number of messages in the DB for the current session */
+  totalMessages: Ref<number>
   connect(sessionId: string): Promise<void>
   /** Load older messages (prepend to chat). Called when user scrolls to top. */
   loadMoreHistory(): Promise<void>
+  /** Load all (or up to `limit`) messages, replacing current messages. Scrolls to top. */
+  loadAllHistory(limit?: number): Promise<void>
   /** Resume in-place: keep messages, update task, reconnect SSE */
   resumeInPlace(newTask: ClaudeTask): void
   /** Reconnect SSE only (no message clear/reload). Used by workspace suspend/resume. */
@@ -51,6 +55,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   let allDbLoaded = false
   const loadingMore = ref(false)
   const hasMoreHistory = ref(false)
+  const totalMessages = ref(0)
   let currentSessionId = ''
 
   const { subscribeSession, connected } = useUnifiedSse()
@@ -220,6 +225,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     allDbLoaded = false
     loadingMore.value = false
     hasMoreHistory.value = false
+    totalMessages.value = 0
 
     // Load latest PAGE_SIZE messages from DB (paginated)
     try {
@@ -227,6 +233,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       if (connectVersion !== myVersion) return
 
       totalDbMessages = result.total
+      totalMessages.value = result.total
       dbLoadedOffset = Math.min(PAGE_SIZE, result.total)
       allDbLoaded = !result.hasMore
       hasMoreHistory.value = result.hasMore
@@ -355,6 +362,56 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     }
   }
 
+  /**
+   * Load all (or up to `limit`) messages, replacing current chat messages.
+   * When no limit is given, loads all messages from DB.
+   * When a limit is given (e.g. 500, 1000), loads the latest N messages.
+   */
+  async function loadAllHistory(limit?: number): Promise<void> {
+    if (loadingMore.value || !currentSessionId) return
+
+    loadingMore.value = true
+    try {
+      chatState.clearMessages()
+
+      if (limit == null) {
+        // Load ALL messages (no pagination)
+        const allMessages = await sessionApi.getMessages(currentSessionId)
+
+        for (let i = 0; i < allMessages.length; i++) {
+          const msg = allMessages[i]
+          if (!msg) continue
+          convertAndPushDbMessage(msg, allMessages[i + 1])
+        }
+
+        totalDbMessages = allMessages.length
+        totalMessages.value = allMessages.length
+        dbLoadedOffset = allMessages.length
+        allDbLoaded = true
+        hasMoreHistory.value = false
+      } else {
+        // Load latest `limit` messages
+        const result = await sessionApi.getLatestMessages(currentSessionId, limit, 0)
+
+        for (let i = 0; i < result.messages.length; i++) {
+          const msg = result.messages[i]
+          if (!msg) continue
+          convertAndPushDbMessage(msg, result.messages[i + 1])
+        }
+
+        totalDbMessages = result.total
+        totalMessages.value = result.total
+        dbLoadedOffset = Math.min(limit, result.total)
+        allDbLoaded = !result.hasMore
+        hasMoreHistory.value = result.hasMore
+      }
+    } catch (e) {
+      console.error(`[TaskPane ${paneId}] Failed to load all history:`, e)
+    } finally {
+      loadingMore.value = false
+    }
+  }
+
   /** Resume in the same pane without clearing messages */
   function resumeInPlace(newTask: ClaudeTask) {
     task.value = newTask
@@ -405,8 +462,10 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     pendingInput,
     loadingMore,
     hasMoreHistory,
+    totalMessages,
     connect,
     loadMoreHistory,
+    loadAllHistory,
     resumeInPlace,
     reconnectSse,
     syncTaskStatus,

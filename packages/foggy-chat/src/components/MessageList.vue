@@ -6,9 +6,21 @@
         <span class="loading-spinner"></span>
         <span>加载更早的消息...</span>
       </div>
-      <el-button v-else size="small" text @click="emit('loadMore')">
-        加载更早的消息
-      </el-button>
+      <template v-else>
+        <el-button size="small" text @click="emit('loadMore')">
+          加载更早的消息
+        </el-button>
+        <span class="load-more-divider">|</span>
+        <el-dropdown size="small" trigger="click" split-button @click="emit('loadAll')" @command="handleLoadAllCommand">
+          加载全部{{ totalMessages ? ` (${totalMessages})` : '' }}
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item :command="500">最近 500 条</el-dropdown-item>
+              <el-dropdown-item :command="1000">最近 1000 条</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </template>
     </div>
     <div v-if="messages.length === 0" class="empty-state">
       <slot name="empty">
@@ -137,6 +149,7 @@ const props = defineProps<{
   rewindEnabled?: boolean
   hasMoreHistory?: boolean
   loadingMore?: boolean
+  totalMessages?: number
 }>()
 
 const emit = defineEmits<{
@@ -146,7 +159,12 @@ const emit = defineEmits<{
   (e: 'rewind', turnIndex: number): void
   (e: 'reconnect', taskId: string): void
   (e: 'loadMore'): void
+  (e: 'loadAll', limit?: number): void
 }>()
+
+function handleLoadAllCommand(command: number) {
+  emit('loadAll', command)
+}
 
 const listRef = ref<HTMLElement>()
 const loadMoreRef = ref<HTMLElement>()
@@ -375,9 +393,17 @@ onBeforeUnmount(() => {
 .load-more-area {
   display: flex;
   justify-content: center;
+  align-items: center;
+  gap: 8px;
   padding: 8px 0;
   min-height: 36px;
   flex-shrink: 0;
+}
+
+.load-more-divider {
+  color: #dcdfe6;
+  font-size: 12px;
+  user-select: none;
 }
 
 .loading-hint {

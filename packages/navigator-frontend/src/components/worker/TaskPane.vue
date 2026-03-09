@@ -48,6 +48,7 @@
         :rewind-enabled="rewindEnabled"
         :has-more-history="paneState.hasMoreHistory.value"
         :loading-more="paneState.loadingMore.value"
+        :total-messages="paneState.totalMessages.value"
         placeholder="输入后续指令... (Ctrl+Enter 发送)"
         @send="handleSend"
         @permission-respond="handlePermissionRespond"
@@ -56,6 +57,7 @@
         @rewind="handleRewind"
         @reconnect="handleReconnect"
         @load-more="paneState.loadMoreHistory()"
+        @load-all="(limit?: number) => paneState.loadAllHistory(limit)"
       >
         <template #empty>
           <div class="waiting-hint">等待 Worker 响应...</div>
