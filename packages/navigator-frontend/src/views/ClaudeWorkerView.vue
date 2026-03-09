@@ -437,6 +437,13 @@
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
             <el-button
+              v-if="paneInteractionState(paneState) === 'ARCHIVED'"
+              size="small"
+              text
+              title="取消归档会话"
+              @click="handlePaneUnarchive(paneState.task.value?.sessionId)"
+            >取消归档</el-button>
+            <el-button
               v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
               text
@@ -748,6 +755,13 @@
               title="归档会话"
               @click="handlePaneArchive(paneState.task.value?.sessionId)"
             >归档</el-button>
+            <el-button
+              v-if="paneInteractionState(paneState) === 'ARCHIVED'"
+              size="small"
+              text
+              title="取消归档会话"
+              @click="handlePaneUnarchive(paneState.task.value?.sessionId)"
+            >取消归档</el-button>
             <el-button
               v-if="paneInteractionState(paneState) === 'AWAITING_REPLY'"
               size="small"
@@ -4800,6 +4814,17 @@ async function handlePaneArchive(sessionId?: string) {
     reloadFilteredTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('归档失败')
+  }
+}
+
+async function handlePaneUnarchive(sessionId?: string) {
+  if (!sessionId) return
+  try {
+    await workerState.unarchiveConversation(sessionId)
+    ElMessage.success('已取消归档')
+    reloadFilteredTasks()
+  } catch {
+    ElMessage.error('取消归档失败')
   }
 }
 
