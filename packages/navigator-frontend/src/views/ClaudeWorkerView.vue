@@ -822,6 +822,14 @@
             <el-button
               size="small"
               text
+              title="搜索会话"
+              @click="showSessionSearch = true"
+            >
+              &#128269;
+            </el-button>
+            <el-button
+              size="small"
+              text
               title="刷新会话列表"
               @click="handleRefreshConversations"
             >
@@ -1857,6 +1865,15 @@
         <div class="fav-ctx-item fav-ctx-danger" @click="handleRemoveFavScript">移除脚本</div>
       </div>
     </Teleport>
+
+    <!-- Session Search Dialog -->
+    <SessionSearchDialog
+      :visible="showSessionSearch"
+      :workers="workerState.workers.value"
+      :directories="workerState.directories.value"
+      @close="showSessionSearch = false"
+      @select="handleSearchSelect"
+    />
   </div>
 </template>
 
@@ -1887,11 +1904,12 @@ import TaskPaneGrid from '@/components/worker/TaskPaneGrid.vue'
 import SshTerminalPanel from '@/components/worker/SshTerminalPanel.vue'
 import SshTerminal from '@/components/worker/SshTerminal.vue'
 import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
+import SessionSearchDialog from '@/components/worker/SessionSearchDialog.vue'
 import * as dirApi from '@/api/claudeWorker'
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult } from '@/types'
 import type { AipMessageType } from '@foggy/chat'
 
 const MAX_PANES = 1
@@ -2070,6 +2088,9 @@ const authForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '' })
 const showBatchAuthDialog = ref(false)
 const batchAuthForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', skipExisting: true, modelConfigId: '' })
 const batchAuthSessionIds = ref<string[]>([])
+
+// Session search dialog state
+const showSessionSearch = ref(false)
 
 // Batch selection state
 const batchSelectMode = ref(false)
@@ -3128,6 +3149,38 @@ function navigateToActiveSession(conv: ConversationGroup) {
   }
   // Open the task in a pane
   viewTask(task)
+}
+
+/** 处理搜索结果选中：构造最小 ConversationGroup 并跳转 */
+function handleSearchSelect(result: SessionSearchResult) {
+  showSessionSearch.value = false
+  const minimalTask = {
+    taskId: result.latestTaskId,
+    sessionId: result.sessionId,
+    workerId: result.workerId,
+    directoryId: result.directoryId,
+    prompt: result.firstPrompt,
+    status: result.latestStatus,
+    createdAt: result.createdAt,
+    updatedAt: result.updatedAt,
+  } as ClaudeTask
+  navigateToActiveSession({
+    sessionId: result.sessionId,
+    claudeSessionId: '',
+    latestTask: minimalTask,
+    tasks: [minimalTask],
+    totalCost: result.totalCost || 0,
+    firstPrompt: result.firstPrompt,
+    config: result.customTitle
+      ? ({
+          sessionId: result.sessionId,
+          customTitle: result.customTitle,
+          pinned: false,
+          authBound: false,
+          interactionState: result.interactionState,
+        } as ConversationConfig)
+      : undefined,
+  })
 }
 
 function selectWorker(workerId: string) {

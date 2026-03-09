@@ -518,3 +518,32 @@ export interface CrossProjectPhase {
   createdAt?: string
   updatedAt?: string
 }
+
+// ===== 会话搜索类型 =====
+
+/** 会话搜索结果项 */
+export interface SessionSearchResult {
+  sessionId: string
+  workerId: string
+  directoryId?: string
+  firstPrompt: string
+  customTitle?: string
+  tags?: string[]
+  interactionState?: 'PROCESSING' | 'AWAITING_REPLY' | 'ON_HOLD' | 'ARCHIVED'
+  latestTaskId: string
+  latestStatus: string
+  model?: string
+  cwd?: string
+  source?: string
+  totalCost?: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** 会话搜索分页响应 */
+export interface SessionSearchPage {
+  results: SessionSearchResult[]
+  total: number
+  page: number
+  size: number
+}

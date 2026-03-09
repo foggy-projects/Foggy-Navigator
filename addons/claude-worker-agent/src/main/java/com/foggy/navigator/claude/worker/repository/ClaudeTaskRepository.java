@@ -121,4 +121,24 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
            "AND t.createdAt = (SELECT MAX(t2.createdAt) FROM ClaudeTaskEntity t2 WHERE t2.sessionId = t.sessionId) " +
            "ORDER BY t.createdAt DESC")
     List<ClaudeTaskEntity> findLatestBySessionIdIn(@Param("sessionIds") List<String> sessionIds);
+
+    // ===== 会话搜索查询 =====
+
+    /** 按 prompt 关键词搜索匹配的 sessionId（不区分大小写） */
+    @Query("SELECT DISTINCT t.sessionId FROM ClaudeTaskEntity t " +
+           "WHERE t.userId = :userId AND LOWER(t.prompt) LIKE LOWER(CONCAT('%', :keyword, '%'))")
+    List<String> findSessionIdsByPromptKeyword(@Param("userId") String userId,
+                                                @Param("keyword") String keyword);
+
+    /** 按 workerId 筛选 sessionId */
+    @Query("SELECT DISTINCT t.sessionId FROM ClaudeTaskEntity t " +
+           "WHERE t.userId = :userId AND t.workerId = :workerId")
+    List<String> findSessionIdsByWorker(@Param("userId") String userId,
+                                        @Param("workerId") String workerId);
+
+    /** 按 directoryId 筛选 sessionId */
+    @Query("SELECT DISTINCT t.sessionId FROM ClaudeTaskEntity t " +
+           "WHERE t.userId = :userId AND t.directoryId = :directoryId")
+    List<String> findSessionIdsByDirectory(@Param("userId") String userId,
+                                            @Param("directoryId") String directoryId);
 }
