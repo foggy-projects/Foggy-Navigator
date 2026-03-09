@@ -90,7 +90,6 @@ function Invoke-Logs {
 function Invoke-Upgrade {
     param([string]$ArchivePath)
 
-    $repo = $env:CLAUDE_WORKER_REPO
     Write-Host "Claude Agent Worker Upgrade" -ForegroundColor Cyan
 
     # Local archive
@@ -100,17 +99,89 @@ function Invoke-Upgrade {
         return
     }
 
-    # GitHub Releases
-    if (-not $repo) {
-        Write-Host "Usage:" -ForegroundColor Yellow
-        Write-Host "  claude-worker upgrade C:\path\to\claude-worker-X.Y.Z-windows.zip"
-        Write-Host ""
-        Write-Host "To enable auto-upgrade from GitHub Releases, set:" -ForegroundColor Yellow
-        Write-Host '  $env:CLAUDE_WORKER_REPO = "your-org/your-repo"'
+    # Load CLAUDE_WORKER_URL from .env if not already set
+    $workerUrl = $env:CLAUDE_WORKER_URL
+    if (-not $workerUrl -and (Test-Path $EnvFile)) {
+        $urlLine = Get-Content $EnvFile | Where-Object { $_ -match "^CLAUDE_WORKER_URL=(.+)" }
+        if ($urlLine -and $urlLine -match "=(.+)") { $workerUrl = $Matches[1].Trim() }
+    }
+
+    # --- Priority 1: OBS / custom URL ---
+    if ($workerUrl) {
+        Invoke-UpgradeFromObs $workerUrl
         return
     }
 
-    Write-Host "Checking GitHub Releases ($repo)..." -ForegroundColor Cyan
+    # --- Priority 2: GitHub Releases ---
+    $repo = $env:CLAUDE_WORKER_REPO
+    if ($repo) {
+        Invoke-UpgradeFromGitHub $repo
+        return
+    }
+
+    # --- No source configured ---
+    Write-Host "Usage:" -ForegroundColor Yellow
+    Write-Host "  claude-worker upgrade C:\path\to\claude-worker-X.Y.Z-windows.zip"
+    Write-Host ""
+    Write-Host "To enable auto-upgrade, set one of:" -ForegroundColor Yellow
+    Write-Host "  CLAUDE_WORKER_URL   OBS/HTTP base URL (in .env or environment)"
+    Write-Host "  CLAUDE_WORKER_REPO  GitHub repo (e.g. your-org/repo)"
+}
+
+function Invoke-UpgradeFromObs {
+    param([string]$BaseUrl)
+
+    Write-Host "Checking latest version from $BaseUrl ..." -ForegroundColor Cyan
+
+    try {
+        $latestJson = Invoke-RestMethod -Uri "$BaseUrl/latest.json" -TimeoutSec 15 -ErrorAction Stop
+    }
+    catch {
+        Write-Host "Could not fetch $BaseUrl/latest.json" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        return
+    }
+
+    $latestVersion = $latestJson.version
+    if (-not $latestVersion) {
+        Write-Host "Could not parse version from latest.json" -ForegroundColor Red
+        return
+    }
+
+    if ($latestVersion -eq $Version) {
+        Write-Host "Already up to date (v$Version)." -ForegroundColor Green
+        return
+    }
+
+    Write-Host "New version available: $Version -> $latestVersion" -ForegroundColor Cyan
+
+    $filePath = $latestJson.files.windows
+    if (-not $filePath) {
+        Write-Host "No Windows release found in latest.json" -ForegroundColor Red
+        return
+    }
+
+    $downloadUrl = "$BaseUrl/$filePath"
+    Write-Host "Downloading: $downloadUrl" -ForegroundColor Cyan
+
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "claude-worker-upgrade"
+    if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $archiveFile = Join-Path $tmpDir (Split-Path $filePath -Leaf)
+
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $archiveFile
+
+    # Pass through CLAUDE_WORKER_URL so install.ps1 can preserve it
+    $env:CLAUDE_WORKER_URL = $BaseUrl
+
+    Invoke-UpgradeFromArchive $archiveFile
+    Remove-Item $tmpDir -Recurse -Force
+}
+
+function Invoke-UpgradeFromGitHub {
+    param([string]$Repo)
+
+    Write-Host "Checking GitHub Releases ($Repo)..." -ForegroundColor Cyan
 
     $headers = @{}
     if ($env:GITHUB_TOKEN) {
@@ -118,7 +189,7 @@ function Invoke-Upgrade {
     }
 
     try {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" `
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
             -Headers $headers -ErrorAction Stop
         $latestTag = $release.tag_name
         $latestVersion = $latestTag -replace '^worker-v?|^v', ''
@@ -190,12 +261,13 @@ function Invoke-Help {
     Write-Host "  status             Show worker status and health"
     Write-Host "  version            Show installed version"
     Write-Host "  logs               Tail worker log output"
-    Write-Host "  upgrade [archive]  Upgrade from local .zip or GitHub Release"
+    Write-Host "  upgrade [archive]  Upgrade from OBS/GitHub or local .zip"
     Write-Host "  help               Show this help message"
     Write-Host ""
     Write-Host "Environment:"
     Write-Host "  CLAUDE_WORKER_HOME    Install directory (default: ~\.claude-worker)"
-    Write-Host "  CLAUDE_WORKER_REPO    GitHub repo for auto-upgrade (e.g. your-org/repo)"
+    Write-Host "  CLAUDE_WORKER_URL     OBS/HTTP base URL for auto-upgrade (preferred)"
+    Write-Host "  CLAUDE_WORKER_REPO    GitHub repo for auto-upgrade (fallback)"
     Write-Host "  GITHUB_TOKEN          Token for private GitHub repos"
     Write-Host ""
     Write-Host "Config: $InstallDir\.env"

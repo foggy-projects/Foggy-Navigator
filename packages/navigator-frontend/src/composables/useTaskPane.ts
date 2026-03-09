@@ -8,7 +8,7 @@ import { useUnifiedSse } from '@/composables/useUnifiedSse'
 import type { AgentMessage, ClaudeTask, Message } from '@/types'
 
 /** Number of messages to load per page */
-const PAGE_SIZE = 50
+const PAGE_SIZE = 800
 
 export interface TaskPaneState {
   paneId: string

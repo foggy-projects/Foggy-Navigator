@@ -124,6 +124,22 @@ elif [ ! -f "$INSTALL_DIR/.env" ]; then
     echo -e "${YELLOW}  -> Please edit: $INSTALL_DIR/.env${NC}"
 fi
 
+# --- Write CLAUDE_WORKER_URL to .env if provided --------------------------
+if [ -n "$CLAUDE_WORKER_URL" ]; then
+    ENV_FILE="$INSTALL_DIR/.env"
+    if grep -q "^CLAUDE_WORKER_URL=" "$ENV_FILE" 2>/dev/null; then
+        # Update existing value
+        sed -i.bak "s|^CLAUDE_WORKER_URL=.*|CLAUDE_WORKER_URL=$CLAUDE_WORKER_URL|" "$ENV_FILE"
+        rm -f "${ENV_FILE}.bak"
+    else
+        # Append
+        echo "" >> "$ENV_FILE"
+        echo "# Auto-upgrade URL (set by remote installer)" >> "$ENV_FILE"
+        echo "CLAUDE_WORKER_URL=$CLAUDE_WORKER_URL" >> "$ENV_FILE"
+    fi
+    echo -e "${GREEN}Saved CLAUDE_WORKER_URL to .env${NC}"
+fi
+
 # --- Clean __pycache__ and .egg-info --------------------------------------
 find "$INSTALL_DIR/src" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$INSTALL_DIR/src" -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
