@@ -277,7 +277,7 @@ public class ClaudeWorkerClient {
     }
 
     /**
-     * 读取 Claude Code 本地会话的对话历史
+     * 读取 Claude Code 本地会话的对话历史（全量）
      */
     @SuppressWarnings("unchecked")
     public Mono<java.util.List<Map<String, Object>>> getSessionMessages(String sessionId) {
@@ -287,6 +287,31 @@ public class ClaudeWorkerClient {
                 .bodyToMono(java.util.List.class)
                 .map(list -> (java.util.List<Map<String, Object>>) list)
                 .doOnError(e -> log.warn("Get session messages failed for worker {}, session {}: {}",
+                        workerId, sessionId, e.getMessage()));
+    }
+
+    /**
+     * 读取 Claude Code 本地会话的对话历史（分页）
+     *
+     * @param sessionId 会话ID
+     * @param offset    跳过的消息数
+     * @param limit     返回的最大消息数（null 表示不限制）
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<java.util.List<Map<String, Object>>> getSessionMessages(String sessionId, int offset, Integer limit) {
+        return webClient.get()
+                .uri(uriBuilder -> {
+                    var b = uriBuilder.path("/api/v1/sessions/{sessionId}/messages")
+                            .queryParam("offset", offset);
+                    if (limit != null) {
+                        b = b.queryParam("limit", limit);
+                    }
+                    return b.build(sessionId);
+                })
+                .retrieve()
+                .bodyToMono(java.util.List.class)
+                .map(list -> (java.util.List<Map<String, Object>>) list)
+                .doOnError(e -> log.warn("Get session messages (paginated) failed for worker {}, session {}: {}",
                         workerId, sessionId, e.getMessage()));
     }
 

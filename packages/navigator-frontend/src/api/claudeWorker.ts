@@ -378,6 +378,19 @@ export async function getWorkerSessionMessages(
   return rx.data
 }
 
+export async function getWorkerSessionMessagesPaged(
+  workerId: string,
+  sessionId: string,
+  offset: number,
+  limit: number,
+): Promise<{ role: string; content: string; timestamp: string }[]> {
+  const rx = (await client.get(
+    `/claude-tasks/worker/${workerId}/sessions/${sessionId}/messages`,
+    { params: { offset, limit } },
+  )) as unknown as RX<{ role: string; content: string; timestamp: string }[]>
+  return rx.data
+}
+
 export async function syncWorkerSessions(
   workerId: string,
 ): Promise<{ synced: number; total: number }> {

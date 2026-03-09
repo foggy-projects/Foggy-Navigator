@@ -1,5 +1,15 @@
 <template>
   <div ref="listRef" class="message-list" @scroll="handleScroll">
+    <!-- Load more history indicator -->
+    <div v-if="hasMoreHistory" ref="loadMoreRef" class="load-more-area">
+      <div v-if="loadingMore" class="loading-hint">
+        <span class="loading-spinner"></span>
+        <span>加载更早的消息...</span>
+      </div>
+      <el-button v-else size="small" text @click="emit('loadMore')">
+        加载更早的消息
+      </el-button>
+    </div>
     <div v-if="messages.length === 0" class="empty-state">
       <slot name="empty">
         <div class="empty-hint">暂无消息</div>
@@ -82,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted } from 'vue'
+import { ref, watch, nextTick, computed, onMounted, onBeforeUnmount } from 'vue'
 import { AipMessageType } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
 import MessageBubble from './MessageBubble.vue'
@@ -125,6 +135,8 @@ const props = defineProps<{
   messages: ChatMessage[]
   isThinking?: boolean
   rewindEnabled?: boolean
+  hasMoreHistory?: boolean
+  loadingMore?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -133,10 +145,16 @@ const emit = defineEmits<{
   (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', turnIndex: number): void
   (e: 'reconnect', taskId: string): void
+  (e: 'loadMore'): void
 }>()
 
 const listRef = ref<HTMLElement>()
+const loadMoreRef = ref<HTMLElement>()
 const userScrolledUp = ref(false)
+
+// Scroll-position preservation for prepend
+let previousScrollHeight = 0
+let previousFirstMsgId = ''
 
 function isBubble(msg: ChatMessage) {
   return msg.type === AipMessageType.TEXT_COMPLETE || msg.type === AipMessageType.TEXT_CHUNK
@@ -253,8 +271,47 @@ function handleScroll() {
   userScrolledUp.value = scrollHeight - scrollTop - clientHeight > 80
 }
 
-// Watch messages array length
-watch(() => props.messages.length, scrollToBottom)
+// Record scroll height BEFORE DOM update (for prepend scroll preservation)
+watch(
+  () => props.messages.length,
+  () => {
+    if (listRef.value) {
+      previousScrollHeight = listRef.value.scrollHeight
+      previousFirstMsgId = props.messages[0]?.id ?? ''
+    }
+  },
+  { flush: 'pre' },
+)
+
+// After DOM update: detect prepend (first message changed) and restore scroll position
+watch(
+  () => props.messages[0]?.id,
+  (newFirstId) => {
+    if (previousFirstMsgId && newFirstId && newFirstId !== previousFirstMsgId && listRef.value) {
+      // Messages were prepended — restore scroll position
+      nextTick(() => {
+        if (listRef.value) {
+          const newScrollHeight = listRef.value.scrollHeight
+          const heightDiff = newScrollHeight - previousScrollHeight
+          listRef.value.scrollTop = heightDiff
+        }
+      })
+      return // don't scroll to bottom on prepend
+    }
+  },
+)
+
+// Watch messages array length — scroll to bottom for appends (new messages at the end)
+watch(() => props.messages.length, (newLen, oldLen) => {
+  // Only auto-scroll for appends (length increased and first message didn't change)
+  if (newLen > (oldLen ?? 0)) {
+    const firstIdNow = props.messages[0]?.id ?? ''
+    if (firstIdNow === previousFirstMsgId || !previousFirstMsgId) {
+      // Messages appended at the end — scroll to bottom
+      scrollToBottom()
+    }
+  }
+})
 // Watch last message content for TEXT_CHUNK streaming updates
 watch(
   () => props.messages[props.messages.length - 1]?.content,
@@ -262,6 +319,34 @@ watch(
 )
 watch(() => props.isThinking, scrollToBottom)
 onMounted(scrollToBottom)
+
+// IntersectionObserver for auto-triggering loadMore when user scrolls to top
+let intersectionObserver: IntersectionObserver | null = null
+
+onMounted(() => {
+  if (!listRef.value) return
+  intersectionObserver = new IntersectionObserver(
+    (entries) => {
+      if (entries[0]?.isIntersecting && props.hasMoreHistory && !props.loadingMore) {
+        emit('loadMore')
+      }
+    },
+    { root: listRef.value, threshold: 0.1 },
+  )
+})
+
+watch(
+  () => loadMoreRef.value,
+  (el, oldEl) => {
+    if (oldEl && intersectionObserver) intersectionObserver.unobserve(oldEl)
+    if (el && intersectionObserver) intersectionObserver.observe(el)
+  },
+)
+
+onBeforeUnmount(() => {
+  intersectionObserver?.disconnect()
+  intersectionObserver = null
+})
 </script>
 
 <style scoped>
@@ -285,6 +370,35 @@ onMounted(scrollToBottom)
   text-align: center;
   color: #c0c4cc;
   font-size: 14px;
+}
+
+.load-more-area {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+  min-height: 36px;
+  flex-shrink: 0;
+}
+
+.loading-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #dcdfe6;
+  border-top-color: #409eff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .compression-hint {

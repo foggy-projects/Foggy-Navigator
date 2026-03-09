@@ -46,6 +46,8 @@
         :show-input="canInput"
         :input-disabled="sendDisabled"
         :rewind-enabled="rewindEnabled"
+        :has-more-history="paneState.hasMoreHistory.value"
+        :loading-more="paneState.loadingMore.value"
         placeholder="输入后续指令... (Ctrl+Enter 发送)"
         @send="handleSend"
         @permission-respond="handlePermissionRespond"
@@ -53,6 +55,7 @@
         @plan-respond="(pid: string, decision: string, denyMsg?: string, planAction?: string) => handlePlanRespond(pid, decision, denyMsg, planAction)"
         @rewind="handleRewind"
         @reconnect="handleReconnect"
+        @load-more="paneState.loadMoreHistory()"
       >
         <template #empty>
           <div class="waiting-hint">等待 Worker 响应...</div>

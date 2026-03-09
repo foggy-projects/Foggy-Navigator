@@ -178,13 +178,22 @@ def _find_session_file(session_id: str) -> Path | None:
     return None
 
 
-def read_session_messages(session_id: str) -> list[dict]:
+def read_session_messages(
+    session_id: str,
+    offset: int = 0,
+    limit: int | None = None,
+) -> list[dict]:
     """Read a session JSONL and return simplified conversation messages.
 
     Returns a list of ``{"role": "user"|"assistant", "content": str, "timestamp": str}``.
     Only user prompts (string content) and assistant text blocks are included;
     tool_use, tool_result, and thinking blocks are skipped.
     Sidechain (branched) lines are excluded.
+
+    Args:
+        session_id: The Claude session ID.
+        offset: Number of messages to skip from the beginning (default 0).
+        limit: Maximum number of messages to return (default None = all).
     """
     filepath = _find_session_file(session_id)
     if filepath is None:
@@ -244,6 +253,11 @@ def read_session_messages(session_id: str) -> list[dict]:
         logger.warning("Failed to read session %s: %s", session_id, exc)
         return []
 
+    # Apply offset/limit slicing
+    if limit is not None:
+        return messages[offset : offset + limit]
+    elif offset > 0:
+        return messages[offset:]
     return messages
 
 

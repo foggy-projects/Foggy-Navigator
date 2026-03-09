@@ -331,7 +331,9 @@ public class ClaudeTaskController {
     @GetMapping("/worker/{workerId}/sessions/{sessionId}/messages")
     public RX<List<Map<String, Object>>> getWorkerSessionMessages(
             @PathVariable String workerId,
-            @PathVariable String sessionId) {
+            @PathVariable String sessionId,
+            @RequestParam(required = false) Integer offset,
+            @RequestParam(required = false) Integer limit) {
         String userId = UserContext.getCurrentUserId();
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
         if (!worker.getUserId().equals(userId)) {
@@ -340,8 +342,15 @@ public class ClaudeTaskController {
 
         try {
             ClaudeWorkerClient client = workerService.createClient(worker);
-            List<Map<String, Object>> messages = client.getSessionMessages(sessionId)
-                    .block(java.time.Duration.ofSeconds(30));
+            List<Map<String, Object>> messages;
+            if (offset != null || limit != null) {
+                messages = client.getSessionMessages(sessionId,
+                        offset != null ? offset : 0, limit)
+                        .block(java.time.Duration.ofSeconds(30));
+            } else {
+                messages = client.getSessionMessages(sessionId)
+                        .block(java.time.Duration.ofSeconds(30));
+            }
             return RX.ok(messages != null ? messages : List.of());
         } catch (Exception e) {
             log.warn("Failed to get session messages: workerId={}, sessionId={}, error={}",
