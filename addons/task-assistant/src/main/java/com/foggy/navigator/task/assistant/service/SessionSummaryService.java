@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 /**
@@ -38,6 +39,9 @@ public class SessionSummaryService {
 
     /** 需要生成摘要的交互状态 */
     private static final List<String> TARGET_STATES = List.of("ARCHIVED", "ON_HOLD");
+
+    /** 防重入锁：同一时刻只允许一个摘要任务在执行 */
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     private final TaskAssistantConfigRepository configRepository;
     @Nullable
@@ -67,6 +71,12 @@ public class SessionSummaryService {
             return;
         }
 
+        // 防重入：同一时刻只允许一个摘要任务在执行
+        if (!running.compareAndSet(false, true)) {
+            log.debug("Session summary: previous execution still running, skipping this cycle");
+            return;
+        }
+
         try {
             // 1. 按用户分组查询 ARCHIVED / ON_HOLD 状态的 sessionId
             Map<String, List<String>> userSessionMap =
@@ -93,13 +103,20 @@ public class SessionSummaryService {
                     continue;
                 }
 
-                // 2b. 过滤出 summary 为 null 的
+                // 2b. 检查该用户是否启用了自动摘要
+                if (!Boolean.TRUE.equals(config.getAutoSummaryEnabled())) {
+                    log.debug("Session summary: autoSummaryEnabled=false for userId={}, skipping {} sessions",
+                            userId, sessionIds.size());
+                    continue;
+                }
+
+                // 2c. 过滤出 summary 为 null 的
                 List<String> pendingIds = sessionManager.findSessionIdsWithoutSummary(sessionIds);
                 if (pendingIds.isEmpty()) {
                     continue;
                 }
 
-                // 2c. 批量处理（每用户限流）
+                // 2d. 批量处理（每用户限流）
                 List<String> batch = pendingIds.stream().limit(BATCH_SIZE_PER_USER).collect(Collectors.toList());
                 int successCount = 0;
 
@@ -124,6 +141,8 @@ public class SessionSummaryService {
             }
         } catch (Exception e) {
             log.error("Session summary: scheduled task failed", e);
+        } finally {
+            running.set(false);
         }
     }
 

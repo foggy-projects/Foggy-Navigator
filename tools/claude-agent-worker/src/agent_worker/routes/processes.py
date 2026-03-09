@@ -103,6 +103,7 @@ def _enrich_processes(processes: list[CliProcessInfo]) -> None:
                 proc.foggy_task_id = entry.get("foggy_task_id")
                 proc.foggy_session_id = entry.get("foggy_session_id")
                 proc.claude_session_id = entry.get("session_id")
+                proc.model = entry.get("model")
                 proc.is_orphan = False
 
         # Layer 1: read env vars directly from the process (survives Worker restart)
