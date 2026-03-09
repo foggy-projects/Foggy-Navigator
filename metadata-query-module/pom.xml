@@ -33,6 +33,12 @@
             <version>${foggy-model.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>com.foggysource</groupId>
+            <artifactId>foggy-fsscript</artifactId>
+            <version>${foggy-model.version}</version>
+        </dependency>
+
         <!-- Foggy Core (统一返回对象 RX) -->
         <dependency>
             <groupId>com.foggysource</groupId>
