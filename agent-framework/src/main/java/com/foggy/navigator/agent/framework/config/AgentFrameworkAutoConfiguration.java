@@ -6,7 +6,6 @@ import com.foggy.navigator.agent.framework.core.impl.DefaultAgentInvoker;
 import com.foggy.navigator.agent.framework.llm.LlmAdapter;
 import com.foggy.navigator.agent.framework.router.SessionRouter;
 import com.foggy.navigator.agent.framework.session.SessionManager;
-import com.foggy.navigator.agent.framework.session.impl.InMemorySessionManager;
 import com.foggy.navigator.agent.framework.skill.SkillManager;
 import com.foggy.navigator.agent.framework.skill.SkillMatcher;
 import com.foggy.navigator.agent.framework.skill.impl.KeywordSkillMatcher;
@@ -36,12 +35,6 @@ import java.util.List;
         "com.foggy.navigator.agent.framework.*"
 })
 public class AgentFrameworkAutoConfiguration {
-
-    @Bean
-    @ConditionalOnMissingBean(SessionManager.class)
-    public SessionManager inMemorySessionManager() {
-        return new InMemorySessionManager();
-    }
 
     /**
      * LLM-based Skill 匹配器（主选），失败时自动回退到 KeywordSkillMatcher

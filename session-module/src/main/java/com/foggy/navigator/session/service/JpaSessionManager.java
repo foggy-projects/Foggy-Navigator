@@ -22,7 +22,6 @@ import java.util.stream.Collectors;
 
 /**
  * JPA持久化的会话管理器
- * 替代InMemorySessionManager，数据持久化到数据库
  */
 @Slf4j
 @Service
