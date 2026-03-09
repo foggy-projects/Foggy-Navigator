@@ -16,7 +16,7 @@
 ## 技术栈
 
 - Spring Boot 3.4.2
-- Foggy Dataset Model 8.1.6.beta
+- Foggy Dataset Model 8.1.7.beta
 - MySQL 8.0+
 - Lombok
 
@@ -199,7 +199,7 @@ messages-by-session.qm
 
 ## 依赖版本
 
-- Foggy Dataset Model: 8.1.6.beta
+- Foggy Dataset Model: 8.1.7.beta
 - Spring Boot: 3.4.2
 - Java: 17
 - MySQL Connector: 8.0+
