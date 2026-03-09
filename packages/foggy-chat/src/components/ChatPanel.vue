@@ -15,11 +15,14 @@
       :messages="messages"
       :is-thinking="isThinking"
       :rewind-enabled="rewindEnabled"
+      :has-more-history="hasMoreHistory"
+      :loading-more="loadingMore"
       @permission-respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
       @question-respond="(pid, answers) => emit('questionRespond', pid, answers)"
       @plan-respond="(pid, decision, denyMsg, planAction) => emit('planRespond', pid, decision, denyMsg, planAction)"
       @rewind="(turnIndex) => emit('rewind', turnIndex)"
       @reconnect="(taskId: string) => emit('reconnect', taskId)"
+      @load-more="emit('loadMore')"
     >
       <template #empty>
         <slot name="empty">
@@ -54,6 +57,8 @@ const props = withDefaults(defineProps<{
   showHeader?: boolean
   showInput?: boolean
   rewindEnabled?: boolean
+  hasMoreHistory?: boolean
+  loadingMore?: boolean
 }>(), {
   isThinking: false,
   connectionStatus: 'disconnected',
@@ -70,6 +75,7 @@ const emit = defineEmits<{
   (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', turnIndex: number): void
   (e: 'reconnect', taskId: string): void
+  (e: 'loadMore'): void
 }>()
 
 const connectionLabel = computed(() => {

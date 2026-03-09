@@ -95,26 +95,26 @@ services:
   #     start_period: 120s
   #   shm_size: '256m'
 
-  # RabbitMQ 消息队列（监控事件总线）
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: foggy-navigator-rabbitmq
-    restart: unless-stopped
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: foggy
-      RABBITMQ_DEFAULT_PASS: foggy@monitor123
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    networks:
-      - foggy-network
-    healthcheck:
-      test: ["CMD", "rabbitmqctl", "status"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # RabbitMQ 消息队列（已停用，监控模块暂停）
+  # rabbitmq:
+  #   image: rabbitmq:3-management-alpine
+  #   container_name: foggy-navigator-rabbitmq
+  #   restart: unless-stopped
+  #   ports:
+  #     - "5672:5672"
+  #     - "15672:15672"
+  #   environment:
+  #     RABBITMQ_DEFAULT_USER: foggy
+  #     RABBITMQ_DEFAULT_PASS: foggy@monitor123
+  #   volumes:
+  #     - rabbitmq_data:/var/lib/rabbitmq
+  #   networks:
+  #     - foggy-network
+  #   healthcheck:
+  #     test: ["CMD", "rabbitmqctl", "status"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
 
   # phpMyAdmin（已停用，用于管理 MySQL）
   # phpmyadmin:
@@ -147,9 +147,9 @@ volumes:
   # gitlab_data:
   #   name: foggy-navigator-gitlab-data
   #   driver: local
-  rabbitmq_data:
-    name: foggy-navigator-rabbitmq-data
-    driver: local
+  # rabbitmq_data:
+  #   name: foggy-navigator-rabbitmq-data
+  #   driver: local
 
 networks:
   foggy-network:

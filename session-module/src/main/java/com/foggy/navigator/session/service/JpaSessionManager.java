@@ -13,6 +13,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -105,6 +108,31 @@ public class JpaSessionManager implements SessionManager {
                 .stream()
                 .map(this::toMessage)
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<Message> getLatestMessages(String sessionId, int limit, int offset) {
+        // Query (offset + limit) messages in DESC order, then skip offset, take limit
+        Pageable pageable = PageRequest.of(0, offset + limit);
+        List<SessionMessageEntity> descEntities =
+                messageRepository.findBySessionIdOrderByCreatedAtDesc(sessionId, pageable);
+
+        // Skip 'offset' items from the DESC result (these are the newest, already loaded)
+        List<SessionMessageEntity> slice = descEntities.stream()
+                .skip(offset)
+                .limit(limit)
+                .collect(Collectors.toList());
+
+        // Reverse to chronological order (ASC)
+        Collections.reverse(slice);
+        return slice.stream().map(this::toMessage).collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public long countMessages(String sessionId) {
+        return messageRepository.countBySessionId(sessionId);
     }
 
     @Override

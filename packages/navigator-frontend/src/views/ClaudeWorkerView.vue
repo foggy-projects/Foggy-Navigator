@@ -4329,13 +4329,20 @@ async function handleResyncFromList(conv: ConversationGroup) {
 
 /**
  * 策略 B 同步后重新加载 pane 中的消息。
- * 从 Worker JSONL 读取完整对话历史并替换 ChatPanel 显示。
+ * 从 Worker JSONL 读取最新消息并替换 ChatPanel 显示。
  */
 async function reloadPaneMessages(pane: TaskPaneState) {
   const task = pane.task.value
   if (!task?.claudeSessionId || !task?.workerId) return
   try {
-    const workerMessages = await dirApi.getWorkerSessionMessages(task.workerId, task.claudeSessionId)
+    // Load only the latest PAGE_SIZE messages to avoid performance issues
+    const pageSize = 50
+    const countResult = await dirApi.getWorkerSessionMessageCount(task.workerId, task.claudeSessionId)
+    const total = countResult.total
+    const offset = Math.max(0, total - pageSize)
+    const workerMessages = await dirApi.getWorkerSessionMessagesPaged(
+      task.workerId, task.claudeSessionId, offset, pageSize,
+    )
     if (!workerMessages || workerMessages.length === 0) return
 
     // 转换为 ChatMessage 格式
@@ -4349,6 +4356,8 @@ async function reloadPaneMessages(pane: TaskPaneState) {
     }))
     // 替换消息列表
     pane.chatState.messages.value = chatMessages
+    // If there are older messages, mark hasMoreHistory
+    pane.hasMoreHistory.value = offset > 0
   } catch (e) {
     console.warn('Failed to reload pane messages after resync:', e)
   }
@@ -4527,9 +4536,15 @@ async function viewTask(task: ClaudeTask) {
   pane.syncTaskStatus()
 
   // For synced tasks: if Navigator session was empty, load JSONL history from Worker
+  // Load only the latest PAGE_SIZE messages to avoid performance issues with long sessions.
   if (pane.chatState.messages.value.length === 0 && task.claudeSessionId && task.workerId) {
     try {
-      const history = await dirApi.getWorkerSessionMessages(task.workerId, task.claudeSessionId)
+      // Get total count first, then load only the latest batch
+      const countResult = await dirApi.getWorkerSessionMessageCount(task.workerId, task.claudeSessionId)
+      const total = countResult.total
+      const pageSize = 50
+      const offset = Math.max(0, total - pageSize)
+      const history = await dirApi.getWorkerSessionMessagesPaged(task.workerId, task.claudeSessionId, offset, pageSize)
       if (history.length > 0) {
         const { AipMessageType } = await import('@foggy/chat')
         const historyMsgs = history.map((m, i) => ({
@@ -4540,6 +4555,10 @@ async function viewTask(task: ClaudeTask) {
           timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
         }))
         pane.chatState.messages.value.push(...historyMsgs)
+        // If there are older messages, mark hasMoreHistory (best-effort for JSONL-only sessions)
+        if (offset > 0) {
+          pane.hasMoreHistory.value = true
+        }
       }
     } catch {
       // JSONL history loading is best-effort

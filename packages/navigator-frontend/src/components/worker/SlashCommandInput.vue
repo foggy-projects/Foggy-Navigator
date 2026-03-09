@@ -495,7 +495,7 @@ function closeFilePanel() {
 
 /**
  * Detect ./ trigger at any position in text (cursor-position-based).
- * The ./ must be preceded by: start-of-text, whitespace, or opening delimiter.
+ * The ./ can appear after any character (including CJK text, letters, etc.).
  * The text between ./ and cursor must not contain whitespace.
  */
 function detectFileTrigger(text: string, cursor: number) {
@@ -512,11 +512,6 @@ function detectFileTrigger(text: string, cursor: number) {
     const idx = before.lastIndexOf('./', searchFrom - 1)
     if (idx === -1) break
     searchFrom = idx // continue searching further left next iteration
-    // Check character before './' (must be word boundary)
-    if (idx > 0) {
-      const charBefore = before[idx - 1]
-      if (!/[\s"'`(\[{,;:]/.test(charBefore)) continue
-    }
     // Check no whitespace between './' and cursor
     const queryPart = before.slice(idx + 2)
     if (/\s/.test(queryPart)) continue

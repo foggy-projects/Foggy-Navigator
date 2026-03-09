@@ -5,7 +5,10 @@ import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'
 import * as workerApi from '@/api/claudeWorker'
 import { useUnifiedSse } from '@/composables/useUnifiedSse'
-import type { AgentMessage, ClaudeTask } from '@/types'
+import type { AgentMessage, ClaudeTask, Message } from '@/types'
+
+/** Number of messages to load per page */
+const PAGE_SIZE = 50
 
 export interface TaskPaneState {
   paneId: string
@@ -13,7 +16,13 @@ export interface TaskPaneState {
   chatState: ChatState
   /** Pre-fill the input field (e.g. after rewind with original prompt) */
   pendingInput: Ref<string>
+  /** Whether older messages are currently being loaded */
+  loadingMore: Ref<boolean>
+  /** Whether there are older messages available to load */
+  hasMoreHistory: Ref<boolean>
   connect(sessionId: string): Promise<void>
+  /** Load older messages (prepend to chat). Called when user scrolls to top. */
+  loadMoreHistory(): Promise<void>
   /** Resume in-place: keep messages, update task, reconnect SSE */
   resumeInPlace(newTask: ClaudeTask): void
   /** Reconnect SSE only (no message clear/reload). Used by workspace suspend/resume. */
@@ -35,6 +44,14 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   const pendingInput = ref('')
   let unsubscribeSse: (() => void) | null = null
   let connectVersion = 0
+
+  // Pagination state
+  let totalDbMessages = 0
+  let dbLoadedOffset = 0    // how many messages from the tail we've already loaded
+  let allDbLoaded = false
+  const loadingMore = ref(false)
+  const hasMoreHistory = ref(false)
+  let currentSessionId = ''
 
   const { subscribeSession, connected } = useUnifiedSse()
 
@@ -78,6 +95,65 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     } catch {
       /* task deleted or inaccessible — ignore */
     }
+  }
+
+  /**
+   * Convert a DB Message to ChatMessage(s) and push into chatState.
+   * Returns 1 if a USER/ASSISTANT message was counted, 0 otherwise.
+   *
+   * @param msg       The DB message
+   * @param nextMsg   The next message in sequence (for waiting-hint suppression)
+   */
+  function convertAndPushDbMessage(msg: Message, nextMsg?: Message): number {
+    let counted = 0
+    if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
+      counted = 1
+    }
+    const meta = msg.metadata
+    const msgType = meta?.type as string | undefined
+    const ts = new Date(msg.createdAt).getTime()
+
+    if (msg.role === 'USER') {
+      chatState.messages.value.push({
+        id: msg.id,
+        type: AipMessageType.TEXT_COMPLETE,
+        sender: 'user',
+        content: msg.content || '',
+        timestamp: ts,
+      })
+    } else if (msgType === 'STATE_SYNC' && meta?.subtype === 'waiting') {
+      // Skip transient "waiting" hints when the next message supersedes them
+      const nextType = nextMsg?.metadata?.type as string | undefined
+      if (nextMsg && (nextType === 'ERROR' || nextType === 'TEXT_COMPLETE'
+        || nextType === 'TASK_COMPLETED' || nextMsg.role === 'USER')) {
+        return counted
+      }
+      chatState.messages.value.push({
+        id: msg.id,
+        type: AipMessageType.STATE_SYNC,
+        sender: 'system',
+        content: msg.content || 'Waiting for response...',
+        raw: { subtype: 'waiting' },
+        timestamp: ts,
+      })
+    } else if (msgType && msgType in AipMessageType) {
+      chatState.processAipMessage({
+        messageId: msg.id,
+        sessionId: msg.sessionId,
+        timestamp: ts,
+        type: msgType as AipMessageType,
+        payload: meta,
+      })
+    } else {
+      chatState.messages.value.push({
+        id: msg.id,
+        type: AipMessageType.TEXT_COMPLETE,
+        sender: 'assistant',
+        content: msg.content || '',
+        timestamp: ts,
+      })
+    }
+    return counted
   }
 
   /** SSE event handler — shared by connect and resumeInPlace */
@@ -137,69 +213,29 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     chatState.clearMessages()
     chatState.setConnectionStatus('connecting')
 
-    // Load history messages — reconstruct typed messages from metadata
-    let dbMessageCount = 0
+    // Reset pagination state
+    currentSessionId = sessionId
+    totalDbMessages = 0
+    dbLoadedOffset = 0
+    allDbLoaded = false
+    loadingMore.value = false
+    hasMoreHistory.value = false
+
+    // Load latest PAGE_SIZE messages from DB (paginated)
     try {
-      const messages = await sessionApi.getMessages(sessionId)
+      const result = await sessionApi.getLatestMessages(sessionId, PAGE_SIZE, 0)
       if (connectVersion !== myVersion) return
+
+      totalDbMessages = result.total
+      dbLoadedOffset = Math.min(PAGE_SIZE, result.total)
+      allDbLoaded = !result.hasMore
+      hasMoreHistory.value = result.hasMore
+
+      const messages = result.messages
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i]
         if (!msg) continue
-        // Count USER/ASSISTANT messages (same口径 as JSONL count)
-        if (msg.role === 'USER' || msg.role === 'ASSISTANT') {
-          dbMessageCount++
-        }
-        const meta = msg.metadata
-        const msgType = meta?.type as string | undefined
-        const ts = new Date(msg.createdAt).getTime()
-
-        if (msg.role === 'USER') {
-          chatState.messages.value.push({
-            id: msg.id,
-            type: AipMessageType.TEXT_COMPLETE,
-            sender: 'user',
-            content: msg.content || '',
-            timestamp: ts,
-          })
-        } else if (msgType === 'STATE_SYNC' && meta?.subtype === 'waiting') {
-          // Skip transient "waiting" hints when the next message supersedes them
-          // (e.g., ERROR, TEXT_COMPLETE, or another real event follows).
-          // Only render if this is the LAST message (task may still be in progress).
-          const next = messages[i + 1]
-          const nextType = next?.metadata?.type as string | undefined
-          if (next && (nextType === 'ERROR' || nextType === 'TEXT_COMPLETE'
-            || nextType === 'TASK_COMPLETED' || next.role === 'USER')) {
-            // Superseded by a subsequent event — skip to avoid confusing display
-            continue
-          }
-          // Last message or followed by non-terminal event — render as waiting hint
-          chatState.messages.value.push({
-            id: msg.id,
-            type: AipMessageType.STATE_SYNC,
-            sender: 'system',
-            content: msg.content || 'Waiting for response...',
-            raw: { subtype: 'waiting' },
-            timestamp: ts,
-          })
-        } else if (msgType && msgType in AipMessageType) {
-          // Structured messages — reconstruct from metadata via processAipMessage
-          chatState.processAipMessage({
-            messageId: msg.id,
-            sessionId: msg.sessionId,
-            timestamp: ts,
-            type: msgType as AipMessageType,
-            payload: meta,
-          })
-        } else {
-          // Fallback — render as plain text
-          chatState.messages.value.push({
-            id: msg.id,
-            type: AipMessageType.TEXT_COMPLETE,
-            sender: 'assistant',
-            content: msg.content || '',
-            timestamp: ts,
-          })
-        }
+        convertAndPushDbMessage(msg, messages[i + 1])
       }
     } catch (e) {
       if (connectVersion !== myVersion) return
@@ -211,12 +247,13 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     attachTaskUpdateListener()
 
     // Non-blocking: detect and load JSONL delta messages.
+    // Use totalDbMessages (total count) for comparison, not the loaded count.
     // Skip for ABORTED tasks — the delta is typically caused by the CLI
     // continuing to run after abort (undelivered SSE events), not by real
     // external conversations.
     if (connectVersion !== myVersion) return
     if (task.value?.claudeSessionId && task.value?.workerId && task.value?.status !== 'ABORTED') {
-      detectAndLoadDelta(task.value.workerId, task.value.claudeSessionId, dbMessageCount, myVersion)
+      detectAndLoadDelta(task.value.workerId, task.value.claudeSessionId, totalDbMessages, myVersion)
     }
   }
 
@@ -230,15 +267,15 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
       // 2. If JSONL has more messages than DB and DB has at least some messages
       if (jsonlTotal > dbMsgCount && dbMsgCount > 0) {
-        // 3. Fetch all JSONL messages
-        const allMessages = await workerApi.getWorkerSessionMessages(workerId, claudeSessionId)
+        // 3. Fetch ONLY the delta using offset-based pagination (optimized)
+        const deltaCount = jsonlTotal - dbMsgCount
+        const delta = await workerApi.getWorkerSessionMessagesPaged(
+          workerId, claudeSessionId, dbMsgCount, deltaCount,
+        )
         if (connectVersion !== myVersion) return
-
-        // 4. Take the delta (messages after DB count)
-        const delta = allMessages.slice(dbMsgCount)
         if (delta.length === 0) return
 
-        // 5. Insert separator
+        // 4. Insert separator
         const separatorMsg: ChatMessage = {
           id: `delta-separator-${Date.now()}`,
           type: AipMessageType.TEXT_COMPLETE,
@@ -248,7 +285,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         }
         chatState.messages.value.push(separatorMsg)
 
-        // 6. Append delta messages
+        // 5. Append delta messages
         for (const msg of delta) {
           const chatMsg: ChatMessage = {
             id: `delta-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -265,6 +302,56 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     } catch (e) {
       if (connectVersion !== myVersion) return
       console.debug(`[TaskPane ${paneId}] Delta detection failed (non-critical):`, e)
+    }
+  }
+
+  /** Load older messages and prepend to chat. Called when user scrolls to top. */
+  async function loadMoreHistory(): Promise<void> {
+    if (allDbLoaded || loadingMore.value || !currentSessionId) return
+
+    loadingMore.value = true
+    try {
+      const result = await sessionApi.getLatestMessages(currentSessionId, PAGE_SIZE, dbLoadedOffset)
+
+      if (!result.messages.length) {
+        allDbLoaded = true
+        hasMoreHistory.value = false
+        return
+      }
+
+      // Convert DB messages to ChatMessages
+      // We need to build the array first, then unshift, to preserve the conversion logic
+      // that peeks at the next message (for waiting-hint suppression).
+      const olderMessages: ChatMessage[] = []
+      const prevMessagesSnapshot = chatState.messages.value
+
+      // Temporarily use a separate array to collect converted messages
+      const tempMessages = chatState.messages.value
+      const insertionPoint = tempMessages.length
+      // Append at the end temporarily (the helper pushes to chatState.messages)
+      for (let i = 0; i < result.messages.length; i++) {
+        const msg = result.messages[i]
+        if (!msg) continue
+        // For boundary: the "next" of the last older message is the first already-loaded message
+        const nextMsg = i < result.messages.length - 1
+          ? result.messages[i + 1]
+          : undefined // no peek across boundary for waiting-hint (conservative: render it)
+        convertAndPushDbMessage(msg, nextMsg)
+      }
+
+      // Extract newly pushed messages and move them to the front
+      const newlyAdded = tempMessages.splice(insertionPoint)
+      if (newlyAdded.length > 0) {
+        chatState.messages.value = [...newlyAdded, ...prevMessagesSnapshot]
+      }
+
+      dbLoadedOffset += result.messages.length
+      allDbLoaded = !result.hasMore
+      hasMoreHistory.value = result.hasMore
+    } catch (e) {
+      console.error(`[TaskPane ${paneId}] Failed to load more history:`, e)
+    } finally {
+      loadingMore.value = false
     }
   }
 
@@ -316,7 +403,10 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     task,
     chatState,
     pendingInput,
+    loadingMore,
+    hasMoreHistory,
     connect,
+    loadMoreHistory,
     resumeInPlace,
     reconnectSse,
     syncTaskStatus,

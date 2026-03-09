@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth import verify_token
 from ..claude.sdk_wrapper import session_store
@@ -77,12 +77,17 @@ async def get_session_message_count(session_id: str) -> dict:
 
 
 @router.get("/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str) -> list[dict]:
+async def get_session_messages(
+    session_id: str,
+    offset: int = Query(0, ge=0, description="Number of messages to skip"),
+    limit: int | None = Query(None, ge=1, description="Max messages to return"),
+) -> list[dict]:
     """Read conversation messages from a Claude Code local JSONL file.
 
     Returns user prompts and assistant text responses (no tool/thinking blocks).
+    Supports optional ``offset`` and ``limit`` query parameters for pagination.
     """
-    messages = read_session_messages(session_id)
+    messages = read_session_messages(session_id, offset=offset, limit=limit)
     if not messages:
         # Still return 200 with empty list - the session may exist but have no displayable messages
         return []

@@ -17,7 +17,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -162,12 +164,37 @@ public class SessionController {
     }
 
     /**
-     * 获取会话消息列表
+     * 获取会话消息列表（全量）
      */
     @GetMapping("/{id}/messages")
     public RX<List<Message>> getMessages(@PathVariable String id) {
         List<Message> messages = sessionManager.getAllMessages(id);
         return RX.ok(messages);
+    }
+
+    /**
+     * 获取会话最新消息（分页，从尾部开始）。
+     * 用于聊天面板按需加载：首次加载最新 N 条，向上滚动时加载更早的消息。
+     *
+     * @param id     会话ID
+     * @param limit  每页条数（默认50）
+     * @param offset 从尾部的偏移量（0=最新的 limit 条，50=跳过最新50条后的 limit 条）
+     */
+    @GetMapping("/{id}/messages/latest")
+    public RX<Map<String, Object>> getLatestMessages(
+            @PathVariable String id,
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+        long total = sessionManager.countMessages(id);
+        List<Message> messages = sessionManager.getLatestMessages(id, limit, offset);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("messages", messages);
+        result.put("total", total);
+        result.put("limit", limit);
+        result.put("offset", offset);
+        result.put("hasMore", (long) (offset + limit) < total);
+        return RX.ok(result);
     }
 
     /**

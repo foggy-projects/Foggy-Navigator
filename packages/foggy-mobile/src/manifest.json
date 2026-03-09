@@ -2,8 +2,8 @@
     "name" : "Foggy Navigator",
     "appid" : "__UNI__AC2B8DB",
     "description" : "Foggy Navigator 移动端",
-    "versionName" : "1.0.26",
-    "versionCode" : "126",
+    "versionName" : "1.0.27",
+    "versionCode" : "127",
     "transformPx" : false,
     "vueVersion" : "3",
     "h5" : {

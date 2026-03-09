@@ -82,6 +82,32 @@ public interface SessionManager {
     }
 
     /**
+     * 获取会话的最新 N 条消息（分页加载，从尾部开始）。
+     * 返回的消息按时间正序排列（ASC）。
+     *
+     * @param sessionId 会话ID
+     * @param limit     每页条数
+     * @param offset    从尾部偏移量（0=最新的 limit 条）
+     * @return 按时间正序排列的消息列表
+     */
+    default List<Message> getLatestMessages(String sessionId, int limit, int offset) {
+        // Default fallback: load all and slice
+        List<Message> all = getAllMessages(sessionId);
+        int total = all.size();
+        // offset is from the end: skip the last (offset) messages, take (limit) before them
+        int endIndex = Math.max(0, total - offset);
+        int startIndex = Math.max(0, endIndex - limit);
+        return all.subList(startIndex, endIndex);
+    }
+
+    /**
+     * 统计会话消息总数
+     */
+    default long countMessages(String sessionId) {
+        return getAllMessages(sessionId).size();
+    }
+
+    /**
      * 查找用户的待办会话
      */
     List<Session> findPendingByUser(String userId);
