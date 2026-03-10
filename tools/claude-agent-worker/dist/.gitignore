@@ -1,6 +1,3 @@
 # Build output - not checked into git
 output/
 staging/
-
-# Release config with OBS credentials (developer-only)
-release.env
