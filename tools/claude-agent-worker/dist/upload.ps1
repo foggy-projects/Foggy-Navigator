@@ -16,6 +16,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Helper: write text file with UTF-8 no BOM + LF line endings (Linux-safe)
+function Write-UnixFile {
+    param([string]$Path, [string]$Content)
+    $Content = $Content -replace "`r`n", "`n"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkerDir = Split-Path -Parent $ScriptDir
 $OutputDir = Join-Path $ScriptDir "output"
@@ -41,12 +49,20 @@ if (-not $ObsBucket -or -not $BaseUrl) {
     exit 1
 }
 
-# --- Check obsutil --------------------------------------------------------
-if (-not (Get-Command obsutil -ErrorAction SilentlyContinue)) {
+# --- Locate obsutil -------------------------------------------------------
+$ObsUtil = (Get-Command obsutil -ErrorAction SilentlyContinue).Source
+if (-not $ObsUtil) {
+    # Fallback: common install locations
+    foreach ($candidate in @("C:\Windows\obsutil.exe", "$env:USERPROFILE\obsutil\obsutil.exe")) {
+        if (Test-Path $candidate) { $ObsUtil = $candidate; break }
+    }
+}
+if (-not $ObsUtil) {
     Write-Host "ERROR: obsutil not found in PATH." -ForegroundColor Red
     Write-Host "Install: https://support.huaweicloud.com/utiltg-obs/obs_11_0003.html" -ForegroundColor Yellow
     exit 1
 }
+Write-Host "obsutil: $ObsUtil" -ForegroundColor Gray
 
 # --- Determine version ----------------------------------------------------
 if (-not $Version) {
@@ -80,7 +96,7 @@ Write-Host "Uploading archives..." -ForegroundColor Cyan
 foreach ($archive in $archives) {
     $obsPath = "$ObsBucket/$Version/$($archive.Name)"
     Write-Host "  $($archive.Name) -> $obsPath" -ForegroundColor Gray
-    obsutil cp $archive.FullName $obsPath -f
+    & $ObsUtil cp $archive.FullName $obsPath -f
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Failed to upload $($archive.Name)" -ForegroundColor Red
         exit 1
@@ -105,10 +121,10 @@ $latestJson = @{
 } | ConvertTo-Json -Depth 3
 
 $latestJsonPath = Join-Path $OutputDir "latest.json"
-$latestJson | Out-File -Encoding UTF8 $latestJsonPath
+Write-UnixFile -Path $latestJsonPath -Content $latestJson
 Write-Host "  Content: $latestJson" -ForegroundColor Gray
 
-obsutil cp $latestJsonPath "$ObsBucket/latest.json" -f
+& $ObsUtil cp $latestJsonPath "$ObsBucket/latest.json" -f
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Failed to upload latest.json" -ForegroundColor Red
     exit 1
@@ -123,8 +139,8 @@ if (Test-Path $bashBootstrap) {
     # Inject RELEASE_BASE_URL into the script
     $bashContent = (Get-Content $bashBootstrap -Raw) -replace 'RELEASE_BASE_URL="[^"]*"', "RELEASE_BASE_URL=`"$BaseUrl`""
     $tmpBash = Join-Path $OutputDir "install.sh"
-    $bashContent | Out-File -Encoding UTF8 -NoNewline $tmpBash
-    obsutil cp $tmpBash "$ObsBucket/install.sh" -f
+    Write-UnixFile -Path $tmpBash -Content $bashContent
+    & $ObsUtil cp $tmpBash "$ObsBucket/install.sh" -f
     Write-Host "  install.sh uploaded" -ForegroundColor Gray
 }
 
@@ -133,8 +149,8 @@ $ps1Bootstrap = Join-Path $ScriptDir "remote-install.ps1"
 if (Test-Path $ps1Bootstrap) {
     $ps1Content = (Get-Content $ps1Bootstrap -Raw) -replace 'RELEASE_BASE_URL\s*=\s*"[^"]*"', "`$ReleaseBaseUrl = `"$BaseUrl`""
     $tmpPs1 = Join-Path $OutputDir "install.ps1"
-    $ps1Content | Out-File -Encoding UTF8 $tmpPs1
-    obsutil cp $tmpPs1 "$ObsBucket/install.ps1" -f
+    Write-UnixFile -Path $tmpPs1 -Content $ps1Content
+    & $ObsUtil cp $tmpPs1 "$ObsBucket/install.ps1" -f
     Write-Host "  install.ps1 uploaded" -ForegroundColor Gray
 }
 

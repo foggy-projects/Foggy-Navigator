@@ -400,6 +400,39 @@ def get_pids_for_task(task_id: str) -> list[int]:
     return [pid for pid, tid in _tracked_pids.items() if tid == task_id]
 
 
+# Process names considered valid CLI targets (lowercase, without .exe suffix).
+_CLI_PROCESS_NAMES: frozenset[str] = frozenset(("node", "claude"))
+
+
+def is_cli_process(pid: int) -> bool:
+    """Check whether *pid* still belongs to a recognised CLI process.
+
+    Used by ``abort_query()`` before sending SIGTERM to avoid killing an
+    unrelated process that reused the same PID after the original CLI exited.
+
+    Returns ``True`` only when the process exists **and** its name matches
+    one of the known CLI executable names (``node``, ``claude``).
+    Returns ``False`` if the process is gone, inaccessible, or has a
+    different name (i.e. PID was reused by the OS for something else).
+    """
+    try:
+        import psutil
+        proc = psutil.Process(pid)
+        name = proc.name()
+        basename = name.rsplit(".", 1)[0].lower() if name.endswith(".exe") else name.lower()
+        return basename in _CLI_PROCESS_NAMES
+    except ImportError:
+        # psutil not available — fall back to existence-only check (best effort)
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    except Exception:
+        # NoSuchProcess / AccessDenied / ZombieProcess — not a valid target
+        return False
+
+
 def get_detector() -> ProcessDetector:
     """Return the platform-appropriate ``ProcessDetector`` singleton."""
     global _detector

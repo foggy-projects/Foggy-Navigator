@@ -21,6 +21,7 @@ from agent_worker.claude.process_detection import (
     _tracked_pids,
     get_detector,
     get_tracked_pids,
+    is_cli_process,
     register_pid,
     unregister_pid,
     unregister_pids_for_task,
@@ -110,6 +111,72 @@ class TestPidRegistry:
 
         assert alive == {1000}
         assert 2000 not in _tracked_pids  # pruned
+
+
+# ---------------------------------------------------------------------------
+# is_cli_process — pre-kill identity verification
+# ---------------------------------------------------------------------------
+
+class TestIsCliProcess:
+    """is_cli_process() validates PID identity before SIGTERM to prevent false kills."""
+
+    def test_returns_true_for_node_process(self):
+        mock_proc = MagicMock()
+        mock_proc.name.return_value = "node"
+        with patch("psutil.Process", return_value=mock_proc):
+            assert is_cli_process(1234) is True
+
+    def test_returns_true_for_claude_exe_on_windows(self):
+        mock_proc = MagicMock()
+        mock_proc.name.return_value = "claude.exe"
+        with patch("psutil.Process", return_value=mock_proc):
+            assert is_cli_process(1234) is True
+
+    def test_returns_true_for_node_exe_on_windows(self):
+        mock_proc = MagicMock()
+        mock_proc.name.return_value = "node.exe"
+        with patch("psutil.Process", return_value=mock_proc):
+            assert is_cli_process(1234) is True
+
+    def test_returns_false_for_unrelated_process(self):
+        """PID reused by a completely different process — must NOT be killed."""
+        mock_proc = MagicMock()
+        mock_proc.name.return_value = "python.exe"
+        with patch("psutil.Process", return_value=mock_proc):
+            assert is_cli_process(1234) is False
+
+    def test_returns_false_for_vscode(self):
+        """PID reused by VS Code — must NOT be killed."""
+        mock_proc = MagicMock()
+        mock_proc.name.return_value = "Code.exe"
+        with patch("psutil.Process", return_value=mock_proc):
+            assert is_cli_process(1234) is False
+
+    def test_returns_false_when_process_gone(self):
+        """Process already exited — psutil raises NoSuchProcess."""
+        import psutil
+        with patch("psutil.Process", side_effect=psutil.NoSuchProcess(1234)):
+            assert is_cli_process(1234) is False
+
+    def test_returns_false_when_access_denied(self):
+        """System process we can't inspect — treat as non-CLI."""
+        import psutil
+        with patch("psutil.Process", side_effect=psutil.AccessDenied(1234)):
+            assert is_cli_process(1234) is False
+
+    def test_fallback_when_psutil_unavailable(self):
+        """Without psutil, falls back to os.kill(pid, 0) existence check."""
+        with patch.dict("sys.modules", {"psutil": None}):
+            with patch("agent_worker.claude.process_detection.os.kill") as mock_kill:
+                # Process exists
+                mock_kill.return_value = None
+                assert is_cli_process(1234) is True
+
+    def test_fallback_returns_false_when_process_gone(self):
+        """Without psutil, process doesn't exist."""
+        with patch.dict("sys.modules", {"psutil": None}):
+            with patch("agent_worker.claude.process_detection.os.kill", side_effect=OSError):
+                assert is_cli_process(1234) is False
 
 
 # ---------------------------------------------------------------------------

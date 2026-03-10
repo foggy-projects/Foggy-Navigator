@@ -41,7 +41,12 @@ class Settings(BaseSettings):
     marketplace_enabled: bool = True
     marketplace_url: str = "http://gitlab.foggysource.com/foggy-tools/company-skill-marketplace.git"
 
-    model_config = SettingsConfigDict(env_prefix="AGENT_WORKER_", env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_prefix="AGENT_WORKER_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",  # ignore non-prefixed variables from .env (e.g. RELEASE_*)
+    )
 
 
 settings = Settings()

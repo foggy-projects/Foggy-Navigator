@@ -311,7 +311,7 @@ async def abort_query(task_id: str) -> AbortResponse:
     ``foggy_task_id``.  Snapshots tracked PIDs before any mutation so
     they survive the asyncio finally-block cleanup.
     """
-    from ..claude.process_detection import get_pids_for_task
+    from ..claude.process_detection import get_pids_for_task, is_cli_process
 
     # -- Resolve task (by worker task_id or foggy_task_id) --
     result = _resolve_task_entry(task_id)
@@ -332,9 +332,20 @@ async def abort_query(task_id: str) -> AbortResponse:
     if atask is not None and not atask.done():
         atask.cancel()
 
-    # -- Kill CLI processes --
+    # -- Kill CLI processes (with identity verification to prevent false kills) --
     killed: list[int] = []
+    skipped: list[int] = []
     for pid in pids_to_kill:
+        # Verify the PID still belongs to a CLI process before sending SIGTERM.
+        # This prevents false kills when the OS reuses a PID for an unrelated
+        # process after the original CLI has already exited.
+        if not is_cli_process(pid):
+            logger.warning(
+                "Abort: PID %d is no longer a CLI process (exited or PID reused), "
+                "skipping to avoid false kill for task %s", pid, resolved_id,
+            )
+            skipped.append(pid)
+            continue
         try:
             os.kill(pid, signal.SIGTERM)
             killed.append(pid)
@@ -343,6 +354,10 @@ async def abort_query(task_id: str) -> AbortResponse:
             logger.info("Abort: pid=%d already exited", pid)
         except OSError as exc:
             logger.warning("Abort: failed to kill pid=%d: %s", pid, exc)
+
+    if skipped:
+        logger.info("Abort: skipped %d stale/reused PID(s) for task %s: %s",
+                     len(skipped), resolved_id, skipped)
 
     return AbortResponse(task_id=task_id, status="cancelled", killed_pids=killed)
 
