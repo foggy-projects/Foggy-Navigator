@@ -24,7 +24,7 @@ class JpaSessionManagerTest {
     @EnableAutoConfiguration
     @EntityScan(basePackages = "com.foggy.navigator.common.entity")
     @EnableJpaRepositories(basePackages = "com.foggy.navigator.session.repository")
-    @ComponentScan(basePackages = "com.foggy.navigator.session.service")
+    @ComponentScan(basePackages = "com.foggy.navigator.session")
     static class TestConfig {
     }
 

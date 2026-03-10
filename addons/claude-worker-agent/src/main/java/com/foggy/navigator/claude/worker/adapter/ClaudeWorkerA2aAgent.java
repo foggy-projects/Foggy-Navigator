@@ -48,6 +48,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
             desc = (desc != null ? desc + "\n\n" : "") + "## 项目概述\n" + entity.getProjectSummary();
         }
         return A2aAgentCard.builder()
+                .id(entity.getAgentId())
                 .name(entity.getName())
                 .description(desc)
                 .url(entity.getEndpointUrl())
@@ -82,9 +83,16 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
             }
         }
 
+        // maxTurns: 从 message.metadata 读取（共享调用可指定），默认 3
+        // 注意：resume 场景下 Claude 可能先用工具（Read 等）再生成文本，
+        // maxTurns=1 会导致用完工具后没有轮次生成回答文本
+        int maxTurns = 3;
+        if (message.getMetadata() != null && message.getMetadata().containsKey("maxTurns")) {
+            maxTurns = ((Number) message.getMetadata().get("maxTurns")).intValue();
+        }
         Map<String, Object> result = workerFacade.syncQuery(
                 entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
-                claudeSessionId, 1, null);
+                claudeSessionId, maxTurns, null);
 
         String resultText = (String) result.get("resultText");
         String error = (String) result.get("error");

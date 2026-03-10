@@ -52,6 +52,14 @@ public class AgentConsultationEntity {
     @Column(length = 64)
     private String contextId;
 
+    /** 调用来源：INTERNAL（内部用户）/ SHARED（外部共享） */
+    @Column(length = 16)
+    private String source;
+
+    /** 共享调用时关联的 SharingKey ID（内部调用为 null） */
+    @Column(length = 64)
+    private String sharingKeyId;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -62,6 +70,9 @@ public class AgentConsultationEntity {
         }
         if (status == null) {
             status = "COMPLETED";
+        }
+        if (source == null) {
+            source = "INTERNAL";
         }
     }
 }

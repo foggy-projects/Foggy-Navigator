@@ -72,6 +72,7 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
             desc = (desc != null ? desc + "\n\n" : "") + "## 项目概述\n" + entity.getProjectSummary();
         }
         return A2aAgentCard.builder()
+                .id(entity.getAgentId())
                 .name(entity.getName())
                 .description(desc)
                 .url(entity.getEndpointUrl())
