@@ -37,6 +37,7 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
@@ -87,6 +88,9 @@ public class ClaudeTaskService {
     private final LlmModelManager llmModelManager;
     private final UserAuthService userAuthService;
     private final TransactionTemplate txTemplate;
+
+    @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}")
+    private String navigatorApiBase;
 
     /**
      * 创建任务
@@ -196,7 +200,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(),
                 authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey, extraEnvVars));
+                navigatorApiKey, navigatorApiBase, extraEnvVars));
 
         return toDTO(entity);
     }
@@ -333,7 +337,7 @@ public class ClaudeTaskService {
                 form.getPrompt(), cwd, form.getClaudeSessionId(),
                 form.getModel(), form.getMaxTurns(), agentTeamsJson,
                 form.getImages(), authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey, extraEnvVars));
+                navigatorApiKey, navigatorApiBase, extraEnvVars));
 
         return toDTO(entity);
     }

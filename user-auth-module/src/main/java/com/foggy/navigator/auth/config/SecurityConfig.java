@@ -87,6 +87,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/coding-agents/", "/api/v1/coding-agents/**").permitAll()
                         .requestMatchers("/api/v1/cross-project-tasks/", "/api/v1/cross-project-tasks/**").permitAll()
                         .requestMatchers("/api/v1/agent-tasks/", "/api/v1/agent-tasks/**").permitAll()
+                        .requestMatchers("/api/v1/agents", "/api/v1/agents/**").permitAll()
                         .requestMatchers("/api/v1/task-assistant/", "/api/v1/task-assistant/**").permitAll()
                         .requestMatchers("/api/v1/notifications/stream", "/api/v1/notifications/stream/", "/api/v1/notifications/stream/**").permitAll()
                         .requestMatchers("/api/v1/sse/", "/api/v1/sse/**").permitAll()

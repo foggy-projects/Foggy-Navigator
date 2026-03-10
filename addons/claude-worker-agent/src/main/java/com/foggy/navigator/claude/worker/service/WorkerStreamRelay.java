@@ -110,6 +110,7 @@ public class WorkerStreamRelay {
                     event.getAgentTeamsJson(), event.getImages(),
                     event.getApiKey(), event.getAuthToken(), event.getBaseUrl(),
                     event.getPermissionMode(), event.getNavigatorApiKey(),
+                    event.getNavigatorApiBase(),
                     event.getTaskId(), event.getSessionId(),
                     event.getExtraEnvVars());
 

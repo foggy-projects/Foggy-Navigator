@@ -558,6 +558,7 @@ class SdkWrapper:
         auth_token: str | None = None,
         base_url: str | None = None,
         navigator_api_key: str | None = None,
+        navigator_api_base: str | None = None,
         extra_env_vars: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Build an environment-variable dict to inject into the CLI subprocess.
@@ -586,6 +587,10 @@ class SdkWrapper:
         # Navigator service token — allows CLI skills to call Navigator API
         if navigator_api_key:
             env["NAVIGATOR_TOKEN"] = navigator_api_key
+        # Navigator platform base URL — allows CLI skills to discover Navigator API
+        nav_base = navigator_api_base or settings.navigator_api_base
+        if nav_base:
+            env["NAVIGATOR_API_BASE"] = nav_base
         # Extra env vars from LLM model config (e.g. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)
         if extra_env_vars:
             env.update(extra_env_vars)
@@ -715,6 +720,7 @@ class SdkWrapper:
         base_url: str | None = None,
         permission_mode: str | None = None,
         navigator_api_key: str | None = None,
+        navigator_api_base: str | None = None,
         disallowed_tools: list[str] | None = None,
         foggy_task_id: str | None = None,
         foggy_session_id: str | None = None,
@@ -777,6 +783,7 @@ class SdkWrapper:
         try:
             env = self._build_env(api_key=api_key, auth_token=auth_token, base_url=base_url,
                                   navigator_api_key=navigator_api_key,
+                                  navigator_api_base=navigator_api_base,
                                   extra_env_vars=extra_env_vars)
 
             # Inject Foggy platform tracking IDs as environment variables.

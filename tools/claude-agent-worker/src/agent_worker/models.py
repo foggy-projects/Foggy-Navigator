@@ -40,6 +40,8 @@ class QueryRequest(BaseModel):
     permission_mode: str | None = Field(None, description="Permission mode for tool authorization")
     # Navigator platform API key (injected into CLI env as NAVIGATOR_API_KEY)
     navigator_api_key: str | None = Field(None, description="Navigator platform API key for cross-project task skills")
+    # Navigator platform base URL (injected into CLI env as NAVIGATOR_API_BASE)
+    navigator_api_base: str | None = Field(None, description="Navigator platform base URL for admin skill env injection")
     # Tool restrictions (claude-agent-sdk only)
     disallowed_tools: list[str] | None = Field(None, description="Tools to disallow for this query (e.g. ['Task'])")
     # Foggy platform tracking IDs (injected as env vars into CLI subprocess)
