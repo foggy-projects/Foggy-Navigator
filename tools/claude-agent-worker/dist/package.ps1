@@ -82,6 +82,12 @@ function Build-ForOS {
     Copy-Item (Join-Path $ScriptDir "bin\claude-worker") $BinDir
     Copy-Item (Join-Path $ScriptDir "bin\claude-worker.ps1") $BinDir
 
+    # --- Copy bundled docs (install skill, etc.) --------------------------
+    $DocsDir = Join-Path $ScriptDir "docs"
+    if (Test-Path $DocsDir) {
+        Copy-Item $DocsDir (Join-Path $StageDir "docs") -Recurse
+    }
+
     # --- Write VERSION file -----------------------------------------------
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText((Join-Path $StageDir "VERSION"), $Version, $utf8NoBom)
