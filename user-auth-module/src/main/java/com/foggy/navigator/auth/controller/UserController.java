@@ -50,6 +50,15 @@ public class UserController {
     }
 
     /**
+     * 查询所有用户（SUPER_ADMIN用，不区分租户）
+     */
+    @GetMapping
+    public RX<List<UserDTO>> listAllUsers() {
+        List<UserDTO> users = userAuthService.listAllUsers();
+        return RX.ok(users);
+    }
+
+    /**
      * 查询租户下的用户列表
      */
     @GetMapping("/tenant/{tenantId}")

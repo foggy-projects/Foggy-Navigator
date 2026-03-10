@@ -16,6 +16,12 @@ export async function getCurrentUser(): Promise<UserDTO> {
   return rx.data
 }
 
+/** 列出所有用户（SUPER_ADMIN用，不区分租户） */
+export async function listAllUsers(): Promise<UserDTO[]> {
+  const rx = (await client.get('/users')) as unknown as RX<UserDTO[]>
+  return rx.data
+}
+
 /** 按租户列出用户 */
 export async function listUsersByTenant(tenantId: string): Promise<UserDTO[]> {
   const rx = (await client.get(`/users/tenant/${tenantId}`)) as unknown as RX<UserDTO[]>

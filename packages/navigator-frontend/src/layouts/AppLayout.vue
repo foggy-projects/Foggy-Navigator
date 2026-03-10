@@ -14,6 +14,7 @@
         <el-menu-item index="/tasks">任务</el-menu-item>
         <el-menu-item index="/cross-tasks">跨项目</el-menu-item>
         <el-menu-item index="/monitoring">监控</el-menu-item>
+        <el-menu-item index="/users">用户</el-menu-item>
         <el-menu-item index="/settings">设置</el-menu-item>
       </el-menu>
       <div class="header-right">

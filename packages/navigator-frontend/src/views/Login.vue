@@ -88,6 +88,7 @@ async function handleLogin() {
       setToken(response.token)
       setUserInfo({
         userId: response.userId,
+        tenantId: response.tenantId,
         username: response.username,
         roles: response.roles,
       })

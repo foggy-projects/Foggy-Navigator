@@ -54,6 +54,11 @@ public interface UserAuthService {
     List<UserDTO> listUsersByTenant(String tenantId);
 
     /**
+     * 查询所有未删除的用户（SUPER_ADMIN 用）
+     */
+    List<UserDTO> listAllUsers();
+
+    /**
      * 创建API Key
      */
     ApiKeyDTO createApiKey(String userId, ApiKeyCreateForm form);
