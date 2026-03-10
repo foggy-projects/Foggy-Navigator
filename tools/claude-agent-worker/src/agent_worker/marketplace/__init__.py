@@ -29,13 +29,11 @@ async def setup_marketplace() -> bool:
 
     This function:
     1. Checks if marketplace is already configured
-    2. Tests repository access
-    3. Prompts for credentials if needed (interactive mode only)
-    4. Writes configuration to settings.json
+    2. Writes configuration to settings.json (regardless of access)
+    3. Tests repository access and logs warning if unavailable
 
     Returns:
-        True if marketplace is configured (either already or newly),
-        False if configuration failed
+        True if marketplace is configured in settings.json
     """
     # Skip if marketplace is disabled
     if not getattr(settings, "marketplace_enabled", True):
@@ -53,51 +51,37 @@ async def setup_marketplace() -> bool:
 
     logger.info("Setting up company-skill-marketplace from %s", marketplace_url)
 
-    # 2. Test repository access
-    has_access, error = await check_repo_access(marketplace_url)
-
-    if not has_access:
-        logger.info("Repository access check: %s", error)
-
-        # 3. Prompt for credentials if authentication required
-        if error == "Authentication required":
-            creds = prompt_for_credentials()
-
-            if creds:
-                username, password = creds
-
-                # Configure git credential helper
-                if configure_credential_helper(marketplace_url, username, password):
-                    # Retry access check
-                    has_access, error = await check_repo_access(marketplace_url)
-
-                    if not has_access:
-                        logger.warning("Credentials accepted but access still denied: %s", error)
-                else:
-                    logger.warning("Failed to store credentials")
-
-        elif error == "Repository not found":
-            logger.error("Marketplace repository not found: %s", marketplace_url)
-            return False
-
-    if not has_access:
-        logger.warning(
-            "Failed to access company-skill-marketplace. "
-            "Skills from marketplace will not be available. "
-            "Error: %s",
-            error
-        )
-        return False
-
-    # 4. Write configuration to settings.json
+    # 2. Write configuration to settings.json first
     try:
         current_settings = configure_marketplace(current_settings, marketplace_url)
         write_settings(current_settings)
-        logger.info("Marketplace configured successfully in %s", SETTINGS_FILE)
-        return True
+        logger.info("Marketplace configured in %s", SETTINGS_FILE)
     except Exception as e:
         logger.warning("Failed to write settings.json: %s", e)
         return False
+
+    # 3. Test repository access (best effort, don't block on failure)
+    has_access, error = await check_repo_access(marketplace_url)
+
+    if not has_access:
+        if error == "Authentication required":
+            # Try to prompt for credentials in interactive mode
+            creds = prompt_for_credentials()
+            if creds:
+                username, password = creds
+                if configure_credential_helper(marketplace_url, username, password):
+                    has_access, _ = await check_repo_access(marketplace_url)
+
+        if not has_access:
+            logger.warning(
+                "Could not verify marketplace access (%s). "
+                "Skills may not load until credentials are configured.",
+                error
+            )
+    else:
+        logger.info("Marketplace repository accessible")
+
+    return True
 
 
 __all__ = ["setup_marketplace"]
