@@ -16,6 +16,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Helper: write text file with UTF-8 no BOM + LF line endings (Linux-safe)
+function Write-UnixFile {
+    param([string]$Path, [string]$Content)
+    $Content = $Content -replace "`r`n", "`n"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkerDir = Split-Path -Parent $ScriptDir
 $OutputDir = Join-Path $ScriptDir "output"
@@ -113,7 +121,7 @@ $latestJson = @{
 } | ConvertTo-Json -Depth 3
 
 $latestJsonPath = Join-Path $OutputDir "latest.json"
-$latestJson | Out-File -Encoding UTF8 $latestJsonPath
+Write-UnixFile -Path $latestJsonPath -Content $latestJson
 Write-Host "  Content: $latestJson" -ForegroundColor Gray
 
 & $ObsUtil cp $latestJsonPath "$ObsBucket/latest.json" -f
@@ -131,7 +139,7 @@ if (Test-Path $bashBootstrap) {
     # Inject RELEASE_BASE_URL into the script
     $bashContent = (Get-Content $bashBootstrap -Raw) -replace 'RELEASE_BASE_URL="[^"]*"', "RELEASE_BASE_URL=`"$BaseUrl`""
     $tmpBash = Join-Path $OutputDir "install.sh"
-    $bashContent | Out-File -Encoding UTF8 -NoNewline $tmpBash
+    Write-UnixFile -Path $tmpBash -Content $bashContent
     & $ObsUtil cp $tmpBash "$ObsBucket/install.sh" -f
     Write-Host "  install.sh uploaded" -ForegroundColor Gray
 }
@@ -141,7 +149,7 @@ $ps1Bootstrap = Join-Path $ScriptDir "remote-install.ps1"
 if (Test-Path $ps1Bootstrap) {
     $ps1Content = (Get-Content $ps1Bootstrap -Raw) -replace 'RELEASE_BASE_URL\s*=\s*"[^"]*"', "`$ReleaseBaseUrl = `"$BaseUrl`""
     $tmpPs1 = Join-Path $OutputDir "install.ps1"
-    $ps1Content | Out-File -Encoding UTF8 $tmpPs1
+    Write-UnixFile -Path $tmpPs1 -Content $ps1Content
     & $ObsUtil cp $tmpPs1 "$ObsBucket/install.ps1" -f
     Write-Host "  install.ps1 uploaded" -ForegroundColor Gray
 }

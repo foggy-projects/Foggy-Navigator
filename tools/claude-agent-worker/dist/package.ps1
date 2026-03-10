@@ -15,6 +15,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Helper: convert file to UTF-8 no BOM + LF line endings (Linux-safe)
+function ConvertTo-UnixLineEndings {
+    param([string]$FilePath)
+    $content = [System.IO.File]::ReadAllText($FilePath)
+    $content = $content -replace "`r`n", "`n"
+    # Remove BOM if present
+    if ($content.Length -gt 0 -and $content[0] -eq [char]0xFEFF) {
+        $content = $content.Substring(1)
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($FilePath, $content, $utf8NoBom)
+}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkerDir = Split-Path -Parent $ScriptDir
 
@@ -70,7 +83,18 @@ function Build-ForOS {
     Copy-Item (Join-Path $ScriptDir "bin\claude-worker.ps1") $BinDir
 
     # --- Write VERSION file -----------------------------------------------
-    $Version | Out-File -Encoding UTF8 -NoNewline (Join-Path $StageDir "VERSION")
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText((Join-Path $StageDir "VERSION"), $Version, $utf8NoBom)
+
+    # --- Convert shell scripts to LF for linux/macos ---------------------
+    if ($OsTag -ne "windows") {
+        Get-ChildItem -Path $StageDir -Recurse -Include "*.sh","*.py" -File | ForEach-Object {
+            ConvertTo-UnixLineEndings $_.FullName
+        }
+        # Also convert the CLI wrapper (no extension)
+        $cliWrapper = Join-Path $StageDir "bin\claude-worker"
+        if (Test-Path $cliWrapper) { ConvertTo-UnixLineEndings $cliWrapper }
+    }
 
     # --- Clean build artifacts --------------------------------------------
     Get-ChildItem -Path $StageDir -Directory -Recurse -Filter "__pycache__" -ErrorAction SilentlyContinue |
