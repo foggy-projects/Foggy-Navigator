@@ -79,6 +79,11 @@ build_for_os() {
     cp "$SCRIPT_DIR/bin/claude-worker"     "$STAGE_DIR/bin/"
     cp "$SCRIPT_DIR/bin/claude-worker.ps1" "$STAGE_DIR/bin/"
 
+    # --- Copy bundled docs (install skill, etc.) --------------------------
+    if [ -d "$SCRIPT_DIR/docs" ]; then
+        cp -r "$SCRIPT_DIR/docs" "$STAGE_DIR/"
+    fi
+
     # --- Write VERSION file -----------------------------------------------
     echo "$VERSION" > "$STAGE_DIR/VERSION"
 
