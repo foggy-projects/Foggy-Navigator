@@ -7,7 +7,7 @@
 #
 # Prerequisites:
 #   - obsutil installed and configured (obsutil config -i=AK -k=SK -e=endpoint)
-#   - dist/release.env with RELEASE_OBS_BUCKET and RELEASE_BASE_URL
+#   - .env with RELEASE_OBS_BUCKET and RELEASE_BASE_URL (in worker root)
 #   - Archives already built in dist/output/
 
 param(
@@ -20,23 +20,24 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkerDir = Split-Path -Parent $ScriptDir
 $OutputDir = Join-Path $ScriptDir "output"
 
-# --- Load release.env ----------------------------------------------------
-$ReleaseEnv = Join-Path $ScriptDir "release.env"
-if (-not (Test-Path $ReleaseEnv)) {
-    Write-Host "ERROR: dist/release.env not found." -ForegroundColor Red
-    Write-Host "Copy dist/release.env.example to dist/release.env and fill in your OBS config." -ForegroundColor Yellow
+# --- Load .env from worker root ------------------------------------------
+$DotEnv = Join-Path $WorkerDir ".env"
+if (-not (Test-Path $DotEnv)) {
+    Write-Host "ERROR: .env not found at $WorkerDir" -ForegroundColor Red
+    Write-Host "Copy .env.example to .env and fill in RELEASE_OBS_BUCKET / RELEASE_BASE_URL." -ForegroundColor Yellow
     exit 1
 }
 
 $ObsBucket = ""
 $BaseUrl = ""
-Get-Content $ReleaseEnv | ForEach-Object {
+Get-Content $DotEnv | ForEach-Object {
     if ($_ -match "^RELEASE_OBS_BUCKET=(.+)") { $ObsBucket = $Matches[1].Trim() }
     if ($_ -match "^RELEASE_BASE_URL=(.+)") { $BaseUrl = $Matches[1].Trim() }
 }
 
 if (-not $ObsBucket -or -not $BaseUrl) {
-    Write-Host "ERROR: RELEASE_OBS_BUCKET and RELEASE_BASE_URL must be set in dist/release.env" -ForegroundColor Red
+    Write-Host "ERROR: RELEASE_OBS_BUCKET and RELEASE_BASE_URL must be set in .env" -ForegroundColor Red
+    Write-Host "See .env.example for reference." -ForegroundColor Yellow
     exit 1
 }
 

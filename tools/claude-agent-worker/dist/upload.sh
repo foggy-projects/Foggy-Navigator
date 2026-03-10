@@ -8,7 +8,7 @@
 #
 # Prerequisites:
 #   - obsutil installed and configured
-#   - dist/release.env with RELEASE_OBS_BUCKET and RELEASE_BASE_URL
+#   - .env with RELEASE_OBS_BUCKET and RELEASE_BASE_URL (in worker root)
 #   - Archives already built in dist/output/
 
 set -e
@@ -20,19 +20,20 @@ OUTPUT_DIR="$SCRIPT_DIR/output"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; GRAY='\033[0;37m'; NC='\033[0m'
 
-# --- Load release.env ----------------------------------------------------
-RELEASE_ENV="$SCRIPT_DIR/release.env"
-if [ ! -f "$RELEASE_ENV" ]; then
-    echo -e "${RED}ERROR: dist/release.env not found.${NC}"
-    echo -e "${YELLOW}Copy dist/release.env.example to dist/release.env and fill in your OBS config.${NC}"
+# --- Load .env from worker root ------------------------------------------
+DOT_ENV="$WORKER_DIR/.env"
+if [ ! -f "$DOT_ENV" ]; then
+    echo -e "${RED}ERROR: .env not found at $WORKER_DIR${NC}"
+    echo -e "${YELLOW}Copy .env.example to .env and fill in RELEASE_OBS_BUCKET / RELEASE_BASE_URL.${NC}"
     exit 1
 fi
 
-OBS_BUCKET=$(grep "^RELEASE_OBS_BUCKET=" "$RELEASE_ENV" | cut -d= -f2- | tr -d '[:space:]')
-BASE_URL=$(grep "^RELEASE_BASE_URL=" "$RELEASE_ENV" | cut -d= -f2- | tr -d '[:space:]')
+OBS_BUCKET=$(grep "^RELEASE_OBS_BUCKET=" "$DOT_ENV" | cut -d= -f2- | tr -d '[:space:]')
+BASE_URL=$(grep "^RELEASE_BASE_URL=" "$DOT_ENV" | cut -d= -f2- | tr -d '[:space:]')
 
 if [ -z "$OBS_BUCKET" ] || [ -z "$BASE_URL" ]; then
-    echo -e "${RED}ERROR: RELEASE_OBS_BUCKET and RELEASE_BASE_URL must be set in dist/release.env${NC}"
+    echo -e "${RED}ERROR: RELEASE_OBS_BUCKET and RELEASE_BASE_URL must be set in .env${NC}"
+    echo -e "${YELLOW}See .env.example for reference.${NC}"
     exit 1
 fi
 

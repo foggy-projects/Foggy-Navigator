@@ -209,6 +209,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  listAllUsers,
   listUsersByTenant,
   createUser,
   updateUser,
@@ -240,13 +241,12 @@ const currentUserId = cachedUserInfo?.userId ?? ''
 const currentTenantId = cachedUserInfo?.tenantId ?? ''
 
 async function loadUsers() {
-  if (!currentTenantId) {
-    ElMessage.error('无法获取租户信息，请重新登录')
-    return
-  }
   loading.value = true
   try {
-    users.value = await listUsersByTenant(currentTenantId)
+    // SUPER_ADMIN 无 tenantId → 查询所有用户；普通租户用户 → 按 tenantId 查询
+    users.value = currentTenantId
+      ? await listUsersByTenant(currentTenantId)
+      : await listAllUsers()
   } catch {
     /* interceptor handles error */
   } finally {

@@ -3,6 +3,7 @@ const USER_INFO_KEY = 'navigator_user'
 
 export interface UserInfo {
   userId: string
+  tenantId?: string
   username: string
   roles: string[]
 }

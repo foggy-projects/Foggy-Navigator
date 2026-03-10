@@ -189,6 +189,14 @@ public class UserAuthServiceImpl implements UserAuthService {
     }
 
     @Override
+    public List<UserDTO> listAllUsers() {
+        return userRepository.findByStatusNot(UserStatus.DELETED)
+                .stream()
+                .map(this::entityToDTO)
+                .collect(Collectors.toList());
+    }
+
+    @Override
     @Transactional
     public ApiKeyDTO createApiKey(String userId, ApiKeyCreateForm form) {
         // 验证用户存在

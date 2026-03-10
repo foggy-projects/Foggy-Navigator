@@ -17,6 +17,7 @@ export interface LoginResultDTO {
   expiresIn: number
   user: {
     id: string
+    tenantId?: string
     username: string
     email?: string
     roles: string[]
@@ -26,6 +27,7 @@ export interface LoginResultDTO {
 export interface LoginResponse {
   token: string
   userId: string
+  tenantId?: string
   username: string
   roles: string[]
 }
@@ -37,6 +39,7 @@ export async function login(request: LoginRequest): Promise<LoginResponse> {
   return {
     token: result.token,
     userId: result.user.id,
+    tenantId: result.user.tenantId,
     username: result.user.username,
     roles: result.user.roles,
   }

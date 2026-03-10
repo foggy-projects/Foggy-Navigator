@@ -35,6 +35,11 @@ public interface UserRepository extends JpaRepository<UserEntity, String> {
     List<UserEntity> findByTenantIdAndStatus(String tenantId, UserStatus status);
 
     /**
+     * 根据状态查找所有用户（不区分租户）
+     */
+    List<UserEntity> findByStatusNot(UserStatus status);
+
+    /**
      * 检查用户名是否存在
      */
     boolean existsByUsername(String username);
