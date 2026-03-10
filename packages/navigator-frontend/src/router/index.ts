@@ -84,6 +84,17 @@ export function resetSetupStatus() {
   setupComplete = null
 }
 
+/** 标记用户主动跳过初始化配置 */
+export function markSetupSkipped() {
+  setupComplete = true
+  localStorage.setItem('navigator_setup_skipped', '1')
+}
+
+/** 清除跳过标记（用于退出登录时重置） */
+export function clearSetupSkipped() {
+  localStorage.removeItem('navigator_setup_skipped')
+}
+
 router.beforeEach(async (to, _from, next) => {
   // Collect meta from matched route chain (supports nested routes)
   const requireAuth = to.matched.some((r) => r.meta.requireAuth)
@@ -103,12 +114,17 @@ router.beforeEach(async (to, _from, next) => {
   // 3. 已登录 + 需要检查 setup 状态的页面
   if (isLoggedIn() && !skipSetupCheck && !isPublic) {
     if (setupComplete === null) {
-      try {
-        const status = await getSetupStatus()
-        setupComplete = status.setupComplete
-      } catch {
-        // API 失败时放行，避免阻塞用户
+      // 用户曾主动跳过配置 → 直接放行
+      if (localStorage.getItem('navigator_setup_skipped') === '1') {
         setupComplete = true
+      } else {
+        try {
+          const status = await getSetupStatus()
+          setupComplete = status.setupComplete
+        } catch {
+          // API 失败时放行，避免阻塞用户
+          setupComplete = true
+        }
       }
     }
     if (!setupComplete) {

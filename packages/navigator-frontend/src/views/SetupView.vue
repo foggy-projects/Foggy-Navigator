@@ -3,7 +3,6 @@
     <div class="setup-card">
       <h1 class="setup-title">Foggy Navigator 初始化配置</h1>
       <p class="setup-desc">完成以下配置后即可开始使用</p>
-
       <!-- Steps -->
       <el-steps :active="currentStep" finish-status="success" align-center class="setup-steps">
         <el-step title="Git 提供者" />
@@ -150,7 +149,7 @@
       <div class="step-footer">
         <el-button v-if="currentStep > 0" @click="currentStep--">上一步</el-button>
         <div class="footer-right">
-          <el-button v-if="currentStep === 2" @click="handleSkipAndFinish">跳过并完成</el-button>
+          <el-button @click="handleSkipSetup">跳过</el-button>
           <el-button
             v-if="currentStep < 2"
             type="primary"
@@ -176,7 +175,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { resetSetupStatus } from '@/router'
+import { resetSetupStatus, markSetupSkipped } from '@/router'
 import { ElMessage } from 'element-plus'
 import { saveGitProvider, saveModelConfig, testLlmConnection } from '@/api/platform'
 import { registerWorker } from '@/api/claudeWorker'
@@ -390,6 +389,12 @@ async function handleFinish() {
 function handleSkipAndFinish() {
   ElMessage.success('配置完成！')
   resetSetupStatus()
+  router.push('/')
+}
+
+function handleSkipSetup() {
+  markSetupSkipped()
+  ElMessage.info('已跳过初始化配置，可随时在「设置」中补充')
   router.push('/')
 }
 </script>
