@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 
 from ..config import settings
+from ..marketplace.config import DEFAULT_MARKETPLACE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +19,12 @@ _SKILLS_DIR = Path(__file__).parent
 # Mapping: target directory name -> source template file in this package
 _SKILL_TEMPLATES = {
     "cross-project-task": "cross_project_task.md",
+    "company-skill-marketplace": "company_skill_marketplace.md",
 }
 
 _TEMPLATE_VARS = {
     "{{NAVIGATOR_API_BASE}}": lambda: settings.navigator_api_base,
+    "{{MARKETPLACE_URL}}": lambda: getattr(settings, "marketplace_url", DEFAULT_MARKETPLACE_URL),
 }
 
 
