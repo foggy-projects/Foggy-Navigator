@@ -90,9 +90,17 @@ function Build-ForOS {
         Write-Host "  -> dist\output\$ArchiveName.zip" -ForegroundColor Green
     }
     else {
-        # For .tar.gz on Windows, use tar if available (Windows 10+)
+        # For .tar.gz on Windows, use Windows native tar (not Git's tar which can't handle drive letters)
         $ArchivePath = Join-Path $OutputDir "$ArchiveName.tar.gz"
-        if (Get-Command tar -ErrorAction SilentlyContinue) {
+        $WinTar = "C:\Windows\System32\tar.exe"
+        if (Test-Path $WinTar) {
+            Push-Location $StagingRoot
+            & $WinTar czf $ArchivePath claude-worker
+            Pop-Location
+            Write-Host "  -> dist\output\$ArchiveName.tar.gz" -ForegroundColor Green
+        }
+        elseif (Get-Command tar -ErrorAction SilentlyContinue) {
+            # Fallback: try any tar in PATH
             Push-Location $StagingRoot
             tar czf $ArchivePath claude-worker
             Pop-Location
