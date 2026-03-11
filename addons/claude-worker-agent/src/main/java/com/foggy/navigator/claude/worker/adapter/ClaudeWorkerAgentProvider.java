@@ -48,6 +48,7 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
     @Override
     public Optional<A2aAgent> resolveAgent(String agentId, String userId) {
         return agentRepository.findByAgentIdAndUserId(agentId, userId)
+                .or(() -> agentRepository.findByNameAndUserId(agentId, userId))
                 .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
                 .map(entity -> {
                     String cwd = resolveDefaultCwd(entity);
