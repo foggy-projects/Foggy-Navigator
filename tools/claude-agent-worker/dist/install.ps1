@@ -136,17 +136,19 @@ elseif (-not (Test-Path $EnvPath)) {
 
 # --- Write CLAUDE_WORKER_URL to .env if provided --------------------------
 if ($env:CLAUDE_WORKER_URL) {
-    $envContent = if (Test-Path $EnvPath) { Get-Content $EnvPath -Raw } else { "" }
+    # IMPORTANT: Always read/write .env as UTF-8 no BOM to avoid encoding corruption
+    # on Chinese Windows where PowerShell 5.x defaults to GBK (system locale).
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $envContent = if (Test-Path $EnvPath) { [System.IO.File]::ReadAllText($EnvPath, $utf8NoBom) } else { "" }
     if ($envContent -match "(?m)^CLAUDE_WORKER_URL=") {
         # Update existing value
         $envContent = $envContent -replace "(?m)^CLAUDE_WORKER_URL=.*", "CLAUDE_WORKER_URL=$($env:CLAUDE_WORKER_URL)"
-        $envContent | Set-Content $EnvPath -NoNewline
     }
     else {
         # Append
-        Add-Content $EnvPath "`n# Auto-upgrade URL (set by remote installer)"
-        Add-Content $EnvPath "CLAUDE_WORKER_URL=$($env:CLAUDE_WORKER_URL)"
+        $envContent = $envContent.TrimEnd() + "`n`n# Auto-upgrade URL (set by remote installer)`nCLAUDE_WORKER_URL=$($env:CLAUDE_WORKER_URL)`n"
     }
+    [System.IO.File]::WriteAllText($EnvPath, $envContent, $utf8NoBom)
     Write-Host "Saved CLAUDE_WORKER_URL to .env" -ForegroundColor Green
 }
 
