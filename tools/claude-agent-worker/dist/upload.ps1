@@ -147,7 +147,7 @@ if (Test-Path $bashBootstrap) {
 # remote-install.ps1 (PowerShell bootstrap)
 $ps1Bootstrap = Join-Path $ScriptDir "remote-install.ps1"
 if (Test-Path $ps1Bootstrap) {
-    $ps1Content = (Get-Content $ps1Bootstrap -Raw) -replace 'RELEASE_BASE_URL\s*=\s*"[^"]*"', "`$ReleaseBaseUrl = `"$BaseUrl`""
+    $ps1Content = (Get-Content $ps1Bootstrap -Raw) -replace '\$ReleaseBaseUrl\s*=\s*"[^"]*"', "`$ReleaseBaseUrl = `"$BaseUrl`""
     $tmpPs1 = Join-Path $OutputDir "install.ps1"
     Write-UnixFile -Path $tmpPs1 -Content $ps1Content
     & $ObsUtil cp $tmpPs1 "$ObsBucket/install.ps1" -f
