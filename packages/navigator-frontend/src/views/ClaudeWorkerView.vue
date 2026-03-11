@@ -4670,6 +4670,12 @@ async function handleAbortTask(taskId: string) {
       cancelButtonText: '取消',
     })
     await workerState.abortTask(taskId)
+    // Sync abort status to any open pane showing this task
+    for (const pane of getAllPanes()) {
+      if (pane.task.value?.taskId === taskId) {
+        pane.task.value.status = 'ABORTED'
+      }
+    }
     ElMessage.success('任务已中止')
     // Immediately remove from activeTasks (don't wait for SSE)
     workerState.activeTasks.value = workerState.activeTasks.value.filter(t => t.taskId !== taskId)

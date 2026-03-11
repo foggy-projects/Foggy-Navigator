@@ -60,7 +60,20 @@
         @load-all="(limit?: number) => paneState.loadAllHistory(limit)"
       >
         <template #empty>
-          <div class="waiting-hint">等待 Worker 响应...</div>
+          <div class="waiting-hint">
+            <template v-if="paneState.task.value?.status === 'ABORTED'">
+              任务已中止
+            </template>
+            <template v-else-if="paneState.task.value?.status === 'FAILED'">
+              任务失败{{ paneState.task.value?.errorMessage ? ': ' + paneState.task.value.errorMessage : '' }}
+            </template>
+            <template v-else-if="paneState.task.value?.status === 'COMPLETED'">
+              任务已完成
+            </template>
+            <template v-else>
+              等待 Worker 响应...
+            </template>
+          </div>
         </template>
         <template #input>
           <div class="pane-input-wrap">
