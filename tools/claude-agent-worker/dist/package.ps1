@@ -92,14 +92,17 @@ function Build-ForOS {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText((Join-Path $StageDir "VERSION"), $Version, $utf8NoBom)
 
-    # --- Convert shell scripts to LF for linux/macos ---------------------
+    # --- Convert text files to LF for linux/macos -------------------------
     if ($OsTag -ne "windows") {
-        Get-ChildItem -Path $StageDir -Recurse -Include "*.sh","*.py" -File | ForEach-Object {
+        # Convert all text files that may end up on Linux/Mac
+        Get-ChildItem -Path $StageDir -Recurse -Include "*.sh","*.py","*.md","*.toml","*.example","*.txt","*.cfg","*.json" -File | ForEach-Object {
             ConvertTo-UnixLineEndings $_.FullName
         }
-        # Also convert the CLI wrapper (no extension)
+        # Also convert the CLI wrapper (no extension) and VERSION
         $cliWrapper = Join-Path $StageDir "bin\claude-worker"
         if (Test-Path $cliWrapper) { ConvertTo-UnixLineEndings $cliWrapper }
+        $versionFile = Join-Path $StageDir "VERSION"
+        if (Test-Path $versionFile) { ConvertTo-UnixLineEndings $versionFile }
     }
 
     # --- Clean build artifacts --------------------------------------------
