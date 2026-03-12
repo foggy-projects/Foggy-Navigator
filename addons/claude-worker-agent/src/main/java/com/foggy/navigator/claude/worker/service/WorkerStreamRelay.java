@@ -722,13 +722,9 @@ public class WorkerStreamRelay {
                 ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
                 if (task == null) return;
 
-                // 已有 checkpoints 则跳过（可能流式阶段已正确收集）
-                String existing = task.getCheckpoints();
-                if (existing != null && !existing.isEmpty() && !"[]".equals(existing)) {
-                    log.debug("Skip auto-scan: task {} already has checkpoints", taskId);
-                    return;
-                }
-
+                // 始终用 JSONL 扫描结果覆盖，不跳过已有 checkpoints。
+                // 原因：流式阶段可能添加了 tool_result 的 checkpoint（turnIndex 错位），
+                // 而 JSONL 扫描只保留真实用户提问，turnIndex 与前端对齐。
                 ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
                 ClaudeWorkerClient client = workerService.createClient(worker);
                 List<Map<String, Object>> scanned = client.scanSessionCheckpoints(claudeSessionId)
