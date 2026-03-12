@@ -286,6 +286,8 @@ defineExpose({ getTextareaEl })
 const atPhase = ref(false)
 const atQuery = ref('')
 const atActiveIndex = ref(0)
+const atTriggerPos = ref(0) // position of '@' within the text
+const atCursorPos = ref(0) // cursor position when trigger was detected
 const showAtPanel = computed(() => atPhase.value && props.agents.length > 0)
 
 const filteredAgents = computed(() => {
@@ -298,15 +300,64 @@ const filteredAgents = computed(() => {
 function selectAgent(idx: number) {
   const agent = filteredAgents.value[idx]
   if (!agent) return
-  emit('update:modelValue', '@' + agent.name + ' ')
+  const text = props.modelValue
+  const replacement = '@' + agent.name + ' '
+  const newText =
+    text.slice(0, atTriggerPos.value) + replacement + text.slice(atCursorPos.value)
+  const newCursor = atTriggerPos.value + replacement.length
+  emit('update:modelValue', newText)
   closeAtPanel()
-  focusInput()
+  // Restore cursor position after the inserted @name
+  nextTick(() => {
+    const textarea = getTextareaEl()
+    if (textarea) {
+      textarea.focus()
+      textarea.setSelectionRange(newCursor, newCursor)
+    }
+  })
 }
 
 function closeAtPanel() {
   atPhase.value = false
   atQuery.value = ''
   atActiveIndex.value = 0
+}
+
+/**
+ * Detect @ trigger at any position in text (cursor-position-based).
+ * The @ must appear at the start of text or after whitespace (to avoid email false positives).
+ * The text between @ and cursor must not contain whitespace.
+ */
+function detectAtTrigger(text: string, cursor: number) {
+  const before = text.slice(0, cursor)
+  let triggerIdx = -1
+  let searchFrom = before.length
+  while (searchFrom > 0) {
+    const idx = before.lastIndexOf('@', searchFrom - 1)
+    if (idx === -1) break
+    searchFrom = idx // continue searching further left next iteration
+    // Check no whitespace between '@' and cursor
+    const queryPart = before.slice(idx + 1)
+    if (/\s/.test(queryPart)) continue
+    // '@' must be at start of text or preceded by whitespace (avoid email addresses)
+    if (idx > 0 && !/\s/.test(before[idx - 1])) continue
+    triggerIdx = idx
+    break
+  }
+  if (triggerIdx >= 0 && props.agents.length > 0) {
+    atQuery.value = before.slice(triggerIdx + 1)
+    atTriggerPos.value = triggerIdx
+    atCursorPos.value = cursor
+    if (!atPhase.value) {
+      atPhase.value = true
+      atActiveIndex.value = 0
+      nextTick(updatePanelPosition)
+    }
+    closePanel() // close slash panel if open
+    closeFilePanel() // close file panel if open
+  } else {
+    if (atPhase.value) closeAtPanel()
+  }
 }
 
 const showPanel = ref(false)
@@ -408,27 +459,12 @@ function openPanel() {
   nextTick(updatePanelPosition)
 }
 
-// Watch text changes to detect slash or @mention prefix
+// Watch text changes to detect slash prefix
+// NOTE: @mention detection is now handled in handleInput() via detectAtTrigger()
 watch(
   () => props.modelValue,
   (val) => {
     if (phase.value === 'sub') return // don't re-enter main when in sub-phase
-
-    // Detect @mention: text starts with @ and no space yet in the @query part
-    const atMatch = val.match(/^@(\S*)$/)
-    if (atMatch && props.agents.length > 0) {
-      atQuery.value = atMatch[1] ?? ''
-      atPhase.value = true
-      atActiveIndex.value = 0
-      closePanel() // close slash panel if open
-      nextTick(updatePanelPosition)
-      return
-    }
-
-    // Close @mention panel if text no longer matches
-    if (atPhase.value) {
-      closeAtPanel()
-    }
 
     if (val.startsWith('/')) {
       const query = val.slice(1)
@@ -450,13 +486,14 @@ function handleInput(val: string) {
   }
   emit('update:modelValue', val)
 
-  // File path trigger detection (mid-text, cursor-based)
-  if (props.directoryId) {
-    nextTick(() => {
-      const textarea = getTextareaEl()
-      if (textarea) detectFileTrigger(val, textarea.selectionStart)
-    })
-  }
+  // Cursor-based trigger detection for @ mentions and ./ file paths
+  nextTick(() => {
+    const textarea = getTextareaEl()
+    if (textarea) {
+      detectAtTrigger(val, textarea.selectionStart)
+      if (props.directoryId) detectFileTrigger(val, textarea.selectionStart)
+    }
+  })
 }
 
 function handleFocus() {
