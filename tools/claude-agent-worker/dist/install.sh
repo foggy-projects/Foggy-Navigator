@@ -152,6 +152,12 @@ echo -e "${CYAN}Setting up Python environment...${NC}"
 
 VENV_DIR="$INSTALL_DIR/.venv"
 
+# On upgrade, always recreate venv to avoid stale/broken pip or python symlinks
+if [ "$IS_UPGRADE" = true ] && [ -d "$VENV_DIR" ]; then
+    echo -e "${YELLOW}Removing old venv (will recreate)...${NC}"
+    rm -rf "$VENV_DIR"
+fi
+
 # Detect if uv is available (preferred, much faster)
 USE_UV=false
 if command -v uv &>/dev/null; then
@@ -168,8 +174,9 @@ if [ "$USE_UV" = true ]; then
     uv pip install -e "$INSTALL_DIR" --python "$VENV_DIR/bin/python" 2>&1
 else
     # Fallback: standard pip
-    if [ ! -f "$VENV_DIR/bin/python" ]; then
+    if [ ! -f "$VENV_DIR/bin/python" ] || [ ! -f "$VENV_DIR/bin/pip" ]; then
         echo -e "${CYAN}Creating venv...${NC}"
+        rm -rf "$VENV_DIR"
         $PYTHON_CMD -m venv "$VENV_DIR"
     fi
     echo -e "${CYAN}Installing dependencies with pip...${NC}"
