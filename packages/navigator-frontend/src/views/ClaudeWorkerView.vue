@@ -355,7 +355,7 @@
               auto-grow
               :max-rows="4"
               size="small"
-              placeholder="新建任务... (Shift+Enter 换行, ./ 搜索文件)"
+              placeholder="新建任务... (Ctrl+Enter 发送, ./ 搜索文件)"
               :skills="directorySkills"
               :directory-id="selectedDirectoryId ?? undefined"
               @submit="handleCreateTask"
@@ -676,7 +676,7 @@
               auto-grow
               :max-rows="4"
               size="small"
-              placeholder="新建任务... (Shift+Enter 换行，可粘贴截图)"
+              placeholder="新建任务... (Ctrl+Enter 发送，可粘贴截图)"
               :skills="directorySkills"
               @submit="handleCreateTask"
               @command="handleSlashCommand"
@@ -4041,7 +4041,31 @@ async function executePaneRewind() {
       }
       ElMessage.success('会话已回退，请编辑提示词后发送')
     } else {
-      ElMessage.success('文件已回退')
+      // file_rewind mode: files rolled back + conversation also rolled back
+      const userPrompt = result.userPrompt || ''
+      const pane = panes.value.find((p) => p.paneId === paneRewindPaneId.value)
+      if (pane) {
+        // Remove messages from turn X onwards in the chat UI (same as conversation_fork)
+        const msgs = pane.chatState.messages.value
+        let userCount = 0
+        let cutIndex = -1
+        for (let i = 0; i < msgs.length; i++) {
+          if (msgs[i]!.sender === 'user') {
+            userCount++
+            if (userCount === paneRewindTurnIndex.value) {
+              cutIndex = i
+              break
+            }
+          }
+        }
+        if (cutIndex >= 0) {
+          pane.chatState.messages.value = msgs.slice(0, cutIndex)
+        }
+        if (userPrompt) {
+          pane.pendingInput.value = userPrompt
+        }
+      }
+      ElMessage.success('文件和会话已回退，请编辑提示词后发送')
       reloadWorkerTasks()
       if (selectedDirectoryId.value) loadDirectoryTasks()
     }

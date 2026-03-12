@@ -158,18 +158,43 @@ Get-ChildItem -Path (Join-Path $InstallDir "src") -Directory -Recurse -Filter "_
 Get-ChildItem -Path (Join-Path $InstallDir "src") -Directory -Recurse -Filter "*.egg-info" -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force 2>$null
 
-# --- Install Python dependencies -----------------------------------------
+# --- Setup venv and install dependencies ---------------------------------
 Write-Host ""
-Write-Host "Installing Python dependencies..." -ForegroundColor Cyan
+Write-Host "Setting up Python environment..." -ForegroundColor Cyan
 Set-Location $InstallDir
 
+$VenvDir = Join-Path $InstallDir ".venv"
+
+# On upgrade, always recreate venv to avoid stale/broken pip or python
+if ($IsUpgrade -and (Test-Path $VenvDir)) {
+    Write-Host "Removing old venv (will recreate)..." -ForegroundColor Yellow
+    Remove-Item $VenvDir -Recurse -Force
+}
+
+# Create venv if missing
+if (-not (Test-Path (Join-Path $VenvDir "Scripts\python.exe"))) {
+    Write-Host "Creating venv..." -ForegroundColor Cyan
+    if (Test-Path $VenvDir) { Remove-Item $VenvDir -Recurse -Force }
+    & $PythonCmd -m venv $VenvDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Failed to create venv." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "venv created at $VenvDir" -ForegroundColor Green
+}
+
+# Use venv's pip to install dependencies
+$VenvPip = Join-Path $VenvDir "Scripts\pip.exe"
+$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+
+Write-Host "Installing dependencies (using venv pip)..." -ForegroundColor Cyan
 try {
-    & pip install -e . -q
+    & $VenvPip install -e . -q
     if ($LASTEXITCODE -ne 0) { throw "pip failed" }
 }
 catch {
     Write-Host "WARNING: pip install failed. Try running manually:" -ForegroundColor Yellow
-    Write-Host "  cd $InstallDir && pip install -e ." -ForegroundColor Yellow
+    Write-Host "  cd $InstallDir && .venv\Scripts\pip install -e ." -ForegroundColor Yellow
 }
 
 # --- Create logs directory ------------------------------------------------

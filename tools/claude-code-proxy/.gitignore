@@ -14,7 +14,10 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
+# dist/ — NOT ignored (contains deployment scripts)
+# Only ignore build artifacts inside dist/
+dist/output/
+dist/staging/
 downloads/
 eggs/
 .eggs/

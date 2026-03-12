@@ -63,6 +63,7 @@ bin/
 !**/src/main/**/bin/
 !**/src/test/**/bin/
 !tools/claude-agent-worker/dist/bin/
+!tools/claude-code-proxy/dist/bin/
 
 # NetBeans
 /nbproject/private/
@@ -102,6 +103,7 @@ pnpm-lock.yaml
 # Frontend build
 dist/
 !tools/claude-agent-worker/dist/
+!tools/claude-code-proxy/dist/
 build/
 .next/
 .nuxt/

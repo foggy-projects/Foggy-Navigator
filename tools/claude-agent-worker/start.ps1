@@ -28,10 +28,47 @@ if ($existingPid) {
     Start-Sleep -Milliseconds 500
 }
 
+# --- Locate venv Python --------------------------------------------------
+$VenvDir = Join-Path $WorkerDir ".venv"
+$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+$VenvPip = Join-Path $VenvDir "Scripts\pip.exe"
+
+# Create venv if it doesn't exist
+if (-not (Test-Path $VenvPython)) {
+    Write-Host "Creating venv..." -ForegroundColor Cyan
+    # Find a suitable Python
+    $PythonCmd = $null
+    foreach ($cmd in @("python3", "python")) {
+        try {
+            $pyVer = & $cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+            if ($pyVer) {
+                $parts = $pyVer.Split('.')
+                if ([int]$parts[0] -ge 3 -and [int]$parts[1] -ge 10) {
+                    $PythonCmd = $cmd
+                    break
+                }
+            }
+        }
+        catch { }
+    }
+    if (-not $PythonCmd) {
+        Write-Host "ERROR: Python 3.10+ not found. Cannot create venv." -ForegroundColor Red
+        exit 1
+    }
+    if (Test-Path $VenvDir) { Remove-Item $VenvDir -Recurse -Force }
+    & $PythonCmd -m venv $VenvDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Failed to create venv." -ForegroundColor Red
+        exit 1
+    }
+}
+
+Write-Host "Using venv: $VenvPython" -ForegroundColor Cyan
+
 # Install / sync dependencies from pyproject.toml before starting
 Set-Location $WorkerDir
 Write-Host "Syncing Python dependencies..." -ForegroundColor Cyan
-pip install -e . -q
+& $VenvPip install -e . -q
 if ($LASTEXITCODE -ne 0) {
     Write-Host "WARNING: pip install failed, continuing with existing env..." -ForegroundColor Yellow
 }
@@ -42,11 +79,11 @@ if (-not (Test-Path $LogDir)) {
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 }
 
-# Start the worker in background
+# Start the worker in background (use venv python, NOT system python)
 $env:PYTHONPATH = Join-Path $WorkerDir "src"
 Write-Host "Starting Agent Worker on port $Port (background)..." -ForegroundColor Green
 
-Start-Process python `
+Start-Process $VenvPython `
     -ArgumentList "-m", "uvicorn", "agent_worker.main:app", "--host", "0.0.0.0", "--port", "$Port" `
     -WorkingDirectory $WorkerDir `
     -RedirectStandardOutput (Join-Path $LogDir "worker.log") `

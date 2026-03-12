@@ -265,7 +265,9 @@ def scan_session_checkpoints(session_id: str) -> list[dict]:
     """Scan a session JSONL to extract UserMessage UUIDs as checkpoints.
 
     Returns a list of ``{"id": uuid, "turnIndex": N, "timestamp": "..."}``.
-    Only non-sidechain user messages with a UUID are included.
+    Only non-sidechain **user prompt** messages are included.
+    Tool-result messages (type "user" but content is tool_result) are excluded
+    so that turnIndex aligns with the frontend's user-turn counting.
     """
     filepath = _find_session_file(session_id)
     if filepath is None:
@@ -291,6 +293,18 @@ def scan_session_checkpoints(session_id: str) -> list[dict]:
 
                 uuid = obj.get("uuid")
                 if not uuid:
+                    continue
+
+                # Skip tool_result messages — they have type "user" in the
+                # Anthropic API but aren't actual user prompts.  The frontend
+                # only counts real user prompts as turns, so including
+                # tool_results would cause a turnIndex mismatch.
+                message = obj.get("message", {})
+                content = message.get("content", "")
+                if isinstance(content, list) and any(
+                    isinstance(c, dict) and c.get("type") == "tool_result"
+                    for c in content
+                ):
                     continue
 
                 turn_index += 1
@@ -387,11 +401,20 @@ def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
         if obj.get("isSidechain"):
             continue
 
+        # Skip tool_result messages — they have type "user" in the
+        # Anthropic API but aren't actual user prompts.
+        message = obj.get("message", {})
+        msg_content = message.get("content", "")
+        if isinstance(msg_content, list) and any(
+            isinstance(c, dict) and c.get("type") == "tool_result"
+            for c in msg_content
+        ):
+            continue
+
         user_turn += 1
         if user_turn == turn_index:
             # Found the target turn — extract prompt and set cutoff AT this line
-            msg = obj.get("message", {})
-            content = msg.get("content", "")
+            content = msg_content
             if isinstance(content, str):
                 user_prompt = content
             cutoff_line = i  # mark FROM this line (inclusive)

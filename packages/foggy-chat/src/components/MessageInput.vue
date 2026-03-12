@@ -7,7 +7,7 @@
       type="textarea"
       :autosize="{ minRows: 1, maxRows: 4 }"
       resize="none"
-      @keydown.enter.exact.prevent="handleSend"
+      @keydown.ctrl.enter.prevent="handleSend"
     />
     <el-button
       type="primary"

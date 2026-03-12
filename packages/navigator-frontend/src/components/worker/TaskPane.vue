@@ -83,7 +83,7 @@
               auto-grow
               :max-rows="4"
               :disabled="false"
-              placeholder="输入后续指令... (Shift+Enter 换行, / 命令, @ 提及 Agent, ./ 搜索文件)"
+              placeholder="输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)"
               :skills="skills || []"
               :agents="agents || []"
               :directory-id="paneState.task.value?.directoryId"

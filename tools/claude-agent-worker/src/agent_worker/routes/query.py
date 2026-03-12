@@ -4,9 +4,12 @@ import asyncio
 import json
 import logging
 import os
+import platform
+import shutil
 import signal
 import subprocess
 import uuid
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,6 +25,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["query"], dependencies=[Depends(verify_token)])
 
 _wrapper = SdkWrapper()
+
+
+def _find_claude_cli() -> str:
+    """Locate Claude Code CLI binary — same strategy as the SDK.
+
+    1. Bundled CLI inside ``claude_agent_sdk/_bundled/``
+    2. ``claude`` on system PATH (``shutil.which``)
+    3. Well-known install locations
+    """
+    cli_name = "claude.exe" if platform.system() == "Windows" else "claude"
+
+    # 1. Bundled CLI shipped with claude-agent-sdk
+    try:
+        import claude_agent_sdk as _pkg
+        bundled = Path(_pkg.__file__).parent / "_bundled" / cli_name
+        if bundled.is_file():
+            return str(bundled)
+    except Exception:
+        pass
+
+    # 2. System PATH
+    which = shutil.which("claude")
+    if which:
+        return which
+
+    # 3. Common locations
+    for p in [
+        Path.home() / ".npm-global/bin/claude",
+        Path("/usr/local/bin/claude"),
+        Path.home() / ".local/bin/claude",
+        Path.home() / "node_modules/.bin/claude",
+        Path.home() / ".yarn/bin/claude",
+        Path.home() / ".claude/local/claude",
+    ]:
+        if p.is_file():
+            return str(p)
+
+    raise FileNotFoundError("Claude Code CLI not found. Install claude-agent-sdk or npm i -g @anthropic-ai/claude-code")
 
 
 def _purge_stale_tasks() -> None:
@@ -259,9 +300,11 @@ async def rewind_files(body: RewindRequest):
     # Use CLI --rewind-files flag (works with both SDK versions)
     if _use_agent_sdk:
         try:
+            cli_path = _find_claude_cli()
+            logger.info("Using Claude CLI at: %s", cli_path)
             env = _wrapper._build_env()
             result = subprocess.run(
-                ["claude", "--resume", body.claude_session_id,
+                [cli_path, "--resume", body.claude_session_id,
                  "--rewind-files", body.checkpoint_id,
                  "--output-format", "json"],
                 capture_output=True, text=True, timeout=30,

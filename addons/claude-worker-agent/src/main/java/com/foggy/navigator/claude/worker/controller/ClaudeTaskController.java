@@ -239,6 +239,7 @@ public class ClaudeTaskController {
         }
 
         // file_rewind mode — requires checkpointId
+        // This mode does BOTH: rewind files (git) AND rewind conversation (JSONL sidechain)
         if (checkpointId == null || checkpointId.isEmpty()) {
             throw RX.throwB("checkpointId is required for file_rewind mode");
         }
@@ -246,9 +247,39 @@ public class ClaudeTaskController {
         try {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
             ClaudeWorkerClient client = workerService.createClient(worker);
-            Map<String, Object> result = client.rewindFiles(claudeSessionId, checkpointId, task.getCwd())
+
+            // Step 1: Rewind files via CLI --rewind-files
+            Map<String, Object> fileResult = client.rewindFiles(claudeSessionId, checkpointId, task.getCwd())
                     .block(java.time.Duration.ofSeconds(30));
-            return RX.ok(result != null ? result : Map.of("status", "rewound", "checkpointId", checkpointId));
+
+            // Step 2: Also rewind the conversation (mark sidechain in JSONL)
+            String userPrompt = "";
+            int effectiveTurn = turnIndex != null ? turnIndex : 1;
+            try {
+                Map<String, Object> convResult = client.rewindConversation(claudeSessionId, effectiveTurn)
+                        .block(java.time.Duration.ofSeconds(15));
+                if (convResult != null) {
+                    userPrompt = convResult.get("user_prompt") != null ? convResult.get("user_prompt").toString() : "";
+                }
+            } catch (Exception convEx) {
+                log.warn("File rewind succeeded but conversation rewind failed for task {}: {}", taskId, convEx.getMessage());
+            }
+
+            // Step 3: Truncate DB messages
+            try {
+                taskService.truncateSessionMessages(task.getSessionId(), effectiveTurn);
+            } catch (Exception dbEx) {
+                log.warn("Failed to truncate DB messages for session {}: {}", task.getSessionId(), dbEx.getMessage());
+            }
+
+            var result = new java.util.HashMap<String, Object>();
+            result.put("status", "rewound");
+            result.put("checkpointId", checkpointId);
+            result.put("taskId", taskId);
+            result.put("userPrompt", userPrompt);
+            result.put("turnIndex", turnIndex);
+            result.put("claudeSessionId", claudeSessionId);
+            return RX.ok(result);
         } catch (Exception e) {
             log.warn("Failed to rewind files: taskId={}, error={}", taskId, e.getMessage());
             return RX.failB("回退失败: " + e.getMessage());

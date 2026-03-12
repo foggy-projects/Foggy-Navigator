@@ -1253,6 +1253,12 @@ class SdkWrapper:
 
                 elif _UserMessage is not None and isinstance(message, _UserMessage):
                     msg_uuid = getattr(message, "uuid", None)
+                    logger.info(
+                        "Task %s UserMessage received: uuid=%s, has_content=%s, parent_tool_use_id=%s",
+                        task_id, msg_uuid,
+                        bool(getattr(message, "content", None)),
+                        getattr(message, "parent_tool_use_id", None),
+                    )
                     if msg_uuid:
                         events.append(event_mapper.map_checkpoint(
                             task_id=task_id,

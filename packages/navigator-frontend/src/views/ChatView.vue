@@ -37,7 +37,7 @@
           :is-thinking="chatStore.isThinking"
           :connection-status="chatStore.connectionStatus"
           :conversation-status="chatStore.conversationStatus"
-          placeholder="输入消息，按回车发送..."
+          placeholder="输入消息... (Ctrl+Enter 发送)"
           @send="handleSend"
         >
           <template #header-left>
