@@ -690,14 +690,8 @@ function handleKeydown(e: KeyboardEvent) {
   }
 
   if (!showPanel.value) {
-    // Ctrl+Enter → submit (for textarea mode)
-    if (e.key === 'Enter' && e.ctrlKey && props.rows > 1) {
-      e.preventDefault()
-      emit('submit')
-      return
-    }
-    // Enter → submit (for single-line / autoGrow mode; Shift+Enter inserts newline)
-    if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && props.rows <= 1) {
+    // Ctrl+Enter → submit (all modes)
+    if (e.key === 'Enter' && e.ctrlKey) {
       e.preventDefault()
       emit('submit')
       return

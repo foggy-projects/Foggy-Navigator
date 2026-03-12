@@ -355,7 +355,7 @@
               auto-grow
               :max-rows="4"
               size="small"
-              placeholder="新建任务... (Shift+Enter 换行, ./ 搜索文件)"
+              placeholder="新建任务... (Ctrl+Enter 发送, ./ 搜索文件)"
               :skills="directorySkills"
               :directory-id="selectedDirectoryId ?? undefined"
               @submit="handleCreateTask"
@@ -676,7 +676,7 @@
               auto-grow
               :max-rows="4"
               size="small"
-              placeholder="新建任务... (Shift+Enter 换行，可粘贴截图)"
+              placeholder="新建任务... (Ctrl+Enter 发送，可粘贴截图)"
               :skills="directorySkills"
               @submit="handleCreateTask"
               @command="handleSlashCommand"
