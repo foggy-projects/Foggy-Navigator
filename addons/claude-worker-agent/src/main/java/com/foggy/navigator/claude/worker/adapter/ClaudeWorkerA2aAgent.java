@@ -90,9 +90,27 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         if (message.getMetadata() != null && message.getMetadata().containsKey("maxTurns")) {
             maxTurns = ((Number) message.getMetadata().get("maxTurns")).intValue();
         }
-        Map<String, Object> result = workerFacade.syncQuery(
-                entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
-                claudeSessionId, maxTurns, null);
+
+        // tracked 模式：通过 syncQueryTracked 创建 claude_tasks 记录 + 持久化消息，
+        // 使共享调用出现在 Worker 页面历史会话列表中
+        boolean tracked = message.getMetadata() != null
+                && Boolean.TRUE.equals(message.getMetadata().get("tracked"));
+        String navigatorSessionId = tracked && message.getMetadata().containsKey("sessionId")
+                ? (String) message.getMetadata().get("sessionId") : null;
+
+        Map<String, Object> result;
+        if (tracked && navigatorSessionId != null) {
+            result = workerFacade.syncQueryTracked(
+                    entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
+                    claudeSessionId, maxTurns, null,
+                    navigatorSessionId, entity.getDefaultDirectoryId());
+            log.info("Tracked A2A sendTask: agentId={}, sessionId={}, directoryId={}",
+                    entity.getAgentId(), navigatorSessionId, entity.getDefaultDirectoryId());
+        } else {
+            result = workerFacade.syncQuery(
+                    entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
+                    claudeSessionId, maxTurns, null);
+        }
 
         String resultText = (String) result.get("resultText");
         String error = (String) result.get("error");
