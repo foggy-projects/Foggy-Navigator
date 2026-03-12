@@ -21,6 +21,7 @@ _SKILL_TEMPLATES = {
     "cross-project-task": "cross_project_task.md",
     "company-skill-marketplace": "company_skill_marketplace.md",
     "navigator-admin": "navigator_admin.md",
+    "scheduled-task": "scheduled_task.md",
 }
 
 _TEMPLATE_VARS = {
