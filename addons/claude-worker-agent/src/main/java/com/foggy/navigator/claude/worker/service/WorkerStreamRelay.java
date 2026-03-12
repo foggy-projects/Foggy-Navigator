@@ -715,31 +715,35 @@ public class WorkerStreamRelay {
             log.debug("Skip auto-scan checkpoints: no claudeSessionId for task {}", taskId);
             return;
         }
-        try {
-            ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
-            if (task == null) return;
+        // 流式回调运行在 reactor-http-nio 线程，不能调用 block()，
+        // 将扫描操作调度到 boundedElastic 线程池异步执行
+        reactor.core.publisher.Mono.fromRunnable(() -> {
+            try {
+                ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
+                if (task == null) return;
 
-            // 已有 checkpoints 则跳过（可能流式阶段已正确收集）
-            String existing = task.getCheckpoints();
-            if (existing != null && !existing.isEmpty() && !"[]".equals(existing)) {
-                log.debug("Skip auto-scan: task {} already has checkpoints", taskId);
-                return;
-            }
+                // 已有 checkpoints 则跳过（可能流式阶段已正确收集）
+                String existing = task.getCheckpoints();
+                if (existing != null && !existing.isEmpty() && !"[]".equals(existing)) {
+                    log.debug("Skip auto-scan: task {} already has checkpoints", taskId);
+                    return;
+                }
 
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
-            ClaudeWorkerClient client = workerService.createClient(worker);
-            List<Map<String, Object>> scanned = client.scanSessionCheckpoints(claudeSessionId)
-                    .block(java.time.Duration.ofSeconds(15));
-            if (scanned != null && !scanned.isEmpty()) {
-                taskService.scanAndPopulateCheckpoints(taskId, scanned);
-                log.info("Auto-scan checkpoints: taskId={}, count={}", taskId, scanned.size());
-            } else {
-                log.debug("Auto-scan checkpoints: no checkpoints found for task {}", taskId);
+                ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+                ClaudeWorkerClient client = workerService.createClient(worker);
+                List<Map<String, Object>> scanned = client.scanSessionCheckpoints(claudeSessionId)
+                        .block(java.time.Duration.ofSeconds(15));
+                if (scanned != null && !scanned.isEmpty()) {
+                    taskService.scanAndPopulateCheckpoints(taskId, scanned);
+                    log.info("Auto-scan checkpoints: taskId={}, count={}", taskId, scanned.size());
+                } else {
+                    log.debug("Auto-scan checkpoints: no checkpoints found for task {}", taskId);
+                }
+            } catch (Exception e) {
+                // 扫描失败不影响任务完成流程
+                log.warn("Auto-scan checkpoints failed for task {}: {}", taskId, e.getMessage());
             }
-        } catch (Exception e) {
-            // 扫描失败不影响任务完成流程
-            log.warn("Auto-scan checkpoints failed for task {}: {}", taskId, e.getMessage());
-        }
+        }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()).subscribe();
     }
 
     private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
