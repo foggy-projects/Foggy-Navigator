@@ -550,6 +550,10 @@ public class WorkerStreamRelay {
                 workerTaskIdMap.remove(taskId);
                 lastAckedSeq.remove(taskId);
 
+                // 自动扫描 JSONL 补齐 checkpoints
+                // 流式 UserMessage.uuid 不可靠，任务完成后从 JSONL 文件扫描作为可靠补充
+                autoScanCheckpoints(taskId, event.getSessionId());
+
                 // 发布跨 Agent 任务完成事件
                 // 注意：Python event_mapper 将 result 文本放在 content 字段，
                 // event.getResult() 始终为 null，应使用已解析的 resultContent
@@ -697,6 +701,45 @@ public class WorkerStreamRelay {
             return "Worker rejected request (HTTP " + status + ")";
         }
         return "Worker connection error: " + e.getMessage();
+    }
+
+    /**
+     * 任务完成后自动从 JSONL 扫描 checkpoints。
+     * <p>
+     * 流式 UserMessage.uuid 在 SDK 输出中不可靠（常为 null），
+     * 而 JSONL 文件中一定有完整的 UUID。任务完成后立即扫描作为可靠补充。
+     * 扫描失败不影响任务完成流程。
+     */
+    private void autoScanCheckpoints(String taskId, String claudeSessionId) {
+        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
+            log.debug("Skip auto-scan checkpoints: no claudeSessionId for task {}", taskId);
+            return;
+        }
+        try {
+            ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
+            if (task == null) return;
+
+            // 已有 checkpoints 则跳过（可能流式阶段已正确收集）
+            String existing = task.getCheckpoints();
+            if (existing != null && !existing.isEmpty() && !"[]".equals(existing)) {
+                log.debug("Skip auto-scan: task {} already has checkpoints", taskId);
+                return;
+            }
+
+            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            List<Map<String, Object>> scanned = client.scanSessionCheckpoints(claudeSessionId)
+                    .block(java.time.Duration.ofSeconds(15));
+            if (scanned != null && !scanned.isEmpty()) {
+                taskService.scanAndPopulateCheckpoints(taskId, scanned);
+                log.info("Auto-scan checkpoints: taskId={}, count={}", taskId, scanned.size());
+            } else {
+                log.debug("Auto-scan checkpoints: no checkpoints found for task {}", taskId);
+            }
+        } catch (Exception e) {
+            // 扫描失败不影响任务完成流程
+            log.warn("Auto-scan checkpoints failed for task {}: {}", taskId, e.getMessage());
+        }
     }
 
     private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
