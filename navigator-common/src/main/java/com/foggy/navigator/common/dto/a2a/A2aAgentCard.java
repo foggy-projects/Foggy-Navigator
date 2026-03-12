@@ -15,6 +15,8 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class A2aAgentCard {
+    /** Agent 唯一标识（用于 /agents/{id}/ask 等端点） */
+    private String id;
     private String name;
     private String description;
     private String url;

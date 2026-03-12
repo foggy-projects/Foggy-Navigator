@@ -59,7 +59,7 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson) {
-        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null, null, null, null);
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -73,7 +73,7 @@ public class ClaudeWorkerClient {
                                                        String navigatorApiKey,
                                                        String foggyTaskId, String foggySessionId) {
         return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, images,
-                apiKey, authToken, baseUrl, permissionMode, navigatorApiKey, foggyTaskId, foggySessionId, null);
+                apiKey, authToken, baseUrl, permissionMode, navigatorApiKey, null, foggyTaskId, foggySessionId, null);
     }
 
     /**
@@ -85,6 +85,22 @@ public class ClaudeWorkerClient {
                                                        String apiKey, String authToken, String baseUrl,
                                                        String permissionMode,
                                                        String navigatorApiKey,
+                                                       String foggyTaskId, String foggySessionId,
+                                                       Map<String, String> extraEnvVars) {
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, images,
+                apiKey, authToken, baseUrl, permissionMode, navigatorApiKey, null, foggyTaskId, foggySessionId, extraEnvVars);
+    }
+
+    /**
+     * 流式查询（含 per-request auth 覆盖、图片附件、权限模式、Navigator 平台 URL 和额外环境变量）
+     */
+    public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
+                                                       String model, Integer maxTurns,
+                                                       String agentTeamsJson, String images,
+                                                       String apiKey, String authToken, String baseUrl,
+                                                       String permissionMode,
+                                                       String navigatorApiKey,
+                                                       String navigatorApiBase,
                                                        String foggyTaskId, String foggySessionId,
                                                        Map<String, String> extraEnvVars) {
         Map<String, Object> body = new java.util.HashMap<>();
@@ -132,6 +148,10 @@ public class ClaudeWorkerClient {
         // Navigator platform API Key (for CLI env injection)
         if (navigatorApiKey != null && !navigatorApiKey.isEmpty()) {
             body.put("navigator_api_key", navigatorApiKey);
+        }
+        // Navigator platform base URL (for CLI env injection as NAVIGATOR_API_BASE)
+        if (navigatorApiBase != null && !navigatorApiBase.isEmpty()) {
+            body.put("navigator_api_base", navigatorApiBase);
         }
         // Foggy platform tracking IDs (injected as env vars into CLI subprocess)
         if (foggyTaskId != null && !foggyTaskId.isEmpty()) {

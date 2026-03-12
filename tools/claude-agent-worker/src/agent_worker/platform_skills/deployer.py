@@ -20,6 +20,7 @@ _SKILLS_DIR = Path(__file__).parent
 _SKILL_TEMPLATES = {
     "cross-project-task": "cross_project_task.md",
     "company-skill-marketplace": "company_skill_marketplace.md",
+    "navigator-admin": "navigator_admin.md",
 }
 
 _TEMPLATE_VARS = {

@@ -247,6 +247,14 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     } catch (e) {
       if (connectVersion !== myVersion) return
       console.error(`[TaskPane ${paneId}] Failed to load history:`, e)
+      chatState.messages.value.push({
+        id: `load-error-${Date.now()}`,
+        type: AipMessageType.ERROR,
+        sender: 'system',
+        content: '',
+        error: '消息加载失败，请尝试关闭后重新打开会话',
+        timestamp: Date.now(),
+      } as ChatMessage)
     }
 
     if (connectVersion !== myVersion) return

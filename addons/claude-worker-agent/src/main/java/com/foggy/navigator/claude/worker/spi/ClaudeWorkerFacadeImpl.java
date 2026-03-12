@@ -245,6 +245,13 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             if (events == null) events = List.of();
 
             // Extract result from events
+            if (log.isDebugEnabled()) {
+                for (int i = 0; i < events.size(); i++) {
+                    WorkerEvent ev = events.get(i);
+                    log.debug("doSyncQuery event[{}]: type={}, hasContent={}, hasResult={}, sessionId={}",
+                            i, ev.getType(), ev.getContent() != null, ev.getResult() != null, ev.getSessionId());
+                }
+            }
             String resultText = null;
             StringBuilder assistantTextBuilder = new StringBuilder();
             String newSessionId = claudeSessionId;

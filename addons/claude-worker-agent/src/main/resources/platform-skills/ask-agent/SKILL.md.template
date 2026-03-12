@@ -1,6 +1,6 @@
 ---
 name: ask-agent
-description: 向平台上其他 Agent 提问，用于跨项目协作咨询。当用户提到要咨询其他项目或 Agent 时使用。
+description: 向平台上其他 Agent 提问，用于跨项目协作咨询。当用户使用 @Agent名称 提问、或提到要咨询其他项目/Agent 时使用。
 ---
 
 # 咨询协作 Agent
@@ -26,6 +26,42 @@ description: 向平台上其他 Agent 提问，用于跨项目协作咨询。当
 curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data[] | {name, description}'
 ```
+
+## @ 快速选择 Agent
+
+用户可以用 `@Agent名称` 语法直接指定要咨询的 Agent：
+
+**匹配规则**（按优先级）：
+1. **精确匹配**：`@foggy-api` → 名称完全匹配的 Agent
+2. **模糊匹配**：`@api` → 名称中包含 "api" 的 Agent
+3. **无匹配**：列出所有可用 Agent 让用户选择
+
+**触发示例**：
+
+```
+用户: @foggy-api 用户认证接口的参数格式是什么？
+→ 匹配 Agent "foggy-api"，向其提问"用户认证接口的参数格式是什么？"
+
+用户: @dashboard 首页的数据刷新频率是多少？
+→ 匹配名称含 "dashboard" 的 Agent
+
+用户: 帮我问一下后端项目，登录流程是怎样的？
+→ 未使用 @ 语法，根据语义从 Agent 列表中推断最匹配的 Agent
+→ 如果无法确定，列出可用 Agent 并请用户用 @ 指定
+```
+
+**处理流程**：
+1. 从用户消息中识别 `@xxx` 模式，提取 Agent 名称和提问内容
+2. 在上方「当前可用 Agent」表中匹配 → 获取 Agent ID
+3. 如果表中没有匹配，调用发现 API 动态查询最新列表
+4. 匹配成功后，调用下方「向 Agent 提问」的 curl 命令执行提问
+5. 将回答转述给用户，并保留 contextId 供后续追问
+
+**多个 Agent 匹配时**：列出所有匹配项，让用户确认：
+> 找到多个匹配的 Agent：
+> 1. foggy-api — 后端 API 项目
+> 2. foggy-api-v2 — 后端 API v2
+> 请用 @完整名称 指定要咨询的 Agent。
 
 ## 向 Agent 提问
 
