@@ -12,11 +12,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
@@ -30,6 +29,9 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
 
     private static final Logger log = LoggerFactory.getLogger(ClaudeWorkerA2aAgent.class);
     private static final int CONTEXT_TTL_HOURS = 24;
+
+    /** 去重时间窗口（秒）：同一用户+Agent+提问内容在此窗口内只创建一个任务 */
+    private static final int DEDUP_WINDOW_SECONDS = 60;
 
     private final CodingAgentEntity entity;
     private final ClaudeTaskService taskService;
@@ -104,7 +106,16 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
             navigatorSessionId = (String) message.getMetadata().get("sessionId");
         }
         if (navigatorSessionId == null || navigatorSessionId.isBlank()) {
-            navigatorSessionId = "a2a-" + IdGenerator.shortId();
+            navigatorSessionId = IdGenerator.shortId();
+        }
+
+        // ★ 幂等去重：相同 userId + agentId + prompt 在时间窗口内只创建一次任务
+        String dedupKey = computeDedupKey(entity.getUserId(), entity.getAgentId(), prompt);
+        Optional<TaskDTO> duplicate = taskService.findRecentByDedupKey(dedupKey, DEDUP_WINDOW_SECONDS);
+        if (duplicate.isPresent()) {
+            TaskDTO dto = duplicate.get();
+            log.info("A2A dedup hit: returning existing taskId={}, dedupKey={}", dto.getTaskId(), dedupKey);
+            return toA2aTask(dto);
         }
 
         // 2. 创建 tracked 任务记录（RUNNING 状态）
@@ -112,6 +123,9 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
                 entity.getUserId(), entity.getWorkerId(),
                 navigatorSessionId, prompt, defaultCwd,
                 entity.getDefaultDirectoryId(), claudeSessionId);
+
+        // 设置去重键（创建后补充设置，避免改动 createTrackedSyncTask 签名影响其他调用方）
+        taskService.setDedupKey(taskId, dedupKey);
 
         // 3. 异步执行，注册完成回调
         final String finalClaudeSessionId = claudeSessionId;
@@ -188,8 +202,8 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
                     taskId, resultText != null ? resultText.length() : 0);
         }
 
-        // 持久化消息到会话历史（非临时 a2a- 会话才持久化）
-        if (sessionId != null && !sessionId.startsWith("a2a-")) {
+        // 持久化消息到会话历史（使历史会话面板能显示对话内容）
+        if (sessionId != null) {
             taskService.persistTrackedSyncMessages(sessionId, prompt,
                     resultText != null ? resultText : (error != null ? "[错误] " + error : ""));
         }
@@ -213,6 +227,27 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
     @Override
     public boolean isAvailable() {
         return true;
+    }
+
+    // ===== 内部工具方法 =====
+
+    /**
+     * 计算去重键：SHA-256(userId:agentId:prompt) 前 32 位十六进制
+     */
+    private String computeDedupKey(String userId, String agentId, String prompt) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update((userId + ":" + agentId + ":" + prompt).getBytes(StandardCharsets.UTF_8));
+            byte[] digest = md.digest();
+            StringBuilder sb = new StringBuilder(32);
+            for (int i = 0; i < 16; i++) {
+                sb.append(String.format("%02x", digest[i]));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            // Fallback: use hashCode (less collision-resistant but functional)
+            return Integer.toHexString(Objects.hash(userId, agentId, prompt));
+        }
     }
 
     /**

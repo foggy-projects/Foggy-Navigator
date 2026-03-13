@@ -660,6 +660,32 @@ public class ClaudeTaskService {
     }
 
     /**
+     * A2A 幂等：根据 dedupKey 查找近期重复任务
+     *
+     * @param dedupKey      去重键 (hash of userId + agentId + prompt)
+     * @param windowSeconds 时间窗口（秒），只查找此时间段内的任务
+     * @return 如果存在近期重复任务则返回对应 TaskDTO
+     */
+    @Transactional(readOnly = true)
+    public Optional<TaskDTO> findRecentByDedupKey(String dedupKey, int windowSeconds) {
+        if (dedupKey == null) return Optional.empty();
+        LocalDateTime cutoff = LocalDateTime.now().minusSeconds(windowSeconds);
+        return taskRepository.findFirstByDedupKeyAndCreatedAtAfterOrderByCreatedAtDesc(dedupKey, cutoff)
+                .map(this::toDTO);
+    }
+
+    /**
+     * 设置任务的 dedupKey（任务创建后补充设置）
+     */
+    @Transactional
+    public void setDedupKey(String taskId, String dedupKey) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setDedupKey(dedupKey);
+            taskRepository.save(entity);
+        });
+    }
+
+    /**
      * 保存异步任务的结果文本（A2A 轮询 getTask 时返回 artifacts）
      */
     @Transactional
