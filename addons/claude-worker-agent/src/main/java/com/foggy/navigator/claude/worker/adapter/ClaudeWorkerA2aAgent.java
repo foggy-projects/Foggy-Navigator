@@ -4,21 +4,27 @@ import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
  * A2aAgent 适配器 — 包装 CodingAgentEntity + ClaudeTaskService + ClaudeWorkerFacade
+ *
+ * sendTask 采用异步模式：立即返回 SUBMITTED，后台线程执行 Worker 调用，
+ * 调用者通过 getTask 轮询状态获取结果。
  */
 class ClaudeWorkerA2aAgent implements A2aAgent {
 
@@ -30,15 +36,17 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
     private final ClaudeWorkerFacade workerFacade;
     private final String defaultCwd;
     private final AgentContextStore contextStore;
+    private final Executor asyncExecutor;
 
     ClaudeWorkerA2aAgent(CodingAgentEntity entity, ClaudeTaskService taskService,
                          ClaudeWorkerFacade workerFacade, String defaultCwd,
-                         AgentContextStore contextStore) {
+                         AgentContextStore contextStore, Executor asyncExecutor) {
         this.entity = entity;
         this.taskService = taskService;
         this.workerFacade = workerFacade;
         this.defaultCwd = defaultCwd;
         this.contextStore = contextStore;
+        this.asyncExecutor = asyncExecutor;
     }
 
     @Override
@@ -66,6 +74,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
 
     @Override
     public A2aTask sendTask(A2aMessage message) {
+        // 1. 提取参数
         String prompt = message.getParts().stream()
                 .filter(p -> "text".equals(p.getType()))
                 .map(A2aPart::getText)
@@ -84,70 +93,106 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         }
 
         // maxTurns: 从 message.metadata 读取（共享调用可指定），默认 3
-        // 注意：resume 场景下 Claude 可能先用工具（Read 等）再生成文本，
-        // maxTurns=1 会导致用完工具后没有轮次生成回答文本
         int maxTurns = 3;
         if (message.getMetadata() != null && message.getMetadata().containsKey("maxTurns")) {
             maxTurns = ((Number) message.getMetadata().get("maxTurns")).intValue();
         }
 
-        // tracked 模式：通过 syncQueryTracked 创建 claude_tasks 记录 + 持久化消息，
-        // 使共享调用出现在 Worker 页面历史会话列表中
-        boolean tracked = message.getMetadata() != null
-                && Boolean.TRUE.equals(message.getMetadata().get("tracked"));
-        String navigatorSessionId = tracked && message.getMetadata().containsKey("sessionId")
-                ? (String) message.getMetadata().get("sessionId") : null;
-
-        Map<String, Object> result;
-        if (tracked && navigatorSessionId != null) {
-            result = workerFacade.syncQueryTracked(
-                    entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
-                    claudeSessionId, maxTurns, null,
-                    navigatorSessionId, entity.getDefaultDirectoryId());
-            log.info("Tracked A2A sendTask: agentId={}, sessionId={}, directoryId={}",
-                    entity.getAgentId(), navigatorSessionId, entity.getDefaultDirectoryId());
-        } else {
-            result = workerFacade.syncQuery(
-                    entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
-                    claudeSessionId, maxTurns, null);
+        // 提取 sessionId（用于关联 Navigator 会话）
+        String navigatorSessionId = null;
+        if (message.getMetadata() != null && message.getMetadata().containsKey("sessionId")) {
+            navigatorSessionId = (String) message.getMetadata().get("sessionId");
+        }
+        if (navigatorSessionId == null || navigatorSessionId.isBlank()) {
+            navigatorSessionId = "a2a-" + IdGenerator.shortId();
         }
 
-        String resultText = (String) result.get("resultText");
+        // 2. 创建 tracked 任务记录（RUNNING 状态）
+        String taskId = taskService.createTrackedSyncTask(
+                entity.getUserId(), entity.getWorkerId(),
+                navigatorSessionId, prompt, defaultCwd,
+                entity.getDefaultDirectoryId(), claudeSessionId);
+
+        // 3. 异步执行，注册完成回调
+        final String finalClaudeSessionId = claudeSessionId;
+        final String finalNavigatorSessionId = navigatorSessionId;
+        final int finalMaxTurns = maxTurns;
+
+        workerFacade.asyncQuery(
+                entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
+                finalClaudeSessionId, finalMaxTurns, null, entity.getDefaultDirectoryId()
+        ).whenComplete((result, ex) ->
+                handleAsyncCompletion(taskId, contextId, finalNavigatorSessionId,
+                        prompt, finalClaudeSessionId, result, ex));
+
+        log.info("A2A async sendTask submitted: agentId={}, taskId={}, sessionId={}, directoryId={}",
+                entity.getAgentId(), taskId, navigatorSessionId, entity.getDefaultDirectoryId());
+
+        // 4. 立即返回 SUBMITTED
+        return A2aTask.builder()
+                .id(taskId)
+                .contextId(contextId)
+                .status(A2aTaskStatus.builder()
+                        .state(A2aTaskState.SUBMITTED)
+                        .timestamp(Instant.now())
+                        .build())
+                .history(List.of(message))
+                .build();
+    }
+
+    /**
+     * 后台异步回调 — 处理 Worker 执行结果
+     *
+     * 错误处理策略：
+     * - Worker SSE error 事件（errorSource=WORKER）→ 标记 FAILED
+     * - 传输层异常（超时、断连，errorSource=TRANSPORT）→ 保持 RUNNING
+     * - CompletableFuture 层异常（线程池拒绝等）→ 保持 RUNNING
+     */
+    private void handleAsyncCompletion(String taskId, String contextId,
+                                        String sessionId, String prompt,
+                                        String prevClaudeSessionId,
+                                        Map<String, Object> result, Throwable ex) {
+        if (ex != null) {
+            // CompletableFuture 层异常（极少见，如线程池拒绝）— 不标记失败
+            log.warn("A2A async task {} future error (stays RUNNING): {}", taskId, ex.getMessage());
+            return;
+        }
+
         String error = (String) result.get("error");
+        String errorSource = (String) result.get("errorSource");
+        String resultText = (String) result.get("resultText");
         String newClaudeSessionId = (String) result.get("claudeSessionId");
 
-        // 保存 contextId → claudeSessionId 映射
+        // 保存 contextId → claudeSessionId 映射（多轮会话）
         if (contextId != null && contextStore != null && newClaudeSessionId != null) {
             contextStore.saveSessionRef(contextId, "claude-worker",
                     newClaudeSessionId, entity.getUserId(), entity.getAgentId());
         }
 
-        if (error != null) {
-            return A2aTask.builder()
-                    .id(UUID.randomUUID().toString())
-                    .contextId(contextId)
-                    .status(A2aTaskStatus.builder()
-                            .state(A2aTaskState.FAILED)
-                            .description(error)
-                            .timestamp(Instant.now())
-                            .build())
-                    .history(List.of(message))
-                    .build();
+        if (error != null && "WORKER".equals(errorSource)) {
+            // ★ Worker 明确报错 → 标记 FAILED
+            taskService.failTask(taskId, newClaudeSessionId, truncate(error, 500));
+            log.warn("A2A task {} FAILED (Worker error): {}", taskId, error);
+        } else if (error != null) {
+            // 传输层异常（TRANSPORT）→ 保持 RUNNING，不标记失败
+            log.warn("A2A task {} transport error (stays RUNNING): {}", taskId, error);
+        } else {
+            // ★ 成功 → 标记 COMPLETED，保存结果
+            taskService.completeTask(taskId, newClaudeSessionId,
+                    toBigDecimal(result.get("costUsd")), null, null,
+                    toLong(result.get("durationMs")), null, (String) result.get("model"));
+            if (resultText != null) {
+                taskService.saveTaskResult(taskId, resultText);
+            }
+            log.info("A2A task {} COMPLETED, resultLength={}",
+                    taskId, resultText != null ? resultText.length() : 0);
         }
 
-        return A2aTask.builder()
-                .id(UUID.randomUUID().toString())
-                .contextId(contextId)
-                .status(A2aTaskStatus.builder()
-                        .state(A2aTaskState.COMPLETED)
-                        .timestamp(Instant.now())
-                        .build())
-                .history(List.of(message))
-                .artifacts(List.of(A2aArtifact.builder()
-                        .name("response")
-                        .parts(List.of(A2aPart.text(resultText != null ? resultText : "")))
-                        .build()))
-                .build();
+        // 持久化消息到会话历史（非临时 a2a- 会话才持久化）
+        if (sessionId != null && !sessionId.startsWith("a2a-")) {
+            taskService.persistTrackedSyncMessages(sessionId, prompt,
+                    resultText != null ? resultText : (error != null ? "[错误] " + error : ""));
+        }
     }
 
     @Override
@@ -170,6 +215,9 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         return true;
     }
 
+    /**
+     * TaskDTO → A2aTask 转换（增强版：包含 artifacts、错误描述、元信息）
+     */
     private A2aTask toA2aTask(TaskDTO dto) {
         A2aTaskState state = switch (dto.getStatus()) {
             case "PENDING" -> A2aTaskState.SUBMITTED;
@@ -181,13 +229,47 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
             default -> A2aTaskState.WORKING;
         };
 
-        return A2aTask.builder()
+        A2aTask.A2aTaskBuilder builder = A2aTask.builder()
                 .id(dto.getTaskId())
                 .status(A2aTaskStatus.builder()
                         .state(state)
-                        .description(dto.getStatus())
+                        .description(state == A2aTaskState.FAILED ? dto.getErrorMessage() : null)
                         .timestamp(Instant.now())
-                        .build())
-                .build();
+                        .build());
+
+        // COMPLETED 且有结果文本 → 包含 artifacts
+        if (state == A2aTaskState.COMPLETED && dto.getResultText() != null) {
+            builder.artifacts(List.of(A2aArtifact.builder()
+                    .name("response")
+                    .parts(List.of(A2aPart.text(dto.getResultText())))
+                    .build()));
+        }
+
+        // 元信息（durationMs, costUsd）
+        Map<String, Object> meta = new HashMap<>();
+        if (dto.getDurationMs() != null) meta.put("durationMs", dto.getDurationMs());
+        if (dto.getCostUsd() != null) meta.put("costUsd", dto.getCostUsd());
+        if (!meta.isEmpty()) builder.metadata(meta);
+
+        return builder.build();
+    }
+
+    private String truncate(String text, int maxLen) {
+        if (text == null) return null;
+        return text.length() > maxLen ? text.substring(0, maxLen) + "..." : text;
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        if (value == null) return null;
+        if (value instanceof BigDecimal bd) return bd;
+        if (value instanceof Number num) return BigDecimal.valueOf(num.doubleValue());
+        return null;
+    }
+
+    private Long toLong(Object value) {
+        if (value == null) return null;
+        if (value instanceof Long l) return l;
+        if (value instanceof Number num) return num.longValue();
+        return null;
     }
 }

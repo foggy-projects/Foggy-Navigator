@@ -4,6 +4,7 @@ import com.foggy.navigator.common.model.CodexConfig;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Claude Worker 门面接口
@@ -75,6 +76,23 @@ public interface ClaudeWorkerFacade {
             String cwd, String claudeSessionId, int maxTurns,
             String model, String sessionId, String directoryId) {
         return syncQuery(userId, workerId, prompt, cwd, claudeSessionId, maxTurns, model);
+    }
+
+    /**
+     * 异步查询 — 同步解析目录认证后，在后台线程执行 Worker 调用。
+     * 使用 30 分钟超时，适用于长时间运行的 A2A 任务。
+     *
+     * @param directoryId 工作目录 ID（用于解析 auth + envVars）
+     * @return CompletableFuture，结果 Map 含 errorSource 字段区分错误来源：
+     *         "WORKER" = Agent 明确报错，"TRANSPORT" = 超时/断连等传输层异常
+     */
+    default CompletableFuture<Map<String, Object>> asyncQuery(
+            String userId, String workerId, String prompt, String cwd,
+            String claudeSessionId, int maxTurns, String model,
+            String directoryId) {
+        // 默认实现：退化为同步（兼容旧代码）
+        return CompletableFuture.completedFuture(
+                syncQuery(userId, workerId, prompt, cwd, claudeSessionId, maxTurns, model));
     }
 
     /**

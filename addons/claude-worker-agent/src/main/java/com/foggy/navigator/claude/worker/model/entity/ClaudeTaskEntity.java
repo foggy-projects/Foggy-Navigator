@@ -67,6 +67,10 @@ public class ClaudeTaskEntity {
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
 
+    /** A2A 异步任务完成后保存的结果文本（轮询 getTask 时返回） */
+    @Column(columnDefinition = "TEXT")
+    private String resultText;
+
     /** JSON array of checkpoint objects: [{"id":"uuid","turnIndex":1,"timestamp":"..."}] */
     @Column(columnDefinition = "TEXT")
     private String checkpoints;

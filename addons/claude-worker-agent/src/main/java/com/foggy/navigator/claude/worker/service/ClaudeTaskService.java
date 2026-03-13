@@ -660,6 +660,19 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 保存异步任务的结果文本（A2A 轮询 getTask 时返回 artifacts）
+     */
+    @Transactional
+    public void saveTaskResult(String taskId, String resultText) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setResultText(resultText);
+            taskRepository.save(entity);
+            log.debug("Saved result text for task {}: length={}", taskId,
+                    resultText != null ? resultText.length() : 0);
+        });
+    }
+
+    /**
      * 标记任务失败（保留 claudeSessionId 以便后续继续会话）
      */
     @Transactional
@@ -1882,6 +1895,7 @@ public class ClaudeTaskService {
                 .numTurns(entity.getNumTurns())
                 .model(entity.getModel())
                 .errorMessage(entity.getErrorMessage())
+                .resultText(entity.getResultText())
                 .checkpoints(entity.getCheckpoints())
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .source(entity.getSource())
