@@ -710,7 +710,7 @@ public class WorkerStreamRelay {
      * 而 JSONL 文件中一定有完整的 UUID。任务完成后立即扫描作为可靠补充。
      * 扫描失败不影响任务完成流程。
      */
-    private void autoScanCheckpoints(String taskId, String claudeSessionId) {
+    void autoScanCheckpoints(String taskId, String claudeSessionId) {
         if (claudeSessionId == null || claudeSessionId.isEmpty()) {
             log.debug("Skip auto-scan checkpoints: no claudeSessionId for task {}", taskId);
             return;

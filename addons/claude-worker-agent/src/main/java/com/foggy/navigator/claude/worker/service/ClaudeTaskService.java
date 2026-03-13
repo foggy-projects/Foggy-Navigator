@@ -825,6 +825,14 @@ public class ClaudeTaskService {
                 conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
             });
         });
+
+        // 5. 异步扫描 JSONL 补齐 checkpoints（中止的任务也可能已有有效 checkpoint）
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String claudeSessionId = entity.getClaudeSessionId();
+            if (claudeSessionId != null && !claudeSessionId.isEmpty()) {
+                streamRelay.autoScanCheckpoints(taskId, claudeSessionId);
+            }
+        });
     }
 
     /**
