@@ -286,6 +286,7 @@
                 auto-grow
                 placeholder="输入任务描述... (可粘贴截图或拖拽图片, ./ 搜索文件)"
                 :skills="directorySkills"
+                :agents="allAgentItems"
                 :directory-id="selectedDirectoryId ?? undefined"
                 @submit="handleCreateTask"
                 @command="handleSlashCommand"
@@ -357,6 +358,7 @@
               size="small"
               placeholder="新建任务... (Ctrl+Enter 发送, ./ 搜索文件)"
               :skills="directorySkills"
+              :agents="allAgentItems"
               :directory-id="selectedDirectoryId ?? undefined"
               @submit="handleCreateTask"
               @command="handleSlashCommand"
@@ -607,6 +609,7 @@
                 auto-grow
                 placeholder="输入任务描述... (可粘贴截图或拖拽图片)"
                 :skills="directorySkills"
+                :agents="allAgentItems"
                 @submit="handleCreateTask"
                 @command="handleSlashCommand"
                 @history-prev="handleTaskHistoryPrev"
@@ -678,6 +681,7 @@
               size="small"
               placeholder="新建任务... (Ctrl+Enter 发送，可粘贴截图)"
               :skills="directorySkills"
+              :agents="allAgentItems"
               @submit="handleCreateTask"
               @command="handleSlashCommand"
               @history-prev="handleTaskHistoryPrev"
