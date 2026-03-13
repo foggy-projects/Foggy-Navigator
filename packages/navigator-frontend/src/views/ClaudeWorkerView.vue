@@ -4012,6 +4012,10 @@ async function executePaneRewind() {
 
   try {
     const result = await dirApi.rewindTask(task.taskId, cpId, mode, paneRewindTurnIndex.value)
+    if (!result) {
+      ElMessage.error('回退失败：服务端未返回有效数据')
+      return
+    }
     if (mode === 'conversation_fork') {
       // Conversation rewind: no new task created.
       // 1. Remove messages from turn X onwards in the chat UI
