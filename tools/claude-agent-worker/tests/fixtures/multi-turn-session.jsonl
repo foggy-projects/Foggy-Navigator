@@ -1,0 +1,12 @@
+{"type":"user","sessionId":"multi-turn-001","cwd":"D:\\projects","slug":"test-project","gitBranch":"main","timestamp":"2026-03-10T10:00:00Z","uuid":"uuid-user-1","message":{"role":"user","content":"Say hello world. Do not use any tools."}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello world!"}]},"timestamp":"2026-03-10T10:00:05Z"}
+{"type":"user","uuid":"uuid-tool-result-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"file created"}]},"timestamp":"2026-03-10T10:00:06Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I created the file for you."}]},"timestamp":"2026-03-10T10:00:10Z"}
+{"type":"user","uuid":"uuid-user-2","message":{"role":"user","content":"Now generate a random file with some content"},"timestamp":"2026-03-10T10:01:00Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-2","name":"Write","input":{"path":"random.txt","content":"random content"}}]},"timestamp":"2026-03-10T10:01:05Z"}
+{"type":"user","uuid":"uuid-tool-result-2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-2","content":"File written successfully"}]},"timestamp":"2026-03-10T10:01:06Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done! I created random.txt with some content."}]},"timestamp":"2026-03-10T10:01:10Z"}
+{"type":"user","uuid":"uuid-user-3","message":{"role":"user","content":"Great, now delete that file"},"timestamp":"2026-03-10T10:02:00Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-3","name":"Bash","input":{"command":"rm random.txt"}}]},"timestamp":"2026-03-10T10:02:05Z"}
+{"type":"user","uuid":"uuid-tool-result-3","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-3","content":""}]},"timestamp":"2026-03-10T10:02:06Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"File deleted."}]},"timestamp":"2026-03-10T10:02:10Z"}

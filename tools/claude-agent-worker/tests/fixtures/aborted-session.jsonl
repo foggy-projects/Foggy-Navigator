@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"aborted-001","cwd":"D:\\projects","slug":"aborted-test","gitBranch":"feature-x","timestamp":"2026-03-10T14:00:00Z","uuid":"uuid-aborted-user-1","message":{"role":"user","content":"Generate a large file with 1000 lines of lorem ipsum"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll create a large file with lorem ipsum content."},{"type":"tool_use","id":"tool-a1","name":"Write","input":{"path":"lorem.txt","content":"Lorem ipsum..."}}]},"timestamp":"2026-03-10T14:00:05Z"}
+{"type":"user","uuid":"uuid-aborted-tool-result-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-a1","content":"File written"}]},"timestamp":"2026-03-10T14:00:06Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Working on generating more content..."}]},"timestamp":"2026-03-10T14:00:10Z"}
