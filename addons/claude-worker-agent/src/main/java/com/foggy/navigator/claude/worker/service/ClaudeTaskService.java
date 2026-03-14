@@ -660,6 +660,45 @@ public class ClaudeTaskService {
     }
 
     /**
+     * A2A 幂等：根据 dedupKey 查找近期重复任务
+     *
+     * @param dedupKey      去重键 (hash of userId + agentId + prompt)
+     * @param windowSeconds 时间窗口（秒），只查找此时间段内的任务
+     * @return 如果存在近期重复任务则返回对应 TaskDTO
+     */
+    @Transactional(readOnly = true)
+    public Optional<TaskDTO> findRecentByDedupKey(String dedupKey, int windowSeconds) {
+        if (dedupKey == null) return Optional.empty();
+        LocalDateTime cutoff = LocalDateTime.now().minusSeconds(windowSeconds);
+        return taskRepository.findFirstByDedupKeyAndCreatedAtAfterOrderByCreatedAtDesc(dedupKey, cutoff)
+                .map(this::toDTO);
+    }
+
+    /**
+     * 设置任务的 dedupKey（任务创建后补充设置）
+     */
+    @Transactional
+    public void setDedupKey(String taskId, String dedupKey) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setDedupKey(dedupKey);
+            taskRepository.save(entity);
+        });
+    }
+
+    /**
+     * 保存异步任务的结果文本（A2A 轮询 getTask 时返回 artifacts）
+     */
+    @Transactional
+    public void saveTaskResult(String taskId, String resultText) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setResultText(resultText);
+            taskRepository.save(entity);
+            log.debug("Saved result text for task {}: length={}", taskId,
+                    resultText != null ? resultText.length() : 0);
+        });
+    }
+
+    /**
      * 标记任务失败（保留 claudeSessionId 以便后续继续会话）
      */
     @Transactional
@@ -785,6 +824,14 @@ public class ClaudeTaskService {
                 publishStatusChange(entity, prev);
                 conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
             });
+        });
+
+        // 5. 异步扫描 JSONL 补齐 checkpoints（中止的任务也可能已有有效 checkpoint）
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            String claudeSessionId = entity.getClaudeSessionId();
+            if (claudeSessionId != null && !claudeSessionId.isEmpty()) {
+                streamRelay.autoScanCheckpoints(taskId, claudeSessionId);
+            }
         });
     }
 
@@ -1882,6 +1929,7 @@ public class ClaudeTaskService {
                 .numTurns(entity.getNumTurns())
                 .model(entity.getModel())
                 .errorMessage(entity.getErrorMessage())
+                .resultText(entity.getResultText())
                 .checkpoints(entity.getCheckpoints())
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .source(entity.getSource())

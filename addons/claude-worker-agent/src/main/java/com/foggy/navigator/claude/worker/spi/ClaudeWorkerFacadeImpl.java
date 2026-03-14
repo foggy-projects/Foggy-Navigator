@@ -18,20 +18,24 @@ import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * ClaudeWorkerFacade SPI 实现
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
+
+    /** A2A 异步任务的超时时间：30 分钟 */
+    private static final long ASYNC_TIMEOUT_SECONDS = 1800;
 
     private final ClaudeWorkerService workerService;
     private final ClaudeTaskService taskService;
@@ -39,6 +43,23 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     private final WorkingDirectoryRepository directoryRepository;
     private final LlmModelManager llmModelManager;
     private final ObjectMapper objectMapper;
+    private final Executor a2aAsyncExecutor;
+
+    public ClaudeWorkerFacadeImpl(ClaudeWorkerService workerService,
+                                   ClaudeTaskService taskService,
+                                   WorkerStreamRelay streamRelay,
+                                   WorkingDirectoryRepository directoryRepository,
+                                   LlmModelManager llmModelManager,
+                                   ObjectMapper objectMapper,
+                                   @Qualifier("a2aAsyncExecutor") Executor a2aAsyncExecutor) {
+        this.workerService = workerService;
+        this.taskService = taskService;
+        this.streamRelay = streamRelay;
+        this.directoryRepository = directoryRepository;
+        this.llmModelManager = llmModelManager;
+        this.objectMapper = objectMapper;
+        this.a2aAsyncExecutor = a2aAsyncExecutor;
+    }
 
     @Override
     public List<Map<String, Object>> listWorkers(String userId) {
@@ -208,6 +229,29 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                 .orElse(null);
     }
 
+    @Override
+    public CompletableFuture<Map<String, Object>> asyncQuery(
+            String userId, String workerId, String prompt, String cwd,
+            String claudeSessionId, int maxTurns, String model,
+            String directoryId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            return CompletableFuture.failedFuture(
+                    new IllegalArgumentException("Worker not found: " + workerId));
+        }
+
+        // 同步解析认证（需要 DB，速度快）
+        String[] auth = (directoryId != null) ? resolveDirectoryAuth(directoryId, userId) : new String[3];
+        Map<String, String> envVars = (directoryId != null) ? resolveDirectoryEnvVars(directoryId, userId) : null;
+
+        // 异步执行（可能耗时 10 秒 ~ 30 分钟）
+        return CompletableFuture.supplyAsync(() ->
+                        doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns,
+                                auth[0], auth[1], auth[2], envVars, ASYNC_TIMEOUT_SECONDS),
+                a2aAsyncExecutor
+        );
+    }
+
     /**
      * 内部 syncQuery 实现，支持可选的 per-request auth 覆盖
      */
@@ -215,14 +259,30 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                                              String claudeSessionId, String model, int maxTurns,
                                              String apiKey, String authToken, String baseUrl,
                                              Map<String, String> extraEnvVars) {
+        return doSyncQuery(worker, prompt, cwd, claudeSessionId, model, maxTurns,
+                apiKey, authToken, baseUrl, extraEnvVars, null);
+    }
+
+    /**
+     * 内部 syncQuery 实现（带可选超时覆盖）
+     *
+     * @param overrideTimeoutSeconds 非 null 时覆盖默认超时（用于 A2A 异步长任务）
+     */
+    private Map<String, Object> doSyncQuery(ClaudeWorkerEntity worker, String prompt, String cwd,
+                                             String claudeSessionId, String model, int maxTurns,
+                                             String apiKey, String authToken, String baseUrl,
+                                             Map<String, String> extraEnvVars,
+                                             Long overrideTimeoutSeconds) {
         Map<String, Object> result = new LinkedHashMap<>();
         long startTime = System.currentTimeMillis();
 
         try {
             ClaudeWorkerClient client = workerService.createClient(worker);
 
-            // 根据 maxTurns 调整超时：每轮约 30s
-            long timeoutSeconds = Math.max(60, maxTurns * 30L);
+            // 根据 maxTurns 调整超时：每轮约 30s，或使用 override（A2A 异步 = 30 min）
+            long timeoutSeconds = overrideTimeoutSeconds != null
+                    ? overrideTimeoutSeconds
+                    : Math.max(60, maxTurns * 30L);
 
             // Collect all SSE events synchronously with bypassPermissions
             List<WorkerEvent> events = client.streamQuery(
@@ -271,6 +331,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                     }
                 } else if ("error".equals(event.getType())) {
                     result.put("error", event.getError());
+                    result.put("errorSource", "WORKER");  // Worker 明确报告的错误
                 }
             }
 
@@ -288,6 +349,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         } catch (Exception e) {
             log.error("syncQuery failed: workerId={}, error={}", worker.getWorkerId(), e.getMessage(), e);
             result.put("error", e.getMessage());
+            result.put("errorSource", "TRANSPORT");  // 传输层异常（超时、断连等）
             result.put("durationMs", System.currentTimeMillis() - startTime);
         }
 

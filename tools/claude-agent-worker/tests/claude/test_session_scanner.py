@@ -514,3 +514,226 @@ class TestRewindSessionConversation:
 
         assert result["status"] == "error"
         assert "not found" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint / Rewind integration — tool_result filtering, multi-turn, abort
+# ---------------------------------------------------------------------------
+
+class TestScanCheckpointsMultiTurn:
+    """Verify checkpoint scan correctly excludes tool_result messages."""
+
+    def _create_session(self, tmp_path: Path, session_id: str, lines: list[dict]) -> Path:
+        encoded = encode_path_to_project_dir("D:\\projects")
+        project_dir = tmp_path / encoded
+        project_dir.mkdir(parents=True, exist_ok=True)
+        f = project_dir / f"{session_id}.jsonl"
+        f.write_text(
+            "\n".join(json.dumps(l) for l in lines) + "\n",
+            encoding="utf-8",
+        )
+        return f
+
+    def test_multi_turn_with_tool_results(self, tmp_path: Path):
+        """3 user prompts + interleaved tool_results → only 3 checkpoints."""
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        lines = [
+            # Turn 1: real user prompt
+            {"type": "user", "uuid": "u1", "message": {"role": "user", "content": "Hello"}, "timestamp": "t1"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}},
+            # tool_result — should NOT count as a turn
+            {"type": "user", "uuid": "u-tr-1", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
+            ]}, "timestamp": "t2"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done"}]}},
+            # Turn 2: real user prompt
+            {"type": "user", "uuid": "u2", "message": {"role": "user", "content": "Generate file"}, "timestamp": "t3"},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Write", "input": {}}]}},
+            # tool_result — NOT a turn
+            {"type": "user", "uuid": "u-tr-2", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t2", "content": "file written"}
+            ]}, "timestamp": "t4"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "File created"}]}},
+            # Turn 3: real user prompt
+            {"type": "user", "uuid": "u3", "message": {"role": "user", "content": "Delete it"}, "timestamp": "t5"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Deleted"}]}},
+        ]
+        self._create_session(tmp_path, sid, lines)
+
+        with patch(
+            "agent_worker.claude.session_scanner._claude_projects_dir",
+            return_value=tmp_path,
+        ):
+            checkpoints = scan_session_checkpoints(sid)
+
+        # Only 3 real user prompts, not 5 (which includes tool_results)
+        assert len(checkpoints) == 3
+        assert checkpoints[0] == {"id": "u1", "turnIndex": 1, "timestamp": "t1"}
+        assert checkpoints[1] == {"id": "u2", "turnIndex": 2, "timestamp": "t3"}
+        assert checkpoints[2] == {"id": "u3", "turnIndex": 3, "timestamp": "t5"}
+
+    def test_tool_result_only_session(self, tmp_path: Path):
+        """Session with only tool_result messages → 0 checkpoints."""
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        lines = [
+            {"type": "user", "uuid": "u-tr", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
+            ]}, "timestamp": "t1"},
+        ]
+        self._create_session(tmp_path, sid, lines)
+
+        with patch(
+            "agent_worker.claude.session_scanner._claude_projects_dir",
+            return_value=tmp_path,
+        ):
+            checkpoints = scan_session_checkpoints(sid)
+
+        assert checkpoints == []
+
+
+class TestRewindSkipsToolResults:
+    """Rewind turn counting must also skip tool_result messages."""
+
+    def _create_session(self, tmp_path: Path, session_id: str, lines: list[dict]) -> Path:
+        encoded = encode_path_to_project_dir("D:\\projects")
+        project_dir = tmp_path / encoded
+        project_dir.mkdir(parents=True, exist_ok=True)
+        f = project_dir / f"{session_id}.jsonl"
+        f.write_text(
+            "\n".join(json.dumps(l) for l in lines) + "\n",
+            encoding="utf-8",
+        )
+        return f
+
+    def test_rewind_turn2_with_interleaved_tool_results(self, tmp_path: Path):
+        """Rewind to turn 2 should skip tool_result lines in turn counting."""
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        lines = [
+            # Turn 1
+            {"type": "user", "message": {"content": "Hello"}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}},
+            # tool_result (not a turn)
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
+            ]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done"}]}},
+            # Turn 2
+            {"type": "user", "message": {"content": "Generate file"}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Generated"}]}},
+        ]
+        self._create_session(tmp_path, sid, lines)
+
+        with patch(
+            "agent_worker.claude.session_scanner._claude_projects_dir",
+            return_value=tmp_path,
+        ):
+            result = rewind_session_conversation(sid, turn_index=2)
+
+        assert result["status"] == "rewound"
+        assert result["user_prompt"] == "Generate file"
+        assert result["turn_index"] == 2
+
+        # After rewind to turn 2: turn 1 user + assistant + tool_result's
+        # assistant remain (all before the cutoff line at turn 2).
+        # read_session_messages skips tool_result "user" messages but keeps
+        # the assistant reply that follows a tool_result.
+        with patch(
+            "agent_worker.claude.session_scanner._claude_projects_dir",
+            return_value=tmp_path,
+        ):
+            messages = read_session_messages(sid)
+        # user1="Hello", assistant1="Hi", assistant-after-tool="Done"
+        assert len(messages) == 3
+        assert messages[0]["content"] == "Hello"
+        assert messages[1]["content"] == "Hi"
+        assert messages[2]["content"] == "Done"
+
+    def test_rewind_to_turn1(self, tmp_path: Path):
+        """Rewind to turn 1 marks everything from turn 1 onwards as sidechain."""
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        lines = [
+            {"type": "user", "message": {"content": "First prompt"}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "First reply"}]}},
+            {"type": "user", "message": {"content": "Second prompt"}},
+        ]
+        self._create_session(tmp_path, sid, lines)
+
+        with patch(
+            "agent_worker.claude.session_scanner._claude_projects_dir",
+            return_value=tmp_path,
+        ):
+            result = rewind_session_conversation(sid, turn_index=1)
+
+        assert result["status"] == "rewound"
+        assert result["user_prompt"] == "First prompt"
+
+        # Everything should be sidechain — no visible messages
+        with patch(
+            "agent_worker.claude.session_scanner._claude_projects_dir",
+            return_value=tmp_path,
+        ):
+            messages = read_session_messages(sid)
+        assert len(messages) == 0
+
+
+class TestScanAbortedSession:
+    """Aborted sessions (incomplete) should still have checkpoints scanned."""
+
+    def _create_session(self, tmp_path: Path, session_id: str, lines: list[dict]) -> Path:
+        encoded = encode_path_to_project_dir("D:\\projects")
+        project_dir = tmp_path / encoded
+        project_dir.mkdir(parents=True, exist_ok=True)
+        f = project_dir / f"{session_id}.jsonl"
+        f.write_text(
+            "\n".join(json.dumps(l) for l in lines) + "\n",
+            encoding="utf-8",
+        )
+        return f
+
+    def test_aborted_session_has_checkpoints(self, tmp_path: Path):
+        """An aborted session (no result event) still has scannable checkpoints."""
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        lines = [
+            {"type": "user", "uuid": "u1", "message": {"role": "user", "content": "Start long task"}, "timestamp": "t1"},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Working on it..."},
+                {"type": "tool_use", "id": "t1", "name": "Write", "input": {}},
+            ]}},
+            {"type": "user", "uuid": "u-tr-1", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "written"}
+            ]}, "timestamp": "t2"},
+            # Task was aborted here — no result/complete message
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Continuing..."},
+            ]}},
+        ]
+        self._create_session(tmp_path, sid, lines)
+
+        with patch(
+            "agent_worker.claude.session_scanner._claude_projects_dir",
+            return_value=tmp_path,
+        ):
+            checkpoints = scan_session_checkpoints(sid)
+
+        # Only 1 real user prompt (the tool_result is excluded)
+        assert len(checkpoints) == 1
+        assert checkpoints[0]["id"] == "u1"
+        assert checkpoints[0]["turnIndex"] == 1
+
+    def test_aborted_session_rewind(self, tmp_path: Path):
+        """Can rewind an aborted session to its only turn."""
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        lines = [
+            {"type": "user", "message": {"content": "Start task"}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Working"}]}},
+        ]
+        self._create_session(tmp_path, sid, lines)
+
+        with patch(
+            "agent_worker.claude.session_scanner._claude_projects_dir",
+            return_value=tmp_path,
+        ):
+            result = rewind_session_conversation(sid, turn_index=1)
+
+        assert result["status"] == "rewound"
+        assert result["user_prompt"] == "Start task"

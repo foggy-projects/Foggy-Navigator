@@ -52,6 +52,12 @@ public class AgentDiscoveryController {
                 .orElse(RX.failA("Agent not found: " + agentId));
     }
 
+    /**
+     * 向 Agent 提问（异步模式）
+     *
+     * 立即返回 SUBMITTED 状态的 A2aTask（含 taskId），
+     * 调用者通过 GET /{agentId}/tasks/{taskId} 轮询状态获取结果。
+     */
     @PostMapping("/{agentId}/ask")
     public RX<A2aTask> askAgent(
             @PathVariable String agentId,
@@ -71,25 +77,54 @@ public class AgentDiscoveryController {
             contextId = IdGenerator.shortId();
         }
 
-        long start = System.currentTimeMillis();
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(question)));
         message.setContextId(contextId);
-        A2aTask task = agent.sendTask(message);
-        long durationMs = System.currentTimeMillis() - start;
+
+        // 将 sessionId 通过 metadata 传递给 Agent（后台回调用于持久化消息）
+        if (sessionId != null && !sessionId.isBlank()) {
+            message.setMetadata(Map.of("tracked", true, "sessionId", sessionId));
+            updateParticipatingAgents(sessionId, agentId);
+        }
+
+        A2aTask task = agent.sendTask(message);  // ← 立即返回 SUBMITTED
 
         // 确保返回值包含 contextId
         if (task.getContextId() == null) {
             task.setContextId(contextId);
         }
 
-        // 记录 consultation
-        if (sessionId != null && !sessionId.isBlank()) {
-            A2aAgentCard card = agent.getAgentCard();
-            recordConsultation(sessionId, userId, agentId, card.getName(), question, task, durationMs, contextId);
-            updateParticipatingAgents(sessionId, agentId);
-        }
-
         return RX.ok(task);
+    }
+
+    /**
+     * 查询 A2A 任务状态（轮询端点）
+     *
+     * 返回任务当前状态，COMPLETED 时包含 artifacts（结果文本）。
+     */
+    @GetMapping("/{agentId}/tasks/{taskId}")
+    public RX<A2aTask> getTaskStatus(
+            @PathVariable String agentId,
+            @PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        A2aAgent agent = registry.resolveAgent(agentId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+        A2aTask task = agent.getTask(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        return RX.ok(task);
+    }
+
+    /**
+     * 取消 A2A 任务
+     */
+    @PostMapping("/{agentId}/tasks/{taskId}/cancel")
+    public RX<String> cancelTask(
+            @PathVariable String agentId,
+            @PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        A2aAgent agent = registry.resolveAgent(agentId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+        agent.cancelTask(taskId);
+        return RX.ok("Task cancel requested");
     }
 
     /** 查询某会话的所有 @agent 咨询记录 */

@@ -54,8 +54,18 @@ curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents \
 1. 从用户消息中识别 `@xxx` 模式，提取 Agent 名称和提问内容
 2. 在上方「当前可用 Agent」表中匹配 → 获取 Agent ID
 3. 如果表中没有匹配，调用发现 API 动态查询最新列表
-4. 匹配成功后，调用下方「向 Agent 提问」的 curl 命令执行提问
-5. 将回答转述给用户，并保留 contextId 供后续追问
+4. 判断执行模式（见下方）：
+   - **等待结果**（默认）：提交 + 轮询，将回答转述给用户
+   - **发后即忘**：仅提交，不轮询，继续当前会话
+
+**执行模式判断**：
+- **等待结果**（默认）：用户提问、咨询、需要回答时。例：`@api 登录接口参数是什么？`
+- **发后即忘**：用户明确表示不需要等待结果，只是派发一个指令。例：
+  - `向 @api 发送：请优化登录接口，不用管结果`
+  - `@worker 执行一下数据库迁移，然后继续我们的会话`
+  - `让 @dashboard 重新生成报表，我们继续`
+
+  此时只执行**第一步（提交任务）**，告知用户 taskId 后立即继续当前对话。
 
 **多个 Agent 匹配时**：列出所有匹配项，让用户确认：
 > 找到多个匹配的 Agent：
@@ -63,9 +73,13 @@ curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents \
 > 2. foggy-api-v2 — 后端 API v2
 > 请用 @完整名称 指定要咨询的 Agent。
 
-## 向 Agent 提问
+## 向 Agent 提问（异步提交 + 轮询）
+
+任务执行采用**异步模式**：提交后立即返回 taskId，然后轮询获取结果。
 
 **重要**：JSON body 中如果包含非 ASCII 字符（中文等），必须先写入临时文件再用 `--data-binary @file` 发送，否则 Windows 终端编码会损坏内容导致 400 错误。
+
+### 第一步：提交任务（必须）
 
 ```bash
 # 1) 用 python 写 JSON 到临时文件（保证 UTF-8 编码）
@@ -76,14 +90,57 @@ with open('/tmp/_ask_agent.json', 'w', encoding='utf-8') as f:
     json.dump(data, f, ensure_ascii=False)
 "
 
-# 2) 用 curl 发送
-curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
+# 2) 提交任务（立即返回 SUBMITTED）
+SUBMIT=$(curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
   -H "Content-Type: application/json; charset=UTF-8" \
-  --data-binary @/tmp/_ask_agent.json | jq '.data'
+  --data-binary @/tmp/_ask_agent.json)
+
+TASK_ID=$(echo $SUBMIT | jq -r '.data.id')
+CONTEXT_ID=$(echo $SUBMIT | jq -r '.data.contextId')
+echo "Task submitted: $TASK_ID (context: $CONTEXT_ID)"
 ```
 
-返回 A2aTask，取 `.data.artifacts[0].parts[0].text` 获取回答，取 `.data.contextId` 获取对话上下文 ID。
+> **发后即忘模式**：如果用户明确不需要等结果，到此步即可结束。告知用户：
+> "已向 @AgentName 提交任务（taskId: xxx），Agent 将在后台执行。"
+> 然后继续当前对话，无需执行第二步。
+
+### 第二步：轮询直到完成（等待结果模式）
+
+```bash
+# 每 5 秒轮询一次，直到任务完成或失败
+while true; do
+  POLL=$(curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/tasks/$TASK_ID \
+    -H "Authorization: Bearer $NAVIGATOR_TOKEN")
+  STATE=$(echo $POLL | jq -r '.data.status.state')
+  case $STATE in
+    COMPLETED)
+      echo $POLL | jq -r '.data.artifacts[0].parts[0].text'
+      break ;;
+    FAILED)
+      echo "Error: $(echo $POLL | jq -r '.data.status.description')"
+      break ;;
+    *)
+      echo "Status: $STATE, waiting..."
+      sleep 5 ;;
+  esac
+done
+```
+
+**状态说明**：
+- `SUBMITTED` — 任务已提交，等待执行
+- `WORKING` — 任务正在执行
+- `COMPLETED` — 任务完成，从 `.data.artifacts[0].parts[0].text` 获取回答
+- `FAILED` — 任务失败（仅 Worker 明确报错才会出现），从 `.data.status.description` 获取错误信息
+- `INPUT_REQUIRED` — 任务等待权限审批
+
+**注意**：长时间运行的任务（如大型代码分析）可能需要几分钟甚至更长时间完成，请耐心轮询。
+如果任务持续处于 WORKING 状态超过 30 分钟，可考虑取消：
+
+```bash
+curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/tasks/$TASK_ID/cancel \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN"
+```
 
 ## 多轮对话
 
@@ -97,24 +154,30 @@ data = {'question': '项目的认证机制是什么？', 'sessionId': ''}
 with open('/tmp/_ask_agent.json', 'w', encoding='utf-8') as f:
     json.dump(data, f, ensure_ascii=False)
 "
-curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
+SUBMIT=$(curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
   -H "Content-Type: application/json; charset=UTF-8" \
-  --data-binary @/tmp/_ask_agent.json | jq '.data'
+  --data-binary @/tmp/_ask_agent.json)
 
-# 从响应中获取 contextId，例如 "20260303-a1b2"
+TASK_ID=$(echo $SUBMIT | jq -r '.data.id')
+CONTEXT_ID=$(echo $SUBMIT | jq -r '.data.contextId')
+
+# 轮询首次结果...（同上）
 
 # 后续追问（传入 contextId，恢复对话上下文）
 python3 -c "
 import json
-data = {'question': '那 JWT token 的过期时间是多少？', 'sessionId': '', 'contextId': '20260303-a1b2'}
+data = {'question': '那 JWT token 的过期时间是多少？', 'sessionId': '', 'contextId': '$CONTEXT_ID'}
 with open('/tmp/_ask_agent.json', 'w', encoding='utf-8') as f:
     json.dump(data, f, ensure_ascii=False)
 "
-curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
+SUBMIT2=$(curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/agents/{agentId}/ask \
   -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
   -H "Content-Type: application/json; charset=UTF-8" \
-  --data-binary @/tmp/_ask_agent.json | jq '.data'
+  --data-binary @/tmp/_ask_agent.json)
+
+TASK_ID2=$(echo $SUBMIT2 | jq -r '.data.id')
+# 轮询第二次结果...
 ```
 
 ## 多轮对话策略

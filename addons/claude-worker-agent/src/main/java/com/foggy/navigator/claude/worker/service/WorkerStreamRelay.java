@@ -546,7 +546,15 @@ public class WorkerStreamRelay {
                         event.getCostUsd(), event.getInputTokens(),
                         event.getOutputTokens(), event.getDurationMs(),
                         event.getNumTurns(), resolvedModel);
-                activeStreams.remove(taskId);
+
+                // 主动 dispose SSE 订阅，防止 CLI 仍存活时后续 "waiting" 事件
+                // 继续被 relay 到前端（CLI 进程本身不 kill，遵守 Rule 2）
+                Disposable completedSub = activeStreams.remove(taskId);
+                if (completedSub != null && !completedSub.isDisposed()) {
+                    completedSub.dispose();
+                    log.info("Disposed SSE subscription after task completion: taskId={}", taskId);
+                }
+                reconnecting.remove(taskId);
                 workerTaskIdMap.remove(taskId);
                 lastAckedSeq.remove(taskId);
 
@@ -627,7 +635,14 @@ public class WorkerStreamRelay {
                 publishMessage(sessionId, MessageType.ERROR, payload);
 
                 taskService.failTask(taskId, errorClaudeSessionId, event.getError());
-                activeStreams.remove(taskId);
+
+                // 主动 dispose SSE 订阅（同 result 逻辑）
+                Disposable failedSub = activeStreams.remove(taskId);
+                if (failedSub != null && !failedSub.isDisposed()) {
+                    failedSub.dispose();
+                    log.info("Disposed SSE subscription after task failure: taskId={}", taskId);
+                }
+                reconnecting.remove(taskId);
                 workerTaskIdMap.remove(taskId);
                 lastAckedSeq.remove(taskId);
 
@@ -710,7 +725,7 @@ public class WorkerStreamRelay {
      * 而 JSONL 文件中一定有完整的 UUID。任务完成后立即扫描作为可靠补充。
      * 扫描失败不影响任务完成流程。
      */
-    private void autoScanCheckpoints(String taskId, String claudeSessionId) {
+    void autoScanCheckpoints(String taskId, String claudeSessionId) {
         if (claudeSessionId == null || claudeSessionId.isEmpty()) {
             log.debug("Skip auto-scan checkpoints: no claudeSessionId for task {}", taskId);
             return;

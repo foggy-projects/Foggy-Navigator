@@ -342,6 +342,9 @@ export async function rewindTask(
   const rx = (await client.post(`/claude-tasks/${taskId}/rewind`, body)) as unknown as RX<{
     status: string; checkpointId?: string; taskId?: string; userPrompt?: string
   }>
+  if (!rx.data) {
+    throw new Error(rx.message || '回退失败')
+  }
   return rx.data
 }
 

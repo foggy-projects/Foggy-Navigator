@@ -27,6 +27,8 @@ public class TaskDTO {
     private Integer numTurns;
     private String model;
     private String errorMessage;
+    /** A2A 异步任务完成后保存的结果文本 */
+    private String resultText;
     /** JSON array of checkpoint objects */
     private String checkpoints;
     /** Whether file checkpointing was enabled for this task */
