@@ -24,7 +24,13 @@
           @node-click="handleNodeClick"
         >
           <template #default="{ data }">
-            <span class="tree-node" @contextmenu.prevent="handleContextMenu($event, data)">
+            <span
+              class="tree-node"
+              @contextmenu.prevent="handleContextMenu($event, data)"
+              @touchstart.passive="handleTouchStart($event, data)"
+              @touchend="handleTouchEnd($event)"
+              @touchmove.passive="handleTouchMove"
+            >
               <span class="tree-icon">{{ data.isDir ? '📁' : '📄' }}</span>
               <span class="tree-label">{{ data.label }}</span>
             </span>
@@ -198,6 +204,7 @@
         v-if="ctxMenu.visible"
         class="ctx-menu"
         :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+        @touchstart.stop
       >
         <div class="ctx-item" @click="copyPath('name')">复制文件名</div>
         <div class="ctx-item" @click="copyPath('relative')">复制相对路径</div>
@@ -439,11 +446,58 @@ const ctxMenu = ref<{ visible: boolean; x: number; y: number; node: TreeNode | n
 })
 
 function handleContextMenu(e: MouseEvent, data: TreeNode) {
-  ctxMenu.value = { visible: true, x: e.clientX, y: e.clientY, node: data }
+  showContextMenuAt(e.clientX, e.clientY, data)
+}
+
+function showContextMenuAt(x: number, y: number, data: TreeNode) {
+  // Ensure menu stays within viewport bounds (important for iPad / small screens)
+  const menuWidth = 200
+  const menuHeight = 220
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const safeX = Math.min(x, vw - menuWidth)
+  const safeY = Math.min(y, vh - menuHeight)
+  ctxMenu.value = { visible: true, x: Math.max(0, safeX), y: Math.max(0, safeY), node: data }
 }
 
 function closeContextMenu() {
   ctxMenu.value.visible = false
+}
+
+// ---- Long-press for touch devices (iPad etc.) --------------------------------
+let longPressTimer: ReturnType<typeof setTimeout> | null = null
+let longPressTriggered = false
+const LONG_PRESS_DURATION = 500 // ms
+
+function handleTouchStart(e: TouchEvent, data: TreeNode) {
+  longPressTriggered = false
+  const touch = e.touches[0]
+  const tx = touch.clientX
+  const ty = touch.clientY
+  longPressTimer = setTimeout(() => {
+    longPressTriggered = true
+    showContextMenuAt(tx, ty, data)
+  }, LONG_PRESS_DURATION)
+}
+
+function handleTouchEnd(e: TouchEvent) {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+  // Prevent the tap/click from firing after a long-press triggered the context menu
+  if (longPressTriggered) {
+    e.preventDefault()
+    longPressTriggered = false
+  }
+}
+
+function handleTouchMove() {
+  // User is scrolling, cancel long-press
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
 }
 
 async function copyPath(type: 'name' | 'relative' | 'absolute') {
@@ -1010,6 +1064,7 @@ onMounted(async () => {
   updateTreeHeight()
   window.addEventListener('resize', updateTreeHeight)
   document.addEventListener('click', closeContextMenu)
+  document.addEventListener('touchstart', closeContextMenu)
   document.addEventListener('keydown', handleGlobalKeydown)
 
   // Lazy load monaco
@@ -1045,6 +1100,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateTreeHeight)
   document.removeEventListener('click', closeContextMenu)
+  document.removeEventListener('touchstart', closeContextMenu)
   document.removeEventListener('keydown', handleGlobalKeydown)
   if (diffEditorInstance) {
     const model = diffEditorInstance.getModel()
@@ -1648,5 +1704,24 @@ watch(() => route.query.directoryId, () => {
 .ctx-item:hover {
   background: #094771;
   color: #fff;
+}
+
+/* Touch-friendly: larger tap targets on touch devices */
+@media (pointer: coarse) {
+  .ctx-item {
+    padding: 10px 16px;
+    font-size: 15px;
+  }
+
+  .ctx-menu {
+    min-width: 200px;
+  }
+}
+
+/* Prevent text selection during long-press on touch devices */
+.tree-node {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 </style>
