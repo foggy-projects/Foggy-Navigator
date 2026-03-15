@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -134,8 +135,18 @@ async def create_ssh_session(
         async def _send_cwd(proc: asyncssh.SSHClientProcess, path: str) -> None:
             await asyncio.sleep(1.5)
             try:
+                # Detect Windows vs Unix shell by path format:
+                #   - Windows paths contain backslash or drive letter (e.g. D:\)
+                #   - Windows (CMD & PowerShell): cd "path" + cls
+                #     Two commands on separate lines to avoid CMD ";&" issues
+                #   - Bash/zsh: cd 'path'; clear
+                is_windows = bool(re.match(r'^[A-Za-z]:\\', path) or '\\' in path)
+                if is_windows:
+                    cmd = f'cd "{path}"\rcls\r'
+                else:
+                    cmd = f"cd '{path}'; clear\r"
                 # Use \r (carriage return) — that's what terminal Enter key sends
-                proc.stdin.write(f"cd '{path}'; clear\r".encode("utf-8"))
+                proc.stdin.write(cmd.encode("utf-8"))
             except Exception as exc:
                 logger.debug("Failed to send cwd command: %s", exc)
 
