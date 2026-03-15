@@ -448,6 +448,59 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     }
 
     @Override
+    public String initDirectory(String userId, String workerId, String path,
+                                 Map<String, String> files, String projectName) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Worker not found: " + workerId);
+        }
+        // Worker 返回展开后的路径
+        String expandedPath = path;
+        try {
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            Map<String, Object> response = client.initDirectory(path, files).block(Duration.ofSeconds(30));
+            if (response != null && response.get("path") != null) {
+                expandedPath = (String) response.get("path");
+            }
+            log.info("Initialized directory on worker {}: path={} → {}", workerId, path, expandedPath);
+        } catch (Exception e) {
+            log.error("Failed to init directory on worker {}: {}", workerId, e.getMessage(), e);
+            throw new RuntimeException("Failed to initialize directory: " + e.getMessage(), e);
+        }
+
+        // 注册工作目录（如果已存在则返回现有 directoryId）
+        Optional<WorkingDirectoryEntity> existing = directoryRepository
+                .findByWorkerIdAndPathAndUserId(workerId, expandedPath, userId);
+        if (existing.isPresent()) {
+            return existing.get().getDirectoryId();
+        }
+        Optional<WorkingDirectoryEntity> existingOriginal = directoryRepository
+                .findByWorkerIdAndPathAndUserId(workerId, path, userId);
+        if (existingOriginal.isPresent()) {
+            WorkingDirectoryEntity old = existingOriginal.get();
+            old.setPath(expandedPath);
+            directoryRepository.save(old);
+            return old.getDirectoryId();
+        }
+
+        String effectiveName = (projectName != null && !projectName.isBlank())
+                ? projectName : "foggy-assistant";
+        WorkingDirectoryEntity entity = new WorkingDirectoryEntity();
+        entity.setDirectoryId(IdGenerator.shortId());
+        entity.setWorkerId(workerId);
+        entity.setUserId(userId);
+        entity.setProjectName(effectiveName);
+        entity.setPath(expandedPath);
+        entity.setDirectoryType("STANDARD");
+        entity.setWorktree(false);
+        directoryRepository.save(entity);
+        log.info("Registered working directory: directoryId={}, path={}, projectName={}",
+                entity.getDirectoryId(), path, effectiveName);
+
+        return entity.getDirectoryId();
+    }
+
+    @Override
     public void validateWorkerOwnership(String userId, String workerId) {
         workerService.getWorker(userId, workerId); // throws if not found or not owned
     }

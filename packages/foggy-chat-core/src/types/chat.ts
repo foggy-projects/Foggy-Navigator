@@ -27,6 +27,8 @@ export interface ChatMessage {
   answeredValues?: Record<number, string>
   /** Whether this error supports manual reconnection */
   reconnectable?: boolean
+  /** Image attachments (preview URLs) for user messages */
+  images?: Array<{ name: string; url: string }>
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

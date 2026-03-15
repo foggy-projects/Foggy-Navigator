@@ -648,15 +648,16 @@ class SdkWrapper:
         if extra_args:
             options_kwargs["extra_args"] = extra_args
 
-    # -- Image attachments ---------------------------------------------------
+    # -- File / image attachments ----------------------------------------------
 
     @staticmethod
     def _save_images(
         cwd: str,
         images: list[dict[str, str]],
     ) -> list[str]:
-        """Save base64-encoded images to ``cwd/.foggy-attachments/``.
+        """Save base64-encoded attachments to ``cwd/.foggy-attachments/``.
 
+        Accepts both image and non-image files (same JSON format).
         Returns relative paths (from *cwd*) of the saved files.
         """
 
@@ -664,10 +665,10 @@ class SdkWrapper:
         attach_dir.mkdir(parents=True, exist_ok=True)
 
         saved: list[str] = []
-        max_image_bytes = 20 * 1024 * 1024  # 20MB decoded limit per image
+        max_file_bytes = 20 * 1024 * 1024  # 20MB decoded limit per file
 
         for img in images:
-            name = img.get("name", "image.png")
+            name = img.get("name", "attachment")
             data_b64 = img.get("data", "")
             if not data_b64:
                 continue
@@ -675,30 +676,30 @@ class SdkWrapper:
             # Sanitize filename: strip path components to prevent traversal
             name = Path(name).name
             if not name or name.startswith("."):
-                name = "image.png"
+                name = "attachment"
 
             # Size check on base64 payload (decoded ~= len*3/4)
-            if len(data_b64) > max_image_bytes * 4 // 3:
-                logger.warning("Image %s exceeds size limit (%d bytes b64), skipping", name, len(data_b64))
+            if len(data_b64) > max_file_bytes * 4 // 3:
+                logger.warning("Attachment %s exceeds size limit (%d bytes b64), skipping", name, len(data_b64))
                 continue
 
             file_path = attach_dir / name
             file_path.write_bytes(base64.b64decode(data_b64))
             saved.append(f".foggy-attachments/{name}")
-            logger.info("Saved image attachment: %s (%d bytes)", file_path, file_path.stat().st_size)
+            logger.info("Saved attachment: %s (%d bytes)", file_path, file_path.stat().st_size)
 
         return saved
 
     @staticmethod
     def _augment_prompt_with_images(prompt: str, image_paths: list[str]) -> str:
-        """Prepend image reading instructions to the user prompt."""
+        """Prepend file reading instructions to the user prompt."""
 
         if not image_paths:
             return prompt
 
         paths_list = "\n".join(f"- {p}" for p in image_paths)
         return (
-            f"[Attached images — use the Read tool to view them before responding]\n"
+            f"[Attached files — use the Read tool to view them before responding]\n"
             f"{paths_list}\n\n"
             f"{prompt}"
         )

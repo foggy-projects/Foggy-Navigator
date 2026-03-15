@@ -96,6 +96,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/monitoring/", "/api/v1/monitoring/**").permitAll()
                         .requestMatchers("/api/v1/users", "/api/v1/users/**").permitAll()
                         .requestMatchers("/api/v1/auth/me").permitAll()
+                        // Open API（第三方系统集成）
+                        .requestMatchers("/api/v1/open/register").permitAll()
+                        .requestMatchers("/api/v1/open", "/api/v1/open/**").permitAll()
 
                         // 开放 Spring Boot 错误端点（避免异常转发时被拦截返回 403）
                         .requestMatchers("/error").permitAll()

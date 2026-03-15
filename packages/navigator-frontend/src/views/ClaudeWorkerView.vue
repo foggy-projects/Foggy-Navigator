@@ -1,5 +1,5 @@
 <template>
-  <div class="worker-layout">
+  <div :class="['worker-layout', { 'fullscreen-active': isSessionFullscreen }]">
     <!-- Left Panel: Two-level Tree Sidebar -->
     <aside class="worker-sidebar">
       <div class="sidebar-header">
@@ -166,8 +166,36 @@
 
     <!-- Middle Panel: Main Content Area -->
     <main :class="['worker-main', { 'has-panes': panes.length > 0 }]" @paste="handlePaste" @drop="handleDrop" @dragover="handleDragOver">
-      <!-- Hidden file input for image picker -->
-      <input ref="fileInputRef" type="file" multiple accept="image/*" class="sr-only" @change="handleFileSelect">
+      <!-- Hidden file input for attachment picker (images + files) -->
+      <input ref="fileInputRef" type="file" multiple class="sr-only" @change="handleFileSelect">
+      <!-- Fullscreen exit bar (only visible in fullscreen mode) -->
+      <div v-if="isSessionFullscreen" class="fullscreen-exit-bar">
+        <el-button text @click="exitFullscreen">← 退出全屏</el-button>
+        <div class="fullscreen-exit-bar-right">
+          <el-button text @click="showPencilCanvas = true" title="打开画板">🎨 画板</el-button>
+        </div>
+      </div>
+      <!-- PencilCanvas overlay -->
+      <PencilCanvas
+        :visible="showPencilCanvas"
+        @save="handleCanvasSave"
+        @close="showPencilCanvas = false"
+      />
+      <!-- ScreenshotAnnotator overlay -->
+      <ScreenshotAnnotator
+        :visible="showAnnotator"
+        :image-url="annotatorImageUrl"
+        :image-index="annotatorImageIndex"
+        @save="handleAnnotatorSave"
+        @close="showAnnotator = false"
+      />
+      <!-- Attachment image lightbox (click-to-enlarge) -->
+      <Teleport to="body">
+        <div v-if="previewAttachmentIdx >= 0 && attachments[previewAttachmentIdx]?.isImage" class="att-lightbox" @click="previewAttachmentIdx = -1">
+          <img :src="attachments[previewAttachmentIdx]!.previewUrl" :alt="attachments[previewAttachmentIdx]!.name" class="att-lightbox-img" @click.stop />
+          <span class="att-lightbox-close" @click="previewAttachmentIdx = -1">&times;</span>
+        </div>
+      </Teleport>
       <!-- Directory selected: show git info + task form scoped to directory -->
       <template v-if="selectedDirectory">
         <!-- Compact directory header -->
@@ -221,6 +249,7 @@
               </template>
             </el-dropdown>
             <el-button size="small" @click="handleToggleTerminal">终端</el-button>
+            <el-button size="small" @click="toggleFullscreen" title="全屏会话">⤢</el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
             <el-button
               v-if="selectedDirectory.worktree"
@@ -248,104 +277,90 @@
             <span v-if="s.pinned" class="pin-icon">&#128204;</span>{{ s.name }}
           </el-tag>
         </div>
-        <div v-if="agentTeamsConfigs.length > 0" class="agent-teams-bar">
-          <span class="agent-teams-label">Agent Teams:</span>
-          <el-select
-            v-model="selectedAgentTeamsConfigId"
-            placeholder="不使用"
-            clearable
-            size="small"
-            style="width: 180px; margin-right: 8px"
-          >
-            <el-option
-              v-for="cfg in agentTeamsConfigs"
-              :key="cfg.configId"
-              :label="cfg.name + (cfg.isDefault ? ' ★' : '')"
-              :value="cfg.configId"
-            />
-          </el-select>
-          <el-tag
-            v-for="agent in parsedAgentTeams"
-            :key="agent"
-            size="small"
-            type="info"
-            effect="light"
-          >
-            {{ agent }}
-          </el-tag>
-        </div>
-
         <!-- Task Form: collapse when panes are open -->
         <div v-if="panes.length === 0" class="task-form">
-          <el-form :model="taskForm" label-position="top" size="default">
-            <el-form-item label="Prompt">
-              <SlashCommandInput
-                ref="dirFullInputRef"
-                v-model="taskForm.prompt"
-                :rows="3"
-                auto-grow
-                placeholder="输入任务描述... (可粘贴截图或拖拽图片, ./ 搜索文件)"
-                :skills="directorySkills"
-                :agents="allAgentItems"
-                :directory-id="selectedDirectoryId ?? undefined"
-                @submit="handleCreateTask"
-                @command="handleSlashCommand"
-                @history-prev="handleTaskHistoryPrev"
-                @history-next="handleTaskHistoryNext"
-              />
-            </el-form-item>
-            <!-- Image preview strip -->
-            <div v-if="attachedImages.length > 0" class="image-preview-strip">
-              <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item">
-                <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
-                <span class="image-remove" @click="removeImage(idx)">&times;</span>
+          <label class="form-label">Prompt</label>
+          <SlashCommandInput
+            ref="dirFullInputRef"
+            v-model="taskForm.prompt"
+            :rows="3"
+            auto-grow
+            placeholder="输入任务描述... (可粘贴截图或拖拽文件, ./ 搜索文件)"
+            :skills="directorySkills"
+            :agents="allAgentItems"
+            :directory-id="selectedDirectoryId ?? undefined"
+            @submit="handleCreateTask"
+            @command="handleSlashCommand"
+            @history-prev="handleTaskHistoryPrev"
+            @history-next="handleTaskHistoryNext"
+          />
+          <!-- Attachment preview strip -->
+          <div v-if="attachments.length > 0" class="image-preview-strip" style="margin-top: 8px">
+            <div v-for="(att, idx) in attachments" :key="idx" class="image-preview-item" :class="{ 'file-item': !att.isImage }">
+              <template v-if="att.isImage">
+                <img :src="att.previewUrl" :alt="att.name" :title="att.name" @click="previewAttachmentIdx = idx" />
+                <span class="image-annotate" @click="openAnnotator(idx)" title="标注">🖊️</span>
+              </template>
+              <div v-else class="file-preview" :title="att.name">
+                <span class="file-icon">{{ fileIcon(att.mimeType) }}</span>
+                <span class="file-name">{{ att.name }}</span>
               </div>
+              <span class="image-remove" @click="removeAttachment(idx)">&times;</span>
             </div>
-            <div v-if="taskForm.maxTurns || platformModelConfig" class="active-overrides">
-              <el-tag v-if="platformModelConfig" size="small" type="success">
-                API: {{ platformModelConfig.name }}
-              </el-tag>
-              <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
-                轮次: {{ taskForm.maxTurns }}
-              </el-tag>
-            </div>
-            <el-form-item>
-              <el-button
-                type="primary"
-                :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
-                :loading="creatingTask"
-                @click="handleCreateTask"
-              >
-                运行任务
-              </el-button>
-              <el-button text @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
-              <el-button text @click="insertDotSlash(dirFullInputRef)" title="搜索文件路径 (./)">&#128193;</el-button>
-              <el-select v-model="taskForm.permissionMode" size="small" style="width: 150px; margin-left: 8px">
-                <el-option value="bypassPermissions" label="跳过权限" />
-                <el-option value="acceptEdits" label="自动接受编辑" />
-                <el-option value="plan" label="只读(Plan)" />
-                <el-option value="default" label="交互式审批" />
-              </el-select>
-              <el-select v-model="taskForm.model" size="small" style="width: 120px; margin-left: 8px">
-                <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
-              </el-select>
-              <el-select
-                v-if="platformModels.length > 0"
-                v-model="platformModelConfigId"
-                size="small"
-                style="width: 180px; margin-left: 8px"
-                placeholder="API 凭证"
-                clearable
-              >
-                <el-option
-                  v-for="m in platformModels"
-                  :key="m.id"
-                  :value="m.id"
-                  :label="m.name"
-                />
-              </el-select>
-            </el-form-item>
-          </el-form>
+          </div>
+          <div class="form-action-bar">
+            <el-button
+              type="primary"
+              :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
+              :loading="creatingTask"
+              @click="handleCreateTask"
+            >
+              运行任务
+            </el-button>
+            <button class="mini-tool-btn" @click="fileInputRef?.click()" title="附加文件">
+              <span class="btn-icon">&#128206;</span><span class="btn-label">附件</span>
+            </button>
+            <button class="mini-tool-btn" @click="showPencilCanvas = true" title="打开画板">
+              <span class="btn-icon">🎨</span><span class="btn-label">画板</span>
+            </button>
+            <button class="mini-tool-btn" @click="insertDotSlash(dirFullInputRef)" title="搜索文件路径 (./)">
+              <span class="btn-icon">&#128193;</span><span class="btn-label">搜索</span>
+            </button>
+            <el-select v-model="taskForm.permissionMode" size="small" class="toolbar-select" style="width: 120px">
+              <el-option value="bypassPermissions" label="跳过权限" />
+              <el-option value="acceptEdits" label="自动接受编辑" />
+              <el-option value="plan" label="只读(Plan)" />
+              <el-option value="default" label="交互式审批" />
+            </el-select>
+            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 100px">
+              <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
+            </el-select>
+            <el-select
+              v-if="platformModels.length > 0"
+              v-model="platformModelConfigId"
+              size="small"
+              class="toolbar-select"
+              style="width: 140px"
+              placeholder="API 凭证"
+              clearable
+            >
+              <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
+            </el-select>
+            <el-select
+              v-if="agentTeamsConfigs.length > 0"
+              v-model="selectedAgentTeamsConfigId"
+              placeholder="Teams"
+              clearable
+              size="small"
+              class="toolbar-select"
+              style="width: 140px"
+            >
+              <el-option v-for="cfg in agentTeamsConfigs" :key="cfg.configId" :label="cfg.name + (cfg.isDefault ? ' ★' : '')" :value="cfg.configId" />
+            </el-select>
+            <el-tag v-for="agent in parsedAgentTeams" :key="agent" size="small" type="info" effect="light">{{ agent }}</el-tag>
+            <el-tag v-if="platformModelConfig" size="small" type="success">API: {{ platformModelConfig.name }}</el-tag>
+            <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">轮次: {{ taskForm.maxTurns }}</el-tag>
+          </div>
         </div>
         <div v-else class="new-task-mini">
           <div class="mini-input-row">
@@ -365,9 +380,8 @@
               @history-prev="handleTaskHistoryPrev"
               @history-next="handleTaskHistoryNext"
             />
-            <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
-            <el-button text size="small" @click="insertDotSlash(dirMiniInputRef)" title="搜索文件路径 (./)">&#128193;</el-button>
             <el-button
+              class="mini-run-btn"
               size="small"
               :disabled="!taskForm.prompt || selectedWorkerEntity?.status !== 'ONLINE'"
               :loading="creatingTask"
@@ -376,22 +390,44 @@
               运行
             </el-button>
           </div>
-          <div v-if="attachedImages.length > 0" class="image-preview-strip compact">
-            <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item small">
-              <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
-              <span class="image-remove" @click="removeImage(idx)">&times;</span>
-            </div>
+          <div class="mini-toolbar">
+            <button class="mini-tool-btn" @click="fileInputRef?.click()" title="附加文件">
+              <span class="btn-icon">&#128206;</span><span class="btn-label">附件</span>
+            </button>
+            <button class="mini-tool-btn" @click="showPencilCanvas = true" title="打开画板">
+              <span class="btn-icon">🎨</span><span class="btn-label">画板</span>
+            </button>
+            <button class="mini-tool-btn" @click="insertDotSlash(dirMiniInputRef)" title="搜索文件路径 (./)">
+              <span class="btn-icon">&#128193;</span><span class="btn-label">搜索</span>
+            </button>
+            <el-select
+              v-if="agentTeamsConfigs.length > 0"
+              v-model="selectedAgentTeamsConfigId"
+              placeholder="Teams"
+              clearable
+              size="small"
+              class="toolbar-select"
+              style="width: 130px"
+            >
+              <el-option v-for="cfg in agentTeamsConfigs" :key="cfg.configId" :label="cfg.name + (cfg.isDefault ? ' ★' : '')" :value="cfg.configId" />
+            </el-select>
+            <el-tag v-for="agent in parsedAgentTeams" :key="agent" size="small" type="info" effect="light">{{ agent }}</el-tag>
+            <el-tag v-if="platformModelConfig" size="small" type="success">API: {{ platformModelConfig.name }}</el-tag>
+            <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">模型: {{ shortModel(taskForm.model) }}</el-tag>
+            <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">轮次: {{ taskForm.maxTurns }}</el-tag>
           </div>
-          <div v-if="taskForm.model || taskForm.maxTurns || platformModelConfig" class="active-overrides">
-            <el-tag v-if="platformModelConfig" size="small" type="success">
-              API: {{ platformModelConfig.name }}
-            </el-tag>
-            <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
-              模型: {{ shortModel(taskForm.model) }}
-            </el-tag>
-            <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
-              轮次: {{ taskForm.maxTurns }}
-            </el-tag>
+          <div v-if="attachments.length > 0" class="image-preview-strip compact">
+            <div v-for="(att, idx) in attachments" :key="idx" class="image-preview-item small" :class="{ 'file-item': !att.isImage }">
+              <template v-if="att.isImage">
+                <img :src="att.previewUrl" :alt="att.name" :title="att.name" @click="previewAttachmentIdx = idx" />
+                <span class="image-annotate" @click="openAnnotator(idx)" title="标注">🖊️</span>
+              </template>
+              <div v-else class="file-preview" :title="att.name">
+                <span class="file-icon">{{ fileIcon(att.mimeType) }}</span>
+                <span class="file-name">{{ att.name }}</span>
+              </div>
+              <span class="image-remove" @click="removeAttachment(idx)">&times;</span>
+            </div>
           </div>
         </div>
 
@@ -601,75 +637,75 @@
 
         <!-- Task Form: collapse when panes are open -->
         <div v-if="panes.length === 0" class="task-form">
-          <el-form :model="taskForm" label-position="top" size="default">
-            <el-form-item label="Prompt">
-              <SlashCommandInput
-                v-model="taskForm.prompt"
-                :rows="3"
-                auto-grow
-                placeholder="输入任务描述... (可粘贴截图或拖拽图片)"
-                :skills="directorySkills"
-                :agents="allAgentItems"
-                @submit="handleCreateTask"
-                @command="handleSlashCommand"
-                @history-prev="handleTaskHistoryPrev"
-                @history-next="handleTaskHistoryNext"
-              />
-            </el-form-item>
-            <!-- Image preview strip -->
-            <div v-if="attachedImages.length > 0" class="image-preview-strip">
-              <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item">
-                <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
-                <span class="image-remove" @click="removeImage(idx)">&times;</span>
+          <label class="form-label">Prompt</label>
+          <SlashCommandInput
+            v-model="taskForm.prompt"
+            :rows="3"
+            auto-grow
+            placeholder="输入任务描述... (可粘贴截图或拖拽文件)"
+            :skills="directorySkills"
+            :agents="allAgentItems"
+            @submit="handleCreateTask"
+            @command="handleSlashCommand"
+            @history-prev="handleTaskHistoryPrev"
+            @history-next="handleTaskHistoryNext"
+          />
+          <!-- Attachment preview strip -->
+          <div v-if="attachments.length > 0" class="image-preview-strip" style="margin-top: 8px">
+            <div v-for="(att, idx) in attachments" :key="idx" class="image-preview-item" :class="{ 'file-item': !att.isImage }">
+              <template v-if="att.isImage">
+                <img :src="att.previewUrl" :alt="att.name" :title="att.name" @click="previewAttachmentIdx = idx" />
+                <span class="image-annotate" @click="openAnnotator(idx)" title="标注">🖊️</span>
+              </template>
+              <div v-else class="file-preview" :title="att.name">
+                <span class="file-icon">{{ fileIcon(att.mimeType) }}</span>
+                <span class="file-name">{{ att.name }}</span>
               </div>
+              <span class="image-remove" @click="removeAttachment(idx)">&times;</span>
             </div>
-            <el-form-item label="工作目录 (cwd)">
-              <el-input v-model="taskForm.cwd" placeholder="可选，如 /home/user/project" />
-            </el-form-item>
-            <div v-if="taskForm.maxTurns || platformModelConfig" class="active-overrides">
-              <el-tag v-if="platformModelConfig" size="small" type="success">
-                API: {{ platformModelConfig.name }}
-              </el-tag>
-              <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
-                轮次: {{ taskForm.maxTurns }}
-              </el-tag>
-            </div>
-            <el-form-item>
-              <el-button
-                type="primary"
-                :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE'"
-                :loading="creatingTask"
-                @click="handleCreateTask"
-              >
-                运行任务
-              </el-button>
-              <el-button text @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
-              <el-select v-model="taskForm.permissionMode" size="small" style="width: 150px; margin-left: 8px">
-                <el-option value="bypassPermissions" label="跳过权限" />
-                <el-option value="acceptEdits" label="自动接受编辑" />
-                <el-option value="plan" label="只读(Plan)" />
-                <el-option value="default" label="交互式审批" />
-              </el-select>
-              <el-select v-model="taskForm.model" size="small" style="width: 120px; margin-left: 8px">
-                <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
-              </el-select>
-              <el-select
-                v-if="platformModels.length > 0"
-                v-model="platformModelConfigId"
-                size="small"
-                style="width: 180px; margin-left: 8px"
-                placeholder="API 凭证"
-                clearable
-              >
-                <el-option
-                  v-for="m in platformModels"
-                  :key="m.id"
-                  :value="m.id"
-                  :label="m.name"
-                />
-              </el-select>
-            </el-form-item>
-          </el-form>
+          </div>
+          <div class="form-action-bar">
+            <el-button
+              type="primary"
+              :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE'"
+              :loading="creatingTask"
+              @click="handleCreateTask"
+            >
+              运行任务
+            </el-button>
+            <button class="mini-tool-btn" @click="fileInputRef?.click()" title="附加文件">
+              <span class="btn-icon">&#128206;</span><span class="btn-label">附件</span>
+            </button>
+            <button class="mini-tool-btn" @click="showPencilCanvas = true" title="打开画板">
+              <span class="btn-icon">🎨</span><span class="btn-label">画板</span>
+            </button>
+            <el-select v-model="taskForm.permissionMode" size="small" class="toolbar-select" style="width: 120px">
+              <el-option value="bypassPermissions" label="跳过权限" />
+              <el-option value="acceptEdits" label="自动接受编辑" />
+              <el-option value="plan" label="只读(Plan)" />
+              <el-option value="default" label="交互式审批" />
+            </el-select>
+            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 100px">
+              <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
+            </el-select>
+            <el-select
+              v-if="platformModels.length > 0"
+              v-model="platformModelConfigId"
+              size="small"
+              class="toolbar-select"
+              style="width: 140px"
+              placeholder="API 凭证"
+              clearable
+            >
+              <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
+            </el-select>
+            <el-tag v-if="platformModelConfig" size="small" type="success">API: {{ platformModelConfig.name }}</el-tag>
+            <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">轮次: {{ taskForm.maxTurns }}</el-tag>
+          </div>
+          <div style="margin-top: 8px">
+            <label class="form-label">工作目录 (cwd)</label>
+            <el-input v-model="taskForm.cwd" size="small" placeholder="可选，如 /home/user/project" />
+          </div>
         </div>
         <div v-else class="new-task-mini">
           <div class="mini-input-row">
@@ -679,7 +715,7 @@
               auto-grow
               :max-rows="4"
               size="small"
-              placeholder="新建任务... (Ctrl+Enter 发送，可粘贴截图)"
+              placeholder="新建任务... (Ctrl+Enter 发送，可拖拽文件)"
               :skills="directorySkills"
               :agents="allAgentItems"
               @submit="handleCreateTask"
@@ -687,8 +723,8 @@
               @history-prev="handleTaskHistoryPrev"
               @history-next="handleTaskHistoryNext"
             />
-            <el-button text size="small" @click="fileInputRef?.click()" title="附加图片">&#128206;</el-button>
             <el-button
+              class="mini-run-btn"
               size="small"
               :disabled="!taskForm.prompt || selectedWorkerEntity.status !== 'ONLINE'"
               :loading="creatingTask"
@@ -697,22 +733,29 @@
               运行
             </el-button>
           </div>
-          <div v-if="attachedImages.length > 0" class="image-preview-strip compact">
-            <div v-for="(img, idx) in attachedImages" :key="idx" class="image-preview-item small">
-              <img :src="img.previewUrl" :alt="img.name" :title="img.name" />
-              <span class="image-remove" @click="removeImage(idx)">&times;</span>
-            </div>
+          <div class="mini-toolbar">
+            <button class="mini-tool-btn" @click="fileInputRef?.click()" title="附加文件">
+              <span class="btn-icon">&#128206;</span><span class="btn-label">附件</span>
+            </button>
+            <button class="mini-tool-btn" @click="showPencilCanvas = true" title="打开画板">
+              <span class="btn-icon">🎨</span><span class="btn-label">画板</span>
+            </button>
+            <el-tag v-if="platformModelConfig" size="small" type="success">API: {{ platformModelConfig.name }}</el-tag>
+            <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">模型: {{ shortModel(taskForm.model) }}</el-tag>
+            <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">轮次: {{ taskForm.maxTurns }}</el-tag>
           </div>
-          <div v-if="taskForm.model || taskForm.maxTurns || platformModelConfig" class="active-overrides">
-            <el-tag v-if="platformModelConfig" size="small" type="success">
-              API: {{ platformModelConfig.name }}
-            </el-tag>
-            <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">
-              模型: {{ shortModel(taskForm.model) }}
-            </el-tag>
-            <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">
-              轮次: {{ taskForm.maxTurns }}
-            </el-tag>
+          <div v-if="attachments.length > 0" class="image-preview-strip compact">
+            <div v-for="(att, idx) in attachments" :key="idx" class="image-preview-item small" :class="{ 'file-item': !att.isImage }">
+              <template v-if="att.isImage">
+                <img :src="att.previewUrl" :alt="att.name" :title="att.name" @click="previewAttachmentIdx = idx" />
+                <span class="image-annotate" @click="openAnnotator(idx)" title="标注">🖊️</span>
+              </template>
+              <div v-else class="file-preview" :title="att.name">
+                <span class="file-icon">{{ fileIcon(att.mimeType) }}</span>
+                <span class="file-name">{{ att.name }}</span>
+              </div>
+              <span class="image-remove" @click="removeAttachment(idx)">&times;</span>
+            </div>
           </div>
         </div>
 
@@ -920,10 +963,14 @@
       <div class="history-content">
         <!-- Global attention section: active tasks + awaiting reply -->
         <div v-if="globalAttentionConvs.length > 0" class="active-sessions-section">
-          <div class="active-header">
-            <span class="active-title">&#9679; 需要关注 ({{ globalAttentionConvs.length }})</span>
-            <el-button size="small" text @click="() => { workerState.loadActiveTasks(); workerState.loadAwaitingReplyTasks() }">&#8635;</el-button>
+          <div class="active-header" @click="toggleAttentionCollapsed">
+            <span class="active-title">
+              <span class="expand-icon">{{ prefs.attentionCollapsed ? '▶' : '▼' }}</span>
+              &#9679; 需要关注 ({{ globalAttentionConvs.length }})
+            </span>
+            <el-button size="small" text @click.stop="() => { workerState.loadActiveTasks(); workerState.loadAwaitingReplyTasks() }">&#8635;</el-button>
           </div>
+          <template v-if="!prefs.attentionCollapsed">
           <template v-for="item in attentionDisplayList" :key="item.type === 'conv' ? item.conv.sessionId : `wh-${item.workerId}`">
             <!-- Worker group header -->
             <div v-if="item.type === 'worker-header'" class="attention-worker-header">
@@ -1039,6 +1086,7 @@
                 </span>
               </div>
             </div>
+          </template>
           </template>
           <div class="active-divider">
             <span class="active-divider-line" />
@@ -1937,6 +1985,10 @@ import SshTerminalPanel from '@/components/worker/SshTerminalPanel.vue'
 import SshTerminal from '@/components/worker/SshTerminal.vue'
 import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import SessionSearchDialog from '@/components/worker/SessionSearchDialog.vue'
+import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
+import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
+import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
+import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
@@ -2111,6 +2163,7 @@ const selectedWorkerId = ref<string | null>(null)
 const selectedDirectoryId = ref<string | null>(null)
 const expandedWorkerIds = reactive(new Set<string>())
 const expandedProjectIds = reactive(new Set<string>())
+const { prefs } = useUserPreferences()
 
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
@@ -2578,16 +2631,50 @@ function handleTaskHistoryNext() {
   if (text != null) taskForm.value.prompt = text
 }
 
-// --- Image attachment state ---
-interface ImageAttachment {
+// --- Attachment state (images + files) ---
+interface Attachment {
   name: string
   base64: string
   mimeType: string
   previewUrl: string
   size: number  // original file size in bytes
+  isImage: boolean
 }
-const attachedImages = ref<ImageAttachment[]>([])
+const attachments = ref<Attachment[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// --- Session fullscreen + iPad tools ---
+const { isSessionFullscreen, toggle: toggleFullscreen, exit: exitFullscreen } = useSessionFullscreen()
+const showPencilCanvas = ref(false)
+const showAnnotator = ref(false)
+const annotatorImageUrl = ref('')
+const annotatorImageIndex = ref(0)
+const previewAttachmentIdx = ref(-1)
+
+function openAnnotator(idx: number) {
+  const img = attachments.value[idx]
+  if (!img || !img.isImage) return
+  annotatorImageUrl.value = img.previewUrl
+  annotatorImageIndex.value = idx
+  showAnnotator.value = true
+}
+
+async function handleCanvasSave(blob: Blob) {
+  showPencilCanvas.value = false
+  const file = new File([blob], `drawing-${Date.now()}.webp`, { type: 'image/webp' })
+  const attachment = await compressImage(file)
+  attachments.value.push(attachment)
+}
+
+async function handleAnnotatorSave(blob: Blob, idx: number) {
+  showAnnotator.value = false
+  const file = new File([blob], `annotated-${Date.now()}.webp`, { type: 'image/webp' })
+  const attachment = await compressImage(file)
+  // Replace the original image at the same index
+  const old = attachments.value[idx]
+  if (old) URL.revokeObjectURL(old.previewUrl)
+  attachments.value.splice(idx, 1, attachment)
+}
 
 // Refs for SlashCommandInput instances (used by insertDotSlash)
 const dirFullInputRef = ref<InstanceType<typeof SlashCommandInput> | null>(null)
@@ -2608,10 +2695,11 @@ function insertDotSlash(comp: InstanceType<typeof SlashCommandInput> | null) {
     textarea.setSelectionRange(newCursor, newCursor)
   })
 }
-const MAX_IMAGES = 10
-const MAX_SINGLE_SIZE = 10 * 1024 * 1024 // 10MB per image before compression
+const MAX_ATTACHMENTS = 10
+const MAX_IMAGE_SIZE = 50 * 1024 * 1024  // 50MB per image before compression (iPad screenshots can be 10-30MB)
+const MAX_FILE_SIZE = 20 * 1024 * 1024   // 20MB per non-image file (no compression)
 
-async function compressImage(file: File): Promise<ImageAttachment> {
+async function compressImage(file: File): Promise<Attachment> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const objectUrl = URL.createObjectURL(file)
@@ -2641,6 +2729,7 @@ async function compressImage(file: File): Promise<ImageAttachment> {
               mimeType: 'image/webp',
               previewUrl: URL.createObjectURL(blob),
               size: file.size,
+              isImage: true,
             })
           }
           reader.onerror = reject
@@ -2655,49 +2744,79 @@ async function compressImage(file: File): Promise<ImageAttachment> {
   })
 }
 
-async function addImageFiles(files: FileList | File[]) {
+async function readFileAsBase64(file: File): Promise<Attachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(',')[1]!
+      resolve({
+        name: file.name,
+        base64,
+        mimeType: file.type || 'application/octet-stream',
+        previewUrl: '',
+        size: file.size,
+        isImage: false,
+      })
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+function fileIcon(mimeType: string): string {
+  if (mimeType.includes('pdf')) return '📑'
+  if (mimeType.includes('zip') || mimeType.includes('tar') || mimeType.includes('gzip') || mimeType.includes('compressed')) return '📦'
+  if (mimeType.includes('sheet') || mimeType.includes('csv')) return '📊'
+  return '📄'
+}
+
+async function addFiles(files: FileList | File[]) {
   for (const file of Array.from(files)) {
-    if (!file.type.startsWith('image/')) continue
-    if (attachedImages.value.length >= MAX_IMAGES) {
-      ElMessage.warning(`最多附加 ${MAX_IMAGES} 张图片`)
+    if (attachments.value.length >= MAX_ATTACHMENTS) {
+      ElMessage.warning(`最多附加 ${MAX_ATTACHMENTS} 个文件`)
       break
     }
-    if (file.size > MAX_SINGLE_SIZE) {
-      ElMessage.warning(`图片 "${file.name}" 超过 10MB，已跳过`)
+    const isImage = file.type.startsWith('image/')
+    const maxSize = isImage ? MAX_IMAGE_SIZE : MAX_FILE_SIZE
+    if (file.size > maxSize) {
+      ElMessage.warning(`"${file.name}" 超过 ${isImage ? '50MB' : '20MB'}，已跳过`)
       continue
     }
     try {
-      const attachment = await compressImage(file)
-      attachedImages.value.push(attachment)
+      const attachment = isImage ? await compressImage(file) : await readFileAsBase64(file)
+      attachments.value.push(attachment)
     } catch {
-      ElMessage.warning(`图片 "${file.name}" 处理失败`)
+      ElMessage.warning(`"${file.name}" 处理失败`)
     }
   }
 }
 
-function removeImage(index: number) {
-  const removed = attachedImages.value.splice(index, 1)
+function removeAttachment(index: number) {
+  const removed = attachments.value.splice(index, 1)
   removed.forEach((img) => URL.revokeObjectURL(img.previewUrl))
 }
 
 function handlePaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items
   if (!items) return
-  const imageFiles: File[] = []
+  const pastedFiles: File[] = []
   for (const item of Array.from(items)) {
-    if (item.type.startsWith('image/')) {
+    if (item.kind === 'file') {
       const file = item.getAsFile()
       if (file) {
-        // Generate a meaningful name for clipboard images
-        const ext = file.type.split('/')[1] || 'png'
-        const named = new File([file], `screenshot-${Date.now()}.${ext}`, { type: file.type })
-        imageFiles.push(named)
+        if (file.type.startsWith('image/')) {
+          // Generate a meaningful name for clipboard images (usually screenshots)
+          const ext = file.type.split('/')[1] || 'png'
+          pastedFiles.push(new File([file], `screenshot-${Date.now()}.${ext}`, { type: file.type }))
+        } else {
+          pastedFiles.push(file)
+        }
       }
     }
   }
-  if (imageFiles.length > 0) {
+  if (pastedFiles.length > 0) {
     e.preventDefault()
-    addImageFiles(imageFiles)
+    addFiles(pastedFiles)
   }
 }
 
@@ -2705,7 +2824,7 @@ function handleDrop(e: DragEvent) {
   e.preventDefault()
   const files = e.dataTransfer?.files
   if (files && files.length > 0) {
-    addImageFiles(files)
+    addFiles(files)
   }
 }
 
@@ -2716,14 +2835,18 @@ function handleDragOver(e: DragEvent) {
 function handleFileSelect(e: Event) {
   const input = e.target as HTMLInputElement
   if (input.files && input.files.length > 0) {
-    addImageFiles(input.files)
+    addFiles(input.files)
     input.value = '' // reset so same file can be selected again
   }
 }
 
-function clearAttachedImages() {
-  attachedImages.value.forEach((img) => URL.revokeObjectURL(img.previewUrl))
-  attachedImages.value = []
+function clearAttachments(preserveUrls?: Set<string>) {
+  attachments.value.forEach((img) => {
+    if (img.previewUrl && (!preserveUrls || !preserveUrls.has(img.previewUrl))) {
+      URL.revokeObjectURL(img.previewUrl)
+    }
+  })
+  attachments.value = []
 }
 
 const selectedWorkerEntity = computed(() => {
@@ -2977,6 +3100,10 @@ function toggleProjectExpand(projectId: string) {
   }
 }
 
+function toggleAttentionCollapsed() {
+  prefs.attentionCollapsed = !prefs.attentionCollapsed
+}
+
 // Active tasks polling (fallback) + SSE-driven refresh
 let activeTasksInterval: ReturnType<typeof setInterval> | null = null
 
@@ -2996,6 +3123,12 @@ function handleTaskUpdateEvent(event: Event) {
       } else {
         workerState.loadActiveTasks()
         workerState.loadAwaitingReplyTasks()
+      }
+      // Also sync to history task list — prevents status mismatch between
+      // attention section (from activeTasks) and history list (from tasks)
+      const inTasks = workerState.tasks.value.find(t => t.taskId === detail.taskId)
+      if (inTasks) {
+        inTasks.status = newStatus as any
       }
     } else {
       // Terminal state — remove from active list + update task list
@@ -4267,10 +4400,10 @@ async function handleCreateTask() {
     if (platformModelConfigId.value) {
       form.modelConfigId = platformModelConfigId.value
     }
-    // Attach images as JSON string
-    if (attachedImages.value.length > 0) {
+    // Attach files/images as JSON string
+    if (attachments.value.length > 0) {
       form.images = JSON.stringify(
-        attachedImages.value.map((img) => ({
+        attachments.value.map((img) => ({
           name: img.name,
           data: img.base64,
           mime_type: img.mimeType,
@@ -4282,10 +4415,16 @@ async function handleCreateTask() {
     taskMemory.addToHistory(prompt)
     taskMemory.clearDraft()
     taskForm.value.prompt = ''
-    clearAttachedImages()
+    // Capture image URLs before clearing (for display in chat)
+    const chatImages = attachments.value
+      .filter(a => a.isImage && a.previewUrl)
+      .map(a => ({ name: a.name, url: a.previewUrl }))
+    // Don't revoke blob URLs that will be displayed in chat messages
+    const preserveUrls = new Set(chatImages.map(ci => ci.url))
+    clearAttachments(preserveUrls)
 
     const pane = createPane(task)
-    await pane.connect(task.sessionId)
+    await pane.connect(task.sessionId, chatImages.length > 0 ? chatImages : undefined)
   } catch (e: unknown) {
     ElMessage.error('创建任务失败: ' + ((e as Error).message || '未知错误'))
   } finally {
@@ -4603,10 +4742,10 @@ async function handlePaneSend(paneId: string, content: string) {
     if (platformModelConfigId.value) {
       resumeForm.modelConfigId = platformModelConfigId.value
     }
-    // Attach images as JSON string
-    if (attachedImages.value.length > 0) {
+    // Attach files/images as JSON string
+    if (attachments.value.length > 0) {
       resumeForm.images = JSON.stringify(
-        attachedImages.value.map((img) => ({
+        attachments.value.map((img) => ({
           name: img.name,
           data: img.base64,
           mime_type: img.mimeType,
@@ -4614,9 +4753,15 @@ async function handlePaneSend(paneId: string, content: string) {
       )
     }
     const newTask = await workerState.resumeTask(resumeForm)
-    clearAttachedImages()
+    // Capture image URLs before clearing (for display in chat)
+    const chatImages = attachments.value
+      .filter(a => a.isImage && a.previewUrl)
+      .map(a => ({ name: a.name, url: a.previewUrl }))
+    // Don't revoke blob URLs that will be displayed in chat messages
+    const preserveUrls = new Set(chatImages.map(ci => ci.url))
+    clearAttachments(preserveUrls)
 
-    pane.resumeInPlace(newTask)
+    pane.resumeInPlace(newTask, chatImages.length > 0 ? chatImages : undefined)
 
     reloadWorkerTasks()
     if (selectedDirectoryId.value) {
@@ -5670,11 +5815,30 @@ function handlePopOutTerminal() {
   flex-shrink: 0;
 }
 
-.active-overrides {
+.form-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #606266;
+  margin-bottom: 6px;
+}
+
+.form-action-bar {
   display: flex;
-  gap: 6px;
-  margin-bottom: 12px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
   flex-wrap: wrap;
+}
+
+.form-action-bar .el-button--primary {
+  border-radius: 16px;
+  padding: 0 20px;
+  height: 32px;
+}
+
+.toolbar-select {
+  flex-shrink: 0;
 }
 
 
@@ -5712,19 +5876,7 @@ function handlePopOutTerminal() {
   max-width: 260px;
 }
 
-.agent-teams-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
-  flex-shrink: 0;
-}
-
-.agent-teams-label {
-  font-size: 12px;
-  color: #909399;
-  margin-right: 4px;
-}
+/* (agent-teams-bar removed — integrated into mini-toolbar / form-action-bar) */
 
 .agent-teams-configs-panel {
   width: 100%;
@@ -5768,13 +5920,66 @@ function handlePopOutTerminal() {
 
 .mini-input-row {
   display: flex;
-  align-items: flex-end;
-  gap: 4px;
+  align-items: stretch;
+  gap: 6px;
 }
 
 .mini-input-row .slash-input-wrap {
   flex: 1;
   min-width: 0;
+}
+
+.mini-run-btn {
+  border-radius: 16px !important;
+  padding: 0 18px !important;
+  flex-shrink: 0;
+  align-self: stretch;
+  min-height: 32px;
+}
+
+/* --- Mini toolbar: second row with utility buttons, selects, tags --- */
+.mini-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  flex-wrap: wrap;
+}
+
+.mini-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  height: 32px;
+  font-size: 13px;
+  border: 1px solid #e4e7ed;
+  border-radius: 16px;
+  background: #f5f7fa;
+  color: #606266;
+  cursor: pointer;
+  white-space: nowrap;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.mini-tool-btn:hover {
+  background: #ecf0f5;
+  border-color: #c0c4cc;
+}
+
+.mini-tool-btn:active {
+  background: #e4e7ed;
+}
+
+.mini-tool-btn .btn-icon {
+  font-size: 14px;
+}
+
+.mini-tool-btn .btn-label {
+  font-size: 12px;
 }
 
 /* Empty pane hint */
@@ -6042,6 +6247,50 @@ function handlePopOutTerminal() {
   flex-shrink: 0;
 }
 
+.image-preview-item.file-item {
+  width: auto;
+  max-width: 160px;
+  height: auto;
+  min-height: 48px;
+  background: #f5f7fa;
+}
+
+.image-preview-item.small.file-item {
+  min-height: 36px;
+  max-width: 120px;
+}
+
+.file-preview {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 24px 6px 8px;
+  height: 100%;
+}
+
+.file-preview .file-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.small .file-preview .file-icon {
+  font-size: 16px;
+}
+
+.file-preview .file-name {
+  font-size: 11px;
+  color: #606266;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.small .file-preview .file-name {
+  font-size: 10px;
+}
+
 .image-preview-item.small {
   width: 48px;
   height: 48px;
@@ -6052,6 +6301,7 @@ function handlePopOutTerminal() {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  cursor: zoom-in;
 }
 
 .image-remove {
@@ -6072,9 +6322,66 @@ function handlePopOutTerminal() {
   transition: opacity 0.15s;
 }
 
-.image-preview-item:hover .image-remove {
+.image-preview-item:hover .image-remove,
+.image-preview-item:hover .image-annotate {
   opacity: 1;
 }
+
+.image-annotate {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: rgba(64, 158, 255, 0.7);
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+/* --- Session fullscreen mode --- */
+.worker-layout.fullscreen-active {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #fff;
+}
+
+.worker-layout.fullscreen-active .worker-sidebar,
+.worker-layout.fullscreen-active .worker-history {
+  display: none !important;
+}
+
+.fullscreen-active .dir-compact-header,
+.fullscreen-active .fav-scripts-bar,
+.fullscreen-active .task-form,
+.fullscreen-active .new-task-mini {
+  display: none !important;
+}
+
+.fullscreen-exit-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #e4e7ed;
+  background: #fafafa;
+}
+
+.fullscreen-exit-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+
 
 /* Visually hidden but accessible (for file input) */
 .sr-only {
@@ -6249,6 +6556,8 @@ function handlePopOutTerminal() {
   align-items: center;
   justify-content: space-between;
   padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
 }
 
 .active-title {
@@ -6394,5 +6703,42 @@ function handlePopOutTerminal() {
 
 .fav-ctx-danger:hover {
   background: #c74e39;
+}
+
+/* Attachment lightbox — unscoped because it's teleported to body */
+.att-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+
+.att-lightbox-img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  cursor: default;
+}
+
+.att-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 24px;
+  font-size: 32px;
+  color: #fff;
+  cursor: pointer;
+  line-height: 1;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.att-lightbox-close:hover {
+  opacity: 1;
 }
 </style>

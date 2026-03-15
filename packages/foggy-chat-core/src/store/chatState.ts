@@ -27,7 +27,7 @@ export interface ChatState {
   conversationStatus: Ref<string>
   isThinking: Ref<boolean>
   processAipMessage: (aip: AipMessage) => void
-  addUserMessage: (content: string, sessionId?: string) => void
+  addUserMessage: (content: string, sessionId?: string, images?: Array<{ name: string; url: string }>) => void
   setConnectionStatus: (status: ConnectionStatus) => void
   clearMessages: () => void
   resolvePermission: (permissionId: string, status: 'approved' | 'denied') => void
@@ -364,14 +364,18 @@ export function createChatState(): ChatState {
     }
   }
 
-  function addUserMessage(content: string, _sessionId?: string) {
-    messages.value.push({
+  function addUserMessage(content: string, _sessionId?: string, images?: Array<{ name: string; url: string }>) {
+    const msg: ChatMessage = {
       id: nextId(),
       type: AipMessageType.TEXT_COMPLETE,
       sender: 'user',
       content,
       timestamp: Date.now(),
-    })
+    }
+    if (images && images.length > 0) {
+      msg.images = images
+    }
+    messages.value.push(msg)
   }
 
   function setConnectionStatus(status: ConnectionStatus) {

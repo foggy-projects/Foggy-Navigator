@@ -492,6 +492,18 @@ public class WorkingDirectoryService {
     }
 
     /**
+     * 更新工作目录的所有者（Open API Provisioning 用）
+     */
+    @Transactional
+    public void updateDirectoryOwner(String directoryId, String newUserId) {
+        WorkingDirectoryEntity entity = directoryRepository.findByDirectoryId(directoryId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+        entity.setUserId(newUserId);
+        directoryRepository.save(entity);
+        log.info("Directory owner updated: directoryId={}, newUserId={}", directoryId, newUserId);
+    }
+
+    /**
      * 从 Worker HTTP 响应体中提取 detail 字段，格式通常为 {"detail": "..."}
      */
     private String extractWorkerErrorDetail(String responseBody, String fallback) {

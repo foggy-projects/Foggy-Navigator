@@ -1,0 +1,53 @@
+/* ==========================================================================
+ * Global Touch & iPad Optimizations
+ * Imported in main.ts — applies cross-cutting touch-device adaptations.
+ * ========================================================================== */
+
+@media (pointer: coarse) {
+  /* --- Input box enlargement (Scribble-friendly) --- */
+  .slash-input-wrap .el-textarea__inner {
+    min-height: 56px !important;
+    font-size: 16px !important;
+    padding: 12px !important;
+    line-height: 1.5 !important;
+  }
+
+  /* --- Send button inside textarea: larger on touch --- */
+  .send-btn-inside {
+    min-height: 36px !important;
+    min-width: 56px !important;
+    font-size: 15px !important;
+    border-radius: 14px !important;
+  }
+
+  /* --- Image remove / annotate: always visible (no hover on touch) --- */
+  .image-remove {
+    opacity: 0.8 !important;
+  }
+
+  .image-annotate {
+    opacity: 0.8 !important;
+  }
+
+  /* --- Prevent text selection on navigation elements --- */
+  .worker-sidebar,
+  .worker-history,
+  .pane-header {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* --- Pane input: better touch layout --- */
+  .pane-input-wrap {
+    gap: 8px !important;
+  }
+}
+
+/* Safe area insets for iPad / notched devices */
+@supports (padding: env(safe-area-inset-top)) {
+  @media (pointer: coarse) {
+    .pane-input-wrap {
+      padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    }
+  }
+}

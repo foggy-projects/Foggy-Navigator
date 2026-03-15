@@ -5,6 +5,24 @@
       <span class="timestamp">{{ formattedTime }}</span>
     </div>
     <div ref="contentRef" class="bubble-content markdown-body" v-html="renderedContent"></div>
+    <div v-if="props.message.images && props.message.images.length > 0" class="bubble-images">
+      <img
+        v-for="(img, idx) in props.message.images"
+        :key="idx"
+        :src="img.url"
+        :alt="img.name"
+        :title="img.name"
+        class="bubble-img"
+        @click="previewIdx = idx"
+      />
+    </div>
+    <!-- Image lightbox -->
+    <Teleport to="body">
+      <div v-if="previewIdx >= 0" class="img-lightbox" @click="previewIdx = -1">
+        <img :src="props.message.images![previewIdx]!.url" :alt="props.message.images![previewIdx]!.name" class="lightbox-img" @click.stop />
+        <span class="lightbox-close" @click="previewIdx = -1">&times;</span>
+      </div>
+    </Teleport>
     <div class="bubble-actions">
       <span class="action-btn" title="复制" @click.stop="handleCopy">
         {{ copied ? '&#10003; 已复制' : '&#128203; 复制' }}
@@ -123,6 +141,7 @@ const renderedContent = computed(() => {
 })
 
 const copied = ref(false)
+const previewIdx = ref(-1)
 async function handleCopy() {
   const text = props.message.content || ''
   const ok = await copyToClipboard(text)
@@ -354,5 +373,64 @@ onBeforeUnmount(() => {
 .action-btn:hover {
   background: rgba(0, 0, 0, 0.06);
   color: #606266;
+}
+
+/* User message image thumbnails */
+.bubble-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.bubble-img {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #e4e7ed;
+  cursor: zoom-in;
+  transition: opacity 0.15s;
+}
+
+.bubble-img:hover {
+  opacity: 0.85;
+}
+
+/* Lightbox overlay */
+.img-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+
+.lightbox-img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  cursor: default;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 24px;
+  font-size: 32px;
+  color: #fff;
+  cursor: pointer;
+  line-height: 1;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.lightbox-close:hover {
+  opacity: 1;
 }
 </style>

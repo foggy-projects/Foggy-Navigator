@@ -15,4 +15,6 @@ public interface ClaudeWorkerRepository extends JpaRepository<ClaudeWorkerEntity
     Optional<ClaudeWorkerEntity> findByWorkerIdAndUserId(String workerId, String userId);
 
     void deleteByWorkerIdAndUserId(String workerId, String userId);
+
+    List<ClaudeWorkerEntity> findByTenantId(String tenantId);
 }

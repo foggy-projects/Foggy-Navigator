@@ -1,6 +1,6 @@
 <template>
   <div class="app-layout">
-    <header class="app-header">
+    <header v-show="!isSessionFullscreen" class="app-header">
       <div class="header-brand" @click="router.push('/')">Foggy Navigator</div>
       <el-menu
         :default-active="activeMenu"
@@ -53,11 +53,13 @@ import { Bell, ArrowDown } from '@element-plus/icons-vue'
 import { getUserInfo, clearAuth } from '@/utils/auth'
 import { resetSetupStatus, clearSetupSkipped } from '@/router'
 import { useNotifications } from '@/composables/useNotifications'
+import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
 
 const route = useRoute()
 const router = useRouter()
 const userInfo = getUserInfo()
 const { unreadCount, connect: connectNotifications, markAllRead, requestPermission } = useNotifications()
+const { isSessionFullscreen } = useSessionFullscreen()
 
 const activeMenu = computed(() => {
   const path = route.path

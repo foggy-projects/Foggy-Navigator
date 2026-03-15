@@ -26,4 +26,14 @@ public interface WorkingDirectoryRepository extends JpaRepository<WorkingDirecto
      * 查找已存在的 worktree（相同源目录和分支）
      */
     Optional<WorkingDirectoryEntity> findBySourceDirectoryIdAndGitBranch(String sourceDirectoryId, String gitBranch);
+
+    /**
+     * 按租户查询所有工作目录（Open API 用）
+     */
+    List<WorkingDirectoryEntity> findByTenantId(String tenantId);
+
+    /**
+     * 按 Worker 查询所有工作目录（不限用户，Open API 用）
+     */
+    List<WorkingDirectoryEntity> findByWorkerIdOrderByProjectNameAsc(String workerId);
 }

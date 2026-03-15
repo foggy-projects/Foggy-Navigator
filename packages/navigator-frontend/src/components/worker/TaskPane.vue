@@ -77,28 +77,33 @@
         </template>
         <template #input>
           <div class="pane-input-wrap">
-            <SlashCommandInput
-              v-model="paneInput"
-              :rows="1"
-              auto-grow
-              :max-rows="4"
-              :disabled="false"
-              placeholder="输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)"
-              :skills="skills || []"
-              :agents="agents || []"
-              :directory-id="paneState.task.value?.directoryId"
-              @submit="handleSend()"
-              @command="handleCommand"
-              @history-prev="handlePaneHistoryPrev"
-              @history-next="handlePaneHistoryNext"
-            />
-            <el-button
-              type="primary"
-              :disabled="sendDisabled || !paneInput.trim()"
-              @click="handleSend()"
-            >
-              发送
-            </el-button>
+            <div class="input-with-send">
+              <SlashCommandInput
+                ref="paneSlashInputRef"
+                v-model="paneInput"
+                :rows="1"
+                auto-grow
+                :max-rows="4"
+                :disabled="false"
+                placeholder="输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)"
+                :skills="skills || []"
+                :agents="agents || []"
+                :directory-id="paneState.task.value?.directoryId"
+                @submit="handleSend()"
+                @command="handleCommand"
+                @history-prev="handlePaneHistoryPrev"
+                @history-next="handlePaneHistoryNext"
+              />
+              <el-button
+                class="send-btn-inside"
+                type="primary"
+                size="small"
+                :disabled="sendDisabled || !paneInput.trim()"
+                @click="handleSend()"
+              >
+                发送
+              </el-button>
+            </div>
           </div>
         </template>
       </ChatPanel>
@@ -107,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import { useInputMemory } from '@/composables/useInputMemory'
@@ -137,6 +142,7 @@ const emit = defineEmits<{
 }>()
 
 const paneInput = ref('')
+const paneSlashInputRef = ref<InstanceType<typeof SlashCommandInput> | null>(null)
 
 // --- Input memory: draft persistence + history for pane input ---
 const paneInputScope = computed(() => {
@@ -234,7 +240,7 @@ function handleCommand(payload: { command: string; value: string | number }) {
   emit('command', payload)
 }
 
-// Cleanup debounce timer on unmount
+// Cleanup timers on unmount
 onUnmounted(() => {
   if (saveDraftTimer) {
     clearTimeout(saveDraftTimer)
@@ -376,8 +382,30 @@ function truncate(text: string, maxLen: number) {
   background: #fff;
 }
 
-.pane-input-wrap .slash-input-wrap {
+.input-with-send {
+  position: relative;
   flex: 1;
+}
+
+.input-with-send .slash-input-wrap {
+  width: 100%;
+}
+
+/* Ensure textarea has room for the send button */
+.input-with-send :deep(.el-textarea__inner) {
+  padding-right: 76px;
+  padding-bottom: 36px;
+}
+
+.send-btn-inside {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 1;
+  border-radius: 12px !important;
+  padding: 0 14px !important;
+  height: 28px !important;
+  font-size: 13px !important;
 }
 
 .pane-letter {
@@ -401,4 +429,5 @@ function truncate(text: string, maxLen: number) {
 .pane-focused {
   box-shadow: 0 0 0 2px #409eff;
 }
+
 </style>

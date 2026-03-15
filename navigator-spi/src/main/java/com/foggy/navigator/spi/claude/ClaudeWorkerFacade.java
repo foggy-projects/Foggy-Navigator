@@ -103,6 +103,17 @@ public interface ClaudeWorkerFacade {
     String initDirectory(String userId, String workerId, String path, Map<String, String> files);
 
     /**
+     * 在 Worker 上初始化目录并注册为工作目录（带自定义项目名称）
+     * @param files 文件相对路径 → 内容 的映射
+     * @param projectName 项目显示名称（可选，为 null 时使用默认名称）
+     * @return 注册的 directoryId
+     */
+    default String initDirectory(String userId, String workerId, String path,
+                                  Map<String, String> files, String projectName) {
+        return initDirectory(userId, workerId, path, files);
+    }
+
+    /**
      * 绑定平台 LLM 配置到工作目录（设置 defaultModelConfigId，清空手动 auth）
      */
     default void bindDirectoryModelConfig(String userId, String directoryId, String modelConfigId) {

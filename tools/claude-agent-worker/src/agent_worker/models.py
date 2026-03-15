@@ -11,11 +11,11 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 class ImageAttachment(BaseModel):
-    """A single image attachment sent from the frontend."""
+    """A single file/image attachment sent from the frontend."""
 
-    name: str = Field(..., description="File name (e.g. screenshot-1.png)")
-    data: str = Field(..., description="Base64-encoded image data")
-    mime_type: str = Field("image/png", description="MIME type (e.g. image/png, image/webp)")
+    name: str = Field(..., description="File name (e.g. screenshot-1.png, document.pdf)")
+    data: str = Field(..., description="Base64-encoded file data")
+    mime_type: str = Field("application/octet-stream", description="MIME type (e.g. image/webp, text/plain, application/pdf)")
 
 
 class QueryRequest(BaseModel):

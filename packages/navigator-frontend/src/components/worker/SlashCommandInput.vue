@@ -925,6 +925,26 @@ onUnmounted(() => document.removeEventListener('mousedown', handleClickOutside))
   text-transform: none;
   letter-spacing: normal;
 }
+
+/* Touch-device optimizations for slash/@ panels */
+@media (pointer: coarse) {
+  .slash-item {
+    padding: 12px 16px;
+    min-height: 44px;
+  }
+
+  .slash-name {
+    font-size: 15px;
+  }
+
+  .slash-desc {
+    font-size: 14px;
+  }
+
+  .slash-panel {
+    max-height: 50vh;
+  }
+}
 </style>
 
 <style scoped>

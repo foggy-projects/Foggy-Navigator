@@ -22,13 +22,13 @@ export interface TaskPaneState {
   hasMoreHistory: Ref<boolean>
   /** Total number of messages in the DB for the current session */
   totalMessages: Ref<number>
-  connect(sessionId: string): Promise<void>
+  connect(sessionId: string, pendingImages?: Array<{ name: string; url: string }>): Promise<void>
   /** Load older messages (prepend to chat). Called when user scrolls to top. */
   loadMoreHistory(): Promise<void>
   /** Load all (or up to `limit`) messages, replacing current messages. Scrolls to top. */
   loadAllHistory(limit?: number): Promise<void>
   /** Resume in-place: keep messages, update task, reconnect SSE */
-  resumeInPlace(newTask: ClaudeTask): void
+  resumeInPlace(newTask: ClaudeTask, images?: Array<{ name: string; url: string }>): void
   /** Reconnect SSE only (no message clear/reload). Used by workspace suspend/resume. */
   reconnectSse(): void
   /** Pull latest task status from backend (idempotent, skips terminal states) */
@@ -212,7 +212,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     chatState.setConnectionStatus(connected.value ? 'connected' : 'connecting')
   }
 
-  async function connect(sessionId: string) {
+  async function connect(sessionId: string, pendingImages?: Array<{ name: string; url: string }>) {
     disconnect()
     const myVersion = ++connectVersion
     chatState.clearMessages()
@@ -243,6 +243,13 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
         const msg = messages[i]
         if (!msg) continue
         convertAndPushDbMessage(msg, messages[i + 1])
+      }
+      // Attach pending images to the first user message (for newly created tasks)
+      if (pendingImages && pendingImages.length > 0) {
+        const firstUserMsg = chatState.messages.value.find(m => m.sender === 'user')
+        if (firstUserMsg) {
+          firstUserMsg.images = pendingImages
+        }
       }
     } catch (e) {
       if (connectVersion !== myVersion) return
@@ -421,9 +428,9 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
   }
 
   /** Resume in the same pane without clearing messages */
-  function resumeInPlace(newTask: ClaudeTask) {
+  function resumeInPlace(newTask: ClaudeTask, images?: Array<{ name: string; url: string }>) {
     task.value = newTask
-    chatState.addUserMessage(newTask.prompt)
+    chatState.addUserMessage(newTask.prompt, undefined, images)
 
     // Unsubscribe old SSE (without clearing messages)
     if (unsubscribeSse) {
