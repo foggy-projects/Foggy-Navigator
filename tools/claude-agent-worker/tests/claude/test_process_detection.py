@@ -20,6 +20,7 @@ from agent_worker.claude.process_detection import (
     WindowsDetector,
     _tracked_pids,
     get_detector,
+    get_pids_for_task,
     get_tracked_pids,
     is_cli_process,
     register_pid,
@@ -111,6 +112,50 @@ class TestPidRegistry:
 
         assert alive == {1000}
         assert 2000 not in _tracked_pids  # pruned
+
+    # -- Ownership guard (prevents cross-task false kills / 误杀) ----------
+
+    def test_register_pid_does_not_overwrite_other_task(self):
+        """PID already owned by task-a must NOT be re-registered to task-b.
+
+        This is the root cause of 'abort one task kills all CLIs':
+        _capture_child_pids() scans ALL children of the Worker process,
+        so concurrent tasks would steal each other's PIDs without this guard.
+        """
+        register_pid(1000, "task-a")
+        register_pid(1000, "task-b")  # cross-task registration attempt
+
+        # task-a still owns PID 1000
+        assert _tracked_pids[1000] == "task-a"
+
+    def test_register_pid_allows_same_task_re_register(self):
+        """Re-registering the same PID for the same task is fine (idempotent)."""
+        register_pid(1000, "task-a")
+        register_pid(1000, "task-a")  # no-op, same owner
+
+        assert _tracked_pids[1000] == "task-a"
+
+    def test_register_pid_allows_after_unregister(self):
+        """After unregister, a new task can claim the PID."""
+        register_pid(1000, "task-a")
+        unregister_pid(1000)
+        register_pid(1000, "task-b")  # OK — task-a released it
+
+        assert _tracked_pids[1000] == "task-b"
+
+    def test_abort_does_not_cross_kill_concurrent_tasks(self):
+        """End-to-end: aborting task-a must only return task-a's PIDs."""
+        register_pid(1000, "task-a")
+        register_pid(2000, "task-b")
+
+        # Simulate _capture_child_pids cross-registration attempt
+        register_pid(2000, "task-a")  # task-a tries to steal task-b's PID
+
+        pids_a = get_pids_for_task("task-a")
+        pids_b = get_pids_for_task("task-b")
+
+        assert pids_a == [1000]  # only task-a's own CLI
+        assert pids_b == [2000]  # task-b's CLI is safe
 
 
 # ---------------------------------------------------------------------------

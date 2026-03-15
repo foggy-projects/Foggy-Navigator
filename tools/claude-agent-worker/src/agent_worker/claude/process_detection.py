@@ -354,9 +354,25 @@ _tracked_pids: dict[int, str] = {}  # pid → task_id
 
 
 def register_pid(pid: int, task_id: str) -> None:
-    """Register a CLI process PID for active tracking."""
+    """Register a CLI process PID for active tracking.
+
+    **Ownership rule**: if *pid* is already registered to a *different* task,
+    the registration is silently skipped.  ``_capture_child_pids()`` scans
+    **all** children of the Worker process, so concurrent tasks would
+    cross-register each other's CLIs without this guard — causing "abort
+    one task → kills all CLIs" (false-kill / 误杀).
+    """
+    existing_owner = _tracked_pids.get(pid)
+    if existing_owner is not None and existing_owner != task_id:
+        # PID already owned by another active task — don't steal it.
+        logger.debug(
+            "Skipped PID %d registration for task %s: already owned by task %s",
+            pid, task_id, existing_owner,
+        )
+        return
     _tracked_pids[pid] = task_id
-    logger.info("Registered tracked PID %d for task %s", pid, task_id)
+    if existing_owner is None:
+        logger.info("Registered tracked PID %d for task %s", pid, task_id)
 
 
 def unregister_pid(pid: int) -> None:
