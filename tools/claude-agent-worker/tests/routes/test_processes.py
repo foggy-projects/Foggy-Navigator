@@ -260,3 +260,128 @@ class TestGetProcessDetails:
             result = _get_process_details({7777})
 
         assert result[0].is_orphan is False
+
+
+# ---------------------------------------------------------------------------
+# Regression: concurrent tasks must show DISTINCT session IDs
+# ---------------------------------------------------------------------------
+
+class TestEnrichProcessesCrossTask:
+    """Regression tests for the bug where all processes displayed the same session ID.
+
+    Root cause: _capture_child_pids() cross-registered all CLI PIDs under
+    a single task_id, so Layer 0 enrichment mapped every process to the
+    same task_registry entry → same claude_session_id.
+
+    After the ownership guard fix, each PID belongs to its original task
+    and _enrich_processes() should produce distinct session IDs.
+    """
+
+    def setup_method(self):
+        task_registry.clear()
+        _tracked_pids.clear()
+
+    def teardown_method(self):
+        task_registry.clear()
+        _tracked_pids.clear()
+
+    def _make_proc(self, pid: int, command: str = "") -> CliProcessInfo:
+        return CliProcessInfo(pid=pid, command=command, memory_mb=0.0, is_orphan=True)
+
+    def test_three_concurrent_tasks_distinct_session_ids(self):
+        """Three concurrent tasks with 3 PIDs must produce 3 distinct session IDs.
+
+        This is the exact scenario the user reported: all 3 processes
+        in the CLI process list showed session_id = 'd2cf6c25'.
+        """
+        # Each task has its own PID correctly registered (ownership guard)
+        _tracked_pids[36500] = "worker-1"
+        _tracked_pids[53684] = "worker-2"
+        _tracked_pids[70336] = "worker-3"
+
+        task_registry["worker-1"] = {
+            "session_id": "session-aaa",
+            "foggy_task_id": "foggy-1",
+            "foggy_session_id": "fs-1",
+            "model": "claude-sonnet",
+        }
+        task_registry["worker-2"] = {
+            "session_id": "session-bbb",
+            "foggy_task_id": "foggy-2",
+            "foggy_session_id": "fs-2",
+            "model": "claude-sonnet",
+        }
+        task_registry["worker-3"] = {
+            "session_id": "session-ccc",
+            "foggy_task_id": "foggy-3",
+            "foggy_session_id": "fs-3",
+            "model": "claude-haiku",
+        }
+
+        procs = [
+            self._make_proc(36500),
+            self._make_proc(53684),
+            self._make_proc(70336),
+        ]
+        _enrich_processes(procs)
+
+        # Each process must have a DISTINCT session ID
+        session_ids = [p.claude_session_id for p in procs]
+        assert session_ids == ["session-aaa", "session-bbb", "session-ccc"]
+
+        # Each process must have a DISTINCT foggy_task_id
+        foggy_ids = [p.foggy_task_id for p in procs]
+        assert foggy_ids == ["foggy-1", "foggy-2", "foggy-3"]
+
+        # None should be orphans
+        assert all(p.is_orphan is False for p in procs)
+
+    def test_cross_registered_pids_show_wrong_session_without_guard(self):
+        """Demonstrate what WOULD happen without the ownership guard:
+        if all PIDs map to the same task, all get the same session_id.
+
+        This test verifies the _enrich_processes() output depends on
+        _tracked_pids mapping — when mapping is wrong, output is wrong.
+        """
+        # Simulate the BUG: all PIDs registered to the same task (cross-contamination)
+        _tracked_pids[1000] = "worker-X"
+        _tracked_pids[2000] = "worker-X"
+        _tracked_pids[3000] = "worker-X"
+
+        task_registry["worker-X"] = {
+            "session_id": "d2cf6c25",  # the session ID the user saw duplicated
+            "foggy_task_id": "ft-X",
+            "foggy_session_id": "fs-X",
+        }
+
+        procs = [self._make_proc(1000), self._make_proc(2000), self._make_proc(3000)]
+        _enrich_processes(procs)
+
+        # All three get the SAME session — this is the bug we fixed
+        assert all(p.claude_session_id == "d2cf6c25" for p in procs)
+        assert all(p.foggy_task_id == "ft-X" for p in procs)
+
+    def test_mixed_tracked_and_untracked_processes(self):
+        """Some processes tracked, some orphans — enrichment handles both."""
+        _tracked_pids[1000] = "worker-1"
+        task_registry["worker-1"] = {
+            "session_id": "sess-1",
+            "foggy_task_id": "ft-1",
+            "foggy_session_id": "fs-1",
+        }
+
+        procs = [
+            self._make_proc(1000),  # tracked
+            self._make_proc(9999),  # untracked orphan
+        ]
+
+        with patch("agent_worker.routes.processes._read_foggy_env", return_value={
+            "foggy_task_id": None,
+            "foggy_session_id": None,
+        }):
+            _enrich_processes(procs)
+
+        assert procs[0].claude_session_id == "sess-1"
+        assert procs[0].is_orphan is False
+        assert procs[1].is_orphan is True
+        assert procs[1].claude_session_id is None

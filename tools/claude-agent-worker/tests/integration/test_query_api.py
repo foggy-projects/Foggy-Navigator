@@ -7,11 +7,13 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import patch
+import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
 
+from agent_worker.claude.process_detection import _tracked_pids, register_pid
 from agent_worker.claude.sdk_wrapper import task_registry
 from agent_worker.config import settings
 
@@ -200,6 +202,150 @@ class TestAbortQuery:
         resp = await client.post("/api/v1/query/t-done/abort")
         assert resp.status_code == 200
         assert "t-done" not in task_registry
+
+
+# ---------------------------------------------------------------------------
+# Regression: Abort concurrent tasks — only target PIDs are killed
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestAbortConcurrentTaskIsolation:
+    """Regression tests: aborting task-A must NOT kill task-B's CLI processes.
+
+    Root cause: _capture_child_pids() scanned ALL children and blindly
+    re-registered them, so all PIDs ended up under the last-scanned task.
+    Aborting any task would then kill all CLIs.
+
+    The ownership guard in register_pid() fixes this by preventing
+    cross-task PID re-registration (first-come-first-served).
+    """
+
+    def setup_method(self):
+        _tracked_pids.clear()
+
+    def teardown_method(self):
+        _tracked_pids.clear()
+
+    async def test_abort_task_a_does_not_kill_task_b_pids(self, client: AsyncClient):
+        """Two concurrent tasks: aborting task-A kills only task-A's PIDs."""
+        # Setup: two running tasks with distinct PIDs
+        running_a = asyncio.ensure_future(asyncio.sleep(999))
+        running_b = asyncio.ensure_future(asyncio.sleep(999))
+
+        task_registry["worker-A"] = {
+            "asyncio_task": running_a,
+            "foggy_task_id": "foggy-A",
+        }
+        task_registry["worker-B"] = {
+            "asyncio_task": running_b,
+            "foggy_task_id": "foggy-B",
+        }
+
+        # Register PIDs with correct ownership
+        register_pid(1000, "worker-A")
+        register_pid(2000, "worker-B")
+
+        # Simulate _capture_child_pids cross-registration attempt (the bug)
+        register_pid(2000, "worker-A")  # task-A tries to steal task-B's PID
+        register_pid(1000, "worker-B")  # task-B tries to steal task-A's PID
+
+        # Verify ownership guard worked
+        assert _tracked_pids[1000] == "worker-A"
+        assert _tracked_pids[2000] == "worker-B"
+
+        # Abort task-A — mock is_cli_process and os.kill
+        killed_pids: list[int] = []
+
+        def mock_kill(pid, sig):
+            killed_pids.append(pid)
+
+        with (
+            patch("agent_worker.claude.process_detection.is_cli_process", return_value=True),
+            patch("os.kill", side_effect=mock_kill),
+        ):
+            resp = await client.post("/api/v1/query/worker-A/abort")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "cancelled"
+
+        # Only task-A's PID (1000) should be killed
+        assert 1000 in killed_pids
+        assert 2000 not in killed_pids
+
+        # Task-B should still be in the registry and running
+        assert "worker-B" in task_registry
+        assert not running_b.cancelled()
+
+        # Cleanup
+        running_b.cancel()
+
+    async def test_abort_by_foggy_id_isolates_pids(self, client: AsyncClient):
+        """Aborting by foggy_task_id also correctly isolates PIDs."""
+        running_x = asyncio.ensure_future(asyncio.sleep(999))
+        running_y = asyncio.ensure_future(asyncio.sleep(999))
+
+        task_registry["worker-X"] = {
+            "asyncio_task": running_x,
+            "foggy_task_id": "foggy-task-X",
+        }
+        task_registry["worker-Y"] = {
+            "asyncio_task": running_y,
+            "foggy_task_id": "foggy-task-Y",
+        }
+
+        register_pid(5000, "worker-X")
+        register_pid(5001, "worker-X")  # task-X has two CLIs
+        register_pid(6000, "worker-Y")
+
+        killed_pids: list[int] = []
+
+        def mock_kill(pid, sig):
+            killed_pids.append(pid)
+
+        with (
+            patch("agent_worker.claude.process_detection.is_cli_process", return_value=True),
+            patch("os.kill", side_effect=mock_kill),
+        ):
+            resp = await client.post("/api/v1/query/foggy-task-X/abort")
+
+        assert resp.status_code == 200
+
+        # Both of task-X's PIDs killed
+        assert 5000 in killed_pids
+        assert 5001 in killed_pids
+        # task-Y's PID untouched
+        assert 6000 not in killed_pids
+
+        # task-Y still alive
+        assert "worker-Y" in task_registry
+
+        # Cleanup
+        running_y.cancel()
+
+    async def test_abort_skips_non_cli_pids(self, client: AsyncClient):
+        """Abort skips PIDs that are no longer CLI processes (PID reuse)."""
+        running = asyncio.ensure_future(asyncio.sleep(999))
+        task_registry["worker-Z"] = {
+            "asyncio_task": running,
+            "foggy_task_id": "foggy-Z",
+        }
+        register_pid(9000, "worker-Z")
+
+        killed_pids: list[int] = []
+
+        def mock_kill(pid, sig):
+            killed_pids.append(pid)
+
+        # PID 9000 is no longer a CLI process (PID reused by python.exe)
+        with (
+            patch("agent_worker.claude.process_detection.is_cli_process", return_value=False),
+            patch("os.kill", side_effect=mock_kill),
+        ):
+            resp = await client.post("/api/v1/query/worker-Z/abort")
+
+        assert resp.status_code == 200
+        assert 9000 not in killed_pids  # skipped because is_cli_process=False
 
 
 # ---------------------------------------------------------------------------
