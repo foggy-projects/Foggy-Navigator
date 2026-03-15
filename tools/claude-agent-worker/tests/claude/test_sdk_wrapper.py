@@ -380,7 +380,7 @@ class TestSaveImages:
         data = base64.b64encode(b"data").decode()
         images = [{"name": ".hidden", "data": data}]
         saved = SdkWrapper._save_images(str(tmp_path), images)
-        assert saved[0] == ".foggy-attachments/image.png"
+        assert saved[0] == ".foggy-attachments/attachment"
 
 
 class TestAugmentPromptWithImages:
