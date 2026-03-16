@@ -1,7 +1,7 @@
 """Multi-key pool with client mapping and round-robin selection."""
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import threading
 
 
@@ -15,6 +15,7 @@ class BackendKey:
     middle_model: str
     small_model: str
     passthrough: bool = False  # Skip format conversion, forward raw Claude requests
+    vision_model: Optional[str] = None  # Override model when request contains images
 
 
 class KeyPool:
@@ -73,3 +74,7 @@ class KeyPool:
             self._client_counters[counter_key] = (idx + 1) % len(pool_names)
 
         return self.keys[selected_name]
+
+    def get_vision_backend(self, vision_backend_name: str) -> Optional[BackendKey]:
+        """Get the designated vision backend by name, or None if not found."""
+        return self.keys.get(vision_backend_name)

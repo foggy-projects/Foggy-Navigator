@@ -10,12 +10,17 @@ logger = logging.getLogger(__name__)
 
 
 def convert_claude_to_openai(
-    claude_request: ClaudeMessagesRequest, model_manager, backend_key: Optional[BackendKey] = None
+    claude_request: ClaudeMessagesRequest,
+    model_manager,
+    backend_key: Optional[BackendKey] = None,
+    has_image: bool = False,
 ) -> Dict[str, Any]:
     """Convert Claude API request format to OpenAI format."""
 
-    # Map model (using per-key model config if available)
-    openai_model = model_manager.map_claude_model_to_openai(claude_request.model, backend_key)
+    # Map model (using per-key model config if available; vision override when has_image)
+    openai_model = model_manager.map_claude_model_to_openai(
+        claude_request.model, backend_key, has_image=has_image
+    )
 
     # Convert messages
     openai_messages = []

@@ -78,11 +78,44 @@ async def validate_api_key(
     return client_api_key
 
 
-def _select_backend(client_api_key: Optional[str]) -> Tuple[BackendKey, Optional[OpenAIClient]]:
+def _has_image_content(body_json: dict) -> bool:
+    """Detect whether the request contains image content blocks.
+
+    Checks all messages for Claude image blocks (type="image") or
+    OpenAI image_url blocks (type="image_url").
+    """
+    messages = body_json.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") in ("image", "image_url"):
+                    return True
+    return False
+
+
+def _select_backend(
+    client_api_key: Optional[str],
+    has_image: bool = False,
+) -> Tuple[BackendKey, Optional[OpenAIClient]]:
     """Select the next backend key + client via round-robin.
 
+    If the request contains images and VISION_BACKEND is configured,
+    route to the designated vision backend instead of round-robin.
     Returns (backend_key, None) for passthrough backends.
     """
+    # Vision routing: if configured and request contains images
+    if has_image and config.vision_backend:
+        vision_key = config.key_pool.get_vision_backend(config.vision_backend)
+        if vision_key:
+            logger.info(
+                "Image detected → routing to vision backend [%s]", config.vision_backend
+            )
+            client = openai_clients.get(vision_key.name)
+            return vision_key, client
+
     backend_key = config.key_pool.get_next_key(client_api_key)
     client = openai_clients.get(backend_key.name)
     return backend_key, client
@@ -128,6 +161,7 @@ async def _forward_passthrough(
     stream: bool,
     http_request: Request,
     target_path: str = "/v1/messages",
+    has_image: bool = False,
 ):
     """Forward raw request to an Anthropic-compatible backend without format conversion.
 
@@ -151,9 +185,12 @@ async def _forward_passthrough(
     try:
         body_json = json.loads(raw_body)
         # Model name mapping (e.g. claude-opus-4-6 -> glm-5)
+        # Also applies vision model override when has_image=True
         if "model" in body_json:
             original_model = body_json["model"]
-            mapped_model = model_manager.map_claude_model_to_openai(original_model, backend_key)
+            mapped_model = model_manager.map_claude_model_to_openai(
+                original_model, backend_key, has_image=has_image
+            )
             if mapped_model != original_model:
                 body_json["model"] = mapped_model
                 logger.info(f"Passthrough model mapping: {original_model} -> {mapped_model}")
@@ -321,9 +358,20 @@ async def create_message(
     http_request: Request,
     client_api_key: Optional[str] = Depends(validate_api_key),
 ):
-    # Select backend for this request
-    backend_key, openai_client = _select_backend(client_api_key)
+    # Read body first so we can detect image content before selecting backend
     raw_body = await http_request.body()
+
+    # Pre-parse JSON for image detection (best-effort, don't fail here)
+    pre_parsed = None
+    has_image = False
+    try:
+        pre_parsed = json.loads(raw_body)
+        has_image = _has_image_content(pre_parsed)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Select backend (content-aware: may route to vision backend if images detected)
+    backend_key, openai_client = _select_backend(client_api_key, has_image=has_image)
 
     # ── Fixture Capture: start session ──
     capture = fixture_capture.start_capture("messages")
@@ -331,23 +379,24 @@ async def create_message(
     # Passthrough mode: bypass Pydantic validation entirely, forward raw request
     if backend_key.passthrough:
         try:
-            body_json = json.loads(raw_body)
+            body_json = pre_parsed or json.loads(raw_body)
             model = body_json.get("model", "unknown")
             stream = body_json.get("stream", False)
             capture.save_claude_request(body_json)
             capture.meta["mode"] = "passthrough"
         except (json.JSONDecodeError, TypeError):
             model, stream = "unknown", False
-        mapped = model_manager.map_claude_model_to_openai(model, backend_key)
+        mapped = model_manager.map_claude_model_to_openai(model, backend_key, has_image=has_image)
         logger.info(
             f"Request: model={model} -> {backend_key.name}({mapped}) [PASSTHROUGH], stream={stream}"
+            + (" [VISION]" if has_image else "")
         )
         capture.finish()  # passthrough 采集仅保存请求（响应在 _forward_passthrough 中直接转发）
-        return await _forward_passthrough(raw_body, backend_key, stream, http_request)
+        return await _forward_passthrough(raw_body, backend_key, stream, http_request, has_image=has_image)
 
     # Non-passthrough: validate request body with Pydantic
     try:
-        body_json = json.loads(raw_body)
+        body_json = pre_parsed or json.loads(raw_body)
         capture.save_claude_request(body_json)
         capture.meta["mode"] = "conversion"
         request = ClaudeMessagesRequest.model_validate(body_json)
@@ -359,7 +408,10 @@ async def create_message(
         raise HTTPException(status_code=422, detail=str(e))
 
     logger.info(
-        f"Request: model={request.model} -> {backend_key.name}({model_manager.map_claude_model_to_openai(request.model, backend_key)}), stream={request.stream}"
+        f"Request: model={request.model} -> {backend_key.name}"
+        f"({model_manager.map_claude_model_to_openai(request.model, backend_key, has_image=has_image)})"
+        f", stream={request.stream}"
+        + (" [VISION]" if has_image else "")
     )
 
     try:
@@ -367,7 +419,7 @@ async def create_message(
         request_id = str(uuid.uuid4())
 
         # Convert Claude request to OpenAI format (with per-key model mapping)
-        openai_request = convert_claude_to_openai(request, model_manager, backend_key)
+        openai_request = convert_claude_to_openai(request, model_manager, backend_key, has_image=has_image)
         capture.save_openai_request(openai_request)
 
         # Check if client disconnected before processing
@@ -577,7 +629,17 @@ async def root():
                 "middle_model": bk.middle_model,
                 "small_model": bk.small_model,
             })
+        if bk.vision_model:
+            info["vision_model"] = bk.vision_model
         backends_info[name] = info
+
+    vision_info = {}
+    if config.vision_backend:
+        vision_info["vision_backend"] = config.vision_backend
+    # Show which backends have vision models
+    vision_models = {name: bk.vision_model for name, bk in key_pool.keys.items() if bk.vision_model}
+    if vision_models:
+        vision_info["vision_models"] = vision_models
 
     return {
         "message": "Claude-to-OpenAI API Proxy v1.0.0",
@@ -587,6 +649,7 @@ async def root():
             "backends": backends_info,
             "key_mapping_enabled": key_pool.has_mapping,
             "max_tokens_limit": config.max_tokens_limit,
+            **({"vision": vision_info} if vision_info else {}),
         },
         "endpoints": {
             "messages": "/v1/messages",
