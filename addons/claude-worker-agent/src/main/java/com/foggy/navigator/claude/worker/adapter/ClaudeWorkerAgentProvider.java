@@ -83,6 +83,15 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
     /**
      * 租户级 Agent 解析（Open API 用，TENANT_ADMIN 可访问租户下任意 Agent）
      */
+    /**
+     * 租户级 Agent 实体查询（Open API 用，获取 userId 等信息而无需构建完整 A2aAgent 对象）
+     */
+    public Optional<CodingAgentEntity> getAgentEntityByTenant(String agentId, String tenantId) {
+        return agentRepository.findByAgentId(agentId)
+                .filter(e -> tenantId.equals(e.getTenantId()))
+                .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()));
+    }
+
     public Optional<A2aAgent> resolveAgentByTenant(String agentId, String tenantId) {
         return agentRepository.findByAgentId(agentId)
                 .filter(e -> tenantId.equals(e.getTenantId()))

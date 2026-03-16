@@ -54,7 +54,18 @@ public class LlmModelConfigForm {
     private List<String> allowedWorkerIds;
 
     /**
+     * Worker 后端类型（CLAUDE_CODE / OPENAI_CODEX / null）
+     */
+    private String workerBackend;
+
+    /**
      * 环境变量（K-V 对），使用该模型启动 Claude Code 时注入到 CLI 子进程
      */
     private Map<String, String> envVars;
+
+    /**
+     * 可用模型列表（workerBackend=CLAUDE_CODE 时有效）
+     * 为空或 null 表示不限制
+     */
+    private List<String> availableModels;
 }

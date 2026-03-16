@@ -317,6 +317,7 @@ export interface LlmModelConfig {
   scope: ModelAccessScope
   allowedWorkerIds?: string[]
   envVars?: Record<string, string>
+  availableModels?: string[]
   workerBackend?: WorkerBackend
   sortOrder: number
   createdAt: string
@@ -334,6 +335,7 @@ export interface LlmModelConfigForm {
   scope?: ModelAccessScope
   allowedWorkerIds?: string[]
   envVars?: Record<string, string>
+  availableModels?: string[]
   workerBackend?: WorkerBackend
 }
 

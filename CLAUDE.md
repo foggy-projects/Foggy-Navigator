@@ -117,3 +117,7 @@ Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实
 6. **语义对齐**：实现涉及用户交互的功能前，先明确关键语义（操作是否产生新实体、是否等待用户确认、UI 状态如何变化），必要时主动向用户确认，避免多轮返工。
 7. **SecurityConfig.java**：增加新的http端口注意更新权限
 8. **前端构建验证**：修改完前端代码后，务必运行 `bash scripts/build-frontend.sh` 确保可以正确构建（含 TypeScript 类型检查）
+9. **Vite HMR 缓存陷阱**：修改 Vue 文件后如果浏览器行为与源码不符（如字段未传递、逻辑未生效），**首先怀疑 Vite HMR 缓存过期**，而非代码错误。排查步骤：
+   - 用 Playwright 读取浏览器实际运行的函数源码（`comp.setupState.xxx.toString()`），与磁盘源文件对比
+   - 如果不一致，执行：`Remove-Item -Recurse -Force packages/navigator-frontend/node_modules/.vite`，然后刷新页面
+   - 若仍不一致，重启 Vite dev server（`stop-frontend.ps1` → `start-frontend.ps1`）

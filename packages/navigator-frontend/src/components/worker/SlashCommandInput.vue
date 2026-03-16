@@ -191,8 +191,10 @@ const BUILT_IN: BuiltInCommand[] = [
     description: '切换模型',
     group: 'command',
     children: [
-      { name: 'sonnet', label: 'Claude Sonnet 4', value: 'claude-sonnet-4-20250514' },
+      { name: 'opus-1m', label: 'Claude Opus 4 (1M)', value: 'opus[1m]' },
       { name: 'opus', label: 'Claude Opus 4', value: 'claude-opus-4-20250514' },
+      { name: 'sonnet-1m', label: 'Claude Sonnet 4 (1M)', value: 'sonnet[1m]' },
+      { name: 'sonnet', label: 'Claude Sonnet 4', value: 'claude-sonnet-4-20250514' },
       { name: 'haiku', label: 'Claude Haiku 4', value: 'claude-haiku-4-20250514' },
       { name: 'default', label: '默认模型', value: '' },
     ],

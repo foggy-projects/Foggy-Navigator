@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /**
  * Open API 任务 DTO — 面向第三方的简化版任务状态
@@ -35,4 +36,7 @@ public class OpenApiTaskDTO {
 
     /** Token 费用（美元） */
     private BigDecimal costUsd;
+
+    /** 任务创建时间 */
+    private LocalDateTime createdAt;
 }
