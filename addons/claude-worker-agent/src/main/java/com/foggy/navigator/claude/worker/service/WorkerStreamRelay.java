@@ -220,6 +220,11 @@ public class WorkerStreamRelay {
         log.info("Startup reconnect: found {} active task(s), attempting reconnection...", activeTasks.size());
 
         for (ClaudeTaskEntity task : activeTasks) {
+            // A2A 异步任务使用直接 HTTP 查询，没有 Worker CLI 进程，跳过 SSE 重连
+            if ("A2A".equals(task.getSource())) {
+                log.debug("Startup reconnect: skipping A2A async task {}", task.getTaskId());
+                continue;
+            }
             try {
                 // Java 重启后 lastAckedSeq 为空 → 先查 Worker 状态判断是否需要回放
                 try {

@@ -1,5 +1,6 @@
 package com.foggy.navigator.claude.worker.controller.openapi;
 
+import com.foggy.navigator.claude.worker.adapter.ClaudeWorkerAgentProvider;
 import com.foggy.navigator.claude.worker.model.dto.*;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.*;
@@ -11,13 +12,18 @@ import com.foggy.navigator.claude.worker.service.WorkerHealthChecker;
 import com.foggy.navigator.claude.worker.service.WorkingDirectoryService;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.a2a.*;
+import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Open API Controller — 面向第三方系统的集成接口
@@ -38,6 +44,7 @@ public class OpenApiController {
     private final ClaudeWorkerRepository workerRepository;
     private final WorkingDirectoryRepository directoryRepository;
     private final WorkerHealthChecker healthChecker;
+    private final ClaudeWorkerAgentProvider agentProvider;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -283,5 +290,149 @@ public class OpenApiController {
         } catch (IllegalArgumentException e) {
             return RX.failB(e.getMessage());
         }
+    }
+
+    // ===== 6. Agent 查询（A2A 协议） =====
+
+    /**
+     * 列出租户下所有 A2A Agent
+     */
+    @GetMapping("/agents")
+    @RequireAuth(roles = {"TENANT_ADMIN"})
+    public RX<List<A2aAgentCard>> listAgents() {
+        String tenantId = UserContext.getCurrentTenantId();
+        return RX.ok(agentProvider.listAgentCardsByTenant(tenantId));
+    }
+
+    /**
+     * 获取 Agent Card 详情
+     */
+    @GetMapping("/agents/{agentId}")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<A2aAgentCard> getAgentCard(@PathVariable String agentId) {
+        String tenantId = UserContext.getCurrentTenantId();
+        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+        return RX.ok(agent.getAgentCard());
+    }
+
+    /**
+     * 向 Agent 发送查询（异步模式）
+     * <p>
+     * 立即返回 SUBMITTED 状态的任务，调用者通过轮询端点获取结果。
+     * 支持多轮会话：首次不传 contextId 则平台自动生成；
+     * 后续传入相同 contextId 可恢复 Claude 会话上下文。
+     */
+    @PostMapping("/agents/{agentId}/ask")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<OpenApiTaskDTO> askAgent(
+            @PathVariable String agentId,
+            @RequestBody OpenApiQueryForm form) {
+        String tenantId = UserContext.getCurrentTenantId();
+
+        if (form.getQuestion() == null || form.getQuestion().isBlank()) {
+            return RX.failB("question is required");
+        }
+
+        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+
+        // 构建 A2aMessage
+        String contextId = (form.getContextId() != null && !form.getContextId().isBlank())
+                ? form.getContextId() : IdGenerator.shortId();
+        A2aMessage message = A2aMessage.user(List.of(A2aPart.text(form.getQuestion())));
+        message.setContextId(contextId);
+        if (form.getMaxTurns() != null) {
+            message.setMetadata(Map.of("maxTurns", form.getMaxTurns()));
+        }
+
+        A2aTask task = agent.sendTask(message);
+
+        log.info("Open API askAgent: agentId={}, taskId={}, tenantId={}", agentId, task.getId(), tenantId);
+
+        return RX.ok(toOpenApiTaskDTO(task, agentId));
+    }
+
+    /**
+     * 轮询 Agent 任务状态
+     * <p>
+     * COMPLETED 时包含执行结果、耗时和费用信息。
+     */
+    @GetMapping("/agents/{agentId}/tasks/{taskId}")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<OpenApiTaskDTO> getTaskStatus(
+            @PathVariable String agentId,
+            @PathVariable String taskId) {
+        String tenantId = UserContext.getCurrentTenantId();
+        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+
+        A2aTask task = agent.getTask(taskId)
+                .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
+        return RX.ok(toOpenApiTaskDTO(task, agentId));
+    }
+
+    /**
+     * 取消 Agent 任务
+     */
+    @PostMapping("/agents/{agentId}/tasks/{taskId}/cancel")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<String> cancelTask(
+            @PathVariable String agentId,
+            @PathVariable String taskId) {
+        String tenantId = UserContext.getCurrentTenantId();
+        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+        agent.cancelTask(taskId);
+        return RX.ok("Task cancel requested");
+    }
+
+    // ===== 内部工具方法 =====
+
+    /**
+     * A2aTask → OpenApiTaskDTO 转换（简化面向第三方的响应）
+     */
+    private OpenApiTaskDTO toOpenApiTaskDTO(A2aTask task, String agentId) {
+        OpenApiTaskDTO.OpenApiTaskDTOBuilder builder = OpenApiTaskDTO.builder()
+                .taskId(task.getId())
+                .agentId(agentId)
+                .contextId(task.getContextId());
+
+        if (task.getStatus() != null) {
+            builder.status(task.getStatus().getState().name());
+            if (task.getStatus().getState() == A2aTaskState.FAILED) {
+                builder.errorMessage(task.getStatus().getDescription());
+            }
+        }
+
+        // 提取 artifacts 中的结果文本
+        if (task.getArtifacts() != null) {
+            for (A2aArtifact artifact : task.getArtifacts()) {
+                if (artifact.getParts() != null) {
+                    for (A2aPart part : artifact.getParts()) {
+                        if ("text".equals(part.getType()) && part.getText() != null) {
+                            builder.result(part.getText());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 提取元信息
+        if (task.getMetadata() != null) {
+            Object durationMs = task.getMetadata().get("durationMs");
+            if (durationMs instanceof Number) {
+                builder.durationMs(((Number) durationMs).longValue());
+            }
+            Object costUsd = task.getMetadata().get("costUsd");
+            if (costUsd instanceof BigDecimal) {
+                builder.costUsd((BigDecimal) costUsd);
+            } else if (costUsd instanceof Number) {
+                builder.costUsd(BigDecimal.valueOf(((Number) costUsd).doubleValue()));
+            }
+        }
+
+        return builder.build();
     }
 }

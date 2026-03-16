@@ -350,6 +350,17 @@ public class ClaudeTaskService {
     public String createTrackedSyncTask(String userId, String workerId, String sessionId,
                                          String prompt, String cwd, String directoryId,
                                          String claudeSessionId) {
+        return createTrackedSyncTask(userId, workerId, sessionId, prompt, cwd,
+                directoryId, claudeSessionId, null);
+    }
+
+    /**
+     * 创建轻量 sync 任务记录（带 contextId 支持 A2A 多轮会话）
+     */
+    @Transactional
+    public String createTrackedSyncTask(String userId, String workerId, String sessionId,
+                                         String prompt, String cwd, String directoryId,
+                                         String claudeSessionId, String contextId) {
         String taskId = IdGenerator.shortId();
         ClaudeTaskEntity entity = new ClaudeTaskEntity();
         entity.setTaskId(taskId);
@@ -360,6 +371,7 @@ public class ClaudeTaskService {
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
         entity.setClaudeSessionId(claudeSessionId);
+        entity.setContextId(contextId);
         entity.setFileCheckpointingEnabled(false);
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
@@ -681,6 +693,17 @@ public class ClaudeTaskService {
     public void setDedupKey(String taskId, String dedupKey) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setDedupKey(dedupKey);
+            taskRepository.save(entity);
+        });
+    }
+
+    /**
+     * 更新任务来源标记（如 "A2A" 表示 A2A 异步任务，不需要 WorkerStreamRelay 监控）
+     */
+    @Transactional
+    public void setSource(String taskId, String source) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setSource(source);
             taskRepository.save(entity);
         });
     }
@@ -1930,6 +1953,7 @@ public class ClaudeTaskService {
                 .model(entity.getModel())
                 .errorMessage(entity.getErrorMessage())
                 .resultText(entity.getResultText())
+                .contextId(entity.getContextId())
                 .checkpoints(entity.getCheckpoints())
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .source(entity.getSource())

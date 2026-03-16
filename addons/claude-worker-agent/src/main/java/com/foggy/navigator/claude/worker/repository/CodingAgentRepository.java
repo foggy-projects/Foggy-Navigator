@@ -17,4 +17,8 @@ public interface CodingAgentRepository extends JpaRepository<CodingAgentEntity, 
     List<CodingAgentEntity> findByUserIdOrderByCreatedAtDesc(String userId);
 
     List<CodingAgentEntity> findByWorkerIdAndUserId(String workerId, String userId);
+
+    List<CodingAgentEntity> findByTenantIdOrderByCreatedAtDesc(String tenantId);
+
+    Optional<CodingAgentEntity> findByDefaultDirectoryIdAndUserId(String defaultDirectoryId, String userId);
 }

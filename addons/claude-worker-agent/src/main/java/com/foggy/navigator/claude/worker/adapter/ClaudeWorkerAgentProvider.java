@@ -70,6 +70,30 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
                 .orElse(null);
     }
 
+    /**
+     * 租户级 Agent 列表（Open API 用，TENANT_ADMIN 可查看租户下所有 Agent）
+     */
+    public List<A2aAgentCard> listAgentCardsByTenant(String tenantId) {
+        return agentRepository.findByTenantIdOrderByCreatedAtDesc(tenantId).stream()
+                .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
+                .map(this::toAgentCard)
+                .toList();
+    }
+
+    /**
+     * 租户级 Agent 解析（Open API 用，TENANT_ADMIN 可访问租户下任意 Agent）
+     */
+    public Optional<A2aAgent> resolveAgentByTenant(String agentId, String tenantId) {
+        return agentRepository.findByAgentId(agentId)
+                .filter(e -> tenantId.equals(e.getTenantId()))
+                .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
+                .map(entity -> {
+                    String cwd = resolveDefaultCwd(entity);
+                    return new ClaudeWorkerA2aAgent(entity, taskService, workerFacade,
+                            cwd, contextStore, a2aAsyncExecutor);
+                });
+    }
+
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {
         String desc = entity.getDescription();
         if (entity.getProjectSummary() != null) {

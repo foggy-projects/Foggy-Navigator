@@ -72,6 +72,10 @@ public class ClaudeTaskEntity {
     @Column(columnDefinition = "TEXT")
     private String resultText;
 
+    /** A2A 多轮会话标识（Open API contextId） */
+    @Column(length = 64)
+    private String contextId;
+
     /** A2A 幂等去重键：hash(userId + agentId + prompt)，防止网络重试导致重复创建任务 */
     @Column(length = 64)
     private String dedupKey;
