@@ -94,6 +94,10 @@
           @respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
         />
         <MessageBubble
+          v-else-if="item.msg.type === AipMessageType.SESSION_START"
+          :message="item.msg"
+        />
+        <MessageBubble
           v-else-if="item.msg.type === AipMessageType.STATE_SYNC"
           :message="item.msg"
         />
@@ -201,6 +205,10 @@ function isWaitingHint(msg: ChatMessage) {
   return raw?.subtype === 'waiting'
 }
 
+function isStatusHint(msg: ChatMessage) {
+  return msg.type === AipMessageType.SESSION_START
+}
+
 // Group consecutive tool call messages together
 const groupedItems = computed<GroupedItem[]>(() => {
   const result: GroupedItem[] = []
@@ -230,6 +238,8 @@ const groupedItems = computed<GroupedItem[]>(() => {
       result.push({ kind: 'waiting', key: msg.id, msg })
     } else if (isToolCall(msg)) {
       toolBuf.push(msg)
+    } else if (isStatusHint(msg) && toolBuf.length > 0) {
+      // Status hints (e.g. "Task started") between tool calls — skip to preserve grouping
     } else {
       flushToolBuf()
       result.push({ kind: 'single', key: msg.id, msg })

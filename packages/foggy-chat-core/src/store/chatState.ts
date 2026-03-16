@@ -309,7 +309,7 @@ export function createChatState(): ChatState {
         if (content) {
           messages.value.push({
             id: aip.messageId,
-            type: AipMessageType.TEXT_COMPLETE,
+            type: AipMessageType.SESSION_START,
             sender: 'assistant',
             content,
             timestamp: aip.timestamp,
