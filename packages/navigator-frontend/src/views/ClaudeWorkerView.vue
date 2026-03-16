@@ -2431,7 +2431,24 @@ const platformModelConfig = computed(() =>
 )
 
 // --- Per-worker LLM 选择缓存：切换 Worker 时记住每个 Worker 的 API 凭证 + 模型选择 ---
-const workerLlmSelectionCache = new Map<string, { apiConfigId: string; model: string }>()
+const LLM_CACHE_KEY = 'foggy:workerLlmSelection'
+type LlmSelection = { apiConfigId: string; model: string }
+
+function loadLlmCacheFromStorage(): Map<string, LlmSelection> {
+  try {
+    const raw = localStorage.getItem(LLM_CACHE_KEY)
+    if (raw) return new Map(Object.entries(JSON.parse(raw)))
+  } catch { /* ignore */ }
+  return new Map()
+}
+
+function persistLlmCache() {
+  try {
+    localStorage.setItem(LLM_CACHE_KEY, JSON.stringify(Object.fromEntries(workerLlmSelectionCache)))
+  } catch { /* ignore */ }
+}
+
+const workerLlmSelectionCache = loadLlmCacheFromStorage()
 let suppressModelAutoSelect = false
 let loadPlatformModelConfigSeq = 0 // 防止异步竞态：只有最新一次调用的结果才生效
 
@@ -2441,6 +2458,7 @@ function saveWorkerLlmSelection(workerId: string | null) {
     apiConfigId: platformModelConfigId.value,
     model: taskForm.value.model,
   })
+  persistLlmCache()
 }
 
 function restoreWorkerLlmSelection(workerId: string | null): boolean {
