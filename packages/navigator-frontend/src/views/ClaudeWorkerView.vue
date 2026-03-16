@@ -2430,6 +2430,39 @@ const platformModelConfig = computed(() =>
   platformModels.value.find((m) => m.id === platformModelConfigId.value) || null,
 )
 
+// --- Per-worker LLM 选择缓存：切换 Worker 时记住每个 Worker 的 API 凭证 + 模型选择 ---
+const workerLlmSelectionCache = new Map<string, { apiConfigId: string; model: string }>()
+let suppressModelAutoSelect = false
+
+function saveWorkerLlmSelection(workerId: string | null) {
+  if (!workerId || !platformModelConfigId.value) return
+  workerLlmSelectionCache.set(workerId, {
+    apiConfigId: platformModelConfigId.value,
+    model: taskForm.value.model,
+  })
+}
+
+function restoreWorkerLlmSelection(workerId: string | null): boolean {
+  if (!workerId) return false
+  const cached = workerLlmSelectionCache.get(workerId)
+  if (!cached) return false
+  // 仅当缓存的 API 凭证仍在可用列表中时才恢复
+  if (platformModels.value.some((m) => m.id === cached.apiConfigId)) {
+    suppressModelAutoSelect = true
+    platformModelConfigId.value = cached.apiConfigId
+    // 恢复模型选择（需在下一 tick，等 claudeModelOptions 更新后）
+    nextTick(() => {
+      const opts = claudeModelOptions.value
+      if (opts.some((o) => o.value === cached.model)) {
+        taskForm.value.model = cached.model
+      }
+      suppressModelAutoSelect = false
+    })
+    return true
+  }
+  return false
+}
+
 // --- 根据平台模型配置过滤可用模型 ---
 const claudeModelOptions = computed(() => {
   const allowed = platformModelConfig.value?.availableModels
@@ -2439,7 +2472,17 @@ const claudeModelOptions = computed(() => {
 
 // 当可用模型列表变化时，若当前选中的模型不在列表中则自动回退到第一个
 watch(claudeModelOptions, (opts) => {
+  if (suppressModelAutoSelect) return
   if (opts.length > 0 && !opts.some(o => o.value === taskForm.value.model)) {
+    taskForm.value.model = opts[0].value
+  }
+})
+
+// 切换 API Key 时，自动选中新 Key 可用模型列表中的第一个（默认）模型
+watch(platformModelConfigId, () => {
+  if (suppressModelAutoSelect) return
+  const opts = claudeModelOptions.value
+  if (opts.length > 0) {
     taskForm.value.model = opts[0].value
   }
 })
@@ -2450,21 +2493,19 @@ async function loadPlatformModelConfig() {
       listAgentModelOverrides(),
       listModelConfigs(selectedWorkerId.value || undefined),
     ])
-    const previousId = platformModelConfigId.value
     platformModels.value = models.filter((m) => m.hasApiKey)
-    // 保持之前选中的模型（如果仍在列表中）
-    if (previousId && platformModels.value.some((m) => m.id === previousId)) {
-      platformModelConfigId.value = previousId
+    // 优先从 per-worker 缓存恢复选择
+    if (restoreWorkerLlmSelection(selectedWorkerId.value)) {
+      return
+    }
+    // 自动选择 claude-worker 的 agent-model override（如有）
+    const override = overrides.find((o) => o.agentId === 'claude-worker')
+    if (override && platformModels.value.some((m) => m.id === override.modelConfigId)) {
+      platformModelConfigId.value = override.modelConfigId
+    } else if (platformModels.value.length > 0) {
+      platformModelConfigId.value = platformModels.value[0]!.id
     } else {
-      // 自动选择 claude-worker 的 agent-model override（如有）
-      const override = overrides.find((o) => o.agentId === 'claude-worker')
-      if (override && platformModels.value.some((m) => m.id === override.modelConfigId)) {
-        platformModelConfigId.value = override.modelConfigId
-      } else if (platformModels.value.length > 0) {
-        platformModelConfigId.value = platformModels.value[0]!.id
-      } else {
-        platformModelConfigId.value = ''
-      }
+      platformModelConfigId.value = ''
     }
   } catch {
     // best-effort
@@ -3380,6 +3421,8 @@ function handleSearchSelect(result: SessionSearchResult) {
 }
 
 function selectWorker(workerId: string) {
+  // 保存当前 Worker 的 LLM 选择，切回时恢复
+  saveWorkerLlmSelection(selectedWorkerId.value)
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = null
   directorySkills.value = []
@@ -3409,8 +3452,9 @@ function selectDirectory(workerId: string, directoryId: string) {
   selectedDirectoryId.value = directoryId
   focusedPaneId.value = null
   exitBatchSelectMode()
-  // 切换到不同 Worker 的目录时，刷新该 Worker 的可用模型列表
+  // 切换到不同 Worker 的目录时，保存旧 Worker 选择并刷新可用模型列表
   if (workerId !== previousWorkerId) {
+    saveWorkerLlmSelection(previousWorkerId)
     loadPlatformModelConfig()
   }
   // Suspend SSE on other workspaces to free browser connections (HTTP/1.1 limit: 6)
