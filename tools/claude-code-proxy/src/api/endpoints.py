@@ -81,17 +81,36 @@ async def validate_api_key(
 def _has_image_content(body_json: dict) -> bool:
     """Detect whether the request contains image content blocks.
 
-    Checks all messages for Claude image blocks (type="image") or
-    OpenAI image_url blocks (type="image_url").
+    Checks all messages for image blocks at two levels:
+    1. Top-level content blocks: type="image" or type="image_url"
+    2. Nested inside tool_result blocks: tool_result.content[].type="image"
+
+    Claude Code CLI typically sends images via:
+    - Direct user message (screenshot paste)
+    - Read tool result (image file read → tool_result with nested image)
     """
     messages = body_json.get("messages")
     if not isinstance(messages, list):
         return False
     for msg in messages:
         content = msg.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") in ("image", "image_url"):
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            # Level 1: direct image content block
+            if block_type in ("image", "image_url"):
+                return True
+            # Level 2: image nested inside tool_result
+            if block_type == "tool_result":
+                nested = block.get("content")
+                if isinstance(nested, list):
+                    for inner in nested:
+                        if isinstance(inner, dict) and inner.get("type") in ("image", "image_url"):
+                            return True
+                elif isinstance(nested, dict) and nested.get("type") in ("image", "image_url"):
                     return True
     return False
 
