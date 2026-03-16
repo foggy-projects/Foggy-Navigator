@@ -2433,6 +2433,7 @@ const platformModelConfig = computed(() =>
 // --- Per-worker LLM 选择缓存：切换 Worker 时记住每个 Worker 的 API 凭证 + 模型选择 ---
 const workerLlmSelectionCache = new Map<string, { apiConfigId: string; model: string }>()
 let suppressModelAutoSelect = false
+let loadPlatformModelConfigSeq = 0 // 防止异步竞态：只有最新一次调用的结果才生效
 
 function saveWorkerLlmSelection(workerId: string | null) {
   if (!workerId || !platformModelConfigId.value) return
@@ -2450,14 +2451,12 @@ function restoreWorkerLlmSelection(workerId: string | null): boolean {
   if (platformModels.value.some((m) => m.id === cached.apiConfigId)) {
     suppressModelAutoSelect = true
     platformModelConfigId.value = cached.apiConfigId
-    // 恢复模型选择（需在下一 tick，等 claudeModelOptions 更新后）
-    nextTick(() => {
-      const opts = claudeModelOptions.value
-      if (opts.some((o) => o.value === cached.model)) {
-        taskForm.value.model = cached.model
-      }
-      suppressModelAutoSelect = false
-    })
+    // Vue 3 computed 同步更新，claudeModelOptions 此时已是最新值，可直接恢复模型
+    const opts = claudeModelOptions.value
+    if (opts.some((o) => o.value === cached.model)) {
+      taskForm.value.model = cached.model
+    }
+    suppressModelAutoSelect = false
     return true
   }
   return false
@@ -2488,11 +2487,14 @@ watch(platformModelConfigId, () => {
 })
 
 async function loadPlatformModelConfig() {
+  const seq = ++loadPlatformModelConfigSeq
   try {
     const [overrides, models] = await Promise.all([
       listAgentModelOverrides(),
       listModelConfigs(selectedWorkerId.value || undefined),
     ])
+    // 防止竞态：如果在 await 期间又发起了新的调用，丢弃本次过期结果
+    if (seq !== loadPlatformModelConfigSeq) return
     platformModels.value = models.filter((m) => m.hasApiKey)
     // 优先从 per-worker 缓存恢复选择
     if (restoreWorkerLlmSelection(selectedWorkerId.value)) {
