@@ -1049,6 +1049,12 @@
                           详情
                         </el-dropdown-item>
                         <el-dropdown-item
+                          v-if="canRepairContext(item.conv)"
+                          @click="handleRepairContext(item.conv)"
+                        >
+                          修复上下文
+                        </el-dropdown-item>
+                        <el-dropdown-item
                           v-if="item.conv.config?.interactionState !== 'ARCHIVED' && item.conv.config?.interactionState !== 'ON_HOLD'"
                           @click="handleHoldConversation(item.conv)"
                         >
@@ -1197,6 +1203,12 @@
                         @click="handleUnarchiveConversation(conv)"
                       >
                         取消归档
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="canRepairContext(conv)"
+                        @click="handleRepairContext(conv)"
+                      >
+                        修复上下文
                       </el-dropdown-item>
                       <el-dropdown-item
                         v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
@@ -1782,6 +1794,69 @@
       </template>
     </el-dialog>
 
+    <!-- Context Repair / Compact Dialog (修复上下文 / 手动压缩) -->
+    <el-dialog v-model="contextRepairVisible" title="修复上下文" width="560px">
+      <div v-if="contextRepairFetching" style="text-align: center; padding: 24px 0">
+        <el-icon class="is-loading" :size="20"><Loading /></el-icon>
+        <span style="margin-left: 8px; color: #909399">正在获取会话信息…</span>
+      </div>
+      <template v-else>
+        <p style="margin-bottom: 12px; color: #606266">
+          会话共 <strong>{{ contextRepairInfo.totalMessages }}</strong> 条消息
+          （用户 {{ contextRepairInfo.userCount }} / 助手 {{ contextRepairInfo.assistantCount }}），
+          将全部压缩为一条续接摘要。
+        </p>
+
+        <!-- Original task (auto-extracted) -->
+        <details open style="margin-bottom: 12px">
+          <summary style="font-weight: 500; cursor: pointer; margin-bottom: 4px">原始任务（自动提取）</summary>
+          <div style="background: #f5f7fa; border-radius: 4px; padding: 8px 12px; font-size: 13px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-word">
+            {{ contextRepairInfo.originalTask || '（未提取到）' }}
+          </div>
+        </details>
+
+        <!-- Recent conversation (auto-extracted) -->
+        <details open style="margin-bottom: 12px">
+          <summary style="font-weight: 500; cursor: pointer; margin-bottom: 4px">最近对话（自动提取）</summary>
+          <div style="background: #f5f7fa; border-radius: 4px; padding: 8px 12px; font-size: 13px; max-height: 200px; overflow-y: auto">
+            <div
+              v-for="(msg, idx) in contextRepairInfo.recentMessages"
+              :key="idx"
+              style="margin-bottom: 6px; white-space: pre-wrap; word-break: break-word"
+            >
+              <strong :style="{ color: msg.role === 'user' ? '#409EFF' : '#67C23A' }">
+                [{{ msg.role === 'user' ? 'User' : 'Assistant' }}]
+              </strong>
+              {{ msg.content }}
+            </div>
+            <div v-if="contextRepairInfo.recentMessages.length === 0" style="color: #909399">
+              （未提取到最近对话）
+            </div>
+          </div>
+        </details>
+
+        <!-- Continuation prompt (editable) -->
+        <p style="margin-bottom: 8px; font-weight: 500">续接提示词：</p>
+        <el-input
+          v-model="contextRepairPrompt"
+          type="textarea"
+          :rows="8"
+          placeholder="描述之前的工作进度和接下来要做的事…"
+        />
+      </template>
+      <template #footer>
+        <el-button @click="contextRepairVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="contextRepairFetching || !contextRepairPrompt.trim()"
+          :loading="contextRepairLoading"
+          @click="executeContextRepair"
+        >
+          确认压缩并继续
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- SSH Connect Dialog -->
     <el-dialog v-model="showSshDialog" title="SSH 连接" width="420px">
       <el-form :model="sshForm" label-position="top">
@@ -1961,7 +2036,7 @@
 import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Back } from '@element-plus/icons-vue'
+import { ArrowDown, Back, Loading } from '@element-plus/icons-vue'
 import { useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useCodingAgent } from '@/composables/useCodingAgent'
 import { useInputMemory } from '@/composables/useInputMemory'
@@ -2295,6 +2370,22 @@ const rewindMode = ref<'file_rewind' | 'conversation_fork'>('conversation_fork')
 const rewindFileEnabled = ref(false)
 const rewindLoading = ref(false)
 const rewindCheckpoints = ref<{ id: string; turnIndex: number; timestamp: string }[]>([])
+
+// Context repair / compact dialog state (修复上下文 / 手动压缩)
+const contextRepairVisible = ref(false)
+const contextRepairFetching = ref(false)
+const contextRepairLoading = ref(false)
+const contextRepairTaskId = ref('')
+const contextRepairPrompt = ref('')
+const contextRepairInfo = ref<{
+  userCount: number
+  assistantCount: number
+  totalMessages: number
+  maxTurn: number
+  originalTask: string
+  recentMessages: { role: string; content: string }[]
+}>({ userCount: 0, assistantCount: 0, totalMessages: 0, maxTurn: 0, originalTask: '', recentMessages: [] })
+const contextRepairConv = ref<ConversationGroup | null>(null)
 
 // Scan checkpoints state
 const scanningTaskId = ref('')
@@ -5021,6 +5112,160 @@ async function handleScanCheckpoints(task: ClaudeTask) {
     scanningTaskId.value = ''
   }
 }
+
+// ─── Context Repair / Compact (修复上下文 / 手动压缩) ──────────────
+
+function canRepairContext(conv: ConversationGroup): boolean {
+  return !!conv.latestTask.claudeSessionId
+    && conv.latestTask.status !== 'RUNNING'
+    && conv.latestTask.status !== 'AWAITING_PERMISSION'
+}
+
+function truncateText(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text
+  return text.slice(0, maxLen) + '…'
+}
+
+function buildCompactPrompt(
+  originalTask: string,
+  recentMessages: { role: string; content: string }[],
+): string {
+  const recentPart = recentMessages.length > 0
+    ? recentMessages.map(m => `[${m.role === 'user' ? 'User' : 'Assistant'}] ${m.content}`).join('\n')
+    : '[请补充最近的工作进度]'
+
+  return `This session is being continued from a previous conversation that ran out of context.
+
+## Original Task
+${originalTask || '[请补充原始任务描述]'}
+
+## Recent Progress
+${recentPart}
+
+## Instructions
+Please continue from where we left off. Review the above context and proceed with the next steps.`
+}
+
+async function handleRepairContext(conv: ConversationGroup) {
+  contextRepairConv.value = conv
+  contextRepairTaskId.value = conv.latestTask.taskId
+  contextRepairLoading.value = false
+  contextRepairFetching.value = true
+  contextRepairVisible.value = true
+  contextRepairInfo.value = { userCount: 0, assistantCount: 0, totalMessages: 0, maxTurn: 0, originalTask: '', recentMessages: [] }
+  contextRepairPrompt.value = ''
+
+  try {
+    const workerId = conv.latestTask.workerId
+    const claudeSessionId = conv.latestTask.claudeSessionId!
+
+    // Phase 1: Fetch message-count + first message + scan checkpoints in parallel
+    const [msgCount, firstMessages, cpResult] = await Promise.all([
+      dirApi.getWorkerSessionMessageCount(workerId, claudeSessionId),
+      dirApi.getWorkerSessionMessagesPaged(workerId, claudeSessionId, 0, 1),
+      dirApi.scanCheckpoints(conv.latestTask.taskId),
+    ])
+
+    // Update task's checkpoint data for the rewind dialog
+    if (cpResult.count > 0) {
+      conv.latestTask.checkpoints = cpResult.checkpoints
+    }
+
+    const checkpoints: { id: string; turnIndex: number; timestamp: string }[] =
+      cpResult.checkpoints ? JSON.parse(cpResult.checkpoints) : []
+    const maxTurn = checkpoints.length > 0 ? checkpoints.length : msgCount.user_count
+
+    // Phase 2: Fetch last few messages (need total from phase 1)
+    const lastOffset = Math.max(0, msgCount.total - 6)
+    const lastMessages = msgCount.total > 1
+      ? await dirApi.getWorkerSessionMessagesPaged(workerId, claudeSessionId, lastOffset, 6)
+      : []
+
+    // Extract original task
+    const originalTask = firstMessages[0]?.content || conv.firstPrompt || ''
+
+    // Truncate recent messages for display
+    const recentMessages = lastMessages.map(m => ({
+      role: m.role,
+      content: truncateText(m.content, 300),
+    }))
+
+    contextRepairInfo.value = {
+      userCount: msgCount.user_count,
+      assistantCount: msgCount.assistant_count,
+      totalMessages: msgCount.total,
+      maxTurn,
+      originalTask: truncateText(originalTask, 500),
+      recentMessages,
+    }
+
+    // Auto-generate compact prompt
+    contextRepairPrompt.value = buildCompactPrompt(originalTask, recentMessages)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '获取会话信息失败')
+    contextRepairVisible.value = false
+  } finally {
+    contextRepairFetching.value = false
+  }
+}
+
+async function executeContextRepair() {
+  const conv = contextRepairConv.value
+  if (!conv || !selectedWorkerId.value) return
+
+  contextRepairLoading.value = true
+  try {
+    // Step 1: Rewind to turn 1 — marks ALL messages as sidechain (full compaction)
+    await dirApi.rewindTask(
+      contextRepairTaskId.value,
+      null,
+      'conversation_fork',
+      1,
+    )
+
+    // Step 2: Resume the session with the compact summary prompt
+    const task = conv.latestTask
+    const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
+      workerId: selectedWorkerId.value,
+      claudeSessionId: task.claudeSessionId!,
+      prompt: contextRepairPrompt.value,
+      cwd: task.cwd,
+      directoryId: task.directoryId,
+      sessionId: task.sessionId,
+    }
+    if (taskForm.value.model) {
+      resumeForm.model = taskForm.value.model
+    }
+    if (selectedAgentTeamsConfigId.value) {
+      const config = agentTeamsConfigs.value.find(c => c.configId === selectedAgentTeamsConfigId.value)
+      if (config) resumeForm.agentTeamsJson = config.config
+    }
+    const newTask = await workerState.resumeTask(resumeForm)
+
+    // Step 3: Open or reuse pane
+    const existingPane = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
+    if (existingPane) {
+      existingPane.resumeInPlace(newTask)
+    } else {
+      while (panes.value.length >= MAX_PANES) {
+        closePane(panes.value[0]!.paneId)
+      }
+      const newPane = createPane(newTask)
+      await newPane.connect(newTask.sessionId)
+    }
+
+    ElMessage.success('上下文已压缩，会话已继续')
+    contextRepairVisible.value = false
+    reloadWorkerTasks()
+    if (selectedDirectoryId.value) loadDirectoryTasks()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '压缩失败')
+  } finally {
+    contextRepairLoading.value = false
+  }
+}
+
+// ─── Delete Conversation ──────────────────────────────────────────
 
 async function handleDeleteConversation(conv: ConversationGroup) {
   try {
