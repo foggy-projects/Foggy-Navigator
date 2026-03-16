@@ -102,6 +102,13 @@ public class LlmModelConfigEntity {
     private String envVars;
 
     /**
+     * 可用模型列表（JSON 数组，如 ["opus[1m]","opus","sonnet"]）
+     * 仅 workerBackend=CLAUDE_CODE 时有意义；为 null 表示不限制（全部可用）
+     */
+    @Column(columnDefinition = "TEXT")
+    private String availableModels;
+
+    /**
      * 更新时间
      */
     @Column(nullable = false)

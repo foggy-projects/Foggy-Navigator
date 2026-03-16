@@ -155,6 +155,11 @@ public class TaskStateReconciler {
 
         // 4. 四象限处理：DB 活跃任务 vs CLI 进程
         for (ClaudeTaskEntity task : activeTasks) {
+            // A2A 异步任务使用直接 HTTP 查询，没有 CLI 进程，跳过 reconcile
+            if ("A2A".equals(task.getSource())) {
+                log.debug("Reconciler: skipping A2A async task {}", task.getTaskId());
+                continue;
+            }
             String taskId = task.getTaskId();
             Integer pid = foggyTaskIdToPid.get(taskId);
 

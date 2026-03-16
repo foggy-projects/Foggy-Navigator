@@ -16,6 +16,8 @@ import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.common.dto.UserDTO;
+import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +44,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     private final WorkerStreamRelay streamRelay;
     private final WorkingDirectoryRepository directoryRepository;
     private final LlmModelManager llmModelManager;
+    private final UserAuthService userAuthService;
     private final ObjectMapper objectMapper;
     private final Executor a2aAsyncExecutor;
 
@@ -50,6 +53,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                                    WorkerStreamRelay streamRelay,
                                    WorkingDirectoryRepository directoryRepository,
                                    LlmModelManager llmModelManager,
+                                   UserAuthService userAuthService,
                                    ObjectMapper objectMapper,
                                    @Qualifier("a2aAsyncExecutor") Executor a2aAsyncExecutor) {
         this.workerService = workerService;
@@ -57,6 +61,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         this.streamRelay = streamRelay;
         this.directoryRepository = directoryRepository;
         this.llmModelManager = llmModelManager;
+        this.userAuthService = userAuthService;
         this.objectMapper = objectMapper;
         this.a2aAsyncExecutor = a2aAsyncExecutor;
     }
@@ -236,8 +241,12 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             String directoryId) {
         ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
         if (!worker.getUserId().equals(userId)) {
-            return CompletableFuture.failedFuture(
-                    new IllegalArgumentException("Worker not found: " + workerId));
+            // 用户不是 Worker 直接所有者 → 检查是否同一租户（Open API / A2A 跨用户访问）
+            if (!isSameTenant(userId, worker.getTenantId())) {
+                return CompletableFuture.failedFuture(
+                        new IllegalArgumentException("Worker not found: " + workerId));
+            }
+            log.debug("asyncQuery: tenant-level access granted for userId={}, workerId={}", userId, workerId);
         }
 
         // 同步解析认证（需要 DB，速度快）
@@ -558,5 +567,17 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         if (value instanceof Long l) return l;
         if (value instanceof Number num) return num.longValue();
         return null;
+    }
+
+    /**
+     * 判断 userId 对应的用户是否与指定 tenantId 属于同一租户
+     * 用于 Open API / A2A 场景：员工通过租户级 Agent 访问管理员创建的 Worker
+     */
+    private boolean isSameTenant(String userId, String workerTenantId) {
+        if (workerTenantId == null) return false;
+        return userAuthService.getUser(userId)
+                .map(UserDTO::getTenantId)
+                .filter(workerTenantId::equals)
+                .isPresent();
     }
 }

@@ -24,7 +24,9 @@ public class LlmModelConfigDTO {
     private Boolean hasApiKey;
     private ModelAccessScope scope;
     private List<String> allowedWorkerIds;
+    private String workerBackend;
     private Map<String, String> envVars;
+    private List<String> availableModels;
     private Integer sortOrder;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

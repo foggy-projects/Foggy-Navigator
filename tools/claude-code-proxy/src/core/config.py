@@ -30,8 +30,17 @@ class Config:
         self.middle_model = os.environ.get("MIDDLE_MODEL", self.big_model)
         self.small_model = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
 
+        # Vision routing: route image-containing requests to a specific backend
+        self.vision_backend = os.environ.get("VISION_BACKEND")
+
         # Build key pool (multi-key or single-key fallback)
         self.key_pool = self._build_key_pool()
+
+        # Validate VISION_BACKEND references an existing backend key
+        if self.vision_backend and self.vision_backend not in self.key_pool.keys:
+            print(f"Warning: VISION_BACKEND='{self.vision_backend}' does not match any backend key "
+                  f"[{', '.join(self.key_pool.all_key_names())}]. Vision routing disabled.")
+            self.vision_backend = None
 
         # Keep openai_api_key for backward compat (first key in pool)
         first_key = list(self.key_pool.keys.values())[0]
@@ -62,6 +71,7 @@ class Config:
                 middle = env_vars.get(f"MIDDLE_MODEL_{name}", big)
                 small = env_vars.get(f"SMALL_MODEL_{name}", self.small_model)
                 passthrough = env_vars.get(f"PASSTHROUGH_{name}", "").lower() in ("true", "1", "yes")
+                vision = env_vars.get(f"VISION_MODEL_{name}") or None
                 named_keys[name] = BackendKey(
                     name=name,
                     api_key=api_key,
@@ -70,6 +80,7 @@ class Config:
                     middle_model=middle,
                     small_model=small,
                     passthrough=passthrough,
+                    vision_model=vision,
                 )
 
         # Fallback: single OPENAI_API_KEY → "DEFAULT"
@@ -77,6 +88,7 @@ class Config:
             single_key = os.environ.get("OPENAI_API_KEY")
             if not single_key:
                 raise ValueError("No OPENAI_API_KEY or OPENAI_API_KEY_* found in environment variables")
+            vision = os.environ.get("VISION_MODEL") or None
             named_keys["DEFAULT"] = BackendKey(
                 name="DEFAULT",
                 api_key=single_key,
@@ -84,6 +96,7 @@ class Config:
                 big_model=self.big_model,
                 middle_model=self.middle_model,
                 small_model=self.small_model,
+                vision_model=vision,
             )
         else:
             if os.environ.get("OPENAI_API_KEY"):

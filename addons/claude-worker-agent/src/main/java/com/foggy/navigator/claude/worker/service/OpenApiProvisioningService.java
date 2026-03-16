@@ -7,10 +7,14 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.ExternalUserMappingEntity;
 import com.foggy.navigator.claude.worker.model.form.OpenApiRegisterForm;
 import com.foggy.navigator.claude.worker.model.form.ProvisionEmployeeForm;
+import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
+import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ExternalUserMappingRepository;
+import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.dto.ApiKeyDTO;
 import com.foggy.navigator.common.dto.UserDTO;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.form.ApiKeyCreateForm;
 import com.foggy.navigator.common.form.UserRegisterForm;
 import com.foggy.navigator.common.util.IdGenerator;
@@ -37,7 +41,9 @@ public class OpenApiProvisioningService {
     private final UserAuthService userAuthService;
     private final ClaudeWorkerFacade claudeWorkerFacade;
     private final ClaudeWorkerRepository workerRepository;
+    private final CodingAgentRepository agentRepository;
     private final WorkingDirectoryService directoryService;
+    private final WorkingDirectoryRepository directoryRepository;
     private final ExternalUserMappingRepository mappingRepository;
 
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -152,22 +158,34 @@ public class OpenApiProvisioningService {
                     form.getExternalUserId(), userId, username);
         }
 
-        // 3. 初始化工作目录（使用 Worker 所有者的 userId 调用，因为 Worker 归属检查基于 userId）
-        String directoryId = claudeWorkerFacade.initDirectory(
-                worker.getUserId(), form.getWorkerId(), form.getDirectoryPath(),
-                form.getFiles(), form.getProjectName());
-
-        // 4. 判断目录是否是新创建的，并更新所有者为员工
+        // 3. 检查目录是否已存在（按 workerId + path 查重，幂等）
+        String directoryId;
         boolean directoryCreated;
-        try {
-            // 尝试更新目录所有者为员工（initDirectory 创建时 userId 是 Worker 所有者的）
+        Optional<WorkingDirectoryEntity> existingDir = directoryRepository
+                .findByWorkerIdAndPath(form.getWorkerId(), form.getDirectoryPath());
+
+        if (existingDir.isPresent()) {
+            // 目录已存在，确保所有者是该员工
+            directoryId = existingDir.get().getDirectoryId();
+            directoryCreated = false;
+            if (!userId.equals(existingDir.get().getUserId())) {
+                directoryService.updateDirectoryOwner(directoryId, userId);
+            }
+            log.info("Directory already exists, reusing: directoryId={}, path={}",
+                    directoryId, form.getDirectoryPath());
+        } else {
+            // 新建目录（使用 Worker 所有者的 userId 调用，因为 Worker 归属检查基于 userId）
+            directoryId = claudeWorkerFacade.initDirectory(
+                    worker.getUserId(), form.getWorkerId(), form.getDirectoryPath(),
+                    form.getFiles(), form.getProjectName());
+            // 更新目录所有者为员工
             directoryService.updateDirectoryOwner(directoryId, userId);
             directoryCreated = true;
-        } catch (Exception e) {
-            // 目录已存在且可能已经属于该员工
-            directoryCreated = false;
-            log.debug("Directory owner update skipped (may already be owned): {}", e.getMessage());
         }
+
+        // 4. 自动注册 A2A Agent（幂等：同一 userId + directoryId 不重复创建）
+        String agentId = ensureAgentForEmployee(userId, worker.getWorkerId(), directoryId,
+                form.getExternalUserId(), form.getProjectName(), callerTenantId);
 
         return ProvisionResultDTO.builder()
                 .externalUserId(form.getExternalUserId())
@@ -176,6 +194,7 @@ public class OpenApiProvisioningService {
                 .password(passwordToReturn)
                 .directoryId(directoryId)
                 .directoryPath(form.getDirectoryPath())
+                .agentId(agentId)
                 .userCreated(userCreated)
                 .directoryCreated(directoryCreated)
                 .build();
@@ -214,6 +233,31 @@ public class OpenApiProvisioningService {
     }
 
     // ===== 内部方法 =====
+
+    /**
+     * 确保员工有对应的 A2A Agent（幂等：同一 userId + directoryId 不重复创建）
+     */
+    private String ensureAgentForEmployee(String userId, String workerId, String directoryId,
+                                           String externalUserId, String projectName, String tenantId) {
+        // 检查是否已有对应的 Agent
+        return agentRepository.findByDefaultDirectoryIdAndUserId(directoryId, userId)
+                .map(CodingAgentEntity::getAgentId)
+                .orElseGet(() -> {
+                    CodingAgentEntity agent = new CodingAgentEntity();
+                    agent.setAgentId(IdGenerator.shortId());
+                    agent.setUserId(userId);
+                    agent.setTenantId(tenantId);
+                    agent.setWorkerId(workerId);
+                    agent.setDefaultDirectoryId(directoryId);
+                    agent.setName(externalUserId + "-agent");
+                    agent.setAgentType("LOCAL_CLAUDE_WORKER");
+                    agent.setDescription(projectName != null ? projectName : externalUserId + " Agent");
+                    agentRepository.save(agent);
+                    log.info("Auto-registered A2A Agent for employee: agentId={}, userId={}, directoryId={}",
+                            agent.getAgentId(), userId, directoryId);
+                    return agent.getAgentId();
+                });
+    }
 
     private ExternalUserDTO toExternalUserDTO(ExternalUserMappingEntity entity) {
         String username = userAuthService.getUser(entity.getUserId())

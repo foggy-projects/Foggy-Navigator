@@ -332,7 +332,7 @@
               <el-option value="plan" label="只读(Plan)" />
               <el-option value="default" label="交互式审批" />
             </el-select>
-            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 100px">
+            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 120px">
               <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
             </el-select>
             <el-select
@@ -685,7 +685,7 @@
               <el-option value="plan" label="只读(Plan)" />
               <el-option value="default" label="交互式审批" />
             </el-select>
-            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 100px">
+            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 120px">
               <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
             </el-select>
             <el-select
@@ -2394,8 +2394,10 @@ const editDirForm = ref({
   defaultModelConfigId: '' as string,
 })
 
-const claudeModelOptions = [
+const ALL_CLAUDE_MODELS = [
+  { value: 'opus[1m]', label: 'Opus (1M)' },
   { value: 'opus', label: 'Opus' },
+  { value: 'sonnet[1m]', label: 'Sonnet (1M)' },
   { value: 'sonnet', label: 'Sonnet' },
   { value: 'haiku', label: 'Haiku' },
 ]
@@ -2404,7 +2406,7 @@ const creatingTask = ref(false)
 const taskForm = ref({
   prompt: '',
   cwd: '',
-  model: 'opus' as string,
+  model: 'opus[1m]' as string,
   maxTurns: null as number | null,
   permissionMode: 'bypassPermissions' as string,
 })
@@ -2427,6 +2429,20 @@ const platformModelConfigId = ref('')
 const platformModelConfig = computed(() =>
   platformModels.value.find((m) => m.id === platformModelConfigId.value) || null,
 )
+
+// --- 根据平台模型配置过滤可用模型 ---
+const claudeModelOptions = computed(() => {
+  const allowed = platformModelConfig.value?.availableModels
+  if (!allowed || allowed.length === 0) return ALL_CLAUDE_MODELS
+  return ALL_CLAUDE_MODELS.filter(opt => allowed.includes(opt.value))
+})
+
+// 当可用模型列表变化时，若当前选中的模型不在列表中则自动回退到第一个
+watch(claudeModelOptions, (opts) => {
+  if (opts.length > 0 && !opts.some(o => o.value === taskForm.value.model)) {
+    taskForm.value.model = opts[0].value
+  }
+})
 
 async function loadPlatformModelConfig() {
   try {
@@ -5216,8 +5232,11 @@ function authModeLabel(mode: string): string {
 }
 
 function shortModel(model: string): string {
-  const match = model.match(/(sonnet|opus|haiku)[\w-]*/i)
-  return match ? match[0] : model.split('-').slice(1, 3).join('-')
+  const has1m = /\[1m\]/i.test(model)
+  const clean = model.replace(/\[1m\]/gi, '')
+  const match = clean.match(/(sonnet|opus|haiku)[\w-]*/i)
+  const base = match ? match[0] : clean.split('-').slice(1, 3).join('-')
+  return has1m ? base + ' (1M)' : base
 }
 
 function formatTime(dateStr: string): string {

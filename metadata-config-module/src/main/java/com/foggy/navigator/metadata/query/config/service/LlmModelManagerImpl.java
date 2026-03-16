@@ -40,6 +40,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     private static final Duration TEST_TIMEOUT = Duration.ofSeconds(10);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<Map<String, String>> MAP_TYPE_REF = new TypeReference<>() {};
+    private static final TypeReference<List<String>> LIST_TYPE_REF = new TypeReference<>() {};
 
     private final LlmModelConfigRepository llmModelRepo;
     private final AgentModelOverrideRepository overrideRepo;
@@ -64,7 +65,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
         entity.setIsDefault(form.getIsDefault() != null ? form.getIsDefault() : false);
         entity.setScope(form.getScope() != null ? form.getScope() : ModelAccessScope.GLOBAL);
+        entity.setWorkerBackend(form.getWorkerBackend());
         entity.setEnvVars(serializeEnvVars(form.getEnvVars()));
+        entity.setAvailableModels(serializeList(form.getAvailableModels()));
 
         // 新增项排在最后
         int maxSort = llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc(tenantId).stream()
@@ -109,8 +112,14 @@ public class LlmModelManagerImpl implements LlmModelManager {
             }
             entity.setIsDefault(form.getIsDefault());
         }
+        if (form.getWorkerBackend() != null) {
+            entity.setWorkerBackend(form.getWorkerBackend());
+        }
         if (form.getEnvVars() != null) {
             entity.setEnvVars(serializeEnvVars(form.getEnvVars()));
+        }
+        if (form.getAvailableModels() != null) {
+            entity.setAvailableModels(serializeList(form.getAvailableModels()));
         }
 
         // scope 变化处理
@@ -424,7 +433,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
         } else {
             dto.setAllowedWorkerIds(Collections.emptyList());
         }
+        dto.setWorkerBackend(entity.getWorkerBackend());
         dto.setEnvVars(deserializeEnvVars(entity.getEnvVars()));
+        dto.setAvailableModels(deserializeList(entity.getAvailableModels()));
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());
         return dto;
@@ -450,6 +461,30 @@ public class LlmModelManagerImpl implements LlmModelManager {
             return OBJECT_MAPPER.readValue(json, MAP_TYPE_REF);
         } catch (JsonProcessingException e) {
             log.warn("Failed to deserialize envVars: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String serializeList(List<String> list) {
+        if (list == null || list.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(list);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize list: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private List<String> deserializeList(String json) {
+        if (json == null || json.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.readValue(json, LIST_TYPE_REF);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to deserialize list: {}", e.getMessage());
             return null;
         }
     }

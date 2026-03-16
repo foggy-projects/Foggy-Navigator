@@ -59,14 +59,23 @@ def main():
         pt_tag = " [PASSTHROUGH]" if bk.passthrough else ""
         print(f"   [{name}] base_url={bk.base_url}{pt_tag}")
         if bk.passthrough:
-            print(f"         (native Anthropic-compatible backend, no format conversion)")
+            print(f"         (Anthropic-compatible, model mapping: opus={bk.big_model}, sonnet={bk.middle_model}, haiku={bk.small_model})")
         else:
             print(f"         opus={bk.big_model}, sonnet={bk.middle_model}, haiku={bk.small_model}")
+        if bk.vision_model:
+            print(f"         vision_model={bk.vision_model}")
     if key_pool.has_mapping:
         print(f"   KEY_MAPPING: {len(key_pool.mapping)} client key(s)")
         for ck, backends in key_pool.mapping.items():
             masked = ck[:8] + "..." if len(ck) > 8 else ck
             print(f"     {masked} -> [{', '.join(backends)}]")
+    # Vision routing summary
+    vision_models = {n: bk.vision_model for n, bk in key_pool.keys.items() if bk.vision_model}
+    if config.vision_backend or vision_models:
+        vb = config.vision_backend or "(not set)"
+        print(f"   Vision Routing: VISION_BACKEND={vb}")
+        for n, vm in vision_models.items():
+            print(f"     [{n}] VISION_MODEL={vm}")
     print(f"   Max Tokens Limit: {config.max_tokens_limit}")
     print(f"   Request Timeout: {config.request_timeout}s")
     print(f"   Server: {config.host}:{config.port}")

@@ -118,14 +118,16 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
             return toA2aTask(dto);
         }
 
-        // 2. 创建 tracked 任务记录（RUNNING 状态）
+        // 2. 创建 tracked 任务记录（RUNNING 状态），持久化 contextId 供轮询返回
+        final String finalContextId = (contextId != null) ? contextId : IdGenerator.shortId();
         String taskId = taskService.createTrackedSyncTask(
                 entity.getUserId(), entity.getWorkerId(),
                 navigatorSessionId, prompt, defaultCwd,
-                entity.getDefaultDirectoryId(), claudeSessionId);
+                entity.getDefaultDirectoryId(), claudeSessionId, finalContextId);
 
-        // 设置去重键（创建后补充设置，避免改动 createTrackedSyncTask 签名影响其他调用方）
+        // 设置去重键 + A2A 来源标记（避免 WorkerStreamRelay 干扰异步任务）
         taskService.setDedupKey(taskId, dedupKey);
+        taskService.setSource(taskId, "A2A");
 
         // 3. 异步执行，注册完成回调
         final String finalClaudeSessionId = claudeSessionId;
@@ -136,7 +138,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
                 entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
                 finalClaudeSessionId, finalMaxTurns, null, entity.getDefaultDirectoryId()
         ).whenComplete((result, ex) ->
-                handleAsyncCompletion(taskId, contextId, finalNavigatorSessionId,
+                handleAsyncCompletion(taskId, finalContextId, finalNavigatorSessionId,
                         prompt, finalClaudeSessionId, result, ex));
 
         log.info("A2A async sendTask submitted: agentId={}, taskId={}, sessionId={}, directoryId={}",
@@ -145,7 +147,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         // 4. 立即返回 SUBMITTED
         return A2aTask.builder()
                 .id(taskId)
-                .contextId(contextId)
+                .contextId(finalContextId)
                 .status(A2aTaskStatus.builder()
                         .state(A2aTaskState.SUBMITTED)
                         .timestamp(Instant.now())
@@ -266,6 +268,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
 
         A2aTask.A2aTaskBuilder builder = A2aTask.builder()
                 .id(dto.getTaskId())
+                .contextId(dto.getContextId())
                 .status(A2aTaskStatus.builder()
                         .state(state)
                         .description(state == A2aTaskState.FAILED ? dto.getErrorMessage() : null)

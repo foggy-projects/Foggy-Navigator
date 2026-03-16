@@ -350,6 +350,17 @@ public class ClaudeTaskService {
     public String createTrackedSyncTask(String userId, String workerId, String sessionId,
                                          String prompt, String cwd, String directoryId,
                                          String claudeSessionId) {
+        return createTrackedSyncTask(userId, workerId, sessionId, prompt, cwd,
+                directoryId, claudeSessionId, null);
+    }
+
+    /**
+     * 创建轻量 sync 任务记录（带 contextId 支持 A2A 多轮会话）
+     */
+    @Transactional
+    public String createTrackedSyncTask(String userId, String workerId, String sessionId,
+                                         String prompt, String cwd, String directoryId,
+                                         String claudeSessionId, String contextId) {
         String taskId = IdGenerator.shortId();
         ClaudeTaskEntity entity = new ClaudeTaskEntity();
         entity.setTaskId(taskId);
@@ -360,6 +371,7 @@ public class ClaudeTaskService {
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
         entity.setClaudeSessionId(claudeSessionId);
+        entity.setContextId(contextId);
         entity.setFileCheckpointingEnabled(false);
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
@@ -686,6 +698,17 @@ public class ClaudeTaskService {
     }
 
     /**
+     * 更新任务来源标记（如 "A2A" 表示 A2A 异步任务，不需要 WorkerStreamRelay 监控）
+     */
+    @Transactional
+    public void setSource(String taskId, String source) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setSource(source);
+            taskRepository.save(entity);
+        });
+    }
+
+    /**
      * 保存异步任务的结果文本（A2A 轮询 getTask 时返回 artifacts）
      */
     @Transactional
@@ -794,6 +817,7 @@ public class ClaudeTaskService {
      * 3. 清理本地 SSE 流订阅
      * 4. 更新 DB 状态 → ABORTED
      */
+    @SuppressWarnings("unchecked")
     public void abortTask(String taskId) {
         // 1. 获取 Worker 内部 task ID（优先使用 streamRelay 的精确映射）
         String workerTaskId = streamRelay.getWorkerTaskId(taskId);
@@ -804,8 +828,17 @@ public class ClaudeTaskService {
             if (task != null) {
                 ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
                 ClaudeWorkerClient client = workerService.createClient(worker);
-                client.abortTask(workerTaskId).block(Duration.ofSeconds(5));
-                log.info("Worker abort sent: taskId={}, workerTaskId={}", taskId, workerTaskId);
+
+                if (workerTaskId != null) {
+                    // 标准路径：通过 SSE 映射的 workerTaskId 发送 abort
+                    client.abortTask(workerTaskId).block(Duration.ofSeconds(5));
+                    log.info("Worker abort sent: taskId={}, workerTaskId={}", taskId, workerTaskId);
+                } else if ("A2A".equals(task.getSource())) {
+                    // A2A fallback：异步任务没有 SSE 流，通过进程列表匹配 PID → SIGTERM
+                    killCliByTaskId(client, taskId);
+                } else {
+                    log.warn("Cannot abort task {}: no workerTaskId mapping and not A2A", taskId);
+                }
             }
         } catch (Exception e) {
             log.warn("Failed to notify worker for abort task {}: {}", taskId, e.getMessage());
@@ -833,6 +866,40 @@ public class ClaudeTaskService {
                 streamRelay.autoScanCheckpoints(taskId, claudeSessionId);
             }
         });
+    }
+
+    /**
+     * A2A 任务 abort fallback：通过 Worker 进程列表匹配 foggy_task_id 找到 PID → SIGTERM
+     * <p>
+     * A2A 异步任务不走 SSE 流，没有 workerTaskId 映射。
+     * 需要通过 Worker API 列出所有 CLI 进程，按 foggy_task_id 匹配后杀进程。
+     */
+    @SuppressWarnings("unchecked")
+    private void killCliByTaskId(ClaudeWorkerClient client, String taskId) {
+        try {
+            Map<String, Object> processInfo = client.listCliProcesses()
+                    .block(Duration.ofSeconds(5));
+            if (processInfo == null) return;
+
+            Object processesList = processInfo.get("processes");
+            if (!(processesList instanceof java.util.List<?> processes)) return;
+
+            for (Object item : processes) {
+                if (!(item instanceof Map<?, ?> proc)) continue;
+                if (taskId.equals(proc.get("foggy_task_id"))) {
+                    Object pidObj = proc.get("pid");
+                    if (pidObj instanceof Number) {
+                        int pid = ((Number) pidObj).intValue();
+                        client.killCliProcess(pid, false).block(Duration.ofSeconds(5));
+                        log.info("A2A abort fallback: killed CLI pid={} for taskId={}", pid, taskId);
+                    }
+                    return;
+                }
+            }
+            log.debug("A2A abort fallback: no CLI process found for taskId={}", taskId);
+        } catch (Exception e) {
+            log.warn("A2A abort fallback failed for taskId={}: {}", taskId, e.getMessage());
+        }
     }
 
     /**
@@ -1930,6 +1997,7 @@ public class ClaudeTaskService {
                 .model(entity.getModel())
                 .errorMessage(entity.getErrorMessage())
                 .resultText(entity.getResultText())
+                .contextId(entity.getContextId())
                 .checkpoints(entity.getCheckpoints())
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .source(entity.getSource())

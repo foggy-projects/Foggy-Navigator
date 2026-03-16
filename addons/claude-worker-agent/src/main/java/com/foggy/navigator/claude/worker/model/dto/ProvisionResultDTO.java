@@ -28,6 +28,9 @@ public class ProvisionResultDTO {
     /** 工作目录路径 */
     private String directoryPath;
 
+    /** A2A Agent ID（可用于向 Agent 发送查询） */
+    private String agentId;
+
     /** 是否新创建了用户（false 表示已存在） */
     private boolean userCreated;
 

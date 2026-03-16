@@ -1,23 +1,30 @@
 package com.foggy.navigator.claude.worker.controller.openapi;
 
+import com.foggy.navigator.claude.worker.adapter.ClaudeWorkerAgentProvider;
+import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.*;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.*;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
-import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
-import com.foggy.navigator.claude.worker.service.OpenApiProvisioningService;
-import com.foggy.navigator.claude.worker.service.WorkerHealthChecker;
-import com.foggy.navigator.claude.worker.service.WorkingDirectoryService;
+import com.foggy.navigator.claude.worker.service.*;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.common.dto.a2a.*;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Open API Controller — 面向第三方系统的集成接口
@@ -38,6 +45,9 @@ public class OpenApiController {
     private final ClaudeWorkerRepository workerRepository;
     private final WorkingDirectoryRepository directoryRepository;
     private final WorkerHealthChecker healthChecker;
+    private final ClaudeWorkerAgentProvider agentProvider;
+    private final ClaudeTaskService taskService;
+    private final TaskStateReconciler reconciler;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -283,5 +293,282 @@ public class OpenApiController {
         } catch (IllegalArgumentException e) {
             return RX.failB(e.getMessage());
         }
+    }
+
+    // ===== 6. Agent 查询（A2A 协议） =====
+
+    /**
+     * 列出租户下所有 A2A Agent
+     */
+    @GetMapping("/agents")
+    @RequireAuth(roles = {"TENANT_ADMIN"})
+    public RX<List<A2aAgentCard>> listAgents() {
+        String tenantId = UserContext.getCurrentTenantId();
+        return RX.ok(agentProvider.listAgentCardsByTenant(tenantId));
+    }
+
+    /**
+     * 获取 Agent Card 详情
+     */
+    @GetMapping("/agents/{agentId}")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<A2aAgentCard> getAgentCard(@PathVariable String agentId) {
+        String tenantId = UserContext.getCurrentTenantId();
+        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+        return RX.ok(agent.getAgentCard());
+    }
+
+    /**
+     * 向 Agent 发送查询（异步模式）
+     * <p>
+     * 立即返回 SUBMITTED 状态的任务，调用者通过轮询端点获取结果。
+     * 支持多轮会话：首次不传 contextId 则平台自动生成；
+     * 后续传入相同 contextId 可恢复 Claude 会话上下文。
+     */
+    @PostMapping("/agents/{agentId}/ask")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<OpenApiTaskDTO> askAgent(
+            @PathVariable String agentId,
+            @RequestBody OpenApiQueryForm form) {
+        String tenantId = UserContext.getCurrentTenantId();
+
+        if (form.getQuestion() == null || form.getQuestion().isBlank()) {
+            return RX.failB("question is required");
+        }
+
+        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+
+        // 构建 A2aMessage
+        String contextId = (form.getContextId() != null && !form.getContextId().isBlank())
+                ? form.getContextId() : IdGenerator.shortId();
+        A2aMessage message = A2aMessage.user(List.of(A2aPart.text(form.getQuestion())));
+        message.setContextId(contextId);
+        if (form.getMaxTurns() != null) {
+            message.setMetadata(Map.of("maxTurns", form.getMaxTurns()));
+        }
+
+        A2aTask task = agent.sendTask(message);
+
+        log.info("Open API askAgent: agentId={}, taskId={}, tenantId={}", agentId, task.getId(), tenantId);
+
+        return RX.ok(toOpenApiTaskDTO(task, agentId));
+    }
+
+    /**
+     * 轮询 Agent 任务状态
+     * <p>
+     * COMPLETED 时包含执行结果、耗时和费用信息。
+     */
+    @GetMapping("/agents/{agentId}/tasks/{taskId}")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<OpenApiTaskDTO> getTaskStatus(
+            @PathVariable String agentId,
+            @PathVariable String taskId) {
+        String tenantId = UserContext.getCurrentTenantId();
+        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+
+        A2aTask task = agent.getTask(taskId)
+                .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
+        return RX.ok(toOpenApiTaskDTO(task, agentId));
+    }
+
+    /**
+     * 取消 Agent 任务
+     */
+    @PostMapping("/agents/{agentId}/tasks/{taskId}/cancel")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<String> cancelTask(
+            @PathVariable String agentId,
+            @PathVariable String taskId) {
+        String tenantId = UserContext.getCurrentTenantId();
+        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+        agent.cancelTask(taskId);
+        return RX.ok("Task cancel requested");
+    }
+
+    /**
+     * 列出 Agent 的活跃任务（RUNNING + AWAITING_PERMISSION）
+     * <p>
+     * 第三方可定期调用此端点监控当前正在执行的任务。
+     */
+    @GetMapping("/agents/{agentId}/tasks")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<List<OpenApiTaskDTO>> listAgentTasks(@PathVariable String agentId) {
+        String tenantId = UserContext.getCurrentTenantId();
+
+        // 获取 Agent 实体以读取 userId
+        CodingAgentEntity agentEntity = agentProvider.getAgentEntityByTenant(agentId, tenantId)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+
+        List<TaskDTO> activeTasks = taskService.listActiveTasks(agentEntity.getUserId());
+        List<OpenApiTaskDTO> result = activeTasks.stream()
+                .map(dto -> OpenApiTaskDTO.builder()
+                        .taskId(dto.getTaskId())
+                        .agentId(agentId)
+                        .status(mapTaskStatus(dto.getStatus()))
+                        .contextId(dto.getContextId())
+                        .createdAt(dto.getCreatedAt())
+                        .build())
+                .toList();
+        return RX.ok(result);
+    }
+
+    // ===== 7. Worker 进程管理 =====
+
+    /**
+     * 列出 Worker 上的 CLI 进程（含孤儿检测标记）
+     * <p>
+     * 返回 Worker 上所有 Claude CLI 进程，并标注 Reconciler 识别的孤儿进程。
+     * 孤儿进程指 DB 任务已结束但 CLI 仍在运行的进程。
+     */
+    @SuppressWarnings("unchecked")
+    @GetMapping("/workers/{workerId}/processes")
+    @RequireAuth(roles = {"TENANT_ADMIN"})
+    public RX<Map<String, Object>> listWorkerProcesses(@PathVariable String workerId) {
+        ClaudeWorkerEntity worker = resolveWorkerByTenant(workerId);
+        ClaudeWorkerClient client = workerService.createClient(worker);
+        try {
+            Map<String, Object> result = client.listCliProcesses()
+                    .block(Duration.ofSeconds(10));
+            if (result != null) {
+                enrichWithOrphanInfo(workerId, result);
+            }
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to list CLI processes for worker {}: {}", workerId, e.getMessage());
+            return RX.failA("获取 CLI 进程列表失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 杀死 Worker 上的 CLI 进程
+     * <p>
+     * 支持 force=true（SIGKILL）和 force=false（SIGTERM）。
+     * 主要用于清理孤儿进程。
+     */
+    @PostMapping("/workers/{workerId}/processes/{pid}/kill")
+    @RequireAuth(roles = {"TENANT_ADMIN"})
+    public RX<Map<String, Object>> killWorkerProcess(
+            @PathVariable String workerId,
+            @PathVariable int pid,
+            @RequestBody(required = false) Map<String, Object> body) {
+        ClaudeWorkerEntity worker = resolveWorkerByTenant(workerId);
+        boolean force = false;
+        if (body != null && body.containsKey("force")) {
+            force = Boolean.TRUE.equals(body.get("force"));
+        }
+        ClaudeWorkerClient client = workerService.createClient(worker);
+        try {
+            Map<String, Object> result = client.killCliProcess(pid, force)
+                    .block(Duration.ofSeconds(10));
+            log.info("Open API killed CLI process: workerId={}, pid={}, force={}", workerId, pid, force);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.warn("Failed to kill CLI process {} for worker {}: {}", pid, workerId, e.getMessage());
+            return RX.failA("终止 CLI 进程失败: " + e.getMessage());
+        }
+    }
+
+    // ===== 内部工具方法 =====
+
+    /**
+     * 租户级 Worker 校验：Worker 必须属于当前租户
+     */
+    private ClaudeWorkerEntity resolveWorkerByTenant(String workerId) {
+        String tenantId = UserContext.getCurrentTenantId();
+        ClaudeWorkerEntity entity = workerRepository.findByWorkerId(workerId)
+                .orElseThrow(() -> RX.throwB("Worker not found: " + workerId));
+        if (!tenantId.equals(entity.getTenantId())) {
+            throw RX.throwB("Worker not found: " + workerId);
+        }
+        return entity;
+    }
+
+    /**
+     * 注入 Reconciler 的孤儿信息到进程列表
+     */
+    @SuppressWarnings("unchecked")
+    private void enrichWithOrphanInfo(String workerId, Map<String, Object> result) {
+        Object procObj = result.get("processes");
+        if (!(procObj instanceof List<?> rawList)) return;
+        for (Object item : rawList) {
+            if (!(item instanceof Map<?, ?> rawProc)) continue;
+            Map<String, Object> proc = (Map<String, Object>) rawProc;
+            Object pidObj = proc.get("pid");
+            if (pidObj == null) continue;
+            int pid = ((Number) pidObj).intValue();
+            Instant firstSeen = reconciler.getOrphanFirstSeen(workerId, pid);
+            if (firstSeen != null) {
+                proc.put("orphan_first_seen_at", firstSeen.toString());
+                proc.put("is_orphan", true);
+            }
+        }
+    }
+
+    /**
+     * 内部任务状态 → Open API 状态映射
+     */
+    private String mapTaskStatus(String internalStatus) {
+        if (internalStatus == null) return "UNKNOWN";
+        return switch (internalStatus) {
+            case "PENDING" -> "SUBMITTED";
+            case "RUNNING" -> "WORKING";
+            case "COMPLETED" -> "COMPLETED";
+            case "FAILED" -> "FAILED";
+            case "ABORTED" -> "CANCELED";
+            case "AWAITING_PERMISSION" -> "INPUT_REQUIRED";
+            default -> internalStatus;
+        };
+    }
+
+    /**
+     * A2aTask → OpenApiTaskDTO 转换（简化面向第三方的响应）
+     */
+    private OpenApiTaskDTO toOpenApiTaskDTO(A2aTask task, String agentId) {
+        OpenApiTaskDTO.OpenApiTaskDTOBuilder builder = OpenApiTaskDTO.builder()
+                .taskId(task.getId())
+                .agentId(agentId)
+                .contextId(task.getContextId());
+
+        if (task.getStatus() != null) {
+            builder.status(task.getStatus().getState().name());
+            if (task.getStatus().getState() == A2aTaskState.FAILED) {
+                builder.errorMessage(task.getStatus().getDescription());
+            }
+        }
+
+        // 提取 artifacts 中的结果文本
+        if (task.getArtifacts() != null) {
+            for (A2aArtifact artifact : task.getArtifacts()) {
+                if (artifact.getParts() != null) {
+                    for (A2aPart part : artifact.getParts()) {
+                        if ("text".equals(part.getType()) && part.getText() != null) {
+                            builder.result(part.getText());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 提取元信息
+        if (task.getMetadata() != null) {
+            Object durationMs = task.getMetadata().get("durationMs");
+            if (durationMs instanceof Number) {
+                builder.durationMs(((Number) durationMs).longValue());
+            }
+            Object costUsd = task.getMetadata().get("costUsd");
+            if (costUsd instanceof BigDecimal) {
+                builder.costUsd((BigDecimal) costUsd);
+            } else if (costUsd instanceof Number) {
+                builder.costUsd(BigDecimal.valueOf(((Number) costUsd).doubleValue()));
+            }
+        }
+
+        return builder.build();
     }
 }

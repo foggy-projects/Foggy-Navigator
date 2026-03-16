@@ -393,7 +393,21 @@
         <el-row :gutter="12">
           <el-col :span="12">
             <el-form-item label="模型名称" required>
-              <el-input v-model="llmForm.modelName" placeholder="如：qwen-max" />
+              <el-select
+                v-if="llmForm.workerBackend === 'CLAUDE_CODE'"
+                v-model="llmForm.modelName"
+                filterable
+                allow-create
+                default-first-option
+                placeholder="选择或输入模型名称"
+              >
+                <el-option value="opus[1m]" label="Opus 4.6 (1M context)" />
+                <el-option value="opus" label="Opus 4.6" />
+                <el-option value="sonnet[1m]" label="Sonnet 4.6 (1M context)" />
+                <el-option value="sonnet" label="Sonnet 4.6" />
+                <el-option value="haiku" label="Haiku" />
+              </el-select>
+              <el-input v-else v-model="llmForm.modelName" placeholder="如：qwen-max" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -402,6 +416,18 @@
             </el-form-item>
           </el-col>
         </el-row>
+        <el-form-item v-if="llmForm.workerBackend === 'CLAUDE_CODE'" label="可用模型">
+          <el-checkbox-group v-model="llmForm.availableModels">
+            <el-checkbox value="opus[1m]" label="Opus (1M)" />
+            <el-checkbox value="opus" label="Opus" />
+            <el-checkbox value="sonnet[1m]" label="Sonnet (1M)" />
+            <el-checkbox value="sonnet" label="Sonnet" />
+            <el-checkbox value="haiku" label="Haiku" />
+          </el-checkbox-group>
+          <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
+            勾选此 API Key 支持的模型，Workers 页面仅显示已勾选项；不勾选则不限制
+          </div>
+        </el-form-item>
         <el-form-item>
           <el-checkbox v-model="llmForm.isDefault">设为该类别的默认模型</el-checkbox>
         </el-form-item>
@@ -719,6 +745,7 @@ const llmForm = ref({
   allowedWorkerIds: [] as string[],
   envVars: [] as Array<{ key: string; value: string }>,
   workerBackend: undefined as import('@/types').WorkerBackend | undefined,
+  availableModels: [] as string[],
 })
 
 const llmPresets = [
@@ -731,7 +758,7 @@ function showLlmDialog(mode: 'add' | 'edit') {
   llmDialogMode.value = mode
   if (mode === 'add') {
     editingLlmId.value = ''
-    llmForm.value = { name: '', category: 'GENERAL', baseUrl: '', modelName: '', apiKey: '', isDefault: false, scope: 'GLOBAL', allowedWorkerIds: [], envVars: [], workerBackend: undefined }
+    llmForm.value = { name: '', category: 'GENERAL', baseUrl: '', modelName: '', apiKey: '', isDefault: false, scope: 'GLOBAL', allowedWorkerIds: [], envVars: [], workerBackend: undefined, availableModels: [] }
   }
   showLlmDialog_.value = true
 }
@@ -750,6 +777,7 @@ function applyPreset(preset: (typeof llmPresets)[number]) {
     allowedWorkerIds: [],
     envVars: [],
     workerBackend: undefined,
+    availableModels: [],
   }
   showLlmDialog_.value = true
 }
@@ -768,6 +796,7 @@ function editLlmModel(row: LlmModelConfig) {
     allowedWorkerIds: row.allowedWorkerIds ? [...row.allowedWorkerIds] : [],
     envVars: row.envVars ? Object.entries(row.envVars).map(([key, value]) => ({ key, value })) : [],
     workerBackend: row.workerBackend,
+    availableModels: row.availableModels ? [...row.availableModels] : [],
   }
   showLlmDialog_.value = true
 }
@@ -802,6 +831,9 @@ async function saveLlm() {
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : undefined,
         envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
         workerBackend: llmForm.value.category === 'CODING' ? llmForm.value.workerBackend : undefined,
+        availableModels: llmForm.value.workerBackend === 'CLAUDE_CODE' && llmForm.value.availableModels.length > 0
+          ? llmForm.value.availableModels
+          : undefined,
       })
     } else {
       const envVarsMap = Object.fromEntries(
@@ -817,6 +849,9 @@ async function saveLlm() {
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : [],
         envVars: envVarsMap,
         workerBackend: llmForm.value.category === 'CODING' ? (llmForm.value.workerBackend || null) : null,
+        availableModels: llmForm.value.workerBackend === 'CLAUDE_CODE' && llmForm.value.availableModels.length > 0
+          ? llmForm.value.availableModels
+          : null,
       }
       if (llmForm.value.apiKey) form.apiKey = llmForm.value.apiKey
       await apiUpdateLlm(editingLlmId.value, form)
