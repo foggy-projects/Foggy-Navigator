@@ -307,6 +307,15 @@ public class WorkerStreamRelay {
                     log.info("Worker stream completed: taskId={}, reconnectAttempt={}", taskId, reconnectAttempt);
                     activeStreams.remove(taskId);
 
+                    // Fast path: if lastAckedSeq was already cleaned up by relayEvent(result),
+                    // the task completed successfully — skip reconnect without DB query.
+                    // This avoids a race condition where the JPA transaction from completeTask()
+                    // hasn't committed yet when we check the DB status below.
+                    if (!lastAckedSeq.containsKey(taskId)) {
+                        log.info("Task {} seq tracker already cleaned (completed via result event), skipping reconnect", taskId);
+                        return;
+                    }
+
                     // Check if task is already in a terminal state — no need to reconnect
                     var taskOpt = taskRepository.findByTaskId(taskId);
                     if (taskOpt.isPresent()) {
@@ -332,6 +341,12 @@ public class WorkerStreamRelay {
                 .doOnError(e -> {
                     log.error("Worker stream error: taskId={}", taskId, e);
                     activeStreams.remove(taskId);
+
+                    // Fast path: task already completed via result event — no need to reconnect or fail
+                    if (!lastAckedSeq.containsKey(taskId)) {
+                        log.info("Task {} seq tracker already cleaned (completed via result event), skipping error handling", taskId);
+                        return;
+                    }
 
                     // 4xx client errors (e.g. 429 Too Many Requests) are not transient —
                     // reconnecting won't help, fail immediately with a clear message.
