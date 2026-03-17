@@ -2586,13 +2586,21 @@ watch(claudeModelOptions, (opts) => {
   }
 })
 
-// 切换 API Key 时，自动选中新 Key 可用模型列表中的第一个（默认）模型
+// 切换 API Key 时，自动选中新 Key 可用模型列表中的第一个（默认）模型，并持久化选择
 watch(platformModelConfigId, () => {
   if (suppressModelAutoSelect) return
   const opts = claudeModelOptions.value
   if (opts.length > 0) {
     taskForm.value.model = opts[0].value
   }
+  // 用户手动切换 API 时立即持久化（suppress 时是恢复缓存，不需要重复保存）
+  saveWorkerLlmSelection(selectedWorkerId.value)
+})
+
+// 用户手动切换模型时立即持久化
+watch(() => taskForm.value.model, () => {
+  if (suppressModelAutoSelect) return
+  saveWorkerLlmSelection(selectedWorkerId.value)
 })
 
 async function loadPlatformModelConfig() {
