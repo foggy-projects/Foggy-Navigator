@@ -248,6 +248,71 @@ public class OpenApiController {
         return RX.ok(null);
     }
 
+    /**
+     * 更新目录的自定义环境变量
+     * <p>
+     * 这些变量会在每次 Claude CLI 执行时注入到进程环境中，
+     * 适合注入上游系统 Token、API 地址等配置。
+     * 传入完整 Map 覆盖，传空 Map 清除。
+     */
+    @PutMapping("/directories/{directoryId}/env")
+    @RequireAuth(roles = {"TENANT_ADMIN"})
+    public RX<Map<String, String>> updateDirectoryEnvVars(
+            @PathVariable String directoryId,
+            @RequestBody Map<String, String> envVars) {
+        String tenantId = UserContext.getCurrentTenantId();
+        var entity = directoryRepository.findByDirectoryId(directoryId)
+                .orElseThrow(() -> RX.throwB("Directory not found: " + directoryId));
+        if (!tenantId.equals(entity.getTenantId())) {
+            throw RX.throwB("Directory not found: " + directoryId);
+        }
+        try {
+            String json = (envVars == null || envVars.isEmpty()) ? null
+                    : new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(envVars);
+            entity.setCustomEnvVars(json);
+            directoryRepository.save(entity);
+            log.info("Updated customEnvVars for directory {}: {} keys", directoryId,
+                    envVars != null ? envVars.size() : 0);
+            return RX.ok(envVars);
+        } catch (Exception e) {
+            return RX.failA("Failed to update env vars: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 更新目录中的文件（覆盖写入）
+     * <p>
+     * 支持更新 CLAUDE.md、.claude/skills/ 等文件。
+     * 文件路径为相对于工作目录的相对路径。
+     */
+    @PutMapping("/directories/{directoryId}/files")
+    @RequireAuth(roles = {"TENANT_ADMIN"})
+    public RX<Map<String, Object>> updateDirectoryFiles(
+            @PathVariable String directoryId,
+            @RequestBody Map<String, String> files) {
+        String tenantId = UserContext.getCurrentTenantId();
+        var entity = directoryRepository.findByDirectoryId(directoryId)
+                .orElseThrow(() -> RX.throwB("Directory not found: " + directoryId));
+        if (!tenantId.equals(entity.getTenantId())) {
+            throw RX.throwB("Directory not found: " + directoryId);
+        }
+        if (files == null || files.isEmpty()) {
+            return RX.failB("files is required");
+        }
+        try {
+            ClaudeWorkerEntity worker = workerRepository.findByWorkerId(entity.getWorkerId())
+                    .orElseThrow(() -> RX.throwB("Worker not found: " + entity.getWorkerId()));
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            Map<String, Object> result = client.initDirectory(entity.getPath(), files)
+                    .block(Duration.ofSeconds(30));
+            log.info("Updated {} files in directory {}", files.size(), directoryId);
+            return RX.ok(result);
+        } catch (Exception e) {
+            log.error("Failed to update files in directory {}: {}", directoryId, e.getMessage(), e);
+            return RX.failA("Failed to update files: " + e.getMessage());
+        }
+    }
+
     // ===== 4. 员工 Provisioning =====
 
     @PostMapping("/provision/employee")

@@ -395,14 +395,33 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             return null;
         }
         WorkingDirectoryEntity dir = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId).orElse(null);
-        if (dir == null || dir.getDefaultModelConfigId() == null) {
+        if (dir == null) {
             return null;
         }
-        LlmModelConfigDTO config = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
-        if (config == null || config.getEnvVars() == null || config.getEnvVars().isEmpty()) {
-            return null;
+
+        Map<String, String> merged = new LinkedHashMap<>();
+
+        // 1. LLM 模型配置上的环境变量
+        if (dir.getDefaultModelConfigId() != null) {
+            LlmModelConfigDTO config = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
+            if (config != null && config.getEnvVars() != null) {
+                merged.putAll(config.getEnvVars());
+            }
         }
-        return config.getEnvVars();
+
+        // 2. 目录级自定义环境变量（优先级更高，覆盖 LLM 配置的同名变量）
+        if (dir.getCustomEnvVars() != null && !dir.getCustomEnvVars().isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, String> custom = objectMapper.readValue(dir.getCustomEnvVars(),
+                        objectMapper.getTypeFactory().constructMapType(Map.class, String.class, String.class));
+                merged.putAll(custom);
+            } catch (Exception e) {
+                log.warn("Failed to parse customEnvVars for directory {}: {}", directoryId, e.getMessage());
+            }
+        }
+
+        return merged.isEmpty() ? null : merged;
     }
 
     @Override

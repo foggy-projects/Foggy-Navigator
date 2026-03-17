@@ -90,6 +90,10 @@ public class WorkingDirectoryEntity {
     @Column(length = 64)
     private String defaultModelConfigId;
 
+    /** 自定义环境变量（JSON Map，注入到 CLI 进程） */
+    @Column(columnDefinition = "TEXT")
+    private String customEnvVars;
+
     private LocalDateTime lastSyncedAt;
 
     @Column(nullable = false, updatable = false)

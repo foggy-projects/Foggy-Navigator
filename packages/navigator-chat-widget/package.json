@@ -1,0 +1,36 @@
+{
+  "name": "@foggy/navigator-chat-widget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/navigator-chat-widget.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/navigator-chat-widget.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./style.css": "./dist/navigator-chat-widget.css"
+  },
+  "scripts": {
+    "build": "vite build && vue-tsc --emitDeclarationOnly --declaration --outDir dist",
+    "dev": "vite build --watch"
+  },
+  "peerDependencies": {
+    "@element-plus/icons-vue": "^2.3.0",
+    "element-plus": "^2.13.0",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "element-plus": "^2.13.1",
+    "typescript": "~5.9.3",
+    "vite": "^7.2.4",
+    "vue": "^3.5.24",
+    "vue-tsc": "^3.1.4"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0"
+  }
+}
