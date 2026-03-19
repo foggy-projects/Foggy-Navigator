@@ -362,12 +362,57 @@ function detectAtTrigger(text: string, cursor: number) {
   }
 }
 
+/**
+ * Detect / trigger at any position in text (cursor-position-based).
+ * The / must appear at the start of text or after whitespace.
+ * The text between / and cursor must not contain whitespace.
+ */
+function detectSlashTrigger(text: string, cursor: number) {
+  // Don't trigger in sub-phase
+  if (phase.value === 'sub') return
+
+  const before = text.slice(0, cursor)
+  let triggerIdx = -1
+  let searchFrom = before.length
+  while (searchFrom > 0) {
+    const idx = before.lastIndexOf('/', searchFrom - 1)
+    if (idx === -1) break
+    searchFrom = idx // continue searching further left next iteration
+    // Check no whitespace between '/' and cursor
+    const queryPart = before.slice(idx + 1)
+    if (/\s/.test(queryPart)) continue
+    // '/' must be at start of text or preceded by whitespace
+    if (idx > 0 && !/\s/.test(before[idx - 1])) continue
+    triggerIdx = idx
+    break
+  }
+
+  if (triggerIdx >= 0) {
+    const query = before.slice(triggerIdx + 1)
+    slashQuery.value = query
+    slashTriggerPos.value = triggerIdx
+    slashCursorPos.value = cursor
+    if (!showPanel.value) {
+      showPanel.value = true
+      activeIndex.value = 0
+      nextTick(updatePanelPosition)
+    }
+    // Close other panels
+    closeAtPanel()
+    closeFilePanel()
+  } else {
+    if (showPanel.value && phase.value === 'main') closePanel()
+  }
+}
+
 const showPanel = ref(false)
 const phase = ref<'main' | 'sub'>('main')
 const activeIndex = ref(0)
 const activeCommand = ref<BuiltInCommand | null>(null)
 const slashQuery = ref('')
 const subQuery = ref('')
+const slashTriggerPos = ref(0) // position of '/' within the text
+const slashCursorPos = ref(0) // cursor position when trigger was detected
 
 // Panel positioning (computed from input wrapper's bounding rect)
 const panelStyle = ref<Record<string, string>>({})
@@ -461,23 +506,6 @@ function openPanel() {
   nextTick(updatePanelPosition)
 }
 
-// Watch text changes to detect slash prefix
-// NOTE: @mention detection is now handled in handleInput() via detectAtTrigger()
-watch(
-  () => props.modelValue,
-  (val) => {
-    if (phase.value === 'sub') return // don't re-enter main when in sub-phase
-
-    if (val.startsWith('/')) {
-      const query = val.slice(1)
-      slashQuery.value = query
-      openPanel()
-    } else {
-      closePanel()
-    }
-  },
-)
-
 function handleInput(val: string) {
   if (phase.value === 'sub') {
     // In sub-phase, extract the sub-query part after the command name
@@ -488,21 +516,26 @@ function handleInput(val: string) {
   }
   emit('update:modelValue', val)
 
-  // Cursor-based trigger detection for @ mentions and ./ file paths
+  // Cursor-based trigger detection for @ mentions, ./ file paths, and / slash commands
   nextTick(() => {
     const textarea = getTextareaEl()
     if (textarea) {
       detectAtTrigger(val, textarea.selectionStart)
       if (props.directoryId) detectFileTrigger(val, textarea.selectionStart)
+      detectSlashTrigger(val, textarea.selectionStart)
     }
   })
 }
 
 function handleFocus() {
-  // Re-check if panel should be shown on focus (e.g., after clicking back into input)
-  if (props.modelValue.startsWith('/') && !showPanel.value && phase.value === 'main') {
-    slashQuery.value = props.modelValue.slice(1)
-    openPanel()
+  // Re-check triggers on focus (e.g., after clicking back into input)
+  const textarea = getTextareaEl()
+  if (textarea) {
+    const val = props.modelValue
+    const cursor = textarea.selectionStart
+    detectAtTrigger(val, cursor)
+    detectSlashTrigger(val, cursor)
+    if (props.directoryId) detectFileTrigger(val, cursor)
   }
 }
 
@@ -767,13 +800,25 @@ function selectItem(idx: number) {
   if (resolved.type === 'cmd') {
     const cmd = filteredCommands.value[resolved.index]
     if (!cmd) return
-    // Enter sub-phase
+    // Enter sub-phase - replace the /query part with /commandName
+    const text = props.modelValue
+    const replacement = '/' + cmd.name + ' '
+    const newText =
+      text.slice(0, slashTriggerPos.value) + replacement + text.slice(slashCursorPos.value)
+    const newCursor = slashTriggerPos.value + replacement.length
     activeCommand.value = cmd
     phase.value = 'sub'
     subQuery.value = ''
     activeIndex.value = 0
-    emit('update:modelValue', '/' + cmd.name + ' ')
-    nextTick(updatePanelPosition)
+    slashCursorPos.value = newCursor
+    emit('update:modelValue', newText)
+    nextTick(() => {
+      updatePanelPosition()
+      const textarea = getTextareaEl()
+      if (textarea) {
+        textarea.setSelectionRange(newCursor, newCursor)
+      }
+    })
   } else {
     // CLI bundled skill or directory skill — both use "name: " format;
     // Claude Code invokes skills via the Skill tool, not via "/" prefix.
@@ -782,9 +827,21 @@ function selectItem(idx: number) {
         ? filteredCliSkills.value[resolved.index]
         : filteredSkills.value[resolved.index]
     if (!item) return
-    emit('update:modelValue', item.name + ': ')
+    // Replace the /query part with skillName:
+    const text = props.modelValue
+    const replacement = item.name + ': '
+    const newText =
+      text.slice(0, slashTriggerPos.value) + replacement + text.slice(slashCursorPos.value)
+    const newCursor = slashTriggerPos.value + replacement.length
+    emit('update:modelValue', newText)
     closePanel()
-    focusInput()
+    nextTick(() => {
+      const textarea = getTextareaEl()
+      if (textarea) {
+        textarea.focus()
+        textarea.setSelectionRange(newCursor, newCursor)
+      }
+    })
   }
 }
 
