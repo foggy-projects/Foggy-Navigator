@@ -4895,6 +4895,15 @@ async function handlePaneSend(paneId: string, content: string) {
     paneAgentContext.value.delete(paneId)
   }
 
+  // Capture image URLs before API call (input is already cleared by the child component)
+  const chatImages = attachments.value
+    .filter(a => a.isImage && a.previewUrl)
+    .map(a => ({ name: a.name, url: a.previewUrl }))
+
+  // Optimistically add user message to chat BEFORE API call,
+  // so the message is preserved even if the server is unavailable
+  pane.chatState.addUserMessage(content, undefined, chatImages.length > 0 ? chatImages : undefined)
+
   try {
     const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
       workerId: selectedWorkerId.value,
@@ -4932,22 +4941,19 @@ async function handlePaneSend(paneId: string, content: string) {
       )
     }
     const newTask = await workerState.resumeTask(resumeForm)
-    // Capture image URLs before clearing (for display in chat)
-    const chatImages = attachments.value
-      .filter(a => a.isImage && a.previewUrl)
-      .map(a => ({ name: a.name, url: a.previewUrl }))
     // Don't revoke blob URLs that will be displayed in chat messages
     const preserveUrls = new Set(chatImages.map(ci => ci.url))
     clearAttachments(preserveUrls)
 
-    pane.resumeInPlace(newTask, chatImages.length > 0 ? chatImages : undefined)
+    // Resume SSE without re-adding user message (already added above)
+    pane.resumeInPlaceNoMessage(newTask)
 
     reloadWorkerTasks()
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
     }
   } catch {
-    ElMessage.error('发送失败')
+    ElMessage.error('发送失败，消息已保留')
   }
 }
 

@@ -29,6 +29,8 @@ export interface TaskPaneState {
   loadAllHistory(limit?: number): Promise<void>
   /** Resume in-place: keep messages, update task, reconnect SSE */
   resumeInPlace(newTask: ClaudeTask, images?: Array<{ name: string; url: string }>): void
+  /** Resume in-place without adding user message (caller already added it) */
+  resumeInPlaceNoMessage(newTask: ClaudeTask): void
   /** Reconnect SSE only (no message clear/reload). Used by workspace suspend/resume. */
   reconnectSse(): void
   /** Pull latest task status from backend (idempotent, skips terminal states) */
@@ -444,6 +446,22 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     attachTaskUpdateListener()
   }
 
+  /** Resume in the same pane — user message already added by caller */
+  function resumeInPlaceNoMessage(newTask: ClaudeTask) {
+    task.value = newTask
+
+    // Unsubscribe old SSE (without clearing messages)
+    if (unsubscribeSse) {
+      unsubscribeSse()
+      unsubscribeSse = null
+    }
+    chatState.setConnectionStatus('connecting')
+
+    // Subscribe to the same sessionId (no history reload)
+    createSseSubscription(newTask.sessionId)
+    attachTaskUpdateListener()
+  }
+
   /** Reconnect SSE only — no message clear/reload. Used by workspace suspend/resume. */
   function reconnectSse() {
     if (unsubscribeSse) return // already subscribed
@@ -482,6 +500,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     loadMoreHistory,
     loadAllHistory,
     resumeInPlace,
+    resumeInPlaceNoMessage,
     reconnectSse,
     syncTaskStatus,
     disconnect,
