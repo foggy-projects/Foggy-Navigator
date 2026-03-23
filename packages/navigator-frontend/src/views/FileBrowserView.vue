@@ -30,6 +30,9 @@
               @touchstart.passive="handleTouchStart($event, data)"
               @touchend="handleTouchEnd($event)"
               @touchmove.passive="handleTouchMove"
+              @pointerdown="handlePointerDown($event, data)"
+              @pointerup="handlePointerUp($event)"
+              @pointermove="handlePointerMove($event)"
             >
               <span class="tree-icon">{{ data.isDir ? '📁' : '📄' }}</span>
               <span class="tree-label">{{ data.label }}</span>
@@ -497,6 +500,43 @@ function handleTouchMove() {
   if (longPressTimer) {
     clearTimeout(longPressTimer)
     longPressTimer = null
+  }
+}
+
+// ---- Pointer events for Apple Pencil / stylus long-press ----------------------
+// Apple Pencil fires pointer events with pointerType === 'pen', which do NOT
+// reliably trigger touchstart. We handle pen long-press separately here.
+let penLongPressTimer: ReturnType<typeof setTimeout> | null = null
+let penLongPressTriggered = false
+
+function handlePointerDown(e: PointerEvent, data: TreeNode) {
+  if (e.pointerType !== 'pen') return // only handle stylus; touch/mouse handled elsewhere
+  penLongPressTriggered = false
+  const px = e.clientX
+  const py = e.clientY
+  penLongPressTimer = setTimeout(() => {
+    penLongPressTriggered = true
+    showContextMenuAt(px, py, data)
+  }, LONG_PRESS_DURATION)
+}
+
+function handlePointerUp(e: PointerEvent) {
+  if (e.pointerType !== 'pen') return
+  if (penLongPressTimer) {
+    clearTimeout(penLongPressTimer)
+    penLongPressTimer = null
+  }
+  if (penLongPressTriggered) {
+    e.preventDefault()
+    penLongPressTriggered = false
+  }
+}
+
+function handlePointerMove(e: PointerEvent) {
+  if (e.pointerType !== 'pen') return
+  if (penLongPressTimer) {
+    clearTimeout(penLongPressTimer)
+    penLongPressTimer = null
   }
 }
 
