@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import mimetypes
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -16,6 +17,15 @@ class ImageAttachment(BaseModel):
     name: str = Field(..., description="File name (e.g. screenshot-1.png, document.pdf)")
     data: str = Field(..., description="Base64-encoded file data")
     mime_type: str = Field("application/octet-stream", description="MIME type (e.g. image/webp, text/plain, application/pdf)")
+
+    @model_validator(mode="after")
+    def _infer_mime_type_from_name(self) -> "ImageAttachment":
+        """Infer a better default MIME type from the attachment filename."""
+        if self.mime_type == "application/octet-stream":
+            guessed, _ = mimetypes.guess_type(self.name)
+            if guessed:
+                self.mime_type = guessed
+        return self
 
 
 class QueryRequest(BaseModel):

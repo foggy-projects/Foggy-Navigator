@@ -15,6 +15,7 @@ from agent_worker.marketplace.settings_manager import (
     write_settings,
 )
 from agent_worker.marketplace.config import MARKETPLACE_KEY
+from agent_worker.marketplace import setup_marketplace
 
 
 # ---------------------------------------------------------------------------
@@ -148,3 +149,29 @@ class TestConfigureMarketplace:
         settings = {}
         result = configure_marketplace(settings, "https://url.git")
         assert result is settings
+
+
+class TestSetupMarketplace:
+    """Async marketplace setup should offload settings writes."""
+
+    @pytest.mark.asyncio
+    async def test_setup_marketplace_uses_to_thread_for_write(self):
+        to_thread_calls: list[tuple] = []
+        mock_write_settings = lambda settings: None
+
+        async def fake_to_thread(func, *args, **kwargs):
+            to_thread_calls.append((func, args, kwargs))
+            return func(*args, **kwargs)
+
+        with (
+            patch("agent_worker.marketplace.settings.marketplace_enabled", True),
+            patch("agent_worker.marketplace.read_settings", return_value={}),
+            patch("agent_worker.marketplace.write_settings", mock_write_settings),
+            patch("agent_worker.marketplace.check_repo_access", return_value=(True, "")),
+            patch("agent_worker.marketplace.asyncio.to_thread", side_effect=fake_to_thread),
+        ):
+            result = await setup_marketplace()
+
+        assert result is True
+        assert len(to_thread_calls) == 1
+        assert to_thread_calls[0][0] is mock_write_settings

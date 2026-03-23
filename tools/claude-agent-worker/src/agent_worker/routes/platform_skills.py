@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Dict
@@ -20,6 +21,13 @@ class DeploySkillsRequest(BaseModel):
     skills: Dict[str, str]  # skill_name -> SKILL.md content
 
 
+def _write_skill_file(skills_dir: Path, name: str, content: str) -> None:
+    """Write one platform skill to disk."""
+    target_dir = skills_dir / name
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+
 @router.post("/platform-skills/deploy")
 async def deploy_skills(request: DeploySkillsRequest):
     """Receive skill content pushed from Navigator and write to ~/.claude/skills/<name>/SKILL.md."""
@@ -28,11 +36,9 @@ async def deploy_skills(request: DeploySkillsRequest):
 
     for name, content in request.skills.items():
         try:
-            target_dir = skills_dir / name
-            target_dir.mkdir(parents=True, exist_ok=True)
-            (target_dir / "SKILL.md").write_text(content, encoding="utf-8")
+            await asyncio.to_thread(_write_skill_file, skills_dir, name, content)
             deployed.append(name)
-            logger.info("Deployed platform skill via API: %s -> %s", name, target_dir)
+            logger.info("Deployed platform skill via API: %s -> %s", name, skills_dir / name)
         except Exception:
             logger.warning("Failed to deploy skill: %s", name, exc_info=True)
 
