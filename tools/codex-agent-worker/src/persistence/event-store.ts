@@ -22,6 +22,7 @@ export class EventBroadcast {
   private closed: boolean = false
   private subscribers: Set<(event: WorkerEvent) => void> = new Set()
   private jsonlPath: string
+  private pendingWrite: Promise<void> = Promise.resolve()
 
   constructor(taskId: string) {
     this.taskId = taskId
@@ -48,12 +49,15 @@ export class EventBroadcast {
 
     this.events.push(event)
 
-    // Persist to JSONL
-    try {
-      fs.appendFileSync(this.jsonlPath, JSON.stringify(event) + '\n')
-    } catch (e) {
-      console.warn(`Failed to persist event for task ${this.taskId}:`, e)
-    }
+    this.pendingWrite = this.pendingWrite
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await fs.promises.appendFile(this.jsonlPath, JSON.stringify(event) + '\n')
+        } catch (e) {
+          console.warn(`Failed to persist event for task ${this.taskId}:`, e)
+        }
+      })
 
     // Notify subscribers
     for (const subscriber of this.subscribers) {
@@ -110,6 +114,13 @@ export class EventBroadcast {
   }
 
   /**
+   * Wait until all queued writes are flushed to disk.
+   */
+  async flush(): Promise<void> {
+    await this.pendingWrite.catch(() => undefined)
+  }
+
+  /**
    * Check if broadcast is closed
    */
   isClosed(): boolean {
@@ -134,12 +145,16 @@ export class EventBroadcast {
    * Cleanup persisted events
    */
   cleanup(): void {
-    try {
-      if (fs.existsSync(this.jsonlPath)) {
-        fs.unlinkSync(this.jsonlPath)
-      }
-    } catch (e) {
-      console.warn(`Failed to cleanup events for task ${this.taskId}:`, e)
-    }
+    void this.pendingWrite
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          if (fs.existsSync(this.jsonlPath)) {
+            await fs.promises.unlink(this.jsonlPath)
+          }
+        } catch (e) {
+          console.warn(`Failed to cleanup events for task ${this.taskId}:`, e)
+        }
+      })
   }
 }

@@ -5,13 +5,23 @@ import type { WorkerEvent } from '../models.js'
 
 const router = Router()
 
+function getSingleParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] || ''
+  return value || ''
+}
+
+function getSingleQuery(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0]
+  return value
+}
+
 /**
  * GET /api/v1/tasks/:taskId/subscribe — Reconnect to existing task's SSE stream
  * Supports ESN-based replay via ?ack_seq=N
  */
 router.get('/api/v1/tasks/:taskId/subscribe', (req: Request, res: Response) => {
-  const { taskId } = req.params
-  const ackSeq = parseInt(req.query.ack_seq as string) || 0
+  const taskId = getSingleParam(req.params.taskId)
+  const ackSeq = parseInt(getSingleQuery(req.query.ack_seq as string | string[] | undefined) || '', 10) || 0
 
   const broadcast = taskBroadcasts.get(taskId)
   if (!broadcast) {
@@ -103,7 +113,7 @@ router.get('/api/v1/tasks/:taskId/subscribe', (req: Request, res: Response) => {
  * GET /api/v1/tasks/:taskId/status — Get task status
  */
 router.get('/api/v1/tasks/:taskId/status', (req: Request, res: Response) => {
-  const { taskId } = req.params
+  const taskId = getSingleParam(req.params.taskId)
   const entry = getTaskStatus(taskId)
 
   if (!entry) {
@@ -125,7 +135,7 @@ router.get('/api/v1/tasks/:taskId/status', (req: Request, res: Response) => {
  * POST /api/v1/tasks/:taskId/abort — Abort a running task
  */
 router.post('/api/v1/tasks/:taskId/abort', (req: Request, res: Response) => {
-  const { taskId } = req.params
+  const taskId = getSingleParam(req.params.taskId)
   const success = abortTask(taskId)
 
   if (!success) {

@@ -45,6 +45,8 @@ export interface HealthResponse {
   worker_name: string
   active_tasks: number
   codex_sdk_available: boolean
+  codex_auth_configured?: boolean
+  codex_auth_mode?: 'api_key' | 'codex_login' | 'none'
 }
 
 /**

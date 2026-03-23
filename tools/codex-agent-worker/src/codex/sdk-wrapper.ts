@@ -1,5 +1,5 @@
 import { Codex } from '@openai/codex-sdk'
-import type { CodexOptions, ThreadOptions, ModelReasoningEffort, ThreadEvent, ThreadItem } from '@openai/codex-sdk'
+import type { CodexOptions, ThreadOptions, ModelReasoningEffort, ThreadItem } from '@openai/codex-sdk'
 import { config } from '../config.js'
 import type { TaskEntry, WorkerEvent } from '../models.js'
 import { createResultEvent, createErrorEvent } from './event-mapper.js'
@@ -23,7 +23,7 @@ export const taskBroadcasts = new Map<string, EventBroadcast>()
  * SDK ModelReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh"
  * 前端传 "extra-high" → 映射为 "xhigh"
  */
-function parseModelString(rawModel: string): { model: string; reasoningLevel?: ModelReasoningEffort } {
+export function parseModelString(rawModel: string): { model: string; reasoningLevel?: ModelReasoningEffort } {
   const colonIdx = rawModel.indexOf(':')
   if (colonIdx <= 0) return { model: rawModel }
 
@@ -40,10 +40,56 @@ function parseModelString(rawModel: string): { model: string; reasoningLevel?: M
   return { model }
 }
 
+export function shouldAbortBeforeTurnStart(completedTurns: number, maxTurns: number | undefined): boolean {
+  return maxTurns !== undefined && completedTurns >= maxTurns
+}
+
+function createEventWithSeq(
+  broadcast: EventBroadcast,
+  event: Omit<WorkerEvent, 'seq'>
+): WorkerEvent {
+  return {
+    ...event,
+    seq: broadcast.nextSeq(),
+  }
+}
+
+function emitWorkerEvent(
+  broadcast: EventBroadcast,
+  event: Omit<WorkerEvent, 'seq'>
+): WorkerEvent {
+  const eventWithSeq = createEventWithSeq(broadcast, event)
+  broadcast.emit(eventWithSeq)
+  return eventWithSeq
+}
+
+function createToolUseEvent(
+  taskId: string,
+  threadId: string | undefined,
+  tool: string,
+  input: Record<string, unknown> | undefined,
+  toolUseId: string
+): Omit<WorkerEvent, 'seq'> {
+  return {
+    type: 'tool_use',
+    task_id: taskId,
+    session_id: threadId,
+    tool,
+    input,
+    tool_use_id: toolUseId,
+  }
+}
+
 /**
  * 将 Codex SDK ThreadItem 映射为 WorkerEvent
  */
-function mapThreadItemToEvents(taskId: string, item: ThreadItem, threadId: string | undefined, seq: number): WorkerEvent[] {
+export function mapThreadItemToEvents(
+  taskId: string,
+  item: ThreadItem,
+  threadId: string | undefined,
+  nextSeq: () => number,
+  startedToolUses: ReadonlySet<string> = new Set()
+): WorkerEvent[] {
   const events: WorkerEvent[] = []
 
   switch (item.type) {
@@ -54,22 +100,18 @@ function mapThreadItemToEvents(taskId: string, item: ThreadItem, threadId: strin
           task_id: taskId,
           session_id: threadId,
           content: item.text,
-          seq,
+          seq: nextSeq(),
         })
       }
       break
 
     case 'command_execution':
-      // 命令开始
-      events.push({
-        type: 'tool_use',
-        task_id: taskId,
-        session_id: threadId,
-        tool: 'command_execution',
-        input: { command: item.command },
-        tool_use_id: item.id,
-        seq,
-      })
+      if (!startedToolUses.has(item.id)) {
+        events.push({
+          ...createToolUseEvent(taskId, threadId, 'command_execution', { command: item.command }, item.id),
+          seq: nextSeq(),
+        })
+      }
       // 如果已完成，输出结果
       if (item.status === 'completed' || item.status === 'failed') {
         events.push({
@@ -80,7 +122,7 @@ function mapThreadItemToEvents(taskId: string, item: ThreadItem, threadId: strin
           output: item.aggregated_output || '',
           tool_use_id: item.id,
           is_error: item.status === 'failed',
-          seq: seq + 1,
+          seq: nextSeq(),
         })
       }
       break
@@ -93,20 +135,23 @@ function mapThreadItemToEvents(taskId: string, item: ThreadItem, threadId: strin
         tool: 'file_change',
         input: { changes: item.changes },
         tool_use_id: item.id,
-        seq,
+        seq: nextSeq(),
       })
       break
 
     case 'mcp_tool_call':
-      events.push({
-        type: 'tool_use',
-        task_id: taskId,
-        session_id: threadId,
-        tool: `${item.server}:${item.tool}`,
-        input: item.arguments as Record<string, unknown>,
-        tool_use_id: item.id,
-        seq,
-      })
+      if (!startedToolUses.has(item.id)) {
+        events.push({
+          ...createToolUseEvent(
+            taskId,
+            threadId,
+            `${item.server}:${item.tool}`,
+            item.arguments as Record<string, unknown>,
+            item.id
+          ),
+          seq: nextSeq(),
+        })
+      }
       if (item.status === 'completed' || item.status === 'failed') {
         events.push({
           type: 'tool_result',
@@ -116,7 +161,7 @@ function mapThreadItemToEvents(taskId: string, item: ThreadItem, threadId: strin
           output: item.result ? JSON.stringify(item.result) : (item.error?.message || ''),
           tool_use_id: item.id,
           is_error: item.status === 'failed',
-          seq: seq + 1,
+          seq: nextSeq(),
         })
       }
       break
@@ -130,7 +175,7 @@ function mapThreadItemToEvents(taskId: string, item: ThreadItem, threadId: strin
           session_id: threadId,
           content: item.text,
           subtype: 'reasoning',
-          seq,
+          seq: nextSeq(),
         })
       }
       break
@@ -141,7 +186,7 @@ function mapThreadItemToEvents(taskId: string, item: ThreadItem, threadId: strin
         task_id: taskId,
         session_id: threadId,
         error: item.message,
-        seq,
+        seq: nextSeq(),
       })
       break
   }
@@ -186,6 +231,13 @@ export async function runQuery(
   let lastAssistantText = ''
   let totalUsage = { inputTokens: 0, outputTokens: 0 }
   let resolvedThreadId = threadId
+  let terminalEventSent = false
+  let terminalFailureMessage: string | undefined
+  let abortReason = 'Task aborted'
+  const startedToolUses = new Set<string>()
+  const maxTurnLimit = maxTurns !== undefined && Number.isInteger(maxTurns) && maxTurns > 0
+    ? maxTurns
+    : undefined
 
   // 解析 model:reasoning_level
   const rawModel = model || 'gpt-5.4-mini'
@@ -232,10 +284,21 @@ export async function runQuery(
           entry.threadId = resolvedThreadId
           break
 
+        case 'turn.started':
+          if (shouldAbortBeforeTurnStart(numTurns, maxTurnLimit)) {
+            abortReason = `Task aborted: max_turns limit reached (${maxTurnLimit})`
+            abortController.abort(abortReason)
+          }
+          break
+
         case 'item.completed': {
-          numTurns++
-          const seq = broadcast.nextSeq()
-          const workerEvents = mapThreadItemToEvents(taskId, event.item, resolvedThreadId, seq)
+          const workerEvents = mapThreadItemToEvents(
+            taskId,
+            event.item,
+            resolvedThreadId,
+            () => broadcast.nextSeq(),
+            startedToolUses
+          )
 
           for (const we of workerEvents) {
             if (we.type === 'assistant_text' && we.content && we.subtype !== 'reasoning') {
@@ -248,23 +311,32 @@ export async function runQuery(
 
         case 'item.started':
         case 'item.updated': {
-          // 对于命令执行，在 started/updated 时也发送事件以显示进度
-          if (event.item.type === 'command_execution' && event.type === 'item.started') {
-            const seq = broadcast.nextSeq()
-            broadcast.emit({
-              type: 'tool_use',
-              task_id: taskId,
-              session_id: resolvedThreadId,
-              tool: 'command_execution',
-              input: { command: event.item.command },
-              tool_use_id: event.item.id,
-              seq,
-            })
+          if (event.type === 'item.started') {
+            if (event.item.type === 'command_execution') {
+              startedToolUses.add(event.item.id)
+              emitWorkerEvent(
+                broadcast,
+                createToolUseEvent(taskId, resolvedThreadId, 'command_execution', { command: event.item.command }, event.item.id)
+              )
+            } else if (event.item.type === 'mcp_tool_call') {
+              startedToolUses.add(event.item.id)
+              emitWorkerEvent(
+                broadcast,
+                createToolUseEvent(
+                  taskId,
+                  resolvedThreadId,
+                  `${event.item.server}:${event.item.tool}`,
+                  event.item.arguments as Record<string, unknown>,
+                  event.item.id
+                )
+              )
+            }
           }
           break
         }
 
         case 'turn.completed':
+          numTurns++
           if (event.usage) {
             totalUsage.inputTokens += event.usage.input_tokens || 0
             totalUsage.outputTokens += event.usage.output_tokens || 0
@@ -272,17 +344,45 @@ export async function runQuery(
           break
 
         case 'turn.failed':
+          terminalFailureMessage = event.error.message
           broadcast.emit(createErrorEvent(
-            taskId, resolvedThreadId, event.error.message, broadcast.nextSeq()
+            taskId, resolvedThreadId, terminalFailureMessage, broadcast.nextSeq()
           ))
+          terminalEventSent = true
           break
 
         case 'error':
+          terminalFailureMessage = event.message
           broadcast.emit(createErrorEvent(
-            taskId, resolvedThreadId, event.message, broadcast.nextSeq()
+            taskId, resolvedThreadId, terminalFailureMessage, broadcast.nextSeq()
           ))
+          terminalEventSent = true
           break
       }
+
+      if (terminalFailureMessage || abortController.signal.aborted) {
+        break
+      }
+    }
+
+    if (terminalFailureMessage) {
+      entry.status = 'failed'
+      entry.completedAt = Date.now()
+      return
+    }
+
+    if (abortController.signal.aborted) {
+      entry.status = 'aborted'
+      entry.completedAt = Date.now()
+      if (!terminalEventSent) {
+        broadcast.emit(createErrorEvent(
+          taskId,
+          resolvedThreadId,
+          abortReason,
+          broadcast.nextSeq()
+        ))
+      }
+      return
     }
 
     // 发送结果事件
@@ -299,11 +399,20 @@ export async function runQuery(
   } catch (error: any) {
     if (abortController.signal.aborted) {
       entry.status = 'aborted'
+      if (!terminalEventSent) {
+        const reason = typeof abortController.signal.reason === 'string'
+          ? abortController.signal.reason
+          : abortReason
+        const abortEvent = createErrorEvent(taskId, resolvedThreadId, reason, broadcast.nextSeq())
+        broadcast.emit(abortEvent)
+      }
     } else {
       entry.status = 'failed'
       const errorMsg = error?.message || String(error)
-      const errorEvent = createErrorEvent(taskId, resolvedThreadId, errorMsg, broadcast.nextSeq())
-      broadcast.emit(errorEvent)
+      if (!terminalEventSent) {
+        const errorEvent = createErrorEvent(taskId, resolvedThreadId, errorMsg, broadcast.nextSeq())
+        broadcast.emit(errorEvent)
+      }
     }
     entry.completedAt = Date.now()
   } finally {
@@ -321,11 +430,6 @@ export function abortTask(taskId: string): boolean {
   entry.abortController?.abort()
   entry.status = 'aborted'
   entry.completedAt = Date.now()
-
-  const broadcast = taskBroadcasts.get(taskId)
-  if (broadcast) {
-    broadcast.close()
-  }
 
   return true
 }
@@ -348,6 +452,12 @@ export function cleanupOldTasks(): void {
 
   if (completed.length > MAX_COMPLETED) {
     for (const [id] of completed.slice(MAX_COMPLETED)) {
+      const broadcast = taskBroadcasts.get(id)
+      if (broadcast) {
+        broadcast.cleanup()
+      } else {
+        new EventBroadcast(id).cleanup()
+      }
       taskRegistry.delete(id)
       taskBroadcasts.delete(id)
     }
