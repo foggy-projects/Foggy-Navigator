@@ -14,11 +14,16 @@ import com.foggy.navigator.claude.worker.service.ConversationConfigService;
 import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
+import com.foggy.navigator.spi.codex.CodexWorkerFacade;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -37,11 +42,55 @@ public class ClaudeTaskController {
     private final ConversationConfigService configService;
     private final WorkerStreamRelay streamRelay;
 
+    @Autowired(required = false) @Nullable
+    private LlmModelManager llmModelManager;
+
+    @Autowired(required = false) @Nullable
+    private CodexWorkerFacade codexWorkerFacade;
+
     @PostMapping
-    public RX<TaskDTO> createTask(@RequestBody CreateTaskForm form) {
+    public RX<?> createTask(@RequestBody CreateTaskForm form) {
         String userId = UserContext.getCurrentUserId();
         String tenantId = UserContext.getCurrentTenantId();
+
+        // 路由分发：根据 modelConfigId 的 workerBackend 判断走 Claude 还是 Codex
+        if (isCodexBackend(form.getModelConfigId())) {
+            return RX.ok(createCodexTask(userId, tenantId, form));
+        }
+
         return RX.ok(taskService.createTask(userId, tenantId, form));
+    }
+
+    /**
+     * 判断 modelConfigId 对应的 workerBackend 是否为 OPENAI_CODEX
+     */
+    private boolean isCodexBackend(String modelConfigId) {
+        if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
+            return false;
+        }
+        return llmModelManager.getModelConfig(modelConfigId)
+                .map(config -> "OPENAI_CODEX".equals(config.getWorkerBackend()))
+                .orElse(false);
+    }
+
+    /**
+     * 将 Claude CreateTaskForm 转发到 Codex 任务创建
+     */
+    private Map<String, Object> createCodexTask(String userId, String tenantId, CreateTaskForm form) {
+        if (codexWorkerFacade == null) {
+            throw new IllegalStateException("Codex Worker module is not available");
+        }
+        log.info("Routing task to Codex Worker: workerId={}, model={}", form.getWorkerId(), form.getModel());
+        Map<String, Object> params = new HashMap<>();
+        params.put("workerId", form.getWorkerId());
+        params.put("prompt", form.getPrompt());
+        params.put("cwd", form.getCwd());
+        params.put("directoryId", form.getDirectoryId());
+        params.put("model", form.getModel());
+        params.put("tenantId", tenantId);
+        params.put("modelConfigId", form.getModelConfigId());
+        if (form.getMaxTurns() != null) params.put("maxTurns", form.getMaxTurns());
+        return codexWorkerFacade.createTask(userId, params);
     }
 
     @PostMapping("/resume")

@@ -6,7 +6,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
 # 读取端口
-$PORT = 3032
+$PORT = 3051
 if (Test-Path ".env") {
     $envContent = Get-Content ".env" | Where-Object { $_ -match "^CODEX_WORKER_PORT=" }
     if ($envContent) {
@@ -21,9 +21,9 @@ $pids = netstat -ano | Select-String ":$PORT\s" | ForEach-Object {
 } | Where-Object { $_ -ne "0" } | Sort-Object -Unique
 
 if ($pids) {
-    foreach ($pid in $pids) {
-        Write-Host "  Killing PID=$pid" -ForegroundColor Yellow
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+    foreach ($procId in $pids) {
+        Write-Host "  Killing PID=$procId" -ForegroundColor Yellow
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
     }
     Write-Host "Codex Worker stopped." -ForegroundColor Green
 } else {

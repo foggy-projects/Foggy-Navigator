@@ -2493,6 +2493,16 @@ const ALL_CLAUDE_MODELS = [
   { value: 'haiku', label: 'Haiku' },
 ]
 
+const ALL_CODEX_MODELS = [
+  { value: 'gpt-5.4:low', label: '5.4 Low' },
+  { value: 'gpt-5.4', label: '5.4 Medium' },
+  { value: 'gpt-5.4:high', label: '5.4 High' },
+  { value: 'gpt-5.4:extra-high', label: '5.4 Extra High' },
+  { value: 'gpt-5.4-mini', label: '5.4 Mini' },
+  { value: 'gpt-5.3-codex', label: '5.3 Codex' },
+  { value: 'gpt-5.3-codex-spark', label: 'Spark' },
+]
+
 const creatingTask = ref(false)
 const taskForm = ref({
   prompt: '',
@@ -2572,10 +2582,13 @@ function restoreWorkerLlmSelection(workerId: string | null): boolean {
 }
 
 // --- 根据平台模型配置过滤可用模型 ---
+const isCodexBackend = computed(() => platformModelConfig.value?.workerBackend === 'OPENAI_CODEX')
+
 const claudeModelOptions = computed(() => {
+  const allModels = isCodexBackend.value ? ALL_CODEX_MODELS : ALL_CLAUDE_MODELS
   const allowed = platformModelConfig.value?.availableModels
-  if (!allowed || allowed.length === 0) return ALL_CLAUDE_MODELS
-  return ALL_CLAUDE_MODELS.filter(opt => allowed.includes(opt.value))
+  if (!allowed || allowed.length === 0) return allModels
+  return allModels.filter(opt => allowed.includes(opt.value))
 })
 
 // 当可用模型列表变化时，若当前选中的模型不在列表中则自动回退到第一个
@@ -4895,6 +4908,15 @@ async function handlePaneSend(paneId: string, content: string) {
     paneAgentContext.value.delete(paneId)
   }
 
+  // Capture image URLs before API call (input is already cleared by the child component)
+  const chatImages = attachments.value
+    .filter(a => a.isImage && a.previewUrl)
+    .map(a => ({ name: a.name, url: a.previewUrl }))
+
+  // Optimistically add user message to chat BEFORE API call,
+  // so the message is preserved even if the server is unavailable
+  pane.chatState.addUserMessage(content, undefined, chatImages.length > 0 ? chatImages : undefined)
+
   try {
     const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
       workerId: selectedWorkerId.value,
@@ -4932,22 +4954,19 @@ async function handlePaneSend(paneId: string, content: string) {
       )
     }
     const newTask = await workerState.resumeTask(resumeForm)
-    // Capture image URLs before clearing (for display in chat)
-    const chatImages = attachments.value
-      .filter(a => a.isImage && a.previewUrl)
-      .map(a => ({ name: a.name, url: a.previewUrl }))
     // Don't revoke blob URLs that will be displayed in chat messages
     const preserveUrls = new Set(chatImages.map(ci => ci.url))
     clearAttachments(preserveUrls)
 
-    pane.resumeInPlace(newTask, chatImages.length > 0 ? chatImages : undefined)
+    // Resume SSE without re-adding user message (already added above)
+    pane.resumeInPlaceNoMessage(newTask)
 
     reloadWorkerTasks()
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
     }
   } catch {
-    ElMessage.error('发送失败')
+    ElMessage.error('发送失败，消息已保留')
   }
 }
 

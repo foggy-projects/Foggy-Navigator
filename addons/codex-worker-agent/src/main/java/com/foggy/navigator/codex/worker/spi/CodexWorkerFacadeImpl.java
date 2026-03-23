@@ -42,6 +42,10 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         form.setCwd((String) params.get("cwd"));
         form.setDirectoryId((String) params.get("directoryId"));
         form.setModel((String) params.get("model"));
+        form.setModelConfigId((String) params.get("modelConfigId"));
+        if (params.get("maxTurns") instanceof Number n) {
+            form.setMaxTurns(n.intValue());
+        }
         CodexTaskDTO dto = taskService.createTask(userId, (String) params.get("tenantId"), form);
         return taskToMap(dto);
     }

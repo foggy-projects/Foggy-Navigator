@@ -6,7 +6,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
 # 读取 .env 文件获取端口
-$PORT = 3032
+$PORT = 3051
 if (Test-Path ".env") {
     $envContent = Get-Content ".env" | Where-Object { $_ -match "^CODEX_WORKER_PORT=" }
     if ($envContent) {
@@ -26,9 +26,9 @@ $existingPids = netstat -ano | Select-String ":$PORT\s" | ForEach-Object {
 } | Where-Object { $_ -ne "0" } | Sort-Object -Unique
 
 if ($existingPids) {
-    foreach ($pid in $existingPids) {
-        Write-Host "  Killing existing process PID=$pid" -ForegroundColor Yellow
-        try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } catch {}
+    foreach ($procId in $existingPids) {
+        Write-Host "  Killing existing process PID=$procId" -ForegroundColor Yellow
+        try { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue } catch {}
     }
     Start-Sleep -Seconds 2
 }
@@ -57,7 +57,7 @@ Write-Host "`n[3/4] Starting Codex Worker..." -ForegroundColor Yellow
 $logFile = "logs/worker.log"
 $errFile = "logs/worker-error.log"
 
-$process = Start-Process -FilePath "npx" -ArgumentList "tsx", "src/index.ts" `
+$process = Start-Process -FilePath "npx.cmd" -ArgumentList "tsx", "src/index.ts" `
     -RedirectStandardOutput $logFile `
     -RedirectStandardError $errFile `
     -PassThru -NoNewWindow

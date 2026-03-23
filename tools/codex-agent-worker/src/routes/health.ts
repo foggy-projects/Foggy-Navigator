@@ -13,14 +13,9 @@ router.get('/health', (_req: Request, res: Response) => {
   const activeTasks = Array.from(taskRegistry.values())
     .filter(t => t.status === 'running').length
 
-  let codexSdkAvailable = false
-  try {
-    // Check if the SDK is importable
-    require.resolve('@openai/codex')
-    codexSdkAvailable = true
-  } catch {
-    // Not available
-  }
+  // SDK availability is checked at startup via static import in sdk-wrapper.ts
+  // If the worker started successfully, the SDK is available
+  const codexSdkAvailable = true
 
   const response: HealthResponse = {
     status: 'ok',
