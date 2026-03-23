@@ -1,7 +1,7 @@
 <template>
   <div class="file-browser">
     <!-- Left: File tree / Git changes -->
-    <aside class="file-sidebar">
+    <aside class="file-sidebar" ref="sidebarEl" :style="{ width: sidebarWidth + 'px' }">
       <div class="sidebar-tabs">
         <button :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">文件</button>
         <button :class="{ active: activeTab === 'git' }" @click="switchToGitTab">Git 改动</button>
@@ -36,6 +36,11 @@
             >
               <span class="tree-icon">{{ data.isDir ? '📁' : '📄' }}</span>
               <span class="tree-label">{{ data.label }}</span>
+              <span
+                v-if="isTouchDevice && selectedTreePath === data.fullPath"
+                class="tree-more-btn"
+                @click.stop="handleMoreBtn($event, data)"
+              >⋯</span>
             </span>
           </template>
         </el-tree-v2>
@@ -147,6 +152,12 @@
     </aside>
 
     <!-- Right: Editor area -->
+    <!-- Resize handle -->
+    <div
+      class="resize-handle"
+      @pointerdown="onResizeStart"
+    ></div>
+
     <main class="editor-area">
       <!-- Toolbar -->
       <div class="editor-toolbar">
@@ -258,6 +269,9 @@ import {
 } from '@/api/fileBrowser'
 import type { FileEntry, DiffFileEntry, GitLogEntry, CommitFileEntry } from '@/api/fileBrowser'
 import FileSearchDialog from '@/components/file-browser/FileSearchDialog.vue'
+import { useTouchDetect } from '@/composables/useTouchDetect'
+
+const { isTouchDevice } = useTouchDetect()
 
 // ---- Route params ---------------------------------------------------------
 const route = useRoute()
@@ -336,6 +350,7 @@ interface TreeNode {
 const treeData = ref<TreeNode[]>([])
 const treeRef = ref()
 const treeHeight = ref(600)
+const selectedTreePath = ref<string>('')  // track selected node for showing ⋯ btn
 const treeProps = {
   value: 'fullPath',
   label: 'label',
@@ -388,6 +403,7 @@ function normalizePath(p: string): string {
 }
 
 async function handleNodeClick(data: TreeNode) {
+  selectedTreePath.value = data.fullPath
   if (data.isDir) {
     // Capture current expansion state before any rebuild
     const expanded = new Set<string>(treeRef.value?.getExpandedKeys?.() as string[] || [])
@@ -449,6 +465,11 @@ const ctxMenu = ref<{ visible: boolean; x: number; y: number; node: TreeNode | n
 })
 
 function handleContextMenu(e: MouseEvent, data: TreeNode) {
+  showContextMenuAt(e.clientX, e.clientY, data)
+}
+
+function handleMoreBtn(e: MouseEvent, data: TreeNode) {
+  // "⋯" button on touch devices — show context menu at the button position
   showContextMenuAt(e.clientX, e.clientY, data)
 }
 
@@ -1106,6 +1127,31 @@ function formatSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+// ---- Resize sidebar -------------------------------------------------------
+const sidebarEl = ref<HTMLElement>()
+const sidebarWidth = ref(260)
+
+function onResizeStart(e: PointerEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startW = sidebarWidth.value
+  const el = e.currentTarget as HTMLElement
+  el.setPointerCapture(e.pointerId)
+
+  function onMove(ev: PointerEvent) {
+    const delta = ev.clientX - startX
+    sidebarWidth.value = Math.max(160, Math.min(startW + delta, window.innerWidth * 0.6))
+  }
+  function onUp() {
+    el.removeEventListener('pointermove', onMove)
+    el.removeEventListener('pointerup', onUp)
+    el.removeEventListener('pointercancel', onUp)
+  }
+  el.addEventListener('pointermove', onMove)
+  el.addEventListener('pointerup', onUp)
+  el.addEventListener('pointercancel', onUp)
+}
+
 // ---- Lifecycle ------------------------------------------------------------
 function updateTreeHeight() {
   treeHeight.value = window.innerHeight - 80
@@ -1213,12 +1259,26 @@ watch(() => route.query.directoryId, () => {
 
 /* ---- Sidebar ---- */
 .file-sidebar {
-  width: 260px;
-  min-width: 200px;
+  flex-shrink: 0;
+  min-width: 160px;
   border-right: 1px solid #333;
   display: flex;
   flex-direction: column;
   background: #252526;
+}
+
+.resize-handle {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  touch-action: none;       /* prevent scroll on touch/pen drag */
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  background: #007acc;
 }
 
 .sidebar-tabs {
@@ -1297,6 +1357,34 @@ watch(() => route.query.directoryId, () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+
+.tree-more-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  margin-left: auto;
+  margin-right: 4px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  color: #888;
+  font-size: 16px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+
+.tree-more-btn:hover {
+  background: #3c3c3c;
+  color: #fff;
+}
+
+.tree-more-btn:active {
+  background: #094771;
+  color: #fff;
 }
 
 /* ---- Git diff list ---- */
