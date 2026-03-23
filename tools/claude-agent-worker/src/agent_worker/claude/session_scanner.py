@@ -359,14 +359,17 @@ def count_session_messages(session_id: str) -> dict:
 
 
 def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
-    """Mark the target user turn and all subsequent lines as sidechain.
+    """Truncate a session JSONL at the target user turn.
 
-    After rewind, the JSONL contains:
-    - turns 1..X-1 (user + assistant): preserved
-    - turn X user message + everything after: marked ``isSidechain: true``
+    After rewind, the JSONL contains **only** turns 1..X-1 (everything
+    before the target user turn).  Lines from turn X onward are **removed**
+    (not marked as sidechain — Claude Code CLI does not support the
+    ``isSidechain: true`` flag and treats such files as invalid).
 
-    When the session is then resumed with the original prompt, Claude sees
-    only turns 1..X-1 plus the fresh user message — no duplicates.
+    A ``last-prompt`` entry is appended so the CLI can identify the
+    conversation when resuming with ``--resume``.
+
+    A backup of the original file is saved as ``{session_id}.jsonl.rewind-backup.bak``.
 
     Returns ``{"status": "rewound", "user_prompt": str, "turn_index": int}``
     on success, or ``{"status": "error", "message": str}`` on failure.
@@ -382,7 +385,7 @@ def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
     except OSError as exc:
         return {"status": "error", "message": f"Failed to read session: {exc}"}
 
-    # Find the target user turn line — cutoff starts AT this line (inclusive)
+    # ── First pass: find the target user turn ──────────────────────
     user_turn = 0
     cutoff_line = -1
     user_prompt = ""
@@ -413,65 +416,116 @@ def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
 
         user_turn += 1
         if user_turn == turn_index:
-            # Found the target turn — extract prompt and set cutoff AT this line
             content = msg_content
             if isinstance(content, str):
                 user_prompt = content
-            cutoff_line = i  # mark FROM this line (inclusive)
+            cutoff_line = i  # truncate FROM this line (inclusive)
             break
 
     if cutoff_line == -1:
         return {"status": "error", "message": f"Turn {turn_index} not found (only {user_turn} user turns)"}
 
-    # Second pass: rewrite lines after cutoff to add isSidechain: true
-    modified = False
-    new_lines: list[str] = []
+    # ── Build the truncated file ──────────────────────────────────
+    # Keep only lines before the cutoff that are NOT already sidechain.
+    kept_lines: list[str] = []
     for i, raw_line in enumerate(lines):
-        if i < cutoff_line:
-            new_lines.append(raw_line)
-            continue
-
+        if i >= cutoff_line:
+            break
         stripped = raw_line.strip()
         if not stripped:
-            new_lines.append(raw_line)
             continue
         try:
             obj = json.loads(stripped)
         except json.JSONDecodeError:
-            new_lines.append(raw_line)
+            kept_lines.append(raw_line)
             continue
+        # Drop any previously-sidechain lines that happen to appear
+        # before the cutoff (from earlier rewinds).
+        if obj.get("isSidechain") is True:
+            continue
+        kept_lines.append(raw_line)
 
-        if not obj.get("isSidechain"):
-            obj["isSidechain"] = True
-            modified = True
-            new_lines.append(json.dumps(obj, ensure_ascii=False) + "\n")
-        else:
-            new_lines.append(raw_line)
+    # When rewinding to the very first turn (cutoff_line == 0), no
+    # conversation lines remain — but that is valid: the caller will
+    # re-send the extracted user_prompt as a fresh message.  We still
+    # need a minimal file so the CLI can accept the session_id.
+    # Keep only initial metadata lines (queue-operation, file-history-snapshot, system)
+    # that appeared before the first conversation message.
+    if not kept_lines:
+        for raw_line in lines[:cutoff_line + 5]:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("type") in ("queue-operation", "file-history-snapshot", "system"):
+                kept_lines.append(raw_line)
+            elif obj.get("type") in ("user", "assistant"):
+                break  # stop at first conversation message
 
-    if not modified:
-        return {"status": "noop", "user_prompt": user_prompt, "turn_index": turn_index,
-                "message": "No messages to mark as sidechain"}
+    # Find the last real user prompt text for last-prompt entry
+    last_prompt_text = user_prompt
+    if not last_prompt_text:
+        for raw_line in reversed(kept_lines):
+            try:
+                obj = json.loads(raw_line.strip())
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if obj.get("type") != "user":
+                continue
+            msg = obj.get("message", {})
+            content = msg.get("content", "")
+            if isinstance(content, str) and content.strip():
+                last_prompt_text = content[:200]
+                break
 
-    # Write back atomically (write to temp file then rename)
+    # Remove any stale last-prompt entries, then append a fresh one.
+    final_lines: list[str] = []
+    for raw_line in kept_lines:
+        try:
+            obj = json.loads(raw_line.strip())
+        except (json.JSONDecodeError, ValueError):
+            final_lines.append(raw_line)
+            continue
+        if obj.get("type") == "last-prompt":
+            continue  # drop stale last-prompt
+        final_lines.append(raw_line)
+
+    final_lines.append(json.dumps({
+        "type": "last-prompt",
+        "lastPrompt": last_prompt_text or "",
+        "sessionId": session_id,
+    }, ensure_ascii=False) + "\n")
+
+    # ── Write back atomically ─────────────────────────────────────
+    # Save a backup (only if one doesn't already exist).
+    backup_path = filepath.with_suffix(".jsonl.rewind-backup.bak")
+    if not backup_path.exists():
+        try:
+            import shutil
+            shutil.copy2(filepath, backup_path)
+        except OSError as exc:
+            logger.warning("Failed to create rewind backup for %s: %s", session_id, exc)
+
     tmp_path = filepath.with_suffix(".jsonl.tmp")
     try:
         with open(tmp_path, "w", encoding="utf-8") as fh:
-            fh.writelines(new_lines)
+            fh.writelines(final_lines)
         tmp_path.replace(filepath)
     except OSError as exc:
-        # Clean up temp file on failure
         tmp_path.unlink(missing_ok=True)
         return {"status": "error", "message": f"Failed to write session file: {exc}"}
 
-    # Count how many lines were newly marked as sidechain
-    marked_count = sum(1 for line in new_lines[cutoff_line:]
-                       if line.strip() and '"isSidechain": true' in line)
+    removed_count = len(lines) - len(final_lines)
 
     logger.info(
-        "Rewound session %s to turn %d: cutoff_line=%d, total_lines=%d, "
-        "marked_as_sidechain=%d, user_prompt=%s",
+        "Rewound session %s to turn %d: cutoff_line=%d, original_lines=%d, "
+        "kept_lines=%d, removed=%d, user_prompt=%s",
         session_id, turn_index, cutoff_line, len(lines),
-        marked_count, repr(user_prompt[:80]) if user_prompt else None,
+        len(final_lines), removed_count,
+        repr(user_prompt[:80]) if user_prompt else None,
     )
 
     return {"status": "rewound", "user_prompt": user_prompt, "turn_index": turn_index}
