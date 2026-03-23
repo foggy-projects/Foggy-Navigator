@@ -452,6 +452,14 @@ function handleContextMenu(e: MouseEvent, data: TreeNode) {
   showContextMenuAt(e.clientX, e.clientY, data)
 }
 
+// Timestamp to prevent the "lift" click/touchstart from immediately closing a
+// long-press-triggered context menu.  When the menu is opened via long-press the
+// user's finger/pencil is still on the screen; lifting it fires click → document
+// closeContextMenu listener → menu disappears instantly.  We ignore close calls
+// within a short grace period after the menu was shown.
+let ctxMenuShownAt = 0
+const CTX_MENU_GRACE_MS = 350
+
 function showContextMenuAt(x: number, y: number, data: TreeNode) {
   // Ensure menu stays within viewport bounds (important for iPad / small screens)
   const menuWidth = 200
@@ -461,9 +469,12 @@ function showContextMenuAt(x: number, y: number, data: TreeNode) {
   const safeX = Math.min(x, vw - menuWidth)
   const safeY = Math.min(y, vh - menuHeight)
   ctxMenu.value = { visible: true, x: Math.max(0, safeX), y: Math.max(0, safeY), node: data }
+  ctxMenuShownAt = Date.now()
 }
 
 function closeContextMenu() {
+  // Ignore close if menu was just shown (prevents lift-after-long-press from closing it)
+  if (Date.now() - ctxMenuShownAt < CTX_MENU_GRACE_MS) return
   ctxMenu.value.visible = false
 }
 
