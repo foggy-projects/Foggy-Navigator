@@ -44,8 +44,9 @@ public class LlmModelConfigEntity {
 
     /**
      * API Base URL，如 https://dashscope.aliyuncs.com/compatible-mode/v1
+     * Codex 订阅模式下可为空
      */
-    @Column(length = 255, nullable = false)
+    @Column(length = 255)
     private String baseUrl;
 
     /**
@@ -56,8 +57,9 @@ public class LlmModelConfigEntity {
 
     /**
      * API Key（CredentialEncryptor 加密存储）
+     * Codex 订阅模式下可为空
      */
-    @Column(length = 512, nullable = false)
+    @Column(length = 512)
     private String apiKey;
 
     /**

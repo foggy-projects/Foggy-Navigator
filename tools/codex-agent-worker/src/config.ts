@@ -6,7 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') })
 
 export const config = {
-  port: parseInt(process.env.CODEX_WORKER_PORT || '3032', 10),
+  port: parseInt(process.env.CODEX_WORKER_PORT || '3051', 10),
   host: process.env.CODEX_WORKER_HOST || '0.0.0.0',
   workerName: process.env.CODEX_WORKER_NAME || 'codex-worker-default',
   openaiApiKey: process.env.OPENAI_API_KEY || '',

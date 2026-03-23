@@ -60,9 +60,11 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setTenantId(tenantId);
         entity.setName(form.getName());
         entity.setCategory(form.getCategory());
-        entity.setBaseUrl(form.getBaseUrl());
+        entity.setBaseUrl(form.getBaseUrl() != null && !form.getBaseUrl().isBlank()
+                ? form.getBaseUrl() : null);
         entity.setModelName(form.getModelName());
-        entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
+        entity.setApiKey(form.getApiKey() != null && !form.getApiKey().isBlank()
+                ? credentialEncryptor.encrypt(form.getApiKey()) : null);
         entity.setIsDefault(form.getIsDefault() != null ? form.getIsDefault() : false);
         entity.setScope(form.getScope() != null ? form.getScope() : ModelAccessScope.GLOBAL);
         entity.setWorkerBackend(form.getWorkerBackend());
@@ -101,9 +103,11 @@ public class LlmModelManagerImpl implements LlmModelManager {
 
         if (form.getName() != null) entity.setName(form.getName());
         if (form.getCategory() != null) entity.setCategory(form.getCategory());
-        if (form.getBaseUrl() != null) entity.setBaseUrl(form.getBaseUrl());
+        if (form.getBaseUrl() != null) {
+            entity.setBaseUrl(!form.getBaseUrl().isBlank() ? form.getBaseUrl() : null);
+        }
         if (form.getModelName() != null) entity.setModelName(form.getModelName());
-        if (form.getApiKey() != null) {
+        if (form.getApiKey() != null && !form.getApiKey().isBlank()) {
             entity.setApiKey(credentialEncryptor.encrypt(form.getApiKey()));
         }
         if (form.getIsDefault() != null) {

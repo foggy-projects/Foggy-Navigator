@@ -64,16 +64,28 @@ export async function runQuery(
       )
     }
 
-    const effectiveApiKey = apiKey || config.openaiApiKey
-    if (!effectiveApiKey) {
-      throw new Error('No OpenAI API key configured. Set OPENAI_API_KEY or pass api_key in request.')
-    }
+    const effectiveApiKey = apiKey || config.openaiApiKey || undefined
+
+    // 解析 model:reasoning_level 后缀（如 "gpt-5.4:high" → model="gpt-5.4", level="high"）
+    const rawModel = model || 'gpt-5.4-mini'
+    const colonIdx = rawModel.indexOf(':')
+    const effectiveModel = colonIdx > 0 ? rawModel.substring(0, colonIdx) : rawModel
+    const reasoningLevel = colonIdx > 0 ? rawModel.substring(colonIdx + 1) : undefined
 
     // Create Codex client
-    const codex = new CodexSDK.CodexClient({
-      apiKey: effectiveApiKey,
-      model: model || 'codex-mini-latest',
-    })
+    // 支持两种认证模式：
+    // 1. API Key 模式：传入 apiKey 参数
+    // 2. 订阅模式：不传 apiKey，SDK 自动读取 ~/.codex/auth.json（ChatGPT Plus/Pro 订阅）
+    const clientOptions: Record<string, unknown> = {
+      model: effectiveModel,
+    }
+    if (effectiveApiKey) {
+      clientOptions.apiKey = effectiveApiKey
+    }
+    if (reasoningLevel) {
+      clientOptions.reasoningLevel = reasoningLevel
+    }
+    const codex = new CodexSDK.CodexClient(clientOptions)
 
     // Create or resume a session
     const sessionOptions: Record<string, unknown> = {}

@@ -387,7 +387,7 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="API Base URL" required>
+        <el-form-item v-if="llmForm.workerBackend !== 'OPENAI_CODEX'" label="API Base URL" required>
           <el-input v-model="llmForm.baseUrl" placeholder="如：https://dashscope.aliyuncs.com/compatible-mode/v1" />
         </el-form-item>
         <el-row :gutter="12">
@@ -407,15 +407,42 @@
                 <el-option value="sonnet" label="Sonnet 4.6" />
                 <el-option value="haiku" label="Haiku" />
               </el-select>
+              <el-select
+                v-else-if="llmForm.workerBackend === 'OPENAI_CODEX'"
+                v-model="llmForm.modelName"
+                filterable
+                allow-create
+                default-first-option
+                placeholder="选择或输入模型名称"
+              >
+                <el-option-group label="GPT-5.4（旗舰）">
+                  <el-option value="gpt-5.4:low" label="GPT-5.4 · Low — 快速轻量" />
+                  <el-option value="gpt-5.4" label="GPT-5.4 · Medium — 均衡（默认）" />
+                  <el-option value="gpt-5.4:high" label="GPT-5.4 · High — 深度推理" />
+                  <el-option value="gpt-5.4:extra-high" label="GPT-5.4 · Extra High — 最深推理" />
+                </el-option-group>
+                <el-option-group label="GPT-5.4 Mini（快速）">
+                  <el-option value="gpt-5.4-mini" label="GPT-5.4 Mini — 快速高效" />
+                </el-option-group>
+                <el-option-group label="GPT-5.3 Codex">
+                  <el-option value="gpt-5.3-codex" label="GPT-5.3 Codex — 业界领先" />
+                  <el-option value="gpt-5.3-codex-spark" label="GPT-5.3 Codex Spark — 实时迭代" />
+                </el-option-group>
+              </el-select>
               <el-input v-else v-model="llmForm.modelName" placeholder="如：qwen-max" />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col v-if="llmForm.workerBackend !== 'OPENAI_CODEX'" :span="12">
             <el-form-item label="API Key" :required="llmDialogMode === 'add'">
               <el-input v-model="llmForm.apiKey" type="password" show-password :placeholder="llmDialogMode === 'edit' ? '留空保持不变' : 'API Key'" />
             </el-form-item>
           </el-col>
         </el-row>
+        <el-form-item v-if="llmForm.workerBackend === 'OPENAI_CODEX'" label="">
+          <div class="form-hint" style="color: #67c23a; font-size: 12px">
+            🔗 Codex 订阅模式：通过 ChatGPT 账号认证（~/.codex/auth.json），无需 API Key
+          </div>
+        </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'CLAUDE_CODE'" label="可用模型">
           <el-checkbox-group v-model="llmForm.availableModels">
             <el-checkbox value="opus[1m]" label="Opus (1M)" />
@@ -426,6 +453,20 @@
           </el-checkbox-group>
           <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
             勾选此 API Key 支持的模型，Workers 页面仅显示已勾选项；不勾选则不限制
+          </div>
+        </el-form-item>
+        <el-form-item v-if="llmForm.workerBackend === 'OPENAI_CODEX'" label="可用模型">
+          <el-checkbox-group v-model="llmForm.availableModels">
+            <el-checkbox value="gpt-5.4:low" label="5.4 Low" />
+            <el-checkbox value="gpt-5.4" label="5.4 Medium" />
+            <el-checkbox value="gpt-5.4:high" label="5.4 High" />
+            <el-checkbox value="gpt-5.4:extra-high" label="5.4 Extra High" />
+            <el-checkbox value="gpt-5.4-mini" label="5.4 Mini" />
+            <el-checkbox value="gpt-5.3-codex" label="5.3 Codex" />
+            <el-checkbox value="gpt-5.3-codex-spark" label="Spark" />
+          </el-checkbox-group>
+          <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
+            勾选可用的 Codex 模型，Workers 页面仅显示已勾选项；不勾选则不限制
           </div>
         </el-form-item>
         <el-form-item>
@@ -469,7 +510,7 @@
       </el-form>
       <template #footer>
         <el-button @click="showLlmDialog_ = false">取消</el-button>
-        <el-button :loading="testingLlm" @click="handleTestLlm">测试连接</el-button>
+        <el-button v-if="llmForm.workerBackend !== 'OPENAI_CODEX'" :loading="testingLlm" @click="handleTestLlm">测试连接</el-button>
         <el-button type="primary" :loading="saving" @click="saveLlm">保存</el-button>
       </template>
     </el-dialog>
@@ -802,11 +843,16 @@ function editLlmModel(row: LlmModelConfig) {
 }
 
 async function saveLlm() {
-  if (!llmForm.value.name || !llmForm.value.baseUrl || !llmForm.value.modelName) {
+  const isCodex = llmForm.value.workerBackend === 'OPENAI_CODEX'
+  if (!llmForm.value.name || !llmForm.value.modelName) {
     ElMessage.warning('请填写必填项')
     return
   }
-  if (!llmForm.value.apiKey && llmDialogMode.value === 'add') {
+  if (!isCodex && !llmForm.value.baseUrl) {
+    ElMessage.warning('请填写 API Base URL')
+    return
+  }
+  if (!isCodex && !llmForm.value.apiKey && llmDialogMode.value === 'add') {
     ElMessage.warning('请填写 API Key')
     return
   }
@@ -820,18 +866,20 @@ async function saveLlm() {
       const envVarsMap = Object.fromEntries(
         llmForm.value.envVars.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value])
       )
+      const isCodexAdd = llmForm.value.workerBackend === 'OPENAI_CODEX'
       await apiSaveLlm({
         name: llmForm.value.name,
         category: llmForm.value.category,
-        baseUrl: llmForm.value.baseUrl,
+        baseUrl: isCodexAdd ? '' : llmForm.value.baseUrl,
         modelName: llmForm.value.modelName,
-        apiKey: llmForm.value.apiKey,
+        apiKey: isCodexAdd ? '' : llmForm.value.apiKey,
         isDefault: llmForm.value.isDefault,
         scope: llmForm.value.scope,
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : undefined,
         envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
         workerBackend: llmForm.value.category === 'CODING' ? llmForm.value.workerBackend : undefined,
-        availableModels: llmForm.value.workerBackend === 'CLAUDE_CODE' && llmForm.value.availableModels.length > 0
+        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX')
+          && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
           : undefined,
       })
@@ -839,21 +887,23 @@ async function saveLlm() {
       const envVarsMap = Object.fromEntries(
         llmForm.value.envVars.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value])
       )
+      const isCodexEdit = llmForm.value.workerBackend === 'OPENAI_CODEX'
       const form: Record<string, unknown> = {
         name: llmForm.value.name,
         category: llmForm.value.category,
-        baseUrl: llmForm.value.baseUrl,
+        baseUrl: isCodexEdit ? '' : llmForm.value.baseUrl,
         modelName: llmForm.value.modelName,
         isDefault: llmForm.value.isDefault,
         scope: llmForm.value.scope,
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : [],
         envVars: envVarsMap,
         workerBackend: llmForm.value.category === 'CODING' ? (llmForm.value.workerBackend || null) : null,
-        availableModels: llmForm.value.workerBackend === 'CLAUDE_CODE' && llmForm.value.availableModels.length > 0
+        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX')
+          && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
           : null,
       }
-      if (llmForm.value.apiKey) form.apiKey = llmForm.value.apiKey
+      if (!isCodexEdit && llmForm.value.apiKey) form.apiKey = llmForm.value.apiKey
       await apiUpdateLlm(editingLlmId.value, form)
     }
     showLlmDialog_.value = false

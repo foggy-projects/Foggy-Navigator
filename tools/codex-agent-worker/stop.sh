@@ -4,7 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-PORT=3032
+PORT=3051
 if [ -f .env ]; then
     PORT_LINE=$(grep "^CODEX_WORKER_PORT=" .env 2>/dev/null || true)
     if [ -n "$PORT_LINE" ]; then
