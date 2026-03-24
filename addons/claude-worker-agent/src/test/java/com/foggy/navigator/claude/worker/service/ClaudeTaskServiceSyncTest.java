@@ -5,7 +5,6 @@ import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
-import com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +31,6 @@ import static org.mockito.Mockito.*;
 class ClaudeTaskServiceSyncTest {
 
     private ClaudeTaskRepository taskRepository;
-    private DeletedClaudeSessionRepository deletedSessionRepository;
     private WorkingDirectoryRepository directoryRepository;
     private SessionManager sessionManager;
     private ClaudeTaskService service;
@@ -44,23 +42,21 @@ class ClaudeTaskServiceSyncTest {
     @BeforeEach
     void setUp() {
         taskRepository = mock(ClaudeTaskRepository.class);
-        deletedSessionRepository = mock(DeletedClaudeSessionRepository.class);
         directoryRepository = mock(WorkingDirectoryRepository.class);
         sessionManager = mock(SessionManager.class);
 
         ClaudeWorkerService workerService = mock(ClaudeWorkerService.class);
-        ConversationConfigService configService = mock(ConversationConfigService.class);
         WorkingDirectoryService dirService = mock(WorkingDirectoryService.class);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
 
         LlmModelManager llmModelManager = mock(LlmModelManager.class);
         UserAuthService userAuthService = mock(UserAuthService.class);
-        var conversationConfigRepository = mock(com.foggy.navigator.claude.worker.repository.ConversationConfigRepository.class);
+        var credentialEncryptor = mock(com.foggy.navigator.common.security.CredentialEncryptor.class);
         var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
         service = new ClaudeTaskService(
-                taskRepository, conversationConfigRepository, deletedSessionRepository, workerService, configService,
+                taskRepository, workerService,
                 agentTeamsConfigService, dirService, directoryRepository, sessionManager, publisher, llmModelManager,
-                userAuthService,
+                userAuthService, credentialEncryptor,
                 mock(org.springframework.transaction.support.TransactionTemplate.class));
 
         // Session creation returns a predictable ID

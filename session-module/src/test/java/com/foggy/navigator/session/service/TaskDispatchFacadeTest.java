@@ -8,7 +8,9 @@ import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -52,6 +54,8 @@ class TaskDispatchFacadeTest {
     private LlmModelManager llmModelManager;
     @Mock
     private SessionTaskRepository sessionTaskRepository;
+    @Mock
+    private WorkingDirectoryRepository workingDirectoryRepository;
 
     private TaskDispatchFacade facade;
 
@@ -210,6 +214,7 @@ class TaskDispatchFacadeTest {
     @Test
     void listTasksPaged_prefersUnifiedSessionStoreWhenAvailable() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(facade, "workingDirectoryRepository", workingDirectoryRepository);
 
         SessionTaskEntity claudeTask = sessionTask(
                 "task-claude-1", "session-claude-1", "claude-worker", "worker-1", "dir-1",
@@ -227,6 +232,11 @@ class TaskDispatchFacadeTest {
                         sessionEntity("session-codex-1", "user-1", "AWAITING_REPLY", LocalDateTime.of(2026, 3, 24, 22, 5)),
                         sessionEntity("session-claude-1", "user-1", "PROCESSING", LocalDateTime.of(2026, 3, 24, 21, 5))
                 ));
+        when(workingDirectoryRepository.findByDirectoryIdIn(List.of("dir-2", "dir-1")))
+                .thenReturn(List.of(
+                        directoryEntity("dir-2", "Codex Project"),
+                        directoryEntity("dir-1", "Claude Project")
+                ));
 
         Object result = facade.listTasksPaged("user-1", 0, 20, null);
 
@@ -238,8 +248,10 @@ class TaskDispatchFacadeTest {
         DispatchTaskDTO second = assertInstanceOf(DispatchTaskDTO.class, content.get(1));
         assertEquals("task-codex-1", first.getTaskId());
         assertEquals("thread-1", first.getCodexThreadId());
+        assertEquals("Codex Project", first.getDirectoryName());
         assertEquals("task-claude-1", second.getTaskId());
         assertEquals("claude-session-1", second.getClaudeSessionId());
+        assertEquals("Claude Project", second.getDirectoryName());
         verify(taskQueryProvider, never()).listTasksPaged(anyString(), anyInt(), anyInt(), any());
     }
 
@@ -318,6 +330,25 @@ class TaskDispatchFacadeTest {
         verify(taskQueryProvider, never()).getTaskById("task-codex-1");
     }
 
+    @Test
+    void rewindTask_routesViaUnifiedSessionStoreProviderTypeAndReturnsProviderPayload() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-claude-1", "session-claude-1", "claude-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 24, 22, 0), "{\"claudeSessionId\":\"claude-session-1\"}"
+        );
+        when(sessionTaskRepository.findByTaskId("task-claude-1")).thenReturn(Optional.of(task));
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        when(taskQueryProvider.rewindTask(eq("task-claude-1"), eq("user-1"), any()))
+                .thenReturn(Map.of("status", "rewound", "taskId", "task-claude-1"));
+
+        Object result = facade.rewindTask("task-claude-1", "user-1", Map.of("mode", "conversation_fork"));
+
+        assertEquals(Map.of("status", "rewound", "taskId", "task-claude-1"), result);
+        verify(taskQueryProvider).rewindTask("task-claude-1", "user-1", Map.of("mode", "conversation_fork"));
+        verify(taskQueryProvider, never()).getTaskById("task-claude-1");
+    }
+
     private SessionTaskEntity sessionTask(String taskId, String sessionId, String providerType,
                                           String workerId, String directoryId, String status,
                                           LocalDateTime createdAt, String taskStateJson) {
@@ -350,6 +381,13 @@ class TaskDispatchFacadeTest {
         entity.setUpdatedAt(lastActivityAt);
         entity.setTitle(title);
         entity.setTagsJson(tagsJson);
+        return entity;
+    }
+
+    private WorkingDirectoryEntity directoryEntity(String directoryId, String projectName) {
+        WorkingDirectoryEntity entity = new WorkingDirectoryEntity();
+        entity.setDirectoryId(directoryId);
+        entity.setProjectName(projectName);
         return entity;
     }
 }

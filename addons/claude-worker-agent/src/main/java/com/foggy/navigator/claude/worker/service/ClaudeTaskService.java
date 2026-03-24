@@ -23,7 +23,6 @@ import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
-import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
@@ -31,10 +30,8 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
-import com.foggy.navigator.claude.worker.model.entity.DeletedClaudeSessionEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
-import com.foggy.navigator.claude.worker.repository.ConversationConfigRepository;
-import com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository;
+import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -82,10 +79,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ClaudeTaskRepository taskRepository;
-    private final ConversationConfigRepository conversationConfigRepository;
-    private final DeletedClaudeSessionRepository deletedSessionRepository;
     private final ClaudeWorkerService workerService;
-    private final ConversationConfigService conversationConfigService;
     private final AgentTeamsConfigService agentTeamsConfigService;
 
     /** @Lazy 打破 ClaudeTaskService ↔ WorkerStreamRelay 的循环依赖 */
@@ -104,6 +98,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     private final ApplicationEventPublisher eventPublisher;
     private final LlmModelManager llmModelManager;
     private final UserAuthService userAuthService;
+    private final CredentialEncryptor credentialEncryptor;
     private final TransactionTemplate txTemplate;
 
     @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}")
@@ -195,13 +190,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 taskId, sessionId, form.getWorkerId(), userId,
                 agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
         publishStatusChange(entity, null);
-        conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
+        updateSessionInteractionState(sessionId, "PROCESSING");
 
         // 4.5. 锁定 Agent Teams 配置到会话
         if (resolvedConfigId != null) {
-            ConversationConfigEntity convConfig = conversationConfigService.getOrCreate(sessionId, form.getWorkerId(), userId);
-            convConfig.setAgentTeamsConfigId(resolvedConfigId);
-            conversationConfigService.saveConfig(convConfig);
+            lockAgentTeamsConfigToSession(sessionId, form.getWorkerId(), userId, resolvedConfigId);
         }
 
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
@@ -267,10 +260,10 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String agentTeamsJson = form.getAgentTeamsJson();
         String resolvedConfigId = null;
 
-        // 优先从会话级 ConversationConfig 读取已锁定的配置（创建后不可变更）
-        ConversationConfigEntity existingConvConfig = conversationConfigService.getConfigEntity(form.getSessionId());
-        if (existingConvConfig != null && existingConvConfig.getAgentTeamsConfigId() != null) {
-            resolvedConfigId = existingConvConfig.getAgentTeamsConfigId();
+        // 优先从会话级 SessionEntity.providerStateJson 读取已锁定的配置（创建后不可变更）
+        String existingAgentTeamsConfigId = readAgentTeamsConfigId(form.getSessionId());
+        if (existingAgentTeamsConfigId != null) {
+            resolvedConfigId = existingAgentTeamsConfigId;
             AgentTeamsConfigEntity lockedConfig = agentTeamsConfigService.getConfigEntity(resolvedConfigId);
             if (lockedConfig != null) {
                 agentTeamsJson = lockedConfig.getConfig();
@@ -344,12 +337,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 taskId, form.getClaudeSessionId(), directoryId,
                 agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
         publishStatusChange(entity, null);
-        conversationConfigService.updateInteractionState(sessionId, "PROCESSING");
+        updateSessionInteractionState(sessionId, "PROCESSING");
 
         // 锁定 Agent Teams 配置到会话（仅首次，已锁定则跳过）
-        if (resolvedConfigId != null && existingConvConfig != null && existingConvConfig.getAgentTeamsConfigId() == null) {
-            existingConvConfig.setAgentTeamsConfigId(resolvedConfigId);
-            conversationConfigService.saveConfig(existingConvConfig);
+        if (resolvedConfigId != null && existingAgentTeamsConfigId == null) {
+            lockAgentTeamsConfigToSession(sessionId, form.getWorkerId(), userId, resolvedConfigId);
         }
 
         // 解析 per-conversation auth（含平台模型配置 fallback）
@@ -415,7 +407,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         persistTask(entity);
         log.info("Tracked sync task created: taskId={}, workerId={}, directoryId={}", taskId, workerId, directoryId);
 
-        // 绑定目录 auth 到 session 的 ConversationConfig（UI 历史会话能看到 auth 状态）
+        // 绑定目录 auth 到 SessionEntity（UI 历史会话能看到 auth 状态）
         try {
             resolveAuth(sessionId, workerId, userId, directoryId, null);
         } catch (Exception e) {
@@ -478,8 +470,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
      * 列出用户所有待回复的任务（interactionState = AWAITING_REPLY），额外填充 directoryName
      */
     public List<TaskDTO> listAwaitingReplyTasks(String userId) {
-        // 1. 从 ConversationConfig 查询所有 AWAITING_REPLY 状态的 sessionId
-        List<String> awaitingSessionIds = conversationConfigService.findSessionIdsByInteractionState(
+        // 1. 从 SessionEntity 查询所有 AWAITING_REPLY 状态的 sessionId
+        List<String> awaitingSessionIds = findSessionIdsByInteractionStateDirect(
                 userId, "AWAITING_REPLY");
 
         if (awaitingSessionIds.isEmpty()) {
@@ -526,10 +518,10 @@ public class ClaudeTaskService implements TaskQueryProvider {
             List<String> allMatchingSessionIds;
             if (states.size() == 1) {
                 allMatchingSessionIds =
-                        conversationConfigService.findSessionIdsByInteractionState(userId, states.get(0));
+                        findSessionIdsByInteractionStateDirect(userId, states.get(0));
             } else {
                 allMatchingSessionIds =
-                        conversationConfigService.findSessionIdsByInteractionStates(userId, states);
+                        findSessionIdsByInteractionStatesDirect(userId, states);
             }
             if (allMatchingSessionIds.isEmpty()) {
                 return SessionPageDTO.builder()
@@ -588,10 +580,10 @@ public class ClaudeTaskService implements TaskQueryProvider {
             List<String> allMatchingSessionIds;
             if (states.size() == 1) {
                 allMatchingSessionIds =
-                        conversationConfigService.findSessionIdsByInteractionState(userId, states.get(0));
+                        findSessionIdsByInteractionStateDirect(userId, states.get(0));
             } else {
                 allMatchingSessionIds =
-                        conversationConfigService.findSessionIdsByInteractionStates(userId, states);
+                        findSessionIdsByInteractionStatesDirect(userId, states);
             }
             if (allMatchingSessionIds.isEmpty()) {
                 return SessionPageDTO.builder()
@@ -714,7 +706,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             persistTask(entity);
             log.info("Task completed: taskId={}, model={}, costUsd={}, durationMs={}", taskId, model, costUsd, durationMs);
             publishStatusChange(entity, prev);
-            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+            updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
     }
 
@@ -831,7 +823,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             persistTask(entity);
             log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
             publishStatusChange(entity, prev);
-            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+            updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
     }
 
@@ -846,7 +838,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             persistTask(entity);
             log.info("Task awaiting permission: taskId={}", taskId);
             publishStatusChange(entity, prev);
-            conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+            updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
         });
     }
 
@@ -879,7 +871,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         persistTask(entity);
         log.info("Task resumed from permission: taskId={}, prev={}", taskId, prev);
         publishStatusChange(entity, prev);
-        conversationConfigService.updateInteractionState(entity.getSessionId(), "PROCESSING");
+        updateSessionInteractionState(entity.getSessionId(), "PROCESSING");
 
         // Persist the user's response so it survives page refresh
         publishConfirmationResponse(entity.getSessionId(), taskId, permissionId, decision, answers);
@@ -949,7 +941,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 persistTask(entity);
                 log.info("Task aborted: taskId={}", taskId);
                 publishStatusChange(entity, prev);
-                conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+                updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
             });
         });
 
@@ -1009,32 +1001,28 @@ public class ClaudeTaskService implements TaskQueryProvider {
             throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
         }
 
-        // 记录被删除的 claudeSessionId，防止 syncLocalSessions 重新导入
-        if (entity.getClaudeSessionId() != null && !entity.getClaudeSessionId().isEmpty()) {
-            if (!deletedSessionRepository.existsByClaudeSessionIdAndWorkerIdAndUserId(
-                    entity.getClaudeSessionId(), entity.getWorkerId(), userId)) {
-                DeletedClaudeSessionEntity deleted = new DeletedClaudeSessionEntity();
-                deleted.setClaudeSessionId(entity.getClaudeSessionId());
-                deleted.setWorkerId(entity.getWorkerId());
-                deleted.setUserId(userId);
-                deletedSessionRepository.save(deleted);
+        // Soft-delete the associated SessionEntity (sets deletedAt) to prevent syncLocalSessions re-import
+        String sessionId = entity.getSessionId();
+        if (sessionId != null && sessionEntityRepository != null) {
+            try {
+                sessionEntityRepository.findById(sessionId).ifPresent(session -> {
+                    session.setDeletedAt(LocalDateTime.now());
+                    sessionEntityRepository.save(session);
+                    log.info("Session soft-deleted: sessionId={}", sessionId);
+                });
+            } catch (Exception e) {
+                log.warn("Failed to soft-delete session: sessionId={}", sessionId, e);
             }
         }
 
-        // 同时删除关联的 Session 及其消息，以及 ConversationConfig
-        String sessionId = entity.getSessionId();
+        // Also hard-delete from SessionManager (messages, etc.)
         taskRepository.delete(entity);
         if (sessionId != null) {
             try {
                 sessionManager.deleteSession(sessionId);
-                log.info("Associated session deleted: sessionId={}", sessionId);
+                log.info("Associated session deleted from SessionManager: sessionId={}", sessionId);
             } catch (Exception e) {
-                log.warn("Failed to delete associated session: sessionId={}", sessionId, e);
-            }
-            try {
-                log.info("Session-backed conversation config removed with session deletion: sessionId={}", sessionId);
-            } catch (Exception e) {
-                log.warn("Failed to finalize session-backed conversation config cleanup: sessionId={}", sessionId, e);
+                log.warn("Failed to delete associated session from SessionManager: sessionId={}", sessionId, e);
             }
         }
         log.info("Task deleted: taskId={}, userId={}", taskId, userId);
@@ -1049,11 +1037,28 @@ public class ClaudeTaskService implements TaskQueryProvider {
                                  List<Map<String, Object>> sessions) {
         if (sessions == null || sessions.isEmpty()) return 0;
 
-        // Batch load deleted session IDs to skip
-        Set<String> deletedSessionIds = deletedSessionRepository.findByWorkerIdAndUserId(workerId, userId)
-                .stream()
-                .map(DeletedClaudeSessionEntity::getClaudeSessionId)
-                .collect(Collectors.toSet());
+        // Batch load deleted session IDs to skip (from soft-deleted SessionEntity records)
+        Set<String> deletedSessionIds = Set.of();
+        if (sessionEntityRepository != null) {
+            deletedSessionIds = sessionEntityRepository.findDeletedByWorkerIdAndUserId(workerId, userId)
+                    .stream()
+                    .map(s -> {
+                        // Extract claudeSessionId from providerStateJson
+                        String json = s.getProviderStateJson();
+                        if (json != null && !json.isBlank()) {
+                            try {
+                                Map<String, Object> state = OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+                                Object csId = state.get("claudeSessionId");
+                                return csId != null ? csId.toString() : null;
+                            } catch (Exception e) {
+                                log.warn("Failed to parse providerStateJson for deleted session {}: {}", s.getId(), e.getMessage());
+                            }
+                        }
+                        return null;
+                    })
+                    .filter(id -> id != null && !id.isEmpty())
+                    .collect(Collectors.toSet());
+        }
 
         int created = 0;
         for (Map<String, Object> session : sessions) {
@@ -1124,7 +1129,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             // Auto-bind auth from WorkingDirectory default config
             if (matchedDir != null && matchedDir.getDefaultAuthMode() != null) {
                 String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(matchedDir);
-                conversationConfigService.bindAuthFromDirectory(
+                bindAuthToSession(
                         sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
             }
 
@@ -1169,7 +1174,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     /**
      * 解析 per-conversation auth 配置
      * 优先级：
-     * 1. ConversationConfig 已绑定 auth → 解密 token 返回
+     * 1. SessionEntity 已绑定 auth → 解密 token 返回
      * 2. 用户选择的平台 LLM 模型配置（modelConfigId）→ 覆盖目录配置
      * 3. WorkingDirectory 默认 auth 继承
      * 4. 全 null（Worker 用 .env 或 claude login）
@@ -1177,12 +1182,12 @@ public class ClaudeTaskService implements TaskQueryProvider {
      */
     private String[] resolveAuth(String sessionId, String workerId, String userId,
                                  String directoryId, String modelConfigId) {
-        ConversationConfigEntity config = conversationConfigService.getOrCreate(sessionId, workerId, userId);
+        SessionEntity sessionForAuth = getOrCreateSessionEntity(sessionId, workerId, userId);
 
-        if (config.getAuthBoundAt() != null) {
+        if (sessionForAuth != null && sessionForAuth.getAuthBoundAt() != null) {
             // Already bound — decrypt and return
-            String decryptedToken = conversationConfigService.getDecryptedToken(config);
-            String authMode = config.getAuthMode();
+            String decryptedToken = getDecryptedTokenFromSession(sessionForAuth);
+            String authMode = sessionForAuth.getAuthMode();
             String apiKey = null;
             String authToken = null;
             if ("API_KEY".equals(authMode) || "CUSTOM_ENDPOINT".equals(authMode)) {
@@ -1190,11 +1195,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
             } else {
                 authToken = decryptedToken;
             }
-            return new String[]{apiKey, authToken, config.getBaseUrl()};
+            return new String[]{apiKey, authToken, sessionForAuth.getAuthBaseUrl()};
         }
 
         // 用户选择的平台模型配置 → 优先于目录默认 auth
-        // 仅当 ConversationConfig 尚未绑定时，才使用并保存 modelConfigId 的 auth
+        // 仅当 SessionEntity 尚未绑定时，才使用并保存 modelConfigId 的 auth
         if (modelConfigId != null && !modelConfigId.isEmpty()) {
             // 校验 Worker 是否有权使用该模型
             llmModelManager.validateModelAccessForWorker(modelConfigId, workerId);
@@ -1203,10 +1208,10 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 String decryptedApiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
                 log.info("Auth resolved from platform model config: {}", modelConfig.getName());
 
-                // 保存到 ConversationConfigEntity
+                // 保存到 SessionEntity
                 String authMode = (modelConfig.getBaseUrl() != null && !modelConfig.getBaseUrl().isEmpty())
                         ? "CUSTOM_ENDPOINT" : "API_KEY";
-                conversationConfigService.bindAuthFromDirectory(
+                bindAuthToSession(
                         sessionId, workerId, userId, authMode, decryptedApiKey, modelConfig.getBaseUrl());
 
                 return new String[]{decryptedApiKey, null, modelConfig.getBaseUrl()};
@@ -1228,7 +1233,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                         log.info("Auth resolved from directory platform model config: {}", dirModelConfig.getName());
                         String authMode = (dirModelConfig.getBaseUrl() != null && !dirModelConfig.getBaseUrl().isEmpty())
                                 ? "CUSTOM_ENDPOINT" : "API_KEY";
-                        conversationConfigService.bindAuthFromDirectory(
+                        bindAuthToSession(
                                 sessionId, workerId, userId, authMode, decryptedApiKey, dirModelConfig.getBaseUrl());
                         return new String[]{decryptedApiKey, null, dirModelConfig.getBaseUrl()};
                     }
@@ -1236,7 +1241,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 // 手动 auth 配置 fallback
                 if (dir.getDefaultAuthMode() != null) {
                     String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(dir);
-                    conversationConfigService.bindAuthFromDirectory(
+                    bindAuthToSession(
                             sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
                     String apiKey = null;
                     String authToken = null;
@@ -1407,7 +1412,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 persistTask(entity);
                 log.info("Task stream ended, CLI exited — marking COMPLETED: taskId={}, reason={}", taskId, reason);
                 publishStatusChange(entity, prev);
-                conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+                updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
 
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
                         .externalTaskId(taskId)
@@ -1821,7 +1826,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         persistTask(task);
         log.info("Resync: Task marked as COMPLETED from sync: taskId={}", task.getTaskId());
         publishStatusChange(task, prev);
-        conversationConfigService.updateInteractionState(task.getSessionId(), "AWAITING_REPLY");
+        updateSessionInteractionState(task.getSessionId(), "AWAITING_REPLY");
     }
 
     private MessageCount countMessages(List<Message> messages) {
@@ -1853,7 +1858,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         log.info("Task completed (CLI exited): taskId={}, createdAt={}, reason={}",
                 entity.getTaskId(), entity.getCreatedAt(), reason);
         publishStatusChange(entity, prev);
-        conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
+        updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
 
         String taskId = entity.getTaskId();
 
@@ -1911,9 +1916,168 @@ public class ClaudeTaskService implements TaskQueryProvider {
         return task.getTaskId();
     }
 
+    // ==================== Session direct-access helpers (replacing ConversationConfigService) ====================
+
+    /**
+     * 更新会话交互状态（直接操作 SessionEntity，替代 ConversationConfigService.updateInteractionState）
+     */
+    private void updateSessionInteractionState(String sessionId, String state) {
+        if (sessionEntityRepository == null || sessionId == null) return;
+        sessionEntityRepository.findById(sessionId).ifPresent(session -> {
+            session.setInteractionState(state);
+            session.setLastActivityAt(LocalDateTime.now());
+            sessionEntityRepository.save(session);
+        });
+    }
+
+    /**
+     * 获取或创建 SessionEntity（替代 ConversationConfigService.getOrCreate）
+     */
+    private SessionEntity getOrCreateSessionEntity(String sessionId, String workerId, String userId) {
+        if (sessionEntityRepository == null) return null;
+        SessionEntity existing = sessionEntityRepository.findById(sessionId).orElse(null);
+        if (existing != null) {
+            boolean changed = false;
+            if ((existing.getUserId() == null || existing.getUserId().isBlank()) && userId != null && !userId.isBlank()) {
+                existing.setUserId(userId);
+                changed = true;
+            }
+            if ((existing.getCurrentWorkerId() == null || existing.getCurrentWorkerId().isBlank()) && workerId != null && !workerId.isBlank()) {
+                existing.setCurrentWorkerId(workerId);
+                changed = true;
+            }
+            if (existing.getProviderType() == null || existing.getProviderType().isBlank()) {
+                existing.setProviderType(AGENT_ID);
+                changed = true;
+            }
+            if (changed) {
+                return sessionEntityRepository.save(existing);
+            }
+            return existing;
+        }
+
+        SessionEntity session = new SessionEntity();
+        session.setId(sessionId);
+        session.setUserId(userId);
+        session.setProviderType(AGENT_ID);
+        session.setCurrentWorkerId(workerId);
+        session.setStatus("ACTIVE");
+        session.setInteractionState("PROCESSING");
+        session.setLastActivityAt(LocalDateTime.now());
+        return sessionEntityRepository.save(session);
+    }
+
+    /**
+     * 将 auth 信息直接绑定到 SessionEntity（替代 ConversationConfigService.bindAuthFromDirectory）
+     */
+    private void bindAuthToSession(String sessionId, String workerId, String userId,
+                                   String authMode, String plainToken, String baseUrl) {
+        if (sessionEntityRepository == null) return;
+        SessionEntity session = getOrCreateSessionEntity(sessionId, workerId, userId);
+        if (session == null || session.getAuthBoundAt() != null) return;
+        session.setAuthMode(authMode);
+        if (plainToken != null && !plainToken.isEmpty()) {
+            session.setAuthTokenCiphertext(credentialEncryptor.encrypt(plainToken));
+        }
+        session.setAuthBaseUrl(blankToNull(baseUrl));
+        session.setAuthBoundAt(LocalDateTime.now());
+        session.setAuthModelConfigId(null);
+        sessionEntityRepository.save(session);
+        log.info("Auth bound to session {}: mode={}", sessionId, authMode);
+    }
+
+    /**
+     * 从 SessionEntity 解密 auth token（替代 ConversationConfigService.getDecryptedToken）
+     */
+    private String getDecryptedTokenFromSession(SessionEntity session) {
+        if (session == null || session.getAuthTokenCiphertext() == null) return null;
+        return credentialEncryptor.decrypt(session.getAuthTokenCiphertext());
+    }
+
+    /**
+     * 锁定 agentTeamsConfigId 到 SessionEntity 的 providerStateJson
+     */
+    private void lockAgentTeamsConfigToSession(String sessionId, String workerId, String userId, String configId) {
+        if (sessionEntityRepository == null || configId == null) return;
+        SessionEntity session = getOrCreateSessionEntity(sessionId, workerId, userId);
+        if (session == null) return;
+        session.setProviderStateJson(mergeJsonValue(session.getProviderStateJson(), "agentTeamsConfigId", configId));
+        sessionEntityRepository.save(session);
+    }
+
+    /**
+     * 从 SessionEntity.providerStateJson 读取 agentTeamsConfigId
+     */
+    private String readAgentTeamsConfigId(String sessionId) {
+        if (sessionEntityRepository == null) return null;
+        return sessionEntityRepository.findById(sessionId)
+                .map(session -> readJsonValue(session.getProviderStateJson(), "agentTeamsConfigId"))
+                .orElse(null);
+    }
+
+    private String readJsonValue(String json, String key) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            Map<String, Object> values = OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+            Object value = values.get(key);
+            return value != null ? value.toString() : null;
+        } catch (Exception e) {
+            log.warn("Failed to read key '{}' from JSON: {}", key, json);
+            return null;
+        }
+    }
+
+    private String blankToNull(String value) {
+        return value != null && !value.isBlank() ? value : null;
+    }
+
+    private List<String> findSessionIdsByInteractionStateDirect(String userId, String state) {
+        if (sessionEntityRepository == null) return List.of();
+        return sessionEntityRepository.findSessionIdsByInteractionState(userId, state);
+    }
+
+    private List<String> findSessionIdsByInteractionStatesDirect(String userId, List<String> states) {
+        if (sessionEntityRepository == null) return List.of();
+        return sessionEntityRepository.findSessionIdsByInteractionStateIn(userId, states);
+    }
+
+    private List<String> findSessionIdsByTitleKeywordDirect(String userId, String keyword) {
+        if (sessionEntityRepository == null) return List.of();
+        return sessionEntityRepository.findSessionIdsByTitleKeyword(userId, keyword);
+    }
+
+    private List<String> findSessionIdsByTagKeywordDirect(String userId, String keyword) {
+        if (sessionEntityRepository == null) return List.of();
+        return sessionEntityRepository.findSessionIdsByTagKeyword(userId, keyword);
+    }
+
+    // ==================== End Session helpers ====================
+
     private String truncate(String text, int maxLen) {
         if (text == null) return null;
         return text.length() > maxLen ? text.substring(0, maxLen) + "..." : text;
+    }
+
+    private Map<String, Object> buildRewindResult(String taskId, String checkpointId, String userPrompt,
+                                                  Integer turnIndex, String claudeSessionId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "rewound");
+        if (checkpointId != null && !checkpointId.isBlank()) {
+            result.put("checkpointId", checkpointId);
+        }
+        result.put("taskId", taskId);
+        result.put("userPrompt", userPrompt != null ? userPrompt : "");
+        result.put("turnIndex", turnIndex);
+        result.put("claudeSessionId", claudeSessionId);
+        return result;
+    }
+
+    private void truncateSessionMessagesQuietly(String sessionId, int fromUserTurnIndex) {
+        try {
+            truncateSessionMessages(sessionId, fromUserTurnIndex);
+        } catch (Exception dbEx) {
+            log.warn("Failed to truncate DB messages for session {}: {}", sessionId, dbEx.getMessage());
+        }
     }
 
     /**
@@ -1977,6 +2141,12 @@ public class ClaudeTaskService implements TaskQueryProvider {
         sessionTask.setProviderTaskId(entity.getWorkerTaskId());
         sessionTask.setWorkerId(entity.getWorkerId());
         sessionTask.setUserId(entity.getUserId());
+        sessionTask.setAgentId(AGENT_ID);
+        // ClaudeTaskEntity 没有 tenantId 字段，从 SessionEntity 获取
+        if (sessionEntityRepository != null && entity.getSessionId() != null) {
+            sessionEntityRepository.findById(entity.getSessionId())
+                    .ifPresent(session -> sessionTask.setTenantId(session.getTenantId()));
+        }
         sessionTask.setDirectoryId(entity.getDirectoryId());
         sessionTask.setPrompt(entity.getPrompt());
         sessionTask.setCwd(entity.getCwd());
@@ -2110,8 +2280,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
             String trimmed = keyword.trim();
             Set<String> textMatches = new LinkedHashSet<>();
             textMatches.addAll(taskRepository.findSessionIdsByPromptKeyword(userId, trimmed));
-            textMatches.addAll(conversationConfigService.findSessionIdsByTitleKeyword(userId, trimmed));
-            textMatches.addAll(conversationConfigService.findSessionIdsByTagKeyword(userId, trimmed));
+            textMatches.addAll(findSessionIdsByTitleKeywordDirect(userId, trimmed));
+            textMatches.addAll(findSessionIdsByTagKeywordDirect(userId, trimmed));
             candidateSessionIds = textMatches;
         }
 
@@ -2157,9 +2327,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
         // 7. 获取每个 session 的最新任务
         List<ClaudeTaskEntity> latestTasks = taskRepository.findLatestBySessionIdIn(pagedSessionIds);
 
-        // 8. 获取会话配置
-        Map<String, ConversationConfigEntity> configMap = conversationConfigService
-                .getConfigMapBySessionIds(pagedSessionIds);
+        // 8. 获取会话配置（直接查 SessionEntity）
+        Map<String, SessionEntity> configMap = sessionEntityRepository != null
+                ? sessionEntityRepository.findAllById(pagedSessionIds).stream()
+                    .collect(Collectors.toMap(SessionEntity::getId, s -> s))
+                : Map.of();
 
         // 9. 计算每个 session 的总费用
         Map<String, BigDecimal> costMap = allTasks.stream()
@@ -2177,7 +2349,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
 
         // 11. 构建结果
         List<SessionSearchResultDTO> results = latestTasks.stream().map(task -> {
-            ConversationConfigEntity config = configMap.get(task.getSessionId());
+            SessionEntity config = configMap.get(task.getSessionId());
             String firstPrompt = firstPromptMap.getOrDefault(task.getSessionId(), task.getPrompt());
 
             return SessionSearchResultDTO.builder()
@@ -2185,8 +2357,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
                     .workerId(task.getWorkerId())
                     .directoryId(task.getDirectoryId())
                     .firstPrompt(truncate(firstPrompt, 200))
-                    .customTitle(config != null ? config.getCustomTitle() : null)
-                    .tags(config != null ? parseTagsJson(config.getTags()) : List.of())
+                    .customTitle(config != null ? config.getTitle() : null)
+                    .tags(config != null ? parseTagsJson(config.getTagsJson()) : List.of())
                     .interactionState(config != null ? config.getInteractionState() : null)
                     .latestTaskId(task.getTaskId())
                     .latestStatus(task.getStatus())
@@ -2313,6 +2485,79 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     @Override
+    @Transactional
+    public Object rewindTask(String taskId, String userId, Map<String, Object> params) {
+        ClaudeTaskEntity task = getTaskEntity(taskId);
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if ("RUNNING".equals(task.getStatus()) || "AWAITING_PERMISSION".equals(task.getStatus())) {
+            throw new IllegalStateException("Cannot rewind a running task");
+        }
+
+        String claudeSessionId = task.getClaudeSessionId();
+        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
+            throw new IllegalArgumentException("Task has no Claude session ID");
+        }
+
+        String mode = params.get("mode") != null ? params.get("mode").toString() : "file_rewind";
+        Integer turnIndex = params.get("turnIndex") instanceof Number n ? n.intValue() : null;
+
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+        ClaudeWorkerClient client = workerService.createClient(worker);
+
+        if ("conversation_fork".equals(mode)) {
+            try {
+                Map<String, Object> rewindResult = client.rewindConversation(
+                                claudeSessionId, turnIndex != null ? turnIndex : 1)
+                        .block(Duration.ofSeconds(15));
+
+                String rewindStatus = rewindResult != null ? (String) rewindResult.get("status") : "error";
+                if ("error".equals(rewindStatus)) {
+                    throw new IllegalStateException("回退会话失败: " + rewindResult.get("message"));
+                }
+
+                String userPrompt = rewindResult != null ? (String) rewindResult.get("user_prompt") : "";
+                truncateSessionMessagesQuietly(task.getSessionId(), turnIndex != null ? turnIndex : 1);
+                return buildRewindResult(taskId, null, userPrompt, turnIndex, claudeSessionId);
+            } catch (IllegalStateException e) {
+                throw e;
+            } catch (Exception e) {
+                log.warn("Failed to rewind conversation: taskId={}, error={}", taskId, e.getMessage());
+                throw new IllegalStateException("回退失败: " + e.getMessage(), e);
+            }
+        }
+
+        String checkpointId = params.get("checkpointId") != null ? params.get("checkpointId").toString() : null;
+        if (checkpointId == null || checkpointId.isEmpty()) {
+            throw new IllegalArgumentException("checkpointId is required for file_rewind mode");
+        }
+
+        try {
+            client.rewindFiles(claudeSessionId, checkpointId, task.getCwd())
+                    .block(Duration.ofSeconds(30));
+
+            String userPrompt = "";
+            int effectiveTurn = turnIndex != null ? turnIndex : 1;
+            try {
+                Map<String, Object> convResult = client.rewindConversation(claudeSessionId, effectiveTurn)
+                        .block(Duration.ofSeconds(15));
+                if (convResult != null && convResult.get("user_prompt") != null) {
+                    userPrompt = convResult.get("user_prompt").toString();
+                }
+            } catch (Exception convEx) {
+                log.warn("File rewind succeeded but conversation rewind failed for task {}: {}", taskId, convEx.getMessage());
+            }
+
+            truncateSessionMessagesQuietly(task.getSessionId(), effectiveTurn);
+            return buildRewindResult(taskId, checkpointId, userPrompt, turnIndex, claudeSessionId);
+        } catch (Exception e) {
+            log.warn("Failed to rewind files: taskId={}, error={}", taskId, e.getMessage());
+            throw new IllegalStateException("回退失败: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
     public DispatchTaskDTO resumeTask(String userId, String tenantId, java.util.Map<String, Object> params) {
         ResumeTaskForm form = new ResumeTaskForm();
         form.setWorkerId((String) params.get("workerId"));
@@ -2379,6 +2624,91 @@ public class ClaudeTaskService implements TaskQueryProvider {
     public Object listTasksByDirectoryPaged(String userId, String directoryId,
                                              int page, int size, String state) {
         return listTasksByDirectorySession(userId, directoryId, page, size, state);
+    }
+
+    // ── Worker Session 查询 SPI 实现 ──
+
+    @Override
+    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Worker not found");
+        }
+        try {
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            List<Map<String, Object>> sessions = client.listSessions()
+                    .block(java.time.Duration.ofSeconds(10));
+            return sessions != null ? sessions : List.of();
+        } catch (Exception e) {
+            log.warn("Failed to list worker sessions: workerId={}, error={}", workerId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
+    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Worker not found");
+        }
+        try {
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            Map<String, Object> result = client.getSessionMessageCount(sessionId)
+                    .block(java.time.Duration.ofSeconds(10));
+            return result != null ? result : Map.of("user_count", 0, "assistant_count", 0, "total", 0);
+        } catch (Exception e) {
+            log.warn("Failed to get message count: workerId={}, sessionId={}, error={}",
+                    workerId, sessionId, e.getMessage());
+            return Map.of("user_count", 0, "assistant_count", 0, "total", 0);
+        }
+    }
+
+    @Override
+    public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
+                                                               String userId, Integer offset, Integer limit) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Worker not found");
+        }
+        try {
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            List<Map<String, Object>> messages;
+            if (offset != null || limit != null) {
+                messages = client.getSessionMessages(sessionId,
+                        offset != null ? offset : 0, limit)
+                        .block(java.time.Duration.ofSeconds(30));
+            } else {
+                messages = client.getSessionMessages(sessionId)
+                        .block(java.time.Duration.ofSeconds(30));
+            }
+            return messages != null ? messages : List.of();
+        } catch (Exception e) {
+            log.warn("Failed to get session messages: workerId={}, sessionId={}, error={}",
+                    workerId, sessionId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
+    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!worker.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Worker not found");
+        }
+        try {
+            ClaudeWorkerClient client = workerService.createClient(worker);
+            client.syncSessions().block(java.time.Duration.ofSeconds(30));
+
+            List<Map<String, Object>> sessions = client.listSessions()
+                    .block(java.time.Duration.ofSeconds(10));
+            if (sessions == null) sessions = List.of();
+
+            int created = syncLocalSessions(userId, tenantId, workerId, sessions);
+            return Map.of("synced", created, "total", sessions.size());
+        } catch (Exception e) {
+            log.warn("Failed to sync sessions on worker: workerId={}, error={}", workerId, e.getMessage());
+            throw new RuntimeException("同步失败: " + e.getMessage());
+        }
     }
 
     @SuppressWarnings("unchecked")

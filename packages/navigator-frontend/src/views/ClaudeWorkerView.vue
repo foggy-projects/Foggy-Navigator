@@ -2245,6 +2245,18 @@ function navigateToProcessSession(process: CliProcessInfo) {
 
 const selectedWorkerId = ref<string | null>(null)
 const selectedDirectoryId = ref<string | null>(null)
+
+// ── Agent-centric navigation ──
+// selectedAgentId is the primary key for task operations (create/resume/respond).
+// resolvedWorkerId derives workerId from the agent when available, falling back to selectedWorkerId.
+const selectedAgentId = ref<string | null>(null)
+const resolvedWorkerId = computed(() => {
+  if (selectedAgentId.value) {
+    const agent = agentState.agents.value.find(a => a.agentId === selectedAgentId.value)
+    return agent?.workerId || selectedWorkerId.value
+  }
+  return selectedWorkerId.value
+})
 const expandedWorkerIds = reactive(new Set<string>())
 const expandedProjectIds = reactive(new Set<string>())
 const { prefs } = useUserPreferences()
@@ -2494,22 +2506,21 @@ const editDirForm = ref({
   defaultModelConfigId: '' as string,
 })
 
-const ALL_CLAUDE_MODELS = [
-  { value: 'opus[1m]', label: 'Opus (1M)' },
-  { value: 'opus', label: 'Opus' },
-  { value: 'sonnet[1m]', label: 'Sonnet (1M)' },
-  { value: 'sonnet', label: 'Sonnet' },
-  { value: 'haiku', label: 'Haiku' },
-]
-
-const ALL_CODEX_MODELS = [
-  { value: 'gpt-5.4:low', label: '5.4 Low' },
-  { value: 'gpt-5.4', label: '5.4 Medium' },
-  { value: 'gpt-5.4:high', label: '5.4 High' },
-  { value: 'gpt-5.4:extra-high', label: '5.4 Extra High' },
-  { value: 'gpt-5.4-mini', label: '5.4 Mini' },
-  { value: 'gpt-5.3-codex', label: '5.3 Codex' },
-  { value: 'gpt-5.3-codex-spark', label: 'Spark' },
+const ALL_MODELS: { value: string; label: string; backend: string }[] = [
+  // Claude models
+  { value: 'opus[1m]', label: 'Opus (1M)', backend: 'CLAUDE_CODE' },
+  { value: 'opus', label: 'Opus', backend: 'CLAUDE_CODE' },
+  { value: 'sonnet[1m]', label: 'Sonnet (1M)', backend: 'CLAUDE_CODE' },
+  { value: 'sonnet', label: 'Sonnet', backend: 'CLAUDE_CODE' },
+  { value: 'haiku', label: 'Haiku', backend: 'CLAUDE_CODE' },
+  // Codex models
+  { value: 'gpt-5.4:low', label: '5.4 Low', backend: 'OPENAI_CODEX' },
+  { value: 'gpt-5.4', label: '5.4 Medium', backend: 'OPENAI_CODEX' },
+  { value: 'gpt-5.4:high', label: '5.4 High', backend: 'OPENAI_CODEX' },
+  { value: 'gpt-5.4:extra-high', label: '5.4 Extra High', backend: 'OPENAI_CODEX' },
+  { value: 'gpt-5.4-mini', label: '5.4 Mini', backend: 'OPENAI_CODEX' },
+  { value: 'gpt-5.3-codex', label: '5.3 Codex', backend: 'OPENAI_CODEX' },
+  { value: 'gpt-5.3-codex-spark', label: 'Spark', backend: 'OPENAI_CODEX' },
 ]
 
 const creatingTask = ref(false)
@@ -2591,17 +2602,16 @@ function restoreWorkerLlmSelection(workerId: string | null): boolean {
 }
 
 // --- 根据平台模型配置过滤可用模型 ---
-const isCodexBackend = computed(() => platformModelConfig.value?.workerBackend === 'OPENAI_CODEX')
-
 function isSelectablePlatformModel(model: LlmModelConfig): boolean {
   return model.hasApiKey || model.workerBackend === 'OPENAI_CODEX'
 }
 
 const claudeModelOptions = computed(() => {
-  const allModels = isCodexBackend.value ? ALL_CODEX_MODELS : ALL_CLAUDE_MODELS
+  const backend = platformModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
+  const backendModels = ALL_MODELS.filter(m => m.backend === backend)
   const allowed = platformModelConfig.value?.availableModels
-  if (!allowed || allowed.length === 0) return allModels
-  return allModels.filter(opt => allowed.includes(opt.value))
+  if (!allowed || allowed.length === 0) return backendModels
+  return backendModels.filter(opt => allowed.includes(opt.value))
 })
 
 // 当可用模型列表变化时，若当前选中的模型不在列表中则自动回退到第一个
@@ -3592,6 +3602,7 @@ function selectWorker(workerId: string) {
   saveWorkerLlmSelection(selectedWorkerId.value)
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = null
+  selectedAgentId.value = null
   directorySkills.value = []
   cliProcesses.value = []
   workerActiveTab.value = 'processes'
@@ -3617,6 +3628,11 @@ function selectDirectory(workerId: string, directoryId: string) {
   const previousWorkerId = selectedWorkerId.value
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = directoryId
+  // Auto-resolve agent: find the agent whose defaultDirectoryId matches, or that is bound to this directory
+  const matchingAgent = agentState.agents.value.find(
+    a => a.workerId === workerId && a.defaultDirectoryId === directoryId,
+  )
+  selectedAgentId.value = matchingAgent?.agentId ?? null
   focusedPaneId.value = null
   exitBatchSelectMode()
   // 切换到不同 Worker 的目录时，保存旧 Worker 选择并刷新可用模型列表
@@ -4569,10 +4585,14 @@ async function handleCreateTask() {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
       model?: string; maxTurns?: number; agentTeamsJson?: string; agentTeamsConfigId?: string
-      images?: string; permissionMode?: string; modelConfigId?: string
+      images?: string; permissionMode?: string; modelConfigId?: string; agentId?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
+    }
+    // Pass agentId when available — backend resolves agentId > directoryId > workerId
+    if (selectedAgentId.value) {
+      form.agentId = selectedAgentId.value
     }
 
     if (selectedDirectoryId.value) {
@@ -4967,6 +4987,10 @@ async function handlePaneSend(paneId: string, content: string) {
       directoryId: oldTask.directoryId,
       sessionId: oldTask.sessionId,
     }
+    // Pass agentId — backend resolves agentId > directoryId > workerId
+    if (selectedAgentId.value) {
+      resumeForm.agentId = selectedAgentId.value
+    }
     if (oldTask.claudeSessionId) {
       resumeForm.claudeSessionId = oldTask.claudeSessionId
     }
@@ -5304,6 +5328,10 @@ async function executeContextRepair() {
       directoryId: task.directoryId,
       sessionId: task.sessionId,
     }
+    // Pass agentId — backend resolves agentId > directoryId > workerId
+    if (selectedAgentId.value) {
+      resumeForm.agentId = selectedAgentId.value
+    }
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -5521,6 +5549,10 @@ async function handleResumeFromHistory(task: ClaudeTask) {
       cwd: task.cwd,
       directoryId: task.directoryId,
       sessionId: task.sessionId,  // per-conversation: reuse session
+    }
+    // Pass agentId — backend resolves agentId > directoryId > workerId
+    if (selectedAgentId.value) {
+      resumeForm.agentId = selectedAgentId.value
     }
     if (task.claudeSessionId) {
       resumeForm.claudeSessionId = task.claudeSessionId

@@ -20,6 +20,7 @@ import java.time.LocalDateTime;
     @Index(name = "idx_st_directory_id", columnList = "directoryId"),
     @Index(name = "idx_st_status", columnList = "status"),
     @Index(name = "idx_st_provider_type", columnList = "providerType"),
+    @Index(name = "idx_st_agent_id", columnList = "agentId"),
     @Index(name = "idx_st_created_at", columnList = "createdAt")
 })
 public class SessionTaskEntity {
@@ -49,6 +50,9 @@ public class SessionTaskEntity {
 
     @Column(length = 64)
     private String tenantId;
+
+    @Column(length = 64)
+    private String agentId;
 
     @Column(length = 64)
     private String directoryId;

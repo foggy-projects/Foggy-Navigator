@@ -188,115 +188,12 @@ public class ClaudeTaskController {
             @PathVariable String taskId,
             @RequestBody Map<String, Object> body) {
         String userId = UserContext.getCurrentUserId();
-        String tenantId = UserContext.getCurrentTenantId();
-        var task = taskService.getTaskEntity(taskId);
-        if (!task.getUserId().equals(userId)) {
-            throw RX.throwB("Task not found");
-        }
-
-        // Only allow rewind on completed/failed tasks
-        if ("RUNNING".equals(task.getStatus()) || "AWAITING_PERMISSION".equals(task.getStatus())) {
-            throw RX.throwB("Cannot rewind a running task");
-        }
-
-        String checkpointId = (String) body.get("checkpointId");
-
-        String claudeSessionId = task.getClaudeSessionId();
-        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
-            throw RX.throwB("Task has no Claude session ID");
-        }
-
-        String mode = body.get("mode") != null ? body.get("mode").toString() : "file_rewind";
-        Integer turnIndex = body.get("turnIndex") != null ? ((Number) body.get("turnIndex")).intValue() : null;
-
-        if ("conversation_fork".equals(mode)) {
-            // Conversation rewind: mark messages from turnIndex onwards as sidechain
-            // in the JSONL. Does NOT create a new task — returns the original prompt
-            // so the frontend can populate the input field for user to edit and send.
-
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
-            ClaudeWorkerClient client = workerService.createClient(worker);
-
-            try {
-                Map<String, Object> rewindResult = client.rewindConversation(
-                        claudeSessionId, turnIndex != null ? turnIndex : 1)
-                        .block(java.time.Duration.ofSeconds(15));
-
-                String rewindStatus = rewindResult != null ? (String) rewindResult.get("status") : "error";
-                if ("error".equals(rewindStatus)) {
-                    throw RX.throwB("回退会话失败: " + rewindResult.get("message"));
-                }
-
-                String userPrompt = rewindResult != null ? (String) rewindResult.get("user_prompt") : "";
-
-                // Clean up Navigator DB messages (3rd layer: JSONL done, UI done by frontend, now DB)
-                int effectiveTurn = turnIndex != null ? turnIndex : 1;
-                try {
-                    taskService.truncateSessionMessages(task.getSessionId(), effectiveTurn);
-                } catch (Exception dbEx) {
-                    log.warn("Failed to truncate DB messages for session {}: {}", task.getSessionId(), dbEx.getMessage());
-                }
-
-                var result = new java.util.HashMap<String, Object>();
-                result.put("status", "rewound");
-                result.put("taskId", taskId);
-                result.put("userPrompt", userPrompt != null ? userPrompt : "");
-                result.put("turnIndex", turnIndex);
-                result.put("claudeSessionId", claudeSessionId);
-                return RX.ok(result);
-            } catch (RuntimeException e) {
-                throw e;
-            } catch (Exception e) {
-                log.warn("Failed to rewind conversation: {}", e.getMessage());
-                return RX.failB("回退失败: " + e.getMessage());
-            }
-        }
-
-        // file_rewind mode — requires checkpointId
-        // This mode does BOTH: rewind files (git) AND rewind conversation (JSONL sidechain)
-        if (checkpointId == null || checkpointId.isEmpty()) {
-            throw RX.throwB("checkpointId is required for file_rewind mode");
-        }
-
         try {
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
-            ClaudeWorkerClient client = workerService.createClient(worker);
-
-            // Step 1: Rewind files via CLI --rewind-files
-            Map<String, Object> fileResult = client.rewindFiles(claudeSessionId, checkpointId, task.getCwd())
-                    .block(java.time.Duration.ofSeconds(30));
-
-            // Step 2: Also rewind the conversation (mark sidechain in JSONL)
-            String userPrompt = "";
-            int effectiveTurn = turnIndex != null ? turnIndex : 1;
-            try {
-                Map<String, Object> convResult = client.rewindConversation(claudeSessionId, effectiveTurn)
-                        .block(java.time.Duration.ofSeconds(15));
-                if (convResult != null) {
-                    userPrompt = convResult.get("user_prompt") != null ? convResult.get("user_prompt").toString() : "";
-                }
-            } catch (Exception convEx) {
-                log.warn("File rewind succeeded but conversation rewind failed for task {}: {}", taskId, convEx.getMessage());
-            }
-
-            // Step 3: Truncate DB messages
-            try {
-                taskService.truncateSessionMessages(task.getSessionId(), effectiveTurn);
-            } catch (Exception dbEx) {
-                log.warn("Failed to truncate DB messages for session {}: {}", task.getSessionId(), dbEx.getMessage());
-            }
-
-            var result = new java.util.HashMap<String, Object>();
-            result.put("status", "rewound");
-            result.put("checkpointId", checkpointId);
-            result.put("taskId", taskId);
-            result.put("userPrompt", userPrompt);
-            result.put("turnIndex", turnIndex);
-            result.put("claudeSessionId", claudeSessionId);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = (Map<String, Object>) taskService.rewindTask(taskId, userId, body);
             return RX.ok(result);
-        } catch (Exception e) {
-            log.warn("Failed to rewind files: taskId={}, error={}", taskId, e.getMessage());
-            return RX.failB("回退失败: " + e.getMessage());
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return RX.failB(e.getMessage());
         }
     }
 

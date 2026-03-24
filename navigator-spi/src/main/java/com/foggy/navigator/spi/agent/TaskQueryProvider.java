@@ -67,7 +67,7 @@ public interface TaskQueryProvider {
     }
 
     /** 回退到检查点 */
-    default void rewindTask(String taskId, String userId, java.util.Map<String, Object> params) {
+    default Object rewindTask(String taskId, String userId, java.util.Map<String, Object> params) {
         throw new UnsupportedOperationException("rewind not supported by " + getProviderType());
     }
 
@@ -107,5 +107,28 @@ public interface TaskQueryProvider {
     /** 按目录分页查询任务列表 */
     default Object listTasksByDirectoryPaged(String userId, String directoryId, int page, int size, String state) {
         throw new UnsupportedOperationException("listTasksByDirectoryPaged not supported by " + getProviderType());
+    }
+
+    // ── Worker Session 查询（统一端点迁移） ──
+
+    /** 列出指定 Worker 上的会话列表 */
+    default List<java.util.Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+        throw new UnsupportedOperationException("listWorkerSessions not supported by " + getProviderType());
+    }
+
+    /** 获取会话消息数量统计 */
+    default java.util.Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
+        throw new UnsupportedOperationException("getWorkerSessionMessageCount not supported by " + getProviderType());
+    }
+
+    /** 获取会话消息（支持分页） */
+    default List<java.util.Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
+                                                                          String userId, Integer offset, Integer limit) {
+        throw new UnsupportedOperationException("getWorkerSessionMessages not supported by " + getProviderType());
+    }
+
+    /** 触发 Worker 重新扫描 + 本地同步 */
+    default java.util.Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
+        throw new UnsupportedOperationException("syncWorkerSessions not supported by " + getProviderType());
     }
 }

@@ -4,16 +4,22 @@ import {
   createTaskUnified,
   deleteTaskUnified,
   getTaskUnified,
+  listTasksByStateUnified,
   listTasksByDirectoryPagedUnified,
   listTasksByDirectoryUnified,
   listTasksPagedUnified,
   listTasksUnified,
   reconnectTaskUnified,
+  rewindTaskUnified,
   respondToTaskUnified,
   resumeTaskUnified,
   resyncTaskUnified,
   scanCheckpointsUnified,
   searchSessionsUnified,
+  listWorkerSessionsUnified,
+  getWorkerSessionMessageCountUnified,
+  getWorkerSessionMessagesUnified,
+  syncWorkerSessionsUnified,
 } from './unifiedTask'
 import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig, SessionSearchPage } from '@/types'
 
@@ -338,13 +344,11 @@ export async function rewindTask(
   const body: Record<string, unknown> = { mode }
   if (checkpointId) body.checkpointId = checkpointId
   if (turnIndex != null) body.turnIndex = turnIndex
-  const rx = (await client.post(`/claude-tasks/${taskId}/rewind`, body)) as unknown as RX<{
-    status: string; checkpointId?: string; taskId?: string; userPrompt?: string
-  }>
-  if (!rx.data) {
-    throw new Error(rx.message || '回退失败')
+  const result = await rewindTaskUnified(taskId, body)
+  if (!result) {
+    throw new Error('回退失败')
   }
-  return rx.data
+  return result
 }
 
 export async function scanCheckpoints(
@@ -357,10 +361,7 @@ export async function getWorkerSessionMessageCount(
   workerId: string,
   sessionId: string,
 ): Promise<{ user_count: number; assistant_count: number; total: number }> {
-  const rx = (await client.get(
-    `/claude-tasks/worker/${workerId}/sessions/${sessionId}/message-count`,
-  )) as unknown as RX<{ user_count: number; assistant_count: number; total: number }>
-  return rx.data
+  return await getWorkerSessionMessageCountUnified(workerId, sessionId)
 }
 
 export async function deleteTask(taskId: string): Promise<{ taskId: string; deleted: boolean }> {
@@ -371,20 +372,14 @@ export async function deleteTask(taskId: string): Promise<{ taskId: string; dele
 export async function listWorkerSessions(
   workerId: string,
 ): Promise<WorkerSession[]> {
-  const rx = (await client.get(
-    `/claude-tasks/worker/${workerId}/sessions`,
-  )) as unknown as RX<WorkerSession[]>
-  return rx.data
+  return await listWorkerSessionsUnified(workerId) as unknown as WorkerSession[]
 }
 
 export async function getWorkerSessionMessages(
   workerId: string,
   sessionId: string,
 ): Promise<{ role: string; content: string; timestamp: string }[]> {
-  const rx = (await client.get(
-    `/claude-tasks/worker/${workerId}/sessions/${sessionId}/messages`,
-  )) as unknown as RX<{ role: string; content: string; timestamp: string }[]>
-  return rx.data
+  return await getWorkerSessionMessagesUnified(workerId, sessionId)
 }
 
 export async function getWorkerSessionMessagesPaged(
@@ -393,20 +388,13 @@ export async function getWorkerSessionMessagesPaged(
   offset: number,
   limit: number,
 ): Promise<{ role: string; content: string; timestamp: string }[]> {
-  const rx = (await client.get(
-    `/claude-tasks/worker/${workerId}/sessions/${sessionId}/messages`,
-    { params: { offset, limit } },
-  )) as unknown as RX<{ role: string; content: string; timestamp: string }[]>
-  return rx.data
+  return await getWorkerSessionMessagesUnified(workerId, sessionId, offset, limit)
 }
 
 export async function syncWorkerSessions(
   workerId: string,
 ): Promise<{ synced: number; total: number }> {
-  const rx = (await client.post(
-    `/claude-tasks/worker/${workerId}/sessions/sync`,
-  )) as unknown as RX<{ synced: number; total: number }>
-  return rx.data
+  return await syncWorkerSessionsUnified(workerId)
 }
 
 export async function listActiveTasks(): Promise<ClaudeTask[]> {
@@ -414,8 +402,7 @@ export async function listActiveTasks(): Promise<ClaudeTask[]> {
 }
 
 export async function listAwaitingReplyTasks(): Promise<ClaudeTask[]> {
-  const rx = (await client.get('/claude-tasks/awaiting-reply')) as unknown as RX<ClaudeTask[]>
-  return rx.data
+  return await listTasksByStateUnified('AWAITING_REPLY') as unknown as ClaudeTask[]
 }
 
 // ===== Conversation Config API =====
@@ -424,7 +411,7 @@ export async function updateConversationTags(
   sessionId: string,
   tags: string[],
 ): Promise<ConversationConfig> {
-  const rx = (await client.patch(`/claude-tasks/conversations/${sessionId}/tags`, {
+  const rx = (await client.patch(`/sessions/${sessionId}/config/tags`, {
     tags,
   })) as unknown as RX<ConversationConfig>
   return rx.data
@@ -434,7 +421,7 @@ export async function updateConversationPin(
   sessionId: string,
   pinned: boolean,
 ): Promise<ConversationConfig> {
-  const rx = (await client.patch(`/claude-tasks/conversations/${sessionId}/pin`, {
+  const rx = (await client.patch(`/sessions/${sessionId}/config/pin`, {
     pinned,
   })) as unknown as RX<ConversationConfig>
   return rx.data
@@ -444,7 +431,7 @@ export async function updateConversationTitle(
   sessionId: string,
   title: string,
 ): Promise<ConversationConfig> {
-  const rx = (await client.patch(`/claude-tasks/conversations/${sessionId}/title`, {
+  const rx = (await client.patch(`/sessions/${sessionId}/config/title`, {
     title,
   })) as unknown as RX<ConversationConfig>
   return rx.data
@@ -455,7 +442,7 @@ export async function bindConversationAuth(
   form: { authMode: string; authToken: string; baseUrl?: string },
 ): Promise<ConversationConfig> {
   const rx = (await client.post(
-    `/claude-tasks/conversations/${sessionId}/bind-auth`,
+    `/sessions/${sessionId}/config/bind-auth`,
     form,
   )) as unknown as RX<ConversationConfig>
   return rx.data
@@ -466,7 +453,7 @@ export async function updateConversationAuth(
   form: { authMode: string; authToken: string; baseUrl?: string },
 ): Promise<ConversationConfig> {
   const rx = (await client.patch(
-    `/claude-tasks/conversations/${sessionId}/auth`,
+    `/sessions/${sessionId}/config/auth`,
     form,
   )) as unknown as RX<ConversationConfig>
   return rx.data
@@ -475,7 +462,7 @@ export async function updateConversationAuth(
 export async function listConversationConfigs(
   sessionIds: string[],
 ): Promise<ConversationConfig[]> {
-  const rx = (await client.get('/claude-tasks/conversation-configs', {
+  const rx = (await client.get('/sessions/configs', {
     params: { sessionIds: sessionIds.join(',') },
   })) as unknown as RX<ConversationConfig[]>
   return rx.data
@@ -490,7 +477,7 @@ export async function batchBindConversationAuth(form: {
   modelConfigId?: string
 }): Promise<{ bound: number; total: number }> {
   const rx = (await client.post(
-    '/claude-tasks/conversations/batch-bind-auth',
+    '/sessions/configs/batch-bind-auth',
     form,
   )) as unknown as RX<{ bound: number; total: number }>
   return rx.data
@@ -500,7 +487,7 @@ export async function archiveConversation(
   sessionId: string,
 ): Promise<ConversationConfig> {
   const rx = (await client.post(
-    `/claude-tasks/conversations/${sessionId}/archive`,
+    `/sessions/${sessionId}/config/archive`,
   )) as unknown as RX<ConversationConfig>
   return rx.data
 }
@@ -509,7 +496,7 @@ export async function unarchiveConversation(
   sessionId: string,
 ): Promise<ConversationConfig> {
   const rx = (await client.post(
-    `/claude-tasks/conversations/${sessionId}/unarchive`,
+    `/sessions/${sessionId}/config/unarchive`,
   )) as unknown as RX<ConversationConfig>
   return rx.data
 }
@@ -518,7 +505,7 @@ export async function holdConversation(
   sessionId: string,
 ): Promise<ConversationConfig> {
   const rx = (await client.post(
-    `/claude-tasks/conversations/${sessionId}/hold`,
+    `/sessions/${sessionId}/config/hold`,
   )) as unknown as RX<ConversationConfig>
   return rx.data
 }
@@ -527,7 +514,7 @@ export async function unholdConversation(
   sessionId: string,
 ): Promise<ConversationConfig> {
   const rx = (await client.post(
-    `/claude-tasks/conversations/${sessionId}/unhold`,
+    `/sessions/${sessionId}/config/unhold`,
   )) as unknown as RX<ConversationConfig>
   return rx.data
 }

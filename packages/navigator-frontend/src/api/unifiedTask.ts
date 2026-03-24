@@ -20,6 +20,15 @@ export type DispatchTask = ClaudeTask & {
   contextId?: string
 }
 
+export type RewindTaskResult = {
+  status: string
+  checkpointId?: string
+  taskId?: string
+  userPrompt?: string
+  turnIndex?: number
+  claudeSessionId?: string
+}
+
 function normalizeImages(images?: string | string[]): string[] | undefined {
   if (images == null) {
     return undefined
@@ -171,8 +180,8 @@ export async function rewindTaskUnified(
     mode?: string
     turnIndex?: number
   },
-): Promise<unknown> {
-  const rx = (await client.post(`/tasks/${taskId}/rewind`, body)) as unknown as RX<unknown>
+): Promise<RewindTaskResult | null> {
+  const rx = (await client.post(`/tasks/${taskId}/rewind`, body)) as unknown as RX<RewindTaskResult | null>
   return rx.data
 }
 
@@ -202,6 +211,29 @@ export async function listTasksPagedUnified(
     params: { page, size, ...(state ? { state } : {}) },
   })) as unknown as RX<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }>
   return rx.data
+}
+
+/**
+ * Load all tasks for sessions in a specific interaction state.
+ * The unified `/tasks/page` endpoint paginates by session, so callers that
+ * need the complete set must walk all pages.
+ */
+export async function listTasksByStateUnified(
+  state: string,
+  pageSize = 100,
+): Promise<DispatchTask[]> {
+  const tasks: DispatchTask[] = []
+  let page = 0
+  let totalSessions = 0
+
+  do {
+    const result = await listTasksPagedUnified(page, pageSize, state)
+    tasks.push(...(result.content as DispatchTask[]))
+    totalSessions = result.totalSessions
+    page += 1
+  } while (page * pageSize < totalSessions)
+
+  return tasks
 }
 
 /**
@@ -248,5 +280,70 @@ export async function listTasksByDirectoryPagedUnified(
   const rx = (await client.get(`/tasks/directory/${directoryId}/page`, {
     params: { page, size, ...(state ? { state } : {}) },
   })) as unknown as RX<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }>
+  return rx.data
+}
+
+// ── Worker Session 查询（统一端点） ──
+
+export type WorkerSession = {
+  session_id: string
+  project: string
+  model: string
+  [key: string]: unknown
+}
+
+/**
+ * List sessions on a Worker.
+ */
+export async function listWorkerSessionsUnified(
+  workerId: string,
+): Promise<WorkerSession[]> {
+  const rx = (await client.get(
+    `/tasks/workers/${workerId}/sessions`,
+  )) as unknown as RX<WorkerSession[]>
+  return rx.data
+}
+
+/**
+ * Get session message count breakdown.
+ */
+export async function getWorkerSessionMessageCountUnified(
+  workerId: string,
+  sessionId: string,
+): Promise<{ user_count: number; assistant_count: number; total: number }> {
+  const rx = (await client.get(
+    `/tasks/workers/${workerId}/sessions/${sessionId}/message-count`,
+  )) as unknown as RX<{ user_count: number; assistant_count: number; total: number }>
+  return rx.data
+}
+
+/**
+ * Get session messages with optional pagination.
+ */
+export async function getWorkerSessionMessagesUnified(
+  workerId: string,
+  sessionId: string,
+  offset?: number,
+  limit?: number,
+): Promise<{ role: string; content: string; timestamp: string }[]> {
+  const params: Record<string, number> = {}
+  if (offset != null) params.offset = offset
+  if (limit != null) params.limit = limit
+  const rx = (await client.get(
+    `/tasks/workers/${workerId}/sessions/${sessionId}/messages`,
+    { params },
+  )) as unknown as RX<{ role: string; content: string; timestamp: string }[]>
+  return rx.data
+}
+
+/**
+ * Trigger Worker to re-scan sessions and sync locally.
+ */
+export async function syncWorkerSessionsUnified(
+  workerId: string,
+): Promise<{ synced: number; total: number }> {
+  const rx = (await client.post(
+    `/tasks/workers/${workerId}/sessions/sync`,
+  )) as unknown as RX<{ synced: number; total: number }>
   return rx.data
 }

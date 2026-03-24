@@ -109,6 +109,7 @@ export function useClaudeWorker() {
     images?: string
     permissionMode?: string
     modelConfigId?: string
+    agentId?: string
   }) {
     // 使用统一任务 API（/api/v1/tasks），后端自动从 modelConfigId 推导 agentId
     const task = await createTaskUnified(form) as unknown as ClaudeTask
@@ -131,6 +132,7 @@ export function useClaudeWorker() {
     images?: string
     permissionMode?: string
     modelConfigId?: string
+    agentId?: string
   }) {
     // 使用统一任务 API（/api/v1/tasks/resume）
     const task = await resumeTaskUnified(form) as unknown as ClaudeTask

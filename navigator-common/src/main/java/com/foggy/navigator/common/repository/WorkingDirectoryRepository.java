@@ -3,6 +3,7 @@ package com.foggy.navigator.common.repository;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,6 +25,8 @@ public interface WorkingDirectoryRepository extends JpaRepository<WorkingDirecto
             String parentProjectId, String userId);
 
     Optional<WorkingDirectoryEntity> findByDirectoryId(String directoryId);
+
+    List<WorkingDirectoryEntity> findByDirectoryIdIn(Collection<String> directoryIds);
 
     Optional<WorkingDirectoryEntity> findBySourceDirectoryIdAndGitBranch(String sourceDirectoryId, String gitBranch);
 

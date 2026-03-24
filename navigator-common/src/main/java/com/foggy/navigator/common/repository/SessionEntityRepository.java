@@ -39,4 +39,23 @@ public interface SessionEntityRepository extends JpaRepository<SessionEntity, St
            "AND LOWER(COALESCE(s.tagsJson, '')) LIKE LOWER(CONCAT('%', :keyword, '%'))")
     List<String> findSessionIdsByTagKeyword(@Param("userId") String userId,
                                             @Param("keyword") String keyword);
+
+    /**
+     * Check if a soft-deleted session exists with the given claudeSessionId in its providerStateJson.
+     * Used by syncLocalSessions to skip re-importing sessions that users have deleted.
+     */
+    @Query("SELECT COUNT(s) > 0 FROM SessionEntity s " +
+           "WHERE s.providerStateJson LIKE %:claudeSessionId% AND s.deletedAt IS NOT NULL")
+    boolean existsDeletedByClaudeSessionId(@Param("claudeSessionId") String claudeSessionId);
+
+    /**
+     * Find all soft-deleted sessions for a given user whose providerStateJson contains the workerId.
+     * Used to batch-load deleted claude session IDs during syncLocalSessions.
+     */
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.deletedAt IS NOT NULL " +
+           "AND s.providerStateJson LIKE %:workerId% " +
+           "AND s.userId = :userId")
+    List<SessionEntity> findDeletedByWorkerIdAndUserId(@Param("workerId") String workerId,
+                                                       @Param("userId") String userId);
 }

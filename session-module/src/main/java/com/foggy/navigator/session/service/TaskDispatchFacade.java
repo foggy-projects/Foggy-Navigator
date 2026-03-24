@@ -8,6 +8,7 @@ import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -55,6 +56,10 @@ public class TaskDispatchFacade {
     @Autowired(required = false)
     @Nullable
     private SessionTaskRepository sessionTaskRepository;
+
+    @Autowired(required = false)
+    @Nullable
+    private WorkingDirectoryRepository workingDirectoryRepository;
 
     /**
      * 创建任务。
@@ -123,9 +128,8 @@ public class TaskDispatchFacade {
      */
     public List<DispatchTaskDTO> listTasksBySession(String sessionId) {
         if (sessionTaskRepository != null) {
-            List<DispatchTaskDTO> tasks = sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(sessionId).stream()
-                    .map(this::toDispatchTaskDTO)
-                    .toList();
+            List<DispatchTaskDTO> tasks = toDispatchTaskDTOs(
+                    sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(sessionId));
             if (!tasks.isEmpty()) {
                 return tasks;
             }
@@ -159,9 +163,9 @@ public class TaskDispatchFacade {
      */
     public List<DispatchTaskDTO> listActiveTasks(String userId) {
         if (sessionTaskRepository != null) {
-            List<DispatchTaskDTO> tasks = sessionTaskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
-                            userId, List.of("RUNNING", "AWAITING_PERMISSION")).stream()
-                    .map(this::toDispatchTaskDTO)
+            List<DispatchTaskDTO> tasks = toDispatchTaskDTOs(
+                    sessionTaskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
+                            userId, List.of("RUNNING", "AWAITING_PERMISSION"))).stream()
                     .sorted((left, right) -> compareNullableTime(right.getCreatedAt(), left.getCreatedAt()))
                     .toList();
             if (!tasks.isEmpty()) {
@@ -223,9 +227,9 @@ public class TaskDispatchFacade {
     /**
      * 回退到检查点
      */
-    public void rewindTask(String taskId, String userId, Map<String, Object> params) {
+    public Object rewindTask(String taskId, String userId, Map<String, Object> params) {
         TaskQueryProvider provider = findProviderForTask(taskId);
-        provider.rewindTask(taskId, userId, params);
+        return provider.rewindTask(taskId, userId, params);
     }
 
     // ── Phase 3: 统一任务端点扩展 ──
@@ -355,10 +359,8 @@ public class TaskDispatchFacade {
      */
     public List<DispatchTaskDTO> listTasksByDirectory(String userId, String directoryId) {
         if (sessionTaskRepository != null) {
-            List<DispatchTaskDTO> tasks = sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId)
-                    .stream()
-                    .map(this::toDispatchTaskDTO)
-                    .toList();
+            List<DispatchTaskDTO> tasks = toDispatchTaskDTOs(
+                    sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId));
             if (!tasks.isEmpty()) {
                 return tasks;
             }
@@ -423,6 +425,49 @@ public class TaskDispatchFacade {
             params.put("images", String.join(",", request.getImages()));
         }
         return params;
+    }
+
+    // ── Worker Session 查询（统一端点） ──
+
+    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+        for (TaskQueryProvider provider : taskQueryProviders) {
+            try {
+                return provider.listWorkerSessions(workerId, userId);
+            } catch (UnsupportedOperationException ignored) {
+            }
+        }
+        return List.of();
+    }
+
+    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
+        for (TaskQueryProvider provider : taskQueryProviders) {
+            try {
+                return provider.getWorkerSessionMessageCount(workerId, sessionId, userId);
+            } catch (UnsupportedOperationException ignored) {
+            }
+        }
+        return Map.of("user_count", 0, "assistant_count", 0, "total", 0);
+    }
+
+    public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
+                                                               String userId, Integer offset, Integer limit) {
+        for (TaskQueryProvider provider : taskQueryProviders) {
+            try {
+                return provider.getWorkerSessionMessages(workerId, sessionId, userId, offset, limit);
+            } catch (UnsupportedOperationException ignored) {
+            }
+        }
+        return List.of();
+    }
+
+    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
+        for (TaskQueryProvider provider : taskQueryProviders) {
+            try {
+                return provider.syncWorkerSessions(workerId, userId, tenantId);
+            } catch (UnsupportedOperationException ignored) {
+            }
+        }
+        throw new UnsupportedOperationException("No provider supports syncWorkerSessions");
     }
 
     private TaskQueryProvider findProviderForTask(String taskId) {
@@ -702,10 +747,10 @@ public class TaskDispatchFacade {
         List<UnifiedSessionView> sessions = buildUnifiedSessionViews(tasks, userId, directoryId, state);
         int from = Math.min(page * size, sessions.size());
         int to = Math.min(from + size, sessions.size());
-        List<Object> content = sessions.subList(from, to).stream()
+        List<SessionTaskEntity> pagedTasks = sessions.subList(from, to).stream()
                 .flatMap(view -> view.tasks().stream())
-                .map(this::toDispatchTaskDTO)
-                .collect(Collectors.toList());
+                .toList();
+        List<Object> content = new ArrayList<>(toDispatchTaskDTOs(pagedTasks));
 
         return Map.of(
                 "content", content,
@@ -852,7 +897,21 @@ public class TaskDispatchFacade {
         return result;
     }
 
+    private List<DispatchTaskDTO> toDispatchTaskDTOs(List<SessionTaskEntity> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> directoryNames = loadDirectoryNames(entities);
+        return entities.stream()
+                .map(entity -> toDispatchTaskDTO(entity, directoryNames))
+                .toList();
+    }
+
     private DispatchTaskDTO toDispatchTaskDTO(SessionTaskEntity entity) {
+        return toDispatchTaskDTO(entity, loadDirectoryNames(List.of(entity)));
+    }
+
+    private DispatchTaskDTO toDispatchTaskDTO(SessionTaskEntity entity, Map<String, String> directoryNames) {
         Map<String, Object> state = parseJsonObject(entity.getTaskStateJson());
         DispatchTaskDTO.DispatchTaskDTOBuilder builder = DispatchTaskDTO.builder()
                 .taskId(entity.getTaskId())
@@ -860,7 +919,7 @@ public class TaskDispatchFacade {
                 .sessionId(entity.getSessionId())
                 .workerId(entity.getWorkerId())
                 .userId(entity.getUserId())
-                .agentId(entity.getProviderType())
+                .agentId(entity.getAgentId() != null ? entity.getAgentId() : entity.getProviderType())
                 .providerType(entity.getProviderType())
                 .prompt(entity.getPrompt())
                 .cwd(entity.getCwd())
@@ -878,6 +937,7 @@ public class TaskDispatchFacade {
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
+                .directoryName(directoryNames.get(entity.getDirectoryId()))
                 .claudeSessionId(asString(state.get("claudeSessionId")))
                 .codexThreadId(asString(state.get("codexThreadId")))
                 .contextId(asString(state.get("contextId")))
@@ -886,6 +946,33 @@ public class TaskDispatchFacade {
             builder.checkpoints(writeJson(state.get("checkpoints")));
         }
         return builder.build();
+    }
+
+    private Map<String, String> loadDirectoryNames(List<SessionTaskEntity> entities) {
+        if (workingDirectoryRepository == null || entities == null || entities.isEmpty()) {
+            return Map.of();
+        }
+        List<String> directoryIds = entities.stream()
+                .map(SessionTaskEntity::getDirectoryId)
+                .filter(Objects::nonNull)
+                .filter(id -> !id.isBlank())
+                .distinct()
+                .toList();
+        if (directoryIds.isEmpty()) {
+            return Map.of();
+        }
+        List<com.foggy.navigator.common.entity.WorkingDirectoryEntity> directories =
+                workingDirectoryRepository.findByDirectoryIdIn(directoryIds);
+        if (directories == null || directories.isEmpty()) {
+            return Map.of();
+        }
+        return directories.stream()
+                .collect(Collectors.toMap(
+                        com.foggy.navigator.common.entity.WorkingDirectoryEntity::getDirectoryId,
+                        com.foggy.navigator.common.entity.WorkingDirectoryEntity::getProjectName,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
     }
 
     private Map<String, Object> parseJsonObject(String json) {

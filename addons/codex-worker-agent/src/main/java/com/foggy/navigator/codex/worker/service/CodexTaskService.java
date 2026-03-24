@@ -625,6 +625,7 @@ public class CodexTaskService implements TaskQueryProvider {
         sessionTask.setWorkerId(entity.getWorkerId());
         sessionTask.setUserId(entity.getUserId());
         sessionTask.setTenantId(entity.getTenantId());
+        sessionTask.setAgentId(AGENT_ID);
         sessionTask.setDirectoryId(entity.getDirectoryId());
         sessionTask.setPrompt(entity.getPrompt());
         sessionTask.setCwd(entity.getCwd());

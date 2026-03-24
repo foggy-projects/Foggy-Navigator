@@ -154,14 +154,16 @@ public class TaskController {
      * 回退到检查点
      */
     @PostMapping("/{taskId}/rewind")
-    public RX<String> rewindTask(@PathVariable String taskId,
-                                  @RequestBody Map<String, Object> body) {
+    public RX<?> rewindTask(@PathVariable String taskId,
+                             @RequestBody Map<String, Object> body) {
         String userId = UserContext.getCurrentUserId();
         try {
-            taskDispatchFacade.rewindTask(taskId, userId, body);
-            return RX.ok("Rewind initiated");
+            Object result = taskDispatchFacade.rewindTask(taskId, userId, body);
+            return RX.ok(result);
         } catch (UnsupportedOperationException e) {
             return RX.failA(e.getMessage());
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return RX.failB(e.getMessage());
         }
     }
 
@@ -256,5 +258,54 @@ public class TaskController {
             @RequestParam(required = false) String state) {
         String userId = UserContext.getCurrentUserId();
         return RX.ok(taskDispatchFacade.listTasksByDirectoryPaged(userId, directoryId, page, size, state));
+    }
+
+    // ── Worker Session 查询（统一端点，迁移自 ClaudeTaskController） ──
+
+    /**
+     * 列出指定 Worker 上的会话列表
+     */
+    @GetMapping("/workers/{workerId}/sessions")
+    public RX<List<Map<String, Object>>> listWorkerSessions(@PathVariable String workerId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskDispatchFacade.listWorkerSessions(workerId, userId));
+    }
+
+    /**
+     * 获取会话消息数量统计
+     */
+    @GetMapping("/workers/{workerId}/sessions/{sessionId}/message-count")
+    public RX<Map<String, Object>> getWorkerSessionMessageCount(
+            @PathVariable String workerId,
+            @PathVariable String sessionId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskDispatchFacade.getWorkerSessionMessageCount(workerId, sessionId, userId));
+    }
+
+    /**
+     * 获取会话消息（支持分页）
+     */
+    @GetMapping("/workers/{workerId}/sessions/{sessionId}/messages")
+    public RX<List<Map<String, Object>>> getWorkerSessionMessages(
+            @PathVariable String workerId,
+            @PathVariable String sessionId,
+            @RequestParam(required = false) Integer offset,
+            @RequestParam(required = false) Integer limit) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskDispatchFacade.getWorkerSessionMessages(workerId, sessionId, userId, offset, limit));
+    }
+
+    /**
+     * 触发 Worker 重新扫描 + 本地同步
+     */
+    @PostMapping("/workers/{workerId}/sessions/sync")
+    public RX<Map<String, Object>> syncWorkerSessions(@PathVariable String workerId) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        try {
+            return RX.ok(taskDispatchFacade.syncWorkerSessions(workerId, userId, tenantId));
+        } catch (Exception e) {
+            return RX.failB(e.getMessage());
+        }
     }
 }
