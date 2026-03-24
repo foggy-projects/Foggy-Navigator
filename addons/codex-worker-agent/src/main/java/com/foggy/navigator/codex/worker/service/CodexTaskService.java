@@ -2,7 +2,7 @@ package com.foggy.navigator.codex.worker.service;
 
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
-import com.foggy.navigator.codex.worker.model.event.CodexTaskStartEvent;
+import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.agent.framework.session.Message;
@@ -86,17 +86,15 @@ public class CodexTaskService implements TaskQueryProvider {
         // 解析 API Key（如有模型配置）
         String apiKey = resolveApiKey(form.getModelConfigId());
 
-        // 发布事件触发 CodexStreamRelay
-        eventPublisher.publishEvent(CodexTaskStartEvent.builder()
-                .taskId(taskId)
-                .sessionId(sessionId)
-                .workerId(form.getWorkerId())
-                .prompt(form.getPrompt())
-                .cwd(form.getCwd())
-                .codexThreadId(form.getCodexThreadId())
-                .model(form.getModel())
-                .maxTurns(form.getMaxTurns())
-                .apiKey(apiKey)
+        // 发布统一事件触发 CodexStreamRelay（通过 providerType 条件过滤）
+        eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
+                .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
+                .prompt(form.getPrompt()).cwd(form.getCwd())
+                .model(form.getModel()).maxTurns(form.getMaxTurns())
+                .apiKey(apiKey).providerType(AGENT_ID)
+                .providerConfig(form.getCodexThreadId() != null
+                        ? java.util.Map.of("codexThreadId", form.getCodexThreadId())
+                        : java.util.Map.of())
                 .build());
 
         return toDTO(entity);

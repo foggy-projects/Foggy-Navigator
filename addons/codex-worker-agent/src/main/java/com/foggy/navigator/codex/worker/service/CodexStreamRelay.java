@@ -9,7 +9,7 @@ import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
-import com.foggy.navigator.codex.worker.model.event.CodexTaskStartEvent;
+import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.common.model.CodexConfig;
@@ -69,8 +69,8 @@ public class CodexStreamRelay {
     private final ConcurrentHashMap<String, AtomicBoolean> reconnecting = new ConcurrentHashMap<>();
 
     @Async("sessionEventExecutor")
-    @EventListener
-    public void onTaskStart(CodexTaskStartEvent event) {
+    @EventListener(condition = "#event.providerType == 'codex-worker'")
+    public void onTaskStart(WorkerTaskStartEvent event) {
         String taskId = event.getTaskId();
         String sessionId = event.getSessionId();
         String workerId = event.getWorkerId();
@@ -84,12 +84,13 @@ public class CodexStreamRelay {
         try {
             CodexWorkerClient client = getCodexClient(workerId);
 
+            String codexThreadId = event.getProviderConfigString("codexThreadId");
             AtomicReference<String> detectedModel = new AtomicReference<>();
-            AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(event.getCodexThreadId());
+            AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(codexThreadId);
 
             Flux<ServerSentEvent<String>> sseFlux = client.streamQuery(
                     event.getPrompt(), event.getCwd(),
-                    event.getCodexThreadId(), event.getModel(),
+                    codexThreadId, event.getModel(),
                     event.getMaxTurns(), event.getApiKey());
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,

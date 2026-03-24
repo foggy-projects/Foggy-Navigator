@@ -157,6 +157,47 @@ public class TaskDispatchFacade {
         log.info("Cancelled task via Facade: taskId={}, agentId={}", taskId, agentId);
     }
 
+    // ── 任务操作（路由到 TaskQueryProvider） ──
+
+    /**
+     * 回复权限请求 / 用户问题（不支持的 Provider 自动抛 UnsupportedOperationException）
+     */
+    public void respondToTask(String taskId, String userId, Map<String, Object> response) {
+        TaskQueryProvider provider = findProviderForTask(taskId);
+        provider.respondToTask(taskId, userId, response);
+    }
+
+    /**
+     * 重连任务 SSE 流
+     */
+    public void reconnectTask(String taskId, String userId) {
+        TaskQueryProvider provider = findProviderForTask(taskId);
+        provider.reconnectTask(taskId, userId);
+    }
+
+    /**
+     * 重新同步任务状态
+     */
+    public Object resyncTask(String taskId, String userId) {
+        TaskQueryProvider provider = findProviderForTask(taskId);
+        return provider.resyncTask(taskId, userId);
+    }
+
+    /**
+     * 回退到检查点
+     */
+    public void rewindTask(String taskId, String userId, Map<String, Object> params) {
+        TaskQueryProvider provider = findProviderForTask(taskId);
+        provider.rewindTask(taskId, userId, params);
+    }
+
+    private TaskQueryProvider findProviderForTask(String taskId) {
+        for (TaskQueryProvider p : taskQueryProviders) {
+            if (p.getTaskById(taskId).isPresent()) return p;
+        }
+        throw new IllegalArgumentException("Task not found: " + taskId);
+    }
+
     // ── 内部方法 ──
 
     private A2aMessage buildMessage(TaskDispatchRequest request) {

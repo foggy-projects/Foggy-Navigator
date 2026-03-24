@@ -105,4 +105,64 @@ public class TaskController {
         taskDispatchFacade.cancelTask(taskId, agentId, context);
         return RX.ok("Task cancelled");
     }
+
+    /**
+     * 回复权限请求 / 用户问题
+     * <p>
+     * 不支持此操作的 Agent 会返回 UnsupportedOperationException → 400
+     */
+    @PostMapping("/{taskId}/respond")
+    public RX<String> respondToTask(@PathVariable String taskId,
+                                     @RequestBody Map<String, Object> body) {
+        String userId = UserContext.getCurrentUserId();
+        try {
+            taskDispatchFacade.respondToTask(taskId, userId, body);
+            return RX.ok("Response sent");
+        } catch (UnsupportedOperationException e) {
+            return RX.failA(e.getMessage());
+        }
+    }
+
+    /**
+     * 重连任务 SSE 流
+     */
+    @PostMapping("/{taskId}/reconnect")
+    public RX<String> reconnectTask(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        try {
+            taskDispatchFacade.reconnectTask(taskId, userId);
+            return RX.ok("Reconnect initiated");
+        } catch (UnsupportedOperationException e) {
+            return RX.failA(e.getMessage());
+        }
+    }
+
+    /**
+     * 重新同步任务状态
+     */
+    @PostMapping("/{taskId}/resync")
+    public RX<?> resyncTask(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        try {
+            Object result = taskDispatchFacade.resyncTask(taskId, userId);
+            return RX.ok(result);
+        } catch (UnsupportedOperationException e) {
+            return RX.failA(e.getMessage());
+        }
+    }
+
+    /**
+     * 回退到检查点
+     */
+    @PostMapping("/{taskId}/rewind")
+    public RX<String> rewindTask(@PathVariable String taskId,
+                                  @RequestBody Map<String, Object> body) {
+        String userId = UserContext.getCurrentUserId();
+        try {
+            taskDispatchFacade.rewindTask(taskId, userId, body);
+            return RX.ok("Rewind initiated");
+        } catch (UnsupportedOperationException e) {
+            return RX.failA(e.getMessage());
+        }
+    }
 }

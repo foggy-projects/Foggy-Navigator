@@ -27,4 +27,26 @@ public interface TaskQueryProvider {
 
     /** 按 userId 查询活跃任务（RUNNING / AWAITING_PERMISSION） */
     List<DispatchTaskDTO> listActiveDispatchTasks(String userId);
+
+    // ── 任务操作（default 抛不支持异常，Provider 按需覆写） ──
+
+    /** 回复权限请求 / 用户问题 */
+    default void respondToTask(String taskId, String userId, java.util.Map<String, Object> response) {
+        throw new UnsupportedOperationException("respond not supported by " + getProviderType());
+    }
+
+    /** 重连任务 SSE 流 */
+    default void reconnectTask(String taskId, String userId) {
+        throw new UnsupportedOperationException("reconnect not supported by " + getProviderType());
+    }
+
+    /** 重新同步任务状态 */
+    default Object resyncTask(String taskId, String userId) {
+        throw new UnsupportedOperationException("resync not supported by " + getProviderType());
+    }
+
+    /** 回退到检查点 */
+    default void rewindTask(String taskId, String userId, java.util.Map<String, Object> params) {
+        throw new UnsupportedOperationException("rewind not supported by " + getProviderType());
+    }
 }

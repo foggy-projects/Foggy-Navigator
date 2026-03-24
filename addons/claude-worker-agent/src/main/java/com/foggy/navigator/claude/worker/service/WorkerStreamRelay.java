@@ -9,7 +9,7 @@ import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
-import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
+import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
@@ -87,8 +87,8 @@ public class WorkerStreamRelay {
     private final ConcurrentHashMap<String, AtomicBoolean> reconnecting = new ConcurrentHashMap<>();
 
     @Async("sessionEventExecutor")
-    @EventListener
-    public void onTaskStart(ClaudeTaskStartEvent event) {
+    @EventListener(condition = "#event.providerType == 'claude-worker'")
+    public void onTaskStart(WorkerTaskStartEvent event) {
         String taskId = event.getTaskId();
         String sessionId = event.getSessionId();
         String workerId = event.getWorkerId();
@@ -103,17 +103,39 @@ public class WorkerStreamRelay {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
             ClaudeWorkerClient client = workerService.createClient(worker);
 
+            // 从 providerConfig 提取 Claude 特有参数
+            String claudeSessionId = event.getProviderConfigString("claudeSessionId");
+            String agentTeamsJson = event.getProviderConfigString("agentTeamsJson");
+            String images = event.getProviderConfigString("images");
+            String authToken = event.getProviderConfigString("authToken");
+            String baseUrl = event.getProviderConfigString("baseUrl");
+            String permissionMode = event.getProviderConfigString("permissionMode");
+            String navigatorApiKey = event.getProviderConfigString("navigatorApiKey");
+            String navigatorApiBase = event.getProviderConfigString("navigatorApiBase");
+            @SuppressWarnings("unchecked")
+            Map<String, String> extraEnvVars = event.getProviderConfigValue("extraEnvVars");
+            if (extraEnvVars != null && extraEnvVars.isEmpty()) extraEnvVars = null;
+
+            // 将空字符串转为 null（providerConfig 的 Map.of 不允许 null value）
+            claudeSessionId = blankToNull(claudeSessionId);
+            agentTeamsJson = blankToNull(agentTeamsJson);
+            images = blankToNull(images);
+            authToken = blankToNull(authToken);
+            baseUrl = blankToNull(baseUrl);
+            permissionMode = blankToNull(permissionMode);
+            navigatorApiKey = blankToNull(navigatorApiKey);
+            navigatorApiBase = blankToNull(navigatorApiBase);
+
             AtomicReference<String> detectedModel = new AtomicReference<>();
-            AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(event.getClaudeSessionId());
+            AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(claudeSessionId);
 
             Flux<ServerSentEvent<String>> sseFlux = client.streamQuery(event.getPrompt(), event.getCwd(),
-                    event.getClaudeSessionId(), event.getModel(), event.getMaxTurns(),
-                    event.getAgentTeamsJson(), event.getImages(),
-                    event.getApiKey(), event.getAuthToken(), event.getBaseUrl(),
-                    event.getPermissionMode(), event.getNavigatorApiKey(),
-                    event.getNavigatorApiBase(),
+                    claudeSessionId, event.getModel(), event.getMaxTurns(),
+                    agentTeamsJson, images,
+                    event.getApiKey(), authToken, baseUrl,
+                    permissionMode, navigatorApiKey, navigatorApiBase,
                     event.getTaskId(), event.getSessionId(),
-                    event.getExtraEnvVars());
+                    extraEnvVars);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, 0);
@@ -135,6 +157,10 @@ public class WorkerStreamRelay {
             publishMessage(sessionId, MessageType.ERROR,
                     Map.of("content", "Failed to connect to worker: " + e.getMessage(), "taskId", taskId));
         }
+    }
+
+    private String blankToNull(String s) {
+        return s != null && !s.isBlank() ? s : null;
     }
 
     // -------------------------------------------------------------------------

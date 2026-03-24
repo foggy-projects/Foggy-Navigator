@@ -23,7 +23,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
-import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
+import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
 import com.foggy.navigator.claude.worker.model.entity.DeletedClaudeSessionEntity;
@@ -197,12 +197,22 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
 
         // 6. 发布任务启动事件 → WorkerStreamRelay 监听
-        eventPublisher.publishEvent(new ClaudeTaskStartEvent(
-                this, taskId, sessionId, form.getWorkerId(), userId,
-                form.getPrompt(), cwd, null, form.getModel(), form.getMaxTurns(), agentTeamsJson,
-                form.getImages(),
-                authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey, navigatorApiBase, extraEnvVars));
+        eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
+                .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
+                .userId(userId).prompt(form.getPrompt()).cwd(cwd)
+                .model(form.getModel()).maxTurns(form.getMaxTurns())
+                .apiKey(authParams[0]).providerType(AGENT_ID)
+                .providerConfig(Map.of(
+                        "claudeSessionId", "",
+                        "agentTeamsJson", agentTeamsJson != null ? agentTeamsJson : "",
+                        "images", form.getImages() != null ? form.getImages() : "",
+                        "authToken", authParams[1] != null ? authParams[1] : "",
+                        "baseUrl", authParams[2] != null ? authParams[2] : "",
+                        "permissionMode", form.getPermissionMode() != null ? form.getPermissionMode() : "",
+                        "navigatorApiKey", navigatorApiKey != null ? navigatorApiKey : "",
+                        "navigatorApiBase", navigatorApiBase != null ? navigatorApiBase : "",
+                        "extraEnvVars", extraEnvVars != null ? (Object) extraEnvVars : ""
+                )).build());
 
         return toDTO(entity);
     }
@@ -334,12 +344,22 @@ public class ClaudeTaskService implements TaskQueryProvider {
         // 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
 
-        eventPublisher.publishEvent(new ClaudeTaskStartEvent(
-                this, taskId, sessionId, form.getWorkerId(), userId,
-                form.getPrompt(), cwd, form.getClaudeSessionId(),
-                form.getModel(), form.getMaxTurns(), agentTeamsJson,
-                form.getImages(), authParams[0], authParams[1], authParams[2], form.getPermissionMode(),
-                navigatorApiKey, navigatorApiBase, extraEnvVars));
+        eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
+                .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
+                .userId(userId).prompt(form.getPrompt()).cwd(cwd)
+                .model(form.getModel()).maxTurns(form.getMaxTurns())
+                .apiKey(authParams[0]).providerType(AGENT_ID)
+                .providerConfig(Map.of(
+                        "claudeSessionId", form.getClaudeSessionId() != null ? form.getClaudeSessionId() : "",
+                        "agentTeamsJson", agentTeamsJson != null ? agentTeamsJson : "",
+                        "images", form.getImages() != null ? form.getImages() : "",
+                        "authToken", authParams[1] != null ? authParams[1] : "",
+                        "baseUrl", authParams[2] != null ? authParams[2] : "",
+                        "permissionMode", form.getPermissionMode() != null ? form.getPermissionMode() : "",
+                        "navigatorApiKey", navigatorApiKey != null ? navigatorApiKey : "",
+                        "navigatorApiBase", navigatorApiBase != null ? navigatorApiBase : "",
+                        "extraEnvVars", extraEnvVars != null ? (Object) extraEnvVars : ""
+                )).build());
 
         return toDTO(entity);
     }
@@ -2080,6 +2100,51 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 userId, List.of("RUNNING", "AWAITING_PERMISSION")).stream()
                 .map(this::toDispatchDTO)
                 .toList();
+    }
+
+    @Override
+    public void respondToTask(String taskId, String userId, java.util.Map<String, Object> response) {
+        ClaudeTaskEntity task = taskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!task.getUserId().equals(userId)) throw new IllegalArgumentException("Task not found: " + taskId);
+
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+        ClaudeWorkerClient client = workerService.createClient(worker);
+        client.respondToPermission(
+                task.getWorkerTaskId() != null ? task.getWorkerTaskId() : resolveWorkerTaskLookupId(task),
+                (String) response.get("permissionId"),
+                (String) response.get("decision"),
+                (String) response.get("denyMessage"),
+                (String) response.get("scope"),
+                castToStringMap(response.get("answers")),
+                (String) response.get("planAction")
+        ).block(java.time.Duration.ofSeconds(10));
+
+        // 回到 RUNNING 状态
+        if ("AWAITING_PERMISSION".equals(task.getStatus())) {
+            task.setStatus("RUNNING");
+            taskRepository.save(task);
+        }
+    }
+
+    @Override
+    public void reconnectTask(String taskId, String userId) {
+        ClaudeTaskEntity task = taskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!task.getUserId().equals(userId)) throw new IllegalArgumentException("Task not found: " + taskId);
+        streamRelay.reconnectTask(taskId, task.getSessionId(), task.getWorkerId());
+    }
+
+    @Override
+    public Object resyncTask(String taskId, String userId) {
+        return resync(taskId, userId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private java.util.Map<String, String> castToStringMap(Object obj) {
+        if (obj == null) return null;
+        if (obj instanceof java.util.Map) return (java.util.Map<String, String>) obj;
+        return null;
     }
 
     private DispatchTaskDTO toDispatchDTO(ClaudeTaskEntity entity) {

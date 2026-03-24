@@ -93,7 +93,7 @@ class CodexWorkerA2aAgent implements A2aAgent {
         String model = meta != null ? (String) meta.get("model") : null;
         String directoryId = meta != null ? (String) meta.get("directoryId") : null;
 
-        // 通过 CodexTaskService.createTask() 创建任务并发布 CodexTaskStartEvent
+        // 通过 CodexTaskService.createTask() 创建任务并发布 WorkerTaskStartEvent
         // CodexStreamRelay 监听事件后异步执行 SSE 流消费
         CreateCodexTaskForm form = new CreateCodexTaskForm();
         form.setWorkerId(entity.getWorkerId());
