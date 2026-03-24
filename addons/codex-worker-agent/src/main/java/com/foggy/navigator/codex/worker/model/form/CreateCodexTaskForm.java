@@ -4,7 +4,11 @@ import lombok.Data;
 
 /**
  * 创建 Codex 任务表单
+ *
+ * @deprecated 使用 {@link com.foggy.navigator.session.service.TaskDispatchRequest} 替代。
+ *             TaskDispatchRequest 是 Agent 无关的统一任务创建请求。
  */
+@Deprecated(since = "unified-task-dispatch-refactor")
 @Data
 public class CreateCodexTaskForm {
     private String workerId;

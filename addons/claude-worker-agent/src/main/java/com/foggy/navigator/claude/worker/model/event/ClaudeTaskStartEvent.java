@@ -8,7 +8,11 @@ import java.util.Map;
 /**
  * Claude 任务启动事件
  * 发布后由 WorkerStreamRelay 监听并开始消费 Worker SSE 流
+ *
+ * @deprecated 使用 {@link com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent} 替代。
+ *             WorkerTaskStartEvent 通过 providerConfig Map 组合 Provider 特有字段。
  */
+@Deprecated(since = "unified-task-dispatch-refactor")
 @Getter
 public class ClaudeTaskStartEvent extends ApplicationEvent {
 
