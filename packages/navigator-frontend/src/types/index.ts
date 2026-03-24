@@ -100,11 +100,14 @@ export interface ClaudeTask {
   taskId: string
   sessionId: string
   workerId: string
+  workerTaskId?: string
   prompt: string
   cwd?: string
   directoryId?: string
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED' | 'AWAITING_PERMISSION'
   claudeSessionId?: string
+  codexThreadId?: string
+  providerType?: string
   costUsd?: number
   inputTokens?: number
   outputTokens?: number

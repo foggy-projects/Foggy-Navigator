@@ -5,7 +5,6 @@ import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.session.service.TaskDispatchRequest;
-import com.foggy.navigator.session.service.TaskReplyRequest;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
@@ -164,5 +163,98 @@ public class TaskController {
         } catch (UnsupportedOperationException e) {
             return RX.failA(e.getMessage());
         }
+    }
+
+    // ── Phase 3: 统一端点扩展 ──
+
+    /**
+     * 恢复任务（续接已有 claudeSessionId）
+     */
+    @PostMapping("/resume")
+    public RX<DispatchTaskDTO> resumeTask(@RequestBody TaskDispatchRequest request) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId(userId)
+                .tenantId(tenantId)
+                .sessionId(request.getSessionId())
+                .requestSource("UI")
+                .build();
+
+        DispatchTaskDTO result = taskDispatchFacade.resumeTask(request, context);
+        return RX.ok(result);
+    }
+
+    /**
+     * 删除任务
+     */
+    @DeleteMapping("/{taskId}")
+    public RX<Map<String, Object>> deleteTask(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        taskDispatchFacade.deleteTask(taskId, userId);
+        return RX.ok(Map.of("taskId", taskId, "deleted", true));
+    }
+
+    /**
+     * 扫描 checkpoints
+     */
+    @PostMapping("/{taskId}/scan-checkpoints")
+    public RX<?> scanCheckpoints(@PathVariable String taskId) {
+        String userId = UserContext.getCurrentUserId();
+        try {
+            Object result = taskDispatchFacade.scanCheckpoints(taskId, userId);
+            return RX.ok(result);
+        } catch (UnsupportedOperationException e) {
+            return RX.failA(e.getMessage());
+        }
+    }
+
+    /**
+     * 分页查询任务列表
+     */
+    @GetMapping("/page")
+    public RX<?> listTasksPaged(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String state) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskDispatchFacade.listTasksPaged(userId, page, size, state));
+    }
+
+    /**
+     * 搜索会话
+     */
+    @GetMapping("/search")
+    public RX<?> searchSessions(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String workerId,
+            @RequestParam(required = false) String directoryId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskDispatchFacade.searchSessions(userId, keyword, workerId, directoryId, page, size));
+    }
+
+    /**
+     * 按目录查询任务列表
+     */
+    @GetMapping("/directory/{directoryId}")
+    public RX<List<DispatchTaskDTO>> listTasksByDirectory(@PathVariable String directoryId) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskDispatchFacade.listTasksByDirectory(userId, directoryId));
+    }
+
+    /**
+     * 按目录分页查询任务列表
+     */
+    @GetMapping("/directory/{directoryId}/page")
+    public RX<?> listTasksByDirectoryPaged(
+            @PathVariable String directoryId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String state) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(taskDispatchFacade.listTasksByDirectoryPaged(userId, directoryId, page, size, state));
     }
 }

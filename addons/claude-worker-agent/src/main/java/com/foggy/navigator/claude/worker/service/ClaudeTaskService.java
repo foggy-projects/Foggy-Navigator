@@ -544,9 +544,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     /**
-     * 按目录列出任务
+     * 按目录列出任务（内部 DTO）
+     * @deprecated 前端迁移到统一 API 后，改用 SPI 方法 {@link #listTasksByDirectory(String, String)}
      */
-    public List<TaskDTO> listTasksByDirectory(String userId, String directoryId) {
+    @Deprecated
+    public List<TaskDTO> listTasksByDirectoryDTO(String userId, String directoryId) {
         return taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId).stream()
                 .map(this::toDTO)
                 .toList();
@@ -2161,6 +2163,75 @@ public class ClaudeTaskService implements TaskQueryProvider {
     @Override
     public Object resyncTask(String taskId, String userId) {
         return resync(taskId, userId);
+    }
+
+    @Override
+    public DispatchTaskDTO resumeTask(String userId, String tenantId, java.util.Map<String, Object> params) {
+        ResumeTaskForm form = new ResumeTaskForm();
+        form.setWorkerId((String) params.get("workerId"));
+        form.setClaudeSessionId((String) params.get("claudeSessionId"));
+        form.setPrompt((String) params.get("prompt"));
+        form.setCwd((String) params.get("cwd"));
+        form.setDirectoryId((String) params.get("directoryId"));
+        form.setSessionId((String) params.get("sessionId"));
+        form.setModel((String) params.get("model"));
+        form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setPermissionMode((String) params.get("permissionMode"));
+        form.setImages((String) params.get("images"));
+        form.setAgentTeamsJson((String) params.get("agentTeamsJson"));
+        form.setAgentTeamsConfigId((String) params.get("agentTeamsConfigId"));
+        if (params.get("maxTurns") instanceof Number n) {
+            form.setMaxTurns(n.intValue());
+        }
+        TaskDTO taskDTO = resumeTask(userId, tenantId, form);
+        return getTaskById(taskDTO.getTaskId()).orElseThrow();
+    }
+
+    // deleteTask(String userId, String taskId) is already defined above at line ~986
+    // and satisfies the SPI interface TaskQueryProvider.deleteTask(userId, taskId)
+
+    @Override
+    public Object scanCheckpoints(String taskId, String userId) {
+        ClaudeTaskEntity task = taskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        String claudeSessionId = task.getClaudeSessionId();
+        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
+            throw new IllegalArgumentException("Task has no Claude session ID");
+        }
+
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+        ClaudeWorkerClient client = workerService.createClient(worker);
+        List<java.util.Map<String, Object>> scanned = client.scanSessionCheckpoints(claudeSessionId)
+                .block(java.time.Duration.ofSeconds(30));
+        if (scanned == null || scanned.isEmpty()) {
+            return java.util.Map.of("taskId", taskId, "checkpoints", "[]", "count", 0);
+        }
+        String json = scanAndPopulateCheckpoints(taskId, scanned);
+        return java.util.Map.of("taskId", taskId, "checkpoints", json, "count", scanned.size());
+    }
+
+    @Override
+    public Object listTasksPaged(String userId, int page, int size, String state) {
+        return listTasksBySession(userId, page, size, state);
+    }
+
+    // searchSessions(userId, keyword, workerId, directoryId, page, size) is already defined
+    // above and satisfies the SPI interface (covariant return: SessionSearchResultDTO.Page → Object)
+
+    @Override
+    public List<DispatchTaskDTO> listTasksByDirectory(String userId, String directoryId) {
+        return taskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId).stream()
+                .map(this::toDispatchDTO)
+                .toList();
+    }
+
+    @Override
+    public Object listTasksByDirectoryPaged(String userId, String directoryId,
+                                             int page, int size, String state) {
+        return listTasksByDirectorySession(userId, directoryId, page, size, state);
     }
 
     @SuppressWarnings("unchecked")

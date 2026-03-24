@@ -8,10 +8,14 @@ import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.lang.reflect.Method;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.*;
 
 /**
@@ -36,39 +40,36 @@ public class TaskDispatchFacade {
     private final SessionBindingService bindingService;
     private final SessionRepository sessionRepository;
     private final List<TaskQueryProvider> taskQueryProviders;
+    private final LlmModelManager llmModelManager;
 
     /**
      * 创建任务。
      * <p>
-     * 1. 解析 agentId（显式 或 从 modelConfigId 兼容推导）
+     * 1. 解析 Agent 查找键（显式 agentId → directoryId → workerId）
      * 2. 验证/建立 Session ↔ Agent 绑定
      * 3. 构造 A2aMessage，调用 A2aAgent.sendTask()
      * 4. 返回统一 DTO
      */
     public DispatchTaskDTO createTask(TaskDispatchRequest request, AgentResolveContext context) {
-        // 兼容推导：前端可能只传 workerId + modelConfigId 而不传 agentId
-        // Provider 支持按 workerId fallback 解析，所以直接用 workerId 作为 agentId
-        String rawAgentId = request.getAgentId();
-        if (rawAgentId == null || rawAgentId.isBlank()) {
-            rawAgentId = request.getWorkerId();
+        DispatchTaskDTO directTask = tryCreateTaskDirect(request, context);
+        if (directTask != null) {
+            return directTask;
         }
-        if (rawAgentId == null || rawAgentId.isBlank()) {
-            throw new IllegalArgumentException("agentId or workerId is required");
-        }
-        final String agentId = rawAgentId;
 
-        // 获取 providerType
-        String providerType = agentResolver.getProviderType(agentId, context)
-                .orElseThrow(() -> new IllegalArgumentException("No provider found for agent: " + agentId));
+        AgentLookup lookup = resolveAgentLookup(request);
+
+        A2aAgent agent = agentResolver.resolveAgent(lookup.lookupId, context)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not available: " + lookup.lookupId));
+
+        String providerType = agentResolver.getProviderType(lookup.lookupId, context)
+                .orElseThrow(() -> new IllegalArgumentException("No provider found for agent: " + lookup.lookupId));
+
+        String agentId = resolveLogicalAgentId(agent, lookup.lookupId);
 
         // 绑定校验
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
-            bindingService.getOrBind(request.getSessionId(), agentId, providerType, "EXPLICIT_AGENT");
+            bindingService.getOrBind(request.getSessionId(), agentId, providerType, lookup.bindingSource);
         }
-
-        // 解析 Agent
-        A2aAgent agent = agentResolver.resolveAgent(agentId, context)
-                .orElseThrow(() -> new IllegalArgumentException("Agent not available: " + agentId));
 
         // 构造 A2aMessage
         A2aMessage message = buildMessage(request);
@@ -182,6 +183,172 @@ public class TaskDispatchFacade {
     public void rewindTask(String taskId, String userId, Map<String, Object> params) {
         TaskQueryProvider provider = findProviderForTask(taskId);
         provider.rewindTask(taskId, userId, params);
+    }
+
+    // ── Phase 3: 统一任务端点扩展 ──
+
+    /**
+     * 恢复任务（resume）—— 续接已有会话。
+     */
+    public DispatchTaskDTO resumeTask(TaskDispatchRequest request, AgentResolveContext context) {
+        // resume 复用 createTask 的 Agent 解析逻辑
+        AgentLookup lookup = resolveAgentLookup(request);
+
+        String providerType = agentResolver.getProviderType(lookup.lookupId, context)
+                .orElseThrow(() -> new IllegalArgumentException("No provider found for: " + lookup.lookupId));
+
+        // 找到对应 Provider 直接调用 resumeTask
+        TaskQueryProvider provider = taskQueryProviders.stream()
+                .filter(p -> providerType.equals(p.getProviderType()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerType));
+
+        Map<String, Object> params = buildResumeParams(request);
+        return provider.resumeTask(context.getUserId(), context.getTenantId(), params);
+    }
+
+    /**
+     * 删除任务
+     */
+    public void deleteTask(String taskId, String userId) {
+        TaskQueryProvider provider = findProviderForTask(taskId);
+        provider.deleteTask(userId, taskId);
+    }
+
+    /**
+     * 扫描 checkpoints
+     */
+    public Object scanCheckpoints(String taskId, String userId) {
+        TaskQueryProvider provider = findProviderForTask(taskId);
+        return provider.scanCheckpoints(taskId, userId);
+    }
+
+    /**
+     * 分页查询任务列表（按会话聚合所有 Provider，再统一分页）
+     */
+    public Object listTasksPaged(String userId, int page, int size, String state) {
+        int fetchSize = computeFetchSize(page, size);
+        List<Object> content = new ArrayList<>();
+        long totalSessions = 0L;
+
+        for (TaskQueryProvider provider : taskQueryProviders) {
+            try {
+                Object pageResult = provider.listTasksPaged(userId, 0, fetchSize, state);
+                TaskPageEnvelope envelope = toTaskPageEnvelope(pageResult);
+                content.addAll(envelope.content());
+                totalSessions += envelope.totalSessions();
+            } catch (UnsupportedOperationException ignored) {
+            }
+        }
+
+        return buildTaskPageResponse(content, totalSessions, page, size);
+    }
+
+    /**
+     * 搜索会话
+     */
+    public Object searchSessions(String userId, String keyword, String workerId,
+                                  String directoryId, int page, int size) {
+        int fetchSize = computeFetchSize(page, size);
+        List<Object> results = new ArrayList<>();
+        long total = 0L;
+
+        for (TaskQueryProvider provider : taskQueryProviders) {
+            try {
+                Object searchResult = provider.searchSessions(userId, keyword, workerId, directoryId, 0, fetchSize);
+                SearchEnvelope envelope = toSearchEnvelope(searchResult);
+                results.addAll(envelope.results());
+                total += envelope.total();
+            } catch (UnsupportedOperationException ignored) {
+            }
+        }
+
+        Map<String, Object> deduped = new LinkedHashMap<>();
+        for (Object result : results) {
+            String sessionId = readStringProperty(result, "sessionId");
+            String dedupeKey = (sessionId != null && !sessionId.isBlank())
+                    ? sessionId
+                    : UUID.randomUUID().toString();
+            Object existing = deduped.get(dedupeKey);
+            if (existing == null || compareNullableTime(
+                    readDateTimeProperty(result, "updatedAt"),
+                    readDateTimeProperty(existing, "updatedAt")) > 0) {
+                deduped.put(dedupeKey, result);
+            }
+        }
+
+        List<Object> sortedResults = deduped.values().stream()
+                .sorted((left, right) -> compareNullableTime(
+                        readDateTimeProperty(right, "updatedAt"),
+                        readDateTimeProperty(left, "updatedAt")))
+                .toList();
+
+        int from = Math.min(page * size, sortedResults.size());
+        int to = Math.min(from + size, sortedResults.size());
+        return Map.of(
+                "results", sortedResults.subList(from, to),
+                "total", total,
+                "page", page,
+                "size", size
+        );
+    }
+
+    /**
+     * 按目录查询任务列表
+     */
+    public List<DispatchTaskDTO> listTasksByDirectory(String userId, String directoryId) {
+        return taskQueryProviders.stream()
+                .flatMap(p -> {
+                    try {
+                        return p.listTasksByDirectory(userId, directoryId).stream();
+                    } catch (UnsupportedOperationException e) {
+                        return java.util.stream.Stream.empty();
+                    }
+                })
+                .toList();
+    }
+
+    /**
+     * 按目录分页查询任务列表
+     */
+    public Object listTasksByDirectoryPaged(String userId, String directoryId,
+                                             int page, int size, String state) {
+        int fetchSize = computeFetchSize(page, size);
+        List<Object> content = new ArrayList<>();
+        long totalSessions = 0L;
+
+        for (TaskQueryProvider provider : taskQueryProviders) {
+            try {
+                Object pageResult = provider.listTasksByDirectoryPaged(userId, directoryId, 0, fetchSize, state);
+                TaskPageEnvelope envelope = toTaskPageEnvelope(pageResult);
+                content.addAll(envelope.content());
+                totalSessions += envelope.totalSessions();
+            } catch (UnsupportedOperationException ignored) {
+            }
+        }
+
+        return buildTaskPageResponse(content, totalSessions, page, size);
+    }
+
+    private Map<String, Object> buildResumeParams(TaskDispatchRequest request) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        putIfNotBlank(params, "workerId", request.getWorkerId());
+        putIfNotBlank(params, "claudeSessionId", request.getClaudeSessionId());
+        putIfNotBlank(params, "prompt", request.getPrompt());
+        putIfNotBlank(params, "cwd", request.getCwd());
+        putIfNotBlank(params, "directoryId", request.getDirectoryId());
+        putIfNotBlank(params, "sessionId", request.getSessionId());
+        putIfNotBlank(params, "model", request.getModel());
+        putIfNotBlank(params, "modelConfigId", request.getModelConfigId());
+        putIfNotBlank(params, "permissionMode", request.getPermissionMode());
+        putIfNotBlank(params, "agentTeamsConfigId", request.getAgentTeamsConfigId());
+        putIfNotBlank(params, "agentTeamsJson", request.getAgentTeamsJson());
+        putIfNotBlank(params, "codexThreadId", request.getCodexThreadId());
+        if (request.getMaxTurns() != null) params.put("maxTurns", request.getMaxTurns());
+        if (request.getImages() != null && !request.getImages().isEmpty()) {
+            params.put("images", String.join(",", request.getImages()));
+        }
+        return params;
     }
 
     private TaskQueryProvider findProviderForTask(String taskId) {
@@ -299,6 +466,251 @@ public class TaskDispatchFacade {
     private String strVal(Map<String, Object> map, String key) {
         Object v = map.get(key);
         return v != null ? v.toString() : null;
+    }
+
+    private int computeFetchSize(int page, int size) {
+        return Math.max(size, (page + 1) * size);
+    }
+
+    private Map<String, Object> buildTaskPageResponse(List<Object> taskItems, long totalSessions, int page, int size) {
+        Map<String, List<Object>> sessions = new LinkedHashMap<>();
+        for (Object item : taskItems) {
+            String sessionId = readStringProperty(item, "sessionId");
+            String key = (sessionId != null && !sessionId.isBlank())
+                    ? sessionId
+                    : Optional.ofNullable(readStringProperty(item, "taskId")).orElse(UUID.randomUUID().toString());
+            sessions.computeIfAbsent(key, ignored -> new ArrayList<>()).add(item);
+        }
+
+        List<List<Object>> sortedSessions = new ArrayList<>(sessions.values());
+        sortedSessions.sort((left, right) -> compareNullableTime(
+                latestTaskTime(right),
+                latestTaskTime(left)));
+
+        int from = Math.min(page * size, sortedSessions.size());
+        int to = Math.min(from + size, sortedSessions.size());
+        List<Object> content = sortedSessions.subList(from, to).stream()
+                .flatMap(Collection::stream)
+                .toList();
+
+        return Map.of(
+                "content", content,
+                "totalSessions", totalSessions,
+                "page", page,
+                "size", size
+        );
+    }
+
+    private LocalDateTime latestTaskTime(List<Object> tasks) {
+        return tasks.stream()
+                .map(task -> {
+                    LocalDateTime createdAt = readDateTimeProperty(task, "createdAt");
+                    LocalDateTime updatedAt = readDateTimeProperty(task, "updatedAt");
+                    return compareNullableTime(createdAt, updatedAt) >= 0 ? createdAt : updatedAt;
+                })
+                .filter(Objects::nonNull)
+                .max(LocalDateTime::compareTo)
+                .orElse(null);
+    }
+
+    private TaskPageEnvelope toTaskPageEnvelope(Object pageResult) {
+        return new TaskPageEnvelope(
+                readListProperty(pageResult, "content"),
+                readLongProperty(pageResult, "totalSessions")
+        );
+    }
+
+    private SearchEnvelope toSearchEnvelope(Object searchResult) {
+        return new SearchEnvelope(
+                readListProperty(searchResult, "results"),
+                readLongProperty(searchResult, "total")
+        );
+    }
+
+    private List<Object> readListProperty(Object target, String property) {
+        Object value = readProperty(target, property);
+        if (value instanceof Collection<?> collection) {
+            return new ArrayList<>(collection);
+        }
+        return List.of();
+    }
+
+    private long readLongProperty(Object target, String property) {
+        Object value = readProperty(target, property);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Long.parseLong(text);
+            } catch (NumberFormatException ignored) {
+                return 0L;
+            }
+        }
+        return 0L;
+    }
+
+    private String readStringProperty(Object target, String property) {
+        Object value = readProperty(target, property);
+        return value != null ? value.toString() : null;
+    }
+
+    private LocalDateTime readDateTimeProperty(Object target, String property) {
+        Object value = readProperty(target, property);
+        if (value instanceof LocalDateTime localDateTime) {
+            return localDateTime;
+        }
+        if (value instanceof OffsetDateTime offsetDateTime) {
+            return offsetDateTime.toLocalDateTime();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return OffsetDateTime.parse(text).toLocalDateTime();
+            } catch (Exception ignored) {
+                try {
+                    return LocalDateTime.parse(text);
+                } catch (Exception ignoredAgain) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    private Object readProperty(Object target, String property) {
+        if (target == null) {
+            return null;
+        }
+        if (target instanceof Map<?, ?> map) {
+            return map.get(property);
+        }
+        try {
+            Method getter = target.getClass().getMethod("get" + Character.toUpperCase(property.charAt(0)) + property.substring(1));
+            return getter.invoke(target);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private int compareNullableTime(LocalDateTime left, LocalDateTime right) {
+        if (left == null && right == null) {
+            return 0;
+        }
+        if (left == null) {
+            return -1;
+        }
+        if (right == null) {
+            return 1;
+        }
+        return left.compareTo(right);
+    }
+
+    private AgentLookup resolveAgentLookup(TaskDispatchRequest request) {
+        if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
+            return new AgentLookup(request.getAgentId(), "EXPLICIT_AGENT");
+        }
+        if (request.getDirectoryId() != null && !request.getDirectoryId().isBlank()) {
+            return new AgentLookup(request.getDirectoryId(), "DIRECTORY_ID");
+        }
+        if (request.getWorkerId() != null && !request.getWorkerId().isBlank()) {
+            return new AgentLookup(request.getWorkerId(), "WORKER_ID");
+        }
+        throw new IllegalArgumentException("agentId, directoryId or workerId is required");
+    }
+
+    private DispatchTaskDTO tryCreateTaskDirect(TaskDispatchRequest request, AgentResolveContext context) {
+        if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
+            return null;
+        }
+        if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
+            return null;
+        }
+        if (request.getWorkerId() == null || request.getWorkerId().isBlank()) {
+            return null;
+        }
+        if (request.getModelConfigId() == null || request.getModelConfigId().isBlank()) {
+            return null;
+        }
+
+        String providerType = llmModelManager.getModelConfig(request.getModelConfigId())
+                .map(cfg -> mapWorkerBackendToProviderType(cfg.getWorkerBackend()))
+                .orElse(null);
+        if (providerType == null || providerType.isBlank()) {
+            return null;
+        }
+
+        TaskQueryProvider provider = taskQueryProviders.stream()
+                .filter(p -> providerType.equals(p.getProviderType()))
+                .findFirst()
+                .orElse(null);
+        if (provider == null) {
+            log.warn("Direct task route skipped: provider {} not available for modelConfigId={}",
+                    providerType, request.getModelConfigId());
+            return null;
+        }
+
+        Map<String, Object> params = buildDirectCreateParams(request);
+        DispatchTaskDTO dto = provider.createTaskDirect(params, context.getUserId(), context.getTenantId());
+        log.info("Dispatched task directly via provider: providerType={}, taskId={}, workerId={}, directoryId={}",
+                providerType, dto.getTaskId(), request.getWorkerId(), request.getDirectoryId());
+        return dto;
+    }
+
+    private Map<String, Object> buildDirectCreateParams(TaskDispatchRequest request) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        putIfNotBlank(params, "workerId", request.getWorkerId());
+        putIfNotBlank(params, "prompt", request.getPrompt());
+        putIfNotBlank(params, "cwd", request.getCwd());
+        putIfNotBlank(params, "directoryId", request.getDirectoryId());
+        putIfNotBlank(params, "model", request.getModel());
+        putIfNotBlank(params, "modelConfigId", request.getModelConfigId());
+        putIfNotBlank(params, "permissionMode", request.getPermissionMode());
+        putIfNotBlank(params, "agentTeamsConfigId", request.getAgentTeamsConfigId());
+        putIfNotBlank(params, "agentTeamsJson", request.getAgentTeamsJson());
+        putIfNotBlank(params, "codexThreadId", request.getCodexThreadId());
+        if (request.getMaxTurns() != null) {
+            params.put("maxTurns", request.getMaxTurns());
+        }
+        if (request.getImages() != null && !request.getImages().isEmpty()) {
+            params.put("images", String.join(",", request.getImages()));
+        }
+        return params;
+    }
+
+    private String mapWorkerBackendToProviderType(String workerBackend) {
+        if (workerBackend == null || workerBackend.isBlank()) {
+            return null;
+        }
+        return switch (workerBackend) {
+            case "OPENAI_CODEX" -> "codex-worker";
+            case "CLAUDE_CODE" -> "claude-worker";
+            default -> null;
+        };
+    }
+
+    private String resolveLogicalAgentId(A2aAgent agent, String lookupId) {
+        if (agent.getAgentCard() != null
+                && agent.getAgentCard().getId() != null
+                && !agent.getAgentCard().getId().isBlank()) {
+            return agent.getAgentCard().getId();
+        }
+        return lookupId;
+    }
+
+    private static final class AgentLookup {
+        private final String lookupId;
+        private final String bindingSource;
+
+        private AgentLookup(String lookupId, String bindingSource) {
+            this.lookupId = lookupId;
+            this.bindingSource = bindingSource;
+        }
+    }
+
+    private record TaskPageEnvelope(List<Object> content, long totalSessions) {
+    }
+
+    private record SearchEnvelope(List<Object> results, long total) {
     }
 
 }

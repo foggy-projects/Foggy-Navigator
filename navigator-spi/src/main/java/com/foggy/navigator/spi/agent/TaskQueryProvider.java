@@ -70,4 +70,42 @@ public interface TaskQueryProvider {
     default void rewindTask(String taskId, String userId, java.util.Map<String, Object> params) {
         throw new UnsupportedOperationException("rewind not supported by " + getProviderType());
     }
+
+    // ── Phase 3: 统一任务端点扩展 ──
+
+    /** 恢复任务（续接已有 claudeSessionId） */
+    default DispatchTaskDTO resumeTask(String userId, String tenantId, java.util.Map<String, Object> params) {
+        throw new UnsupportedOperationException("resume not supported by " + getProviderType());
+    }
+
+    /** 删除任务 */
+    default void deleteTask(String userId, String taskId) {
+        throw new UnsupportedOperationException("delete not supported by " + getProviderType());
+    }
+
+    /** 扫描 checkpoints */
+    default Object scanCheckpoints(String taskId, String userId) {
+        throw new UnsupportedOperationException("scanCheckpoints not supported by " + getProviderType());
+    }
+
+    /** 分页查询任务列表 */
+    default Object listTasksPaged(String userId, int page, int size, String state) {
+        throw new UnsupportedOperationException("listTasksPaged not supported by " + getProviderType());
+    }
+
+    /** 搜索会话 */
+    default Object searchSessions(String userId, String keyword, String workerId,
+                                   String directoryId, int page, int size) {
+        throw new UnsupportedOperationException("searchSessions not supported by " + getProviderType());
+    }
+
+    /** 按目录查询任务列表 */
+    default List<DispatchTaskDTO> listTasksByDirectory(String userId, String directoryId) {
+        throw new UnsupportedOperationException("listTasksByDirectory not supported by " + getProviderType());
+    }
+
+    /** 按目录分页查询任务列表 */
+    default Object listTasksByDirectoryPaged(String userId, String directoryId, int page, int size, String state) {
+        throw new UnsupportedOperationException("listTasksByDirectoryPaged not supported by " + getProviderType());
+    }
 }

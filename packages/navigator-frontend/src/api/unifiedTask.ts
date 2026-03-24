@@ -8,8 +8,7 @@
  * so frontend does NOT need to know if it's Claude or Codex.
  */
 import client from './client'
-import type { RX } from '@/types'
-import type { ClaudeTask } from '@/types'
+import type { RX, ClaudeTask, SessionSearchResult } from '@/types'
 
 // Re-use ClaudeTask type since DispatchTaskDTO is a superset with the same field names.
 // Additional fields (agentId, providerType, codexThreadId) are optional.
@@ -99,5 +98,128 @@ export async function reconnectTaskUnified(taskId: string): Promise<void> {
  */
 export async function resyncTaskUnified(taskId: string): Promise<unknown> {
   const rx = (await client.post(`/tasks/${taskId}/resync`)) as unknown as RX<unknown>
+  return rx.data
+}
+
+// ── Phase 3: 统一端点扩展 ──
+
+/**
+ * Resume a task (continue an existing Claude/Codex session).
+ */
+export async function resumeTaskUnified(form: {
+  workerId: string
+  claudeSessionId?: string
+  codexThreadId?: string
+  prompt: string
+  cwd?: string
+  directoryId?: string
+  sessionId?: string
+  model?: string
+  maxTurns?: number
+  agentTeamsJson?: string
+  agentTeamsConfigId?: string
+  images?: string
+  permissionMode?: string
+  modelConfigId?: string
+  agentId?: string
+}): Promise<DispatchTask> {
+  const rx = (await client.post('/tasks/resume', form)) as unknown as RX<DispatchTask>
+  return rx.data
+}
+
+/**
+ * Delete a task.
+ */
+export async function deleteTaskUnified(taskId: string): Promise<void> {
+  await client.delete(`/tasks/${taskId}`)
+}
+
+/**
+ * Rewind task to a checkpoint.
+ */
+export async function rewindTaskUnified(
+  taskId: string,
+  body: {
+    checkpointId?: string
+    mode?: string
+    turnIndex?: number
+  },
+): Promise<unknown> {
+  const rx = (await client.post(`/tasks/${taskId}/rewind`, body)) as unknown as RX<unknown>
+  return rx.data
+}
+
+/**
+ * Scan session checkpoints for a task.
+ */
+export async function scanCheckpointsUnified(
+  taskId: string,
+): Promise<{ taskId: string; checkpoints: string; count: number }> {
+  const rx = (await client.post(`/tasks/${taskId}/scan-checkpoints`)) as unknown as RX<{
+    taskId: string
+    checkpoints: string
+    count: number
+  }>
+  return rx.data
+}
+
+/**
+ * List tasks with pagination.
+ */
+export async function listTasksPagedUnified(
+  page: number,
+  size: number,
+  state?: string,
+): Promise<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }> {
+  const rx = (await client.get('/tasks/page', {
+    params: { page, size, ...(state ? { state } : {}) },
+  })) as unknown as RX<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }>
+  return rx.data
+}
+
+/**
+ * Search sessions (keyword + worker/directory filter).
+ */
+export async function searchSessionsUnified(
+  keyword?: string,
+  workerId?: string,
+  directoryId?: string,
+  page = 0,
+  size = 20,
+): Promise<{ results: SessionSearchResult[]; total: number; page: number; size: number }> {
+  const rx = (await client.get('/tasks/search', {
+    params: {
+      ...(keyword ? { keyword } : {}),
+      ...(workerId ? { workerId } : {}),
+      ...(directoryId ? { directoryId } : {}),
+      page,
+      size,
+    },
+  })) as unknown as RX<{ results: SessionSearchResult[]; total: number; page: number; size: number }>
+  return rx.data
+}
+
+/**
+ * List tasks by directory.
+ */
+export async function listTasksByDirectoryUnified(
+  directoryId: string,
+): Promise<DispatchTask[]> {
+  const rx = (await client.get(`/tasks/directory/${directoryId}`)) as unknown as RX<DispatchTask[]>
+  return rx.data
+}
+
+/**
+ * List tasks by directory with pagination.
+ */
+export async function listTasksByDirectoryPagedUnified(
+  directoryId: string,
+  page: number,
+  size: number,
+  state?: string,
+): Promise<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }> {
+  const rx = (await client.get(`/tasks/directory/${directoryId}/page`, {
+    params: { page, size, ...(state ? { state } : {}) },
+  })) as unknown as RX<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }>
   return rx.data
 }

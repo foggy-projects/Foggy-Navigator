@@ -78,6 +78,8 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
 
         String contextId = message.getContextId();
         Map<String, Object> meta = message.getMetadata() != null ? message.getMetadata() : Map.of();
+        String requestedCwd = stringMeta(meta, "cwd");
+        String requestedDirectoryId = stringMeta(meta, "directoryId");
 
         // 多轮会话：通过 contextId 恢复已有 claudeSessionId
         String claudeSessionId = null;
@@ -101,11 +103,14 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         // 2. 通过 taskService.createTask() 走完整路径
         //    → 创建 Session → 创建 Task Entity → 发布 WorkerTaskStartEvent
         //    → WorkerStreamRelay 监听事件，启动 SSE 流消费
+        String effectiveCwd = requestedCwd != null ? requestedCwd : defaultCwd;
+        String effectiveDirectoryId = requestedDirectoryId != null ? requestedDirectoryId : entity.getDefaultDirectoryId();
+
         CreateTaskForm form = new CreateTaskForm();
         form.setWorkerId(entity.getWorkerId());
         form.setPrompt(prompt);
-        form.setCwd(defaultCwd);
-        form.setDirectoryId(entity.getDefaultDirectoryId());
+        form.setCwd(effectiveCwd);
+        form.setDirectoryId(effectiveDirectoryId);
         form.setModel((String) meta.get("model"));
         form.setModelConfigId((String) meta.get("modelConfigId"));
         form.setPermissionMode((String) meta.get("permissionMode"));
@@ -135,6 +140,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         Map<String, Object> taskMeta = new LinkedHashMap<>();
         taskMeta.put("sessionId", task.getSessionId());
         taskMeta.put("workerId", task.getWorkerId());
+        taskMeta.put("directoryId", task.getDirectoryId());
         taskMeta.put("claudeSessionId", task.getClaudeSessionId());
 
         return A2aTask.builder()
@@ -228,6 +234,15 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         if (!meta.isEmpty()) builder.metadata(meta);
 
         return builder.build();
+    }
+
+    private String stringMeta(Map<String, Object> meta, String key) {
+        Object value = meta.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString();
+        return text.isBlank() ? null : text;
     }
 
 }

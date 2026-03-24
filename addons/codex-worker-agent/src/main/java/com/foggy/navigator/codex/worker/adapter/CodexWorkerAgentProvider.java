@@ -1,5 +1,6 @@
 package com.foggy.navigator.codex.worker.adapter;
 
+import com.foggy.navigator.codex.worker.repository.CodexAgentDirectoryBindingRepository;
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
@@ -25,6 +26,7 @@ import java.util.Optional;
 public class CodexWorkerAgentProvider implements A2aAgentProvider {
 
     private final CodexCodingAgentRepository agentRepository;
+    private final CodexAgentDirectoryBindingRepository bindingRepository;
     private final CodexTaskService taskService;
     @Nullable
     private final AgentContextStore contextStore;
@@ -47,13 +49,7 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
 
     @Override
     public Optional<A2aAgent> resolveAgent(String agentId, String userId) {
-        return agentRepository.findByAgentIdAndUserId(agentId, userId)
-                .or(() -> agentRepository.findByNameAndUserId(agentId, userId))
-                // workerId fallback: 前端发 workerId，按关联的 CodingAgentEntity 解析
-                .or(() -> agentRepository.findByWorkerIdAndUserId(agentId, userId).stream()
-                        .filter(e -> "LOCAL_CODEX_WORKER".equals(e.getAgentType()))
-                        .findFirst())
-                .filter(e -> "LOCAL_CODEX_WORKER".equals(e.getAgentType()))
+        return resolveManagedEntity(agentId, userId)
                 .map(entity -> {
                     String cwd = resolveDefaultCwd(entity, userId);
                     return new CodexWorkerA2aAgent(entity, taskService, cwd, contextStore);
@@ -67,6 +63,28 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
         if (entity.getDefaultDirectoryId() == null) return null;
         if (workerManagementFacade == null) return null;
         return workerManagementFacade.getDirectoryPath(userId, entity.getDefaultDirectoryId());
+    }
+
+    private Optional<CodingAgentEntity> resolveManagedEntity(String lookupId, String userId) {
+        return agentRepository.findByAgentIdAndUserId(lookupId, userId)
+                .or(() -> agentRepository.findByNameAndUserId(lookupId, userId))
+                .or(() -> agentRepository.findByDefaultDirectoryIdAndUserId(lookupId, userId)
+                        .filter(this::isManagedAgent))
+                .or(() -> bindingRepository.findByDirectoryId(lookupId).stream()
+                        .map(binding -> agentRepository.findByAgentIdAndUserId(binding.getAgentId(), userId))
+                        .filter(Optional::isPresent)
+                        .map(Optional::get)
+                        .filter(this::isManagedAgent)
+                        .findFirst())
+                // workerId fallback: 仅在未命中 directoryId 时兜底
+                .or(() -> agentRepository.findByWorkerIdAndUserId(lookupId, userId).stream()
+                        .filter(this::isManagedAgent)
+                        .findFirst())
+                .filter(this::isManagedAgent);
+    }
+
+    private boolean isManagedAgent(CodingAgentEntity entity) {
+        return "LOCAL_CODEX_WORKER".equals(entity.getAgentType());
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {

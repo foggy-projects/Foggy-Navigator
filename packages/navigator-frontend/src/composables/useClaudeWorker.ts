@@ -7,6 +7,9 @@ import {
   respondToTaskUnified,
   reconnectTaskUnified,
   resyncTaskUnified,
+  resumeTaskUnified,
+  deleteTaskUnified,
+  listTasksPagedUnified,
 } from '@/api/unifiedTask'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
 
@@ -35,12 +38,14 @@ export function useClaudeWorker() {
 
   async function loadTasks(state?: string) {
     try {
-      const result = await api.listTasksPaged(taskPage.value, taskSize.value, state || undefined)
+      // 使用统一任务 API（/api/v1/tasks/page）
+      const result = await listTasksPagedUnified(taskPage.value, taskSize.value, state || undefined)
       tasks.value = result.content
       taskTotal.value = result.totalSessions
     } catch {
       // Fallback to non-paged API
-      tasks.value = await api.listTasks()
+      const unified = await listTasksUnified()
+      tasks.value = unified as unknown as ClaudeTask[]
       taskTotal.value = tasks.value.length
     }
   }
@@ -113,7 +118,8 @@ export function useClaudeWorker() {
 
   async function resumeTask(form: {
     workerId: string
-    claudeSessionId: string
+    claudeSessionId?: string
+    codexThreadId?: string
     prompt: string
     cwd?: string
     directoryId?: string
@@ -126,7 +132,8 @@ export function useClaudeWorker() {
     permissionMode?: string
     modelConfigId?: string
   }) {
-    const task = await api.resumeTask(form)
+    // 使用统一任务 API（/api/v1/tasks/resume）
+    const task = await resumeTaskUnified(form) as unknown as ClaudeTask
     tasks.value.unshift(task)
     return task
   }
@@ -144,9 +151,9 @@ export function useClaudeWorker() {
   }
 
   async function deleteTask(taskId: string) {
-    const result = await api.deleteTask(taskId)
+    // 使用统一任务 API（DELETE /api/v1/tasks/{taskId}）
+    await deleteTaskUnified(taskId)
     tasks.value = tasks.value.filter((t) => t.taskId !== taskId)
-    return result
   }
 
   // ===== Directory methods =====

@@ -88,21 +88,27 @@ class CodexWorkerA2aAgent implements A2aAgent {
         }
 
         // 提取 metadata
-        Map<String, Object> meta = message.getMetadata();
+        Map<String, Object> meta = message.getMetadata() != null ? message.getMetadata() : Map.of();
         Integer maxTurns = meta != null && meta.get("maxTurns") instanceof Number n ? n.intValue() : null;
-        String model = meta != null ? (String) meta.get("model") : null;
-        String directoryId = meta != null ? (String) meta.get("directoryId") : null;
+        String model = stringMeta(meta, "model");
+        String requestedCwd = stringMeta(meta, "cwd");
+        String requestedDirectoryId = stringMeta(meta, "directoryId");
+        String modelConfigId = stringMeta(meta, "modelConfigId");
+
+        String effectiveCwd = requestedCwd != null ? requestedCwd : defaultCwd;
+        String effectiveDirectoryId = requestedDirectoryId != null ? requestedDirectoryId : entity.getDefaultDirectoryId();
 
         // 通过 CodexTaskService.createTask() 创建任务并发布 WorkerTaskStartEvent
         // CodexStreamRelay 监听事件后异步执行 SSE 流消费
         CreateCodexTaskForm form = new CreateCodexTaskForm();
         form.setWorkerId(entity.getWorkerId());
         form.setPrompt(prompt);
-        form.setCwd(defaultCwd);
-        form.setDirectoryId(directoryId);
+        form.setCwd(effectiveCwd);
+        form.setDirectoryId(effectiveDirectoryId);
         form.setModel(model);
         form.setMaxTurns(maxTurns);
         form.setCodexThreadId(codexThreadId);
+        form.setModelConfigId(modelConfigId);
 
         CodexTaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
 
@@ -119,6 +125,7 @@ class CodexWorkerA2aAgent implements A2aAgent {
         Map<String, Object> taskMeta = new LinkedHashMap<>();
         taskMeta.put("sessionId", task.getSessionId());
         taskMeta.put("workerId", task.getWorkerId());
+        taskMeta.put("directoryId", task.getDirectoryId());
         taskMeta.put("codexThreadId", task.getCodexThreadId());
 
         return A2aTask.builder()
@@ -194,5 +201,14 @@ class CodexWorkerA2aAgent implements A2aAgent {
         }
 
         return builder.build();
+    }
+
+    private String stringMeta(Map<String, Object> meta, String key) {
+        Object value = meta.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString();
+        return text.isBlank() ? null : text;
     }
 }

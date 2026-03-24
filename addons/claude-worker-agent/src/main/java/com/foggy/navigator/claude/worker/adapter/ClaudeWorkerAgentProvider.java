@@ -1,5 +1,6 @@
 package com.foggy.navigator.claude.worker.adapter;
 
+import com.foggy.navigator.claude.worker.repository.AgentDirectoryBindingRepository;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -27,6 +28,7 @@ import java.util.concurrent.Executor;
 public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
 
     private final CodingAgentRepository agentRepository;
+    private final AgentDirectoryBindingRepository bindingRepository;
     private final ClaudeTaskService taskService;
     private final WorkingDirectoryRepository directoryRepository;
     @Nullable
@@ -47,17 +49,8 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
 
     @Override
     public Optional<A2aAgent> resolveAgent(String agentId, String userId) {
-        return agentRepository.findByAgentIdAndUserId(agentId, userId)
-                .or(() -> agentRepository.findByNameAndUserId(agentId, userId))
-                // workerId fallback: 前端发 workerId，按关联的 CodingAgentEntity 解析
-                .or(() -> agentRepository.findByWorkerIdAndUserId(agentId, userId).stream()
-                        .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
-                        .findFirst())
-                .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
-                .map(entity -> {
-                    String cwd = resolveDefaultCwd(entity);
-                    return new ClaudeWorkerA2aAgent(entity, taskService, cwd, contextStore);
-                });
+        return resolveManagedEntity(agentId, userId)
+                .map(this::toA2aAgent);
     }
 
     private String resolveDefaultCwd(CodingAgentEntity entity) {
@@ -111,10 +104,34 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
         return agentRepository.findByAgentId(agentId)
                 .filter(e -> tenantId.equals(e.getTenantId()))
                 .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
-                .map(entity -> {
-                    String cwd = resolveDefaultCwd(entity);
-                    return new ClaudeWorkerA2aAgent(entity, taskService, cwd, contextStore);
-                });
+                .map(this::toA2aAgent);
+    }
+
+    private Optional<CodingAgentEntity> resolveManagedEntity(String lookupId, String userId) {
+        return agentRepository.findByAgentIdAndUserId(lookupId, userId)
+                .or(() -> agentRepository.findByNameAndUserId(lookupId, userId))
+                .or(() -> agentRepository.findByDefaultDirectoryIdAndUserId(lookupId, userId)
+                        .filter(this::isManagedAgent))
+                .or(() -> bindingRepository.findByDirectoryId(lookupId).stream()
+                        .map(binding -> agentRepository.findByAgentIdAndUserId(binding.getAgentId(), userId))
+                        .filter(Optional::isPresent)
+                        .map(Optional::get)
+                        .filter(this::isManagedAgent)
+                        .findFirst())
+                // workerId fallback: 仅在未命中 directoryId 时兜底
+                .or(() -> agentRepository.findByWorkerIdAndUserId(lookupId, userId).stream()
+                        .filter(this::isManagedAgent)
+                        .findFirst())
+                .filter(this::isManagedAgent);
+    }
+
+    private boolean isManagedAgent(CodingAgentEntity entity) {
+        return "LOCAL_CLAUDE_WORKER".equals(entity.getAgentType());
+    }
+
+    private A2aAgent toA2aAgent(CodingAgentEntity entity) {
+        String cwd = resolveDefaultCwd(entity);
+        return new ClaudeWorkerA2aAgent(entity, taskService, cwd, contextStore);
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {

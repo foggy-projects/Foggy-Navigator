@@ -78,8 +78,13 @@ public class CodexStreamRelay {
         log.info("Starting Codex stream relay: taskId={}, sessionId={}, workerId={}", taskId, sessionId, workerId);
 
         // 发送 SESSION_START
-        publishMessage(sessionId, MessageType.SESSION_START,
-                Map.of("content", "Connecting to Codex worker...", "taskId", taskId));
+        Map<String, Object> sessionStartPayload = new LinkedHashMap<>();
+        sessionStartPayload.put("content", "Connecting to Codex worker...");
+        sessionStartPayload.put("taskId", taskId);
+        if (event.getProviderConfigString("codexThreadId") != null) {
+            sessionStartPayload.put("codexThreadId", event.getProviderConfigString("codexThreadId"));
+        }
+        publishMessage(sessionId, MessageType.SESSION_START, sessionStartPayload);
 
         try {
             CodexWorkerClient client = getCodexClient(workerId);
@@ -301,7 +306,9 @@ public class CodexStreamRelay {
             if (type == null) return;
 
             // 使用 AgentMessageBuilder 标准化 payload 字段名
-            AgentMessageBuilder mb = AgentMessageBuilder.create(sessionId, AGENT_ID).taskId(taskId);
+            AgentMessageBuilder mb = AgentMessageBuilder.create(sessionId, AGENT_ID)
+                    .taskId(taskId)
+                    .put("codexThreadId", detectedCodexThreadId.get());
 
             switch (type) {
                 case "assistant_text" -> {

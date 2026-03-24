@@ -341,7 +341,7 @@
               size="small"
               class="toolbar-select"
               style="width: 140px"
-              placeholder="API 凭证"
+              placeholder="LLM 配置"
               clearable
             >
               <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
@@ -694,12 +694,12 @@
               size="small"
               class="toolbar-select"
               style="width: 140px"
-              placeholder="API 凭证"
+              placeholder="LLM 配置"
               clearable
             >
               <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
             </el-select>
-            <el-tag v-if="platformModelConfig" size="small" type="success">API: {{ platformModelConfig.name }}</el-tag>
+            <el-tag v-if="platformModelConfig" size="small" type="success">LLM: {{ platformModelConfig.name }}</el-tag>
             <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">轮次: {{ taskForm.maxTurns }}</el-tag>
           </div>
           <div style="margin-top: 8px">
@@ -1012,7 +1012,7 @@
                 <!-- Action buttons -->
                 <span class="conv-actions" @click.stop>
                   <el-button
-                    v-if="!['RUNNING', 'AWAITING_PERMISSION'].includes(item.conv.latestTask.status) && item.conv.claudeSessionId"
+                    v-if="canResumeConversation(item.conv)"
                     type="primary"
                     size="small"
                     text
@@ -1531,7 +1531,7 @@
             />
           </el-select>
           <div class="form-tip">
-            选择平台 LLM 配置后，将使用其 API Key 和 Base URL，无需手动填写。
+            选择平台 LLM 配置后，将使用其对应的后端鉴权与连接配置，无需手动填写。
           </div>
         </el-form-item>
         <template v-if="!editDirForm.defaultModelConfigId">
@@ -1646,7 +1646,7 @@
               :value="m.id"
             />
           </el-select>
-          <div class="form-tip" style="margin-top: 4px">选择后将作为后续任务的默认 API 配置</div>
+          <div class="form-tip" style="margin-top: 4px">选择后将作为后续任务的默认 LLM 配置</div>
         </el-form-item>
         <el-form-item>
           <el-checkbox v-model="batchAuthForm.skipExisting">跳过已有 Auth 配置的会话</el-checkbox>
@@ -2065,7 +2065,15 @@ import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
 import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
-import { reconnectTaskUnified, resyncTaskUnified } from '@/api/unifiedTask'
+import {
+  reconnectTaskUnified,
+  resyncTaskUnified,
+  rewindTaskUnified,
+  scanCheckpointsUnified,
+  searchSessionsUnified,
+  listTasksByDirectoryUnified,
+  listTasksByDirectoryPagedUnified,
+} from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
@@ -2585,6 +2593,10 @@ function restoreWorkerLlmSelection(workerId: string | null): boolean {
 // --- 根据平台模型配置过滤可用模型 ---
 const isCodexBackend = computed(() => platformModelConfig.value?.workerBackend === 'OPENAI_CODEX')
 
+function isSelectablePlatformModel(model: LlmModelConfig): boolean {
+  return model.hasApiKey || model.workerBackend === 'OPENAI_CODEX'
+}
+
 const claudeModelOptions = computed(() => {
   const allModels = isCodexBackend.value ? ALL_CODEX_MODELS : ALL_CLAUDE_MODELS
   const allowed = platformModelConfig.value?.availableModels
@@ -2600,14 +2612,14 @@ watch(claudeModelOptions, (opts) => {
   }
 })
 
-// 切换 API Key 时，自动选中新 Key 可用模型列表中的第一个（默认）模型，并持久化选择
+// 切换 LLM 配置时，自动选中新配置可用模型列表中的第一个（默认）模型，并持久化选择
 watch(platformModelConfigId, () => {
   if (suppressModelAutoSelect) return
   const opts = claudeModelOptions.value
   if (opts.length > 0) {
     taskForm.value.model = opts[0].value
   }
-  // 用户手动切换 API 时立即持久化（suppress 时是恢复缓存，不需要重复保存）
+  // 用户手动切换配置时立即持久化（suppress 时是恢复缓存，不需要重复保存）
   saveWorkerLlmSelection(selectedWorkerId.value)
 })
 
@@ -2626,7 +2638,7 @@ async function loadPlatformModelConfig() {
     ])
     // 防止竞态：如果在 await 期间又发起了新的调用，丢弃本次过期结果
     if (seq !== loadPlatformModelConfigSeq) return
-    platformModels.value = models.filter((m) => m.hasApiKey)
+    platformModels.value = models.filter(isSelectablePlatformModel)
     // 优先从 per-worker 缓存恢复选择
     if (restoreWorkerLlmSelection(selectedWorkerId.value)) {
       return
@@ -3067,11 +3079,24 @@ const workerTasks = computed(() =>
 interface ConversationGroup {
   sessionId: string
   claudeSessionId: string
+  codexThreadId: string
   latestTask: ClaudeTask
   tasks: ClaudeTask[]
   totalCost: number
   firstPrompt: string
   config?: ConversationConfig
+}
+
+function getTaskResumeRef(task: Pick<ClaudeTask, 'claudeSessionId' | 'codexThreadId'>): string {
+  if (task.claudeSessionId) return `claude:${task.claudeSessionId}`
+  if (task.codexThreadId) return `codex:${task.codexThreadId}`
+  return ''
+}
+
+function getConversationResumeRef(conv: ConversationGroup): string {
+  if (conv.claudeSessionId) return `claude:${conv.claudeSessionId}`
+  if (conv.codexThreadId) return `codex:${conv.codexThreadId}`
+  return ''
 }
 
 function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] {
@@ -3089,6 +3114,7 @@ function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] 
     .map((tasks) => ({
       sessionId: tasks[0]!.sessionId,
       claudeSessionId: tasks.find((t) => t.claudeSessionId)?.claudeSessionId || '',
+      codexThreadId: tasks.find((t) => t.codexThreadId)?.codexThreadId || '',
       latestTask: tasks[0]!,
       tasks,
       totalCost: tasks.reduce((s, t) => s + (t.costUsd || 0), 0),
@@ -3233,20 +3259,28 @@ const attentionDisplayList = computed<AttentionDisplayItem[]>(() => {
   return items
 })
 
-// Set of claudeSessionIds that currently have a RUNNING task (for concurrency protection)
-const runningClaudeSessionIds = computed(() => {
-  const ids = new Set<string>()
+// Set of provider session refs that currently have a RUNNING task (for concurrency protection)
+const runningConversationRefs = computed(() => {
+  const refs = new Set<string>()
   for (const task of workerState.activeTasks.value) {
-    if (task.status === 'RUNNING' && task.claudeSessionId) {
-      ids.add(task.claudeSessionId)
+    if (task.status !== 'RUNNING') continue
+    const ref = getTaskResumeRef(task)
+    if (ref) {
+      refs.add(ref)
     }
   }
-  return ids
+  return refs
 })
 
-/** Check if a conversation's Claude session is currently busy (has a RUNNING task) */
+function canResumeConversation(conv: ConversationGroup): boolean {
+  return !['RUNNING', 'AWAITING_PERMISSION'].includes(conv.latestTask.status)
+    && !!getConversationResumeRef(conv)
+}
+
+/** Check if a conversation session is currently busy (has a RUNNING task) */
 function isSessionBusy(conv: ConversationGroup): boolean {
-  return !!conv.claudeSessionId && runningClaudeSessionIds.value.has(conv.claudeSessionId)
+  const ref = getConversationResumeRef(conv)
+  return !!ref && runningConversationRefs.value.has(ref)
 }
 
 function directoriesForWorker(workerId: string): WorkingDirectory[] {
@@ -3607,7 +3641,7 @@ async function loadDirectoryTasks() {
   if (!selectedDirectoryId.value) return
   const stateParam = currentStateParam()
   try {
-    const result = await dirApi.listTasksByDirectoryPaged(
+    const result = await listTasksByDirectoryPagedUnified(
       selectedDirectoryId.value,
       dirTaskPage.value,
       dirTaskSize.value,
@@ -3617,7 +3651,8 @@ async function loadDirectoryTasks() {
     dirTaskTotal.value = result.totalSessions
   } catch {
     try {
-      directoryTasks.value = await dirApi.listTasksByDirectory(selectedDirectoryId.value)
+      const unified = await listTasksByDirectoryUnified(selectedDirectoryId.value)
+      directoryTasks.value = unified as unknown as ClaudeTask[]
       dirTaskTotal.value = directoryTasks.value.length
     } catch {
       directoryTasks.value = []
@@ -4341,7 +4376,11 @@ async function executePaneRewind() {
   }
 
   try {
-    const result = await dirApi.rewindTask(task.taskId, cpId, mode, paneRewindTurnIndex.value)
+    const result = await rewindTaskUnified(task.taskId, {
+      checkpointId: cpId || undefined,
+      mode,
+      turnIndex: paneRewindTurnIndex.value,
+    }) as { status: string; checkpointId?: string; taskId?: string; userPrompt?: string } | null
     if (!result) {
       ElMessage.error('回退失败：服务端未返回有效数据')
       return
@@ -4896,7 +4935,9 @@ async function handlePaneSend(paneId: string, content: string) {
 
   const pane = panes.value.find((p) => p.paneId === paneId)
   const oldTask = pane?.task.value
-  if (!pane || !oldTask?.claudeSessionId || !selectedWorkerId.value) return
+  const workerId = oldTask?.workerId || selectedWorkerId.value
+  if (!pane || !oldTask || !workerId) return
+  if (!oldTask.claudeSessionId && !oldTask.codexThreadId) return
 
   // Inject @agent context into prompt if available
   let finalPrompt = content
@@ -4920,13 +4961,18 @@ async function handlePaneSend(paneId: string, content: string) {
 
   try {
     const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
-      workerId: selectedWorkerId.value,
-      claudeSessionId: oldTask.claudeSessionId,
+      workerId,
       prompt: finalPrompt,
       cwd: oldTask.cwd,
       directoryId: oldTask.directoryId,
+      sessionId: oldTask.sessionId,
     }
-    resumeForm.sessionId = oldTask.sessionId
+    if (oldTask.claudeSessionId) {
+      resumeForm.claudeSessionId = oldTask.claudeSessionId
+    }
+    if (oldTask.codexThreadId) {
+      resumeForm.codexThreadId = oldTask.codexThreadId
+    }
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -5096,12 +5142,11 @@ async function handleRewind() {
   rewindLoading.value = true
   try {
     const selectedCp = rewindCheckpoints.value.find(cp => cp.id === rewindSelectedId.value)
-    await dirApi.rewindTask(
-      rewindTaskId.value,
-      rewindSelectedId.value,
-      rewindMode.value,
-      selectedCp?.turnIndex,
-    )
+    await rewindTaskUnified(rewindTaskId.value, {
+      checkpointId: rewindSelectedId.value,
+      mode: rewindMode.value,
+      turnIndex: selectedCp?.turnIndex,
+    })
     if (rewindMode.value === 'conversation_fork') {
       ElMessage.success('会话已 fork，新任务已创建')
       // Refresh task list to show new task
@@ -5126,7 +5171,7 @@ function canScanCheckpoints(task: ClaudeTask): boolean {
 async function handleScanCheckpoints(task: ClaudeTask) {
   scanningTaskId.value = task.taskId
   try {
-    const result = await dirApi.scanCheckpoints(task.taskId)
+    const result = await scanCheckpointsUnified(task.taskId)
     if (result.count > 0) {
       task.checkpoints = result.checkpoints
       ElMessage.success(`扫描到 ${result.count} 个 Checkpoint`)
@@ -5191,7 +5236,7 @@ async function handleRepairContext(conv: ConversationGroup) {
     const [msgCount, firstMessages, cpResult] = await Promise.all([
       dirApi.getWorkerSessionMessageCount(workerId, claudeSessionId),
       dirApi.getWorkerSessionMessagesPaged(workerId, claudeSessionId, 0, 1),
-      dirApi.scanCheckpoints(conv.latestTask.taskId),
+      scanCheckpointsUnified(conv.latestTask.taskId),
     ])
 
     // Update task's checkpoint data for the rewind dialog
@@ -5244,12 +5289,10 @@ async function executeContextRepair() {
   contextRepairLoading.value = true
   try {
     // Step 1: Rewind to turn 1 — marks ALL messages as sidechain (full compaction)
-    await dirApi.rewindTask(
-      contextRepairTaskId.value,
-      null,
-      'conversation_fork',
-      1,
-    )
+    await rewindTaskUnified(contextRepairTaskId.value, {
+      mode: 'conversation_fork',
+      turnIndex: 1,
+    })
 
     // Step 2: Resume the session with the compact summary prompt
     const task = conv.latestTask
@@ -5459,7 +5502,9 @@ function attentionStatusLabel(conv: ConversationGroup): string {
 }
 
 async function handleResumeFromHistory(task: ClaudeTask) {
-  if (!task.claudeSessionId || !selectedWorkerId.value) return
+  const workerId = task.workerId || selectedWorkerId.value
+  if (!workerId) return
+  if (!task.claudeSessionId && !task.codexThreadId) return
 
   try {
     const { value: prompt } = (await ElMessageBox.prompt('输入后续指令', '继续对话', {
@@ -5471,12 +5516,17 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     if (!prompt) return
 
     const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
-      workerId: selectedWorkerId.value,
-      claudeSessionId: task.claudeSessionId,
+      workerId,
       prompt,
       cwd: task.cwd,
       directoryId: task.directoryId,
       sessionId: task.sessionId,  // per-conversation: reuse session
+    }
+    if (task.claudeSessionId) {
+      resumeForm.claudeSessionId = task.claudeSessionId
+    }
+    if (task.codexThreadId) {
+      resumeForm.codexThreadId = task.codexThreadId
     }
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model

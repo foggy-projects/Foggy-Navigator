@@ -57,4 +57,10 @@ public class TaskDispatchRequest {
 
     /** Codex Thread ID（续接 Codex 会话） */
     private String codexThreadId;
+
+    /** Claude Session ID（resume 时续接指定会话） */
+    private String claudeSessionId;
+
+    /** 是否为 resume 操作 */
+    private boolean resume;
 }
