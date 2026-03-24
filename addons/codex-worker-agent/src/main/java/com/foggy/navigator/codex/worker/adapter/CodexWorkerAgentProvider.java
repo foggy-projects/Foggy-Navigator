@@ -9,7 +9,6 @@ import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
-import com.foggy.navigator.spi.codex.CodexWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
@@ -27,7 +26,6 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
 
     private final CodexCodingAgentRepository agentRepository;
     private final CodexTaskService taskService;
-    private final CodexWorkerFacade codexWorkerFacade;
     @Nullable
     private final AgentContextStore contextStore;
     /** 用于获取目录路径（目录由 Claude Worker 管理） */
@@ -54,7 +52,7 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
                 .filter(e -> "LOCAL_CODEX_WORKER".equals(e.getAgentType()))
                 .map(entity -> {
                     String cwd = resolveDefaultCwd(entity, userId);
-                    return new CodexWorkerA2aAgent(entity, taskService, codexWorkerFacade, cwd, contextStore);
+                    return new CodexWorkerA2aAgent(entity, taskService, cwd, contextStore);
                 });
     }
 

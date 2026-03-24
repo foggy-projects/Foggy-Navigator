@@ -1,24 +1,31 @@
 package com.foggy.navigator.codex.worker.adapter;
 
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
+import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentContextStore;
-import com.foggy.navigator.spi.codex.CodexWorkerFacade;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
- * A2aAgent 适配器 — 包装 CodingAgentEntity + CodexTaskService + CodexWorkerFacade
+ * A2aAgent 适配器 — 异步模式，返回 SUBMITTED 后在后台由 CodexStreamRelay 处理。
+ * <p>
+ * 与旧版同步模式的区别：
+ * <ul>
+ *   <li>旧版：sendTask() 阻塞调 syncQuery()，返回 COMPLETED/FAILED</li>
+ *   <li>新版：sendTask() 创建 tracked task + 发布事件，立即返回 SUBMITTED</li>
+ * </ul>
  */
 class CodexWorkerA2aAgent implements A2aAgent {
 
@@ -27,16 +34,13 @@ class CodexWorkerA2aAgent implements A2aAgent {
 
     private final CodingAgentEntity entity;
     private final CodexTaskService taskService;
-    private final CodexWorkerFacade workerFacade;
     private final String defaultCwd;
     private final AgentContextStore contextStore;
 
     CodexWorkerA2aAgent(CodingAgentEntity entity, CodexTaskService taskService,
-                        CodexWorkerFacade workerFacade, String defaultCwd,
-                        AgentContextStore contextStore) {
+                        String defaultCwd, AgentContextStore contextStore) {
         this.entity = entity;
         this.taskService = taskService;
-        this.workerFacade = workerFacade;
         this.defaultCwd = defaultCwd;
         this.contextStore = contextStore;
     }
@@ -48,6 +52,7 @@ class CodexWorkerA2aAgent implements A2aAgent {
             desc = (desc != null ? desc + "\n\n" : "") + "## 项目概述\n" + entity.getProjectSummary();
         }
         return A2aAgentCard.builder()
+                .id(entity.getAgentId())
                 .name(entity.getName())
                 .description(desc)
                 .url(entity.getEndpointUrl())
@@ -82,45 +87,50 @@ class CodexWorkerA2aAgent implements A2aAgent {
             }
         }
 
-        Map<String, Object> result = workerFacade.syncQuery(
-                entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
-                codexThreadId, 1, null);
+        // 提取 metadata
+        Map<String, Object> meta = message.getMetadata();
+        Integer maxTurns = meta != null && meta.get("maxTurns") instanceof Number n ? n.intValue() : null;
+        String model = meta != null ? (String) meta.get("model") : null;
+        String directoryId = meta != null ? (String) meta.get("directoryId") : null;
 
-        String resultText = (String) result.get("resultText");
-        String error = (String) result.get("error");
-        String newCodexThreadId = (String) result.get("codexThreadId");
+        // 通过 CodexTaskService.createTask() 创建任务并发布 CodexTaskStartEvent
+        // CodexStreamRelay 监听事件后异步执行 SSE 流消费
+        CreateCodexTaskForm form = new CreateCodexTaskForm();
+        form.setWorkerId(entity.getWorkerId());
+        form.setPrompt(prompt);
+        form.setCwd(defaultCwd);
+        form.setDirectoryId(directoryId);
+        form.setModel(model);
+        form.setMaxTurns(maxTurns);
+        form.setCodexThreadId(codexThreadId);
 
-        // 保存 contextId → codexThreadId 映射
-        if (contextId != null && contextStore != null && newCodexThreadId != null) {
+        CodexTaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
+
+        // 保存 contextId → codexThreadId 映射（如果后续 relay 拿到新的 threadId 会更新）
+        if (contextId != null && contextStore != null && codexThreadId != null) {
             contextStore.saveSessionRef(contextId, "codex-worker",
-                    newCodexThreadId, entity.getUserId(), entity.getAgentId());
+                    codexThreadId, entity.getUserId(), entity.getAgentId());
         }
 
-        if (error != null) {
-            return A2aTask.builder()
-                    .id(UUID.randomUUID().toString())
-                    .contextId(contextId)
-                    .status(A2aTaskStatus.builder()
-                            .state(A2aTaskState.FAILED)
-                            .description(error)
-                            .timestamp(Instant.now())
-                            .build())
-                    .history(List.of(message))
-                    .build();
-        }
+        log.info("Codex A2A sendTask: agentId={}, taskId={}, contextId={}",
+                entity.getAgentId(), task.getTaskId(), contextId);
+
+        // 返回 SUBMITTED 状态，后台异步执行
+        Map<String, Object> taskMeta = new LinkedHashMap<>();
+        taskMeta.put("sessionId", task.getSessionId());
+        taskMeta.put("workerId", task.getWorkerId());
+        taskMeta.put("codexThreadId", task.getCodexThreadId());
 
         return A2aTask.builder()
-                .id(UUID.randomUUID().toString())
+                .id(task.getTaskId())
                 .contextId(contextId)
                 .status(A2aTaskStatus.builder()
-                        .state(A2aTaskState.COMPLETED)
+                        .state(A2aTaskState.SUBMITTED)
+                        .description("Task submitted, executing in background")
                         .timestamp(Instant.now())
                         .build())
                 .history(List.of(message))
-                .artifacts(List.of(A2aArtifact.builder()
-                        .name("response")
-                        .parts(List.of(A2aPart.text(resultText != null ? resultText : "")))
-                        .build()))
+                .metadata(taskMeta)
                 .build();
     }
 
@@ -154,13 +164,35 @@ class CodexWorkerA2aAgent implements A2aAgent {
             default -> A2aTaskState.WORKING;
         };
 
-        return A2aTask.builder()
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("sessionId", dto.getSessionId());
+        meta.put("workerId", dto.getWorkerId());
+        meta.put("workerTaskId", dto.getWorkerTaskId());
+        meta.put("codexThreadId", dto.getCodexThreadId());
+
+        A2aTask.A2aTaskBuilder builder = A2aTask.builder()
                 .id(dto.getTaskId())
                 .status(A2aTaskStatus.builder()
                         .state(state)
                         .description(dto.getStatus())
                         .timestamp(Instant.now())
                         .build())
-                .build();
+                .metadata(meta);
+
+        if (dto.getResultText() != null) {
+            builder.artifacts(List.of(A2aArtifact.builder()
+                    .name("response")
+                    .parts(List.of(A2aPart.text(dto.getResultText())))
+                    .build()));
+        }
+        if (state == A2aTaskState.FAILED && dto.getErrorMessage() != null) {
+            builder.status(A2aTaskStatus.builder()
+                    .state(A2aTaskState.FAILED)
+                    .description(dto.getErrorMessage())
+                    .timestamp(Instant.now())
+                    .build());
+        }
+
+        return builder.build();
     }
 }

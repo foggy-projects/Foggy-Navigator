@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
-import { createTaskUnified } from '@/api/unifiedTask'
+import { createTaskUnified, cancelTaskUnified } from '@/api/unifiedTask'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
 
 const workers = ref<ClaudeWorker[]>([])
@@ -129,10 +129,10 @@ export function useClaudeWorker() {
   }
 
   async function abortTask(taskId: string) {
-    const result = await api.abortTask(taskId)
+    // 使用统一任务 API（/api/v1/tasks/{taskId}/cancel）
+    await cancelTaskUnified(taskId)
     const idx = tasks.value.findIndex((t) => t.taskId === taskId)
     if (idx >= 0) tasks.value[idx]!.status = 'ABORTED'
-    return result
   }
 
   async function deleteTask(taskId: string) {
