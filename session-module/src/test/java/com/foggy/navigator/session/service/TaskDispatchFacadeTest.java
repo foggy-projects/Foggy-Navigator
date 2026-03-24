@@ -30,7 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -389,5 +389,94 @@ class TaskDispatchFacadeTest {
         entity.setDirectoryId(directoryId);
         entity.setProjectName(projectName);
         return entity;
+    }
+
+    // ── New tests ──
+
+    @Test
+    void createTask_agentNotFound_throwsException() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-missing")
+                .prompt("hi")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+
+        when(agentResolver.resolveAgent(eq("worker-missing"), any())).thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class, () -> facade.createTask(request, context));
+    }
+
+    @Test
+    void getTask_notFoundInAllSources_returnsEmpty() {
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .build();
+
+        // sessionTaskRepository is null (not injected)
+        when(taskQueryProvider.getTaskByIdAndUser("task-missing", "user-1")).thenReturn(Optional.empty());
+
+        Optional<DispatchTaskDTO> result = facade.getTask("task-missing", context);
+
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void cancelTask_routesViaSessionStore() {
+        // cancelTask resolves agent through agentResolver, then calls agent.cancelTask
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+
+        facade.cancelTask("task-cancel-1", "agent-1", context);
+
+        verify(agent).cancelTask("task-cancel-1");
+    }
+
+    @Test
+    void listWorkerSessions_delegatesToProvider() {
+        List<Map<String, Object>> sessions = List.of(
+                Map.of("sessionId", "s1", "status", "active"),
+                Map.of("sessionId", "s2", "status", "completed")
+        );
+        when(taskQueryProvider.listWorkerSessions("worker-1", "user-1")).thenReturn(sessions);
+
+        List<Map<String, Object>> result = facade.listWorkerSessions("worker-1", "user-1");
+
+        assertEquals(2, result.size());
+        assertEquals("s1", result.get(0).get("sessionId"));
+    }
+
+    @Test
+    void syncWorkerSessions_delegatesToProvider() {
+        Map<String, Object> syncResult = Map.of("synced", 5, "workerId", "worker-1");
+        when(taskQueryProvider.syncWorkerSessions("worker-1", "user-1", "tenant-1")).thenReturn(syncResult);
+
+        Map<String, Object> result = facade.syncWorkerSessions("worker-1", "user-1", "tenant-1");
+
+        assertEquals(5, result.get("synced"));
+        verify(taskQueryProvider).syncWorkerSessions("worker-1", "user-1", "tenant-1");
+    }
+
+    @Test
+    void listTasksByDirectory_prefersUnifiedStore() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-dir-1", "session-1", "claude-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 24, 21, 0), "{\"claudeSessionId\":\"cs-1\"}"
+        );
+        when(sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc("dir-1", "user-1"))
+                .thenReturn(List.of(task));
+
+        List<DispatchTaskDTO> result = facade.listTasksByDirectory("user-1", "dir-1");
+
+        assertEquals(1, result.size());
+        assertEquals("task-dir-1", result.get(0).getTaskId());
+        verify(taskQueryProvider, never()).listTasksByDirectory(anyString(), anyString());
     }
 }
