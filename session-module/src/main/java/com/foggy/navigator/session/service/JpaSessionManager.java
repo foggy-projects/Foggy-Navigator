@@ -49,6 +49,8 @@ public class JpaSessionManager implements SessionManager {
         entity.setParentSessionId(request.getParentSessionId());
         entity.setTitle(request.getTaskName());
         entity.setStatus(SessionStatus.ACTIVE.name());
+        entity.setInteractionState("PROCESSING");
+        entity.setLastActivityAt(LocalDateTime.now());
         sessionRepository.save(entity);
         return sessionId;
     }
@@ -74,22 +76,36 @@ public class JpaSessionManager implements SessionManager {
     @Transactional
     public String addMessage(String sessionId, Message message) {
         String messageId = message.getId() != null ? message.getId() : UUID.randomUUID().toString();
+        LocalDateTime createdAt = resolveMessageCreatedAt(sessionId, message.getCreatedAt());
         SessionMessageEntity entity = new SessionMessageEntity();
         entity.setId(messageId);
         entity.setSessionId(sessionId);
         entity.setRole(message.getRole().name());
         entity.setContent(message.getContent());
         entity.setMetadata(serializeMetadata(message.getMetadata()));
-        entity.setCreatedAt(message.getCreatedAt() != null ? message.getCreatedAt() : LocalDateTime.now());
+        entity.setCreatedAt(createdAt);
         messageRepository.save(entity);
 
         // 更新会话时间
         sessionRepository.findById(sessionId).ifPresent(session -> {
-            session.setUpdatedAt(LocalDateTime.now());
+            LocalDateTime now = LocalDateTime.now();
+            session.setUpdatedAt(now);
+            session.setLastActivityAt(now);
             sessionRepository.save(session);
         });
 
         return messageId;
+    }
+
+    private LocalDateTime resolveMessageCreatedAt(String sessionId, LocalDateTime requestedCreatedAt) {
+        LocalDateTime candidate = requestedCreatedAt != null ? requestedCreatedAt : LocalDateTime.now();
+        LocalDateTime latestCreatedAt = messageRepository.findFirstBySessionIdOrderByCreatedAtDesc(sessionId)
+                .map(SessionMessageEntity::getCreatedAt)
+                .orElse(null);
+        if (latestCreatedAt != null && !candidate.isAfter(latestCreatedAt)) {
+            return latestCreatedAt.plusNanos(1);
+        }
+        return candidate;
     }
 
     @Override
@@ -220,6 +236,7 @@ public class JpaSessionManager implements SessionManager {
     public void updateSessionSummary(String sessionId, String summary) {
         sessionRepository.findById(sessionId).ifPresent(entity -> {
             entity.setSummary(summary);
+            entity.setLastActivityAt(LocalDateTime.now());
             sessionRepository.save(entity);
         });
     }

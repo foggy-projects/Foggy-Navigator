@@ -1,5 +1,8 @@
 package com.foggy.navigator.claude.worker.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
@@ -21,6 +24,8 @@ import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
@@ -30,6 +35,8 @@ import com.foggy.navigator.claude.worker.model.entity.DeletedClaudeSessionEntity
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.claude.worker.repository.ConversationConfigRepository;
 import com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
@@ -72,6 +79,7 @@ import com.foggy.navigator.common.util.IdGenerator;
 public class ClaudeTaskService implements TaskQueryProvider {
 
     private static final String AGENT_ID = "claude-worker";
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ClaudeTaskRepository taskRepository;
     private final ConversationConfigRepository conversationConfigRepository;
@@ -83,6 +91,13 @@ public class ClaudeTaskService implements TaskQueryProvider {
     /** @Lazy 打破 ClaudeTaskService ↔ WorkerStreamRelay 的循环依赖 */
     @Autowired @Lazy
     private WorkerStreamRelay streamRelay;
+
+    @Autowired(required = false)
+    private SessionTaskRepository sessionTaskRepository;
+
+    @Autowired(required = false)
+    private SessionEntityRepository sessionEntityRepository;
+
     private final WorkingDirectoryService workingDirectoryService;
     private final WorkingDirectoryRepository workingDirectoryRepository;
     private final SessionManager sessionManager;
@@ -174,7 +189,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
         entity.setAgentTeamsConfigId(resolvedConfigId);
-        taskRepository.save(entity);
+        persistTask(entity);
 
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}, agentTeams={}",
                 taskId, sessionId, form.getWorkerId(), userId,
@@ -186,7 +201,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         if (resolvedConfigId != null) {
             ConversationConfigEntity convConfig = conversationConfigService.getOrCreate(sessionId, form.getWorkerId(), userId);
             convConfig.setAgentTeamsConfigId(resolvedConfigId);
-            conversationConfigRepository.save(convConfig);
+            conversationConfigService.saveConfig(convConfig);
         }
 
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
@@ -323,7 +338,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
         entity.setAgentTeamsConfigId(resolvedConfigId);
-        taskRepository.save(entity);
+        persistTask(entity);
 
         log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}, agentTeams={}",
                 taskId, form.getClaudeSessionId(), directoryId,
@@ -334,7 +349,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         // 锁定 Agent Teams 配置到会话（仅首次，已锁定则跳过）
         if (resolvedConfigId != null && existingConvConfig != null && existingConvConfig.getAgentTeamsConfigId() == null) {
             existingConvConfig.setAgentTeamsConfigId(resolvedConfigId);
-            conversationConfigRepository.save(existingConvConfig);
+            conversationConfigService.saveConfig(existingConvConfig);
         }
 
         // 解析 per-conversation auth（含平台模型配置 fallback）
@@ -397,7 +412,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         entity.setFileCheckpointingEnabled(false);
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Tracked sync task created: taskId={}, workerId={}, directoryId={}", taskId, workerId, directoryId);
 
         // 绑定目录 auth 到 session 的 ConversationConfig（UI 历史会话能看到 auth 状态）
@@ -464,7 +479,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
      */
     public List<TaskDTO> listAwaitingReplyTasks(String userId) {
         // 1. 从 ConversationConfig 查询所有 AWAITING_REPLY 状态的 sessionId
-        List<String> awaitingSessionIds = conversationConfigRepository.findSessionIdsByInteractionState(
+        List<String> awaitingSessionIds = conversationConfigService.findSessionIdsByInteractionState(
                 userId, "AWAITING_REPLY");
 
         if (awaitingSessionIds.isEmpty()) {
@@ -613,7 +628,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         try {
             String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(scannedCheckpoints);
             entity.setCheckpoints(json);
-            taskRepository.save(entity);
+            persistTask(entity);
             log.info("Checkpoints populated from scan: taskId={}, count={}", taskId, scannedCheckpoints.size());
             return json;
         } catch (Exception e) {
@@ -651,7 +666,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             } catch (Exception e) {
                 log.warn("Failed to serialize checkpoints for task {}: {}", taskId, e.getMessage());
             }
-            taskRepository.save(entity);
+            persistTask(entity);
             log.debug("Checkpoint added: taskId={}, checkpointId={}, total={}", taskId, checkpointId, list.size());
         });
     }
@@ -696,7 +711,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             }
             entity.setErrorMessage(null);
             entity.setLastAliveAt(LocalDateTime.now());
-            taskRepository.save(entity);
+            persistTask(entity);
             log.info("Task completed: taskId={}, model={}, costUsd={}, durationMs={}", taskId, model, costUsd, durationMs);
             publishStatusChange(entity, prev);
             conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
@@ -712,7 +727,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             if (entity.getClaudeSessionId() == null || !entity.getClaudeSessionId().equals(claudeSessionId)) {
                 entity.setClaudeSessionId(claudeSessionId);
-                taskRepository.save(entity);
+                persistTask(entity);
                 log.debug("Updated claudeSessionId for task {}: {}", taskId, claudeSessionId);
             }
         });
@@ -744,7 +759,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
         }
         entity.setLastAliveAt(LocalDateTime.now());
-        taskRepository.save(entity);
+        persistTask(entity);
     }
 
     /**
@@ -769,7 +784,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     public void setDedupKey(String taskId, String dedupKey) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setDedupKey(dedupKey);
-            taskRepository.save(entity);
+            persistTask(entity);
         });
     }
 
@@ -780,7 +795,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     public void setSource(String taskId, String source) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setSource(source);
-            taskRepository.save(entity);
+            persistTask(entity);
         });
     }
 
@@ -791,7 +806,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     public void saveTaskResult(String taskId, String resultText) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setResultText(resultText);
-            taskRepository.save(entity);
+            persistTask(entity);
             log.debug("Saved result text for task {}: length={}", taskId,
                     resultText != null ? resultText.length() : 0);
         });
@@ -813,7 +828,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 entity.setClaudeSessionId(claudeSessionId);
             }
             entity.setLastAliveAt(LocalDateTime.now());
-            taskRepository.save(entity);
+            persistTask(entity);
             log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
             publishStatusChange(entity, prev);
             conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
@@ -828,7 +843,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
             entity.setStatus("AWAITING_PERMISSION");
-            taskRepository.save(entity);
+            persistTask(entity);
             log.info("Task awaiting permission: taskId={}", taskId);
             publishStatusChange(entity, prev);
             conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
@@ -861,7 +876,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String prev = entity.getStatus();
         entity.setStatus("RUNNING");
         entity.setErrorMessage(null); // 清除之前可能的错误信息
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Task resumed from permission: taskId={}, prev={}", taskId, prev);
         publishStatusChange(entity, prev);
         conversationConfigService.updateInteractionState(entity.getSessionId(), "PROCESSING");
@@ -931,7 +946,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             taskRepository.findByTaskId(taskId).ifPresent(entity -> {
                 String prev = entity.getStatus();
                 entity.setStatus("ABORTED");
-                taskRepository.save(entity);
+                persistTask(entity);
                 log.info("Task aborted: taskId={}", taskId);
                 publishStatusChange(entity, prev);
                 conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
@@ -1017,10 +1032,9 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 log.warn("Failed to delete associated session: sessionId={}", sessionId, e);
             }
             try {
-                conversationConfigRepository.deleteBySessionId(sessionId);
-                log.info("Associated conversation config deleted: sessionId={}", sessionId);
+                log.info("Session-backed conversation config removed with session deletion: sessionId={}", sessionId);
             } catch (Exception e) {
-                log.warn("Failed to delete conversation config: sessionId={}", sessionId, e);
+                log.warn("Failed to finalize session-backed conversation config cleanup: sessionId={}", sessionId, e);
             }
         }
         log.info("Task deleted: taskId={}, userId={}", taskId, userId);
@@ -1105,7 +1119,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             if (createdAt != null) entity.setCreatedAt(createdAt);
             if (updatedAt != null) entity.setUpdatedAt(updatedAt);
 
-            taskRepository.save(entity);
+            persistTask(entity);
 
             // Auto-bind auth from WorkingDirectory default config
             if (matchedDir != null && matchedDir.getDefaultAuthMode() != null) {
@@ -1145,7 +1159,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             }
             if (dirOpt.isPresent()) {
                 task.setDirectoryId(dirOpt.get().getDirectoryId());
-                taskRepository.save(task);
+                persistTask(task);
                 fixed++;
             }
         }
@@ -1345,7 +1359,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     public void touchAlive(String taskId) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setLastAliveAt(LocalDateTime.now());
-            taskRepository.save(entity);
+            persistTask(entity);
         });
     }
 
@@ -1390,7 +1404,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 String prev = entity.getStatus();
                 entity.setStatus("COMPLETED");
                 entity.setErrorMessage(reason);
-                taskRepository.save(entity);
+                persistTask(entity);
                 log.info("Task stream ended, CLI exited — marking COMPLETED: taskId={}, reason={}", taskId, reason);
                 publishStatusChange(entity, prev);
                 conversationConfigService.updateInteractionState(entity.getSessionId(), "AWAITING_REPLY");
@@ -1418,7 +1432,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String prev = entity.getStatus();
         entity.setStatus("RUNNING");
         entity.setErrorMessage(null);
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Task reset to RUNNING for reconnect: taskId={}", taskId);
         publishStatusChange(entity, prev);
     }
@@ -1468,7 +1482,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String prev = entity.getStatus();
         entity.setStatus("RUNNING");
         entity.setErrorMessage(null);
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Task resynced: taskId={}, workerId={}", taskId, entity.getWorkerId());
         publishStatusChange(entity, prev);
 
@@ -1804,7 +1818,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String prev = task.getStatus();
         task.setStatus("COMPLETED");
         task.setErrorMessage(null);
-        taskRepository.save(task);
+        persistTask(task);
         log.info("Resync: Task marked as COMPLETED from sync: taskId={}", task.getTaskId());
         publishStatusChange(task, prev);
         conversationConfigService.updateInteractionState(task.getSessionId(), "AWAITING_REPLY");
@@ -1835,7 +1849,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String prev = entity.getStatus();
         entity.setStatus("COMPLETED");
         entity.setErrorMessage(reason);
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Task completed (CLI exited): taskId={}, createdAt={}, reason={}",
                 entity.getTaskId(), entity.getCreatedAt(), reason);
         publishStatusChange(entity, prev);
@@ -1943,6 +1957,141 @@ public class ClaudeTaskService implements TaskQueryProvider {
         return null;
     }
 
+    private ClaudeTaskEntity persistTask(ClaudeTaskEntity entity) {
+        ClaudeTaskEntity saved = taskRepository.save(entity);
+        syncSessionTask(saved);
+        syncSessionProjection(saved);
+        return saved;
+    }
+
+    private void syncSessionTask(ClaudeTaskEntity entity) {
+        if (sessionTaskRepository == null) {
+            return;
+        }
+
+        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(entity.getTaskId())
+                .orElseGet(SessionTaskEntity::new);
+        sessionTask.setTaskId(entity.getTaskId());
+        sessionTask.setSessionId(entity.getSessionId());
+        sessionTask.setProviderType(AGENT_ID);
+        sessionTask.setProviderTaskId(entity.getWorkerTaskId());
+        sessionTask.setWorkerId(entity.getWorkerId());
+        sessionTask.setUserId(entity.getUserId());
+        sessionTask.setDirectoryId(entity.getDirectoryId());
+        sessionTask.setPrompt(entity.getPrompt());
+        sessionTask.setCwd(entity.getCwd());
+        sessionTask.setStatus(entity.getStatus());
+        sessionTask.setModel(entity.getModel());
+        sessionTask.setCostUsd(entity.getCostUsd());
+        sessionTask.setInputTokens(entity.getInputTokens());
+        sessionTask.setOutputTokens(entity.getOutputTokens());
+        sessionTask.setDurationMs(entity.getDurationMs());
+        sessionTask.setNumTurns(entity.getNumTurns());
+        sessionTask.setResultText(entity.getResultText());
+        sessionTask.setErrorMessage(entity.getErrorMessage());
+        sessionTask.setSource(entity.getSource());
+        sessionTask.setLastAckedSeq(entity.getLastAckedSeq());
+        sessionTask.setLastAliveAt(entity.getLastAliveAt());
+        sessionTask.setCreatedAt(entity.getCreatedAt());
+        sessionTask.setUpdatedAt(entity.getUpdatedAt());
+        sessionTask.setTaskStateJson(buildClaudeTaskStateJson(entity));
+        sessionTaskRepository.save(sessionTask);
+    }
+
+    private void syncSessionProjection(ClaudeTaskEntity entity) {
+        if (sessionEntityRepository == null || entity.getSessionId() == null || entity.getSessionId().isBlank()) {
+            return;
+        }
+        sessionEntityRepository.findById(entity.getSessionId()).ifPresent(session -> {
+            session.setAgentId(firstNonBlank(session.getAgentId(), AGENT_ID));
+            session.setProviderType(firstNonBlank(session.getProviderType(), AGENT_ID));
+            session.setCurrentWorkerId(firstNonBlank(entity.getWorkerId(), session.getCurrentWorkerId()));
+            session.setCurrentDirectoryId(firstNonBlank(entity.getDirectoryId(), session.getCurrentDirectoryId()));
+            session.setLatestTaskId(entity.getTaskId());
+            session.setLatestModel(firstNonBlank(entity.getModel(), session.getLatestModel()));
+            session.setLastActivityAt(firstNonNull(entity.getUpdatedAt(), entity.getLastAliveAt(), LocalDateTime.now()));
+            session.setProviderStateJson(mergeJsonValue(
+                    mergeJsonValue(session.getProviderStateJson(), "claudeSessionId", entity.getClaudeSessionId()),
+                    "agentTeamsConfigId", entity.getAgentTeamsConfigId()));
+            sessionEntityRepository.save(session);
+        });
+    }
+
+    private String buildClaudeTaskStateJson(ClaudeTaskEntity entity) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        putIfNotBlank(state, "claudeSessionId", entity.getClaudeSessionId());
+        putIfNotBlank(state, "contextId", entity.getContextId());
+        putIfNotBlank(state, "dedupKey", entity.getDedupKey());
+        putIfNotBlank(state, "agentTeamsConfigId", entity.getAgentTeamsConfigId());
+        if (entity.getFileCheckpointingEnabled() != null) {
+            state.put("fileCheckpointingEnabled", entity.getFileCheckpointingEnabled());
+        }
+        if (entity.getCheckpoints() != null && !entity.getCheckpoints().isBlank()) {
+            try {
+                state.put("checkpoints", OBJECT_MAPPER.readValue(entity.getCheckpoints(), Object.class));
+            } catch (Exception e) {
+                state.put("checkpoints", entity.getCheckpoints());
+            }
+        }
+        if (state.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(state);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize Claude task state", e);
+        }
+    }
+
+    private String mergeJsonValue(String json, String key, String value) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        if (json != null && !json.isBlank()) {
+            try {
+                values.putAll(OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {}));
+            } catch (Exception e) {
+                log.warn("Failed to parse session providerStateJson, recreating JSON: {}", json);
+            }
+        }
+        if (value == null || value.isBlank()) {
+            values.remove(key);
+        } else {
+            values.put(key, value);
+        }
+        if (values.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(values);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize session provider state", e);
+        }
+    }
+
+    private void putIfNotBlank(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    @SafeVarargs
+    private final <T> T firstNonNull(T... values) {
+        for (T value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     // ===== 会话搜索 =====
 
     /**
@@ -1961,8 +2110,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
             String trimmed = keyword.trim();
             Set<String> textMatches = new LinkedHashSet<>();
             textMatches.addAll(taskRepository.findSessionIdsByPromptKeyword(userId, trimmed));
-            textMatches.addAll(conversationConfigRepository.findSessionIdsByTitleKeyword(userId, trimmed));
-            textMatches.addAll(conversationConfigRepository.findSessionIdsByTagKeyword(userId, trimmed));
+            textMatches.addAll(conversationConfigService.findSessionIdsByTitleKeyword(userId, trimmed));
+            textMatches.addAll(conversationConfigService.findSessionIdsByTagKeyword(userId, trimmed));
             candidateSessionIds = textMatches;
         }
 
@@ -2009,10 +2158,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
         List<ClaudeTaskEntity> latestTasks = taskRepository.findLatestBySessionIdIn(pagedSessionIds);
 
         // 8. 获取会话配置
-        List<ConversationConfigEntity> configs = conversationConfigRepository
-                .findBySessionIdIn(pagedSessionIds);
-        Map<String, ConversationConfigEntity> configMap = configs.stream()
-                .collect(Collectors.toMap(ConversationConfigEntity::getSessionId, c -> c));
+        Map<String, ConversationConfigEntity> configMap = conversationConfigService
+                .getConfigMapBySessionIds(pagedSessionIds);
 
         // 9. 计算每个 session 的总费用
         Map<String, BigDecimal> costMap = allTasks.stream()
@@ -2148,7 +2295,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         // 回到 RUNNING 状态
         if ("AWAITING_PERMISSION".equals(task.getStatus())) {
             task.setStatus("RUNNING");
-            taskRepository.save(task);
+            persistTask(task);
         }
     }
 

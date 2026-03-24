@@ -6,6 +6,9 @@ import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -17,7 +20,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +50,8 @@ class TaskDispatchFacadeTest {
     private TaskQueryProvider taskQueryProvider;
     @Mock
     private LlmModelManager llmModelManager;
+    @Mock
+    private SessionTaskRepository sessionTaskRepository;
 
     private TaskDispatchFacade facade;
 
@@ -198,5 +205,151 @@ class TaskDispatchFacadeTest {
                 argThat(params -> "thread-1".equals(params.get("codexThreadId"))
                         && "session-1".equals(params.get("sessionId"))
                         && "continue".equals(params.get("prompt"))));
+    }
+
+    @Test
+    void listTasksPaged_prefersUnifiedSessionStoreWhenAvailable() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+
+        SessionTaskEntity claudeTask = sessionTask(
+                "task-claude-1", "session-claude-1", "claude-worker", "worker-1", "dir-1",
+                "RUNNING", LocalDateTime.of(2026, 3, 24, 21, 0), "{\"claudeSessionId\":\"claude-session-1\"}"
+        );
+        SessionTaskEntity codexTask = sessionTask(
+                "task-codex-1", "session-codex-1", "codex-worker", "worker-1", "dir-2",
+                "COMPLETED", LocalDateTime.of(2026, 3, 24, 22, 0), "{\"codexThreadId\":\"thread-1\"}"
+        );
+
+        when(sessionTaskRepository.findByUserIdOrderByCreatedAtDesc("user-1"))
+                .thenReturn(List.of(codexTask, claudeTask));
+        when(sessionRepository.findAllById(List.of("session-codex-1", "session-claude-1")))
+                .thenReturn(List.of(
+                        sessionEntity("session-codex-1", "user-1", "AWAITING_REPLY", LocalDateTime.of(2026, 3, 24, 22, 5)),
+                        sessionEntity("session-claude-1", "user-1", "PROCESSING", LocalDateTime.of(2026, 3, 24, 21, 5))
+                ));
+
+        Object result = facade.listTasksPaged("user-1", 0, 20, null);
+
+        Map<?, ?> page = assertInstanceOf(Map.class, result);
+        assertEquals(2L, page.get("totalSessions"));
+        List<?> content = assertInstanceOf(List.class, page.get("content"));
+        assertEquals(2, content.size());
+        DispatchTaskDTO first = assertInstanceOf(DispatchTaskDTO.class, content.get(0));
+        DispatchTaskDTO second = assertInstanceOf(DispatchTaskDTO.class, content.get(1));
+        assertEquals("task-codex-1", first.getTaskId());
+        assertEquals("thread-1", first.getCodexThreadId());
+        assertEquals("task-claude-1", second.getTaskId());
+        assertEquals("claude-session-1", second.getClaudeSessionId());
+        verify(taskQueryProvider, never()).listTasksPaged(anyString(), anyInt(), anyInt(), any());
+    }
+
+    @Test
+    void searchSessions_prefersUnifiedSessionStoreWhenAvailable() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+
+        SessionTaskEntity matchingTask = sessionTask(
+                "task-claude-1", "session-claude-1", "claude-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 24, 21, 0), "{\"claudeSessionId\":\"claude-session-1\"}"
+        );
+        matchingTask.setPrompt("Fix auth flow");
+        matchingTask.setResultText("Auth flow fixed");
+        matchingTask.setCostUsd(new BigDecimal("1.250000"));
+
+        SessionTaskEntity otherTask = sessionTask(
+                "task-codex-1", "session-codex-1", "codex-worker", "worker-2", "dir-2",
+                "COMPLETED", LocalDateTime.of(2026, 3, 24, 20, 0), "{\"codexThreadId\":\"thread-1\"}"
+        );
+        otherTask.setPrompt("Unrelated prompt");
+
+        when(sessionTaskRepository.findByUserIdOrderByCreatedAtDesc("user-1"))
+                .thenReturn(List.of(matchingTask, otherTask));
+        when(sessionRepository.findAllById(List.of("session-claude-1", "session-codex-1")))
+                .thenReturn(List.of(
+                        sessionEntity("session-claude-1", "user-1", "AWAITING_REPLY", LocalDateTime.of(2026, 3, 24, 21, 10), "Auth Session", "[\"auth\",\"backend\"]"),
+                        sessionEntity("session-codex-1", "user-1", "AWAITING_REPLY", LocalDateTime.of(2026, 3, 24, 20, 10), "Other", "[\"misc\"]")
+                ));
+
+        Object result = facade.searchSessions("user-1", "auth", null, null, 0, 20);
+
+        Map<?, ?> page = assertInstanceOf(Map.class, result);
+        assertEquals(1L, page.get("total"));
+        List<?> results = assertInstanceOf(List.class, page.get("results"));
+        Map<?, ?> first = assertInstanceOf(Map.class, results.get(0));
+        assertEquals("session-claude-1", first.get("sessionId"));
+        assertEquals("Auth Session", first.get("customTitle"));
+        assertEquals("task-claude-1", first.get("latestTaskId"));
+        assertEquals(new BigDecimal("1.250000"), first.get("totalCost"));
+        verify(taskQueryProvider, never()).searchSessions(anyString(), any(), any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void getTask_prefersUnifiedSessionStoreWhenAvailable() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-codex-1", "session-codex-1", "codex-worker", "worker-1", "dir-2",
+                "COMPLETED", LocalDateTime.of(2026, 3, 24, 22, 0), "{\"codexThreadId\":\"thread-1\"}"
+        );
+
+        when(sessionTaskRepository.findByTaskIdAndUserId("task-codex-1", "user-1"))
+                .thenReturn(Optional.of(task));
+
+        Optional<DispatchTaskDTO> result = facade.getTask("task-codex-1", AgentResolveContext.builder()
+                .userId("user-1")
+                .build());
+
+        assertEquals(true, result.isPresent());
+        assertEquals("thread-1", result.orElseThrow().getCodexThreadId());
+        verify(taskQueryProvider, never()).getTaskByIdAndUser(anyString(), anyString());
+    }
+
+    @Test
+    void respondToTask_routesViaUnifiedSessionStoreProviderType() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-codex-1", "session-codex-1", "codex-worker", "worker-1", "dir-2",
+                "AWAITING_PERMISSION", LocalDateTime.of(2026, 3, 24, 22, 0), "{\"codexThreadId\":\"thread-1\"}"
+        );
+        when(sessionTaskRepository.findByTaskId("task-codex-1")).thenReturn(Optional.of(task));
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+
+        facade.respondToTask("task-codex-1", "user-1", Map.of("decision", "approve"));
+
+        verify(taskQueryProvider).respondToTask("task-codex-1", "user-1", Map.of("decision", "approve"));
+        verify(taskQueryProvider, never()).getTaskById("task-codex-1");
+    }
+
+    private SessionTaskEntity sessionTask(String taskId, String sessionId, String providerType,
+                                          String workerId, String directoryId, String status,
+                                          LocalDateTime createdAt, String taskStateJson) {
+        SessionTaskEntity entity = new SessionTaskEntity();
+        entity.setTaskId(taskId);
+        entity.setSessionId(sessionId);
+        entity.setProviderType(providerType);
+        entity.setWorkerId(workerId);
+        entity.setDirectoryId(directoryId);
+        entity.setUserId("user-1");
+        entity.setPrompt(taskId + " prompt");
+        entity.setStatus(status);
+        entity.setCreatedAt(createdAt);
+        entity.setUpdatedAt(createdAt.plusMinutes(1));
+        entity.setTaskStateJson(taskStateJson);
+        return entity;
+    }
+
+    private SessionEntity sessionEntity(String sessionId, String userId, String interactionState, LocalDateTime lastActivityAt) {
+        return sessionEntity(sessionId, userId, interactionState, lastActivityAt, null, null);
+    }
+
+    private SessionEntity sessionEntity(String sessionId, String userId, String interactionState,
+                                        LocalDateTime lastActivityAt, String title, String tagsJson) {
+        SessionEntity entity = new SessionEntity();
+        entity.setId(sessionId);
+        entity.setUserId(userId);
+        entity.setInteractionState(interactionState);
+        entity.setLastActivityAt(lastActivityAt);
+        entity.setUpdatedAt(lastActivityAt);
+        entity.setTitle(title);
+        entity.setTagsJson(tagsJson);
+        return entity;
     }
 }

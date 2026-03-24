@@ -1,8 +1,13 @@
 package com.foggy.navigator.session.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -11,12 +16,16 @@ import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.lang.reflect.Method;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 统一任务分发 Facade —— 所有外部入口（前端 / OpenAPI / A2A）的唯一任务操作层。
@@ -36,11 +45,16 @@ import java.util.*;
 @RequiredArgsConstructor
 public class TaskDispatchFacade {
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private final UnifiedAgentResolver agentResolver;
     private final SessionBindingService bindingService;
     private final SessionRepository sessionRepository;
     private final List<TaskQueryProvider> taskQueryProviders;
     private final LlmModelManager llmModelManager;
+
+    @Autowired(required = false)
+    @Nullable
+    private SessionTaskRepository sessionTaskRepository;
 
     /**
      * 创建任务。
@@ -86,6 +100,15 @@ public class TaskDispatchFacade {
      * 查询单个任务（遍历所有 TaskQueryProvider）
      */
     public Optional<DispatchTaskDTO> getTask(String taskId, AgentResolveContext context) {
+        if (sessionTaskRepository != null) {
+            Optional<DispatchTaskDTO> unified = context.getUserId() != null
+                    ? sessionTaskRepository.findByTaskIdAndUserId(taskId, context.getUserId()).map(this::toDispatchTaskDTO)
+                    : sessionTaskRepository.findByTaskId(taskId).map(this::toDispatchTaskDTO);
+            if (unified.isPresent()) {
+                return unified;
+            }
+        }
+
         for (TaskQueryProvider provider : taskQueryProviders) {
             Optional<DispatchTaskDTO> result = context.getUserId() != null
                     ? provider.getTaskByIdAndUser(taskId, context.getUserId())
@@ -99,6 +122,15 @@ public class TaskDispatchFacade {
      * 按会话查询任务列表（根据 session 绑定的 providerType 路由到对应 Provider）
      */
     public List<DispatchTaskDTO> listTasksBySession(String sessionId) {
+        if (sessionTaskRepository != null) {
+            List<DispatchTaskDTO> tasks = sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(sessionId).stream()
+                    .map(this::toDispatchTaskDTO)
+                    .toList();
+            if (!tasks.isEmpty()) {
+                return tasks;
+            }
+        }
+
         SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
         if (session == null) return List.of();
 
@@ -126,6 +158,17 @@ public class TaskDispatchFacade {
      * 聚合所有 Provider 的活跃任务
      */
     public List<DispatchTaskDTO> listActiveTasks(String userId) {
+        if (sessionTaskRepository != null) {
+            List<DispatchTaskDTO> tasks = sessionTaskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
+                            userId, List.of("RUNNING", "AWAITING_PERMISSION")).stream()
+                    .map(this::toDispatchTaskDTO)
+                    .sorted((left, right) -> compareNullableTime(right.getCreatedAt(), left.getCreatedAt()))
+                    .toList();
+            if (!tasks.isEmpty()) {
+                return tasks;
+            }
+        }
+
         return taskQueryProviders.stream()
                 .flatMap(p -> p.listActiveDispatchTasks(userId).stream())
                 .sorted((a, b) -> {
@@ -227,6 +270,13 @@ public class TaskDispatchFacade {
      * 分页查询任务列表（按会话聚合所有 Provider，再统一分页）
      */
     public Object listTasksPaged(String userId, int page, int size, String state) {
+        if (sessionTaskRepository != null) {
+            Object unified = listTasksPagedFromSessionStore(userId, null, page, size, state);
+            if (unified != null) {
+                return unified;
+            }
+        }
+
         int fetchSize = computeFetchSize(page, size);
         List<Object> content = new ArrayList<>();
         long totalSessions = 0L;
@@ -249,6 +299,13 @@ public class TaskDispatchFacade {
      */
     public Object searchSessions(String userId, String keyword, String workerId,
                                   String directoryId, int page, int size) {
+        if (sessionTaskRepository != null) {
+            Object unified = searchSessionsFromSessionStore(userId, keyword, workerId, directoryId, page, size);
+            if (unified != null) {
+                return unified;
+            }
+        }
+
         int fetchSize = computeFetchSize(page, size);
         List<Object> results = new ArrayList<>();
         long total = 0L;
@@ -297,6 +354,16 @@ public class TaskDispatchFacade {
      * 按目录查询任务列表
      */
     public List<DispatchTaskDTO> listTasksByDirectory(String userId, String directoryId) {
+        if (sessionTaskRepository != null) {
+            List<DispatchTaskDTO> tasks = sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId)
+                    .stream()
+                    .map(this::toDispatchTaskDTO)
+                    .toList();
+            if (!tasks.isEmpty()) {
+                return tasks;
+            }
+        }
+
         return taskQueryProviders.stream()
                 .flatMap(p -> {
                     try {
@@ -313,6 +380,13 @@ public class TaskDispatchFacade {
      */
     public Object listTasksByDirectoryPaged(String userId, String directoryId,
                                              int page, int size, String state) {
+        if (sessionTaskRepository != null) {
+            Object unified = listTasksPagedFromSessionStore(userId, directoryId, page, size, state);
+            if (unified != null) {
+                return unified;
+            }
+        }
+
         int fetchSize = computeFetchSize(page, size);
         List<Object> content = new ArrayList<>();
         long totalSessions = 0L;
@@ -352,6 +426,18 @@ public class TaskDispatchFacade {
     }
 
     private TaskQueryProvider findProviderForTask(String taskId) {
+        if (sessionTaskRepository != null) {
+            String providerType = sessionTaskRepository.findByTaskId(taskId)
+                    .map(SessionTaskEntity::getProviderType)
+                    .orElse(null);
+            if (providerType != null && !providerType.isBlank()) {
+                return taskQueryProviders.stream()
+                        .filter(provider -> providerType.equals(provider.getProviderType()))
+                        .findFirst()
+                        .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerType));
+            }
+        }
+
         for (TaskQueryProvider p : taskQueryProviders) {
             if (p.getTaskById(taskId).isPresent()) return p;
         }
@@ -605,6 +691,324 @@ public class TaskDispatchFacade {
         return left.compareTo(right);
     }
 
+    private Object listTasksPagedFromSessionStore(String userId, String directoryId, int page, int size, String state) {
+        List<SessionTaskEntity> tasks = directoryId == null || directoryId.isBlank()
+                ? sessionTaskRepository.findByUserIdOrderByCreatedAtDesc(userId)
+                : sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc(directoryId, userId);
+        if (tasks.isEmpty()) {
+            return null;
+        }
+
+        List<UnifiedSessionView> sessions = buildUnifiedSessionViews(tasks, userId, directoryId, state);
+        int from = Math.min(page * size, sessions.size());
+        int to = Math.min(from + size, sessions.size());
+        List<Object> content = sessions.subList(from, to).stream()
+                .flatMap(view -> view.tasks().stream())
+                .map(this::toDispatchTaskDTO)
+                .collect(Collectors.toList());
+
+        return Map.of(
+                "content", content,
+                "totalSessions", (long) sessions.size(),
+                "page", page,
+                "size", size
+        );
+    }
+
+    private Object searchSessionsFromSessionStore(String userId, String keyword, String workerId,
+                                                  String directoryId, int page, int size) {
+        List<SessionTaskEntity> tasks = sessionTaskRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        if (tasks.isEmpty()) {
+            return null;
+        }
+
+        String normalizedKeyword = keyword != null ? keyword.trim().toLowerCase(Locale.ROOT) : null;
+        List<UnifiedSessionView> sessions = buildUnifiedSessionViews(tasks, userId, directoryId, null).stream()
+                .filter(view -> matchesWorkerFilter(view, workerId))
+                .filter(view -> matchesKeywordFilter(view, normalizedKeyword))
+                .toList();
+
+        int from = Math.min(page * size, sessions.size());
+        int to = Math.min(from + size, sessions.size());
+        List<Map<String, Object>> results = sessions.subList(from, to).stream()
+                .map(this::toSearchResult)
+                .toList();
+
+        return Map.of(
+                "results", results,
+                "total", (long) sessions.size(),
+                "page", page,
+                "size", size
+        );
+    }
+
+    private List<UnifiedSessionView> buildUnifiedSessionViews(List<SessionTaskEntity> tasks, String userId,
+                                                              String directoryId, String state) {
+        Map<String, List<SessionTaskEntity>> grouped = groupSessionTasks(tasks);
+        Map<String, SessionEntity> sessionsById = loadSessions(grouped.keySet());
+        Set<String> stateFilter = parseInteractionStates(state);
+
+        return grouped.entrySet().stream()
+                .map(entry -> toUnifiedSessionView(entry.getKey(), entry.getValue(), sessionsById.get(entry.getKey())))
+                .filter(view -> view.session() == null || view.session().getDeletedAt() == null)
+                .filter(view -> view.session() == null || userId.equals(view.session().getUserId()))
+                .filter(view -> matchesDirectoryFilter(view, directoryId))
+                .filter(view -> stateFilter.isEmpty() || stateFilter.contains(resolveInteractionState(view)))
+                .sorted((left, right) -> compareNullableTime(resolveSessionSortTime(right), resolveSessionSortTime(left)))
+                .toList();
+    }
+
+    private Map<String, List<SessionTaskEntity>> groupSessionTasks(List<SessionTaskEntity> tasks) {
+        Map<String, List<SessionTaskEntity>> grouped = new LinkedHashMap<>();
+        for (SessionTaskEntity task : tasks) {
+            String key = task.getSessionId() != null && !task.getSessionId().isBlank()
+                    ? task.getSessionId()
+                    : "task:" + task.getTaskId();
+            grouped.computeIfAbsent(key, ignored -> new ArrayList<>()).add(task);
+        }
+        grouped.values().forEach(group -> group.sort((left, right) -> compareNullableTime(
+                firstNonNull(right.getCreatedAt(), right.getUpdatedAt()),
+                firstNonNull(left.getCreatedAt(), left.getUpdatedAt()))));
+        return grouped;
+    }
+
+    private Map<String, SessionEntity> loadSessions(Collection<String> sessionIds) {
+        List<String> persistedSessionIds = sessionIds.stream()
+                .filter(id -> id != null && !id.isBlank() && !id.startsWith("task:"))
+                .toList();
+        if (persistedSessionIds.isEmpty()) {
+            return Map.of();
+        }
+        return sessionRepository.findAllById(persistedSessionIds).stream()
+                .collect(Collectors.toMap(SessionEntity::getId, session -> session));
+    }
+
+    private UnifiedSessionView toUnifiedSessionView(String sessionKey, List<SessionTaskEntity> tasks, SessionEntity session) {
+        SessionTaskEntity latestTask = tasks.get(0);
+        SessionTaskEntity earliestTask = tasks.get(tasks.size() - 1);
+        return new UnifiedSessionView(sessionKey, session, tasks, latestTask, earliestTask);
+    }
+
+    private boolean matchesWorkerFilter(UnifiedSessionView view, String workerId) {
+        if (workerId == null || workerId.isBlank()) {
+            return true;
+        }
+        String currentWorkerId = firstNonBlank(
+                view.latestTask().getWorkerId(),
+                view.session() != null ? view.session().getCurrentWorkerId() : null
+        );
+        return workerId.equals(currentWorkerId);
+    }
+
+    private boolean matchesDirectoryFilter(UnifiedSessionView view, String directoryId) {
+        if (directoryId == null || directoryId.isBlank()) {
+            return true;
+        }
+        String currentDirectoryId = firstNonBlank(
+                view.latestTask().getDirectoryId(),
+                view.session() != null ? view.session().getCurrentDirectoryId() : null
+        );
+        return directoryId.equals(currentDirectoryId);
+    }
+
+    private boolean matchesKeywordFilter(UnifiedSessionView view, String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return true;
+        }
+        if (view.session() != null) {
+            if (containsIgnoreCase(view.session().getTitle(), keyword)
+                    || containsIgnoreCase(view.session().getTagsJson(), keyword)) {
+                return true;
+            }
+        }
+        return view.tasks().stream().anyMatch(task ->
+                containsIgnoreCase(task.getPrompt(), keyword)
+                        || containsIgnoreCase(task.getResultText(), keyword));
+    }
+
+    private Map<String, Object> toSearchResult(UnifiedSessionView view) {
+        BigDecimal totalCost = view.tasks().stream()
+                .map(task -> task.getCostUsd() != null ? task.getCostUsd() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("sessionId", firstNonBlank(view.latestTask().getSessionId(), view.sessionKey()));
+        result.put("workerId", firstNonBlank(view.latestTask().getWorkerId(),
+                view.session() != null ? view.session().getCurrentWorkerId() : null));
+        result.put("directoryId", firstNonBlank(view.latestTask().getDirectoryId(),
+                view.session() != null ? view.session().getCurrentDirectoryId() : null));
+        result.put("firstPrompt", truncate(view.earliestTask().getPrompt(), 200));
+        result.put("customTitle", view.session() != null ? view.session().getTitle() : null);
+        result.put("tags", view.session() != null ? parseTags(view.session().getTagsJson()) : List.of());
+        result.put("interactionState", resolveInteractionState(view));
+        result.put("latestTaskId", view.latestTask().getTaskId());
+        result.put("latestStatus", view.latestTask().getStatus());
+        result.put("model", firstNonBlank(view.latestTask().getModel(),
+                view.session() != null ? view.session().getLatestModel() : null));
+        result.put("cwd", view.latestTask().getCwd());
+        result.put("source", view.latestTask().getSource());
+        result.put("totalCost", totalCost);
+        result.put("createdAt", view.earliestTask().getCreatedAt());
+        result.put("updatedAt", resolveSessionSortTime(view));
+        return result;
+    }
+
+    private DispatchTaskDTO toDispatchTaskDTO(SessionTaskEntity entity) {
+        Map<String, Object> state = parseJsonObject(entity.getTaskStateJson());
+        DispatchTaskDTO.DispatchTaskDTOBuilder builder = DispatchTaskDTO.builder()
+                .taskId(entity.getTaskId())
+                .workerTaskId(entity.getProviderTaskId())
+                .sessionId(entity.getSessionId())
+                .workerId(entity.getWorkerId())
+                .userId(entity.getUserId())
+                .agentId(entity.getProviderType())
+                .providerType(entity.getProviderType())
+                .prompt(entity.getPrompt())
+                .cwd(entity.getCwd())
+                .directoryId(entity.getDirectoryId())
+                .status(entity.getStatus())
+                .model(entity.getModel())
+                .costUsd(entity.getCostUsd())
+                .inputTokens(entity.getInputTokens())
+                .outputTokens(entity.getOutputTokens())
+                .durationMs(entity.getDurationMs())
+                .numTurns(entity.getNumTurns())
+                .resultText(entity.getResultText())
+                .errorMessage(entity.getErrorMessage())
+                .lastAckedSeq(entity.getLastAckedSeq())
+                .source(entity.getSource())
+                .createdAt(entity.getCreatedAt())
+                .updatedAt(entity.getUpdatedAt())
+                .claudeSessionId(asString(state.get("claudeSessionId")))
+                .codexThreadId(asString(state.get("codexThreadId")))
+                .contextId(asString(state.get("contextId")))
+                .fileCheckpointingEnabled(asBoolean(state.get("fileCheckpointingEnabled")));
+        if (state.containsKey("checkpoints")) {
+            builder.checkpoints(writeJson(state.get("checkpoints")));
+        }
+        return builder.build();
+    }
+
+    private Map<String, Object> parseJsonObject(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse task/session JSON payload: {}", json);
+            return Map.of();
+        }
+    }
+
+    private List<String> parseTags(String tagsJson) {
+        if (tagsJson == null || tagsJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            return OBJECT_MAPPER.readValue(tagsJson, new TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse session tags JSON: {}", tagsJson);
+            return List.of();
+        }
+    }
+
+    private String writeJson(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String text) {
+            return text;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize task state payload", e);
+        }
+    }
+
+    private Set<String> parseInteractionStates(String interactionState) {
+        if (interactionState == null || interactionState.isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(interactionState.split(","))
+                .map(String::trim)
+                .filter(state -> !state.isEmpty())
+                .collect(Collectors.toSet());
+    }
+
+    private String resolveInteractionState(UnifiedSessionView view) {
+        if (view.session() != null && view.session().getInteractionState() != null
+                && !view.session().getInteractionState().isBlank()) {
+            return view.session().getInteractionState();
+        }
+        return deriveInteractionState(view.latestTask().getStatus());
+    }
+
+    private String deriveInteractionState(String taskStatus) {
+        if ("RUNNING".equals(taskStatus) || "PENDING".equals(taskStatus)) {
+            return "PROCESSING";
+        }
+        if ("COMPLETED".equals(taskStatus) || "FAILED".equals(taskStatus)
+                || "ABORTED".equals(taskStatus) || "AWAITING_PERMISSION".equals(taskStatus)) {
+            return "AWAITING_REPLY";
+        }
+        return null;
+    }
+
+    private LocalDateTime resolveSessionSortTime(UnifiedSessionView view) {
+        if (view.session() != null) {
+            LocalDateTime sessionTime = firstNonNull(view.session().getLastActivityAt(), view.session().getUpdatedAt());
+            if (sessionTime != null) {
+                return sessionTime;
+            }
+        }
+        return firstNonNull(view.latestTask().getUpdatedAt(), view.latestTask().getCreatedAt());
+    }
+
+    private boolean containsIgnoreCase(String value, String keyword) {
+        return value != null && value.toLowerCase(Locale.ROOT).contains(keyword);
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
+    }
+
+    private String asString(Object value) {
+        return value != null ? value.toString() : null;
+    }
+
+    private Boolean asBoolean(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return Boolean.parseBoolean(text);
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    @SafeVarargs
+    private final <T> T firstNonNull(T... values) {
+        for (T value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     private AgentLookup resolveAgentLookup(TaskDispatchRequest request) {
         if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
             return new AgentLookup(request.getAgentId(), "EXPLICIT_AGENT");
@@ -711,6 +1115,13 @@ public class TaskDispatchFacade {
     }
 
     private record SearchEnvelope(List<Object> results, long total) {
+    }
+
+    private record UnifiedSessionView(String sessionKey,
+                                      SessionEntity session,
+                                      List<SessionTaskEntity> tasks,
+                                      SessionTaskEntity latestTask,
+                                      SessionTaskEntity earliestTask) {
     }
 
 }

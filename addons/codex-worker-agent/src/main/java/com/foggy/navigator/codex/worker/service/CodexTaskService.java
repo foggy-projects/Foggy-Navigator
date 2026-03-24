@@ -1,5 +1,8 @@
 package com.foggy.navigator.codex.worker.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
@@ -10,7 +13,11 @@ import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
@@ -44,6 +51,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class CodexTaskService implements TaskQueryProvider {
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private final CodexTaskRepository taskRepository;
     private final WorkerManagementFacade workerManagementFacade;
     private final ApplicationEventPublisher eventPublisher;
@@ -55,6 +63,14 @@ public class CodexTaskService implements TaskQueryProvider {
     @Autowired(required = false)
     @Nullable
     private LlmModelManager llmModelManager;
+
+    @Autowired(required = false)
+    @Nullable
+    private SessionTaskRepository sessionTaskRepository;
+
+    @Autowired(required = false)
+    @Nullable
+    private SessionEntityRepository sessionEntityRepository;
 
     /**
      * 创建并启动 Codex 任务
@@ -143,7 +159,7 @@ public class CodexTaskService implements TaskQueryProvider {
         entity.setSource("PLATFORM");
         entity.setCodexThreadId(form.getCodexThreadId());
 
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Created Codex task: taskId={}, workerId={}, sessionId={}", taskId, form.getWorkerId(), sessionId);
 
         // 解析 API Key（如有模型配置）
@@ -184,7 +200,7 @@ public class CodexTaskService implements TaskQueryProvider {
         entity.setSource("PLATFORM");
         entity.setCodexThreadId(codexThreadId);
 
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Created tracked sync Codex task: taskId={}, sessionId={}", taskId, sessionId);
         return taskId;
     }
@@ -215,7 +231,7 @@ public class CodexTaskService implements TaskQueryProvider {
             entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
         }
         entity.setLastAliveAt(LocalDateTime.now());
-        taskRepository.save(entity);
+        persistTask(entity);
     }
 
     /**
@@ -268,7 +284,7 @@ public class CodexTaskService implements TaskQueryProvider {
         }
 
         entity.setStatus("ABORTED");
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Aborted Codex task: taskId={}", taskId);
     }
 
@@ -299,7 +315,7 @@ public class CodexTaskService implements TaskQueryProvider {
         entity.setErrorMessage(null);
         entity.setLastAliveAt(LocalDateTime.now());
 
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Completed Codex task: taskId={}, cost={}", taskId, costUsd);
     }
 
@@ -320,7 +336,7 @@ public class CodexTaskService implements TaskQueryProvider {
         if (codexThreadId != null) entity.setCodexThreadId(codexThreadId);
         entity.setLastAliveAt(LocalDateTime.now());
 
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Failed Codex task: taskId={}, error={}", taskId, errorMessage);
     }
 
@@ -332,7 +348,7 @@ public class CodexTaskService implements TaskQueryProvider {
         CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
         if (entity != null && codexThreadId != null) {
             entity.setCodexThreadId(codexThreadId);
-            taskRepository.save(entity);
+            persistTask(entity);
         }
     }
 
@@ -587,6 +603,147 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     private static final String AGENT_ID = "codex-worker";
+
+    private CodexTaskEntity persistTask(CodexTaskEntity entity) {
+        CodexTaskEntity saved = taskRepository.save(entity);
+        syncSessionTask(saved);
+        syncSessionProjection(saved);
+        return saved;
+    }
+
+    private void syncSessionTask(CodexTaskEntity entity) {
+        if (sessionTaskRepository == null) {
+            return;
+        }
+
+        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(entity.getTaskId())
+                .orElseGet(SessionTaskEntity::new);
+        sessionTask.setTaskId(entity.getTaskId());
+        sessionTask.setSessionId(entity.getSessionId());
+        sessionTask.setProviderType(AGENT_ID);
+        sessionTask.setProviderTaskId(entity.getWorkerTaskId());
+        sessionTask.setWorkerId(entity.getWorkerId());
+        sessionTask.setUserId(entity.getUserId());
+        sessionTask.setTenantId(entity.getTenantId());
+        sessionTask.setDirectoryId(entity.getDirectoryId());
+        sessionTask.setPrompt(entity.getPrompt());
+        sessionTask.setCwd(entity.getCwd());
+        sessionTask.setStatus(entity.getStatus());
+        sessionTask.setModel(entity.getModel());
+        sessionTask.setCostUsd(entity.getCostUsd());
+        sessionTask.setInputTokens(entity.getInputTokens());
+        sessionTask.setOutputTokens(entity.getOutputTokens());
+        sessionTask.setDurationMs(entity.getDurationMs());
+        sessionTask.setNumTurns(entity.getNumTurns());
+        sessionTask.setResultText(entity.getResultText());
+        sessionTask.setErrorMessage(entity.getErrorMessage());
+        sessionTask.setSource(entity.getSource());
+        sessionTask.setLastAckedSeq(entity.getLastAckedSeq());
+        sessionTask.setLastAliveAt(entity.getLastAliveAt());
+        sessionTask.setCreatedAt(entity.getCreatedAt());
+        sessionTask.setUpdatedAt(entity.getUpdatedAt());
+        sessionTask.setTaskStateJson(buildCodexTaskStateJson(entity));
+        sessionTaskRepository.save(sessionTask);
+    }
+
+    private void syncSessionProjection(CodexTaskEntity entity) {
+        if (sessionEntityRepository == null || entity.getSessionId() == null || entity.getSessionId().isBlank()) {
+            return;
+        }
+
+        SessionEntity session = sessionEntityRepository.findById(entity.getSessionId())
+                .orElseGet(() -> createSessionProjection(entity));
+        session.setUserId(firstNonBlank(session.getUserId(), entity.getUserId()));
+        session.setTenantId(firstNonBlank(session.getTenantId(), entity.getTenantId()));
+        session.setAgentId(firstNonBlank(session.getAgentId(), AGENT_ID));
+        session.setProviderType(AGENT_ID);
+        session.setStatus(firstNonBlank(session.getStatus(), "ACTIVE"));
+        session.setCurrentWorkerId(firstNonBlank(entity.getWorkerId(), session.getCurrentWorkerId()));
+        session.setCurrentDirectoryId(firstNonBlank(entity.getDirectoryId(), session.getCurrentDirectoryId()));
+        session.setLatestTaskId(entity.getTaskId());
+        session.setLatestModel(firstNonBlank(entity.getModel(), session.getLatestModel()));
+        session.setLastActivityAt(firstNonNull(entity.getUpdatedAt(), entity.getLastAliveAt(), LocalDateTime.now()));
+        session.setInteractionState(deriveInteractionState(entity.getStatus()));
+        session.setProviderStateJson(mergeJsonValue(session.getProviderStateJson(), "codexThreadId", entity.getCodexThreadId()));
+        sessionEntityRepository.save(session);
+    }
+
+    private SessionEntity createSessionProjection(CodexTaskEntity entity) {
+        SessionEntity session = new SessionEntity();
+        session.setId(entity.getSessionId());
+        session.setUserId(entity.getUserId());
+        session.setTenantId(entity.getTenantId());
+        session.setAgentId(AGENT_ID);
+        session.setProviderType(AGENT_ID);
+        session.setStatus("ACTIVE");
+        session.setInteractionState(deriveInteractionState(entity.getStatus()));
+        session.setCurrentWorkerId(entity.getWorkerId());
+        session.setCurrentDirectoryId(entity.getDirectoryId());
+        session.setLastActivityAt(firstNonNull(entity.getUpdatedAt(), entity.getLastAliveAt(), LocalDateTime.now()));
+        return session;
+    }
+
+    private String buildCodexTaskStateJson(CodexTaskEntity entity) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        putIfNotBlank(state, "codexThreadId", entity.getCodexThreadId());
+        if (state.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(state);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize Codex task state", e);
+        }
+    }
+
+    private String mergeJsonValue(String json, String key, String value) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        if (json != null && !json.isBlank()) {
+            try {
+                values.putAll(OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {}));
+            } catch (Exception e) {
+                log.warn("Failed to parse session providerStateJson, recreating JSON: {}", json);
+            }
+        }
+        if (value == null || value.isBlank()) {
+            values.remove(key);
+        } else {
+            values.put(key, value);
+        }
+        if (values.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(values);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize session provider state", e);
+        }
+    }
+
+    private void putIfNotBlank(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    @SafeVarargs
+    private <T> T firstNonNull(T... values) {
+        for (T value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
 
     private void validateExistingSession(String userId, String sessionId) {
         if (sessionManager == null) {

@@ -24,7 +24,10 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
     "com.foggy.navigator.session.util"
 })
 @EntityScan(basePackages = {"com.foggy.navigator.common.entity"})
-@EnableJpaRepositories(basePackages = {"com.foggy.navigator.session.repository"})
+@EnableJpaRepositories(basePackages = {
+    "com.foggy.navigator.session.repository",
+    "com.foggy.navigator.common.repository"
+})
 @EnableAsync
 public class SessionModuleAutoConfiguration {
 

@@ -1,4 +1,4 @@
-package com.foggy.navigator.session.repository;
+package com.foggy.navigator.common.repository;
 
 import com.foggy.navigator.common.entity.SessionEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -8,13 +8,7 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface SessionRepository extends JpaRepository<SessionEntity, String> {
-
-    List<SessionEntity> findByUserIdOrderByUpdatedAtDesc(String userId);
-
-    List<SessionEntity> findByUserIdAndAgentIdOrderByUpdatedAtDesc(String userId, String agentId);
-
-    List<SessionEntity> findByUserIdAndStatusInOrderByUpdatedAtDesc(String userId, List<String> statuses);
+public interface SessionEntityRepository extends JpaRepository<SessionEntity, String> {
 
     Optional<SessionEntity> findByIdAndUserId(String id, String userId);
 

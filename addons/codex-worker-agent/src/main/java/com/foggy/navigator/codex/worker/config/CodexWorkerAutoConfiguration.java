@@ -17,8 +17,12 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
         "com.foggy.navigator.codex.worker.adapter"
 })
 @EntityScan(basePackages = {
-        "com.foggy.navigator.codex.worker.model.entity"
+        "com.foggy.navigator.codex.worker.model.entity",
+        "com.foggy.navigator.common.entity"
 })
-@EnableJpaRepositories(basePackages = {"com.foggy.navigator.codex.worker.repository"})
+@EnableJpaRepositories(basePackages = {
+        "com.foggy.navigator.codex.worker.repository",
+        "com.foggy.navigator.common.repository"
+})
 public class CodexWorkerAutoConfiguration {
 }

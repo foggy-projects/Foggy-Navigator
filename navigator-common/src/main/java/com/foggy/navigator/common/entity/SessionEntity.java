@@ -16,7 +16,10 @@ import java.time.LocalDateTime;
     @Index(name = "idx_session_tenant_id", columnList = "tenantId"),
     @Index(name = "idx_session_agent_id", columnList = "agentId"),
     @Index(name = "idx_session_status", columnList = "status"),
-    @Index(name = "idx_session_parent_id", columnList = "parentSessionId")
+    @Index(name = "idx_session_parent_id", columnList = "parentSessionId"),
+    @Index(name = "idx_session_interaction_state", columnList = "interactionState"),
+    @Index(name = "idx_session_current_worker_id", columnList = "currentWorkerId"),
+    @Index(name = "idx_session_last_activity_at", columnList = "lastActivityAt")
 })
 public class SessionEntity {
 
@@ -50,6 +53,50 @@ public class SessionEntity {
     @Column(length = 32, nullable = false)
     private String status;
 
+    @Column(length = 32)
+    private String interactionState;
+
+    @Column(nullable = false)
+    private Boolean pinned = false;
+
+    private LocalDateTime pinnedAt;
+
+    @Column(columnDefinition = "TEXT")
+    private String tagsJson;
+
+    @Column(length = 32)
+    private String authMode;
+
+    private LocalDateTime authBoundAt;
+
+    @Column(length = 64)
+    private String authModelConfigId;
+
+    @Column(length = 512)
+    private String authBaseUrl;
+
+    @Column(columnDefinition = "TEXT")
+    private String authTokenCiphertext;
+
+    @Column(length = 64)
+    private String currentWorkerId;
+
+    @Column(length = 64)
+    private String currentDirectoryId;
+
+    @Column(length = 64)
+    private String latestTaskId;
+
+    @Column(length = 128)
+    private String latestModel;
+
+    private LocalDateTime lastActivityAt;
+
+    @Column(columnDefinition = "TEXT")
+    private String providerStateJson;
+
+    private LocalDateTime deletedAt;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -71,10 +118,22 @@ public class SessionEntity {
         if (status == null) {
             status = "ACTIVE";
         }
+        if (interactionState == null) {
+            interactionState = "PROCESSING";
+        }
+        if (pinned == null) {
+            pinned = false;
+        }
+        if (lastActivityAt == null) {
+            lastActivityAt = updatedAt;
+        }
     }
 
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+        if (lastActivityAt == null) {
+            lastActivityAt = updatedAt;
+        }
     }
 }

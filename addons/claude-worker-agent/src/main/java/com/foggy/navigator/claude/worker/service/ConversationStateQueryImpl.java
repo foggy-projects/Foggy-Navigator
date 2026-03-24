@@ -1,7 +1,7 @@
 package com.foggy.navigator.claude.worker.service;
 
-import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
-import com.foggy.navigator.claude.worker.repository.ConversationConfigRepository;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.spi.claude.ConversationStateQuery;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -13,20 +13,20 @@ import java.util.Map;
 
 /**
  * ConversationStateQuery SPI 实现
- * 通过 ConversationConfigRepository 查询会话交互状态
+ * 通过 SessionEntity 查询会话交互状态
  */
 @Component
 @RequiredArgsConstructor
 public class ConversationStateQueryImpl implements ConversationStateQuery {
 
-    private final ConversationConfigRepository configRepository;
+    private final SessionEntityRepository sessionRepository;
 
     @Override
     public List<String> findSessionIdsByStates(List<String> states) {
         if (states == null || states.isEmpty()) {
             return List.of();
         }
-        return configRepository.findSessionIdsByStates(states);
+        return sessionRepository.findSessionIdsByStates(states);
     }
 
     @Override
@@ -34,10 +34,10 @@ public class ConversationStateQueryImpl implements ConversationStateQuery {
         if (states == null || states.isEmpty()) {
             return Map.of();
         }
-        List<ConversationConfigEntity> configs = configRepository.findByInteractionStateIn(states);
+        List<SessionEntity> sessions = sessionRepository.findByInteractionStateIn(states);
         Map<String, List<String>> result = new LinkedHashMap<>();
-        for (ConversationConfigEntity c : configs) {
-            result.computeIfAbsent(c.getUserId(), k -> new ArrayList<>()).add(c.getSessionId());
+        for (SessionEntity session : sessions) {
+            result.computeIfAbsent(session.getUserId(), k -> new ArrayList<>()).add(session.getId());
         }
         return result;
     }

@@ -7,16 +7,21 @@ import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
-import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -39,12 +44,13 @@ class ClaudeTaskServiceAuthTest {
     private com.foggy.navigator.common.repository.WorkingDirectoryRepository workingDirectoryRepository;
     private com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository deletedSessionRepository;
     private com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository taskRepository;
+    private SessionTaskRepository sessionTaskRepository;
+    private SessionEntityRepository sessionEntityRepository;
 
     private static final String USER_ID = "user-1";
     private static final String TENANT_ID = "tenant-1";
     private static final String WORKER_ID = "worker-1";
     private static final String SESSION_ID = "session-001";
-    private static final String TASK_ID = "task-001";
 
     @BeforeEach
     void setUp() {
@@ -57,6 +63,8 @@ class ClaudeTaskServiceAuthTest {
         publisher = mock(ApplicationEventPublisher.class);
         llmModelManager = mock(LlmModelManager.class);
         taskRepository = mock(com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository.class);
+        sessionTaskRepository = mock(SessionTaskRepository.class);
+        sessionEntityRepository = mock(SessionEntityRepository.class);
 
         UserAuthService userAuthService = mock(UserAuthService.class);
         when(userAuthService.generateServiceToken(anyString())).thenReturn("mock-jwt-token");
@@ -71,6 +79,8 @@ class ClaudeTaskServiceAuthTest {
                 workingDirectoryRepository,
                 sessionManager, publisher, llmModelManager, userAuthService,
                 mock(org.springframework.transaction.support.TransactionTemplate.class));
+        ReflectionTestUtils.setField(service, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(service, "sessionEntityRepository", sessionEntityRepository);
 
         // Default worker mock (online)
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
@@ -91,13 +101,16 @@ class ClaudeTaskServiceAuthTest {
         existingSession.setTaskName("Test task");
         when(sessionManager.getSession(SESSION_ID)).thenReturn(existingSession);
 
-        // Mock task repository to return task with fixed ID
-        com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity taskEntity = new com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity();
-        taskEntity.setTaskId(TASK_ID);
-        taskEntity.setSessionId(SESSION_ID);
-        taskEntity.setWorkerId(WORKER_ID);
-        taskEntity.setUserId(USER_ID);
-        when(taskRepository.save(any())).thenReturn(taskEntity);
+        when(taskRepository.save(any(ClaudeTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
+        when(sessionTaskRepository.save(any(SessionTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionEntityRepository.findById(anyString())).thenAnswer(invocation -> {
+            SessionEntity session = new SessionEntity();
+            session.setId(invocation.getArgument(0));
+            session.setProviderType("claude-worker");
+            return Optional.of(session);
+        });
+        when(sessionEntityRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Default: no existing conversation config (not bound yet)
         ConversationConfigEntity emptyConfig = createConversationConfig(SESSION_ID, WORKER_ID, USER_ID);
@@ -150,6 +163,17 @@ class ClaudeTaskServiceAuthTest {
         assertEquals("CUSTOM_ENDPOINT", authModeCaptor.getValue());
         assertEquals("sk-test-key-123", tokenCaptor.getValue());
         assertEquals("https://api.openai.com/v1", baseUrlCaptor.getValue());
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                SESSION_ID.equals(entity.getSessionId())
+                        && "claude-worker".equals(entity.getProviderType())
+                        && entity.getTaskStateJson() != null
+                        && entity.getTaskStateJson().contains("\"fileCheckpointingEnabled\":true")
+        ));
+        verify(sessionEntityRepository).save(argThat((SessionEntity entity) ->
+                SESSION_ID.equals(entity.getId())
+                        && result.getTaskId().equals(entity.getLatestTaskId())
+                        && WORKER_ID.equals(entity.getCurrentWorkerId())
+        ));
     }
 
     @Test

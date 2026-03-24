@@ -8,6 +8,10 @@ import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
@@ -46,6 +51,10 @@ class CodexTaskServiceTest {
     private LlmModelManager llmModelManager;
     @Mock
     private SessionManager sessionManager;
+    @Mock
+    private SessionTaskRepository sessionTaskRepository;
+    @Mock
+    private SessionEntityRepository sessionEntityRepository;
 
     private CodexTaskService service;
 
@@ -54,6 +63,19 @@ class CodexTaskServiceTest {
         service = new CodexTaskService(taskRepository, workerManagementFacade, eventPublisher);
         ReflectionTestUtils.setField(service, "llmModelManager", llmModelManager);
         ReflectionTestUtils.setField(service, "sessionManager", sessionManager);
+        ReflectionTestUtils.setField(service, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(service, "sessionEntityRepository", sessionEntityRepository);
+
+        lenient().when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
+        lenient().when(sessionTaskRepository.save(any(SessionTaskEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(sessionEntityRepository.findById(anyString())).thenAnswer(invocation -> {
+            SessionEntity session = new SessionEntity();
+            session.setId(invocation.getArgument(0));
+            return Optional.of(session);
+        });
+        lenient().when(sessionEntityRepository.save(any(SessionEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
@@ -144,6 +166,17 @@ class CodexTaskServiceTest {
                         && "thread-1".equals(entity.getCodexThreadId())
                         && "worker-1".equals(entity.getWorkerId())
                         && "continue please".equals(entity.getPrompt())
+        ));
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                "session-1".equals(entity.getSessionId())
+                        && "codex-worker".equals(entity.getProviderType())
+                        && entity.getTaskStateJson() != null
+                        && entity.getTaskStateJson().contains("thread-1")
+        ));
+        verify(sessionEntityRepository).save(argThat((SessionEntity entity) ->
+                "session-1".equals(entity.getId())
+                        && "codex-worker".equals(entity.getProviderType())
+                        && "worker-1".equals(entity.getCurrentWorkerId())
         ));
         verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
                 "session-1".equals(event.getSessionId())
