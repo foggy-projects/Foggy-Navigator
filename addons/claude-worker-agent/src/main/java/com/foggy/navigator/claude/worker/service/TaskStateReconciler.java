@@ -174,8 +174,9 @@ public class TaskStateReconciler {
                 // ESN seq gap 检测：Worker 比 Java 多事件 + 无活跃 SSE 流 → 触发重连
                 if (!streamRelay.hasActiveStream(taskId)) {
                     try {
+                        String workerLookupTaskId = taskService.resolveWorkerTaskLookupId(task);
                         Map<String, Object> taskStatus = workerService.createClient(worker)
-                                .getTaskStatus(taskId)
+                                .getTaskStatus(workerLookupTaskId)
                                 .block(Duration.ofSeconds(5));
                         if (taskStatus != null) {
                             int workerLatestSeq = ((Number) taskStatus.getOrDefault("latest_seq", 0)).intValue();
@@ -205,8 +206,9 @@ public class TaskStateReconciler {
                 // ★ 先查 Worker 的 task status：CLI 可能正常完成后退出，Worker 持久化层仍有完整事件
                 boolean recoveredFromWorker = false;
                 try {
+                    String workerLookupTaskId = taskService.resolveWorkerTaskLookupId(task);
                     Map<String, Object> taskStatus = workerService.createClient(worker)
-                            .getTaskStatus(taskId)
+                            .getTaskStatus(workerLookupTaskId)
                             .block(Duration.ofSeconds(5));
                     if (taskStatus != null) {
                         boolean closed = Boolean.TRUE.equals(taskStatus.get("closed"));
@@ -249,8 +251,9 @@ public class TaskStateReconciler {
                         // ★ 再次向 Worker 确认 CLI 是否真的已死
                         boolean confirmedCliDead = false;
                         try {
+                            String workerLookupTaskId = taskService.resolveWorkerTaskLookupId(task);
                             Map<String, Object> taskStatus = workerService.createClient(worker)
-                                    .getTaskStatus(taskId)
+                                    .getTaskStatus(workerLookupTaskId)
                                     .block(Duration.ofSeconds(5));
                             if (taskStatus != null) {
                                 Boolean cliAlive = (Boolean) taskStatus.get("cli_alive");

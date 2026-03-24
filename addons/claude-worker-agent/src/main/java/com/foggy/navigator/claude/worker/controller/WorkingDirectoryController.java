@@ -2,7 +2,7 @@ package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
-import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;

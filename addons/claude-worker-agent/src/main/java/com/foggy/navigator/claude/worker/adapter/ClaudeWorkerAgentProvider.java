@@ -1,8 +1,8 @@
 package com.foggy.navigator.claude.worker.adapter;
 
-import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
-import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.dto.a2a.A2aAgentSkill;

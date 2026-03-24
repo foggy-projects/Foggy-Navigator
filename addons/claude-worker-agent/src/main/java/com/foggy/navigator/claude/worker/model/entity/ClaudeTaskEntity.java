@@ -27,6 +27,10 @@ public class ClaudeTaskEntity {
     @Column(length = 64, nullable = false, unique = true)
     private String taskId;
 
+    /** claude-agent-worker 内部 task_id，用于 /subscribe /status /abort */
+    @Column(length = 128)
+    private String workerTaskId;
+
     @Column(length = 64, nullable = false)
     private String sessionId;
 
@@ -83,6 +87,9 @@ public class ClaudeTaskEntity {
     /** JSON array of checkpoint objects: [{"id":"uuid","turnIndex":1,"timestamp":"..."}] */
     @Column(columnDefinition = "TEXT")
     private String checkpoints;
+
+    /** 已确认收到的最新 Worker 事件序号（ack_seq） */
+    private Integer lastAckedSeq;
 
     /** Whether file checkpointing was enabled for this task (Navigator-created tasks = true, synced = false) */
     @Column

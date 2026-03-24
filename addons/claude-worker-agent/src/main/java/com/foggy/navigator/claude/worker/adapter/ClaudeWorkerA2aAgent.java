@@ -177,6 +177,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         String error = (String) result.get("error");
         String errorSource = (String) result.get("errorSource");
         String resultText = (String) result.get("resultText");
+        String workerTaskId = (String) result.get("workerTaskId");
         String newClaudeSessionId = (String) result.get("claudeSessionId");
 
         // 保存 contextId → claudeSessionId 映射（多轮会话）
@@ -187,19 +188,20 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
 
         if (error != null && "WORKER".equals(errorSource)) {
             // ★ Worker 明确报错 → 标记 FAILED
-            taskService.failTask(taskId, newClaudeSessionId, truncate(error, 500));
+            taskService.failTask(taskId, workerTaskId, newClaudeSessionId, truncate(error, 500));
             log.warn("A2A task {} FAILED (Worker error): {}", taskId, error);
         } else if (error != null) {
             // 传输层异常（TRANSPORT）→ 保持 RUNNING，不标记失败
             log.warn("A2A task {} transport error (stays RUNNING): {}", taskId, error);
         } else {
             // ★ 成功 → 标记 COMPLETED，保存结果
-            taskService.completeTask(taskId, newClaudeSessionId,
-                    toBigDecimal(result.get("costUsd")), null, null,
-                    toLong(result.get("durationMs")), null, (String) result.get("model"));
-            if (resultText != null) {
-                taskService.saveTaskResult(taskId, resultText);
-            }
+            taskService.completeTask(taskId, workerTaskId, newClaudeSessionId,
+                    resultText, toBigDecimal(result.get("costUsd")),
+                    toLong(result.get("inputTokens")),
+                    toLong(result.get("outputTokens")),
+                    toLong(result.get("durationMs")),
+                    toInteger(result.get("numTurns")),
+                    (String) result.get("model"));
             log.info("A2A task {} COMPLETED, resultLength={}",
                     taskId, resultText != null ? resultText.length() : 0);
         }
@@ -308,6 +310,13 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         if (value == null) return null;
         if (value instanceof Long l) return l;
         if (value instanceof Number num) return num.longValue();
+        return null;
+    }
+
+    private Integer toInteger(Object value) {
+        if (value == null) return null;
+        if (value instanceof Integer i) return i;
+        if (value instanceof Number num) return num.intValue();
         return null;
     }
 }

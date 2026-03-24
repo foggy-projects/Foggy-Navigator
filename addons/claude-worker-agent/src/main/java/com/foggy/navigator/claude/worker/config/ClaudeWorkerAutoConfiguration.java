@@ -23,9 +23,13 @@ import java.util.concurrent.Executor;
         "com.foggy.navigator.claude.worker.websocket"
 })
 @EntityScan(basePackages = {
-        "com.foggy.navigator.claude.worker.model.entity"
+        "com.foggy.navigator.claude.worker.model.entity",
+        "com.foggy.navigator.common.entity"
 })
-@EnableJpaRepositories(basePackages = {"com.foggy.navigator.claude.worker.repository"})
+@EnableJpaRepositories(basePackages = {
+        "com.foggy.navigator.claude.worker.repository",
+        "com.foggy.navigator.common.repository"
+})
 @EnableScheduling
 public class ClaudeWorkerAutoConfiguration {
 

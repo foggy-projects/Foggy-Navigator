@@ -21,7 +21,7 @@ import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
-import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
@@ -30,7 +30,7 @@ import com.foggy.navigator.claude.worker.model.entity.DeletedClaudeSessionEntity
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.claude.worker.repository.ConversationConfigRepository;
 import com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository;
-import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;

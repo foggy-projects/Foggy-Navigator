@@ -25,6 +25,10 @@ public class CodexTaskEntity {
     @Column(length = 64, nullable = false, unique = true)
     private String taskId;
 
+    /** Upstream codex-agent-worker task_id，用于 /subscribe /status /abort */
+    @Column(length = 128)
+    private String workerTaskId;
+
     /** Foggy session ID */
     @Column(length = 64)
     private String sessionId;
@@ -72,6 +76,9 @@ public class CodexTaskEntity {
 
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
+
+    /** 已确认收到的最新 Worker 事件序号（ack_seq） */
+    private Integer lastAckedSeq;
 
     /** PLATFORM (created by Navigator) | SYNCED (discovered from Codex sessions) */
     @Column(length = 32)

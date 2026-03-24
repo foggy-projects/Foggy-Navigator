@@ -7,7 +7,7 @@ import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
-import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
@@ -36,7 +36,7 @@ class ClaudeTaskServiceAuthTest {
     private SessionManager sessionManager;
     private ApplicationEventPublisher publisher;
     private LlmModelManager llmModelManager;
-    private com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository workingDirectoryRepository;
+    private com.foggy.navigator.common.repository.WorkingDirectoryRepository workingDirectoryRepository;
     private com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository deletedSessionRepository;
     private com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository taskRepository;
 
@@ -51,7 +51,7 @@ class ClaudeTaskServiceAuthTest {
         workerService = mock(ClaudeWorkerService.class);
         configService = mock(ConversationConfigService.class);
         directoryService = mock(WorkingDirectoryService.class);
-        workingDirectoryRepository = mock(com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository.class);
+        workingDirectoryRepository = mock(com.foggy.navigator.common.repository.WorkingDirectoryRepository.class);
         deletedSessionRepository = mock(com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository.class);
         sessionManager = mock(SessionManager.class);
         publisher = mock(ApplicationEventPublisher.class);
