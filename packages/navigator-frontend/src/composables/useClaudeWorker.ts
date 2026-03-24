@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
-import { createTaskUnified, cancelTaskUnified } from '@/api/unifiedTask'
+import { createTaskUnified, cancelTaskUnified, listTasksUnified } from '@/api/unifiedTask'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
 
 const workers = ref<ClaudeWorker[]>([])
@@ -176,7 +176,9 @@ export function useClaudeWorker() {
 
   async function loadActiveTasks() {
     try {
-      activeTasks.value = await api.listActiveTasks()
+      // 使用统一 API（/api/v1/tasks）聚合所有 Agent 的活跃任务
+      const unified = await listTasksUnified()
+      activeTasks.value = unified as unknown as ClaudeTask[]
     } catch {
       activeTasks.value = []
     }
