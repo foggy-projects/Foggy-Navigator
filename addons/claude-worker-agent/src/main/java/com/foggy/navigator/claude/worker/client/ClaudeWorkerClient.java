@@ -1,6 +1,6 @@
 package com.foggy.navigator.claude.worker.client;
 
-import com.foggy.navigator.claude.worker.model.event.WorkerEvent;
+import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;

@@ -10,7 +10,7 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.event.ClaudeTaskStartEvent;
-import com.foggy.navigator.claude.worker.model.event.WorkerEvent;
+import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;

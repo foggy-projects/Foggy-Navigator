@@ -11,7 +11,7 @@ import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.model.event.CodexTaskStartEvent;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
-import com.foggy.navigator.codex.worker.model.event.WorkerEvent;
+import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.common.model.CodexConfig;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import lombok.RequiredArgsConstructor;

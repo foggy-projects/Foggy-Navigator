@@ -5,7 +5,7 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.dto.WorkerDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
-import com.foggy.navigator.claude.worker.model.event.WorkerEvent;
+import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
 import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
@@ -179,19 +179,23 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
             // 5. 完成/失败记录
             String error = (String) result.get("error");
+            String workerTaskId = (String) result.get("workerTaskId");
             String newClaudeSessionId = (String) result.get("claudeSessionId");
             if (error != null) {
-                taskService.failTask(taskId, newClaudeSessionId, truncate(error, 500));
+                taskService.failTask(taskId, workerTaskId, newClaudeSessionId, truncate(error, 500));
             } else {
-                taskService.completeTask(taskId, newClaudeSessionId,
+                taskService.completeTask(taskId, workerTaskId, newClaudeSessionId,
+                        resultText,
                         toBigDecimal(result.get("costUsd")),
-                        null, null,
+                        toLong(result.get("inputTokens")),
+                        toLong(result.get("outputTokens")),
                         toLong(result.get("durationMs")),
-                        null, (String) result.get("model"));
+                        toInteger(result.get("numTurns")),
+                        (String) result.get("model"));
             }
         } catch (Exception e) {
             log.error("syncQueryTracked failed after task creation: taskId={}, error={}", taskId, e.getMessage(), e);
-            taskService.failTask(taskId, claudeSessionId, truncate(e.getMessage(), 500));
+            taskService.failTask(taskId, null, claudeSessionId, truncate(e.getMessage(), 500));
             // 异常路径也要持久化消息，让前端会话面板能看到用户发了什么、失败原因
             taskService.persistTrackedSyncMessages(sessionId, prompt,
                     "[系统错误] Worker 请求失败: " + truncate(e.getMessage(), 300));
@@ -293,67 +297,31 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
                     ? overrideTimeoutSeconds
                     : Math.max(60, maxTurns * 30L);
 
-            // Collect all SSE events synchronously with bypassPermissions
-            List<WorkerEvent> events = client.streamQuery(
+            SyncQueryAccumulator state = new SyncQueryAccumulator(claudeSessionId);
+            client.streamQuery(
                             prompt, cwd, claudeSessionId, model, maxTurns,
                             null, null, apiKey, authToken, baseUrl, "bypassPermissions", null,
                             null, null, extraEnvVars)
-                    .mapNotNull(sse -> {
-                        String data = sse.data();
-                        if (data == null || data.isEmpty()) return null;
-                        try {
-                            return objectMapper.readValue(data, WorkerEvent.class);
-                        } catch (Exception e) {
-                            log.debug("Failed to parse sync query event: {}", e.getMessage());
-                            return null;
-                        }
-                    })
-                    .collectList()
+                    .doOnNext(sse -> consumeSyncEvent(state, sse))
+                    .then()
                     .block(Duration.ofSeconds(timeoutSeconds));
 
-            if (events == null) events = List.of();
-
-            // Extract result from events
-            if (log.isDebugEnabled()) {
-                for (int i = 0; i < events.size(); i++) {
-                    WorkerEvent ev = events.get(i);
-                    log.debug("doSyncQuery event[{}]: type={}, hasContent={}, hasResult={}, sessionId={}",
-                            i, ev.getType(), ev.getContent() != null, ev.getResult() != null, ev.getSessionId());
-                }
+            result.put("workerTaskId", state.workerTaskId);
+            result.put("resultText", state.getResultText());
+            result.put("claudeSessionId", state.claudeSessionId);
+            result.put("costUsd", state.costUsd);
+            result.put("durationMs", state.durationMs);
+            result.put("inputTokens", state.inputTokens);
+            result.put("outputTokens", state.outputTokens);
+            result.put("numTurns", state.numTurns);
+            result.put("model", state.model);
+            if (state.error != null) {
+                result.put("error", state.error);
+                result.put("errorSource", "WORKER");
             }
-            String resultText = null;
-            StringBuilder assistantTextBuilder = new StringBuilder();
-            String newSessionId = claudeSessionId;
-            for (WorkerEvent event : events) {
-                if (event.getSessionId() != null) {
-                    newSessionId = event.getSessionId();
-                }
-                if ("result".equals(event.getType())) {
-                    resultText = event.getContent() != null ? event.getContent() : event.getResult();
-                    result.put("costUsd", event.getCostUsd());
-                    result.put("durationMs", event.getDurationMs());
-                    result.put("model", event.getModel());
-                } else if ("assistant_text".equals(event.getType())) {
-                    // Accumulate streamed text as fallback when result.content is null
-                    if (event.getContent() != null) {
-                        assistantTextBuilder.append(event.getContent());
-                    }
-                } else if ("error".equals(event.getType())) {
-                    result.put("error", event.getError());
-                    result.put("errorSource", "WORKER");  // Worker 明确报告的错误
-                }
-            }
-
-            // Fallback: use accumulated assistant_text if result event had no content
-            if (resultText == null && !assistantTextBuilder.isEmpty()) {
-                resultText = assistantTextBuilder.toString();
-            }
-
-            result.put("resultText", resultText);
-            result.put("claudeSessionId", newSessionId);
 
             log.info("doSyncQuery completed: workerId={}, events={}, hasResult={}, hasError={}",
-                    worker.getWorkerId(), events.size(), resultText != null, result.containsKey("error"));
+                    worker.getWorkerId(), state.eventCount, state.getResultText() != null, result.containsKey("error"));
 
         } catch (Exception e) {
             log.error("syncQuery failed: workerId={}, error={}", worker.getWorkerId(), e.getMessage(), e);
@@ -556,6 +524,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
     private Map<String, Object> taskToMap(TaskDTO dto) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("taskId", dto.getTaskId());
+        map.put("workerTaskId", dto.getWorkerTaskId());
         map.put("sessionId", dto.getSessionId());
         map.put("workerId", dto.getWorkerId());
         map.put("prompt", dto.getPrompt());
@@ -563,8 +532,14 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         map.put("status", dto.getStatus());
         map.put("claudeSessionId", dto.getClaudeSessionId());
         map.put("costUsd", dto.getCostUsd());
+        map.put("inputTokens", dto.getInputTokens());
+        map.put("outputTokens", dto.getOutputTokens());
         map.put("durationMs", dto.getDurationMs());
+        map.put("numTurns", dto.getNumTurns());
+        map.put("model", dto.getModel());
+        map.put("resultText", dto.getResultText());
         map.put("errorMessage", dto.getErrorMessage());
+        map.put("lastAckedSeq", dto.getLastAckedSeq());
         map.put("createdAt", dto.getCreatedAt());
         return map;
     }
@@ -586,6 +561,75 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         if (value instanceof Long l) return l;
         if (value instanceof Number num) return num.longValue();
         return null;
+    }
+
+    private Integer toInteger(Object value) {
+        if (value == null) return null;
+        if (value instanceof Integer i) return i;
+        if (value instanceof Number num) return num.intValue();
+        return null;
+    }
+
+    private void consumeSyncEvent(SyncQueryAccumulator acc, org.springframework.http.codec.ServerSentEvent<String> sse) {
+        String data = sse.data();
+        if (data == null || data.isEmpty()) {
+            return;
+        }
+        try {
+            WorkerEvent event = objectMapper.readValue(data, WorkerEvent.class);
+            acc.eventCount++;
+            if (event.getTaskId() != null && !event.getTaskId().isBlank()) {
+                acc.workerTaskId = event.getTaskId();
+            }
+            if (event.getSessionId() != null && !event.getSessionId().isBlank()) {
+                acc.claudeSessionId = event.getSessionId();
+            }
+            if (event.getModel() != null && !event.getModel().isBlank()) {
+                acc.model = event.getModel();
+            }
+            if ("result".equals(event.getType())) {
+                acc.resultText = event.getContent() != null ? event.getContent() : event.getResult();
+                acc.costUsd = event.getCostUsd();
+                acc.durationMs = event.getDurationMs();
+                acc.inputTokens = event.getInputTokens();
+                acc.outputTokens = event.getOutputTokens();
+                acc.numTurns = event.getNumTurns();
+            } else if ("assistant_text".equals(event.getType())) {
+                if (event.getContent() != null) {
+                    acc.assistantText.append(event.getContent());
+                }
+            } else if ("error".equals(event.getType())) {
+                acc.error = event.getError();
+            }
+        } catch (Exception e) {
+            log.debug("Failed to parse sync query event: {}", e.getMessage());
+        }
+    }
+
+    private static final class SyncQueryAccumulator {
+        private String workerTaskId;
+        private String claudeSessionId;
+        private String model;
+        private java.math.BigDecimal costUsd;
+        private Long durationMs;
+        private Long inputTokens;
+        private Long outputTokens;
+        private Integer numTurns;
+        private String resultText;
+        private String error;
+        private int eventCount;
+        private final StringBuilder assistantText = new StringBuilder();
+
+        private SyncQueryAccumulator(String initialClaudeSessionId) {
+            this.claudeSessionId = initialClaudeSessionId;
+        }
+
+        private String getResultText() {
+            if (resultText != null) {
+                return resultText;
+            }
+            return assistantText.isEmpty() ? null : assistantText.toString();
+        }
     }
 
     /**
