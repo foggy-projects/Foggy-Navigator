@@ -1,6 +1,13 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
-import { createTaskUnified, cancelTaskUnified, listTasksUnified } from '@/api/unifiedTask'
+import {
+  createTaskUnified,
+  cancelTaskUnified,
+  listTasksUnified,
+  respondToTaskUnified,
+  reconnectTaskUnified,
+  resyncTaskUnified,
+} from '@/api/unifiedTask'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
 
 const workers = ref<ClaudeWorker[]>([])
@@ -125,7 +132,8 @@ export function useClaudeWorker() {
   }
 
   async function respondToPermission(taskId: string, form: { permissionId: string; decision: string; denyMessage?: string; scope?: string; answers?: Record<string, string>; planAction?: string }) {
-    return api.respondToPermission(taskId, form)
+    // 使用统一任务 API（/api/v1/tasks/{taskId}/respond）
+    return respondToTaskUnified(taskId, form)
   }
 
   async function abortTask(taskId: string) {

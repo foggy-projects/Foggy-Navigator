@@ -68,3 +68,36 @@ export async function listTasksUnified(sessionId?: string): Promise<DispatchTask
 export async function cancelTaskUnified(taskId: string, agentId?: string): Promise<void> {
   await client.post(`/tasks/${taskId}/cancel`, agentId ? { agentId } : {})
 }
+
+/**
+ * Respond to a permission request / user question.
+ * Unsupported agents return 400 with a clear message.
+ */
+export async function respondToTaskUnified(
+  taskId: string,
+  form: {
+    permissionId: string
+    decision: string
+    denyMessage?: string
+    scope?: string
+    answers?: Record<string, string>
+    planAction?: string
+  },
+): Promise<void> {
+  await client.post(`/tasks/${taskId}/respond`, form)
+}
+
+/**
+ * Reconnect task SSE stream.
+ */
+export async function reconnectTaskUnified(taskId: string): Promise<void> {
+  await client.post(`/tasks/${taskId}/reconnect`)
+}
+
+/**
+ * Resync task state (smart: SSE reconnect or JSONL repair).
+ */
+export async function resyncTaskUnified(taskId: string): Promise<unknown> {
+  const rx = (await client.post(`/tasks/${taskId}/resync`)) as unknown as RX<unknown>
+  return rx.data
+}
