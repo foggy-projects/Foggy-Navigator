@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
+import { createTaskUnified } from '@/api/unifiedTask'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
 
 const workers = ref<ClaudeWorker[]>([])
@@ -93,10 +94,12 @@ export function useClaudeWorker() {
     maxTurns?: number
     agentTeamsJson?: string
     agentTeamsConfigId?: string
+    images?: string
     permissionMode?: string
     modelConfigId?: string
   }) {
-    const task = await api.createTask(form)
+    // 使用统一任务 API（/api/v1/tasks），后端自动从 modelConfigId 推导 agentId
+    const task = await createTaskUnified(form) as unknown as ClaudeTask
     tasks.value.unshift(task)
     return task
   }

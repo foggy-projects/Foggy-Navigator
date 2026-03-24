@@ -54,6 +54,7 @@ public class ClaudeTaskController {
         String tenantId = UserContext.getCurrentTenantId();
 
         // 路由分发：根据 modelConfigId 的 workerBackend 判断走 Claude 还是 Codex
+        // Phase 1: 解析 agentId（后续 Phase 2 会移入 TaskDispatchFacade）
         if (isCodexBackend(form.getModelConfigId())) {
             return RX.ok(createCodexTask(userId, tenantId, form));
         }
@@ -63,7 +64,10 @@ public class ClaudeTaskController {
 
     /**
      * 判断 modelConfigId 对应的 workerBackend 是否为 OPENAI_CODEX
+     *
+     * @deprecated Phase 3: 前端迁移到 /api/v1/tasks 后，此路由逻辑由 TaskDispatchFacade 统一处理
      */
+    @Deprecated(since = "Phase 3 — unified task dispatch")
     private boolean isCodexBackend(String modelConfigId) {
         if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
             return false;
@@ -75,7 +79,10 @@ public class ClaudeTaskController {
 
     /**
      * 将 Claude CreateTaskForm 转发到 Codex 任务创建
+     *
+     * @deprecated Phase 3: 前端迁移到 /api/v1/tasks 后，由 TaskDispatchFacade 统一路由
      */
+    @Deprecated(since = "Phase 3 — unified task dispatch")
     private Map<String, Object> createCodexTask(String userId, String tenantId, CreateTaskForm form) {
         if (codexWorkerFacade == null) {
             throw new IllegalStateException("Codex Worker module is not available");

@@ -5,7 +5,13 @@ import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.model.event.CodexTaskStartEvent;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
+import com.foggy.navigator.agent.framework.session.Message;
+import com.foggy.navigator.agent.framework.session.MessageRole;
+import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
+import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
@@ -17,7 +23,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Codex 任务生命周期管理
@@ -25,11 +33,15 @@ import java.util.List;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class CodexTaskService {
+public class CodexTaskService implements TaskQueryProvider {
 
     private final CodexTaskRepository taskRepository;
     private final ClaudeWorkerFacade claudeWorkerFacade;
     private final ApplicationEventPublisher eventPublisher;
+
+    @Autowired(required = false)
+    @Nullable
+    private SessionManager sessionManager;
 
     @Autowired(required = false)
     @Nullable
@@ -51,7 +63,9 @@ public class CodexTaskService {
         claudeWorkerFacade.validateWorkerOwnership(userId, form.getWorkerId());
 
         String taskId = IdGenerator.shortId();
-        String sessionId = IdGenerator.shortId();
+
+        // 创建平台会话（之前缺失，导致 Codex 任务没有 SessionEntity）
+        String sessionId = createPlatformSession(userId, tenantId, form.getPrompt());
 
         CodexTaskEntity entity = new CodexTaskEntity();
         entity.setTaskId(taskId);
@@ -115,6 +129,35 @@ public class CodexTaskService {
     }
 
     /**
+     * 记录 Worker 侧任务元数据与流消费进度。
+     */
+    @Transactional
+    public void recordWorkerProgress(String taskId, String workerTaskId, String codexThreadId,
+                                      String model, Integer ackSeq) {
+        CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        if (entity == null) {
+            log.warn("recordWorkerProgress: task not found: {}", taskId);
+            return;
+        }
+
+        if (workerTaskId != null && !workerTaskId.isBlank()) {
+            entity.setWorkerTaskId(workerTaskId);
+        }
+        if (codexThreadId != null && !codexThreadId.isBlank()) {
+            entity.setCodexThreadId(codexThreadId);
+        }
+        if (model != null && !model.isBlank()) {
+            entity.setModel(model);
+        }
+        if (ackSeq != null) {
+            Integer current = entity.getLastAckedSeq();
+            entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
+        }
+        entity.setLastAliveAt(LocalDateTime.now());
+        taskRepository.save(entity);
+    }
+
+    /**
      * 获取任务详情
      */
     public CodexTaskDTO getTask(String userId, String taskId) {
@@ -172,9 +215,10 @@ public class CodexTaskService {
      * 标记任务完成
      */
     @Transactional
-    public void completeTask(String taskId, String codexThreadId,
-                              BigDecimal costUsd, Long inputTokens, Long outputTokens,
-                              Long durationMs, Integer numTurns, String model) {
+    public void completeTask(String taskId, String workerTaskId, String codexThreadId,
+                              String resultText, BigDecimal costUsd, Long inputTokens,
+                              Long outputTokens, Long durationMs, Integer numTurns,
+                              String model) {
         CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
         if (entity == null) {
             log.warn("completeTask: task not found: {}", taskId);
@@ -182,13 +226,17 @@ public class CodexTaskService {
         }
 
         entity.setStatus("COMPLETED");
+        if (workerTaskId != null) entity.setWorkerTaskId(workerTaskId);
         if (codexThreadId != null) entity.setCodexThreadId(codexThreadId);
+        if (resultText != null) entity.setResultText(resultText);
         if (costUsd != null) entity.setCostUsd(costUsd);
         if (inputTokens != null) entity.setInputTokens(inputTokens);
         if (outputTokens != null) entity.setOutputTokens(outputTokens);
         if (durationMs != null) entity.setDurationMs(durationMs);
         if (numTurns != null) entity.setNumTurns(numTurns);
         if (model != null) entity.setModel(model);
+        entity.setErrorMessage(null);
+        entity.setLastAliveAt(LocalDateTime.now());
 
         taskRepository.save(entity);
         log.info("Completed Codex task: taskId={}, cost={}", taskId, costUsd);
@@ -198,7 +246,7 @@ public class CodexTaskService {
      * 标记任务失败
      */
     @Transactional
-    public void failTask(String taskId, String codexThreadId, String errorMessage) {
+    public void failTask(String taskId, String workerTaskId, String codexThreadId, String errorMessage) {
         CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
         if (entity == null) {
             log.warn("failTask: task not found: {}", taskId);
@@ -207,7 +255,9 @@ public class CodexTaskService {
 
         entity.setStatus("FAILED");
         entity.setErrorMessage(errorMessage);
+        if (workerTaskId != null) entity.setWorkerTaskId(workerTaskId);
         if (codexThreadId != null) entity.setCodexThreadId(codexThreadId);
+        entity.setLastAliveAt(LocalDateTime.now());
 
         taskRepository.save(entity);
         log.info("Failed Codex task: taskId={}, error={}", taskId, errorMessage);
@@ -225,6 +275,94 @@ public class CodexTaskService {
         }
     }
 
+    // ── TaskQueryProvider 实现 ──
+
+    @Override
+    public String getProviderType() {
+        return AGENT_ID;
+    }
+
+    @Override
+    public Optional<DispatchTaskDTO> getTaskById(String taskId) {
+        return taskRepository.findByTaskId(taskId).map(this::toDispatchDTO);
+    }
+
+    @Override
+    public Optional<DispatchTaskDTO> getTaskByIdAndUser(String taskId, String userId) {
+        return taskRepository.findByTaskIdAndUserId(taskId, userId).map(this::toDispatchDTO);
+    }
+
+    @Override
+    public List<DispatchTaskDTO> listTasksBySession(String sessionId) {
+        return taskRepository.findBySessionId(sessionId).stream()
+                .map(this::toDispatchDTO)
+                .toList();
+    }
+
+    @Override
+    public List<DispatchTaskDTO> listActiveDispatchTasks(String userId) {
+        return taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, List.of("RUNNING", "AWAITING_PERMISSION")).stream()
+                .map(this::toDispatchDTO)
+                .toList();
+    }
+
+    private DispatchTaskDTO toDispatchDTO(CodexTaskEntity entity) {
+        return DispatchTaskDTO.builder()
+                .taskId(entity.getTaskId())
+                .workerTaskId(entity.getWorkerTaskId())
+                .sessionId(entity.getSessionId())
+                .workerId(entity.getWorkerId())
+                .userId(entity.getUserId())
+                .agentId(AGENT_ID)
+                .providerType(AGENT_ID)
+                .prompt(entity.getPrompt())
+                .cwd(entity.getCwd())
+                .directoryId(entity.getDirectoryId())
+                .status(entity.getStatus())
+                .model(entity.getModel())
+                .costUsd(entity.getCostUsd())
+                .inputTokens(entity.getInputTokens())
+                .outputTokens(entity.getOutputTokens())
+                .durationMs(entity.getDurationMs())
+                .numTurns(entity.getNumTurns())
+                .resultText(entity.getResultText())
+                .errorMessage(entity.getErrorMessage())
+                .lastAckedSeq(entity.getLastAckedSeq())
+                .source(entity.getSource())
+                .createdAt(entity.getCreatedAt())
+                .updatedAt(entity.getUpdatedAt())
+                // Codex-specific
+                .codexThreadId(entity.getCodexThreadId())
+                .build();
+    }
+
+    private static final String AGENT_ID = "codex-worker";
+
+    /**
+     * 创建平台 SessionEntity（补齐 Codex 之前缺失的会话记录）
+     */
+    private String createPlatformSession(String userId, String tenantId, String prompt) {
+        if (sessionManager == null) {
+            // SessionManager 未注入时降级为纯 ID（保持向后兼容）
+            log.warn("SessionManager not available, falling back to IdGenerator for Codex sessionId");
+            return IdGenerator.shortId();
+        }
+        String title = prompt != null && prompt.length() > 100 ? prompt.substring(0, 100) : prompt;
+        String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
+                .userId(userId)
+                .tenantId(tenantId)
+                .agentId(AGENT_ID)
+                .taskName(title)
+                .build());
+        // 记录用户 prompt 到会话消息
+        sessionManager.addMessage(sessionId, Message.builder()
+                .sessionId(sessionId)
+                .role(MessageRole.USER)
+                .content(prompt)
+                .build());
+        return sessionId;
+    }
+
     private String resolveApiKey(String modelConfigId) {
         if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
             return null;
@@ -240,6 +378,7 @@ public class CodexTaskService {
     private CodexTaskDTO toDTO(CodexTaskEntity entity) {
         return CodexTaskDTO.builder()
                 .taskId(entity.getTaskId())
+                .workerTaskId(entity.getWorkerTaskId())
                 .sessionId(entity.getSessionId())
                 .directoryId(entity.getDirectoryId())
                 .workerId(entity.getWorkerId())
@@ -255,6 +394,7 @@ public class CodexTaskService {
                 .numTurns(entity.getNumTurns())
                 .resultText(entity.getResultText())
                 .errorMessage(entity.getErrorMessage())
+                .lastAckedSeq(entity.getLastAckedSeq())
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStartedEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
+import com.foggy.navigator.agent.framework.protocol.AgentMessageBuilder;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClient;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
@@ -24,6 +25,7 @@ import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -105,7 +107,7 @@ public class CodexStreamRelay {
 
         } catch (Exception e) {
             log.error("Failed to start Codex stream relay: taskId={}", taskId, e);
-            taskService.failTask(taskId, null, e.getMessage());
+            taskService.failTask(taskId, null, null, e.getMessage());
             publishMessage(sessionId, MessageType.ERROR,
                     Map.of("content", "Failed to connect to Codex worker: " + e.getMessage(), "taskId", taskId));
         }
@@ -130,14 +132,25 @@ public class CodexStreamRelay {
 
         try {
             CodexWorkerClient client = getCodexClient(workerId);
+            CodexTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+            if (entity == null) {
+                log.warn("reconnectTask: task {} not found in repository", taskId);
+                return;
+            }
+            if (entity.getWorkerTaskId() == null || entity.getWorkerTaskId().isBlank()) {
+                log.warn("reconnectTask: task {} has no upstream workerTaskId yet, skip reconnect", taskId);
+                return;
+            }
 
             AtomicReference<String> detectedModel = new AtomicReference<>();
-            AtomicReference<String> detectedCodexThreadId = new AtomicReference<>();
+            AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(entity.getCodexThreadId());
 
             AtomicInteger seqTracker = lastAckedSeq.get(taskId);
-            int ackSeq = seqTracker != null ? seqTracker.get() : 0;
+            int memoryAckSeq = seqTracker != null ? seqTracker.get() : 0;
+            int persistedAckSeq = entity.getLastAckedSeq() != null ? entity.getLastAckedSeq() : 0;
+            int ackSeq = Math.max(memoryAckSeq, persistedAckSeq);
 
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, ackSeq);
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(entity.getWorkerTaskId(), ackSeq);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedCodexThreadId, 0);
@@ -192,6 +205,26 @@ public class CodexStreamRelay {
         reconnecting.remove(taskId);
     }
 
+    /**
+     * 尝试远程中止 worker 侧任务；若尚未拿到 upstream task_id，仅记录日志。
+     */
+    public void abortRemoteTask(CodexTaskEntity task) {
+        if (task == null || task.getWorkerTaskId() == null || task.getWorkerTaskId().isBlank()) {
+            log.warn("abortRemoteTask skipped: no upstream workerTaskId for local task {}", task != null ? task.getTaskId() : null);
+            return;
+        }
+        try {
+            getCodexClient(task.getWorkerId())
+                    .abortTask(task.getWorkerTaskId())
+                    .block(Duration.ofSeconds(10));
+            log.info("Requested upstream abort: localTaskId={}, workerTaskId={}",
+                    task.getTaskId(), task.getWorkerTaskId());
+        } catch (Exception e) {
+            log.warn("Failed to abort upstream Codex task: localTaskId={}, workerTaskId={}, error={}",
+                    task.getTaskId(), task.getWorkerTaskId(), e.getMessage());
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Internal
     // -------------------------------------------------------------------------
@@ -220,7 +253,7 @@ public class CodexStreamRelay {
                         reconnectTask(taskId, sessionId, workerId);
                     } else {
                         log.error("Max reconnection attempts reached for Codex task {}", taskId);
-                        taskService.failTask(taskId, detectedCodexThreadId.get(),
+                        taskService.failTask(taskId, null, detectedCodexThreadId.get(),
                                 "SSE stream disconnected after " + MAX_RECONNECT_ATTEMPTS + " reconnection attempts");
                         publishMessage(sessionId, MessageType.ERROR,
                                 Map.of("content", "Connection to Codex worker lost", "taskId", taskId));
@@ -253,7 +286,6 @@ public class CodexStreamRelay {
             // 更新 codexThreadId
             if (event.getSessionId() != null) {
                 detectedCodexThreadId.set(event.getSessionId());
-                taskService.updateCodexThreadId(taskId, event.getSessionId());
             }
 
             // 更新 model
@@ -261,51 +293,49 @@ public class CodexStreamRelay {
                 detectedModel.set(event.getModel());
             }
 
+            taskService.recordWorkerProgress(taskId, event.getTaskId(), event.getSessionId(),
+                    event.getModel(), event.getSeq());
+
             String type = event.getType();
             if (type == null) return;
 
+            // 使用 AgentMessageBuilder 标准化 payload 字段名
+            AgentMessageBuilder mb = AgentMessageBuilder.create(sessionId, AGENT_ID).taskId(taskId);
+
             switch (type) {
                 case "assistant_text" -> {
-                    publishMessage(sessionId, MessageType.TEXT_COMPLETE,
-                            Map.of("content", event.getContent() != null ? event.getContent() : "",
-                                    "taskId", taskId));
+                    if ("sync_checkpoint".equals(event.getSubtype())) {
+                        log.debug("Ignoring sync checkpoint for task {}", taskId);
+                        return;
+                    }
+                    publishBuilt(mb.textComplete(event.getContent() != null ? event.getContent() : ""));
                 }
                 case "tool_use" -> {
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("taskId", taskId);
-                    payload.put("tool", event.getTool());
-                    payload.put("input", event.getInput());
-                    if (event.getToolUseId() != null) payload.put("toolUseId", event.getToolUseId());
-                    publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
+                    // 标准化: Codex 原字段 tool/input → 统一 toolName/arguments
+                    publishBuilt(mb.toolCallStart(event.getToolUseId(), event.getTool(), event.getInput()));
                 }
                 case "tool_result" -> {
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("taskId", taskId);
-                    payload.put("tool", event.getTool());
-                    payload.put("output", event.getOutput());
-                    if (event.getIsError() != null) payload.put("isError", event.getIsError());
-                    if (event.getToolUseId() != null) payload.put("toolUseId", event.getToolUseId());
-                    publishMessage(sessionId, MessageType.TOOL_CALL_RESULT, payload);
+                    // 标准化: Codex 原字段 tool/output/isError → 统一 toolName/data/success
+                    boolean success = event.getIsError() == null || !event.getIsError();
+                    publishBuilt(mb.toolCallResult(event.getToolUseId(), event.getTool(),
+                            event.getOutput(), success));
                 }
                 case "result" -> {
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("taskId", taskId);
-                    payload.put("content", event.getContent() != null ? event.getContent() : event.getResult());
-                    if (event.getCostUsd() != null) payload.put("costUsd", event.getCostUsd());
-                    if (event.getDurationMs() != null) payload.put("durationMs", event.getDurationMs());
-                    if (event.getInputTokens() != null) payload.put("inputTokens", event.getInputTokens());
-                    if (event.getOutputTokens() != null) payload.put("outputTokens", event.getOutputTokens());
-                    if (event.getNumTurns() != null) payload.put("numTurns", event.getNumTurns());
-                    if (event.getModel() != null) payload.put("model", event.getModel());
-                    publishMessage(sessionId, MessageType.SESSION_END, payload);
+                    String resultText = event.getContent() != null ? event.getContent() : event.getResult();
+                    mb.result(resultText)
+                            .metrics(event.getCostUsd(), event.getDurationMs(),
+                                    event.getInputTokens(), event.getOutputTokens(),
+                                    event.getNumTurns(), event.getModel());
+                    // result 事件用 SESSION_END 类型（Codex 特有语义）
+                    publishEvent(mb.build(MessageType.SESSION_END));
 
                     // 完成任务记录
-                    taskService.completeTask(taskId, detectedCodexThreadId.get(),
-                            event.getCostUsd(), event.getInputTokens(), event.getOutputTokens(),
-                            event.getDurationMs(), event.getNumTurns(), event.getModel());
+                    taskService.completeTask(taskId, event.getTaskId(),
+                            detectedCodexThreadId.get(), resultText, event.getCostUsd(),
+                            event.getInputTokens(), event.getOutputTokens(), event.getDurationMs(),
+                            event.getNumTurns(), event.getModel());
 
                     // 发布任务完成事件
-                    String resultText = event.getContent() != null ? event.getContent() : event.getResult();
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
                             .externalTaskId(taskId)
                             .parentSessionId(sessionId)
@@ -315,10 +345,8 @@ public class CodexStreamRelay {
                             .build());
                 }
                 case "error" -> {
-                    publishMessage(sessionId, MessageType.ERROR,
-                            Map.of("content", event.getError() != null ? event.getError() : "Unknown error",
-                                    "taskId", taskId));
-                    taskService.failTask(taskId, detectedCodexThreadId.get(),
+                    publishBuilt(mb.error(event.getError() != null ? event.getError() : "Unknown error"));
+                    taskService.failTask(taskId, event.getTaskId(), detectedCodexThreadId.get(),
                             event.getError());
 
                     eventPublisher.publishEvent(TaskCompletionEvent.builder()
@@ -339,6 +367,14 @@ public class CodexStreamRelay {
 
     private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
         AgentMessage message = AgentMessage.of(sessionId, AGENT_ID, type, payload);
+        eventPublisher.publishEvent(message);
+    }
+
+    private void publishBuilt(AgentMessageBuilder builder) {
+        eventPublisher.publishEvent(builder.build());
+    }
+
+    private void publishEvent(AgentMessage message) {
         eventPublisher.publishEvent(message);
     }
 

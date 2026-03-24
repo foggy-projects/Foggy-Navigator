@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.TaskCompletionEvent;
 import com.foggy.navigator.agent.framework.event.TaskStartedEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
+import com.foggy.navigator.agent.framework.protocol.AgentMessageBuilder;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
@@ -130,7 +131,7 @@ public class WorkerStreamRelay {
 
         } catch (Exception e) {
             log.error("Failed to start stream relay: taskId={}", taskId, e);
-            taskService.failTask(taskId, null, e.getMessage());
+            taskService.failTask(taskId, null, null, e.getMessage());
             publishMessage(sessionId, MessageType.ERROR,
                     Map.of("content", "Failed to connect to worker: " + e.getMessage(), "taskId", taskId));
         }
@@ -163,17 +164,25 @@ public class WorkerStreamRelay {
         try {
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
             ClaudeWorkerClient client = workerService.createClient(worker);
+            ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+            if (entity == null) {
+                log.warn("reconnectTask: task {} not found in repository", taskId);
+                return;
+            }
 
             AtomicReference<String> detectedModel = new AtomicReference<>();
-            AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
+            AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(entity.getClaudeSessionId());
 
             // 用 lastAckedSeq（ESN）计算 ack_seq：
             // - 有 seq → 精确回放遗漏的事件（Worker 返回 seq > ack_seq 的所有事件）
             // - 无 seq（Java 重启） → ack_seq=0，从头回放（安全，幂等）
             AtomicInteger seqTracker = lastAckedSeq.get(taskId);
-            int ackSeq = seqTracker != null ? seqTracker.get() : 0;
+            int memoryAckSeq = seqTracker != null ? seqTracker.get() : 0;
+            int persistedAckSeq = entity.getLastAckedSeq() != null ? entity.getLastAckedSeq() : 0;
+            int ackSeq = Math.max(memoryAckSeq, persistedAckSeq);
+            String subscribeTaskId = resolveWorkerTaskLookupId(entity);
             log.info("reconnectTask ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, ackSeq);
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(subscribeTaskId, ackSeq);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, 0);
@@ -230,7 +239,7 @@ public class WorkerStreamRelay {
                 try {
                     ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
                     ClaudeWorkerClient client = workerService.createClient(worker);
-                    Map<String, Object> status = client.getTaskStatus(task.getTaskId())
+                    Map<String, Object> status = client.getTaskStatus(resolveWorkerTaskLookupId(task))
                             .block(java.time.Duration.ofSeconds(5));
                     if (status != null) {
                         boolean closed = Boolean.TRUE.equals(status.get("closed"));
@@ -279,25 +288,27 @@ public class WorkerStreamRelay {
                         log.debug("Task {} received SSE data: {}", taskId, data.substring(0, Math.min(200, data.length())));
                         WorkerEvent workerEvent = objectMapper.readValue(data, WorkerEvent.class);
                         log.debug("Task {} parsed event type: {}", taskId, workerEvent.getType());
-                        // Capture worker's internal task ID for abort/respond calls
-                        if (workerEvent.getTaskId() != null && !workerTaskIdMap.containsKey(taskId)) {
+                        // 更新 ACK 序列号：优先用 Worker 注入的 seq（ESN 模式），
+                        // 若 Worker 未返回 seq（旧版），降级为单调递增计数
+                        Integer ackSeq;
+                        if (workerEvent.getSeq() != null) {
+                            ackSeq = lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0))
+                                    .updateAndGet(cur -> Math.max(cur, workerEvent.getSeq()));
+                        } else {
+                            // 旧 Worker 兼容：无 seq 字段，按计数递增
+                            ackSeq = lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0)).incrementAndGet();
+                        }
+                        if (workerEvent.getTaskId() != null && !workerEvent.getTaskId().isBlank()) {
                             workerTaskIdMap.put(taskId, workerEvent.getTaskId());
                             log.debug("Task {} mapped to worker task: {}", taskId, workerEvent.getTaskId());
                         }
+                        taskService.recordWorkerProgress(taskId, workerEvent.getTaskId(),
+                                workerEvent.getSessionId(), workerEvent.getModel(), ackSeq);
                         try {
                             relayEvent(sessionId, taskId, workerEvent, detectedModel, detectedClaudeSessionId);
                         } catch (Exception relayEx) {
                             log.warn("Failed to relay event for task {}, type={}: {}",
                                     taskId, workerEvent.getType(), relayEx.getMessage(), relayEx);
-                        }
-                        // 更新 ACK 序列号：优先用 Worker 注入的 seq（ESN 模式），
-                        // 若 Worker 未返回 seq（旧版），降级为单调递增计数
-                        if (workerEvent.getSeq() != null) {
-                            lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0))
-                                    .updateAndGet(cur -> Math.max(cur, workerEvent.getSeq()));
-                        } else {
-                            // 旧 Worker 兼容：无 seq 字段，按计数递增
-                            lastAckedSeq.computeIfAbsent(taskId, k -> new AtomicInteger(0)).incrementAndGet();
                         }
                     } catch (Exception e) {
                         log.warn("Failed to parse worker event for task {}: {}", taskId, data, e);
@@ -356,7 +367,7 @@ public class WorkerStreamRelay {
                     if (isClientError) {
                         // Genuine startup failure — keep failTask for 4xx errors
                         String errorMsg = extractWorkerErrorMessage(e);
-                        taskService.failTask(taskId, detectedClaudeSessionId.get(), errorMsg);
+                        taskService.failTask(taskId, workerTaskIdMap.get(taskId), detectedClaudeSessionId.get(), errorMsg);
                         publishMessage(sessionId, MessageType.ERROR,
                                 Map.of("content", errorMsg, "taskId", taskId));
                         lastAckedSeq.remove(taskId);
@@ -410,13 +421,18 @@ public class WorkerStreamRelay {
             ClaudeWorkerClient client = workerService.createClient(worker);
 
             AtomicReference<String> detectedModel = new AtomicReference<>();
-            AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>();
+            ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+            AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(
+                    entity != null ? entity.getClaudeSessionId() : null);
 
             // 用 lastAckedSeq（ESN）计算 ack_seq
             AtomicInteger seqTracker = lastAckedSeq.get(taskId);
-            int ackSeq = seqTracker != null ? seqTracker.get() : 0;
+            int memoryAckSeq = seqTracker != null ? seqTracker.get() : 0;
+            int persistedAckSeq = entity != null && entity.getLastAckedSeq() != null ? entity.getLastAckedSeq() : 0;
+            int ackSeq = Math.max(memoryAckSeq, persistedAckSeq);
+            String subscribeTaskId = resolveWorkerTaskLookupId(entity != null ? entity : taskOpt.get());
             log.info("attemptReconnect ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
-            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(taskId, ackSeq);
+            Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(subscribeTaskId, ackSeq);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedClaudeSessionId, nextAttempt);
@@ -451,7 +467,17 @@ public class WorkerStreamRelay {
      * @return Worker 生成的 UUID task ID, 如果未映射则返回 javaTaskId
      */
     public String getWorkerTaskId(String javaTaskId) {
-        return workerTaskIdMap.getOrDefault(javaTaskId, javaTaskId);
+        String runtimeWorkerTaskId = workerTaskIdMap.get(javaTaskId);
+        if (runtimeWorkerTaskId != null && !runtimeWorkerTaskId.isBlank()) {
+            return runtimeWorkerTaskId;
+        }
+        return taskRepository.findByTaskId(javaTaskId)
+                .map(this::resolveWorkerTaskLookupId)
+                .orElse(javaTaskId);
+    }
+
+    private String resolveWorkerTaskLookupId(ClaudeTaskEntity task) {
+        return taskService.resolveWorkerTaskLookupId(task);
     }
 
     /**
@@ -475,12 +501,14 @@ public class WorkerStreamRelay {
                             AtomicReference<String> detectedClaudeSessionId) {
         if (event.getType() == null) return;
 
+        // 使用 AgentMessageBuilder 标准化 payload 字段名
+        AgentMessageBuilder mb = AgentMessageBuilder.create(sessionId, AGENT_ID).taskId(taskId);
+
         switch (event.getType()) {
             case "system" -> {
                 // 系统消息，携带 session_id 等元数据 — 尽早记住 claudeSessionId
                 if (event.getSessionId() != null) {
                     detectedClaudeSessionId.set(event.getSessionId());
-                    // 立即保存到数据库，防止任何情况下丢失（包括用户中止任务）
                     try {
                         taskService.updateClaudeSessionId(taskId, event.getSessionId());
                         log.debug("Early saved claudeSessionId {} for task {}", event.getSessionId(), taskId);
@@ -490,85 +518,49 @@ public class WorkerStreamRelay {
                 }
                 String subtype = event.getSubtype();
                 if ("auto_compact".equals(subtype) || "context_compression".equals(subtype)) {
-                    // Context compression event — push as STATE_SYNC hint
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("content", "Context compressed");
-                    payload.put("subtype", subtype);
-                    payload.put("taskId", taskId);
-                    publishMessage(sessionId, MessageType.STATE_SYNC, payload);
+                    publishBuilt(mb.stateSync("Context compressed", subtype));
                 } else if ("waiting".equals(subtype)) {
-                    // Waiting hint — CLI is likely retrying internally
                     Map<String, Object> data = event.getData() != null ? event.getData() : Map.of();
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("content", "Waiting for response...");
-                    payload.put("subtype", "waiting");
-                    payload.put("elapsedSeconds", data.getOrDefault("elapsed_seconds", 0));
-                    payload.put("timeoutSeconds", data.getOrDefault("timeout_seconds", 600));
-                    payload.put("taskId", taskId);
-                    publishMessage(sessionId, MessageType.STATE_SYNC, payload);
+                    publishBuilt(mb.stateSync("Waiting for response...", "waiting")
+                            .put("elapsedSeconds", data.getOrDefault("elapsed_seconds", 0))
+                            .put("timeoutSeconds", data.getOrDefault("timeout_seconds", 600)));
                 } else {
-                    publishMessage(sessionId, MessageType.SESSION_START,
-                            Map.of("content", "Task started", "taskId", taskId,
-                                    "claudeSessionId", nullSafe(event.getSessionId())));
+                    publishBuilt(mb.sessionStart("Task started")
+                            .put("claudeSessionId", nullSafe(event.getSessionId())));
                 }
             }
             case "assistant_text" -> {
-                // Track model from assistant_text events
                 if (event.getModel() != null) {
                     detectedModel.set(event.getModel());
                 }
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("content", event.getContent());
-                payload.put("taskId", taskId);
-                // assistant_text from Python Worker is a complete text block (not a streaming chunk),
-                // so emit TEXT_COMPLETE to ensure it gets persisted to the database.
-                publishMessage(sessionId, MessageType.TEXT_COMPLETE, payload);
+                publishBuilt(mb.textComplete(event.getContent()));
             }
             case "tool_use" -> {
                 String toolCallId = event.getToolUseId() != null
                         ? event.getToolUseId() : "tc-" + System.nanoTime();
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("toolCallId", toolCallId);
-                payload.put("toolName", event.getTool());
-                payload.put("arguments", event.getInput());
-                payload.put("taskId", taskId);
-                publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
+                publishBuilt(mb.toolCallStart(toolCallId, event.getTool(), event.getInput()));
             }
             case "tool_result" -> {
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("toolCallId", event.getToolUseId());
-                payload.put("toolName", event.getTool());
-                payload.put("data", event.getOutput());
-                payload.put("success", !Boolean.TRUE.equals(event.getIsError()));
-                payload.put("taskId", taskId);
-                publishMessage(sessionId, MessageType.TOOL_CALL_RESULT, payload);
+                publishBuilt(mb.toolCallResult(event.getToolUseId(), event.getTool(),
+                        event.getOutput(), !Boolean.TRUE.equals(event.getIsError())));
             }
             case "result" -> {
-                // 任务完成
-                // Worker 返回的 result 事件使用 content 字段，不是 result 字段
                 String resultContent = event.getContent() != null ? event.getContent() : event.getResult();
                 String resolvedModel = event.getModel() != null ? event.getModel() : detectedModel.get();
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("content", resultContent);
-                payload.put("isResult", true); // 标记为 result 事件，前端不再重复创建文本气泡
-                payload.put("taskId", taskId);
-                payload.put("costUsd", event.getCostUsd());
-                payload.put("durationMs", event.getDurationMs());
-                payload.put("inputTokens", event.getInputTokens());
-                payload.put("outputTokens", event.getOutputTokens());
-                payload.put("numTurns", event.getNumTurns());
-                payload.put("model", resolvedModel);
-                payload.put("claudeSessionId", nullSafe(event.getSessionId()));
-                publishMessage(sessionId, MessageType.TEXT_COMPLETE, payload);
+                publishBuilt(mb.result(resultContent)
+                        .metrics(event.getCostUsd(), event.getDurationMs(),
+                                event.getInputTokens(), event.getOutputTokens(),
+                                event.getNumTurns(), resolvedModel)
+                        .put("claudeSessionId", nullSafe(event.getSessionId())));
 
                 // 更新任务状态
-                taskService.completeTask(taskId, event.getSessionId(),
-                        event.getCostUsd(), event.getInputTokens(),
-                        event.getOutputTokens(), event.getDurationMs(),
+                taskService.completeTask(taskId,
+                        event.getTaskId() != null ? event.getTaskId() : getWorkerTaskId(taskId),
+                        event.getSessionId(), resultContent, event.getCostUsd(),
+                        event.getInputTokens(), event.getOutputTokens(), event.getDurationMs(),
                         event.getNumTurns(), resolvedModel);
 
-                // 主动 dispose SSE 订阅，防止 CLI 仍存活时后续 "waiting" 事件
-                // 继续被 relay 到前端（CLI 进程本身不 kill，遵守 Rule 2）
+                // 主动 dispose SSE 订阅
                 Disposable completedSub = activeStreams.remove(taskId);
                 if (completedSub != null && !completedSub.isDisposed()) {
                     completedSub.dispose();
@@ -578,13 +570,8 @@ public class WorkerStreamRelay {
                 workerTaskIdMap.remove(taskId);
                 lastAckedSeq.remove(taskId);
 
-                // 自动扫描 JSONL 补齐 checkpoints
-                // 流式 UserMessage.uuid 不可靠，任务完成后从 JSONL 文件扫描作为可靠补充
                 autoScanCheckpoints(taskId, event.getSessionId());
 
-                // 发布跨 Agent 任务完成事件
-                // 注意：Python event_mapper 将 result 文本放在 content 字段，
-                // event.getResult() 始终为 null，应使用已解析的 resultContent
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
                         .externalTaskId(taskId)
                         .parentSessionId(sessionId)
@@ -595,51 +582,33 @@ public class WorkerStreamRelay {
                         .build());
             }
             case "permission_request" -> {
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("permissionId", event.getPermissionId());
-                payload.put("toolName", event.getTool());
-                payload.put("toolInput", event.getInput());
-                payload.put("taskId", taskId);
-                publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
+                publishBuilt(mb.confirmationRequest(event.getPermissionId())
+                        .put("toolName", event.getTool())
+                        .put("toolInput", event.getInput()));
                 taskService.setAwaitingPermission(taskId);
             }
             case "user_question" -> {
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("permissionId", event.getPermissionId());
-                payload.put("questions", event.getQuestions());
-                payload.put("taskId", taskId);
-                publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
+                publishBuilt(mb.confirmationRequest(event.getPermissionId())
+                        .put("questions", event.getQuestions()));
                 taskService.setAwaitingPermission(taskId);
             }
             case "plan_review" -> {
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("permissionId", event.getPermissionId());
-                payload.put("planReview", true);
-                if (event.getAllowedPrompts() != null) {
-                    payload.put("allowedPrompts", event.getAllowedPrompts());
-                }
-                if (event.getPlan() != null) {
-                    payload.put("plan", event.getPlan());
-                }
-                payload.put("taskId", taskId);
-                publishMessage(sessionId, MessageType.CONFIRMATION_REQUEST, payload);
+                publishBuilt(mb.confirmationRequest(event.getPermissionId())
+                        .put("planReview", true)
+                        .put("allowedPrompts", event.getAllowedPrompts())
+                        .put("plan", event.getPlan()));
                 taskService.setAwaitingPermission(taskId);
             }
             case "checkpoint" -> {
                 String checkpointId = event.getCheckpointId();
                 if (checkpointId != null && !checkpointId.isEmpty()) {
                     taskService.addCheckpoint(taskId, checkpointId);
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("checkpointId", checkpointId);
-                    payload.put("taskId", taskId);
-                    publishMessage(sessionId, MessageType.CHECKPOINT, payload);
+                    publishBuilt(mb.checkpoint(checkpointId));
                 }
             }
             case "error" -> {
-                // 错误事件也可能携带 session_id
                 if (event.getSessionId() != null) {
                     detectedClaudeSessionId.set(event.getSessionId());
-                    // 立即保存到数据库，防止任何情况下丢失
                     try {
                         taskService.updateClaudeSessionId(taskId, event.getSessionId());
                         log.debug("Early saved claudeSessionId {} for task {} (error event)", event.getSessionId(), taskId);
@@ -648,15 +617,13 @@ public class WorkerStreamRelay {
                     }
                 }
                 String errorClaudeSessionId = detectedClaudeSessionId.get();
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("content", event.getError());
-                payload.put("taskId", taskId);
-                payload.put("claudeSessionId", nullSafe(errorClaudeSessionId));
-                publishMessage(sessionId, MessageType.ERROR, payload);
+                publishBuilt(mb.error(event.getError())
+                        .put("claudeSessionId", nullSafe(errorClaudeSessionId)));
 
-                taskService.failTask(taskId, errorClaudeSessionId, event.getError());
+                taskService.failTask(taskId,
+                        event.getTaskId() != null ? event.getTaskId() : getWorkerTaskId(taskId),
+                        errorClaudeSessionId, event.getError());
 
-                // 主动 dispose SSE 订阅（同 result 逻辑）
                 Disposable failedSub = activeStreams.remove(taskId);
                 if (failedSub != null && !failedSub.isDisposed()) {
                     failedSub.dispose();
@@ -666,7 +633,6 @@ public class WorkerStreamRelay {
                 workerTaskIdMap.remove(taskId);
                 lastAckedSeq.remove(taskId);
 
-                // 发布跨 Agent 任务失败事件
                 eventPublisher.publishEvent(TaskCompletionEvent.builder()
                         .externalTaskId(taskId)
                         .parentSessionId(sessionId)
@@ -677,8 +643,6 @@ public class WorkerStreamRelay {
                         .build());
             }
             case "sync_checkpoint" -> {
-                // Worker 在 result/error 事件后发送 sync_checkpoint，
-                // 携带 latest_seq 和 event_count，Java 可用于校验完整性
                 Integer workerLatestSeq = event.getLatestSeq();
                 Integer workerEventCount = event.getEventCount();
                 AtomicInteger mySeq = lastAckedSeq.get(taskId);
@@ -687,13 +651,8 @@ public class WorkerStreamRelay {
                 log.info("Sync checkpoint: taskId={}, workerLatestSeq={}, workerEventCount={}, myAckedSeq={}",
                         taskId, workerLatestSeq, workerEventCount, myAckedSeq);
 
-                // 推送 STATE_SYNC 到前端，表明流已通过完整性校验
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("content", "Event stream verified");
-                payload.put("subtype", "sync_checkpoint");
-                payload.put("taskId", taskId);
-                if (workerLatestSeq != null) payload.put("latestSeq", workerLatestSeq);
-                publishMessage(sessionId, MessageType.STATE_SYNC, payload);
+                publishBuilt(mb.stateSync("Event stream verified", "sync_checkpoint")
+                        .put("latestSeq", workerLatestSeq));
             }
             default -> log.debug("Unknown worker event type: {}", event.getType());
         }
@@ -781,6 +740,10 @@ public class WorkerStreamRelay {
         AgentMessage message = AgentMessage.of(sessionId, AGENT_ID, type, payload);
         log.debug("Publishing message: sessionId={}, type={}, payload={}", sessionId, type, payload);
         eventPublisher.publishEvent(message);
+    }
+
+    private void publishBuilt(AgentMessageBuilder builder) {
+        eventPublisher.publishEvent(builder.build());
     }
 
     private String nullSafe(String value) {

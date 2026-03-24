@@ -31,7 +31,9 @@ import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
 import com.foggy.navigator.claude.worker.repository.ConversationConfigRepository;
 import com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository;
 import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
@@ -67,7 +69,7 @@ import com.foggy.navigator.common.util.IdGenerator;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class ClaudeTaskService {
+public class ClaudeTaskService implements TaskQueryProvider {
 
     private static final String AGENT_ID = "claude-worker";
 
@@ -636,19 +638,42 @@ public class ClaudeTaskService {
      * 更新任务状态为完成
      */
     @Transactional
-    public void completeTask(String taskId, String claudeSessionId, BigDecimal costUsd,
-                              Long inputTokens, Long outputTokens, Long durationMs,
-                              Integer numTurns, String model) {
+    public void completeTask(String taskId, String workerTaskId, String claudeSessionId,
+                              String resultText, BigDecimal costUsd, Long inputTokens,
+                              Long outputTokens, Long durationMs, Integer numTurns,
+                              String model) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
             entity.setStatus("COMPLETED");
-            entity.setClaudeSessionId(claudeSessionId);
-            entity.setCostUsd(costUsd);
-            entity.setInputTokens(inputTokens);
-            entity.setOutputTokens(outputTokens);
-            entity.setDurationMs(durationMs);
-            entity.setNumTurns(numTurns);
-            entity.setModel(model);
+            if (workerTaskId != null && !workerTaskId.isBlank()) {
+                entity.setWorkerTaskId(workerTaskId);
+            }
+            if (claudeSessionId != null && !claudeSessionId.isBlank()) {
+                entity.setClaudeSessionId(claudeSessionId);
+            }
+            if (resultText != null) {
+                entity.setResultText(resultText);
+            }
+            if (costUsd != null) {
+                entity.setCostUsd(costUsd);
+            }
+            if (inputTokens != null) {
+                entity.setInputTokens(inputTokens);
+            }
+            if (outputTokens != null) {
+                entity.setOutputTokens(outputTokens);
+            }
+            if (durationMs != null) {
+                entity.setDurationMs(durationMs);
+            }
+            if (numTurns != null) {
+                entity.setNumTurns(numTurns);
+            }
+            if (model != null) {
+                entity.setModel(model);
+            }
+            entity.setErrorMessage(null);
+            entity.setLastAliveAt(LocalDateTime.now());
             taskRepository.save(entity);
             log.info("Task completed: taskId={}, model={}, costUsd={}, durationMs={}", taskId, model, costUsd, durationMs);
             publishStatusChange(entity, prev);
@@ -669,6 +694,35 @@ public class ClaudeTaskService {
                 log.debug("Updated claudeSessionId for task {}: {}", taskId, claudeSessionId);
             }
         });
+    }
+
+    /**
+     * 记录 Worker 侧任务标识、会话信息和事件消费进度。
+     */
+    @Transactional
+    public void recordWorkerProgress(String taskId, String workerTaskId, String claudeSessionId,
+                                      String model, Integer ackSeq) {
+        ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+        if (entity == null) {
+            log.warn("recordWorkerProgress: task not found: {}", taskId);
+            return;
+        }
+
+        if (workerTaskId != null && !workerTaskId.isBlank()) {
+            entity.setWorkerTaskId(workerTaskId);
+        }
+        if (claudeSessionId != null && !claudeSessionId.isBlank()) {
+            entity.setClaudeSessionId(claudeSessionId);
+        }
+        if (model != null && !model.isBlank()) {
+            entity.setModel(model);
+        }
+        if (ackSeq != null) {
+            Integer current = entity.getLastAckedSeq();
+            entity.setLastAckedSeq(current == null ? ackSeq : Math.max(current, ackSeq));
+        }
+        entity.setLastAliveAt(LocalDateTime.now());
+        taskRepository.save(entity);
     }
 
     /**
@@ -725,14 +779,18 @@ public class ClaudeTaskService {
      * 标记任务失败（保留 claudeSessionId 以便后续继续会话）
      */
     @Transactional
-    public void failTask(String taskId, String claudeSessionId, String errorMessage) {
+    public void failTask(String taskId, String workerTaskId, String claudeSessionId, String errorMessage) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
             entity.setStatus("FAILED");
             entity.setErrorMessage(errorMessage);
-            if (claudeSessionId != null && entity.getClaudeSessionId() == null) {
+            if (workerTaskId != null && !workerTaskId.isBlank()) {
+                entity.setWorkerTaskId(workerTaskId);
+            }
+            if (claudeSessionId != null && !claudeSessionId.isBlank()) {
                 entity.setClaudeSessionId(claudeSessionId);
             }
+            entity.setLastAliveAt(LocalDateTime.now());
             taskRepository.save(entity);
             log.warn("Task failed: taskId={}, claudeSessionId={}, error={}", taskId, claudeSessionId, errorMessage);
             publishStatusChange(entity, prev);
@@ -819,18 +877,17 @@ public class ClaudeTaskService {
      */
     @SuppressWarnings("unchecked")
     public void abortTask(String taskId) {
-        // 1. 获取 Worker 内部 task ID（优先使用 streamRelay 的精确映射）
-        String workerTaskId = streamRelay.getWorkerTaskId(taskId);
+        ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
+        String workerTaskId = resolveWorkerTaskLookupId(task);
 
         // 2. 通知 Worker 中止 CLI（在清理流之前，确保 Worker task 还在 registry）
         try {
-            ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
             if (task != null) {
                 ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
                 ClaudeWorkerClient client = workerService.createClient(worker);
 
-                if (workerTaskId != null) {
-                    // 标准路径：通过 SSE 映射的 workerTaskId 发送 abort
+                if (workerTaskId != null && !workerTaskId.isBlank()) {
+                    // 优先使用持久化 workerTaskId；缺失时退回 Foggy taskId 别名
                     client.abortTask(workerTaskId).block(Duration.ofSeconds(5));
                     log.info("Worker abort sent: taskId={}, workerTaskId={}", taskId, workerTaskId);
                 } else if ("A2A".equals(task.getSource())) {
@@ -1372,7 +1429,7 @@ public class ClaudeTaskService {
         Boolean cliAlive = false;
         try {
             Map<String, Object> status = workerService.createClient(worker)
-                    .getTaskStatus(taskId)
+                    .getTaskStatus(resolveWorkerTaskLookupId(entity))
                     .block(java.time.Duration.ofSeconds(5));
             if (status != null) {
                 cliAlive = (Boolean) status.get("cli_alive");
@@ -1500,7 +1557,7 @@ public class ClaudeTaskService {
      */
     @SuppressWarnings("unchecked")
     private CliStatus detectCliStatus(ClaudeWorkerClient client, ClaudeTaskEntity task) {
-        String taskId = task.getTaskId();
+        String taskId = resolveWorkerTaskLookupId(task);
 
         // 层1: 查询 Worker task_registry
         try {
@@ -1804,6 +1861,20 @@ public class ClaudeTaskService {
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
     }
 
+    /**
+     * 解析调用 Worker /subscribe /status /abort 时应使用的任务标识。
+     * 优先使用持久化的 workerTaskId，缺失时退回 Foggy taskId（worker 支持 foggy_task_id 别名）。
+     */
+    public String resolveWorkerTaskLookupId(ClaudeTaskEntity task) {
+        if (task == null) {
+            return null;
+        }
+        if (task.getWorkerTaskId() != null && !task.getWorkerTaskId().isBlank()) {
+            return task.getWorkerTaskId();
+        }
+        return task.getTaskId();
+    }
+
     private String truncate(String text, int maxLen) {
         if (text == null) return null;
         return text.length() > maxLen ? text.substring(0, maxLen) + "..." : text;
@@ -1979,9 +2050,75 @@ public class ClaudeTaskService {
         }
     }
 
+    // ── TaskQueryProvider 实现 ──
+
+    @Override
+    public String getProviderType() {
+        return AGENT_ID;
+    }
+
+    @Override
+    public Optional<DispatchTaskDTO> getTaskById(String taskId) {
+        return taskRepository.findByTaskId(taskId).map(this::toDispatchDTO);
+    }
+
+    @Override
+    public Optional<DispatchTaskDTO> getTaskByIdAndUser(String taskId, String userId) {
+        return taskRepository.findByTaskIdAndUserId(taskId, userId).map(this::toDispatchDTO);
+    }
+
+    @Override
+    public List<DispatchTaskDTO> listTasksBySession(String sessionId) {
+        return taskRepository.findBySessionId(sessionId).stream()
+                .map(this::toDispatchDTO)
+                .toList();
+    }
+
+    @Override
+    public List<DispatchTaskDTO> listActiveDispatchTasks(String userId) {
+        return taskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
+                userId, List.of("RUNNING", "AWAITING_PERMISSION")).stream()
+                .map(this::toDispatchDTO)
+                .toList();
+    }
+
+    private DispatchTaskDTO toDispatchDTO(ClaudeTaskEntity entity) {
+        return DispatchTaskDTO.builder()
+                .taskId(entity.getTaskId())
+                .workerTaskId(entity.getWorkerTaskId())
+                .sessionId(entity.getSessionId())
+                .workerId(entity.getWorkerId())
+                .userId(entity.getUserId())
+                .agentId(AGENT_ID)
+                .providerType(AGENT_ID)
+                .prompt(entity.getPrompt())
+                .cwd(entity.getCwd())
+                .directoryId(entity.getDirectoryId())
+                .status(entity.getStatus())
+                .model(entity.getModel())
+                .costUsd(entity.getCostUsd())
+                .inputTokens(entity.getInputTokens())
+                .outputTokens(entity.getOutputTokens())
+                .durationMs(entity.getDurationMs())
+                .numTurns(entity.getNumTurns())
+                .resultText(entity.getResultText())
+                .errorMessage(entity.getErrorMessage())
+                .lastAckedSeq(entity.getLastAckedSeq())
+                .source(entity.getSource())
+                .createdAt(entity.getCreatedAt())
+                .updatedAt(entity.getUpdatedAt())
+                // Claude-specific
+                .claudeSessionId(entity.getClaudeSessionId())
+                .contextId(entity.getContextId())
+                .checkpoints(entity.getCheckpoints())
+                .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
+                .build();
+    }
+
     private TaskDTO toDTO(ClaudeTaskEntity entity) {
         return TaskDTO.builder()
                 .taskId(entity.getTaskId())
+                .workerTaskId(entity.getWorkerTaskId())
                 .sessionId(entity.getSessionId())
                 .workerId(entity.getWorkerId())
                 .prompt(entity.getPrompt())
@@ -1999,6 +2136,7 @@ public class ClaudeTaskService {
                 .resultText(entity.getResultText())
                 .contextId(entity.getContextId())
                 .checkpoints(entity.getCheckpoints())
+                .lastAckedSeq(entity.getLastAckedSeq())
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .source(entity.getSource())
                 .agentTeamsConfigId(entity.getAgentTeamsConfigId())

@@ -41,6 +41,11 @@ public class JpaSessionManager implements SessionManager {
         entity.setUserId(request.getUserId());
         entity.setTenantId(request.getTenantId());
         entity.setAgentId(request.getAgentId());
+        // 自动推导 providerType（agentId 本身就是 provider type 的约定命名）
+        if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
+            entity.setProviderType(request.getAgentId());
+            entity.setBindingSource("EXPLICIT_AGENT");
+        }
         entity.setParentSessionId(request.getParentSessionId());
         entity.setTitle(request.getTaskName());
         entity.setStatus(SessionStatus.ACTIVE.name());

@@ -33,6 +33,14 @@ public class SessionEntity {
     @Column(length = 64)
     private String agentId;
 
+    /** Agent Provider 类型，如 "claude-worker" / "codex-worker" */
+    @Column(length = 32)
+    private String providerType;
+
+    /** 绑定来源: EXPLICIT_AGENT / LEGACY_MODEL_CONFIG / RESTORED */
+    @Column(length = 32)
+    private String bindingSource;
+
     @Column(length = 64)
     private String parentSessionId;
 

@@ -18,4 +18,16 @@ public interface A2aAgentProvider {
 
     /** Provider type identifier (e.g. "claude-worker", "langchain4j", "openhands") */
     String getProviderType();
+
+    // ── 上下文感知方法（default 实现回退到 userId 维度，Provider 可 override 支持 tenant 等） ──
+
+    /** 按上下文列出 Agent 卡片 */
+    default List<A2aAgentCard> listAgentCards(AgentResolveContext context) {
+        return listAgentCards(context.getUserId());
+    }
+
+    /** 按上下文解析 Agent 实例 */
+    default Optional<A2aAgent> resolveAgent(String agentId, AgentResolveContext context) {
+        return resolveAgent(agentId, context.getUserId());
+    }
 }

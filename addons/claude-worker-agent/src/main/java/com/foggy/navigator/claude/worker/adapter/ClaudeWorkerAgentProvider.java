@@ -10,6 +10,7 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
+import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -68,6 +69,24 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
         return directoryRepository.findByDirectoryId(entity.getDefaultDirectoryId())
                 .map(WorkingDirectoryEntity::getPath)
                 .orElse(null);
+    }
+
+    // ── 上下文感知方法：自动路由 user / tenant 维度 ──
+
+    @Override
+    public List<A2aAgentCard> listAgentCards(AgentResolveContext context) {
+        if (context.getTenantId() != null && "OPEN_API".equals(context.getRequestSource())) {
+            return listAgentCardsByTenant(context.getTenantId());
+        }
+        return listAgentCards(context.getUserId());
+    }
+
+    @Override
+    public Optional<A2aAgent> resolveAgent(String agentId, AgentResolveContext context) {
+        if (context.getTenantId() != null && "OPEN_API".equals(context.getRequestSource())) {
+            return resolveAgentByTenant(agentId, context.getTenantId());
+        }
+        return resolveAgent(agentId, context.getUserId());
     }
 
     /**
