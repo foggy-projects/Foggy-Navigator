@@ -1,28 +1,27 @@
 package com.foggy.navigator.claude.worker.adapter;
 
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
+import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentContextStore;
-import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
- * A2aAgent 适配器 — 包装 CodingAgentEntity + ClaudeTaskService + ClaudeWorkerFacade
+ * A2aAgent 适配器 — 包装 CodingAgentEntity + ClaudeTaskService
  *
- * sendTask 采用异步模式：立即返回 SUBMITTED，后台线程执行 Worker 调用，
+ * sendTask 通过 taskService.createTask() 走完整的任务生命周期：
+ * 创建 session → 创建 task entity → 发布 WorkerTaskStartEvent → StreamRelay 启动 SSE。
  * 调用者通过 getTask 轮询状态获取结果。
  */
 class ClaudeWorkerA2aAgent implements A2aAgent {
@@ -35,20 +34,15 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
 
     private final CodingAgentEntity entity;
     private final ClaudeTaskService taskService;
-    private final ClaudeWorkerFacade workerFacade;
     private final String defaultCwd;
     private final AgentContextStore contextStore;
-    private final Executor asyncExecutor;
 
     ClaudeWorkerA2aAgent(CodingAgentEntity entity, ClaudeTaskService taskService,
-                         ClaudeWorkerFacade workerFacade, String defaultCwd,
-                         AgentContextStore contextStore, Executor asyncExecutor) {
+                         String defaultCwd, AgentContextStore contextStore) {
         this.entity = entity;
         this.taskService = taskService;
-        this.workerFacade = workerFacade;
         this.defaultCwd = defaultCwd;
         this.contextStore = contextStore;
-        this.asyncExecutor = asyncExecutor;
     }
 
     @Override
@@ -83,6 +77,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
                 .collect(Collectors.joining("\n"));
 
         String contextId = message.getContextId();
+        Map<String, Object> meta = message.getMetadata() != null ? message.getMetadata() : Map.of();
 
         // 多轮会话：通过 contextId 恢复已有 claudeSessionId
         String claudeSessionId = null;
@@ -94,22 +89,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
             }
         }
 
-        // maxTurns: 从 message.metadata 读取（共享调用可指定），默认 3
-        int maxTurns = 3;
-        if (message.getMetadata() != null && message.getMetadata().containsKey("maxTurns")) {
-            maxTurns = ((Number) message.getMetadata().get("maxTurns")).intValue();
-        }
-
-        // 提取 sessionId（用于关联 Navigator 会话）
-        String navigatorSessionId = null;
-        if (message.getMetadata() != null && message.getMetadata().containsKey("sessionId")) {
-            navigatorSessionId = (String) message.getMetadata().get("sessionId");
-        }
-        if (navigatorSessionId == null || navigatorSessionId.isBlank()) {
-            navigatorSessionId = IdGenerator.shortId();
-        }
-
-        // ★ 幂等去重：相同 userId + agentId + prompt 在时间窗口内只创建一次任务
+        // ★ 幂等去重
         String dedupKey = computeDedupKey(entity.getUserId(), entity.getAgentId(), prompt);
         Optional<TaskDTO> duplicate = taskService.findRecentByDedupKey(dedupKey, DEDUP_WINDOW_SECONDS);
         if (duplicate.isPresent()) {
@@ -118,99 +98,55 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
             return toA2aTask(dto);
         }
 
-        // 2. 创建 tracked 任务记录（RUNNING 状态），持久化 contextId 供轮询返回
-        final String finalContextId = (contextId != null) ? contextId : IdGenerator.shortId();
-        String taskId = taskService.createTrackedSyncTask(
-                entity.getUserId(), entity.getWorkerId(),
-                navigatorSessionId, prompt, defaultCwd,
-                entity.getDefaultDirectoryId(), claudeSessionId, finalContextId);
+        // 2. 通过 taskService.createTask() 走完整路径
+        //    → 创建 Session → 创建 Task Entity → 发布 WorkerTaskStartEvent
+        //    → WorkerStreamRelay 监听事件，启动 SSE 流消费
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(entity.getWorkerId());
+        form.setPrompt(prompt);
+        form.setCwd(defaultCwd);
+        form.setDirectoryId(entity.getDefaultDirectoryId());
+        form.setModel((String) meta.get("model"));
+        form.setModelConfigId((String) meta.get("modelConfigId"));
+        form.setPermissionMode((String) meta.get("permissionMode"));
+        form.setImages((String) meta.get("images"));
+        form.setAgentTeamsJson((String) meta.get("agentTeamsJson"));
+        form.setAgentTeamsConfigId((String) meta.get("agentTeamsConfigId"));
+        if (meta.get("maxTurns") instanceof Number n) {
+            form.setMaxTurns(n.intValue());
+        }
 
-        // 设置去重键 + A2A 来源标记（避免 WorkerStreamRelay 干扰异步任务）
-        taskService.setDedupKey(taskId, dedupKey);
-        taskService.setSource(taskId, "A2A");
+        TaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
 
-        // 3. 异步执行，注册完成回调
-        final String finalClaudeSessionId = claudeSessionId;
-        final String finalNavigatorSessionId = navigatorSessionId;
-        final int finalMaxTurns = maxTurns;
+        // 设置去重键
+        taskService.setDedupKey(task.getTaskId(), dedupKey);
 
-        workerFacade.asyncQuery(
-                entity.getUserId(), entity.getWorkerId(), prompt, defaultCwd,
-                finalClaudeSessionId, finalMaxTurns, null, entity.getDefaultDirectoryId()
-        ).whenComplete((result, ex) ->
-                handleAsyncCompletion(taskId, finalContextId, finalNavigatorSessionId,
-                        prompt, finalClaudeSessionId, result, ex));
+        // 保存 contextId → claudeSessionId 映射
+        final String finalContextId = contextId != null ? contextId : IdGenerator.shortId();
+        if (contextStore != null && task.getClaudeSessionId() != null) {
+            contextStore.saveSessionRef(finalContextId, "claude-worker",
+                    task.getClaudeSessionId(), entity.getUserId(), entity.getAgentId());
+        }
 
-        log.info("A2A async sendTask submitted: agentId={}, taskId={}, sessionId={}, directoryId={}",
-                entity.getAgentId(), taskId, navigatorSessionId, entity.getDefaultDirectoryId());
+        log.info("A2A sendTask via createTask: agentId={}, taskId={}, sessionId={}",
+                entity.getAgentId(), task.getTaskId(), task.getSessionId());
 
-        // 4. 立即返回 SUBMITTED
+        // 3. 立即返回 SUBMITTED（SSE 流已由 StreamRelay 在后台启动）
+        Map<String, Object> taskMeta = new LinkedHashMap<>();
+        taskMeta.put("sessionId", task.getSessionId());
+        taskMeta.put("workerId", task.getWorkerId());
+        taskMeta.put("claudeSessionId", task.getClaudeSessionId());
+
         return A2aTask.builder()
-                .id(taskId)
+                .id(task.getTaskId())
                 .contextId(finalContextId)
                 .status(A2aTaskStatus.builder()
                         .state(A2aTaskState.SUBMITTED)
                         .timestamp(Instant.now())
                         .build())
                 .history(List.of(message))
+                .metadata(taskMeta)
                 .build();
-    }
-
-    /**
-     * 后台异步回调 — 处理 Worker 执行结果
-     *
-     * 错误处理策略：
-     * - Worker SSE error 事件（errorSource=WORKER）→ 标记 FAILED
-     * - 传输层异常（超时、断连，errorSource=TRANSPORT）→ 保持 RUNNING
-     * - CompletableFuture 层异常（线程池拒绝等）→ 保持 RUNNING
-     */
-    private void handleAsyncCompletion(String taskId, String contextId,
-                                        String sessionId, String prompt,
-                                        String prevClaudeSessionId,
-                                        Map<String, Object> result, Throwable ex) {
-        if (ex != null) {
-            // CompletableFuture 层异常（极少见，如线程池拒绝）— 不标记失败
-            log.warn("A2A async task {} future error (stays RUNNING): {}", taskId, ex.getMessage());
-            return;
-        }
-
-        String error = (String) result.get("error");
-        String errorSource = (String) result.get("errorSource");
-        String resultText = (String) result.get("resultText");
-        String workerTaskId = (String) result.get("workerTaskId");
-        String newClaudeSessionId = (String) result.get("claudeSessionId");
-
-        // 保存 contextId → claudeSessionId 映射（多轮会话）
-        if (contextId != null && contextStore != null && newClaudeSessionId != null) {
-            contextStore.saveSessionRef(contextId, "claude-worker",
-                    newClaudeSessionId, entity.getUserId(), entity.getAgentId());
-        }
-
-        if (error != null && "WORKER".equals(errorSource)) {
-            // ★ Worker 明确报错 → 标记 FAILED
-            taskService.failTask(taskId, workerTaskId, newClaudeSessionId, truncate(error, 500));
-            log.warn("A2A task {} FAILED (Worker error): {}", taskId, error);
-        } else if (error != null) {
-            // 传输层异常（TRANSPORT）→ 保持 RUNNING，不标记失败
-            log.warn("A2A task {} transport error (stays RUNNING): {}", taskId, error);
-        } else {
-            // ★ 成功 → 标记 COMPLETED，保存结果
-            taskService.completeTask(taskId, workerTaskId, newClaudeSessionId,
-                    resultText, toBigDecimal(result.get("costUsd")),
-                    toLong(result.get("inputTokens")),
-                    toLong(result.get("outputTokens")),
-                    toLong(result.get("durationMs")),
-                    toInteger(result.get("numTurns")),
-                    (String) result.get("model"));
-            log.info("A2A task {} COMPLETED, resultLength={}",
-                    taskId, resultText != null ? resultText.length() : 0);
-        }
-
-        // 持久化消息到会话历史（使历史会话面板能显示对话内容）
-        if (sessionId != null) {
-            taskService.persistTrackedSyncMessages(sessionId, prompt,
-                    resultText != null ? resultText : (error != null ? "[错误] " + error : ""));
-        }
     }
 
     @Override
@@ -294,29 +230,4 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         return builder.build();
     }
 
-    private String truncate(String text, int maxLen) {
-        if (text == null) return null;
-        return text.length() > maxLen ? text.substring(0, maxLen) + "..." : text;
-    }
-
-    private BigDecimal toBigDecimal(Object value) {
-        if (value == null) return null;
-        if (value instanceof BigDecimal bd) return bd;
-        if (value instanceof Number num) return BigDecimal.valueOf(num.doubleValue());
-        return null;
-    }
-
-    private Long toLong(Object value) {
-        if (value == null) return null;
-        if (value instanceof Long l) return l;
-        if (value instanceof Number num) return num.longValue();
-        return null;
-    }
-
-    private Integer toInteger(Object value) {
-        if (value == null) return null;
-        if (value instanceof Integer i) return i;
-        if (value instanceof Number num) return num.intValue();
-        return null;
-    }
 }

@@ -112,9 +112,13 @@ public class WorkerStreamRelay {
             String permissionMode = event.getProviderConfigString("permissionMode");
             String navigatorApiKey = event.getProviderConfigString("navigatorApiKey");
             String navigatorApiBase = event.getProviderConfigString("navigatorApiBase");
-            @SuppressWarnings("unchecked")
-            Map<String, String> extraEnvVars = event.getProviderConfigValue("extraEnvVars");
-            if (extraEnvVars != null && extraEnvVars.isEmpty()) extraEnvVars = null;
+            Map<String, String> extraEnvVars = null;
+            Object rawEnvVars = event.getProviderConfig().get("extraEnvVars");
+            if (rawEnvVars instanceof Map<?,?> m && !m.isEmpty()) {
+                @SuppressWarnings("unchecked")
+                Map<String, String> typed = (Map<String, String>) rawEnvVars;
+                extraEnvVars = typed;
+            }
 
             // 将空字符串转为 null（providerConfig 的 Map.of 不允许 null value）
             claudeSessionId = blankToNull(claudeSessionId);

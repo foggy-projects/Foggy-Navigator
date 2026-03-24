@@ -281,6 +281,24 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     @Override
+    public DispatchTaskDTO createTaskDirect(java.util.Map<String, Object> params,
+                                             String userId, String tenantId) {
+        CreateCodexTaskForm form = new CreateCodexTaskForm();
+        form.setWorkerId((String) params.get("workerId"));
+        form.setPrompt((String) params.get("prompt"));
+        form.setCwd((String) params.get("cwd"));
+        form.setDirectoryId((String) params.get("directoryId"));
+        form.setModel((String) params.get("model"));
+        form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setCodexThreadId((String) params.get("codexThreadId"));
+        if (params.get("maxTurns") instanceof Number n) {
+            form.setMaxTurns(n.intValue());
+        }
+        CodexTaskDTO dto = createTask(userId, tenantId, form);
+        return getTaskById(dto.getTaskId()).orElseThrow();
+    }
+
+    @Override
     public Optional<DispatchTaskDTO> getTaskById(String taskId) {
         return taskRepository.findByTaskId(taskId).map(this::toDispatchDTO);
     }

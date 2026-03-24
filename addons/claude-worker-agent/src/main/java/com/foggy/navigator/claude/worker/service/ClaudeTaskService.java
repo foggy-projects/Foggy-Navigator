@@ -2103,6 +2103,29 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     @Override
+    public DispatchTaskDTO createTaskDirect(java.util.Map<String, Object> params,
+                                             String userId, String tenantId) {
+        // 构造旧 CreateTaskForm，复用完整的 createTask 路径（含 session 创建 + 事件发布）
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId((String) params.get("workerId"));
+        form.setPrompt((String) params.get("prompt"));
+        form.setCwd((String) params.get("cwd"));
+        form.setDirectoryId((String) params.get("directoryId"));
+        form.setModel((String) params.get("model"));
+        form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setPermissionMode((String) params.get("permissionMode"));
+        form.setImages((String) params.get("images"));
+        form.setAgentTeamsJson((String) params.get("agentTeamsJson"));
+        form.setAgentTeamsConfigId((String) params.get("agentTeamsConfigId"));
+        if (params.get("maxTurns") instanceof Number n) {
+            form.setMaxTurns(n.intValue());
+        }
+        TaskDTO taskDTO = createTask(userId, tenantId, form);
+        // 转为统一 DispatchTaskDTO
+        return getTaskById(taskDTO.getTaskId()).orElseThrow();
+    }
+
+    @Override
     public void respondToTask(String taskId, String userId, java.util.Map<String, Object> response) {
         ClaudeTaskEntity task = taskRepository.findByTaskId(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));

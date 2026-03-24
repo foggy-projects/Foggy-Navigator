@@ -11,10 +11,7 @@ import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
-import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
@@ -31,14 +28,9 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
 
     private final CodingAgentRepository agentRepository;
     private final ClaudeTaskService taskService;
-    private final ClaudeWorkerFacade workerFacade;
     private final WorkingDirectoryRepository directoryRepository;
     @Nullable
     private final AgentContextStore contextStore;
-
-    @Autowired
-    @Qualifier("a2aAsyncExecutor")
-    private Executor a2aAsyncExecutor;
 
     @Override
     public String getProviderType() {
@@ -64,7 +56,7 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
                 .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
                 .map(entity -> {
                     String cwd = resolveDefaultCwd(entity);
-                    return new ClaudeWorkerA2aAgent(entity, taskService, workerFacade, cwd, contextStore, a2aAsyncExecutor);
+                    return new ClaudeWorkerA2aAgent(entity, taskService, cwd, contextStore);
                 });
     }
 
@@ -121,8 +113,7 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
                 .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
                 .map(entity -> {
                     String cwd = resolveDefaultCwd(entity);
-                    return new ClaudeWorkerA2aAgent(entity, taskService, workerFacade,
-                            cwd, contextStore, a2aAsyncExecutor);
+                    return new ClaudeWorkerA2aAgent(entity, taskService, cwd, contextStore);
                 });
     }
 

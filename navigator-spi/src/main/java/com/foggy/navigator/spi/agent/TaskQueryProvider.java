@@ -28,6 +28,27 @@ public interface TaskQueryProvider {
     /** 按 userId 查询活跃任务（RUNNING / AWAITING_PERMISSION） */
     List<DispatchTaskDTO> listActiveDispatchTasks(String userId);
 
+    // ── 任务创建（前端直达 TaskService，绕过 A2A sendTask） ──
+
+    /**
+     * 直接创建任务（前端路径：发布 TaskStartEvent → StreamRelay SSE 消费）。
+     * <p>
+     * 与 A2aAgent.sendTask() 的区别：
+     * <ul>
+     *   <li>sendTask: 后端异步查询，不发布 TaskStartEvent，不启动 SSE relay</li>
+     *   <li>createTaskDirect: 完整的前端任务创建路径，包含 session 创建 + 事件发布</li>
+     * </ul>
+     *
+     * @param params 任务参数（workerId, prompt, cwd, directoryId, model, maxTurns, etc.）
+     * @param userId 用户 ID
+     * @param tenantId 租户 ID（可空）
+     * @return 统一任务 DTO
+     */
+    default DispatchTaskDTO createTaskDirect(java.util.Map<String, Object> params,
+                                              String userId, String tenantId) {
+        throw new UnsupportedOperationException("createTaskDirect not supported by " + getProviderType());
+    }
+
     // ── 任务操作（default 抛不支持异常，Provider 按需覆写） ──
 
     /** 回复权限请求 / 用户问题 */
