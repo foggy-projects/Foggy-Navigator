@@ -2065,6 +2065,7 @@ import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
 import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
+import { reconnectTaskUnified, resyncTaskUnified } from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
@@ -2174,8 +2175,8 @@ async function handleResyncTask(taskId: string) {
     return // cancelled
   }
   try {
-    const result = await dirApi.resyncTask(taskId)
-    if (result.status === 'RESYNCED') {
+    const result = await resyncTaskUnified(taskId) as Record<string, unknown>
+    if (result?.status === 'RESYNCED') {
       ElMessage.success('任务已重新同步')
       // 不需要刷新进程列表，因为任务状态改变不影响 CLI 进程
     }
@@ -4671,7 +4672,7 @@ async function handlePaneReconnect(paneId: string, taskId: string) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane) return
   try {
-    await dirApi.reconnectTask(taskId)
+    await reconnectTaskUnified(taskId)
     if (pane.task.value) {
       pane.task.value.status = 'RUNNING'
     }
@@ -4704,9 +4705,9 @@ async function handlePaneReconnect(paneId: string, taskId: string) {
 async function doResync(taskId: string, pane?: TaskPaneState) {
   resyncingTaskId.value = taskId
   try {
-    const result = await dirApi.resyncTask(taskId)
+    const result = await resyncTaskUnified(taskId) as Record<string, unknown>
 
-    switch (result.action) {
+    switch (result?.action) {
       case 'RECONNECTED': {
         // 策略 A：CLI 活着，已重连 SSE
         if (pane) {
