@@ -8,10 +8,7 @@ import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
-import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.lang.Nullable;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -40,10 +37,6 @@ public class TaskDispatchFacade {
     private final SessionRepository sessionRepository;
     private final List<TaskQueryProvider> taskQueryProviders;
 
-    @Autowired(required = false)
-    @Nullable
-    private LlmModelManager llmModelManager;
-
     /**
      * 创建任务。
      * <p>
@@ -53,14 +46,14 @@ public class TaskDispatchFacade {
      * 4. 返回统一 DTO
      */
     public DispatchTaskDTO createTask(TaskDispatchRequest request, AgentResolveContext context) {
-        // 兼容推导：前端可能只传 modelConfigId 而不传 agentId
+        // 兼容推导：前端可能只传 workerId + modelConfigId 而不传 agentId
+        // Provider 支持按 workerId fallback 解析，所以直接用 workerId 作为 agentId
         String rawAgentId = request.getAgentId();
-        if ((rawAgentId == null || rawAgentId.isBlank()) && request.getModelConfigId() != null) {
-            rawAgentId = resolveAgentIdFromModelConfig(request.getModelConfigId());
-            request.setAgentId(rawAgentId);
+        if (rawAgentId == null || rawAgentId.isBlank()) {
+            rawAgentId = request.getWorkerId();
         }
         if (rawAgentId == null || rawAgentId.isBlank()) {
-            throw new IllegalArgumentException("agentId is required (provide agentId or modelConfigId)");
+            throw new IllegalArgumentException("agentId or workerId is required");
         }
         final String agentId = rawAgentId;
 
@@ -308,17 +301,4 @@ public class TaskDispatchFacade {
         return v != null ? v.toString() : null;
     }
 
-    /**
-     * 从 modelConfigId 推导 agentId（兼容旧前端）。
-     * <p>
-     * 规则：workerBackend == "OPENAI_CODEX" → "codex-worker"，其余 → "claude-worker"
-     */
-    private String resolveAgentIdFromModelConfig(String modelConfigId) {
-        if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
-            return "claude-worker"; // 默认走 Claude
-        }
-        return llmModelManager.getModelConfig(modelConfigId)
-                .map(config -> "OPENAI_CODEX".equals(config.getWorkerBackend()) ? "codex-worker" : "claude-worker")
-                .orElse("claude-worker");
-    }
 }
