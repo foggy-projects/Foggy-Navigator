@@ -39,6 +39,7 @@
         <module>addons/coding-agent</module>
         <module>addons/claude-worker-agent</module>
         <module>addons/codex-worker-agent</module>
+        <module>addons/echo-agent</module>
         <module>addons/task-assistant</module>
         <module>monitoring-module</module>
         <!-- Open API SDK（独立模块，供第三方系统引入） -->
