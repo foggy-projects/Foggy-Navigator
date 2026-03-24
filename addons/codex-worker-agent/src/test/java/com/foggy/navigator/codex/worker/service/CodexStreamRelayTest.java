@@ -6,7 +6,7 @@ import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.common.model.CodexConfig;
-import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,7 +23,7 @@ class CodexStreamRelayTest {
 
     private CodexTaskRepository taskRepository;
     private CodexWorkerClientFactory clientFactory;
-    private ClaudeWorkerFacade claudeWorkerFacade;
+    private WorkerManagementFacade workerManagementFacade;
     private CodexWorkerClient client;
     private CodexStreamRelay relay;
 
@@ -31,11 +31,11 @@ class CodexStreamRelayTest {
     void setUp() {
         taskRepository = mock(CodexTaskRepository.class);
         clientFactory = mock(CodexWorkerClientFactory.class);
-        claudeWorkerFacade = mock(ClaudeWorkerFacade.class);
+        workerManagementFacade = mock(WorkerManagementFacade.class);
         client = mock(CodexWorkerClient.class);
 
         relay = new CodexStreamRelay(
-                claudeWorkerFacade,
+                workerManagementFacade,
                 clientFactory,
                 mock(CodexTaskService.class),
                 taskRepository,
@@ -60,7 +60,7 @@ class CodexStreamRelayTest {
         entity.setLastAckedSeq(7);
 
         when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
-        when(claudeWorkerFacade.getCodexConfig("worker-1"))
+        when(workerManagementFacade.getCodexConfig("worker-1"))
                 .thenReturn(CodexConfig.builder()
                         .baseUrl("http://localhost:3051")
                         .authToken("worker-token")

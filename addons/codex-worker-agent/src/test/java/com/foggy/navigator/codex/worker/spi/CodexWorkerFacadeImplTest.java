@@ -6,7 +6,7 @@ import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.codex.worker.service.CodexStreamRelay;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.model.CodexConfig;
-import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -29,7 +29,7 @@ import static org.mockito.Mockito.when;
 class CodexWorkerFacadeImplTest {
 
     @Mock
-    private ClaudeWorkerFacade claudeWorkerFacade;
+    private WorkerManagementFacade workerManagementFacade;
 
     @Mock
     private CodexWorkerClientFactory clientFactory;
@@ -48,7 +48,7 @@ class CodexWorkerFacadeImplTest {
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
         facade = new CodexWorkerFacadeImpl(
-                claudeWorkerFacade,
+                workerManagementFacade,
                 clientFactory,
                 taskService,
                 streamRelay,
@@ -125,7 +125,7 @@ class CodexWorkerFacadeImplTest {
     }
 
     private void mockWorker(String workerId, String defaultModel) {
-        when(claudeWorkerFacade.getCodexConfig(workerId))
+        when(workerManagementFacade.getCodexConfig(workerId))
                 .thenReturn(CodexConfig.builder()
                         .baseUrl("http://localhost:3051")
                         .authToken("worker-token")

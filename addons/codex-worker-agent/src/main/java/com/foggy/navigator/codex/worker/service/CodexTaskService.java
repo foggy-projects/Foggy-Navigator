@@ -12,7 +12,7 @@ import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
-import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,7 +36,7 @@ import java.util.Optional;
 public class CodexTaskService implements TaskQueryProvider {
 
     private final CodexTaskRepository taskRepository;
-    private final ClaudeWorkerFacade claudeWorkerFacade;
+    private final WorkerManagementFacade workerManagementFacade;
     private final ApplicationEventPublisher eventPublisher;
 
     @Autowired(required = false)
@@ -59,8 +59,8 @@ public class CodexTaskService implements TaskQueryProvider {
             throw new IllegalArgumentException("prompt is required");
         }
 
-        // 验证 Worker 存在且属于该用户（通过 ClaudeWorkerFacade SPI）
-        claudeWorkerFacade.validateWorkerOwnership(userId, form.getWorkerId());
+        // 验证 Worker 存在且属于该用户（通过 WorkerManagementFacade SPI）
+        workerManagementFacade.validateWorkerOwnership(userId, form.getWorkerId());
 
         String taskId = IdGenerator.shortId();
 

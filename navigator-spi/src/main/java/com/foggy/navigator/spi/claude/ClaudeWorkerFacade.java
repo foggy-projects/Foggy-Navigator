@@ -1,26 +1,17 @@
 package com.foggy.navigator.spi.claude;
 
-import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Claude Worker 门面接口
- * 供其他模块通过 SPI 调用 Claude Worker 功能
+ * Claude Worker 门面接口 —— 继承 WorkerManagementFacade，仅保留 Claude 特有方法。
+ * <p>
+ * Worker/Directory 管理方法在 {@link WorkerManagementFacade} 中定义。
  */
-public interface ClaudeWorkerFacade {
-
-    /**
-     * 列出用户的所有 Worker
-     */
-    List<Map<String, Object>> listWorkers(String userId);
-
-    /**
-     * 获取 Worker 详情
-     */
-    Map<String, Object> getWorker(String userId, String workerId);
+public interface ClaudeWorkerFacade extends WorkerManagementFacade {
 
     /**
      * 创建任务
@@ -54,22 +45,13 @@ public interface ClaudeWorkerFacade {
 
     /**
      * 同步查询 — 发送 prompt 到 Worker，阻塞等待完成返回结果
-     * 用于轻量级 AI 查询（通知生成等），不创建任务记录，不发布事件
-     *
-     * @param maxTurns 最大轮次（1=纯文本分析，>1 允许工具调用）
-     * @return Map: {resultText, claudeSessionId, costUsd, durationMs, error}
      */
     Map<String, Object> syncQuery(String userId, String workerId, String prompt,
                                    String cwd, String claudeSessionId, int maxTurns,
                                    String model);
 
     /**
-     * 同步查询（带 claude_tasks 记录） — 在 syncQuery 基础上创建/完成任务记录，
-     * 使 Workers 页"历史会话"面板能按目录查到这些轻量查询。
-     *
-     * @param sessionId   Foggy 会话 ID（所有助手任务共用同一会话）
-     * @param directoryId 工作目录 ID（让 Workers 页按目录筛选到）
-     * @return Map: {resultText, claudeSessionId, costUsd, durationMs, error, taskId}
+     * 同步查询（带 claude_tasks 记录）
      */
     default Map<String, Object> syncQueryTracked(
             String userId, String workerId, String prompt,
@@ -79,70 +61,13 @@ public interface ClaudeWorkerFacade {
     }
 
     /**
-     * 异步查询 — 同步解析目录认证后，在后台线程执行 Worker 调用。
-     * 使用 30 分钟超时，适用于长时间运行的 A2A 任务。
-     *
-     * @param directoryId 工作目录 ID（用于解析 auth + envVars）
-     * @return CompletableFuture，结果 Map 含 errorSource 字段区分错误来源：
-     *         "WORKER" = Agent 明确报错，"TRANSPORT" = 超时/断连等传输层异常
+     * 异步查询 — 30 分钟超时，适用于 A2A 长任务
      */
     default CompletableFuture<Map<String, Object>> asyncQuery(
             String userId, String workerId, String prompt, String cwd,
             String claudeSessionId, int maxTurns, String model,
             String directoryId) {
-        // 默认实现：退化为同步（兼容旧代码）
         return CompletableFuture.completedFuture(
                 syncQuery(userId, workerId, prompt, cwd, claudeSessionId, maxTurns, model));
-    }
-
-    /**
-     * 在 Worker 上初始化目录并注册为工作目录
-     * @param files 文件相对路径 → 内容 的映射
-     * @return 注册的 directoryId
-     */
-    String initDirectory(String userId, String workerId, String path, Map<String, String> files);
-
-    /**
-     * 在 Worker 上初始化目录并注册为工作目录（带自定义项目名称）
-     * @param files 文件相对路径 → 内容 的映射
-     * @param projectName 项目显示名称（可选，为 null 时使用默认名称）
-     * @return 注册的 directoryId
-     */
-    default String initDirectory(String userId, String workerId, String path,
-                                  Map<String, String> files, String projectName) {
-        return initDirectory(userId, workerId, path, files);
-    }
-
-    /**
-     * 绑定平台 LLM 配置到工作目录（设置 defaultModelConfigId，清空手动 auth）
-     */
-    default void bindDirectoryModelConfig(String userId, String directoryId, String modelConfigId) {
-        // no-op by default
-    }
-
-    /**
-     * 获取工作目录的实际路径（Worker 上展开后的绝对路径）
-     */
-    default String getDirectoryPath(String userId, String directoryId) {
-        return null;
-    }
-
-    /**
-     * 获取 Worker 的 Codex 配置（authToken 已解密）
-     *
-     * @param workerId Worker ID
-     * @return 解密后的 CodexConfig，若未配置则返回 null
-     */
-    default CodexConfig getCodexConfig(String workerId) {
-        return null;
-    }
-
-    /**
-     * 验证 Worker 属于指定用户
-     *
-     * @throws IllegalArgumentException 若 Worker 不存在或不属于该用户
-     */
-    default void validateWorkerOwnership(String userId, String workerId) {
-        getWorker(userId, workerId); // 默认走 getWorker 校验
     }
 }

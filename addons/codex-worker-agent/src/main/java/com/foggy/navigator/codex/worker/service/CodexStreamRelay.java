@@ -13,7 +13,7 @@ import com.foggy.navigator.codex.worker.model.event.CodexTaskStartEvent;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.common.model.CodexConfig;
-import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -52,7 +52,7 @@ public class CodexStreamRelay {
     private static final int MAX_RECONNECT_ATTEMPTS = 3;
     private static final long RECONNECT_BASE_DELAY_MS = 2000;
 
-    private final ClaudeWorkerFacade claudeWorkerFacade;
+    private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
     private final CodexTaskService taskService;
     private final CodexTaskRepository taskRepository;
@@ -384,10 +384,10 @@ public class CodexStreamRelay {
     }
 
     /**
-     * 通过 ClaudeWorkerFacade 获取 CodexConfig 并创建 Client
+     * 通过 WorkerManagementFacade 获取 CodexConfig 并创建 Client
      */
     private CodexWorkerClient getCodexClient(String workerId) {
-        CodexConfig config = claudeWorkerFacade.getCodexConfig(workerId);
+        CodexConfig config = workerManagementFacade.getCodexConfig(workerId);
         if (config == null || config.getBaseUrl() == null || config.getBaseUrl().isBlank()) {
             throw new IllegalStateException("Codex not configured for worker: " + workerId);
         }

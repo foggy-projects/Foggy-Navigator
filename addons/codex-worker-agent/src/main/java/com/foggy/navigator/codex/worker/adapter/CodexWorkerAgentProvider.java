@@ -8,7 +8,7 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
-import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import com.foggy.navigator.spi.codex.CodexWorkerFacade;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,7 +32,7 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
     private final AgentContextStore contextStore;
     /** 用于获取目录路径（目录由 Claude Worker 管理） */
     @Nullable
-    private final ClaudeWorkerFacade claudeWorkerFacade;
+    private final WorkerManagementFacade workerManagementFacade;
 
     @Override
     public String getProviderType() {
@@ -59,12 +59,12 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
     }
 
     /**
-     * 通过 ClaudeWorkerFacade 获取目录路径（Codex 复用 Claude 管理的目录）
+     * 通过 WorkerManagementFacade 获取目录路径（Codex 复用 Claude 管理的目录）
      */
     private String resolveDefaultCwd(CodingAgentEntity entity, String userId) {
         if (entity.getDefaultDirectoryId() == null) return null;
-        if (claudeWorkerFacade == null) return null;
-        return claudeWorkerFacade.getDirectoryPath(userId, entity.getDefaultDirectoryId());
+        if (workerManagementFacade == null) return null;
+        return workerManagementFacade.getDirectoryPath(userId, entity.getDefaultDirectoryId());
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {

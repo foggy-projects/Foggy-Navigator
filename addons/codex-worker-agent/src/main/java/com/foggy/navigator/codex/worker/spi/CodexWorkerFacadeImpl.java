@@ -8,8 +8,8 @@ import com.foggy.navigator.agent.framework.protocol.WorkerEvent;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.codex.worker.service.CodexStreamRelay;
 import com.foggy.navigator.common.model.CodexConfig;
-import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.spi.codex.CodexWorkerFacade;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -21,14 +21,14 @@ import java.util.*;
  * CodexWorkerFacade SPI 实现
  * <p>
  * Codex 配置（baseUrl/authToken/model）从 ClaudeWorkerEntity.codexConfig 获取，
- * 通过 ClaudeWorkerFacade.getCodexConfig(workerId) 解密后使用。
+ * 通过 WorkerManagementFacade.getCodexConfig(workerId) 解密后使用。
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
 
-    private final ClaudeWorkerFacade claudeWorkerFacade;
+    private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
     private final CodexTaskService taskService;
     private final CodexStreamRelay streamRelay;
@@ -71,7 +71,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
     public Map<String, Object> syncQuery(String userId, String workerId, String prompt,
                                           String cwd, String codexThreadId, int maxTurns,
                                           String model) {
-        claudeWorkerFacade.validateWorkerOwnership(userId, workerId);
+        workerManagementFacade.validateWorkerOwnership(userId, workerId);
         CodexConfig codexConfig = getRequiredCodexConfig(workerId);
         return doSyncQuery(workerId, codexConfig, prompt, cwd, codexThreadId, model, maxTurns, null);
     }
@@ -80,7 +80,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
     public Map<String, Object> syncQueryTracked(String userId, String workerId, String prompt,
                                                  String cwd, String codexThreadId, int maxTurns,
                                                  String model, String sessionId) {
-        claudeWorkerFacade.validateWorkerOwnership(userId, workerId);
+        workerManagementFacade.validateWorkerOwnership(userId, workerId);
         CodexConfig codexConfig = getRequiredCodexConfig(workerId);
 
         // 创建 codex_tasks 记录
@@ -175,7 +175,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
      * 获取 Codex 配置（必须存在）
      */
     CodexConfig getRequiredCodexConfig(String workerId) {
-        CodexConfig config = claudeWorkerFacade.getCodexConfig(workerId);
+        CodexConfig config = workerManagementFacade.getCodexConfig(workerId);
         if (config == null || config.getBaseUrl() == null || config.getBaseUrl().isBlank()) {
             throw new IllegalArgumentException("Codex not configured for worker: " + workerId);
         }
