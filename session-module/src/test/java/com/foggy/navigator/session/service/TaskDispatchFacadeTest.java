@@ -439,6 +439,59 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_codexDirectRouteNotSkippedBySessionId() {
+        // Codex 任务即使带 sessionId 也应走 direct route（非 claude-worker 不需要 A2a 解析）
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-1")
+                .directoryId("dir-1")
+                .sessionId("session-1") // 关键：带 sessionId
+                .prompt("codex task")
+                .model("gpt-5.4")
+                .modelConfigId("cfg-codex")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1").tenantId("tenant-1").requestSource("UI").build();
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("OPENAI_CODEX");
+
+        DispatchTaskDTO directTask = DispatchTaskDTO.builder()
+                .taskId("task-codex-direct").providerType("codex-worker").build();
+
+        when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(modelConfig));
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        when(taskQueryProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1"))).thenReturn(directTask);
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("task-codex-direct", result.getTaskId());
+        // 不应走 agentResolver（那是 A2a 路径）
+        verifyNoInteractions(agentResolver, bindingService, agent);
+    }
+
+    @Test
+    void cancelTask_fallsBackToProviderWhenAgentNotResolvable() {
+        // agentResolver 找不到 "codex-worker"（不是有效的 agent 实体 ID）
+        when(agentResolver.resolveAgent(eq("codex-worker"), any())).thenReturn(Optional.empty());
+        // findProviderForTask 通过 SessionTaskRepository 找到 provider
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        SessionTaskEntity task = sessionTask(
+                "task-codex-1", "session-1", "codex-worker", "worker-1", "dir-1",
+                "RUNNING", LocalDateTime.of(2026, 3, 25, 10, 0), "{}");
+        when(sessionTaskRepository.findByTaskId("task-codex-1")).thenReturn(Optional.of(task));
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1").requestSource("UI").build();
+
+        facade.cancelTask("task-codex-1", "codex-worker", context);
+
+        // 应走 provider fallback，而不是 A2a Agent
+        verify(agent, never()).cancelTask(anyString());
+        verify(taskQueryProvider).cancelTask("task-codex-1", "user-1");
+    }
+
+    @Test
     void listWorkerSessions_delegatesToProvider() {
         List<Map<String, Object>> sessions = List.of(
                 Map.of("sessionId", "s1", "status", "active"),

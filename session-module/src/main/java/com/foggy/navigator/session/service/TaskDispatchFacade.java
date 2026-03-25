@@ -186,16 +186,25 @@ public class TaskDispatchFacade {
      * 取消任务
      */
     public void cancelTask(String taskId, String agentId, AgentResolveContext context) {
-        A2aAgent agent = agentResolver.resolveAgent(agentId, context)
-                .orElseThrow(() -> new IllegalArgumentException("Agent not available: " + agentId));
-
-        // 验证绑定（如有 sessionId）
-        if (context.getSessionId() != null) {
-            bindingService.validateBinding(context.getSessionId(), agentId);
+        // 优先尝试 A2a Agent 路径
+        Optional<A2aAgent> agentOpt = agentResolver.resolveAgent(agentId, context);
+        if (agentOpt.isPresent()) {
+            if (context.getSessionId() != null) {
+                bindingService.validateBinding(context.getSessionId(), agentId);
+            }
+            agentOpt.get().cancelTask(taskId);
+            log.info("Cancelled task via A2a Agent: taskId={}, agentId={}", taskId, agentId);
+            return;
         }
 
-        agent.cancelTask(taskId);
-        log.info("Cancelled task via Facade: taskId={}, agentId={}", taskId, agentId);
+        // Fallback: 通过 TaskQueryProvider 路由取消（Codex 等无 A2a 实例的 provider）
+        try {
+            TaskQueryProvider provider = findProviderForTask(taskId);
+            provider.cancelTask(taskId, context.getUserId());
+            log.info("Cancelled task via Provider: taskId={}, providerType={}", taskId, provider.getProviderType());
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Cannot cancel task " + taskId + ": " + e.getMessage(), e);
+        }
     }
 
     // ── 任务操作（路由到 TaskQueryProvider） ──
@@ -1133,9 +1142,6 @@ public class TaskDispatchFacade {
         if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
             return null;
         }
-        if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
-            return null;
-        }
         if (request.getWorkerId() == null || request.getWorkerId().isBlank()) {
             return null;
         }
@@ -1147,6 +1153,12 @@ public class TaskDispatchFacade {
                 .map(cfg -> mapWorkerBackendToProviderType(cfg.getWorkerBackend()))
                 .orElse(null);
         if (providerType == null || providerType.isBlank()) {
+            return null;
+        }
+
+        // claude-worker 有完整 A2a 解析链，带 sessionId 时优先走绑定路径
+        if ("claude-worker".equals(providerType)
+                && request.getSessionId() != null && !request.getSessionId().isBlank()) {
             return null;
         }
 

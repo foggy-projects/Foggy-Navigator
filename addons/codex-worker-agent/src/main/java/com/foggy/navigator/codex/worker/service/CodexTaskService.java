@@ -275,6 +275,15 @@ public class CodexTaskService implements TaskQueryProvider {
                 .toList();
     }
 
+    @Override
+    public void cancelTask(String taskId, String userId) {
+        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())) {
+            abortTask(taskId);
+        }
+    }
+
     /**
      * 中止任务
      */

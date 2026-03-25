@@ -78,6 +78,11 @@ public interface TaskQueryProvider {
         throw new UnsupportedOperationException("resume not supported by " + getProviderType());
     }
 
+    /** 取消运行中的任务 */
+    default void cancelTask(String taskId, String userId) {
+        throw new UnsupportedOperationException("cancel not supported by " + getProviderType());
+    }
+
     /** 删除任务 */
     default void deleteTask(String userId, String taskId) {
         throw new UnsupportedOperationException("delete not supported by " + getProviderType());
