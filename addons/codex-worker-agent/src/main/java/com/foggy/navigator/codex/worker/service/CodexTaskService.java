@@ -475,6 +475,39 @@ public class CodexTaskService implements TaskQueryProvider {
                 .build();
     }
 
+    @Override
+    public void deleteTask(String userId, String taskId) {
+        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+
+        if ("RUNNING".equals(entity.getStatus())) {
+            throw new IllegalStateException("Cannot delete a running task. Please abort it first.");
+        }
+
+        // Soft-delete session
+        String sessionId = entity.getSessionId();
+        if (sessionId != null && sessionEntityRepository != null) {
+            try {
+                sessionEntityRepository.findById(sessionId).ifPresent(session -> {
+                    session.setDeletedAt(java.time.LocalDateTime.now());
+                    sessionEntityRepository.save(session);
+                });
+            } catch (Exception e) {
+                log.warn("Failed to soft-delete session: sessionId={}", sessionId, e);
+            }
+        }
+
+        taskRepository.delete(entity);
+        if (sessionId != null && sessionManager != null) {
+            try {
+                sessionManager.deleteSession(sessionId);
+            } catch (Exception e) {
+                log.warn("Failed to delete session from SessionManager: sessionId={}", sessionId, e);
+            }
+        }
+        log.info("Codex task deleted: taskId={}, userId={}", taskId, userId);
+    }
+
     private Map<String, Object> buildSessionPage(List<CodexTaskEntity> tasks, int page, int size, String interactionState) {
         Set<String> states = parseInteractionStates(interactionState);
         List<List<CodexTaskEntity>> sessions = new ArrayList<>(groupTasksBySession(tasks).values());

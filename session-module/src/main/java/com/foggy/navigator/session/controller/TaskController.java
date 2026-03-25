@@ -194,8 +194,14 @@ public class TaskController {
     @DeleteMapping("/{taskId}")
     public RX<Map<String, Object>> deleteTask(@PathVariable String taskId) {
         String userId = UserContext.getCurrentUserId();
-        taskDispatchFacade.deleteTask(taskId, userId);
-        return RX.ok(Map.of("taskId", taskId, "deleted", true));
+        try {
+            taskDispatchFacade.deleteTask(taskId, userId);
+            return RX.ok(Map.of("taskId", taskId, "deleted", true));
+        } catch (UnsupportedOperationException e) {
+            return RX.failA(e.getMessage());
+        } catch (IllegalStateException e) {
+            return RX.failB(e.getMessage());
+        }
     }
 
     /**
