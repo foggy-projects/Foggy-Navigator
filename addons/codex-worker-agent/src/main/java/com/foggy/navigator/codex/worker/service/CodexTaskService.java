@@ -145,9 +145,9 @@ public class CodexTaskService implements TaskQueryProvider {
             cwd = cwd.replace('\\', '/');
         }
 
-        // 解析有效 agentId：优先用前端传来的 CodingAgent 实体 ID，否则 fallback 到 provider type
-        String effectiveAgentId = (form.getAgentId() != null && !form.getAgentId().isBlank())
-                ? form.getAgentId() : AGENT_ID;
+        // 解析有效 agentId：agentId > directoryId > providerType
+        // directoryId 本身是 5 级解析链的合法 lookupId（第 3 级 findByDefaultDirectoryId）
+        String effectiveAgentId = firstNonBlank(form.getAgentId(), form.getDirectoryId(), AGENT_ID);
 
         String taskId = IdGenerator.shortId();
 
