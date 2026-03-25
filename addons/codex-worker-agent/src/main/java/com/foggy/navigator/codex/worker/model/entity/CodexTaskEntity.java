@@ -46,6 +46,10 @@ public class CodexTaskEntity {
     @Column(length = 64)
     private String tenantId;
 
+    /** 前端解析的 CodingAgent 实体 ID（不持久化，仅用于 sync 到 SessionTaskEntity） */
+    @Transient
+    private String resolvedAgentId;
+
     @Column(columnDefinition = "TEXT")
     private String prompt;
 

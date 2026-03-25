@@ -11,6 +11,8 @@ import lombok.Data;
 @Deprecated(since = "unified-task-dispatch-refactor")
 @Data
 public class CreateCodexTaskForm {
+    /** 前端解析的 CodingAgent 实体 ID（可选，用于 session 绑定和取消路由） */
+    private String agentId;
     private String workerId;
     private String prompt;
     private String cwd;

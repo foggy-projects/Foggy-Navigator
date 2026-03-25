@@ -145,9 +145,13 @@ public class CodexTaskService implements TaskQueryProvider {
             cwd = cwd.replace('\\', '/');
         }
 
+        // 解析有效 agentId：优先用前端传来的 CodingAgent 实体 ID，否则 fallback 到 provider type
+        String effectiveAgentId = (form.getAgentId() != null && !form.getAgentId().isBlank())
+                ? form.getAgentId() : AGENT_ID;
+
         String taskId = IdGenerator.shortId();
 
-        String sessionId = resolveSessionId(userId, tenantId, form.getPrompt(), existingSessionId);
+        String sessionId = resolveSessionId(userId, tenantId, form.getPrompt(), existingSessionId, effectiveAgentId);
 
         CodexTaskEntity entity = new CodexTaskEntity();
         entity.setTaskId(taskId);
@@ -156,6 +160,7 @@ public class CodexTaskService implements TaskQueryProvider {
         entity.setWorkerId(form.getWorkerId());
         entity.setUserId(userId);
         entity.setTenantId(tenantId);
+        entity.setResolvedAgentId(effectiveAgentId);
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setModel(form.getModel());
@@ -378,6 +383,7 @@ public class CodexTaskService implements TaskQueryProvider {
     public DispatchTaskDTO createTaskDirect(java.util.Map<String, Object> params,
                                              String userId, String tenantId) {
         CreateCodexTaskForm form = new CreateCodexTaskForm();
+        form.setAgentId((String) params.get("agentId"));
         form.setWorkerId((String) params.get("workerId"));
         form.setPrompt((String) params.get("prompt"));
         form.setCwd((String) params.get("cwd"));
@@ -461,13 +467,14 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     private DispatchTaskDTO toDispatchDTO(CodexTaskEntity entity) {
+        String agentId = entity.getResolvedAgentId() != null ? entity.getResolvedAgentId() : AGENT_ID;
         return DispatchTaskDTO.builder()
                 .taskId(entity.getTaskId())
                 .workerTaskId(entity.getWorkerTaskId())
                 .sessionId(entity.getSessionId())
                 .workerId(entity.getWorkerId())
                 .userId(entity.getUserId())
-                .agentId(AGENT_ID)
+                .agentId(agentId)
                 .providerType(AGENT_ID)
                 .prompt(entity.getPrompt())
                 .cwd(entity.getCwd())
@@ -663,6 +670,7 @@ public class CodexTaskService implements TaskQueryProvider {
         if (sessionTaskRepository == null) {
             return;
         }
+        String agentId = entity.getResolvedAgentId() != null ? entity.getResolvedAgentId() : AGENT_ID;
 
         SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(entity.getTaskId())
                 .orElseGet(SessionTaskEntity::new);
@@ -673,7 +681,7 @@ public class CodexTaskService implements TaskQueryProvider {
         sessionTask.setWorkerId(entity.getWorkerId());
         sessionTask.setUserId(entity.getUserId());
         sessionTask.setTenantId(entity.getTenantId());
-        sessionTask.setAgentId(AGENT_ID);
+        sessionTask.setAgentId(agentId);
         sessionTask.setDirectoryId(entity.getDirectoryId());
         sessionTask.setPrompt(entity.getPrompt());
         sessionTask.setCwd(entity.getCwd());
@@ -699,12 +707,13 @@ public class CodexTaskService implements TaskQueryProvider {
         if (sessionEntityRepository == null || entity.getSessionId() == null || entity.getSessionId().isBlank()) {
             return;
         }
+        String agentId = entity.getResolvedAgentId() != null ? entity.getResolvedAgentId() : AGENT_ID;
 
         SessionEntity session = sessionEntityRepository.findById(entity.getSessionId())
                 .orElseGet(() -> createSessionProjection(entity));
         session.setUserId(firstNonBlank(session.getUserId(), entity.getUserId()));
         session.setTenantId(firstNonBlank(session.getTenantId(), entity.getTenantId()));
-        session.setAgentId(firstNonBlank(session.getAgentId(), AGENT_ID));
+        session.setAgentId(firstNonBlank(session.getAgentId(), agentId));
         session.setProviderType(AGENT_ID);
         session.setStatus(firstNonBlank(session.getStatus(), "ACTIVE"));
         session.setCurrentWorkerId(firstNonBlank(entity.getWorkerId(), session.getCurrentWorkerId()));
@@ -718,11 +727,12 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     private SessionEntity createSessionProjection(CodexTaskEntity entity) {
+        String agentId = entity.getResolvedAgentId() != null ? entity.getResolvedAgentId() : AGENT_ID;
         SessionEntity session = new SessionEntity();
         session.setId(entity.getSessionId());
         session.setUserId(entity.getUserId());
         session.setTenantId(entity.getTenantId());
-        session.setAgentId(AGENT_ID);
+        session.setAgentId(agentId);
         session.setProviderType(AGENT_ID);
         session.setStatus("ACTIVE");
         session.setInteractionState(deriveInteractionState(entity.getStatus()));
@@ -804,9 +814,10 @@ public class CodexTaskService implements TaskQueryProvider {
         }
     }
 
-    private String resolveSessionId(String userId, String tenantId, String prompt, String existingSessionId) {
+    private String resolveSessionId(String userId, String tenantId, String prompt,
+                                     String existingSessionId, String agentId) {
         if (existingSessionId == null || existingSessionId.isBlank()) {
-            return createPlatformSession(userId, tenantId, prompt);
+            return createPlatformSession(userId, tenantId, prompt, agentId);
         }
 
         if (sessionManager == null) {
@@ -825,9 +836,8 @@ public class CodexTaskService implements TaskQueryProvider {
     /**
      * 创建平台 SessionEntity（补齐 Codex 之前缺失的会话记录）
      */
-    private String createPlatformSession(String userId, String tenantId, String prompt) {
+    private String createPlatformSession(String userId, String tenantId, String prompt, String agentId) {
         if (sessionManager == null) {
-            // SessionManager 未注入时降级为纯 ID（保持向后兼容）
             log.warn("SessionManager not available, falling back to IdGenerator for Codex sessionId");
             return IdGenerator.shortId();
         }
@@ -835,7 +845,7 @@ public class CodexTaskService implements TaskQueryProvider {
         String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
                 .userId(userId)
                 .tenantId(tenantId)
-                .agentId(AGENT_ID)
+                .agentId(agentId != null ? agentId : AGENT_ID)
                 .taskName(title)
                 .build());
         // 记录用户 prompt 到会话消息

@@ -1181,6 +1181,7 @@ public class TaskDispatchFacade {
 
     private Map<String, Object> buildDirectCreateParams(TaskDispatchRequest request) {
         Map<String, Object> params = new LinkedHashMap<>();
+        putIfNotBlank(params, "agentId", request.getAgentId());
         putIfNotBlank(params, "workerId", request.getWorkerId());
         putIfNotBlank(params, "prompt", request.getPrompt());
         putIfNotBlank(params, "cwd", request.getCwd());
