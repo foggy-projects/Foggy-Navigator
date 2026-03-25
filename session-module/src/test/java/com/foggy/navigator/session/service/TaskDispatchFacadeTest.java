@@ -464,6 +464,61 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void resumeTask_fallsBackToWorkerIdWhenDirectoryIdNotResolved() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-1")
+                .directoryId("dir-unbound")
+                .sessionId("session-1")
+                .prompt("continue")
+                .claudeSessionId("cs-1")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .sessionId("session-1")
+                .requestSource("UI")
+                .build();
+
+        DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
+                .taskId("task-resumed")
+                .providerType("claude-worker")
+                .build();
+
+        // directoryId 查不到 provider
+        when(agentResolver.getProviderType(eq("dir-unbound"), any())).thenReturn(Optional.empty());
+        // workerId fallback 命中
+        when(agentResolver.getProviderType(eq("worker-1"), any())).thenReturn(Optional.of("claude-worker"));
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        when(taskQueryProvider.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(resumedTask);
+
+        DispatchTaskDTO result = facade.resumeTask(request, context);
+
+        assertEquals("task-resumed", result.getTaskId());
+        // 验证 directoryId 先被尝试，然后 workerId 被尝试
+        verify(agentResolver).getProviderType(eq("dir-unbound"), any());
+        verify(agentResolver).getProviderType(eq("worker-1"), any());
+    }
+
+    @Test
+    void resumeTask_allIdentifiersExhausted_throwsException() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-unknown")
+                .directoryId("dir-unknown")
+                .sessionId("session-1")
+                .prompt("continue")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+
+        when(agentResolver.getProviderType(eq("dir-unknown"), any())).thenReturn(Optional.empty());
+        when(agentResolver.getProviderType(eq("worker-unknown"), any())).thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class, () -> facade.resumeTask(request, context));
+    }
+
+    @Test
     void listTasksByDirectory_prefersUnifiedStore() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
         SessionTaskEntity task = sessionTask(

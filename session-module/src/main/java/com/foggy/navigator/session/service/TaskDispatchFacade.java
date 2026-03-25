@@ -238,11 +238,8 @@ public class TaskDispatchFacade {
      * 恢复任务（resume）—— 续接已有会话。
      */
     public DispatchTaskDTO resumeTask(TaskDispatchRequest request, AgentResolveContext context) {
-        // resume 复用 createTask 的 Agent 解析逻辑
-        AgentLookup lookup = resolveAgentLookup(request);
-
-        String providerType = agentResolver.getProviderType(lookup.lookupId, context)
-                .orElseThrow(() -> new IllegalArgumentException("No provider found for: " + lookup.lookupId));
+        // resume: 尝试多个标识符解析 provider（directoryId 可能未绑定，需 fallback 到 workerId）
+        String providerType = resolveProviderTypeWithFallback(request, context);
 
         // 找到对应 Provider 直接调用 resumeTask
         TaskQueryProvider provider = taskQueryProviders.stream()
@@ -252,6 +249,29 @@ public class TaskDispatchFacade {
 
         Map<String, Object> params = buildResumeParams(request);
         return provider.resumeTask(context.getUserId(), context.getTenantId(), params);
+    }
+
+    /**
+     * 带 fallback 的 provider 类型解析。
+     * 依次尝试 agentId → directoryId → workerId，第一个命中即返回。
+     * 适用于 resume 场景：directoryId 未绑定时可用 workerId 兜底。
+     */
+    private String resolveProviderTypeWithFallback(TaskDispatchRequest request, AgentResolveContext context) {
+        // 按优先级构造候选 lookupId 列表
+        String[] candidates = {
+                request.getAgentId(),
+                request.getDirectoryId(),
+                request.getWorkerId()
+        };
+        for (String candidate : candidates) {
+            if (candidate != null && !candidate.isBlank()) {
+                Optional<String> pt = agentResolver.getProviderType(candidate, context);
+                if (pt.isPresent()) {
+                    return pt.get();
+                }
+            }
+        }
+        throw new IllegalArgumentException("No provider found for resume request (tried agentId/directoryId/workerId)");
     }
 
     /**

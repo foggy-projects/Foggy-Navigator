@@ -184,8 +184,14 @@ public class TaskController {
                 .requestSource("UI")
                 .build();
 
-        DispatchTaskDTO result = taskDispatchFacade.resumeTask(request, context);
-        return RX.ok(result);
+        try {
+            DispatchTaskDTO result = taskDispatchFacade.resumeTask(request, context);
+            return RX.ok(result);
+        } catch (IllegalArgumentException e) {
+            return RX.failA(e.getMessage());
+        } catch (IllegalStateException e) {
+            return RX.failB(e.getMessage());
+        }
     }
 
     /**

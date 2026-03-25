@@ -153,6 +153,45 @@ class TaskControllerTest {
     }
 
     @Test
+    void resumeTask_success() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-1")
+                .sessionId("session-1")
+                .claudeSessionId("cs-1")
+                .prompt("continue")
+                .build();
+
+        DispatchTaskDTO dto = DispatchTaskDTO.builder()
+                .taskId("task-resumed")
+                .providerType("claude-worker")
+                .build();
+
+        when(taskDispatchFacade.resumeTask(eq(request), any(AgentResolveContext.class))).thenReturn(dto);
+
+        RX<DispatchTaskDTO> result = controller.resumeTask(request);
+
+        assertNotNull(result.getData());
+        assertEquals("task-resumed", result.getData().getTaskId());
+    }
+
+    @Test
+    void resumeTask_providerNotFound_returnsFailA() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-unknown")
+                .directoryId("dir-unknown")
+                .prompt("continue")
+                .build();
+
+        when(taskDispatchFacade.resumeTask(eq(request), any(AgentResolveContext.class)))
+                .thenThrow(new IllegalArgumentException("No provider found for resume request"));
+
+        RX<DispatchTaskDTO> result = controller.resumeTask(request);
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("No provider found"));
+    }
+
+    @Test
     void respondToTask_unsupported() {
         Map<String, Object> body = Map.of("decision", "approve");
         doThrow(new UnsupportedOperationException("respond not supported by codex-worker"))
