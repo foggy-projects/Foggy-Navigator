@@ -140,6 +140,10 @@ public class CodexTaskService implements TaskQueryProvider {
                 && !form.getDirectoryId().isBlank()) {
             cwd = workerManagementFacade.getDirectoryPath(userId, form.getDirectoryId());
         }
+        // Codex CLI (Rust) 不接受 Windows 反斜杠路径，需转为正斜杠
+        if (cwd != null) {
+            cwd = cwd.replace('\\', '/');
+        }
 
         String taskId = IdGenerator.shortId();
 
@@ -187,6 +191,8 @@ public class CodexTaskService implements TaskQueryProvider {
                                          String prompt, String cwd, String directoryId,
                                          String codexThreadId) {
         String taskId = IdGenerator.shortId();
+        // Codex CLI (Rust) 不接受 Windows 反斜杠路径
+        String normalizedCwd = cwd != null ? cwd.replace('\\', '/') : null;
 
         CodexTaskEntity entity = new CodexTaskEntity();
         entity.setTaskId(taskId);
@@ -195,7 +201,7 @@ public class CodexTaskService implements TaskQueryProvider {
         entity.setWorkerId(workerId);
         entity.setUserId(userId);
         entity.setPrompt(prompt);
-        entity.setCwd(cwd);
+        entity.setCwd(normalizedCwd);
         entity.setStatus("RUNNING");
         entity.setSource("PLATFORM");
         entity.setCodexThreadId(codexThreadId);

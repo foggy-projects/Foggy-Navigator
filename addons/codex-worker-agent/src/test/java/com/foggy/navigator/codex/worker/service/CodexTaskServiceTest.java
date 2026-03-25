@@ -186,6 +186,49 @@ class CodexTaskServiceTest {
         ));
     }
 
+    @Test
+    void createTaskDirect_normalizesWindowsBackslashCwd() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+
+        DispatchTaskDTO result = service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "cwd", "D:\\projects\\my-app",
+                "directoryId", "dir-1",
+                "model", "gpt-5.4"
+        ), "user-1", "tenant-1");
+
+        // cwd 反斜杠应被转为正斜杠（Codex CLI 不接受 Windows 反斜杠）
+        assertEquals("D:/projects/my-app", savedTask[0].getCwd());
+        verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
+                "D:/projects/my-app".equals(event.getCwd())
+        ));
+    }
+
+    @Test
+    void createTaskDirect_forwardSlashCwdUnchanged() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "cwd", "D:/tmp",
+                "model", "gpt-5.4"
+        ), "user-1", "tenant-1");
+
+        assertEquals("D:/tmp", savedTask[0].getCwd());
+    }
+
     private CodexTaskEntity createTask(String taskId, String sessionId, String workerId,
                                        String directoryId, String status, LocalDateTime createdAt) {
         CodexTaskEntity entity = new CodexTaskEntity();
