@@ -135,6 +135,10 @@ export interface WorkingDirectory {
   workerId: string
   projectName: string
   path: string
+  /** 关联的 CodingAgent 实体 ID（项目级 Agent，可选） */
+  agentId?: string
+  /** Agent 名称 */
+  agentName?: string
   gitBranch?: string
   gitRemoteUrl?: string
   gitProvider?: 'GITHUB' | 'GITLAB' | 'GITEE' | 'OTHER'

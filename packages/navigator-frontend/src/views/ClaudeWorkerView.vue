@@ -3628,11 +3628,9 @@ function selectDirectory(workerId: string, directoryId: string) {
   const previousWorkerId = selectedWorkerId.value
   selectedWorkerId.value = workerId
   selectedDirectoryId.value = directoryId
-  // Auto-resolve agent: find the agent whose defaultDirectoryId matches, or that is bound to this directory
-  const matchingAgent = agentState.agents.value.find(
-    a => a.workerId === workerId && a.defaultDirectoryId === directoryId,
-  )
-  selectedAgentId.value = matchingAgent?.agentId ?? null
+  // Auto-resolve agent: 直接从目录数据获取（后端已批量解析）
+  const dir = workerState.directories.value.find(d => d.directoryId === directoryId)
+  selectedAgentId.value = dir?.agentId ?? null
   focusedPaneId.value = null
   exitBatchSelectMode()
   // 切换到不同 Worker 的目录时，保存旧 Worker 选择并刷新可用模型列表

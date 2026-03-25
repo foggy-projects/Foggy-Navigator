@@ -26,7 +26,10 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.common.util.IdGenerator;
+import java.util.HashMap;
 
 /**
  * 工作目录管理
@@ -38,6 +41,7 @@ public class WorkingDirectoryService {
 
     private final WorkingDirectoryRepository directoryRepository;
     private final AgentTeamsConfigRepository agentTeamsConfigRepository;
+    private final CodingAgentRepository codingAgentRepository;
     private final ClaudeWorkerService workerService;
     private final CredentialEncryptor credentialEncryptor;
 
@@ -248,9 +252,25 @@ public class WorkingDirectoryService {
      * 列出 Worker 下的工作目录
      */
     public List<WorkingDirectoryDTO> listByWorker(String userId, String workerId) {
-        return directoryRepository.findByWorkerIdAndUserIdOrderByProjectNameAsc(workerId, userId).stream()
-                .map(this::toDTO)
+        List<WorkingDirectoryEntity> directories =
+                directoryRepository.findByWorkerIdAndUserIdOrderByProjectNameAsc(workerId, userId);
+
+        // 批量解析：directoryId → 关联的 CodingAgent（一次查询，不 N+1）
+        Map<String, CodingAgentEntity> agentByDirId = buildAgentMap(userId, workerId);
+
+        return directories.stream()
+                .map(entity -> toDTO(entity, agentByDirId.get(entity.getDirectoryId())))
                 .toList();
+    }
+
+    private Map<String, CodingAgentEntity> buildAgentMap(String userId, String workerId) {
+        Map<String, CodingAgentEntity> map = new HashMap<>();
+        for (CodingAgentEntity agent : codingAgentRepository.findByWorkerIdAndUserId(workerId, userId)) {
+            if (agent.getDefaultDirectoryId() != null) {
+                map.put(agent.getDefaultDirectoryId(), agent);
+            }
+        }
+        return map;
     }
 
     /**
@@ -448,6 +468,15 @@ public class WorkingDirectoryService {
             log.warn("Failed to sync git info for directoryId={}: {}", entity.getDirectoryId(), e.getMessage());
             throw new RuntimeException("Git sync failed: " + e.getMessage());
         }
+    }
+
+    private WorkingDirectoryDTO toDTO(WorkingDirectoryEntity entity, CodingAgentEntity agent) {
+        WorkingDirectoryDTO dto = toDTO(entity);
+        if (agent != null) {
+            dto.setAgentId(agent.getAgentId());
+            dto.setAgentName(agent.getName());
+        }
+        return dto;
     }
 
     private WorkingDirectoryDTO toDTO(WorkingDirectoryEntity entity) {

@@ -42,7 +42,8 @@ class WorkingDirectoryServiceTest {
             return val.startsWith("enc:") ? val.substring(4) : val;
         });
         var agentTeamsConfigRepository = mock(com.foggy.navigator.claude.worker.repository.AgentTeamsConfigRepository.class);
-        service = new WorkingDirectoryService(repository, agentTeamsConfigRepository, workerService, credentialEncryptor);
+        var codingAgentRepository = mock(com.foggy.navigator.claude.worker.repository.CodingAgentRepository.class);
+        service = new WorkingDirectoryService(repository, agentTeamsConfigRepository, codingAgentRepository, workerService, credentialEncryptor);
 
         // Default: worker belongs to user
         ClaudeWorkerEntity worker = createWorker();

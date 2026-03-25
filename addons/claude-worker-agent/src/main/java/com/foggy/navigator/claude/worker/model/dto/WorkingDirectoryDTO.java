@@ -15,6 +15,10 @@ public class WorkingDirectoryDTO {
     private String directoryId;
     private String workerId;
     private String projectName;
+    /** 关联的 CodingAgent 实体 ID（项目级 Agent 身份，可 null） */
+    private String agentId;
+    /** Agent 名称（方便前端展示，可 null） */
+    private String agentName;
     private String path;
     private String gitBranch;
     private String gitRemoteUrl;
