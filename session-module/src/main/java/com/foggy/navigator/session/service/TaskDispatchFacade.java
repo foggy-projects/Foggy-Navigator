@@ -247,8 +247,7 @@ public class TaskDispatchFacade {
      * 恢复任务（resume）—— 续接已有会话。
      */
     public DispatchTaskDTO resumeTask(TaskDispatchRequest request, AgentResolveContext context) {
-        // resume: 尝试多个标识符解析 provider（directoryId 可能未绑定，需 fallback 到 workerId）
-        String providerType = resolveProviderTypeWithFallback(request, context);
+        String providerType = resolveResumeProviderType(request, context);
 
         // 找到对应 Provider 直接调用 resumeTask
         TaskQueryProvider provider = taskQueryProviders.stream()
@@ -258,6 +257,25 @@ public class TaskDispatchFacade {
 
         Map<String, Object> params = buildResumeParams(request);
         return provider.resumeTask(context.getUserId(), context.getTenantId(), params);
+    }
+
+    /**
+     * resume 优先复用 session 已绑定的 provider，避免同目录/同 worker 下的跨 provider 误路由。
+     * 仅当旧 session 尚未绑定 providerType 时，才回退到 agentId/directoryId/workerId 推导。
+     */
+    private String resolveResumeProviderType(TaskDispatchRequest request, AgentResolveContext context) {
+        String sessionId = request.getSessionId();
+        if (sessionId != null && !sessionId.isBlank()) {
+            SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
+            if (session != null) {
+                String boundProviderType = session.getProviderType();
+                if (boundProviderType != null && !boundProviderType.isBlank()) {
+                    return boundProviderType;
+                }
+            }
+        }
+        // fallback: 尝试多个标识符解析 provider（directoryId 可能未绑定，需 fallback 到 workerId）
+        return resolveProviderTypeWithFallback(request, context);
     }
 
     /**

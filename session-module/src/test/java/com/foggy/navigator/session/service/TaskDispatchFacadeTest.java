@@ -212,6 +212,58 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void resumeTask_prefersSessionBoundProviderTypeOverLookupFallback() {
+        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(claudeProvider, codexProvider), llmModelManager);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-1")
+                .directoryId("dir-1")
+                .sessionId("session-codex-1")
+                .prompt("continue")
+                .codexThreadId("thread-1")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .sessionId("session-codex-1")
+                .requestSource("UI")
+                .build();
+
+        SessionEntity session = new SessionEntity();
+        session.setId("session-codex-1");
+        session.setUserId("user-1");
+        session.setProviderType("codex-worker");
+        when(sessionRepository.findById("session-codex-1")).thenReturn(Optional.of(session));
+        // 显式模拟历史 bug 场景：如果错误回退到 lookup，会把同目录/worker 解析成 claude-worker。
+        lenient().when(agentResolver.getProviderType(eq("dir-1"), any())).thenReturn(Optional.of("claude-worker"));
+        lenient().when(agentResolver.getProviderType(eq("worker-1"), any())).thenReturn(Optional.of("claude-worker"));
+
+        DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
+                .taskId("task-codex-resumed")
+                .sessionId("session-codex-1")
+                .providerType("codex-worker")
+                .codexThreadId("thread-1")
+                .build();
+
+        when(codexProvider.getProviderType()).thenReturn("codex-worker");
+        when(claudeProvider.getProviderType()).thenReturn("claude-worker");
+        when(codexProvider.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(resumedTask);
+
+        DispatchTaskDTO result = facade.resumeTask(request, context);
+
+        assertEquals("task-codex-resumed", result.getTaskId());
+        verify(codexProvider).resumeTask(eq("user-1"), eq("tenant-1"),
+                argThat(params -> "thread-1".equals(params.get("codexThreadId"))
+                        && "session-codex-1".equals(params.get("sessionId"))
+                        && "continue".equals(params.get("prompt"))));
+        verifyNoInteractions(agentResolver);
+        verify(claudeProvider, never()).resumeTask(anyString(), anyString(), any());
+    }
+
+    @Test
     void listTasksPaged_prefersUnifiedSessionStoreWhenAvailable() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
         ReflectionTestUtils.setField(facade, "workingDirectoryRepository", workingDirectoryRepository);
