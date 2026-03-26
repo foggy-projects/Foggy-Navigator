@@ -1,5 +1,6 @@
 package com.foggy.navigator.codex.worker.service;
 
+import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.Session;
@@ -152,6 +153,7 @@ class CodexTaskServiceTest {
                 "sessionId", "session-1",
                 "prompt", "continue please",
                 "codexThreadId", "thread-1",
+                "images", "[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]",
                 "directoryId", "dir-1",
                 "cwd", "/repo"
         ));
@@ -182,6 +184,8 @@ class CodexTaskServiceTest {
                 "session-1".equals(event.getSessionId())
                         && "worker-1".equals(event.getWorkerId())
                         && "continue please".equals(event.getPrompt())
+                        && "[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]"
+                        .equals(event.getProviderConfigString("images"))
                         && "thread-1".equals(event.getProviderConfigString("codexThreadId"))
         ));
     }
@@ -211,6 +215,27 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void createTaskDirect_forwardsImagesToProviderConfig() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "describe screenshot",
+                "images", "[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]"
+        ), "user-1", "tenant-1");
+
+        verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
+                "[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]"
+                        .equals(event.getProviderConfigString("images"))
+        ));
+    }
+
+    @Test
     void createTaskDirect_forwardSlashCwdUnchanged() {
         CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
         when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
@@ -227,6 +252,49 @@ class CodexTaskServiceTest {
         ), "user-1", "tenant-1");
 
         assertEquals("D:/tmp", savedTask[0].getCwd());
+    }
+
+    @Test
+    void completeTask_publishesTaskStatusChangeEvent() {
+        CodexTaskEntity entity = createTask(
+                "task-1", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 3, 26, 10, 0)
+        );
+        when(taskRepository.findByTaskId("task-1")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.completeTask("task-1", "worker-task-1", "thread-1", "done",
+                null, null, null, null, null, "gpt-5.4");
+
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-1".equals(event.getTaskId())
+                        && "session-1".equals(event.getSessionId())
+                        && "user-1".equals(event.getUserId())
+                        && "codex-worker".equals(event.getAgentId())
+                        && "RUNNING".equals(event.getPreviousStatus())
+                        && "COMPLETED".equals(event.getStatus())
+                        && "AWAITING_REPLY".equals(event.getInteractionState())
+        ));
+    }
+
+    @Test
+    void failTask_publishesTaskStatusChangeEventWithError() {
+        CodexTaskEntity entity = createTask(
+                "task-2", "session-2", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 3, 26, 11, 0)
+        );
+        when(taskRepository.findByTaskId("task-2")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.failTask("task-2", "worker-task-2", "thread-2", "worker timeout");
+
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-2".equals(event.getTaskId())
+                        && "FAILED".equals(event.getStatus())
+                        && "RUNNING".equals(event.getPreviousStatus())
+                        && "worker timeout".equals(event.getErrorMessage())
+                        && "AWAITING_REPLY".equals(event.getInteractionState())
+        ));
     }
 
     private CodexTaskEntity createTask(String taskId, String sessionId, String workerId,

@@ -1,9 +1,13 @@
 import { Codex } from '@openai/codex-sdk'
-import type { CodexOptions, ThreadOptions, ModelReasoningEffort, ThreadItem } from '@openai/codex-sdk'
+import type { CodexOptions, Input, ThreadOptions, ModelReasoningEffort, ThreadItem } from '@openai/codex-sdk'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { config } from '../config.js'
-import type { TaskEntry, WorkerEvent } from '../models.js'
+import type { ImageAttachment, TaskEntry, WorkerEvent } from '../models.js'
 import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
+import { detectSpawnedCodexPid, snapshotCodexCliPids } from './processes.js'
 
 /**
  * Global task registry — tracks all active and recently completed tasks
@@ -42,6 +46,124 @@ export function parseModelString(rawModel: string): { model: string; reasoningLe
 
 export function shouldAbortBeforeTurnStart(completedTurns: number, maxTurns: number | undefined): boolean {
   return maxTurns !== undefined && completedTurns >= maxTurns
+}
+
+export function getRunningTaskCount(): number {
+  let count = 0
+  for (const entry of taskRegistry.values()) {
+    if (entry.status === 'running') {
+      count++
+    }
+  }
+  return count
+}
+
+function isImageAttachment(attachment: ImageAttachment): boolean {
+  const mimeType = attachment.mime_type?.toLowerCase() || ''
+  if (mimeType.startsWith('image/')) {
+    return true
+  }
+  const ext = path.extname(attachment.name).toLowerCase()
+  return ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'].includes(ext)
+}
+
+function sanitizeAttachmentName(name: string, index: number): string {
+  const trimmed = name.trim()
+  const replaced = trimmed.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/^\.+/, '')
+  const fallback = replaced || `image-${index + 1}`
+  return fallback.length > 255 ? fallback.slice(-255) : fallback
+}
+
+function extensionFromMimeType(mimeType: string | undefined): string {
+  switch ((mimeType || '').toLowerCase()) {
+    case 'image/png':
+      return '.png'
+    case 'image/jpeg':
+      return '.jpg'
+    case 'image/webp':
+      return '.webp'
+    case 'image/gif':
+      return '.gif'
+    case 'image/bmp':
+      return '.bmp'
+    default:
+      return ''
+  }
+}
+
+function stripBase64Prefix(data: string): string {
+  const marker = 'base64,'
+  const markerIndex = data.indexOf(marker)
+  return markerIndex >= 0 ? data.slice(markerIndex + marker.length) : data
+}
+
+export async function saveAttachments(
+  taskId: string,
+  cwd: string | undefined,
+  images: ImageAttachment[] | undefined
+): Promise<{ imagePaths: string[]; filePaths: string[] }> {
+  if (!images || images.length === 0) {
+    return { imagePaths: [], filePaths: [] }
+  }
+
+  const baseDir = cwd
+    ? path.join(cwd, '.foggy-attachments', 'codex', taskId)
+    : path.join(os.tmpdir(), 'foggy-codex-attachments', taskId)
+  await fs.mkdir(baseDir, { recursive: true })
+
+  const imagePaths: string[] = []
+  const filePaths: string[] = []
+  for (const [index, image] of images.entries()) {
+    let filename = sanitizeAttachmentName(image.name, index)
+    if (!path.extname(filename)) {
+      filename += extensionFromMimeType(image.mime_type)
+    }
+    const buffer = Buffer.from(stripBase64Prefix(image.data), 'base64')
+    if (buffer.length === 0) {
+      continue
+    }
+    const outputPath = path.join(baseDir, filename)
+    await fs.writeFile(outputPath, buffer)
+    if (isImageAttachment(image)) {
+      imagePaths.push(outputPath)
+    } else {
+      filePaths.push(outputPath)
+    }
+  }
+
+  return { imagePaths, filePaths }
+}
+
+function augmentPromptWithAttachments(prompt: string, filePaths: string[]): string {
+  if (filePaths.length === 0) {
+    return prompt
+  }
+
+  const lines = [
+    'The user attached files. They have been written to disk and may be relevant.',
+    'Review them directly if needed:',
+    ...filePaths.map(filePath => `- ${filePath}`),
+    '',
+    prompt,
+  ]
+  return lines.join('\n')
+}
+
+export async function buildCodexInput(
+  taskId: string,
+  prompt: string,
+  cwd: string | undefined,
+  images: ImageAttachment[] | undefined
+): Promise<Input> {
+  const { imagePaths, filePaths } = await saveAttachments(taskId, cwd, images)
+  const effectivePrompt = augmentPromptWithAttachments(prompt, filePaths)
+  if (imagePaths.length === 0 && filePaths.length === 0) {
+    return prompt
+  }
+  return [
+    { type: 'text', text: effectivePrompt },
+    ...imagePaths.map(imagePath => ({ type: 'local_image' as const, path: imagePath })),
+  ]
 }
 
 function createEventWithSeq(
@@ -210,18 +332,21 @@ export async function runQuery(
   threadId: string | undefined,
   model: string | undefined,
   maxTurns: number | undefined,
+  images: ImageAttachment[] | undefined,
   apiKey: string | undefined
 ): Promise<void> {
   const broadcast = new EventBroadcast(taskId)
   taskBroadcasts.set(taskId, broadcast)
 
   const abortController = new AbortController()
+  const rawModel = model || 'gpt-5.4-mini'
 
   const entry: TaskEntry = {
     taskId,
     status: 'running',
     abortController,
     threadId,
+    model: rawModel,
     startedAt: Date.now(),
   }
   taskRegistry.set(taskId, entry)
@@ -239,18 +364,25 @@ export async function runQuery(
     ? maxTurns
     : undefined
 
-  // 解析 model:reasoning_level
-  const rawModel = model || 'gpt-5.4-mini'
+  entry.model = rawModel
   const { model: effectiveModel, reasoningLevel } = parseModelString(rawModel)
   let resolvedModel = effectiveModel
 
   try {
+    const existingPids = await snapshotCodexCliPids()
+
     // 创建 Codex 实例
     // 支持两种认证模式：
     // 1. API Key 模式：传入 apiKey
     // 2. 订阅模式：不传 apiKey，SDK 通过 Codex CLI 自动读取 ~/.codex/auth.json
     const effectiveApiKey = apiKey || config.openaiApiKey || undefined
-    const codexOptions: CodexOptions = {}
+    const codexOptions: CodexOptions = {
+      env: {
+        ...process.env,
+        FOGGY_CODEX_TASK_ID: taskId,
+        ...(threadId ? { FOGGY_CODEX_THREAD_ID: threadId } : {}),
+      },
+    }
     if (effectiveApiKey) {
       codexOptions.apiKey = effectiveApiKey
     }
@@ -270,10 +402,13 @@ export async function runQuery(
       ? codex.resumeThread(threadId, threadOptions)
       : codex.startThread(threadOptions)
 
+    const input = await buildCodexInput(taskId, prompt, cwd, images)
+
     // 流式执行
-    const { events } = await thread.runStreamed(prompt, {
+    const { events } = await thread.runStreamed(input, {
       signal: abortController.signal,
     })
+    entry.pid = await detectSpawnedCodexPid(existingPids)
 
     for await (const event of events) {
       if (abortController.signal.aborted) break

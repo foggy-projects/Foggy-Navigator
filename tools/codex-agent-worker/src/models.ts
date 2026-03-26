@@ -1,3 +1,9 @@
+export interface ImageAttachment {
+  name: string
+  data: string
+  mime_type?: string
+}
+
 /**
  * Query request body
  */
@@ -7,6 +13,7 @@ export interface QueryRequest {
   session_id?: string  // Codex thread ID for session resume
   model?: string
   max_turns?: number
+  images?: ImageAttachment[] // Historical field name; payload may include non-image attachments too.
   api_key?: string     // Per-request OpenAI API key override
 }
 
@@ -57,8 +64,21 @@ export interface TaskEntry {
   status: 'running' | 'completed' | 'failed' | 'aborted'
   abortController?: AbortController
   threadId?: string
+  pid?: number
+  model?: string
   startedAt: number
   completedAt?: number
+}
+
+export interface CliProcessInfo {
+  pid: number
+  command: string
+  memory_mb: number
+  started_at: string
+  is_orphan: boolean
+  process_type: 'codex'
+  codex_thread_id?: string
+  model?: string
 }
 
 /**

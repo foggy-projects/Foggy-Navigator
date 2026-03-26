@@ -1,10 +1,12 @@
-import type { QueryRequest } from '../models.js'
+import type { ImageAttachment, QueryRequest } from '../models.js'
 
 const MAX_PROMPT_LENGTH = 200_000
 const MAX_PATH_LENGTH = 4_096
 const MAX_MODEL_LENGTH = 128
 const MAX_SESSION_ID_LENGTH = 256
 const MAX_API_KEY_LENGTH = 512
+const MAX_IMAGE_NAME_LENGTH = 255
+const MAX_IMAGE_COUNT = 20
 const VALID_REASONING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'extra-high'])
 
 type ValidationSuccess = {
@@ -34,6 +36,45 @@ function validateOptionalString(value: unknown, field: string, maxLength: number
   }
 
   return trimmed
+}
+
+function validateImages(value: unknown): ImageAttachment[] | ValidationFailure | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) {
+    return { ok: false, error: 'images must be an array' }
+  }
+  if (value.length > MAX_IMAGE_COUNT) {
+    return { ok: false, error: 'too many images' }
+  }
+
+  const normalized: ImageAttachment[] = []
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return { ok: false, error: `images[${index}] must be an object` }
+    }
+    const record = item as Record<string, unknown>
+    if (typeof record.name !== 'string' || !record.name.trim()) {
+      return { ok: false, error: `images[${index}].name is required` }
+    }
+    if (record.name.trim().length > MAX_IMAGE_NAME_LENGTH) {
+      return { ok: false, error: `images[${index}].name is too long` }
+    }
+    if (typeof record.data !== 'string' || !record.data.trim()) {
+      return { ok: false, error: `images[${index}].data is required` }
+    }
+    if (record.mime_type !== undefined && typeof record.mime_type !== 'string') {
+      return { ok: false, error: `images[${index}].mime_type must be a string` }
+    }
+    normalized.push({
+      name: record.name.trim(),
+      data: record.data.trim(),
+      mime_type: typeof record.mime_type === 'string' && record.mime_type.trim()
+        ? record.mime_type.trim()
+        : undefined,
+    })
+  }
+
+  return normalized
 }
 
 export function validateModelString(value: string): true | string {
@@ -92,6 +133,9 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
     return { ok: false, error: 'max_turns must be a positive integer' }
   }
 
+  const images = validateImages(body.images)
+  if (images && !Array.isArray(images)) return images
+
   return {
     ok: true,
     value: {
@@ -100,6 +144,7 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
       session_id: sessionId,
       model,
       max_turns: maxTurns as number | undefined,
+      images,
       api_key: apiKey,
     },
   }

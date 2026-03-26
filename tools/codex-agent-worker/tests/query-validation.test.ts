@@ -21,6 +21,7 @@ test('validateQueryRequest trims and returns normalized payload', () => {
     session_id: 'abc',
     api_key: 'sk-test',
     max_turns: 2,
+    images: undefined,
   })
 })
 
@@ -45,4 +46,19 @@ test('validateQueryRequest rejects non-object bodies', () => {
 test('validateModelString accepts bare model names and known reasoning levels', () => {
   assert.equal(validateModelString('gpt-5.4-mini'), true)
   assert.equal(validateModelString('gpt-5.4:extra-high'), true)
+})
+
+test('validateQueryRequest accepts image attachments', () => {
+  const result = validateQueryRequest({
+    prompt: 'describe',
+    images: [
+      { name: 'screen.png', data: 'YmFzZTY0', mime_type: 'image/png' },
+    ],
+  })
+
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.value.images, [
+    { name: 'screen.png', data: 'YmFzZTY0', mime_type: 'image/png' },
+  ])
 })

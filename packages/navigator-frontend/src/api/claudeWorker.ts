@@ -93,6 +93,13 @@ export async function listCliProcesses(workerId: string): Promise<CliProcessList
   return rx.data
 }
 
+export async function listCodexCliProcesses(workerId: string): Promise<CliProcessListResponse> {
+  const rx = (await client.get(
+    `/codex-workers/${workerId}/processes`,
+  )) as unknown as RX<CliProcessListResponse>
+  return rx.data
+}
+
 export async function killCliProcess(
   workerId: string,
   pid: number,
@@ -100,6 +107,18 @@ export async function killCliProcess(
 ): Promise<KillProcessResponse> {
   const rx = (await client.post(
     `/claude-workers/${workerId}/processes/${pid}/kill`,
+    { force },
+  )) as unknown as RX<KillProcessResponse>
+  return rx.data
+}
+
+export async function killCodexCliProcess(
+  workerId: string,
+  pid: number,
+  force = false,
+): Promise<KillProcessResponse> {
+  const rx = (await client.post(
+    `/codex-workers/${workerId}/processes/${pid}/kill`,
     { force },
   )) as unknown as RX<KillProcessResponse>
   return rx.data

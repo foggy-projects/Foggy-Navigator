@@ -536,9 +536,16 @@
               :data="cliProcesses"
               size="small"
               stripe
-              empty-text="未检测到 Claude CLI 进程"
+              empty-text="未检测到 CLI 进程"
               style="width: 100%"
             >
+              <el-table-column label="类型" width="90">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.process_type === 'codex' ? 'success' : 'info'">
+                    {{ row.process_type === 'codex' ? 'Codex' : 'Claude' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
               <el-table-column prop="pid" label="PID" width="80" />
               <el-table-column prop="command" label="命令" min-width="200" show-overflow-tooltip />
               <el-table-column label="内存" width="80">
@@ -561,6 +568,13 @@
                     >
                       {{ row.claude_session_id.slice(0, 8) }}
                     </el-link>
+                  </el-tooltip>
+                  <el-tooltip
+                    v-else-if="row.codex_thread_id"
+                    :content="row.codex_thread_id"
+                    placement="top"
+                  >
+                    <el-tag size="small" type="success">{{ row.codex_thread_id.slice(0, 8) }}</el-tag>
                   </el-tooltip>
                   <el-tag v-else-if="!row.is_orphan" size="small" type="info">新会话</el-tag>
                   <span v-else>-</span>
@@ -589,12 +603,12 @@
               </el-table-column>
               <el-table-column label="操作" width="200" align="center">
                 <template #default="{ row }">
-                  <template v-if="row.foggy_task_id">
+                  <template v-if="row.process_type !== 'codex' && row.foggy_task_id">
                     <el-button text size="small" @click="handleResyncTask(row.foggy_task_id)">重新同步</el-button>
                     <el-divider direction="vertical" style="margin: 0 4px;" />
                   </template>
-                  <el-button text size="small" @click="handleKillProcess(row.pid, false)">终止</el-button>
-                  <el-button text size="small" type="danger" @click="handleKillProcess(row.pid, true)">强制</el-button>
+                  <el-button text size="small" @click="handleKillProcess(row, false)">终止</el-button>
+                  <el-button text size="small" type="danger" @click="handleKillProcess(row, true)">强制</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -2134,9 +2148,33 @@ async function loadCliProcesses() {
   if (!selectedWorkerId.value) return
   loadingProcesses.value = true
   try {
-    const data = await dirApi.listCliProcesses(selectedWorkerId.value)
-    cliProcesses.value = data.processes
-    cliProcessActiveTaskCount.value = data.active_task_count
+    const workerId = selectedWorkerId.value
+    const [claudeResult, codexResult] = await Promise.allSettled([
+      dirApi.listCliProcesses(workerId),
+      dirApi.listCodexCliProcesses(workerId),
+    ])
+
+    const merged: CliProcessInfo[] = []
+    let activeTaskCount = 0
+
+    if (claudeResult.status === 'fulfilled') {
+      merged.push(...claudeResult.value.processes.map(processInfo => ({
+        ...processInfo,
+        process_type: processInfo.process_type || 'claude',
+      })))
+      activeTaskCount += claudeResult.value.active_task_count
+    }
+
+    if (codexResult.status === 'fulfilled') {
+      merged.push(...codexResult.value.processes.map(processInfo => ({
+        ...processInfo,
+        process_type: processInfo.process_type || 'codex',
+      })))
+      activeTaskCount += codexResult.value.active_task_count
+    }
+
+    cliProcesses.value = merged.sort((a, b) => b.pid - a.pid)
+    cliProcessActiveTaskCount.value = activeTaskCount
   } catch {
     cliProcesses.value = []
     cliProcessActiveTaskCount.value = 0
@@ -2145,12 +2183,13 @@ async function loadCliProcesses() {
   }
 }
 
-async function handleKillProcess(pid: number, force = false) {
+async function handleKillProcess(processInfo: CliProcessInfo, force = false) {
   if (!selectedWorkerId.value) return
   const action = force ? '强制终止' : '终止'
+  const typeLabel = processInfo.process_type === 'codex' ? 'Codex CLI' : 'Claude CLI'
   try {
     await ElMessageBox.confirm(
-      `确定要${action}进程 PID ${pid} 吗？`,
+      `确定要${action}${typeLabel} 进程 PID ${processInfo.pid} 吗？`,
       `${action}进程`,
       { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
     )
@@ -2158,9 +2197,11 @@ async function handleKillProcess(pid: number, force = false) {
     return // cancelled
   }
   try {
-    const result = await dirApi.killCliProcess(selectedWorkerId.value, pid, force)
+    const result = processInfo.process_type === 'codex'
+      ? await dirApi.killCodexCliProcess(selectedWorkerId.value, processInfo.pid, force)
+      : await dirApi.killCliProcess(selectedWorkerId.value, processInfo.pid, force)
     if (result.status === 'killed') {
-      ElMessage.success(`进程 ${pid} 已${action}`)
+      ElMessage.success(`进程 ${processInfo.pid} 已${action}`)
     } else {
       ElMessage.warning(result.message)
     }
@@ -3343,7 +3384,7 @@ let activeTasksInterval: ReturnType<typeof setInterval> | null = null
 
 function handleTaskUpdateEvent(event: Event) {
   const detail = (event as CustomEvent).detail
-  if (detail?.type === 'task_status_change' && detail?.taskId) {
+  if (['task_status_change', 'task_completion'].includes(detail?.type) && detail?.taskId) {
     const newStatus = detail.status as string
     // Sync interactionState from SSE
     if (detail.sessionId && detail.interactionState) {
@@ -3372,7 +3413,11 @@ function handleTaskUpdateEvent(event: Event) {
       const inTasks = workerState.tasks.value.find(t => t.taskId === detail.taskId)
       if (inTasks) {
         inTasks.status = newStatus as any
-        if (detail.errorMessage) inTasks.errorMessage = detail.errorMessage
+        if (detail.errorMessage) {
+          inTasks.errorMessage = detail.errorMessage
+        } else if (newStatus === 'FAILED' && detail.summary) {
+          inTasks.errorMessage = String(detail.summary)
+        }
       }
       workerState.loadAwaitingReplyTasks()
     }

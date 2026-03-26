@@ -14,6 +14,7 @@ export interface AppConfig {
   openaiApiKey: string
   workerToken: string
   allowedCwds: string[]
+  maxConcurrentTasks: number
   logLevel: 'debug' | 'info' | 'warn' | 'error'
 }
 
@@ -95,6 +96,19 @@ function parseLogLevel(rawLogLevel: string | undefined): AppConfig['logLevel'] {
   return value as AppConfig['logLevel']
 }
 
+function parseMaxConcurrentTasks(rawValue: string | undefined): number {
+  const value = (rawValue || '6').trim()
+  if (!/^\d+$/.test(value)) {
+    throw new Error('CODEX_MAX_CONCURRENT_TASKS must be an integer')
+  }
+
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 32) {
+    throw new Error('CODEX_MAX_CONCURRENT_TASKS must be between 1 and 32')
+  }
+  return parsed
+}
+
 export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const openaiApiKey = parseApiKey(getOptionalEnvFromEnv(env, 'OPENAI_API_KEY'))
 
@@ -105,6 +119,7 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     openaiApiKey,
     workerToken: parseToken(env.CODEX_WORKER_TOKEN),
     allowedCwds: parseAllowedCwds(env.CODEX_ALLOWED_CWDS),
+    maxConcurrentTasks: parseMaxConcurrentTasks(env.CODEX_MAX_CONCURRENT_TASKS),
     logLevel: parseLogLevel(env.CODEX_LOG_LEVEL),
   }
 }

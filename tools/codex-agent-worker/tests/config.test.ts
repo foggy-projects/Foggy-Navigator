@@ -36,3 +36,15 @@ test('createConfig rejects invalid log level', () => {
     CODEX_LOG_LEVEL: 'trace',
   }), /CODEX_LOG_LEVEL must be one of/)
 })
+
+test('createConfig parses max concurrent tasks and rejects invalid values', () => {
+  const config = createConfig({
+    CODEX_MAX_CONCURRENT_TASKS: '3',
+  })
+
+  assert.equal(config.maxConcurrentTasks, 3)
+
+  assert.throws(() => createConfig({
+    CODEX_MAX_CONCURRENT_TASKS: '0',
+  }), /CODEX_MAX_CONCURRENT_TASKS must be between 1 and 32/)
+})
