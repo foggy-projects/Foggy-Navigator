@@ -64,6 +64,33 @@ class CodexWorkerA2aAgentTest {
         assertEquals("model-config-1", captor.getValue().getModelConfigId());
     }
 
+    @Test
+    void sendTask_forwardsImagesMetadata() {
+        CodingAgentEntity entity = defaultEntity();
+
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+                .taskId("task-images")
+                .sessionId("session-images")
+                .workerId("worker-1")
+                .build());
+
+        CodexWorkerA2aAgent agent = new CodexWorkerA2aAgent(entity, taskService, "D:\\default", null);
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("describe image")))
+                .metadata(Map.of(
+                        "images", List.of("[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]")
+                ))
+                .build();
+
+        agent.sendTask(message);
+
+        ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+        verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+        assertEquals("[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]",
+                captor.getValue().getImages());
+    }
+
     // ── New tests ──
 
     @Test

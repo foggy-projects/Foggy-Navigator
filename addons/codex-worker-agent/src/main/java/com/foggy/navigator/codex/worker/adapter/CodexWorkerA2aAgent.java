@@ -94,6 +94,7 @@ class CodexWorkerA2aAgent implements A2aAgent {
         String requestedCwd = stringMeta(meta, "cwd");
         String requestedDirectoryId = stringMeta(meta, "directoryId");
         String modelConfigId = stringMeta(meta, "modelConfigId");
+        String images = imagesMeta(meta.get("images"));
 
         String effectiveCwd = requestedCwd != null ? requestedCwd : defaultCwd;
         String effectiveDirectoryId = requestedDirectoryId != null ? requestedDirectoryId : entity.getDefaultDirectoryId();
@@ -107,6 +108,7 @@ class CodexWorkerA2aAgent implements A2aAgent {
         form.setDirectoryId(effectiveDirectoryId);
         form.setModel(model);
         form.setMaxTurns(maxTurns);
+        form.setImages(images);
         form.setCodexThreadId(codexThreadId);
         form.setModelConfigId(modelConfigId);
 
@@ -207,6 +209,20 @@ class CodexWorkerA2aAgent implements A2aAgent {
         Object value = meta.get(key);
         if (value == null) {
             return null;
+        }
+        String text = value.toString();
+        return text.isBlank() ? null : text;
+    }
+
+    private String imagesMeta(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof List<?> list) {
+            return list.stream()
+                    .map(Object::toString)
+                    .filter(text -> !text.isBlank())
+                    .collect(Collectors.joining(","));
         }
         String text = value.toString();
         return text.isBlank() ? null : text;

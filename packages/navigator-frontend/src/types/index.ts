@@ -454,7 +454,9 @@ export interface CliProcessInfo {
   memory_mb: number
   started_at: string
   is_orphan: boolean
+  process_type?: 'claude' | 'codex'
   claude_session_id?: string
+  codex_thread_id?: string
   foggy_task_id?: string
   foggy_session_id?: string
   /** LLM model used by this process (e.g. claude-sonnet-4-20250514) */

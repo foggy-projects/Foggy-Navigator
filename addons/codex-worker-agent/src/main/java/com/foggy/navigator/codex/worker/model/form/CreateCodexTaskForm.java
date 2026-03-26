@@ -19,6 +19,8 @@ public class CreateCodexTaskForm {
     private String directoryId;
     private String model;
     private Integer maxTurns;
+    /** Base64-encoded image attachments JSON: [{name, data, mime_type}] */
+    private String images;
     /** Codex SDK thread ID（非空则恢复已有会话） */
     private String codexThreadId;
     /** 平台 LLM 模型配置 ID，用于从平台配置中获取 apiKey */

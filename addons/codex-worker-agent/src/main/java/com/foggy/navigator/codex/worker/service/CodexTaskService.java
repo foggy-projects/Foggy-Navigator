@@ -3,6 +3,7 @@ package com.foggy.navigator.codex.worker.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.event.TaskStatusChangeEvent;
 import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
@@ -90,6 +91,7 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setDirectoryId((String) params.get("directoryId"));
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setImages((String) params.get("images"));
         form.setCodexThreadId((String) params.get("codexThreadId"));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
@@ -175,14 +177,16 @@ public class CodexTaskService implements TaskQueryProvider {
         String apiKey = resolveApiKey(form.getModelConfigId());
 
         // 发布统一事件触发 CodexStreamRelay（通过 providerType 条件过滤）
+        Map<String, Object> providerConfig = new LinkedHashMap<>();
+        putIfNotBlank(providerConfig, "codexThreadId", form.getCodexThreadId());
+        putIfNotBlank(providerConfig, "images", form.getImages());
+
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
                 .prompt(form.getPrompt()).cwd(cwd)
                 .model(form.getModel()).maxTurns(form.getMaxTurns())
                 .apiKey(apiKey).providerType(AGENT_ID)
-                .providerConfig(form.getCodexThreadId() != null
-                        ? java.util.Map.of("codexThreadId", form.getCodexThreadId())
-                        : java.util.Map.of())
+                .providerConfig(providerConfig)
                 .build());
 
         return toDTO(entity);
@@ -303,9 +307,11 @@ public class CodexTaskService implements TaskQueryProvider {
             return;
         }
 
+        String previousStatus = entity.getStatus();
         entity.setStatus("ABORTED");
         persistTask(entity);
         log.info("Aborted Codex task: taskId={}", taskId);
+        publishStatusChange(entity, previousStatus);
     }
 
     /**
@@ -322,6 +328,7 @@ public class CodexTaskService implements TaskQueryProvider {
             return;
         }
 
+        String previousStatus = entity.getStatus();
         entity.setStatus("COMPLETED");
         if (workerTaskId != null) entity.setWorkerTaskId(workerTaskId);
         if (codexThreadId != null) entity.setCodexThreadId(codexThreadId);
@@ -337,6 +344,7 @@ public class CodexTaskService implements TaskQueryProvider {
 
         persistTask(entity);
         log.info("Completed Codex task: taskId={}, cost={}", taskId, costUsd);
+        publishStatusChange(entity, previousStatus);
     }
 
     /**
@@ -350,6 +358,7 @@ public class CodexTaskService implements TaskQueryProvider {
             return;
         }
 
+        String previousStatus = entity.getStatus();
         entity.setStatus("FAILED");
         entity.setErrorMessage(errorMessage);
         if (workerTaskId != null) entity.setWorkerTaskId(workerTaskId);
@@ -358,6 +367,7 @@ public class CodexTaskService implements TaskQueryProvider {
 
         persistTask(entity);
         log.info("Failed Codex task: taskId={}, error={}", taskId, errorMessage);
+        publishStatusChange(entity, previousStatus);
     }
 
     /**
@@ -390,6 +400,7 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setDirectoryId((String) params.get("directoryId"));
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setImages((String) params.get("images"));
         form.setCodexThreadId((String) params.get("codexThreadId"));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
@@ -631,6 +642,19 @@ public class CodexTaskService implements TaskQueryProvider {
             return "AWAITING_REPLY";
         }
         return null;
+    }
+
+    private void publishStatusChange(CodexTaskEntity entity, String previousStatus) {
+        eventPublisher.publishEvent(TaskStatusChangeEvent.builder()
+                .taskId(entity.getTaskId())
+                .sessionId(entity.getSessionId())
+                .userId(entity.getUserId())
+                .agentId(AGENT_ID)
+                .status(entity.getStatus())
+                .previousStatus(previousStatus)
+                .errorMessage(entity.getErrorMessage())
+                .interactionState(deriveInteractionState(entity.getStatus()))
+                .build());
     }
 
     private boolean containsIgnoreCase(String value, String keyword) {

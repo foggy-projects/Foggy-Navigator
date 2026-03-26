@@ -72,13 +72,22 @@ public class CodexWorkerClient {
      */
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd,
                                                       String codexThreadId, String model,
-                                                      Integer maxTurns, String apiKey) {
+                                                      Integer maxTurns, String images,
+                                                      String apiKey) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) body.put("cwd", cwd);
         if (codexThreadId != null) body.put("session_id", codexThreadId);
         if (model != null) body.put("model", model);
         if (maxTurns != null) body.put("max_turns", maxTurns);
+        if (images != null && !images.isBlank()) {
+            try {
+                Object parsed = new com.fasterxml.jackson.databind.ObjectMapper().readValue(images, List.class);
+                body.put("images", parsed);
+            } catch (Exception e) {
+                log.warn("Failed to parse images JSON, skipping: {}", e.getMessage());
+            }
+        }
         if (apiKey != null) body.put("api_key", apiKey);
 
         return webClient.post()
@@ -140,6 +149,34 @@ public class CodexWorkerClient {
                 .retrieve()
                 .bodyToMono(List.class)
                 .map(list -> (List<Map<String, Object>>) list)
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    /**
+     * 列出 Worker 上的 Codex CLI 进程
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> listCliProcesses() {
+        return webClient.get()
+                .uri("/api/v1/processes")
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
+                .timeout(Duration.ofSeconds(10));
+    }
+
+    /**
+     * 终止 Worker 上的 Codex CLI 进程
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<Map<String, Object>> killCliProcess(int pid, boolean force) {
+        return webClient.post()
+                .uri("/api/v1/processes/{pid}/kill", pid)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("force", force))
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(m -> (Map<String, Object>) m)
                 .timeout(Duration.ofSeconds(10));
     }
 }

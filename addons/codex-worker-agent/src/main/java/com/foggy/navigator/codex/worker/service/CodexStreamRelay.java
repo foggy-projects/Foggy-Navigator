@@ -90,13 +90,14 @@ public class CodexStreamRelay {
             CodexWorkerClient client = getCodexClient(workerId);
 
             String codexThreadId = event.getProviderConfigString("codexThreadId");
+            String images = blankToNull(event.getProviderConfigString("images"));
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(codexThreadId);
 
             Flux<ServerSentEvent<String>> sseFlux = client.streamQuery(
                     event.getPrompt(), event.getCwd(),
                     codexThreadId, event.getModel(),
-                    event.getMaxTurns(), event.getApiKey());
+                    event.getMaxTurns(), images, event.getApiKey());
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedCodexThreadId, 0);
@@ -389,6 +390,13 @@ public class CodexStreamRelay {
     private String truncateResult(String text) {
         if (text == null) return null;
         return text.length() > 200 ? text.substring(0, 200) + "..." : text;
+    }
+
+    private String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value;
     }
 
     /**

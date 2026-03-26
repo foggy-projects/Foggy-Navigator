@@ -3,6 +3,7 @@ import cors from 'cors'
 import { config } from './config.js'
 import { authMiddleware } from './auth.js'
 import healthRouter from './routes/health.js'
+import processesRouter from './routes/processes.js'
 import queryRouter from './routes/query.js'
 import tasksRouter from './routes/tasks.js'
 import sessionsRouter from './routes/sessions.js'
@@ -16,6 +17,7 @@ app.use(authMiddleware)
 
 // Routes
 app.use(healthRouter)
+app.use(processesRouter)
 app.use(queryRouter)
 app.use(tasksRouter)
 app.use(sessionsRouter)
@@ -35,6 +37,7 @@ const server = app.listen(config.port, config.host, () => {
   console.log(`  Name:   ${config.workerName}`)
   console.log(`  Auth:   ${config.workerToken ? 'Enabled' : 'Disabled'}`)
   console.log(`  Codex:  ${authMode}`)
+  console.log(`  MaxTasks: ${config.maxConcurrentTasks}`)
   console.log(`  CWDs:   ${config.allowedCwds.length > 0 ? config.allowedCwds.join(', ') : 'All allowed'}`)
   console.log('='.repeat(60))
 })

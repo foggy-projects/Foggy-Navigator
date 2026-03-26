@@ -43,6 +43,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         form.setDirectoryId((String) params.get("directoryId"));
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setImages((String) params.get("images"));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
         }
@@ -136,7 +137,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             String effectiveModel = model != null ? model : codexConfig.getModel();
 
             SyncQueryAccumulator state = client.streamQuery(
-                            prompt, cwd, codexThreadId, effectiveModel, maxTurns, apiKey)
+                            prompt, cwd, codexThreadId, effectiveModel, maxTurns, null, apiKey)
                     .reduce(new SyncQueryAccumulator(codexThreadId), (acc, sse) -> {
                         consumeSyncEvent(acc, sse);
                         return acc;

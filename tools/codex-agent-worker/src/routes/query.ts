@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
-import { runQuery, taskBroadcasts, cleanupOldTasks } from '../codex/sdk-wrapper.js'
+import { runQuery, taskBroadcasts, cleanupOldTasks, getRunningTaskCount } from '../codex/sdk-wrapper.js'
 import type { WorkerEvent } from '../models.js'
 import { validateQueryRequest } from '../validation/query.js'
 
@@ -30,6 +30,16 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     }
   }
 
+  const runningTasks = getRunningTaskCount()
+  if (runningTasks >= config.maxConcurrentTasks) {
+    res.status(429).json({
+      error: `Too many concurrent Codex tasks: ${runningTasks}/${config.maxConcurrentTasks}`,
+      running_tasks: runningTasks,
+      max_concurrent_tasks: config.maxConcurrentTasks,
+    })
+    return
+  }
+
   const taskId = uuidv4()
 
   // Clean up old tasks periodically
@@ -51,6 +61,7 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     body.session_id,
     body.model,
     body.max_turns,
+    body.images,
     body.api_key
   )
 

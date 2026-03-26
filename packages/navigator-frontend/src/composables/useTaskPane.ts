@@ -63,7 +63,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
 
   const { subscribeSession, connected } = useUnifiedSse()
 
-  // User-level SSE fallback: listen for task_status_change via useNotifications
+  // User-level SSE fallback: listen for task_status_change, with task_completion as a terminal-state fallback.
   let taskUpdateHandler: ((event: Event) => void) | null = null
 
   function attachTaskUpdateListener() {
@@ -71,10 +71,15 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     taskUpdateHandler = (event: Event) => {
       const detail = (event as CustomEvent).detail
       if (!task.value || detail?.taskId !== task.value.taskId) return
+      if (!['task_status_change', 'task_completion'].includes(detail?.type)) return
       const newStatus = detail?.status as string
       if (newStatus && newStatus !== task.value.status) {
         task.value.status = newStatus as any
-        if (detail.errorMessage) task.value.errorMessage = detail.errorMessage
+        if (detail.errorMessage) {
+          task.value.errorMessage = detail.errorMessage
+        } else if (newStatus === 'FAILED' && detail.summary) {
+          task.value.errorMessage = String(detail.summary)
+        }
         if (['COMPLETED', 'FAILED', 'ABORTED'].includes(newStatus)) {
           options?.onTaskFinished?.(paneId)
         }
