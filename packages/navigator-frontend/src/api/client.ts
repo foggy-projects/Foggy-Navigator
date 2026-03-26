@@ -8,6 +8,10 @@ const client = axios.create({
   timeout: 30000,
 })
 
+function isRxEnvelope(value: unknown): value is { code: number; message?: string; data?: unknown } {
+  return !!value && typeof value === 'object' && 'code' in value && typeof (value as { code?: unknown }).code === 'number'
+}
+
 client.interceptors.request.use(
   (config) => {
     const token = getToken()
@@ -24,6 +28,9 @@ client.interceptors.response.use(
     const newToken = response.headers['x-new-token']
     if (newToken) {
       setToken(newToken)
+    }
+    if (isRxEnvelope(response.data) && response.data.code !== 200) {
+      throw new Error(response.data.message || '请求失败')
     }
     return response.data
   },

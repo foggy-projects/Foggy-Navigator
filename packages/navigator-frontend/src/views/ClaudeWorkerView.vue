@@ -5023,6 +5023,9 @@ async function handlePaneSend(paneId: string, content: string) {
       )
     }
     const newTask = await workerState.resumeTask(resumeForm)
+    if (!newTask?.sessionId) {
+      throw new Error('继续会话失败：服务端未返回有效任务数据')
+    }
     // Don't revoke blob URLs that will be displayed in chat messages
     const preserveUrls = new Set(chatImages.map(ci => ci.url))
     clearAttachments(preserveUrls)
@@ -5034,8 +5037,9 @@ async function handlePaneSend(paneId: string, content: string) {
     if (selectedDirectoryId.value) {
       loadDirectoryTasks()
     }
-  } catch {
-    ElMessage.error('发送失败，消息已保留')
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : ''
+    ElMessage.error(msg ? `${msg}（消息已保留）` : '发送失败，消息已保留')
   }
 }
 
@@ -5567,6 +5571,9 @@ async function handleResumeFromHistory(task: ClaudeTask) {
       if (config) resumeForm.agentTeamsJson = config.config
     }
     const newTask = await workerState.resumeTask(resumeForm)
+    if (!newTask?.sessionId) {
+      throw new Error('继续会话失败：服务端未返回有效任务数据')
+    }
 
     // Per-conversation: find existing pane by sessionId
     const existingPane = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
@@ -5587,7 +5594,7 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     }
   } catch (e) {
     if (e !== 'cancel') {
-      ElMessage.error('创建任务失败')
+      ElMessage.error(e instanceof Error ? e.message : '继续会话失败')
     }
   }
 }
