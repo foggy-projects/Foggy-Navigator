@@ -1,0 +1,497 @@
+- generic [ref=e36]:
+  - banner [ref=e37]:
+    - generic [ref=e38] [cursor=pointer]: Foggy Navigator
+    - menubar [ref=e39]:
+      - menuitem "Workers" [ref=e40] [cursor=pointer]
+      - menuitem "会话" [ref=e41] [cursor=pointer]
+      - menuitem "任务" [ref=e42] [cursor=pointer]
+      - menuitem "跨项目" [ref=e43] [cursor=pointer]
+      - menuitem "监控" [ref=e44] [cursor=pointer]
+      - menuitem "用户" [ref=e45] [cursor=pointer]
+      - menuitem "设置" [ref=e46] [cursor=pointer]
+    - generic [ref=e47]:
+      - generic "通知" [ref=e49] [cursor=pointer]:
+        - img [ref=e50]
+      - button "root" [ref=e55] [cursor=pointer]:
+        - text: root
+        - img [ref=e57]
+  - generic [ref=e60]:
+    - complementary [ref=e61]:
+      - generic [ref=e62]:
+        - heading "Workers" [level=3] [ref=e63]
+        - button "+ 添加" [ref=e65] [cursor=pointer]:
+          - generic [ref=e66]: + 添加
+      - generic [ref=e67]:
+        - generic [ref=e68] [cursor=pointer]:
+          - generic [ref=e69]:
+            - generic [ref=e70]: ▼
+            - generic [ref=e72]: 本机测试
+          - generic [ref=e73]: foggy
+        - generic [ref=e93] [cursor=pointer]:
+          - generic [ref=e94]: ▶
+          - generic [ref=e95]: 📦
+          - generic [ref=e96]: Foggy Navigator
+          - generic "0 子目录" [ref=e97]: "0"
+        - generic [ref=e100] [cursor=pointer]: foggy-assistant
+        - generic [ref=e103] [cursor=pointer]: test2
+        - generic [ref=e106] [cursor=pointer]: tmp
+        - generic [ref=e74] [cursor=pointer]:
+          - generic [ref=e75]:
+            - generic [ref=e76]: ▶
+            - generic [ref=e78]: LocalDev
+          - generic [ref=e79]: foggy
+      - button "返回会话" [ref=e81] [cursor=pointer]:
+        - generic [ref=e82]:
+          - img [ref=e84]
+          - text: 返回会话
+    - main [ref=e87]:
+      - button "Choose File" [ref=e88]
+      - generic [ref=e107]:
+        - generic [ref=e108]:
+          - heading "本机测试" [level=2] [ref=e109]
+          - generic [ref=e111]: ONLINE
+          - generic [ref=e112]: v0.1.3
+        - generic [ref=e113]:
+          - button "刷新状态" [ref=e114] [cursor=pointer]:
+            - generic [ref=e115]: 刷新状态
+          - button "同步 Skills" [ref=e116] [cursor=pointer]:
+            - generic [ref=e117]: 同步 Skills
+          - button "编辑" [ref=e118] [cursor=pointer]:
+            - generic [ref=e119]: 编辑
+          - button "删除" [ref=e120] [cursor=pointer]:
+            - generic [ref=e121]: 删除
+      - generic [ref=e122]:
+        - tablist [ref=e126]:
+          - tab "CLI 进程 1" [selected] [ref=e128]:
+            - generic [ref=e129]: CLI 进程
+            - generic [ref=e131]: "1"
+          - tab "Coding Agents 2" [ref=e132]:
+            - generic [ref=e133]: Coding Agents
+            - generic [ref=e135]: "2"
+        - tabpanel "CLI 进程 1" [ref=e137]:
+          - button "刷新" [ref=e139] [cursor=pointer]:
+            - generic [ref=e140]: 刷新
+          - generic [ref=e142]:
+            - table [ref=e144]:
+              - rowgroup [ref=e154]:
+                - row "PID 命令 内存 启动时间 会话 模型 状态 操作" [ref=e155]:
+                  - columnheader "PID" [ref=e156]:
+                    - generic [ref=e157]: PID
+                  - columnheader "命令" [ref=e158]:
+                    - generic [ref=e159]: 命令
+                  - columnheader "内存" [ref=e160]:
+                    - generic [ref=e161]: 内存
+                  - columnheader "启动时间" [ref=e162]:
+                    - generic [ref=e163]: 启动时间
+                  - columnheader "会话" [ref=e164]:
+                    - generic [ref=e165]: 会话
+                  - columnheader "模型" [ref=e166]:
+                    - generic [ref=e167]: 模型
+                  - columnheader "状态" [ref=e168]:
+                    - generic [ref=e169]: 状态
+                  - columnheader "操作" [ref=e170]:
+                    - generic [ref=e171]: 操作
+            - table [ref=e176]:
+              - rowgroup [ref=e186]:
+                - row "11964 D:\\foggy-projects\\Foggy-Navigator\\tools\\claude-agent-worker\\.venv\\Lib\\site-packages\\claude_agent_sdk\\_bundled\\claude.exe --output-format stream-json --verbose --system-prompt \"\" --model opus[1m] --per 684.1 MB 2026-03-25T03:36:39 - - 孤儿 · 孤儿 重新同步 终止 强制" [ref=e187]:
+                  - cell "11964" [ref=e188]:
+                    - generic [ref=e189]: "11964"
+                  - cell "D:\\foggy-projects\\Foggy-Navigator\\tools\\claude-agent-worker\\.venv\\Lib\\site-packages\\claude_agent_sdk\\_bundled\\claude.exe --output-format stream-json --verbose --system-prompt \"\" --model opus[1m] --per" [ref=e190]:
+                    - generic [ref=e191]: D:\foggy-projects\Foggy-Navigator\tools\claude-agent-worker\.venv\Lib\site-packages\claude_agent_sdk\_bundled\claude.exe --output-format stream-json --verbose --system-prompt "" --model opus[1m] --per
+                  - cell "684.1 MB" [ref=e192]:
+                    - generic [ref=e193]: 684.1 MB
+                  - cell "2026-03-25T03:36:39" [ref=e194]:
+                    - generic [ref=e195]: 2026-03-25T03:36:39
+                  - cell "-" [ref=e196]:
+                    - generic [ref=e197]: "-"
+                  - cell "-" [ref=e198]:
+                    - generic [ref=e199]: "-"
+                  - cell "孤儿 · 孤儿" [ref=e200]:
+                    - generic [ref=e203]: 孤儿 · 孤儿
+                  - cell "重新同步 终止 强制" [ref=e204]:
+                    - generic [ref=e205]:
+                      - button "重新同步" [ref=e206] [cursor=pointer]:
+                        - generic [ref=e207]: 重新同步
+                      - separator [ref=e208]
+                      - button "终止" [ref=e209] [cursor=pointer]:
+                        - generic [ref=e210]: 终止
+                      - button "强制" [ref=e211] [cursor=pointer]:
+                        - generic [ref=e212]: 强制
+      - generic [ref=e672]:
+        - generic [ref=e673]:
+          - textbox "新建任务... (Ctrl+Enter 发送，可拖拽文件)" [ref=e676]
+          - button "运行" [disabled] [ref=e677]:
+            - generic [ref=e678]: 运行
+        - generic [ref=e679]:
+          - button "📎 附件" [ref=e680] [cursor=pointer]:
+            - generic [ref=e681]: 📎
+            - generic [ref=e682]: 附件
+          - button "🎨 画板" [ref=e683] [cursor=pointer]:
+            - generic [ref=e684]: 🎨
+            - generic [ref=e685]: 画板
+          - generic [ref=e687]: "API: test"
+          - generic [ref=e688]:
+            - generic [ref=e689]: "模型: opus (1M)"
+            - button "Close this tag" [ref=e690]:
+              - img [ref=e692] [cursor=pointer]
+      - generic [ref=e695]:
+        - generic [ref=e696]:
+          - generic [ref=e697]:
+            - generic [ref=e698]: A
+            - generic [ref=e700]: "5"
+            - generic "test" [ref=e701]
+          - generic [ref=e702]:
+            - generic [ref=e703]: $0.1147
+            - generic [ref=e704]: 7.6s
+            - button "关闭" [ref=e705] [cursor=pointer]:
+              - generic [ref=e706]: 关闭
+        - generic [ref=e708]:
+          - generic [ref=e709]:
+            - generic [ref=e710]:
+              - generic [ref=e711]:
+                - generic [ref=e712]: 用户
+                - generic [ref=e713]: 22:31:12
+              - paragraph [ref=e715]: test
+              - generic [ref=e716]:
+                - generic "复制" [ref=e717] [cursor=pointer]: 📋 复制
+                - generic "回退到此" [ref=e718] [cursor=pointer]: ↩ 回退到此
+            - generic [ref=e719]:
+              - generic [ref=e720]:
+                - generic [ref=e721]: Agent
+                - generic [ref=e722]: 22:31:12
+              - paragraph [ref=e724]: Connecting to worker...
+              - generic "复制" [ref=e726] [cursor=pointer]: 📋 复制
+            - generic [ref=e727]:
+              - generic [ref=e728]:
+                - generic [ref=e729]: Agent
+                - generic [ref=e730]: 22:31:13
+              - paragraph [ref=e732]: Task started
+              - generic "复制" [ref=e734] [cursor=pointer]: 📋 复制
+            - generic [ref=e735]:
+              - generic [ref=e736]:
+                - generic [ref=e737]: Agent
+                - generic [ref=e738]: 22:31:20
+              - paragraph [ref=e740]: Hello! I'm here and ready to help. How can I assist you today?
+              - generic "复制" [ref=e742] [cursor=pointer]: 📋 复制
+            - generic [ref=e752]:
+              - generic [ref=e753]:
+                - generic [ref=e754]: 用户
+                - generic [ref=e755]: 04:10:58
+              - paragraph [ref=e757]: 你好，请介绍一下你自己
+              - generic [ref=e758]:
+                - generic "复制" [ref=e759] [cursor=pointer]: 📋 复制
+                - generic "回退到此" [ref=e760] [cursor=pointer]: ↩ 回退到此
+          - generic [ref=e744]:
+            - textbox "输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)" [ref=e747]
+            - button "发送" [disabled] [ref=e748]:
+              - generic [ref=e749]: 发送
+    - complementary [ref=e262]:
+      - generic [ref=e263]:
+        - heading "历史会话" [level=3] [ref=e264]
+        - generic [ref=e265]:
+          - button "🔍" [ref=e266] [cursor=pointer]:
+            - generic [ref=e267]: 🔍
+          - button "↻" [ref=e268] [cursor=pointer]:
+            - generic [ref=e269]: ↻
+          - button "选择" [ref=e270] [cursor=pointer]:
+            - generic [ref=e271]: 选择
+      - generic [ref=e272]:
+        - generic [ref=e273]:
+          - generic [ref=e274] [cursor=pointer]: 全部
+          - generic [ref=e275] [cursor=pointer]: 待回复
+          - generic [ref=e276] [cursor=pointer]: 处理中
+          - generic [ref=e277] [cursor=pointer]: 已搁置
+          - generic [ref=e278] [cursor=pointer]: 已归档
+        - generic [ref=e279]:
+          - generic [ref=e280] [cursor=pointer]: 平台
+          - generic [ref=e281] [cursor=pointer]: 同步
+          - generic [ref=e282] [cursor=pointer]: 全部来源
+      - generic [ref=e283]:
+        - generic [ref=e284]:
+          - generic [ref=e285] [cursor=pointer]:
+            - generic [ref=e286]: ▼ ● 需要关注 (16)
+            - button "↻" [ref=e287]:
+              - generic [ref=e288]: ↻
+          - generic [ref=e289]:
+            - generic [ref=e290]: 本机测试
+            - generic [ref=e291]: (16)
+          - generic [ref=e292] [cursor=pointer]:
+            - generic [ref=e295]: 处理中
+            - generic "hi codex" [ref=e297]
+            - generic [ref=e298]:
+              - generic [ref=e299]: $0.02
+              - generic [ref=e300]: 0min
+              - generic [ref=e301]: 03/24
+              - generic [ref=e302]:
+                - button "继续" [ref=e303]:
+                  - generic [ref=e304]: 继续
+                - button "⋯" [ref=e306]
+          - generic [ref=e307] [cursor=pointer]:
+            - generic [ref=e310]: 处理中
+            - generic "haha" [ref=e312]
+            - generic [ref=e313]:
+              - generic [ref=e314]: $0.02
+              - generic [ref=e315]: 0min
+              - generic [ref=e316]: 03/24
+              - generic [ref=e317]:
+                - button "继续" [ref=e318]:
+                  - generic [ref=e319]: 继续
+                - button "⋯" [ref=e321]
+          - generic [ref=e322] [cursor=pointer]:
+            - generic [ref=e325]: 处理中
+            - generic "hi" [ref=e327]
+            - generic [ref=e328]:
+              - generic [ref=e329]: $0.02
+              - generic [ref=e330]: 0min
+              - generic [ref=e331]: 03/24
+              - generic [ref=e332]:
+                - button "继续" [ref=e333]:
+                  - generic [ref=e334]: 继续
+                - button "⋯" [ref=e336]
+          - generic [ref=e337] [cursor=pointer]:
+            - generic [ref=e338]:
+              - generic [ref=e750]: A
+              - generic [ref=e340]: 处理中
+            - generic "test" [ref=e342]
+            - generic [ref=e343]:
+              - generic [ref=e344]: $0.11
+              - generic [ref=e345]: 0min
+              - generic [ref=e346]: 03/24
+              - generic [ref=e347]:
+                - button "继续" [ref=e348]:
+                  - generic [ref=e349]: 继续
+                - button "⋯" [ref=e351]
+          - generic [ref=e352] [cursor=pointer]:
+            - generic [ref=e355]: 处理中
+            - generic "hi2" [ref=e357]
+            - generic [ref=e358]:
+              - generic [ref=e359]: $0.02
+              - generic [ref=e360]: 0min
+              - generic [ref=e361]: 03/24
+              - generic [ref=e362]:
+                - button "继续" [ref=e363]:
+                  - generic [ref=e364]: 继续
+                - button "⋯" [ref=e366]
+          - generic [ref=e367] [cursor=pointer]:
+            - generic [ref=e370]: 处理中
+            - generic "hi2" [ref=e372]
+            - generic [ref=e373]:
+              - generic [ref=e374]: 03/24
+              - generic [ref=e375]:
+                - button "继续" [ref=e376]:
+                  - generic [ref=e377]: 继续
+                - button "⋯" [ref=e379]
+          - generic [ref=e380] [cursor=pointer]:
+            - generic [ref=e383]: 处理中
+            - generic "test" [ref=e385]
+            - generic [ref=e386]:
+              - generic [ref=e387]: 03/24
+              - generic [ref=e388]:
+                - button "继续" [ref=e389]:
+                  - generic [ref=e390]: 继续
+                - button "⋯" [ref=e392]
+          - generic [ref=e393] [cursor=pointer]:
+            - generic [ref=e396]: 处理中
+            - generic "test" [ref=e398]
+            - generic [ref=e399]:
+              - generic [ref=e400]: 03/24
+              - generic [ref=e401]:
+                - button "继续" [ref=e402]:
+                  - generic [ref=e403]: 继续
+                - button "⋯" [ref=e405]
+          - generic [ref=e406] [cursor=pointer]:
+            - generic [ref=e409]: 处理中
+            - generic "hi" [ref=e411]
+            - generic [ref=e412]:
+              - generic [ref=e413]: 03/24
+              - generic [ref=e414]:
+                - button "继续" [ref=e415]:
+                  - generic [ref=e416]: 继续
+                - button "⋯" [ref=e418]
+          - generic [ref=e419] [cursor=pointer]:
+            - generic [ref=e422]: 处理中
+            - generic "test" [ref=e424]
+            - generic [ref=e425]:
+              - generic [ref=e426]: 03/24
+              - generic [ref=e427]:
+                - button "继续" [ref=e428]:
+                  - generic [ref=e429]: 继续
+                - button "⋯" [ref=e431]
+          - generic [ref=e432] [cursor=pointer]:
+            - generic [ref=e435]: 处理中
+            - generic "test" [ref=e437]
+            - generic [ref=e438]:
+              - generic [ref=e439]: 03/23
+              - generic [ref=e440]:
+                - button "继续" [ref=e441]:
+                  - generic [ref=e442]: 继续
+                - button "⋯" [ref=e444]
+          - generic [ref=e445] [cursor=pointer]:
+            - generic [ref=e448]: 处理中
+            - generic "hi" [ref=e450]
+            - generic [ref=e451]:
+              - generic [ref=e452]: 03/23
+              - generic [ref=e453]:
+                - button "继续" [ref=e454]:
+                  - generic [ref=e455]: 继续
+                - button "⋯" [ref=e457]
+          - generic [ref=e458] [cursor=pointer]:
+            - generic [ref=e461]: 处理中
+            - generic "hi" [ref=e463]
+            - generic [ref=e464]:
+              - generic [ref=e465]: 03/23
+              - button "⋯" [ref=e468]
+          - generic [ref=e469] [cursor=pointer]:
+            - generic [ref=e472]: 处理中
+            - generic "hi" [ref=e474]
+            - generic [ref=e475]:
+              - generic [ref=e476]: 03/23
+              - button "⋯" [ref=e479]
+          - generic [ref=e480] [cursor=pointer]:
+            - generic [ref=e483]: 处理中
+            - generic "hi" [ref=e485]
+            - generic [ref=e486]:
+              - generic [ref=e487]: 03/23
+              - button "⋯" [ref=e490]
+          - generic [ref=e491] [cursor=pointer]:
+            - generic [ref=e494]: 处理中
+            - generic "test" [ref=e496]
+            - generic [ref=e497]:
+              - generic [ref=e498]: 03/23
+              - button "⋯" [ref=e501]
+          - generic [ref=e504]: 历史会话
+        - generic [ref=e506]:
+          - generic [ref=e507] [cursor=pointer]:
+            - generic [ref=e508]:
+              - generic "hi codex" [ref=e509]
+              - generic "COMPLETED" [ref=e510]
+            - generic [ref=e511]:
+              - generic [ref=e512]: "5.4"
+              - generic [ref=e513]: $0.02
+              - generic [ref=e514]: 03/24
+              - button "⋯" [ref=e517]
+          - generic [ref=e518] [cursor=pointer]:
+            - generic [ref=e519]:
+              - generic "haha" [ref=e520]
+              - generic "COMPLETED" [ref=e521]
+            - generic [ref=e522]:
+              - generic [ref=e523]: "5.4"
+              - generic [ref=e524]: $0.02
+              - generic [ref=e525]: 03/24
+              - button "⋯" [ref=e528]
+          - generic [ref=e529] [cursor=pointer]:
+            - generic [ref=e530]:
+              - generic "hi" [ref=e531]
+              - generic "COMPLETED" [ref=e532]
+            - generic [ref=e533]:
+              - generic [ref=e534]: "5.4"
+              - generic [ref=e535]: $0.02
+              - generic [ref=e536]: 03/24
+              - button "⋯" [ref=e539]
+          - generic [ref=e540] [cursor=pointer]:
+            - generic [ref=e541]:
+              - generic [ref=e751]: A
+              - generic "test" [ref=e542]
+              - generic "COMPLETED" [ref=e543]
+            - generic [ref=e544]:
+              - generic [ref=e545]: "5"
+              - generic [ref=e546]: $0.11
+              - generic [ref=e547]: 03/24
+              - button "⋯" [ref=e550]
+          - generic [ref=e551] [cursor=pointer]:
+            - generic [ref=e552]:
+              - generic "hi2" [ref=e553]
+              - generic "COMPLETED" [ref=e554]
+            - generic [ref=e555]:
+              - generic [ref=e556]: "5.4"
+              - generic [ref=e557]: $0.02
+              - generic [ref=e558]: 03/24
+              - button "⋯" [ref=e561]
+          - generic [ref=e562] [cursor=pointer]:
+            - generic [ref=e563]:
+              - generic "hi2" [ref=e564]
+              - generic "FAILED" [ref=e565]
+            - generic [ref=e566]:
+              - generic [ref=e567]: "5.4"
+              - generic [ref=e568]: 03/24
+              - button "⋯" [ref=e571]
+          - generic [ref=e572] [cursor=pointer]:
+            - generic [ref=e573]:
+              - generic "test" [ref=e574]
+              - generic "FAILED" [ref=e575]
+            - generic [ref=e576]:
+              - generic [ref=e577]: "5.4"
+              - generic [ref=e578]: 03/24
+              - button "⋯" [ref=e581]
+          - generic [ref=e582] [cursor=pointer]:
+            - generic [ref=e583]:
+              - generic "test" [ref=e584]
+              - generic "FAILED" [ref=e585]
+            - generic [ref=e586]:
+              - generic [ref=e587]: "5.4"
+              - generic [ref=e588]: 03/24
+              - button "⋯" [ref=e591]
+          - generic [ref=e592] [cursor=pointer]:
+            - generic [ref=e593]:
+              - generic "hi" [ref=e594]
+              - generic "FAILED" [ref=e595]
+            - generic [ref=e596]:
+              - generic [ref=e597]: "5.4"
+              - generic [ref=e598]: 03/24
+              - button "⋯" [ref=e601]
+          - generic [ref=e602] [cursor=pointer]:
+            - generic [ref=e603]:
+              - generic "test" [ref=e604]
+              - generic "FAILED" [ref=e605]
+            - generic [ref=e606]:
+              - generic [ref=e607]: "5.4"
+              - generic [ref=e608]: 03/24
+              - button "⋯" [ref=e611]
+          - generic [ref=e612] [cursor=pointer]:
+            - generic [ref=e613]:
+              - generic "test" [ref=e614]
+              - generic "FAILED" [ref=e615]
+            - generic [ref=e616]:
+              - generic [ref=e617]: "5.4"
+              - generic [ref=e618]: 03/23
+              - button "⋯" [ref=e621]
+          - generic [ref=e622] [cursor=pointer]:
+            - generic [ref=e623]:
+              - generic "hi" [ref=e624]
+              - generic "FAILED" [ref=e625]
+            - generic [ref=e626]:
+              - generic [ref=e627]: "5.4"
+              - generic [ref=e628]: 03/23
+              - button "⋯" [ref=e631]
+          - generic [ref=e632] [cursor=pointer]:
+            - generic [ref=e633]:
+              - generic "hi" [ref=e634]
+              - generic "FAILED" [ref=e635]
+            - generic [ref=e636]:
+              - generic [ref=e637]: "5.4"
+              - generic [ref=e638]: 03/23
+              - button "⋯" [ref=e641]
+          - generic [ref=e642] [cursor=pointer]:
+            - generic [ref=e643]:
+              - generic "hi" [ref=e644]
+              - generic "FAILED" [ref=e645]
+            - generic [ref=e646]:
+              - generic [ref=e647]: "5.4"
+              - generic [ref=e648]: 03/23
+              - button "⋯" [ref=e651]
+          - generic [ref=e652] [cursor=pointer]:
+            - generic [ref=e653]:
+              - generic "hi" [ref=e654]
+              - generic "FAILED" [ref=e655]
+            - generic [ref=e656]:
+              - generic [ref=e657]: "5.4"
+              - generic [ref=e658]: 03/23
+              - button "⋯" [ref=e661]
+          - generic [ref=e662] [cursor=pointer]:
+            - generic [ref=e663]:
+              - generic "test" [ref=e664]
+              - generic "FAILED" [ref=e665]
+            - generic [ref=e666]:
+              - generic [ref=e667]: "5.4"
+              - generic [ref=e668]: 03/23
+              - button "⋯" [ref=e671]

@@ -6,17 +6,22 @@ import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
-import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
-import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.enums.LlmModelCategory;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -31,46 +36,47 @@ class ClaudeTaskServiceAuthTest {
 
     private ClaudeTaskService service;
     private ClaudeWorkerService workerService;
-    private ConversationConfigService configService;
     private WorkingDirectoryService directoryService;
     private SessionManager sessionManager;
     private ApplicationEventPublisher publisher;
     private LlmModelManager llmModelManager;
-    private com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository workingDirectoryRepository;
-    private com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository deletedSessionRepository;
+    private CredentialEncryptor credentialEncryptor;
+    private com.foggy.navigator.common.repository.WorkingDirectoryRepository workingDirectoryRepository;
     private com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository taskRepository;
+    private SessionTaskRepository sessionTaskRepository;
+    private SessionEntityRepository sessionEntityRepository;
 
     private static final String USER_ID = "user-1";
     private static final String TENANT_ID = "tenant-1";
     private static final String WORKER_ID = "worker-1";
     private static final String SESSION_ID = "session-001";
-    private static final String TASK_ID = "task-001";
 
     @BeforeEach
     void setUp() {
         workerService = mock(ClaudeWorkerService.class);
-        configService = mock(ConversationConfigService.class);
         directoryService = mock(WorkingDirectoryService.class);
-        workingDirectoryRepository = mock(com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository.class);
-        deletedSessionRepository = mock(com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository.class);
+        workingDirectoryRepository = mock(com.foggy.navigator.common.repository.WorkingDirectoryRepository.class);
         sessionManager = mock(SessionManager.class);
         publisher = mock(ApplicationEventPublisher.class);
         llmModelManager = mock(LlmModelManager.class);
+        credentialEncryptor = mock(CredentialEncryptor.class);
         taskRepository = mock(com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository.class);
+        sessionTaskRepository = mock(SessionTaskRepository.class);
+        sessionEntityRepository = mock(SessionEntityRepository.class);
 
         UserAuthService userAuthService = mock(UserAuthService.class);
         when(userAuthService.generateServiceToken(anyString())).thenReturn("mock-jwt-token");
 
-        var conversationConfigRepository = mock(com.foggy.navigator.claude.worker.repository.ConversationConfigRepository.class);
         var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
         service = new ClaudeTaskService(
                 taskRepository,
-                conversationConfigRepository,
-                deletedSessionRepository,
-                workerService, configService, agentTeamsConfigService, directoryService,
+                workerService, agentTeamsConfigService, directoryService,
                 workingDirectoryRepository,
                 sessionManager, publisher, llmModelManager, userAuthService,
+                credentialEncryptor,
                 mock(org.springframework.transaction.support.TransactionTemplate.class));
+        ReflectionTestUtils.setField(service, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(service, "sessionEntityRepository", sessionEntityRepository);
 
         // Default worker mock (online)
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
@@ -91,32 +97,29 @@ class ClaudeTaskServiceAuthTest {
         existingSession.setTaskName("Test task");
         when(sessionManager.getSession(SESSION_ID)).thenReturn(existingSession);
 
-        // Mock task repository to return task with fixed ID
-        com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity taskEntity = new com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity();
-        taskEntity.setTaskId(TASK_ID);
-        taskEntity.setSessionId(SESSION_ID);
-        taskEntity.setWorkerId(WORKER_ID);
-        taskEntity.setUserId(USER_ID);
-        when(taskRepository.save(any())).thenReturn(taskEntity);
+        when(taskRepository.save(any(ClaudeTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
+        when(sessionTaskRepository.save(any(SessionTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(sessionEntityRepository.findById(anyString())).thenAnswer(invocation -> {
+            SessionEntity session = new SessionEntity();
+            session.setId(invocation.getArgument(0));
+            session.setProviderType("claude-worker");
+            return Optional.of(session);
+        });
+        when(sessionEntityRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        // Default: no existing conversation config (not bound yet)
-        ConversationConfigEntity emptyConfig = createConversationConfig(SESSION_ID, WORKER_ID, USER_ID);
-        // Ensure authBoundAt is null
-        assertNull(emptyConfig.getAuthBoundAt(), "emptyConfig should have null authBoundAt");
-        when(configService.getOrCreate(SESSION_ID, WORKER_ID, USER_ID)).thenReturn(emptyConfig);
-
-        // Stub bindAuthFromDirectory as void method
-        doNothing().when(configService).bindAuthFromDirectory(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        // Default: session entity with no auth bound yet (authBoundAt = null)
+        // sessionEntityRepository.findById already mocked above to return a SessionEntity
     }
 
     @Test
-    void createTask_withModelConfigId_savesToConversationConfig() {
+    void createTask_withModelConfigId_savesAuthToSession() {
         // Arrange: Platform model config exists
         String modelConfigId = "model-config-123";
         LlmModelConfigDTO modelConfig = createModelConfig(modelConfigId, "GPT-4", "https://api.openai.com/v1");
         when(llmModelManager.getModelConfig(modelConfigId)).thenReturn(Optional.of(modelConfig));
         when(llmModelManager.getDecryptedApiKey(modelConfigId)).thenReturn("sk-test-key-123");
+        when(credentialEncryptor.encrypt("sk-test-key-123")).thenReturn("encrypted-sk-test-key-123");
 
         CreateTaskForm form = new CreateTaskForm();
         form.setWorkerId(WORKER_ID);
@@ -132,24 +135,20 @@ class ClaudeTaskServiceAuthTest {
         assertEquals(SESSION_ID, result.getSessionId());
         assertEquals(WORKER_ID, result.getWorkerId());
 
-        // Verify bindAuthFromDirectory was called with correct params
-        ArgumentCaptor<String> sessionIdCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> workerIdCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> userIdCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> authModeCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> tokenCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> baseUrlCaptor = ArgumentCaptor.forClass(String.class);
-
-        verify(configService).bindAuthFromDirectory(
-                sessionIdCaptor.capture(), workerIdCaptor.capture(), userIdCaptor.capture(),
-                authModeCaptor.capture(), tokenCaptor.capture(), baseUrlCaptor.capture());
-
-        assertEquals(SESSION_ID, sessionIdCaptor.getValue());
-        assertEquals(WORKER_ID, workerIdCaptor.getValue());
-        assertEquals(USER_ID, userIdCaptor.getValue());
-        assertEquals("CUSTOM_ENDPOINT", authModeCaptor.getValue());
-        assertEquals("sk-test-key-123", tokenCaptor.getValue());
-        assertEquals("https://api.openai.com/v1", baseUrlCaptor.getValue());
+        // Verify SessionEntity was saved with auth fields
+        verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
+                SESSION_ID.equals(entity.getId())
+                        && "CUSTOM_ENDPOINT".equals(entity.getAuthMode())
+                        && "encrypted-sk-test-key-123".equals(entity.getAuthTokenCiphertext())
+                        && "https://api.openai.com/v1".equals(entity.getAuthBaseUrl())
+                        && entity.getAuthBoundAt() != null
+        ));
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                SESSION_ID.equals(entity.getSessionId())
+                        && "claude-worker".equals(entity.getProviderType())
+                        && entity.getTaskStateJson() != null
+                        && entity.getTaskStateJson().contains("\"fileCheckpointingEnabled\":true")
+        ));
     }
 
     @Test
@@ -159,6 +158,7 @@ class ClaudeTaskServiceAuthTest {
         LlmModelConfigDTO modelConfig = createModelConfig(modelConfigId, "Claude-3", null);
         when(llmModelManager.getModelConfig(modelConfigId)).thenReturn(Optional.of(modelConfig));
         when(llmModelManager.getDecryptedApiKey(modelConfigId)).thenReturn("sk-ant-key-456");
+        when(credentialEncryptor.encrypt("sk-ant-key-456")).thenReturn("encrypted-sk-ant-key-456");
 
         CreateTaskForm form = new CreateTaskForm();
         form.setWorkerId(WORKER_ID);
@@ -169,29 +169,31 @@ class ClaudeTaskServiceAuthTest {
         // Act
         service.createTask(USER_ID, TENANT_ID, form);
 
-        // Assert: should use API_KEY mode (not CUSTOM_ENDPOINT)
-        ArgumentCaptor<String> authModeCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> tokenCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> baseUrlCaptor = ArgumentCaptor.forClass(String.class);
-        verify(configService).bindAuthFromDirectory(
-                anyString(), anyString(), anyString(),
-                authModeCaptor.capture(), tokenCaptor.capture(), baseUrlCaptor.capture());
-
-        assertEquals("API_KEY", authModeCaptor.getValue());
-        assertEquals("sk-ant-key-456", tokenCaptor.getValue());
-        assertNull(baseUrlCaptor.getValue());
+        // Assert: should use API_KEY mode (not CUSTOM_ENDPOINT) — verify SessionEntity
+        verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
+                "API_KEY".equals(entity.getAuthMode())
+                        && "encrypted-sk-ant-key-456".equals(entity.getAuthTokenCiphertext())
+                        && entity.getAuthBaseUrl() == null
+                        && entity.getAuthBoundAt() != null
+        ));
     }
 
     @Test
     void resumeTask_existingAuthBound_notOverriddenByModelConfigId() {
-        // Arrange: ConversationConfig already has auth bound
-        ConversationConfigEntity existingConfig = createConversationConfig(SESSION_ID, WORKER_ID, USER_ID);
-        existingConfig.setAuthMode("API_KEY");
-        existingConfig.setAuthToken("encrypted-old-key");
-        existingConfig.setBaseUrl(null);
-        existingConfig.setAuthBoundAt(LocalDateTime.now().minusHours(1)); // Bound 1 hour ago
-        when(configService.getOrCreate(SESSION_ID, WORKER_ID, USER_ID)).thenReturn(existingConfig);
-        when(configService.getDecryptedToken(existingConfig)).thenReturn("old-key-789");
+        // Arrange: SessionEntity already has auth bound
+        // Override the sessionEntityRepository mock to return a session with auth already bound
+        SessionEntity boundSession = new SessionEntity();
+        boundSession.setId(SESSION_ID);
+        boundSession.setUserId(USER_ID);
+        boundSession.setProviderType("claude-worker");
+        boundSession.setCurrentWorkerId(WORKER_ID);
+        boundSession.setAuthMode("API_KEY");
+        boundSession.setAuthTokenCiphertext("encrypted-old-key");
+        boundSession.setAuthBaseUrl(null);
+        boundSession.setAuthBoundAt(LocalDateTime.now().minusHours(1)); // Bound 1 hour ago
+        boundSession.setStatus("ACTIVE");
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(boundSession));
+        when(credentialEncryptor.decrypt("encrypted-old-key")).thenReturn("old-key-789");
 
         // User provides different modelConfigId in resume request
         String modelConfigId = "model-config-new";
@@ -213,21 +215,19 @@ class ClaudeTaskServiceAuthTest {
         // Act
         service.resumeTask(USER_ID, TENANT_ID, form);
 
-        // Assert: bindAuthFromDirectory should NOT be called (existing auth is preserved)
-        verify(configService, never()).bindAuthFromDirectory(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        // Assert: encrypt should NOT be called with new key (existing auth is preserved)
+        verify(credentialEncryptor, never()).encrypt("sk-new-key");
     }
 
     @Test
     void resumeTask_noExistingAuth_resolvesFromModelConfigId() {
-        // Arrange: No existing auth bound
-        ConversationConfigEntity emptyConfig = createConversationConfig(SESSION_ID, WORKER_ID, USER_ID);
-        when(configService.getOrCreate(SESSION_ID, WORKER_ID, USER_ID)).thenReturn(emptyConfig);
+        // Arrange: No existing auth bound (default session mock has no authBoundAt)
 
         String modelConfigId = "model-config-789";
         LlmModelConfigDTO modelConfig = createModelConfig(modelConfigId, "GPT-4", "https://api.example.com");
         when(llmModelManager.getModelConfig(modelConfigId)).thenReturn(Optional.of(modelConfig));
         when(llmModelManager.getDecryptedApiKey(modelConfigId)).thenReturn("sk-789");
+        when(credentialEncryptor.encrypt("sk-789")).thenReturn("encrypted-sk-789");
 
         var form = new com.foggy.navigator.claude.worker.model.form.ResumeTaskForm();
         form.setWorkerId(WORKER_ID);
@@ -243,18 +243,18 @@ class ClaudeTaskServiceAuthTest {
         // Act
         service.resumeTask(USER_ID, TENANT_ID, form);
 
-        // Assert: bindAuthFromDirectory should be called (no existing auth)
-        verify(configService).bindAuthFromDirectory(
-                eq(SESSION_ID), eq(WORKER_ID), eq(USER_ID),
-                eq("CUSTOM_ENDPOINT"), eq("sk-789"), eq("https://api.example.com"));
+        // Assert: auth should be saved to SessionEntity
+        verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
+                SESSION_ID.equals(entity.getId())
+                        && "CUSTOM_ENDPOINT".equals(entity.getAuthMode())
+                        && "encrypted-sk-789".equals(entity.getAuthTokenCiphertext())
+                        && "https://api.example.com".equals(entity.getAuthBaseUrl())
+                        && entity.getAuthBoundAt() != null
+        ));
     }
 
     @Test
     void resolveAuth_modelConfigIdWithNoApiKey_fallsBackToDirectory() {
-        // This test validates the private resolveAuth method through public API behavior
-        // We can't test resolveAuth directly since it's private, but we can verify
-        // that when modelConfigId has no API key, directory auth is used
-
         // Arrange: Model config exists but hasApiKey=false
         String modelConfigId = "model-config-no-key";
         LlmModelConfigDTO modelConfig = createModelConfig(modelConfigId, "Free Model", null);
@@ -268,12 +268,11 @@ class ClaudeTaskServiceAuthTest {
         dir.setDefaultAuthToken("encrypted-dir-key");
         dir.setDefaultBaseUrl(null);
 
-        when(configService.getOrCreate(SESSION_ID, WORKER_ID, USER_ID))
-                .thenReturn(createConversationConfig(SESSION_ID, WORKER_ID, USER_ID));
         when(directoryService.getDirectoryEntity(USER_ID, directoryId)).thenReturn(dir);
         when(workingDirectoryRepository.findByDirectoryIdAndUserId(directoryId, USER_ID))
                 .thenReturn(Optional.of(dir));
         when(directoryService.getDecryptedDefaultAuth(dir)).thenReturn(new String[]{"API_KEY", "dir-key-123", null});
+        when(credentialEncryptor.encrypt("dir-key-123")).thenReturn("encrypted-dir-key-123");
 
         CreateTaskForm form = new CreateTaskForm();
         form.setWorkerId(WORKER_ID);
@@ -285,17 +284,12 @@ class ClaudeTaskServiceAuthTest {
         service.createTask(USER_ID, TENANT_ID, form);
 
         // Assert: Should bind from directory (not model config since hasApiKey=false)
-        verify(configService).bindAuthFromDirectory(
-                eq(SESSION_ID), eq(WORKER_ID), eq(USER_ID),
-                eq("API_KEY"), eq("dir-key-123"), isNull());
-    }
-
-    private ConversationConfigEntity createConversationConfig(String sessionId, String workerId, String userId) {
-        ConversationConfigEntity entity = new ConversationConfigEntity();
-        entity.setSessionId(sessionId);
-        entity.setWorkerId(workerId);
-        entity.setUserId(userId);
-        return entity;
+        verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
+                SESSION_ID.equals(entity.getId())
+                        && "API_KEY".equals(entity.getAuthMode())
+                        && "encrypted-dir-key-123".equals(entity.getAuthTokenCiphertext())
+                        && entity.getAuthBoundAt() != null
+        ));
     }
 
     private LlmModelConfigDTO createModelConfig(String id, String modelName, String baseUrl) {

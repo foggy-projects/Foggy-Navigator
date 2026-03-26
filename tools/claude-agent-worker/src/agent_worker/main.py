@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import logging.handlers
+import queue
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -65,11 +67,35 @@ _file = logging.handlers.RotatingFileHandler(
     backupCount=3,
     encoding="utf-8",
 )
-logging.basicConfig(
-    level=logging.INFO,
-    format=_fmt,
-    handlers=[_console, _file],
-)
+_log_queue: queue.Queue[logging.LogRecord] = queue.Queue()
+_queue_handler = logging.handlers.QueueHandler(_log_queue)
+_log_listener: logging.handlers.QueueListener | None = None
+
+
+def _configure_logging() -> None:
+    """Route application logs through a background listener thread."""
+    global _log_listener
+    if _log_listener is not None:
+        return
+
+    _console.setFormatter(logging.Formatter(_fmt))
+    _file.setFormatter(logging.Formatter(_fmt))
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(_queue_handler)
+
+    _log_listener = logging.handlers.QueueListener(
+        _log_queue,
+        _console,
+        _file,
+        respect_handler_level=True,
+    )
+    _log_listener.start()
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
 
 # -- Foggy Monitor (optional RabbitMQ log forwarding) ----------------------
@@ -116,7 +142,7 @@ async def lifespan(app: FastAPI):
     logger.info("  default_auth   = %s", default_auth)
 
     # Deploy platform skills to ~/.claude/skills/
-    deploy_platform_skills()
+    await asyncio.to_thread(deploy_platform_skills)
 
     # Setup company-skill-marketplace in settings.json
     await setup_marketplace()
@@ -131,6 +157,8 @@ async def lifespan(app: FastAPI):
     if _monitor_publisher:
         _monitor_publisher.close()
     logger.info("Claude Agent Worker stopped")
+    if _log_listener is not None:
+        _log_listener.stop()
 
 
 app = FastAPI(

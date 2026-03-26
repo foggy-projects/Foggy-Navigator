@@ -350,30 +350,39 @@ class EventBroadcast:
         except ValueError:
             pass
 
+    async def _persist_event(self, item: dict[str, Any]) -> None:
+        """Offload durable persistence to a worker thread."""
+        if not (self._event_store and self._task_id):
+            return
+        try:
+            await asyncio.to_thread(self._event_store.append, self._task_id, item)
+        except Exception:
+            logger.warning(
+                "Event persistence failed for task %s seq %d",
+                self._task_id, self._seq_counter, exc_info=True,
+            )
+
+    async def _mark_closed(self) -> None:
+        """Offload stream-close persistence to a worker thread."""
+        if not (self._event_store and self._task_id):
+            return
+        try:
+            await asyncio.to_thread(self._event_store.mark_closed, self._task_id)
+        except Exception:
+            logger.warning(
+                "Failed to mark task %s as closed in event store",
+                self._task_id, exc_info=True,
+            )
+
     async def put(self, item: dict[str, Any] | None) -> None:
         if item is not None:
             self._seq_counter += 1
             item["seq"] = self._seq_counter
             self._history.append(item)
-            # Persist to durable storage (fire-and-forget, errors logged inside)
-            if self._event_store and self._task_id:
-                try:
-                    self._event_store.append(self._task_id, item)
-                except Exception:
-                    logger.warning(
-                        "Event persistence failed for task %s seq %d",
-                        self._task_id, self._seq_counter, exc_info=True,
-                    )
+            await self._persist_event(item)
         else:
             self._closed = True
-            if self._event_store and self._task_id:
-                try:
-                    self._event_store.mark_closed(self._task_id)
-                except Exception:
-                    logger.warning(
-                        "Failed to mark task %s as closed in event store",
-                        self._task_id, exc_info=True,
-                    )
+            await self._mark_closed()
         for q in list(self._subscribers):  # snapshot to avoid mutation during iteration
             await q.put(item)
 
@@ -691,6 +700,14 @@ class SdkWrapper:
         return saved
 
     @staticmethod
+    async def _save_images_async(
+        cwd: str,
+        images: list[dict[str, str]],
+    ) -> list[str]:
+        """Offload attachment writes to a worker thread."""
+        return await asyncio.to_thread(SdkWrapper._save_images, cwd, images)
+
+    @staticmethod
     def _augment_prompt_with_images(prompt: str, image_paths: list[str]) -> str:
         """Prepend file reading instructions to the user prompt."""
 
@@ -752,7 +769,7 @@ class SdkWrapper:
         # Save attached images and augment prompt with file paths.
         if images:
             try:
-                saved_paths = self._save_images(cwd, images)
+                saved_paths = await self._save_images_async(cwd, images)
                 if saved_paths:
                     prompt = self._augment_prompt_with_images(prompt, saved_paths)
                     logger.info("Task %s: saved %d image(s), prompt augmented", task_id, len(saved_paths))

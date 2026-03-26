@@ -1,12 +1,14 @@
 package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.agent.framework.session.*;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.context.annotation.Bean;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
@@ -16,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
 
 @SpringBootTest(classes = JpaSessionManagerTest.TestConfig.class)
 @ActiveProfiles("test")
@@ -26,6 +29,10 @@ class JpaSessionManagerTest {
     @EnableJpaRepositories(basePackages = "com.foggy.navigator.session.repository")
     @ComponentScan(basePackages = "com.foggy.navigator.session")
     static class TestConfig {
+        @Bean
+        LlmModelManager llmModelManager() {
+            return mock(LlmModelManager.class);
+        }
     }
 
     @Autowired

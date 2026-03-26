@@ -78,7 +78,7 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick, computed } from 'vue'
-import { searchSessions } from '@/api/claudeWorker'
+import { searchSessionsUnified } from '@/api/unifiedTask'
 import type { ClaudeWorker, WorkingDirectory, SessionSearchResult } from '@/types'
 
 const props = defineProps<{
@@ -162,13 +162,13 @@ async function doSearch() {
   activeIndex.value = 0
 
   try {
-    const data = await searchSessions({
-      keyword: keyword.value.trim() || undefined,
-      workerId: filterWorkerId.value || undefined,
-      directoryId: filterDirectoryId.value || undefined,
-      page: 0,
-      size: 50,
-    })
+    const data = await searchSessionsUnified(
+      keyword.value.trim() || undefined,
+      filterWorkerId.value || undefined,
+      filterDirectoryId.value || undefined,
+      0,
+      50,
+    )
 
     // 丢弃过时的请求结果
     if (currentCounter !== searchCounter) return

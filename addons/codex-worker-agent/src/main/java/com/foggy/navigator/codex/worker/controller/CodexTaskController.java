@@ -70,6 +70,7 @@ public class CodexTaskController {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
 
+        streamRelay.abortRemoteTask(task);
         streamRelay.abortStream(taskId);
         taskService.abortTask(taskId);
         return RX.ok(Map.of("taskId", taskId, "status", "ABORTED"));

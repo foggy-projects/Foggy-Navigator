@@ -28,11 +28,13 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 
 // Start server
 const server = app.listen(config.port, config.host, () => {
+  const authMode = config.openaiApiKey ? 'API Key' : 'Codex Login / Per-request'
   console.log('='.repeat(60))
   console.log(`Codex Agent Worker started`)
   console.log(`  URL:    http://${config.host}:${config.port}`)
   console.log(`  Name:   ${config.workerName}`)
   console.log(`  Auth:   ${config.workerToken ? 'Enabled' : 'Disabled'}`)
+  console.log(`  Codex:  ${authMode}`)
   console.log(`  CWDs:   ${config.allowedCwds.length > 0 ? config.allowedCwds.join(', ') : 'All allowed'}`)
   console.log('='.repeat(60))
 })

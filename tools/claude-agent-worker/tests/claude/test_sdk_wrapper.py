@@ -189,13 +189,21 @@ class TestEventBroadcastPersistence:
 
     @pytest.mark.asyncio
     async def test_events_persisted_to_store(self):
+        to_thread_calls: list[tuple] = []
         mock_store = MagicMock()
-        b = EventBroadcast(task_id="t1", event_store=mock_store)
-        b.subscribe()
 
-        await b.put({"type": "e1"})
-        await b.put({"type": "e2"})
+        async def fake_to_thread(func, *args, **kwargs):
+            to_thread_calls.append((func, args, kwargs))
+            return func(*args, **kwargs)
 
+        with patch("agent_worker.claude.sdk_wrapper.asyncio.to_thread", side_effect=fake_to_thread):
+            b = EventBroadcast(task_id="t1", event_store=mock_store)
+            b.subscribe()
+
+            await b.put({"type": "e1"})
+            await b.put({"type": "e2"})
+
+        assert len(to_thread_calls) == 2
         assert mock_store.append.call_count == 2
         # First call: seq=1
         first_call = mock_store.append.call_args_list[0]
@@ -204,11 +212,17 @@ class TestEventBroadcastPersistence:
 
     @pytest.mark.asyncio
     async def test_close_marks_store_closed(self):
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
         mock_store = MagicMock()
         b = EventBroadcast(task_id="t1", event_store=mock_store)
         b.subscribe()
 
-        await b.put(None)  # close
+        with patch("agent_worker.claude.sdk_wrapper.asyncio.to_thread", side_effect=fake_to_thread) as mocked_to_thread:
+            await b.put(None)  # close
+
+        mocked_to_thread.assert_awaited_once()
         mock_store.mark_closed.assert_called_once_with("t1")
 
     @pytest.mark.asyncio
@@ -381,6 +395,23 @@ class TestSaveImages:
         images = [{"name": ".hidden", "data": data}]
         saved = SdkWrapper._save_images(str(tmp_path), images)
         assert saved[0] == ".foggy-attachments/attachment"
+
+    @pytest.mark.asyncio
+    async def test_save_images_async_uses_to_thread(self, tmp_path: Path):
+        data = base64.b64encode(b"fake-png-data").decode()
+        images = [{"name": "async.png", "data": data}]
+        to_thread_calls: list[tuple] = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            to_thread_calls.append((func, args, kwargs))
+            return func(*args, **kwargs)
+
+        with patch("agent_worker.claude.sdk_wrapper.asyncio.to_thread", side_effect=fake_to_thread):
+            saved = await SdkWrapper._save_images_async(str(tmp_path), images)
+
+        assert len(to_thread_calls) == 1
+        assert saved == [".foggy-attachments/async.png"]
+        assert (tmp_path / ".foggy-attachments" / "async.png").exists()
 
 
 class TestAugmentPromptWithImages:

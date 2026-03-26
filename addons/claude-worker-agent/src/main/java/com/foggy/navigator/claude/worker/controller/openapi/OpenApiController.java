@@ -6,7 +6,7 @@ import com.foggy.navigator.claude.worker.model.dto.*;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.*;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
-import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.*;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
@@ -14,6 +14,7 @@ import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
@@ -369,7 +370,9 @@ public class OpenApiController {
     @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<List<A2aAgentCard>> listAgents() {
         String tenantId = UserContext.getCurrentTenantId();
-        return RX.ok(agentProvider.listAgentCardsByTenant(tenantId));
+        AgentResolveContext ctx = AgentResolveContext.builder()
+                .tenantId(tenantId).requestSource("OPEN_API").build();
+        return RX.ok(agentProvider.listAgentCards(ctx));
     }
 
     /**
@@ -379,7 +382,9 @@ public class OpenApiController {
     @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
     public RX<A2aAgentCard> getAgentCard(@PathVariable String agentId) {
         String tenantId = UserContext.getCurrentTenantId();
-        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+        AgentResolveContext ctx = AgentResolveContext.builder()
+                .tenantId(tenantId).requestSource("OPEN_API").build();
+        A2aAgent agent = agentProvider.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
         return RX.ok(agent.getAgentCard());
     }
@@ -402,7 +407,9 @@ public class OpenApiController {
             return RX.failB("question is required");
         }
 
-        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+        AgentResolveContext ctx = AgentResolveContext.builder()
+                .tenantId(tenantId).requestSource("OPEN_API").build();
+        A2aAgent agent = agentProvider.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
 
         // 构建 A2aMessage
@@ -432,7 +439,9 @@ public class OpenApiController {
             @PathVariable String agentId,
             @PathVariable String taskId) {
         String tenantId = UserContext.getCurrentTenantId();
-        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+        AgentResolveContext ctx = AgentResolveContext.builder()
+                .tenantId(tenantId).requestSource("OPEN_API").build();
+        A2aAgent agent = agentProvider.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
 
         A2aTask task = agent.getTask(taskId)
@@ -449,7 +458,9 @@ public class OpenApiController {
             @PathVariable String agentId,
             @PathVariable String taskId) {
         String tenantId = UserContext.getCurrentTenantId();
-        A2aAgent agent = agentProvider.resolveAgentByTenant(agentId, tenantId)
+        AgentResolveContext ctx = AgentResolveContext.builder()
+                .tenantId(tenantId).requestSource("OPEN_API").build();
+        A2aAgent agent = agentProvider.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
         agent.cancelTask(taskId);
         return RX.ok("Task cancel requested");

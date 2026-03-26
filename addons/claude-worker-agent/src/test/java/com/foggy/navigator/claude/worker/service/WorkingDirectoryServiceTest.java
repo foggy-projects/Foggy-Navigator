@@ -3,10 +3,10 @@ package com.foggy.navigator.claude.worker.service;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
-import com.foggy.navigator.claude.worker.model.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
-import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -42,7 +42,8 @@ class WorkingDirectoryServiceTest {
             return val.startsWith("enc:") ? val.substring(4) : val;
         });
         var agentTeamsConfigRepository = mock(com.foggy.navigator.claude.worker.repository.AgentTeamsConfigRepository.class);
-        service = new WorkingDirectoryService(repository, agentTeamsConfigRepository, workerService, credentialEncryptor);
+        var codingAgentRepository = mock(com.foggy.navigator.claude.worker.repository.CodingAgentRepository.class);
+        service = new WorkingDirectoryService(repository, agentTeamsConfigRepository, codingAgentRepository, workerService, credentialEncryptor);
 
         // Default: worker belongs to user
         ClaudeWorkerEntity worker = createWorker();

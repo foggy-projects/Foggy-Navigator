@@ -70,6 +70,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
         entity.setWorkerBackend(form.getWorkerBackend());
         entity.setEnvVars(serializeEnvVars(form.getEnvVars()));
         entity.setAvailableModels(serializeList(form.getAvailableModels()));
+        normalizeWorkerAuth(entity);
 
         // 新增项排在最后
         int maxSort = llmModelRepo.findByTenantIdOrderBySortOrderAscCreatedAtAsc(tenantId).stream()
@@ -125,6 +126,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
         if (form.getAvailableModels() != null) {
             entity.setAvailableModels(serializeList(form.getAvailableModels()));
         }
+        normalizeWorkerAuth(entity);
 
         // scope 变化处理
         if (form.getScope() != null) {
@@ -249,6 +251,10 @@ public class LlmModelManagerImpl implements LlmModelManager {
     public String getDecryptedApiKey(String modelConfigId) {
         LlmModelConfigEntity entity = llmModelRepo.findById(modelConfigId)
                 .orElseThrow(() -> RX.throwB("LLM model config not found: " + modelConfigId));
+        if (isCodexSubscriptionConfig(entity.getWorkerBackend(), entity.getBaseUrl())
+                || entity.getApiKey() == null || entity.getApiKey().isBlank()) {
+            return null;
+        }
         return credentialEncryptor.decrypt(entity.getApiKey());
     }
 
@@ -424,7 +430,9 @@ public class LlmModelManagerImpl implements LlmModelManager {
         dto.setBaseUrl(entity.getBaseUrl());
         dto.setModelName(entity.getModelName());
         dto.setIsDefault(entity.getIsDefault());
-        dto.setHasApiKey(entity.getApiKey() != null && !entity.getApiKey().isEmpty());
+        dto.setHasApiKey(entity.getApiKey() != null
+                && !entity.getApiKey().isEmpty()
+                && !isCodexSubscriptionConfig(entity.getWorkerBackend(), entity.getBaseUrl()));
         dto.setSortOrder(entity.getSortOrder() != null ? entity.getSortOrder() : 0);
         ModelAccessScope scope = entity.getScope() != null ? entity.getScope() : ModelAccessScope.GLOBAL;
         dto.setScope(scope);
@@ -443,6 +451,17 @@ public class LlmModelManagerImpl implements LlmModelManager {
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());
         return dto;
+    }
+
+    private void normalizeWorkerAuth(LlmModelConfigEntity entity) {
+        if (isCodexSubscriptionConfig(entity.getWorkerBackend(), entity.getBaseUrl())) {
+            // Codex subscription mode relies on ~/.codex/auth.json and should not inject a platform API key.
+            entity.setApiKey(null);
+        }
+    }
+
+    private boolean isCodexSubscriptionConfig(String workerBackend, String baseUrl) {
+        return "OPENAI_CODEX".equals(workerBackend) && (baseUrl == null || baseUrl.isBlank());
     }
 
     private String serializeEnvVars(Map<String, String> envVars) {

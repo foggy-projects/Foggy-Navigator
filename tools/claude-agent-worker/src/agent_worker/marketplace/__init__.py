@@ -7,6 +7,7 @@ internal GitLab repository.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from ..config import settings
@@ -54,7 +55,7 @@ async def setup_marketplace() -> bool:
     # 2. Write configuration to settings.json first
     try:
         current_settings = configure_marketplace(current_settings, marketplace_url)
-        write_settings(current_settings)
+        await asyncio.to_thread(write_settings, current_settings)
         logger.info("Marketplace configured in %s", SETTINGS_FILE)
     except Exception as e:
         logger.warning("Failed to write settings.json: %s", e)

@@ -65,6 +65,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Echo Agent - 模拟 Agent（验证框架扩展性） -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>echo-agent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Task Assistant - AI 任务通知助手模块 -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>

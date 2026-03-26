@@ -1,60 +1,24 @@
 package com.foggy.navigator.claude.worker.model.entity;
 
 import com.foggy.navigator.claude.worker.model.converter.CodexConfigConverter;
+import com.foggy.navigator.common.entity.BaseWorkerEntity;
 import com.foggy.navigator.common.model.CodexConfig;
 import jakarta.persistence.*;
 import lombok.Data;
-
-import java.time.LocalDateTime;
+import lombok.EqualsAndHashCode;
 
 /**
- * Claude Worker 注册信息
+ * Claude Worker 注册信息 —— 继承 BaseWorkerEntity，保留 Claude 特有字段。
  */
 @Data
+@EqualsAndHashCode(callSuper = true)
 @Entity
 @Table(name = "claude_workers", indexes = {
     @Index(name = "idx_cw_user_id", columnList = "userId")
 })
-public class ClaudeWorkerEntity {
+public class ClaudeWorkerEntity extends BaseWorkerEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
-    @Column(length = 64, nullable = false, unique = true)
-    private String workerId;
-
-    @Column(length = 64, nullable = false)
-    private String userId;
-
-    @Column(length = 64)
-    private String tenantId;
-
-    @Column(length = 128, nullable = false)
-    private String name;
-
-    @Column(length = 512, nullable = false)
-    private String baseUrl;
-
-    @Column(length = 512, nullable = false)
-    private String authToken;
-
-    @Column(length = 32)
-    private String authMode;
-
-    @Column(length = 32)
-    private String status;
-
-    @Column(length = 256)
-    private String hostname;
-
-    @Column(length = 32)
-    private String workerVersion;
-
-    private LocalDateTime lastHeartbeat;
-
-    @Column(nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    // ── Claude 特有字段 ──
 
     /** Code Server 公网 URL */
     @Column(length = 512)
@@ -87,24 +51,4 @@ public class ClaudeWorkerEntity {
     @Convert(converter = CodexConfigConverter.class)
     @Column(columnDefinition = "TEXT")
     private CodexConfig codexConfig;
-
-    @Column(nullable = false)
-    private LocalDateTime updatedAt;
-
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
-        if (status == null) {
-            status = "UNKNOWN";
-        }
-        if (authMode == null) {
-            authMode = "SUBSCRIPTION";
-        }
-    }
-
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-    }
 }

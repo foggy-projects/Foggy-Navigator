@@ -19,4 +19,8 @@ public interface CodexCodingAgentRepository extends JpaRepository<CodingAgentEnt
     Optional<CodingAgentEntity> findByNameAndUserId(String name, String userId);
 
     List<CodingAgentEntity> findByUserIdOrderByCreatedAtDesc(String userId);
+
+    Optional<CodingAgentEntity> findByDefaultDirectoryIdAndUserId(String defaultDirectoryId, String userId);
+
+    List<CodingAgentEntity> findByWorkerIdAndUserId(String workerId, String userId);
 }

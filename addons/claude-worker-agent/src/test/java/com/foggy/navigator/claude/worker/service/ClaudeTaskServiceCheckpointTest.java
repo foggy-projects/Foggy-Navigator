@@ -5,7 +5,7 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
-import com.foggy.navigator.claude.worker.repository.WorkingDirectoryRepository;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.auth.UserAuthService;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,22 +49,17 @@ class ClaudeTaskServiceCheckpointTest {
         workerService = mock(ClaudeWorkerService.class);
         txTemplate = mock(TransactionTemplate.class);
 
-        var conversationConfigRepository = mock(com.foggy.navigator.claude.worker.repository.ConversationConfigRepository.class);
-        var deletedSessionRepository = mock(com.foggy.navigator.claude.worker.repository.DeletedClaudeSessionRepository.class);
-        var configService = mock(ConversationConfigService.class);
         var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
         var directoryService = mock(WorkingDirectoryService.class);
         var workingDirectoryRepository = mock(WorkingDirectoryRepository.class);
         var publisher = mock(ApplicationEventPublisher.class);
         var llmModelManager = mock(LlmModelManager.class);
         var userAuthService = mock(UserAuthService.class);
+        var credentialEncryptor = mock(com.foggy.navigator.common.security.CredentialEncryptor.class);
 
         service = new ClaudeTaskService(
                 taskRepository,
-                conversationConfigRepository,
-                deletedSessionRepository,
                 workerService,
-                configService,
                 agentTeamsConfigService,
                 directoryService,
                 workingDirectoryRepository,
@@ -72,6 +67,7 @@ class ClaudeTaskServiceCheckpointTest {
                 publisher,
                 llmModelManager,
                 userAuthService,
+                credentialEncryptor,
                 txTemplate
         );
 

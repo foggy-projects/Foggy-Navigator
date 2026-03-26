@@ -1,5 +1,16 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
+import {
+  createTaskUnified,
+  cancelTaskUnified,
+  listTasksUnified,
+  respondToTaskUnified,
+  reconnectTaskUnified,
+  resyncTaskUnified,
+  resumeTaskUnified,
+  deleteTaskUnified,
+  listTasksPagedUnified,
+} from '@/api/unifiedTask'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
 
 const workers = ref<ClaudeWorker[]>([])
@@ -27,12 +38,14 @@ export function useClaudeWorker() {
 
   async function loadTasks(state?: string) {
     try {
-      const result = await api.listTasksPaged(taskPage.value, taskSize.value, state || undefined)
+      // 使用统一任务 API（/api/v1/tasks/page）
+      const result = await listTasksPagedUnified(taskPage.value, taskSize.value, state || undefined)
       tasks.value = result.content
       taskTotal.value = result.totalSessions
     } catch {
       // Fallback to non-paged API
-      tasks.value = await api.listTasks()
+      const unified = await listTasksUnified()
+      tasks.value = unified as unknown as ClaudeTask[]
       taskTotal.value = tasks.value.length
     }
   }
@@ -93,17 +106,21 @@ export function useClaudeWorker() {
     maxTurns?: number
     agentTeamsJson?: string
     agentTeamsConfigId?: string
+    images?: string
     permissionMode?: string
     modelConfigId?: string
+    agentId?: string
   }) {
-    const task = await api.createTask(form)
+    // 使用统一任务 API（/api/v1/tasks），后端自动从 modelConfigId 推导 agentId
+    const task = await createTaskUnified(form) as unknown as ClaudeTask
     tasks.value.unshift(task)
     return task
   }
 
   async function resumeTask(form: {
     workerId: string
-    claudeSessionId: string
+    claudeSessionId?: string
+    codexThreadId?: string
     prompt: string
     cwd?: string
     directoryId?: string
@@ -115,27 +132,30 @@ export function useClaudeWorker() {
     images?: string
     permissionMode?: string
     modelConfigId?: string
+    agentId?: string
   }) {
-    const task = await api.resumeTask(form)
+    // 使用统一任务 API（/api/v1/tasks/resume）
+    const task = await resumeTaskUnified(form) as unknown as ClaudeTask
     tasks.value.unshift(task)
     return task
   }
 
   async function respondToPermission(taskId: string, form: { permissionId: string; decision: string; denyMessage?: string; scope?: string; answers?: Record<string, string>; planAction?: string }) {
-    return api.respondToPermission(taskId, form)
+    // 使用统一任务 API（/api/v1/tasks/{taskId}/respond）
+    return respondToTaskUnified(taskId, form)
   }
 
   async function abortTask(taskId: string) {
-    const result = await api.abortTask(taskId)
+    // 使用统一任务 API（/api/v1/tasks/{taskId}/cancel）
+    await cancelTaskUnified(taskId)
     const idx = tasks.value.findIndex((t) => t.taskId === taskId)
     if (idx >= 0) tasks.value[idx]!.status = 'ABORTED'
-    return result
   }
 
   async function deleteTask(taskId: string) {
-    const result = await api.deleteTask(taskId)
+    // 使用统一任务 API（DELETE /api/v1/tasks/{taskId}）
+    await deleteTaskUnified(taskId)
     tasks.value = tasks.value.filter((t) => t.taskId !== taskId)
-    return result
   }
 
   // ===== Directory methods =====
@@ -173,7 +193,9 @@ export function useClaudeWorker() {
 
   async function loadActiveTasks() {
     try {
-      activeTasks.value = await api.listActiveTasks()
+      // 使用统一 API（/api/v1/tasks）聚合所有 Agent 的活跃任务
+      const unified = await listTasksUnified()
+      activeTasks.value = unified as unknown as ClaudeTask[]
     } catch {
       activeTasks.value = []
     }

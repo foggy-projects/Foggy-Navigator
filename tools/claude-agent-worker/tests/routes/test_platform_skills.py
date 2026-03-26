@@ -86,3 +86,22 @@ class TestDeploySkills:
 
         assert "good-skill" in result["deployed"]
         assert "bad-skill" not in result["deployed"]
+
+    async def test_deploy_uses_to_thread(self, tmp_path):
+        from pathlib import Path
+
+        req = DeploySkillsRequest(skills={"threaded-skill": "# Threaded"})
+        to_thread_calls: list[tuple] = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            to_thread_calls.append((func, args, kwargs))
+            return func(*args, **kwargs)
+
+        with patch("agent_worker.routes.platform_skills.Path", wraps=Path) as WrappedPath:
+            WrappedPath.home = lambda: tmp_path
+            with patch("agent_worker.routes.platform_skills.asyncio.to_thread", side_effect=fake_to_thread):
+                result = await deploy_skills(req)
+
+        assert result["deployed"] == ["threaded-skill"]
+        assert len(to_thread_calls) == 1
+        assert (tmp_path / ".claude" / "skills" / "threaded-skill" / "SKILL.md").exists()

@@ -14,13 +14,9 @@ import com.foggy.navigator.claude.worker.service.ConversationConfigService;
 import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
-import com.foggy.navigator.spi.codex.CodexWorkerFacade;
-import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.lang.Nullable;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -42,57 +38,26 @@ public class ClaudeTaskController {
     private final ConversationConfigService configService;
     private final WorkerStreamRelay streamRelay;
 
-    @Autowired(required = false) @Nullable
-    private LlmModelManager llmModelManager;
-
-    @Autowired(required = false) @Nullable
-    private CodexWorkerFacade codexWorkerFacade;
-
+    /**
+     * 创建任务 —— 已迁移到统一 API {@code POST /api/v1/tasks}。
+     * <p>
+     * 保留此端点仅为兼容尚未迁移的客户端（如 foggy-mobile）。
+     * 不再包含 Codex 路由逻辑，仅创建 Claude 任务。
+     *
+     * @deprecated 请使用 POST /api/v1/tasks（TaskController）
+     */
+    @Deprecated(since = "Phase 3 — use POST /api/v1/tasks instead")
     @PostMapping
     public RX<?> createTask(@RequestBody CreateTaskForm form) {
         String userId = UserContext.getCurrentUserId();
         String tenantId = UserContext.getCurrentTenantId();
-
-        // 路由分发：根据 modelConfigId 的 workerBackend 判断走 Claude 还是 Codex
-        if (isCodexBackend(form.getModelConfigId())) {
-            return RX.ok(createCodexTask(userId, tenantId, form));
-        }
-
         return RX.ok(taskService.createTask(userId, tenantId, form));
     }
 
     /**
-     * 判断 modelConfigId 对应的 workerBackend 是否为 OPENAI_CODEX
+     * @deprecated 请使用 POST /api/v1/tasks/resume（TaskController）
      */
-    private boolean isCodexBackend(String modelConfigId) {
-        if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
-            return false;
-        }
-        return llmModelManager.getModelConfig(modelConfigId)
-                .map(config -> "OPENAI_CODEX".equals(config.getWorkerBackend()))
-                .orElse(false);
-    }
-
-    /**
-     * 将 Claude CreateTaskForm 转发到 Codex 任务创建
-     */
-    private Map<String, Object> createCodexTask(String userId, String tenantId, CreateTaskForm form) {
-        if (codexWorkerFacade == null) {
-            throw new IllegalStateException("Codex Worker module is not available");
-        }
-        log.info("Routing task to Codex Worker: workerId={}, model={}", form.getWorkerId(), form.getModel());
-        Map<String, Object> params = new HashMap<>();
-        params.put("workerId", form.getWorkerId());
-        params.put("prompt", form.getPrompt());
-        params.put("cwd", form.getCwd());
-        params.put("directoryId", form.getDirectoryId());
-        params.put("model", form.getModel());
-        params.put("tenantId", tenantId);
-        params.put("modelConfigId", form.getModelConfigId());
-        if (form.getMaxTurns() != null) params.put("maxTurns", form.getMaxTurns());
-        return codexWorkerFacade.createTask(userId, params);
-    }
-
+    @Deprecated(since = "Phase 3 — use POST /api/v1/tasks/resume instead")
     @PostMapping("/resume")
     public RX<TaskDTO> resumeTask(@RequestBody ResumeTaskForm form) {
         String userId = UserContext.getCurrentUserId();
@@ -223,115 +188,12 @@ public class ClaudeTaskController {
             @PathVariable String taskId,
             @RequestBody Map<String, Object> body) {
         String userId = UserContext.getCurrentUserId();
-        String tenantId = UserContext.getCurrentTenantId();
-        var task = taskService.getTaskEntity(taskId);
-        if (!task.getUserId().equals(userId)) {
-            throw RX.throwB("Task not found");
-        }
-
-        // Only allow rewind on completed/failed tasks
-        if ("RUNNING".equals(task.getStatus()) || "AWAITING_PERMISSION".equals(task.getStatus())) {
-            throw RX.throwB("Cannot rewind a running task");
-        }
-
-        String checkpointId = (String) body.get("checkpointId");
-
-        String claudeSessionId = task.getClaudeSessionId();
-        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
-            throw RX.throwB("Task has no Claude session ID");
-        }
-
-        String mode = body.get("mode") != null ? body.get("mode").toString() : "file_rewind";
-        Integer turnIndex = body.get("turnIndex") != null ? ((Number) body.get("turnIndex")).intValue() : null;
-
-        if ("conversation_fork".equals(mode)) {
-            // Conversation rewind: mark messages from turnIndex onwards as sidechain
-            // in the JSONL. Does NOT create a new task — returns the original prompt
-            // so the frontend can populate the input field for user to edit and send.
-
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
-            ClaudeWorkerClient client = workerService.createClient(worker);
-
-            try {
-                Map<String, Object> rewindResult = client.rewindConversation(
-                        claudeSessionId, turnIndex != null ? turnIndex : 1)
-                        .block(java.time.Duration.ofSeconds(15));
-
-                String rewindStatus = rewindResult != null ? (String) rewindResult.get("status") : "error";
-                if ("error".equals(rewindStatus)) {
-                    throw RX.throwB("回退会话失败: " + rewindResult.get("message"));
-                }
-
-                String userPrompt = rewindResult != null ? (String) rewindResult.get("user_prompt") : "";
-
-                // Clean up Navigator DB messages (3rd layer: JSONL done, UI done by frontend, now DB)
-                int effectiveTurn = turnIndex != null ? turnIndex : 1;
-                try {
-                    taskService.truncateSessionMessages(task.getSessionId(), effectiveTurn);
-                } catch (Exception dbEx) {
-                    log.warn("Failed to truncate DB messages for session {}: {}", task.getSessionId(), dbEx.getMessage());
-                }
-
-                var result = new java.util.HashMap<String, Object>();
-                result.put("status", "rewound");
-                result.put("taskId", taskId);
-                result.put("userPrompt", userPrompt != null ? userPrompt : "");
-                result.put("turnIndex", turnIndex);
-                result.put("claudeSessionId", claudeSessionId);
-                return RX.ok(result);
-            } catch (RuntimeException e) {
-                throw e;
-            } catch (Exception e) {
-                log.warn("Failed to rewind conversation: {}", e.getMessage());
-                return RX.failB("回退失败: " + e.getMessage());
-            }
-        }
-
-        // file_rewind mode — requires checkpointId
-        // This mode does BOTH: rewind files (git) AND rewind conversation (JSONL sidechain)
-        if (checkpointId == null || checkpointId.isEmpty()) {
-            throw RX.throwB("checkpointId is required for file_rewind mode");
-        }
-
         try {
-            ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
-            ClaudeWorkerClient client = workerService.createClient(worker);
-
-            // Step 1: Rewind files via CLI --rewind-files
-            Map<String, Object> fileResult = client.rewindFiles(claudeSessionId, checkpointId, task.getCwd())
-                    .block(java.time.Duration.ofSeconds(30));
-
-            // Step 2: Also rewind the conversation (mark sidechain in JSONL)
-            String userPrompt = "";
-            int effectiveTurn = turnIndex != null ? turnIndex : 1;
-            try {
-                Map<String, Object> convResult = client.rewindConversation(claudeSessionId, effectiveTurn)
-                        .block(java.time.Duration.ofSeconds(15));
-                if (convResult != null) {
-                    userPrompt = convResult.get("user_prompt") != null ? convResult.get("user_prompt").toString() : "";
-                }
-            } catch (Exception convEx) {
-                log.warn("File rewind succeeded but conversation rewind failed for task {}: {}", taskId, convEx.getMessage());
-            }
-
-            // Step 3: Truncate DB messages
-            try {
-                taskService.truncateSessionMessages(task.getSessionId(), effectiveTurn);
-            } catch (Exception dbEx) {
-                log.warn("Failed to truncate DB messages for session {}: {}", task.getSessionId(), dbEx.getMessage());
-            }
-
-            var result = new java.util.HashMap<String, Object>();
-            result.put("status", "rewound");
-            result.put("checkpointId", checkpointId);
-            result.put("taskId", taskId);
-            result.put("userPrompt", userPrompt);
-            result.put("turnIndex", turnIndex);
-            result.put("claudeSessionId", claudeSessionId);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = (Map<String, Object>) taskService.rewindTask(taskId, userId, body);
             return RX.ok(result);
-        } catch (Exception e) {
-            log.warn("Failed to rewind files: taskId={}, error={}", taskId, e.getMessage());
-            return RX.failB("回退失败: " + e.getMessage());
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return RX.failB(e.getMessage());
         }
     }
 
@@ -388,7 +250,7 @@ public class ClaudeTaskController {
     @GetMapping("/directory/{directoryId}")
     public RX<List<TaskDTO>> listTasksByDirectory(@PathVariable String directoryId) {
         String userId = UserContext.getCurrentUserId();
-        return RX.ok(taskService.listTasksByDirectory(userId, directoryId));
+        return RX.ok(taskService.listTasksByDirectoryDTO(userId, directoryId));
     }
 
     @GetMapping("/directory/{directoryId}/page")

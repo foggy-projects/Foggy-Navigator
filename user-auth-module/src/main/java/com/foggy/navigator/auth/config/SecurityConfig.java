@@ -80,6 +80,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/claude-workers", "/api/v1/claude-workers/**").permitAll()
                         .requestMatchers("/api/v1/claude-tasks", "/api/v1/claude-tasks/**").permitAll()
                         .requestMatchers("/api/v1/codex-tasks", "/api/v1/codex-tasks/**").permitAll()
+                        .requestMatchers("/api/v1/tasks", "/api/v1/tasks/**").permitAll()
                         .requestMatchers("/api/v1/working-directories", "/api/v1/working-directories/**").permitAll()
                         .requestMatchers("/api/v1/ssh/connect", "/api/v1/ssh/connect/**").permitAll()
                         .requestMatchers("/api/v1/file-browser", "/api/v1/file-browser/**").permitAll()

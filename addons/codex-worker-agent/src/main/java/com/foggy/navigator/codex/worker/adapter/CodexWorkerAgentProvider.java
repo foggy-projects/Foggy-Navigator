@@ -1,5 +1,6 @@
 package com.foggy.navigator.codex.worker.adapter;
 
+import com.foggy.navigator.codex.worker.repository.CodexAgentDirectoryBindingRepository;
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
@@ -8,8 +9,7 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
-import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
-import com.foggy.navigator.spi.codex.CodexWorkerFacade;
+import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
@@ -26,13 +26,13 @@ import java.util.Optional;
 public class CodexWorkerAgentProvider implements A2aAgentProvider {
 
     private final CodexCodingAgentRepository agentRepository;
+    private final CodexAgentDirectoryBindingRepository bindingRepository;
     private final CodexTaskService taskService;
-    private final CodexWorkerFacade codexWorkerFacade;
     @Nullable
     private final AgentContextStore contextStore;
     /** 用于获取目录路径（目录由 Claude Worker 管理） */
     @Nullable
-    private final ClaudeWorkerFacade claudeWorkerFacade;
+    private final WorkerManagementFacade workerManagementFacade;
 
     @Override
     public String getProviderType() {
@@ -49,22 +49,42 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
 
     @Override
     public Optional<A2aAgent> resolveAgent(String agentId, String userId) {
-        return agentRepository.findByAgentIdAndUserId(agentId, userId)
-                .or(() -> agentRepository.findByNameAndUserId(agentId, userId))
-                .filter(e -> "LOCAL_CODEX_WORKER".equals(e.getAgentType()))
+        return resolveManagedEntity(agentId, userId)
                 .map(entity -> {
                     String cwd = resolveDefaultCwd(entity, userId);
-                    return new CodexWorkerA2aAgent(entity, taskService, codexWorkerFacade, cwd, contextStore);
+                    return new CodexWorkerA2aAgent(entity, taskService, cwd, contextStore);
                 });
     }
 
     /**
-     * 通过 ClaudeWorkerFacade 获取目录路径（Codex 复用 Claude 管理的目录）
+     * 通过 WorkerManagementFacade 获取目录路径（Codex 复用 Claude 管理的目录）
      */
     private String resolveDefaultCwd(CodingAgentEntity entity, String userId) {
         if (entity.getDefaultDirectoryId() == null) return null;
-        if (claudeWorkerFacade == null) return null;
-        return claudeWorkerFacade.getDirectoryPath(userId, entity.getDefaultDirectoryId());
+        if (workerManagementFacade == null) return null;
+        return workerManagementFacade.getDirectoryPath(userId, entity.getDefaultDirectoryId());
+    }
+
+    private Optional<CodingAgentEntity> resolveManagedEntity(String lookupId, String userId) {
+        return agentRepository.findByAgentIdAndUserId(lookupId, userId)
+                .or(() -> agentRepository.findByNameAndUserId(lookupId, userId))
+                .or(() -> agentRepository.findByDefaultDirectoryIdAndUserId(lookupId, userId)
+                        .filter(this::isManagedAgent))
+                .or(() -> bindingRepository.findByDirectoryId(lookupId).stream()
+                        .map(binding -> agentRepository.findByAgentIdAndUserId(binding.getAgentId(), userId))
+                        .filter(Optional::isPresent)
+                        .map(Optional::get)
+                        .filter(this::isManagedAgent)
+                        .findFirst())
+                // workerId fallback: 仅在未命中 directoryId 时兜底
+                .or(() -> agentRepository.findByWorkerIdAndUserId(lookupId, userId).stream()
+                        .filter(this::isManagedAgent)
+                        .findFirst())
+                .filter(this::isManagedAgent);
+    }
+
+    private boolean isManagedAgent(CodingAgentEntity entity) {
+        return "LOCAL_CODEX_WORKER".equals(entity.getAgentType());
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {

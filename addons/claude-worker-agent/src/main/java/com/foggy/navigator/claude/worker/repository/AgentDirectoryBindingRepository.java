@@ -10,6 +10,8 @@ public interface AgentDirectoryBindingRepository extends JpaRepository<AgentDire
 
     List<AgentDirectoryBindingEntity> findByAgentId(String agentId);
 
+    List<AgentDirectoryBindingEntity> findByDirectoryId(String directoryId);
+
     Optional<AgentDirectoryBindingEntity> findByAgentIdAndDirectoryId(String agentId, String directoryId);
 
     void deleteByAgentIdAndDirectoryId(String agentId, String directoryId);

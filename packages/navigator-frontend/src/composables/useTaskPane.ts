@@ -4,6 +4,7 @@ import type { ChatState, ChatMessage } from '@foggy/chat'
 import { tutorAgentAdapter } from '@/adapters/TutorAgentAdapter'
 import * as sessionApi from '@/api/session'
 import * as workerApi from '@/api/claudeWorker'
+import { getTaskUnified } from '@/api/unifiedTask'
 import { useUnifiedSse } from '@/composables/useUnifiedSse'
 import type { AgentMessage, ClaudeTask, Message } from '@/types'
 
@@ -93,7 +94,8 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     if (!task.value) return
     if (['COMPLETED', 'FAILED', 'ABORTED'].includes(task.value.status)) return
     try {
-      const fresh = await workerApi.getTask(task.value.taskId)
+      const fresh = (await getTaskUnified(task.value.taskId)) as unknown as ClaudeTask
+      if (!fresh) return
       const prevStatus = task.value.status
       Object.assign(task.value, fresh)
       if (prevStatus !== fresh.status && ['COMPLETED', 'FAILED', 'ABORTED'].includes(fresh.status)) {
@@ -179,17 +181,20 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     // taskId guard: ignore events from previous tasks in the same session
     if (payload.taskId !== task.value.taskId) return
 
-    // Capture claudeSessionId as early as possible (from SESSION_START / system events)
+    // Capture provider session refs as early as possible.
     if (typeof payload.claudeSessionId === 'string' && payload.claudeSessionId) {
       task.value.claudeSessionId = payload.claudeSessionId
+    }
+    if (typeof payload.codexThreadId === 'string' && payload.codexThreadId) {
+      task.value.codexThreadId = payload.codexThreadId
     }
 
     if (raw.type === 'CONFIRMATION_REQUEST') {
       task.value.status = 'AWAITING_PERMISSION' as ClaudeTask['status']
-    } else if (raw.type === 'TEXT_COMPLETE') {
+    } else if (raw.type === 'TEXT_COMPLETE' || raw.type === 'SESSION_END') {
       // Only treat as task completion when result-level metadata is present.
       // The "result" event from Python Worker always includes numTurns/costUsd/durationMs.
-      // Intermediate "assistant_text" events (also TEXT_COMPLETE) only have content and taskId.
+      // Intermediate "assistant_text" events only have content and taskId.
       if (payload.numTurns != null || payload.costUsd != null || payload.durationMs != null) {
         task.value.status = 'COMPLETED'
         if (typeof payload.costUsd === 'number') task.value.costUsd = payload.costUsd
@@ -202,8 +207,11 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       }
     } else if (raw.type === 'ERROR') {
       task.value.status = 'FAILED'
-      if (typeof payload.errorMessage === 'string')
+      if (typeof payload.errorMessage === 'string') {
         task.value.errorMessage = payload.errorMessage
+      } else if (typeof payload.content === 'string') {
+        task.value.errorMessage = payload.content
+      }
       options?.onTaskFinished?.(paneId)
     }
   }

@@ -48,6 +48,14 @@ class TaskStateReconcilerTest {
     void setUp() {
         reconciler = new TaskStateReconciler(
                 taskRepository, workerRepository, workerService, taskService, streamRelay);
+        lenient().when(taskService.resolveWorkerTaskLookupId(any(ClaudeTaskEntity.class)))
+                .thenAnswer(inv -> {
+                    ClaudeTaskEntity task = inv.getArgument(0);
+                    if (task.getWorkerTaskId() != null && !task.getWorkerTaskId().isBlank()) {
+                        return task.getWorkerTaskId();
+                    }
+                    return task.getTaskId();
+                });
     }
 
     // ---- 象限 1: DB active + CLI alive → touchAlive ----

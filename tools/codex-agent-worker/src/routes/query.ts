@@ -2,7 +2,8 @@ import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
 import { runQuery, taskBroadcasts, cleanupOldTasks } from '../codex/sdk-wrapper.js'
-import type { QueryRequest, WorkerEvent } from '../models.js'
+import type { WorkerEvent } from '../models.js'
+import { validateQueryRequest } from '../validation/query.js'
 
 const router = Router()
 
@@ -10,12 +11,12 @@ const router = Router()
  * POST /api/v1/query — Start a Codex query and stream results as SSE
  */
 router.post('/api/v1/query', async (req: Request, res: Response) => {
-  const body = req.body as QueryRequest
-
-  if (!body.prompt) {
-    res.status(400).json({ error: 'prompt is required' })
+  const validation = validateQueryRequest(req.body)
+  if (!validation.ok) {
+    res.status(400).json({ error: validation.error })
     return
   }
+  const body = validation.value
 
   // Validate working directory
   const cwd = body.cwd

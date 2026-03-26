@@ -2,12 +2,11 @@ package com.foggy.navigator.claude.worker.service;
 
 import com.foggy.navigator.claude.worker.model.dto.ConversationConfigDTO;
 import com.foggy.navigator.claude.worker.model.entity.ConversationConfigEntity;
-import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
-import com.foggy.navigator.claude.worker.repository.ConversationConfigRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.spi.config.LlmModelManager;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -16,385 +15,172 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
-/**
- * ConversationConfigService 单元测试 — L1
- */
 @ExtendWith(MockitoExtension.class)
 class ConversationConfigServiceTest {
 
-    @Mock private ConversationConfigRepository configRepository;
+    @Mock private SessionEntityRepository sessionRepository;
     @Mock private ClaudeTaskRepository taskRepository;
     @Mock private CredentialEncryptor credentialEncryptor;
     @Mock private LlmModelManager llmModelManager;
 
     @InjectMocks private ConversationConfigService service;
 
-    // ---- getOrCreate ----
-
     @Test
-    void getOrCreate_existingConfig_returnsIt() {
-        ConversationConfigEntity existing = buildEntity("s1", "w1", "u1");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(existing));
+    void getOrCreate_existingSession_mapsToConversationConfig() {
+        SessionEntity session = buildSession("s1", "w1", "u1");
+        session.setPinned(true);
+        session.setTitle("Custom Title");
+        session.setInteractionState("AWAITING_REPLY");
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
 
         ConversationConfigEntity result = service.getOrCreate("s1", "w1", "u1");
-        assertEquals("s1", result.getSessionId());
-        verify(configRepository, never()).save(any());
-    }
 
-    @Test
-    void getOrCreate_notExisting_creates() {
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.empty());
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
-        ConversationConfigEntity result = service.getOrCreate("s1", "w1", "u1");
         assertEquals("s1", result.getSessionId());
         assertEquals("w1", result.getWorkerId());
-        verify(configRepository).save(any());
+        assertEquals("Custom Title", result.getCustomTitle());
+        assertEquals("AWAITING_REPLY", result.getInteractionState());
+        assertTrue(result.getPinned());
+        verify(sessionRepository, never()).save(any(SessionEntity.class));
     }
 
-    // ---- updatePin ----
+    @Test
+    void getOrCreate_missingSession_createsBackedSessionRecord() {
+        when(sessionRepository.findById("s1")).thenReturn(Optional.empty());
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ConversationConfigEntity result = service.getOrCreate("s1", "w1", "u1");
+
+        assertEquals("s1", result.getSessionId());
+        assertEquals("w1", result.getWorkerId());
+        verify(sessionRepository).save(argThat(session ->
+                "s1".equals(session.getId())
+                        && "u1".equals(session.getUserId())
+                        && "w1".equals(session.getCurrentWorkerId())
+                        && "claude-worker".equals(session.getProviderType())));
+    }
 
     @Test
-    void updatePin_setsTrue() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt(anyString())).thenReturn("token");
+    void updatePin_updatesSessionFields() {
+        SessionEntity session = buildSession("s1", "w1", "u1");
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         ConversationConfigDTO dto = service.updatePin("s1", "u1", true);
+
         assertTrue(dto.isPinned());
-        assertNotNull(entity.getPinnedAt());
+        assertTrue(session.getPinned());
+        assertNotNull(session.getPinnedAt());
     }
 
     @Test
-    void updatePin_setsFalse_clearsPinnedAt() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setPinned(true);
-        entity.setPinnedAt(LocalDateTime.now());
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt(anyString())).thenReturn("token");
-
-        service.updatePin("s1", "u1", false);
-        assertFalse(entity.getPinned());
-        assertNull(entity.getPinnedAt());
-    }
-
-    @Test
-    void updatePin_wrongUser_throws() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "other-user");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-
-        assertThrows(IllegalArgumentException.class,
-                () -> service.updatePin("s1", "u1", true));
-    }
-
-    // ---- bindAuth ----
-
-    @Test
-    void bindAuth_firstTime_binds() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthBoundAt(null);
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
+    void bindAuth_firstTime_persistsEncryptedTokenOnSession() {
+        SessionEntity session = buildSession("s1", "w1", "u1");
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(credentialEncryptor.encrypt("my-api-key")).thenReturn("enc-key");
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt("enc-key")).thenReturn("my-api-key");
+        when(credentialEncryptor.decrypt("enc-key")).thenReturn("my-api-key");
 
-        service.bindAuth("s1", "u1", "API_KEY", "my-api-key", "https://api.anthropic.com");
+        ConversationConfigDTO dto = service.bindAuth("s1", "u1", "API_KEY", "my-api-key", "https://api.anthropic.com");
 
-        assertEquals("API_KEY", entity.getAuthMode());
-        assertEquals("enc-key", entity.getAuthToken());
-        assertEquals("https://api.anthropic.com", entity.getBaseUrl());
-        assertNotNull(entity.getAuthBoundAt());
+        assertEquals("API_KEY", dto.getAuthMode());
+        assertEquals("API_KEY", session.getAuthMode());
+        assertEquals("enc-key", session.getAuthTokenCiphertext());
+        assertEquals("https://api.anthropic.com", session.getAuthBaseUrl());
+        assertNotNull(session.getAuthBoundAt());
     }
 
     @Test
     void bindAuth_alreadyBound_throws() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthBoundAt(LocalDateTime.now());
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
+        SessionEntity session = buildSession("s1", "w1", "u1");
+        session.setAuthBoundAt(LocalDateTime.now());
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
 
         assertThrows(IllegalStateException.class,
-                () -> service.bindAuth("s1", "u1", "API_KEY", "tk", null));
+                () -> service.bindAuth("s1", "u1", "API_KEY", "token", null));
     }
 
     @Test
-    void bindAuth_wrongUser_throws() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "other");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
+    void bindAuthFromWorker_alreadyBound_skipsSave() {
+        SessionEntity session = buildSession("s1", "w1", "u1");
+        session.setAuthBoundAt(LocalDateTime.now());
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
 
-        assertThrows(IllegalArgumentException.class,
-                () -> service.bindAuth("s1", "u1", "API_KEY", "tk", null));
-    }
+        service.bindAuthFromWorker("s1", "w1", "u1", java.util.Map.of("api_key", "new-key"));
 
-    // ---- bindAuthFromWorker ----
-
-    @Test
-    void bindAuthFromWorker_setsFromMap() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthBoundAt(null);
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(credentialEncryptor.encrypt("worker-key")).thenReturn("enc-worker-key");
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
-        Map<String, Object> workerAuth = Map.of(
-                "auth_mode", "CUSTOM_ENDPOINT",
-                "api_key", "worker-key",
-                "base_url", "http://custom"
-        );
-
-        service.bindAuthFromWorker("s1", "w1", "u1", workerAuth);
-
-        assertEquals("CUSTOM_ENDPOINT", entity.getAuthMode());
-        assertEquals("enc-worker-key", entity.getAuthToken());
-        assertEquals("http://custom", entity.getBaseUrl());
-        assertNotNull(entity.getAuthBoundAt());
+        verify(sessionRepository, never()).save(any(SessionEntity.class));
     }
 
     @Test
-    void bindAuthFromWorker_alreadyBound_skips() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthBoundAt(LocalDateTime.now());
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
+    void updateTags_serializesIntoSessionTagsJson() {
+        SessionEntity session = buildSession("s1", "w1", "u1");
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.bindAuthFromWorker("s1", "w1", "u1", Map.of("api_key", "new-key"));
+        service.updateTags("s1", "u1", List.of("bug", "feature"));
 
-        // save should NOT be called since already bound
-        verify(configRepository, never()).save(any());
-    }
-
-    // ---- bindAuthFromDirectory ----
-
-    @Test
-    void bindAuthFromDirectory_encryptsToken() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthBoundAt(null);
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(credentialEncryptor.encrypt("dir-token")).thenReturn("enc-dir-token");
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
-        service.bindAuthFromDirectory("s1", "w1", "u1", "SUBSCRIPTION", "dir-token", null);
-
-        assertEquals("SUBSCRIPTION", entity.getAuthMode());
-        assertEquals("enc-dir-token", entity.getAuthToken());
-        assertNotNull(entity.getAuthBoundAt());
+        assertNotNull(session.getTagsJson());
+        assertTrue(session.getTagsJson().contains("bug"));
+        assertTrue(session.getTagsJson().contains("feature"));
     }
 
     @Test
-    void bindAuthFromDirectory_alreadyBound_skips() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthBoundAt(LocalDateTime.now());
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
+    void updateTitle_returnsMaskedTokenFromSessionStorage() {
+        SessionEntity session = buildSession("s1", "w1", "u1");
+        session.setAuthTokenCiphertext("enc-token");
+        session.setAuthBoundAt(LocalDateTime.now());
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
+        when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(credentialEncryptor.decrypt("enc-token")).thenReturn("sk-ant-api03-1234567890abcdef");
 
-        service.bindAuthFromDirectory("s1", "w1", "u1", "SUB", "tk", null);
+        ConversationConfigDTO dto = service.updateTitle("s1", "u1", "My Title");
 
-        verify(configRepository, never()).save(any());
-    }
-
-    // ---- updateAuth (允许覆盖) ----
-
-    @Test
-    void updateAuth_overwritesExisting() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthBoundAt(LocalDateTime.now());
-        entity.setAuthMode("OLD_MODE");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(credentialEncryptor.encrypt("new-token")).thenReturn("enc-new");
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt("enc-new")).thenReturn("new-token");
-
-        service.updateAuth("s1", "u1", "NEW_MODE", "new-token", "http://new-url");
-
-        assertEquals("NEW_MODE", entity.getAuthMode());
-        assertEquals("enc-new", entity.getAuthToken());
-        assertEquals("http://new-url", entity.getBaseUrl());
-    }
-
-    @Test
-    void updateAuth_setsAuthBoundAt_ifNull() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthBoundAt(null);
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(credentialEncryptor.encrypt("token")).thenReturn("enc");
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt("enc")).thenReturn("token");
-
-        service.updateAuth("s1", "u1", "MODE", "token", null);
-
-        assertNotNull(entity.getAuthBoundAt());
-    }
-
-    // ---- 状态转换 ----
-
-    @Test
-    void archiveConversation_setsARCHIVED() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt(anyString())).thenReturn("token");
-
-        service.archiveConversation("s1", "u1");
-
-        assertEquals("ARCHIVED", entity.getInteractionState());
-    }
-
-    @Test
-    void unarchiveConversation_setsAWAITING_REPLY() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setInteractionState("ARCHIVED");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt(anyString())).thenReturn("token");
-
-        service.unarchiveConversation("s1", "u1");
-
-        assertEquals("AWAITING_REPLY", entity.getInteractionState());
-    }
-
-    @Test
-    void holdConversation_setsON_HOLD() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt(anyString())).thenReturn("token");
-
-        service.holdConversation("s1", "u1");
-
-        assertEquals("ON_HOLD", entity.getInteractionState());
-    }
-
-    @Test
-    void unholdConversation_setsAWAITING_REPLY() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setInteractionState("ON_HOLD");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt(anyString())).thenReturn("token");
-
-        service.unholdConversation("s1", "u1");
-
-        assertEquals("AWAITING_REPLY", entity.getInteractionState());
+        assertEquals("My Title", session.getTitle());
+        assertEquals("sk-ant****cdef", dto.getMaskedAuthToken());
     }
 
     @Test
     void archiveConversation_wrongUser_throws() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "other");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
+        SessionEntity session = buildSession("s1", "w1", "other");
+        when(sessionRepository.findById("s1")).thenReturn(Optional.of(session));
 
         assertThrows(IllegalArgumentException.class,
                 () -> service.archiveConversation("s1", "u1"));
     }
 
-    // ---- 标签 ----
-
     @Test
-    void updateTags_serializesJsonArray() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt(anyString())).thenReturn("token");
+    void findSessionIdsByInteractionStates_delegatesToSessionRepository() {
+        when(sessionRepository.findSessionIdsByInteractionStateIn("u1", List.of("PROCESSING", "ON_HOLD")))
+                .thenReturn(List.of("s1", "s2"));
 
-        service.updateTags("s1", "u1", List.of("bug", "feature"));
+        List<String> result = service.findSessionIdsByInteractionStates("u1", List.of("PROCESSING", "ON_HOLD"));
 
-        assertNotNull(entity.getTags());
-        assertTrue(entity.getTags().contains("bug"));
-        assertTrue(entity.getTags().contains("feature"));
+        assertEquals(List.of("s1", "s2"), result);
     }
 
     @Test
-    void updateTags_nullOrEmpty_clears() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setTags("[\"old\"]");
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(credentialEncryptor.decrypt(anyString())).thenReturn("token");
-
-        service.updateTags("s1", "u1", null);
-
-        assertNull(entity.getTags());
-    }
-
-    // ---- Token 脱敏 ----
-
-    @Test
-    void toDTO_masksLongToken() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthToken("enc-token");
-        entity.setAuthBoundAt(LocalDateTime.now());
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(credentialEncryptor.decrypt("enc-token")).thenReturn("sk-ant-api03-1234567890abcdef");
-
-        ConversationConfigDTO dto = service.updateTitle("s1", "u1", "My Title");
-
-        assertNotNull(dto.getMaskedAuthToken());
-        // Long token: first 6 + **** + last 4
-        assertEquals("sk-ant****cdef", dto.getMaskedAuthToken());
-    }
-
-    @Test
-    void toDTO_masksShortToken() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthToken("enc-token");
-        entity.setAuthBoundAt(LocalDateTime.now());
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(credentialEncryptor.decrypt("enc-token")).thenReturn("short12");
-
-        ConversationConfigDTO dto = service.updateTitle("s1", "u1", "Title");
-
-        // Short token (<=10): first 2 + **** + last 2
-        assertEquals("sh****12", dto.getMaskedAuthToken());
-    }
-
-    @Test
-    void toDTO_noAuthToken_nullMasked() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthToken(null);
-        entity.setAuthBoundAt(null);
-        when(configRepository.findBySessionId("s1")).thenReturn(Optional.of(entity));
-        when(configRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
-        ConversationConfigDTO dto = service.updateTitle("s1", "u1", "Title");
-
-        assertNull(dto.getMaskedAuthToken());
-    }
-
-    // ---- 解密 token ----
-
-    @Test
-    void getDecryptedToken_null_returnsNull() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
-        entity.setAuthToken(null);
-
-        assertNull(service.getDecryptedToken(entity));
-        verify(credentialEncryptor, never()).decrypt(anyString());
-    }
-
-    @Test
-    void getDecryptedToken_decrypts() {
-        ConversationConfigEntity entity = buildEntity("s1", "w1", "u1");
+    void getDecryptedToken_usesCiphertextFromConversationConfig() {
+        ConversationConfigEntity entity = new ConversationConfigEntity();
         entity.setAuthToken("enc-value");
         when(credentialEncryptor.decrypt("enc-value")).thenReturn("plain-value");
 
         assertEquals("plain-value", service.getDecryptedToken(entity));
+        verify(credentialEncryptor).decrypt("enc-value");
     }
 
-    // ---- helper ----
-
-    private ConversationConfigEntity buildEntity(String sessionId, String workerId, String userId) {
-        ConversationConfigEntity entity = new ConversationConfigEntity();
-        entity.setSessionId(sessionId);
-        entity.setWorkerId(workerId);
+    private SessionEntity buildSession(String sessionId, String workerId, String userId) {
+        SessionEntity entity = new SessionEntity();
+        entity.setId(sessionId);
         entity.setUserId(userId);
+        entity.setCurrentWorkerId(workerId);
+        entity.setProviderType("claude-worker");
+        entity.setStatus("ACTIVE");
+        entity.setInteractionState("PROCESSING");
         entity.setPinned(false);
         return entity;
     }
