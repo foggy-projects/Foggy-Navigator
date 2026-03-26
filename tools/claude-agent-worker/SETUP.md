@@ -60,6 +60,42 @@ cd tools/claude-agent-worker
 uvicorn agent_worker.main:app --host 0.0.0.0 --port 3031
 ```
 
+> 如果你是通过 **SSH 连接 Windows 机器** 来启动 Worker，不要长期依赖 `start.ps1` 所在的 SSH 会话。
+> 更稳妥的做法是注册为 **Windows 任务计划程序** 任务，让 Worker 由系统托管，而不是挂在 SSH 会话上。
+
+### Windows 推荐: 任务计划程序托管
+
+```powershell
+cd tools/claude-agent-worker
+
+# 安装计划任务，并立即启动一次做验证
+powershell -ExecutionPolicy Bypass -File .\install-scheduled-task.ps1 -RunNow
+
+# 如需开机后自动拉起，再加 AtStartup
+powershell -ExecutionPolicy Bypass -File .\install-scheduled-task.ps1 -AtStartup -RunNow -Force
+```
+
+常用命令:
+
+```powershell
+# 手动启动 / 停止
+Start-ScheduledTask -TaskName "Foggy-ClaudeAgentWorker"
+Stop-ScheduledTask  -TaskName "Foggy-ClaudeAgentWorker"
+
+# 查看状态
+Get-ScheduledTask -TaskName "Foggy-ClaudeAgentWorker"
+Get-ScheduledTaskInfo -TaskName "Foggy-ClaudeAgentWorker"
+
+# 卸载
+powershell -ExecutionPolicy Bypass -File .\uninstall-scheduled-task.ps1
+```
+
+说明:
+
+- `install-scheduled-task.ps1` 注册的是一个**前台运行**的 runner 脚本 `run-scheduled-task.ps1`，这样 Task Scheduler 可以感知 Worker 进程是否退出，并按策略重启。
+- 计划任务默认使用当前用户的 **S4U** 凭据运行，适合访问当前用户目录下的 `.claude`、`.env`、日志等本地文件。
+- `scheduled-task-stdout.log` / `scheduled-task-stderr.log` 用来排查计划任务层面的启动问题；应用日志仍然写入 `logs/worker.log`。
+
 ### 4. 验证
 
 ```bash
@@ -296,7 +332,7 @@ A: 同时运行的任务数超过了 `MAX_CONCURRENT_TASKS`。等待现有任务
 A: 检查网络连通性、防火墙、以及 Worker 是否正在运行。在 Navigator 中点击"刷新状态"重试。
 
 **Q: 如何让 Worker 开机自启？**
-A: Linux 可用 systemd，Windows 可用任务计划程序或 NSSM 包装为服务。
+A: Linux 可用 systemd，Windows 推荐使用 `install-scheduled-task.ps1 -AtStartup` 注册为任务计划程序任务。若你已有统一服务管理规范，也可以用 NSSM 包装。
 
 **Q: Navigator 配置了目录 Auth 但 Worker 没有使用？**
 A: 确认任务创建时选择了正确的工作目录。Auth 配置绑定在 WorkingDirectory 上，任务创建时自动继承。已有会话的 Auth 不会被覆盖。

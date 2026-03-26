@@ -100,7 +100,16 @@ Copy-Item (Join-Path $ScriptDir "SETUP.md") $InstallDir -Force
 Copy-Item (Join-Path $ScriptDir "VERSION") $InstallDir -Force
 
 # Start/stop scripts
-foreach ($f in @("start.ps1", "stop.ps1", "start.sh", "start-mac.sh", "stop.sh")) {
+foreach ($f in @(
+    "start.ps1",
+    "stop.ps1",
+    "run-scheduled-task.ps1",
+    "install-scheduled-task.ps1",
+    "uninstall-scheduled-task.ps1",
+    "start.sh",
+    "start-mac.sh",
+    "stop.sh"
+)) {
     $srcFile = Join-Path $ScriptDir $f
     if (Test-Path $srcFile) {
         Copy-Item $srcFile $InstallDir -Force

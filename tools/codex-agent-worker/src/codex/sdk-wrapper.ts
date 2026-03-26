@@ -1,9 +1,15 @@
+import { existsSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import os from 'node:os'
+import path from 'node:path'
 import { Codex } from '@openai/codex-sdk'
 import type { CodexOptions, ThreadOptions, ModelReasoningEffort, ThreadItem } from '@openai/codex-sdk'
 import { config } from '../config.js'
 import type { TaskEntry, WorkerEvent } from '../models.js'
 import { createResultEvent, createErrorEvent } from './event-mapper.js'
 import { EventBroadcast } from '../persistence/event-store.js'
+
+const moduleRequire = createRequire(import.meta.url)
 
 /**
  * Global task registry — tracks all active and recently completed tasks
@@ -42,6 +48,97 @@ export function parseModelString(rawModel: string): { model: string; reasoningLe
 
 export function shouldAbortBeforeTurnStart(completedTurns: number, maxTurns: number | undefined): boolean {
   return maxTurns !== undefined && completedTurns >= maxTurns
+}
+
+function resolveCodexPlatformPackage(
+  platform: NodeJS.Platform,
+  arch: string
+): string | undefined {
+  switch (`${platform}:${arch}`) {
+    case 'linux:x64':
+      return '@openai/codex-linux-x64'
+    case 'linux:arm64':
+      return '@openai/codex-linux-arm64'
+    case 'android:x64':
+      return '@openai/codex-linux-x64'
+    case 'android:arm64':
+      return '@openai/codex-linux-arm64'
+    case 'darwin:x64':
+      return '@openai/codex-darwin-x64'
+    case 'darwin:arm64':
+      return '@openai/codex-darwin-arm64'
+    case 'win32:x64':
+      return '@openai/codex-win32-x64'
+    case 'win32:arm64':
+      return '@openai/codex-win32-arm64'
+    default:
+      return undefined
+  }
+}
+
+export function resolveCodexPathEntries(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): string[] {
+  const platformPackage = resolveCodexPlatformPackage(platform, arch)
+  if (!platformPackage) return []
+
+  try {
+    const packageJsonPath = moduleRequire.resolve(`${platformPackage}/package.json`)
+    const vendorRoot = path.join(path.dirname(packageJsonPath), 'vendor')
+    const targetDirs = existsSync(vendorRoot)
+      ? readdirSync(vendorRoot, { withFileTypes: true })
+          .filter(entry => entry.isDirectory())
+          .map(entry => path.join(vendorRoot, entry.name, 'path'))
+      : []
+
+    return targetDirs.filter(dir => existsSync(dir))
+  } catch {
+    return []
+  }
+}
+
+type CodexEnvOptions = {
+  platform?: NodeJS.Platform
+  tempDir?: string
+  additionalPathEntries?: string[]
+}
+
+export function buildCodexProcessEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  options: CodexEnvOptions = {}
+): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (value !== undefined) {
+      env[key] = value
+    }
+  }
+
+  const platform = options.platform ?? process.platform
+  const tempDir = options.tempDir ?? os.tmpdir()
+  const pathKey = Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH'
+  const existingPath = env[pathKey] || ''
+  const extraPathEntries = (options.additionalPathEntries ?? resolveCodexPathEntries(platform))
+    .filter(Boolean)
+    .filter(entry => !existingPath.split(path.delimiter).includes(entry))
+
+  if (extraPathEntries.length > 0) {
+    env[pathKey] = [ ...extraPathEntries, existingPath ].filter(Boolean).join(path.delimiter)
+  }
+
+  if (!env.CODEX_MANAGED_BY_NPM) {
+    env.CODEX_MANAGED_BY_NPM = '1'
+  }
+
+  if (platform === 'win32') {
+    env.SystemRoot = env.SystemRoot || 'C:\\WINDOWS'
+    env.ComSpec = env.ComSpec || path.join(env.SystemRoot, 'System32', 'cmd.exe')
+    env.TEMP = env.TEMP || tempDir
+    env.TMP = env.TMP || tempDir
+  }
+
+  return env
 }
 
 function createEventWithSeq(
@@ -250,7 +347,9 @@ export async function runQuery(
     // 1. API Key 模式：传入 apiKey
     // 2. 订阅模式：不传 apiKey，SDK 通过 Codex CLI 自动读取 ~/.codex/auth.json
     const effectiveApiKey = apiKey || config.openaiApiKey || undefined
-    const codexOptions: CodexOptions = {}
+    const codexOptions: CodexOptions = {
+      env: buildCodexProcessEnv(),
+    }
     if (effectiveApiKey) {
       codexOptions.apiKey = effectiveApiKey
     }

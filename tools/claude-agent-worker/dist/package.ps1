@@ -66,7 +66,16 @@ function Build-ForOS {
     Copy-Item (Join-Path $WorkerDir "SETUP.md") $StageDir
 
     # --- Copy start/stop scripts -----------------------------------------
-    foreach ($f in @("start.ps1", "stop.ps1", "start.sh", "stop.sh", "start-mac.sh")) {
+    foreach ($f in @(
+        "start.ps1",
+        "stop.ps1",
+        "run-scheduled-task.ps1",
+        "install-scheduled-task.ps1",
+        "uninstall-scheduled-task.ps1",
+        "start.sh",
+        "stop.sh",
+        "start-mac.sh"
+    )) {
         $srcFile = Join-Path $WorkerDir $f
         if (Test-Path $srcFile) {
             Copy-Item $srcFile $StageDir

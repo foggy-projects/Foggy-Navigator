@@ -1,7 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { ThreadItem } from '@openai/codex-sdk'
-import { mapThreadItemToEvents, parseModelString, shouldAbortBeforeTurnStart } from '../src/codex/sdk-wrapper.ts'
+import {
+  buildCodexProcessEnv,
+  mapThreadItemToEvents,
+  parseModelString,
+  shouldAbortBeforeTurnStart,
+} from '../src/codex/sdk-wrapper.ts'
 
 function createSeq(): () => number {
   let seq = 0
@@ -51,4 +56,49 @@ test('command_execution completion does not duplicate tool_use after item.starte
   assert.equal(events.length, 1)
   assert.equal(events[0]?.type, 'tool_result')
   assert.equal(events[0]?.seq, 1)
+})
+
+test('buildCodexProcessEnv hardens Windows child process environment', () => {
+  const env = buildCodexProcessEnv(
+    {
+      PATH: 'C:\\Tools',
+    },
+    {
+      platform: 'win32',
+      tempDir: 'C:\\Temp',
+      additionalPathEntries: ['D:\\codex\\vendor\\path'],
+    }
+  )
+
+  assert.equal(env.CODEX_MANAGED_BY_NPM, '1')
+  assert.equal(env.SystemRoot, 'C:\\WINDOWS')
+  assert.equal(env.ComSpec, 'C:\\WINDOWS\\System32\\cmd.exe')
+  assert.equal(env.TEMP, 'C:\\Temp')
+  assert.equal(env.TMP, 'C:\\Temp')
+  assert.equal(env.PATH, ['D:\\codex\\vendor\\path', 'C:\\Tools'].join(';'))
+})
+
+test('buildCodexProcessEnv preserves existing Windows variables and avoids duplicate PATH entries', () => {
+  const env = buildCodexProcessEnv(
+    {
+      Path: ['D:\\codex\\vendor\\path', 'C:\\Tools'].join(';'),
+      CODEX_MANAGED_BY_NPM: '0',
+      SystemRoot: 'D:\\Windows',
+      ComSpec: 'D:\\Windows\\System32\\cmd.exe',
+      TEMP: 'D:\\Temp',
+      TMP: 'D:\\Tmp',
+    },
+    {
+      platform: 'win32',
+      tempDir: 'C:\\Ignored',
+      additionalPathEntries: ['D:\\codex\\vendor\\path'],
+    }
+  )
+
+  assert.equal(env.CODEX_MANAGED_BY_NPM, '0')
+  assert.equal(env.SystemRoot, 'D:\\Windows')
+  assert.equal(env.ComSpec, 'D:\\Windows\\System32\\cmd.exe')
+  assert.equal(env.TEMP, 'D:\\Temp')
+  assert.equal(env.TMP, 'D:\\Tmp')
+  assert.equal(env.Path, ['D:\\codex\\vendor\\path', 'C:\\Tools'].join(';'))
 })
