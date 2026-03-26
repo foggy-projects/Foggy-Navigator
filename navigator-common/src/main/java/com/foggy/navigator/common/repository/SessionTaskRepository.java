@@ -2,6 +2,8 @@ package com.foggy.navigator.common.repository;
 
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
 import java.util.List;
@@ -12,6 +14,10 @@ public interface SessionTaskRepository extends JpaRepository<SessionTaskEntity, 
     Optional<SessionTaskEntity> findByTaskId(String taskId);
 
     Optional<SessionTaskEntity> findByTaskIdAndUserId(String taskId, String userId);
+
+    @Modifying
+    @Transactional
+    void deleteByTaskId(String taskId);
 
     List<SessionTaskEntity> findBySessionIdOrderByCreatedAtAsc(String sessionId);
 

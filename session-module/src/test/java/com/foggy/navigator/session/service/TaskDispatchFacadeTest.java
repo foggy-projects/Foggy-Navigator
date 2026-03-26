@@ -26,6 +26,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -638,5 +641,81 @@ class TaskDispatchFacadeTest {
         assertEquals(1, result.size());
         assertEquals("task-dir-1", result.get(0).getTaskId());
         verify(taskQueryProvider, never()).listTasksByDirectory(anyString(), anyString());
+    }
+
+    @Test
+    void deleteTask_removesUnifiedSessionStoreRecordSoHistoryPageNoLongerShowsDeletedConversation() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+
+        SessionTaskEntity task = sessionTask(
+                "task-delete-1", "session-delete-1", "codex-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 26, 10, 0), "{\"codexThreadId\":\"thread-delete-1\"}"
+        );
+
+        Map<String, SessionTaskEntity> store = new LinkedHashMap<>();
+        store.put(task.getTaskId(), task);
+
+        when(sessionTaskRepository.findByTaskId("task-delete-1"))
+                .thenAnswer(invocation -> Optional.ofNullable(store.get("task-delete-1")));
+        when(sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc("dir-1", "user-1"))
+                .thenAnswer(invocation -> store.values().stream()
+                        .filter(entity -> "dir-1".equals(entity.getDirectoryId()) && "user-1".equals(entity.getUserId()))
+                        .sorted(Comparator.comparing(SessionTaskEntity::getCreatedAt).reversed())
+                        .toList());
+        doAnswer(invocation -> {
+            store.remove(invocation.getArgument(0));
+            return null;
+        }).when(sessionTaskRepository).deleteByTaskId(anyString());
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+
+        Map<?, ?> beforeDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
+        assertEquals(1L, beforeDelete.get("totalSessions"));
+
+        facade.deleteTask("task-delete-1", "user-1");
+
+        Map<?, ?> afterDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
+        assertEquals(0L, afterDelete.get("totalSessions"));
+        assertEquals(List.of(), afterDelete.get("content"));
+        verify(taskQueryProvider).deleteTask("user-1", "task-delete-1");
+        verify(sessionTaskRepository).deleteByTaskId("task-delete-1");
+    }
+
+    @Test
+    void deleteTask_cleansUnifiedSessionStoreWhenProviderTaskIsAlreadyMissing() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+
+        SessionTaskEntity staleTask = sessionTask(
+                "task-stale-1", "session-stale-1", "claude-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 26, 11, 0), "{\"claudeSessionId\":\"session-worker-1\"}"
+        );
+
+        Map<String, SessionTaskEntity> store = new LinkedHashMap<>();
+        store.put(staleTask.getTaskId(), staleTask);
+
+        when(sessionTaskRepository.findByTaskId("task-stale-1"))
+                .thenAnswer(invocation -> Optional.ofNullable(store.get("task-stale-1")));
+        when(sessionTaskRepository.findByDirectoryIdAndUserIdOrderByCreatedAtDesc("dir-1", "user-1"))
+                .thenAnswer(invocation -> store.values().stream()
+                        .filter(entity -> "dir-1".equals(entity.getDirectoryId()) && "user-1".equals(entity.getUserId()))
+                        .sorted(Comparator.comparing(SessionTaskEntity::getCreatedAt).reversed())
+                        .toList());
+        doAnswer(invocation -> {
+            store.remove(invocation.getArgument(0));
+            return null;
+        }).when(sessionTaskRepository).deleteByTaskId(anyString());
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        doThrow(new IllegalArgumentException("Task not found: task-stale-1"))
+                .when(taskQueryProvider).deleteTask("user-1", "task-stale-1");
+
+        Map<?, ?> beforeDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
+        assertEquals(1L, beforeDelete.get("totalSessions"));
+
+        assertDoesNotThrow(() -> facade.deleteTask("task-stale-1", "user-1"));
+
+        Map<?, ?> afterDelete = assertInstanceOf(Map.class, facade.listTasksByDirectoryPaged("user-1", "dir-1", 0, 20, null));
+        assertEquals(0L, afterDelete.get("totalSessions"));
+        assertEquals(List.of(), afterDelete.get("content"));
+        verify(taskQueryProvider).deleteTask("user-1", "task-stale-1");
+        verify(sessionTaskRepository).deleteByTaskId("task-stale-1");
     }
 }

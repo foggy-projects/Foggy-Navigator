@@ -306,7 +306,21 @@ public class TaskDispatchFacade {
      */
     public void deleteTask(String taskId, String userId) {
         TaskQueryProvider provider = findProviderForTask(taskId);
-        provider.deleteTask(userId, taskId);
+        boolean shouldCleanupSessionStore = false;
+        try {
+            provider.deleteTask(userId, taskId);
+            shouldCleanupSessionStore = true;
+        } catch (IllegalArgumentException e) {
+            if (!isProviderTaskAlreadyMissing(e, taskId)) {
+                throw e;
+            }
+            log.warn("Provider task already missing during delete; cleaning unified session store only: taskId={}", taskId);
+            shouldCleanupSessionStore = true;
+        }
+
+        if (shouldCleanupSessionStore && sessionTaskRepository != null) {
+            sessionTaskRepository.deleteByTaskId(taskId);
+        }
     }
 
     /**
@@ -534,6 +548,14 @@ public class TaskDispatchFacade {
             if (p.getTaskById(taskId).isPresent()) return p;
         }
         throw new IllegalArgumentException("Task not found: " + taskId);
+    }
+
+    private boolean isProviderTaskAlreadyMissing(IllegalArgumentException exception, String taskId) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        return message.equals("Task not found: " + taskId) || message.contains("Task not found");
     }
 
     // ── 内部方法 ──
