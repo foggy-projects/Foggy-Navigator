@@ -152,6 +152,32 @@ class ClaudeTaskServiceAuthTest {
     }
 
     @Test
+    void createTask_withExplicitLogicalAgentId_persistsItIntoSessionAndTaskProjection() {
+        CreateTaskForm form = new CreateTaskForm();
+        form.setAgentId("agent-claude-1");
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Test task");
+        form.setCwd("/test/path");
+
+        service.createTask(USER_ID, TENANT_ID, form);
+
+        verify(sessionManager).createSession(argThat((SessionCreateRequest request) ->
+                "agent-claude-1".equals(request.getAgentId())
+                        && "claude-worker".equals(request.getProviderType())
+        ));
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                SESSION_ID.equals(entity.getSessionId())
+                        && "agent-claude-1".equals(entity.getAgentId())
+                        && "claude-worker".equals(entity.getProviderType())
+        ));
+        verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
+                SESSION_ID.equals(entity.getId())
+                        && "agent-claude-1".equals(entity.getAgentId())
+                        && "claude-worker".equals(entity.getProviderType())
+        ));
+    }
+
+    @Test
     void createTask_withModelConfigId_noBaseUrl_usesApiKeyMode() {
         // Arrange: Platform model config without custom baseUrl
         String modelConfigId = "model-config-456";
@@ -254,6 +280,36 @@ class ClaudeTaskServiceAuthTest {
     }
 
     @Test
+    void resumeTask_reusesLogicalAgentIdFromExistingSessionWhenRequestOmitsAgentId() {
+        SessionEntity existingSession = new SessionEntity();
+        existingSession.setId(SESSION_ID);
+        existingSession.setUserId(USER_ID);
+        existingSession.setAgentId("agent-claude-1");
+        existingSession.setProviderType("claude-worker");
+        when(sessionEntityRepository.findById(SESSION_ID)).thenReturn(Optional.of(existingSession));
+        when(taskRepository.existsByClaudeSessionIdAndWorkerId("claude-session-003", WORKER_ID)).thenReturn(true);
+        when(taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus("claude-session-003", WORKER_ID, "RUNNING"))
+                .thenReturn(false);
+
+        var form = new com.foggy.navigator.claude.worker.model.form.ResumeTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Resume task");
+        form.setSessionId(SESSION_ID);
+        form.setClaudeSessionId("claude-session-003");
+
+        service.resumeTask(USER_ID, TENANT_ID, form);
+
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                SESSION_ID.equals(entity.getSessionId())
+                        && "agent-claude-1".equals(entity.getAgentId())
+        ));
+        verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
+                SESSION_ID.equals(entity.getId())
+                        && "agent-claude-1".equals(entity.getAgentId())
+        ));
+    }
+
+    @Test
     void resolveAuth_modelConfigIdWithNoApiKey_fallsBackToDirectory() {
         // Arrange: Model config exists but hasApiKey=false
         String modelConfigId = "model-config-no-key";
@@ -326,6 +382,29 @@ class ClaudeTaskServiceAuthTest {
 
         // getDecryptedApiKey should never be called
         verify(llmModelManager, never()).getDecryptedApiKey(anyString());
+    }
+
+    @Test
+    void getTaskById_recoversLogicalAgentIdFromUnifiedSessionStore() {
+        ClaudeTaskEntity entity = new ClaudeTaskEntity();
+        entity.setTaskId("task-1");
+        entity.setSessionId(SESSION_ID);
+        entity.setWorkerId(WORKER_ID);
+        entity.setUserId(USER_ID);
+        entity.setPrompt("Test prompt");
+        entity.setStatus("RUNNING");
+        when(taskRepository.findByTaskId("task-1")).thenReturn(Optional.of(entity));
+
+        SessionTaskEntity sessionTask = new SessionTaskEntity();
+        sessionTask.setTaskId("task-1");
+        sessionTask.setSessionId(SESSION_ID);
+        sessionTask.setAgentId("agent-claude-1");
+        when(sessionTaskRepository.findByTaskId("task-1")).thenReturn(Optional.of(sessionTask));
+
+        var result = service.getTaskById("task-1").orElseThrow();
+
+        assertEquals("agent-claude-1", result.getAgentId());
+        assertEquals("claude-worker", result.getProviderType());
     }
 
     private WorkingDirectoryEntity createWorkingDirectory(String directoryId, String path) {

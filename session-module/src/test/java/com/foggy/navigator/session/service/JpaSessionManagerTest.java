@@ -83,6 +83,39 @@ class JpaSessionManagerTest {
     }
 
     @Test
+    void createSession_usesExplicitProviderTypeWithoutOverwritingLogicalAgentId() {
+        SessionCreateRequest request = SessionCreateRequest.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .agentId("agent-1")
+                .providerType("codex-worker")
+                .taskName("Test Task")
+                .build();
+
+        String sessionId = sessionManager.createSession(request);
+
+        var saved = sessionRepository.findById(sessionId).orElseThrow();
+        assertEquals("agent-1", saved.getAgentId());
+        assertEquals("codex-worker", saved.getProviderType());
+    }
+
+    @Test
+    void createSession_doesNotInferProviderTypeFromNonProviderAgentId() {
+        SessionCreateRequest request = SessionCreateRequest.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .agentId("agent-1")
+                .taskName("Test Task")
+                .build();
+
+        String sessionId = sessionManager.createSession(request);
+
+        var saved = sessionRepository.findById(sessionId).orElseThrow();
+        assertEquals("agent-1", saved.getAgentId());
+        assertNull(saved.getProviderType());
+    }
+
+    @Test
     void getSession_shouldReturnNullForNonExistent() {
         assertNull(sessionManager.getSession("non-existent"));
     }

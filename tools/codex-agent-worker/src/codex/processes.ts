@@ -20,8 +20,8 @@ function extractJsonArray(raw: string): string {
   return trimmed
 }
 
-async function listProcessesWindows(): Promise<CodexCliProcessInfo[]> {
-  const script = [
+export function buildListProcessesWindowsScript(): string {
+  return [
     '$ErrorActionPreference = "Stop"',
     '$items = Get-CimInstance Win32_Process | Where-Object {',
     '  $_.CommandLine -and $_.CommandLine -match "--experimental-json" -and (',
@@ -42,7 +42,11 @@ async function listProcessesWindows(): Promise<CodexCliProcessInfo[]> {
     '  }',
     '}',
     '$items | ConvertTo-Json -Compress',
-  ].join('; ')
+  ].join('\n')
+}
+
+async function listProcessesWindows(): Promise<CodexCliProcessInfo[]> {
+  const script = buildListProcessesWindowsScript()
 
   const { stdout } = await execFileAsync('powershell', ['-NoProfile', '-Command', script], {
     windowsHide: true,

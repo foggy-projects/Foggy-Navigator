@@ -11,6 +11,8 @@ import lombok.Data;
 @Deprecated(since = "unified-task-dispatch-refactor")
 @Data
 public class CreateTaskForm {
+    /** 逻辑 CodingAgent ID（可选，缺省时回落到 session 已绑定 agent 或 provider） */
+    private String agentId;
     private String workerId;
     private String prompt;
     private String cwd;

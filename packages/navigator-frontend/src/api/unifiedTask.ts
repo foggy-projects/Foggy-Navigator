@@ -4,8 +4,8 @@
  * Agent-agnostic task operations. Frontend should gradually migrate
  * from /api/v1/claude-tasks to these endpoints.
  *
- * Backend resolves agentId from modelConfigId automatically,
- * so frontend does NOT need to know if it's Claude or Codex.
+ * Backend now routes by a richer execution context:
+ * logical agentId, providerType, sessionId, and modelConfigId may all participate.
  */
 import client from './client'
 import type { RX, ClaudeTask, SessionSearchResult } from '@/types'
@@ -58,7 +58,6 @@ function normalizeTaskForm<T extends { images?: string | string[] }>(
 
 /**
  * Create a task via unified dispatch.
- * Backend automatically resolves agentId from modelConfigId.
  */
 export async function createTaskUnified(form: {
   workerId: string
@@ -73,6 +72,7 @@ export async function createTaskUnified(form: {
   permissionMode?: string
   modelConfigId?: string
   agentId?: string
+  providerType?: string
   contextId?: string
   codexThreadId?: string
 }): Promise<DispatchTask> {
@@ -158,6 +158,7 @@ export async function resumeTaskUnified(form: {
   permissionMode?: string
   modelConfigId?: string
   agentId?: string
+  providerType?: string
 }): Promise<DispatchTask> {
   const rx = (await client.post('/tasks/resume', normalizeTaskForm(form))) as unknown as RX<DispatchTask>
   return rx.data

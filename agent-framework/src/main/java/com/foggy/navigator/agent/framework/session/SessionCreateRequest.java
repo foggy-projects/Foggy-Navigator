@@ -18,6 +18,7 @@ public class SessionCreateRequest {
     private String userId;
     private String tenantId;
     private String agentId;
+    private String providerType;
     private String parentSessionId;
     private String taskName;
     private Map<String, Object> context;

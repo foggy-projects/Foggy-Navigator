@@ -47,6 +47,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -155,11 +156,14 @@ public class ClaudeTaskService implements TaskQueryProvider {
             }
         }
 
+        String logicalAgentId = resolveLogicalAgentId(form.getAgentId(), null);
+
         // 3. 创建 Foggy Session
         String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
                 .userId(userId)
                 .tenantId(tenantId)
-                .agentId(AGENT_ID)
+                .agentId(logicalAgentId)
+                .providerType(AGENT_ID)
                 .taskName(truncate(form.getPrompt(), 100))
                 .build());
 
@@ -180,6 +184,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
+        entity.setResolvedAgentId(logicalAgentId);
         entity.setFileCheckpointingEnabled(true);
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
@@ -254,6 +259,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
             throw new IllegalStateException("该会话正在运行任务，请等待完成或终止后再继续");
         }
 
+        String logicalAgentId = resolveLogicalAgentId(form.getAgentId(), form.getSessionId());
+
         // 如果指定了 directoryId，从目录解析 cwd 和 agentTeams
         String cwd = form.getCwd();
         String directoryId = form.getDirectoryId();
@@ -326,6 +333,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
         entity.setDirectoryId(directoryId);
+        entity.setResolvedAgentId(logicalAgentId);
         entity.setClaudeSessionId(form.getClaudeSessionId());
         entity.setFileCheckpointingEnabled(true);
         entity.setSource("PLATFORM");
@@ -1100,6 +1108,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                     .userId(userId)
                     .tenantId(tenantId)
                     .agentId(AGENT_ID)
+                    .providerType(AGENT_ID)
                     .taskName(truncate(prompt, 100))
                     .build());
 
@@ -2132,6 +2141,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         if (sessionTaskRepository == null) {
             return;
         }
+        String agentId = resolveLogicalAgentId(entity);
 
         SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(entity.getTaskId())
                 .orElseGet(SessionTaskEntity::new);
@@ -2141,7 +2151,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         sessionTask.setProviderTaskId(entity.getWorkerTaskId());
         sessionTask.setWorkerId(entity.getWorkerId());
         sessionTask.setUserId(entity.getUserId());
-        sessionTask.setAgentId(AGENT_ID);
+        sessionTask.setAgentId(agentId);
         // ClaudeTaskEntity 没有 tenantId 字段，从 SessionEntity 获取
         if (sessionEntityRepository != null && entity.getSessionId() != null) {
             sessionEntityRepository.findById(entity.getSessionId())
@@ -2172,8 +2182,9 @@ public class ClaudeTaskService implements TaskQueryProvider {
         if (sessionEntityRepository == null || entity.getSessionId() == null || entity.getSessionId().isBlank()) {
             return;
         }
+        String agentId = resolveLogicalAgentId(entity);
         sessionEntityRepository.findById(entity.getSessionId()).ifPresent(session -> {
-            session.setAgentId(firstNonBlank(session.getAgentId(), AGENT_ID));
+            session.setAgentId(firstNonBlank(session.getAgentId(), agentId));
             session.setProviderType(firstNonBlank(session.getProviderType(), AGENT_ID));
             session.setCurrentWorkerId(firstNonBlank(entity.getWorkerId(), session.getCurrentWorkerId()));
             session.setCurrentDirectoryId(firstNonBlank(entity.getDirectoryId(), session.getCurrentDirectoryId()));
@@ -2428,6 +2439,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                                              String userId, String tenantId) {
         // 构造旧 CreateTaskForm，复用完整的 createTask 路径（含 session 创建 + 事件发布）
         CreateTaskForm form = new CreateTaskForm();
+        form.setAgentId((String) params.get("agentId"));
         form.setWorkerId((String) params.get("workerId"));
         form.setPrompt((String) params.get("prompt"));
         form.setCwd((String) params.get("cwd"));
@@ -2560,6 +2572,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     @Override
     public DispatchTaskDTO resumeTask(String userId, String tenantId, java.util.Map<String, Object> params) {
         ResumeTaskForm form = new ResumeTaskForm();
+        form.setAgentId((String) params.get("agentId"));
         form.setWorkerId((String) params.get("workerId"));
         form.setClaudeSessionId((String) params.get("claudeSessionId"));
         form.setPrompt((String) params.get("prompt"));
@@ -2719,13 +2732,14 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     private DispatchTaskDTO toDispatchDTO(ClaudeTaskEntity entity) {
+        String agentId = resolveLogicalAgentId(entity);
         return DispatchTaskDTO.builder()
                 .taskId(entity.getTaskId())
                 .workerTaskId(entity.getWorkerTaskId())
                 .sessionId(entity.getSessionId())
                 .workerId(entity.getWorkerId())
                 .userId(entity.getUserId())
-                .agentId(AGENT_ID)
+                .agentId(agentId)
                 .providerType(AGENT_ID)
                 .prompt(entity.getPrompt())
                 .cwd(entity.getCwd())
@@ -2749,6 +2763,49 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 .checkpoints(entity.getCheckpoints())
                 .fileCheckpointingEnabled(entity.getFileCheckpointingEnabled())
                 .build();
+    }
+
+    private String resolveLogicalAgentId(@Nullable String requestedAgentId, @Nullable String sessionId) {
+        if (requestedAgentId != null && !requestedAgentId.isBlank()) {
+            return requestedAgentId;
+        }
+        if (sessionId != null && !sessionId.isBlank()) {
+            String sessionAgentId = resolveSessionAgentId(sessionId);
+            if (sessionAgentId != null && !sessionAgentId.isBlank()) {
+                return sessionAgentId;
+            }
+        }
+        return AGENT_ID;
+    }
+
+    private String resolveLogicalAgentId(ClaudeTaskEntity entity) {
+        if (entity.getResolvedAgentId() != null && !entity.getResolvedAgentId().isBlank()) {
+            return entity.getResolvedAgentId();
+        }
+        if (sessionTaskRepository != null) {
+            String sessionTaskAgentId = sessionTaskRepository.findByTaskId(entity.getTaskId())
+                    .map(SessionTaskEntity::getAgentId)
+                    .orElse(null);
+            if (sessionTaskAgentId != null && !sessionTaskAgentId.isBlank()) {
+                return sessionTaskAgentId;
+            }
+        }
+        if (entity.getSessionId() != null && !entity.getSessionId().isBlank()) {
+            String sessionAgentId = resolveSessionAgentId(entity.getSessionId());
+            if (sessionAgentId != null && !sessionAgentId.isBlank()) {
+                return sessionAgentId;
+            }
+        }
+        return AGENT_ID;
+    }
+
+    private String resolveSessionAgentId(String sessionId) {
+        if (sessionEntityRepository == null) {
+            return null;
+        }
+        return sessionEntityRepository.findById(sessionId)
+                .map(SessionEntity::getAgentId)
+                .orElse(null);
     }
 
     private TaskDTO toDTO(ClaudeTaskEntity entity) {

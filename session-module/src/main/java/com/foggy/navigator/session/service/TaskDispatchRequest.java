@@ -13,8 +13,11 @@ import java.util.List;
 @Builder
 public class TaskDispatchRequest {
 
-    /** 目标 Agent ID（显式指定，优先于 modelConfigId 推导） */
+    /** 目标逻辑 Agent ID */
     private String agentId;
+
+    /** 目标执行 Provider（claude-worker / codex-worker） */
+    private String providerType;
 
     /** 平台会话 ID（null 表示新建会话） */
     private String sessionId;
@@ -34,7 +37,7 @@ public class TaskDispatchRequest {
     /** 模型名称 */
     private String model;
 
-    /** 模型配置 ID（兼容旧前端，用于推导 Agent） */
+    /** 模型配置 ID（用于认证/模型配置，并可辅助推导 Provider） */
     private String modelConfigId;
 
     /** 最大 turn 数 */
