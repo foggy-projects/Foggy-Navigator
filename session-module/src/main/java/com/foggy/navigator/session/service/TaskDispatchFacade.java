@@ -585,7 +585,7 @@ public class TaskDispatchFacade {
             metadata.put("maxTurns", request.getMaxTurns());
         }
         if (request.getImages() != null && !request.getImages().isEmpty()) {
-            metadata.put("images", request.getImages());
+            metadata.put("images", String.join(",", request.getImages()));
         }
 
         return A2aMessage.builder()
@@ -994,7 +994,7 @@ public class TaskDispatchFacade {
                 .sessionId(entity.getSessionId())
                 .workerId(entity.getWorkerId())
                 .userId(entity.getUserId())
-                .agentId(entity.getAgentId() != null ? entity.getAgentId() : entity.getProviderType())
+                .agentId(entity.getAgentId())
                 .providerType(entity.getProviderType())
                 .prompt(entity.getPrompt())
                 .cwd(entity.getCwd())
@@ -1225,6 +1225,7 @@ public class TaskDispatchFacade {
         Map<String, Object> params = new LinkedHashMap<>();
         putIfNotBlank(params, "agentId", request.getAgentId());
         putIfNotBlank(params, "providerType", request.getProviderType());
+        putIfNotBlank(params, "sessionId", request.getSessionId());
         putIfNotBlank(params, "workerId", request.getWorkerId());
         putIfNotBlank(params, "prompt", request.getPrompt());
         putIfNotBlank(params, "cwd", request.getCwd());

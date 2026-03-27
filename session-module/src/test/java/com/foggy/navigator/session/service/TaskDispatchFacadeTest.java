@@ -3,6 +3,7 @@ package com.foggy.navigator.session.service;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
+import com.foggy.navigator.common.dto.a2a.A2aMessage;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
@@ -100,6 +101,45 @@ class TaskDispatchFacadeTest {
         assertEquals("agent-2", result.getAgentId());
         verify(agentResolver).resolveAgent(eq("agent-2"), any());
         verify(bindingService).getOrBind("session-1", "agent-2", "claude-worker", "SESSION_AGENT");
+    }
+
+    @Test
+    void createTask_imagesPassedAsStringNotListInA2aMessage() {
+        // Bug: buildMessage() 曾直接将 List<String> 放入 metadata，
+        // 导致 ClaudeWorkerA2aAgent 用 (String) 强转时 ClassCastException。
+        // 修复后应转为 String（JSON）传递。
+        String imageJson = "[{\"name\":\"screenshot.webp\",\"data\":\"base64...\",\"mime_type\":\"image/webp\"}]";
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .agentId("agent-1")
+                .workerId("worker-1")
+                .prompt("看图")
+                .images(List.of(imageJson))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agentResolver.getProviderType(eq("agent-1"), any())).thenReturn(Optional.of("claude-worker"));
+        when(agent.getAgentCard()).thenReturn(A2aAgentCard.builder().id("agent-1").build());
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-img-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        facade.createTask(request, context);
+
+        // 验证传给 agent.sendTask() 的 A2aMessage 中 images 是 String 类型
+        var messageCaptor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(messageCaptor.capture());
+        A2aMessage captured = messageCaptor.getValue();
+        Object imagesValue = captured.getMetadata().get("images");
+        assertNotNull(imagesValue, "images should be present in metadata");
+        assertInstanceOf(String.class, imagesValue,
+                "images in A2aMessage metadata must be String, not List, to avoid ClassCastException in downstream consumers");
+        assertEquals(imageJson, imagesValue);
     }
 
     @Test
@@ -849,6 +889,59 @@ class TaskDispatchFacadeTest {
         assertEquals(List.of(), afterDelete.get("content"));
         verify(taskQueryProvider).deleteTask("user-1", "task-delete-1");
         verify(sessionTaskRepository).deleteByTaskId("task-delete-1");
+    }
+
+    @Test
+    void toDispatchTaskDTO_preservesNullAgentIdInsteadOfFallingBackToProviderType() {
+        // 设计规范 §5.1: 禁止用 providerType 常量覆盖真实 logicalAgentId
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(facade, "workingDirectoryRepository", workingDirectoryRepository);
+
+        // 构造一个 agentId 为 null 的 SessionTaskEntity（模拟旧数据或未绑定 Agent 的任务）
+        SessionTaskEntity taskWithNullAgent = sessionTask(
+                "task-null-agent", "session-null-agent", "claude-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 27, 10, 0), "{\"claudeSessionId\":\"cs-1\"}"
+        );
+        // agentId 未设置，保持 null
+
+        when(sessionTaskRepository.findByTaskIdAndUserId("task-null-agent", "user-1"))
+                .thenReturn(Optional.of(taskWithNullAgent));
+        when(workingDirectoryRepository.findByDirectoryIdIn(List.of("dir-1")))
+                .thenReturn(List.of(directoryEntity("dir-1", "Test Project")));
+
+        Optional<DispatchTaskDTO> result = facade.getTask("task-null-agent",
+                AgentResolveContext.builder().userId("user-1").build());
+
+        assertTrue(result.isPresent());
+        DispatchTaskDTO dto = result.orElseThrow();
+        // 关键断言：agentId 应为 null，不应回退到 "claude-worker"
+        assertNull(dto.getAgentId(),
+                "agentId should be null when entity has no logical agent, not fall back to providerType");
+        assertEquals("claude-worker", dto.getProviderType());
+    }
+
+    @Test
+    void toDispatchTaskDTO_preservesRealLogicalAgentId() {
+        // 设计规范 §11.4: session.agentId 必须保存真实逻辑 Agent，而不是 provider 常量
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+
+        SessionTaskEntity taskWithAgent = sessionTask(
+                "task-real-agent", "session-real-agent", "claude-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 27, 10, 0), "{\"claudeSessionId\":\"cs-1\"}"
+        );
+        taskWithAgent.setAgentId("agent-claude-prod-1");
+
+        when(sessionTaskRepository.findByTaskIdAndUserId("task-real-agent", "user-1"))
+                .thenReturn(Optional.of(taskWithAgent));
+
+        Optional<DispatchTaskDTO> result = facade.getTask("task-real-agent",
+                AgentResolveContext.builder().userId("user-1").build());
+
+        assertTrue(result.isPresent());
+        DispatchTaskDTO dto = result.orElseThrow();
+        assertEquals("agent-claude-prod-1", dto.getAgentId(),
+                "agentId must be the real logical agent, not the provider constant");
+        assertEquals("claude-worker", dto.getProviderType());
     }
 
     @Test
