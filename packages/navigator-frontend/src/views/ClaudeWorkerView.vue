@@ -2668,6 +2668,12 @@ function isSelectablePlatformModel(model: LlmModelConfig): boolean {
   return model.hasApiKey || model.workerBackend === 'OPENAI_CODEX'
 }
 
+function providerTypeFromWorkerBackend(workerBackend?: string | null): string | undefined {
+  if (workerBackend === 'OPENAI_CODEX') return 'codex-worker'
+  if (workerBackend === 'CLAUDE_CODE') return 'claude-worker'
+  return undefined
+}
+
 const claudeModelOptions = computed(() => {
   const backend = platformModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
   const backendModels = ALL_MODELS.filter(m => m.backend === backend)
@@ -4649,14 +4655,16 @@ async function handleCreateTask() {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
       model?: string; maxTurns?: number; agentTeamsJson?: string; agentTeamsConfigId?: string
-      images?: string; permissionMode?: string; modelConfigId?: string; agentId?: string
+      images?: string; permissionMode?: string; modelConfigId?: string; agentId?: string; providerType?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
     }
-    // Pass agentId when available — backend resolves agentId > directoryId > workerId
+    // Pass logical agent when available. Otherwise pass providerType from the selected model config.
     if (selectedAgentId.value) {
       form.agentId = selectedAgentId.value
+    } else {
+      form.providerType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
     }
 
     if (selectedDirectoryId.value) {
@@ -5051,10 +5059,12 @@ async function handlePaneSend(paneId: string, content: string) {
       directoryId: oldTask.directoryId,
       sessionId: oldTask.sessionId,
     }
-    // Pass agentId — backend resolves agentId > directoryId > workerId
+    // Pass logical agent when available, otherwise keep the existing provider context explicit.
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
+    resumeForm.providerType = oldTask.providerType
+      || providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
     if (oldTask.claudeSessionId) {
       resumeForm.claudeSessionId = oldTask.claudeSessionId
     }
@@ -5396,10 +5406,12 @@ async function executeContextRepair() {
       directoryId: task.directoryId,
       sessionId: task.sessionId,
     }
-    // Pass agentId — backend resolves agentId > directoryId > workerId
+    // Pass logical agent when available, otherwise keep the provider context explicit.
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
+    resumeForm.providerType = task.providerType
+      || providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -5618,10 +5630,12 @@ async function handleResumeFromHistory(task: ClaudeTask) {
       directoryId: task.directoryId,
       sessionId: task.sessionId,  // per-conversation: reuse session
     }
-    // Pass agentId — backend resolves agentId > directoryId > workerId
+    // Pass logical agent when available, otherwise keep the provider context explicit.
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
+    resumeForm.providerType = task.providerType
+      || providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
     if (task.claudeSessionId) {
       resumeForm.claudeSessionId = task.claudeSessionId
     }

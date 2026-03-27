@@ -49,6 +49,10 @@ public class ClaudeTaskEntity {
     @Column(length = 64)
     private String directoryId;
 
+    /** 逻辑 CodingAgent ID（不持久化，仅用于同步统一 session/task 镜像） */
+    @Transient
+    private String resolvedAgentId;
+
     @Column(length = 32)
     private String status;
 

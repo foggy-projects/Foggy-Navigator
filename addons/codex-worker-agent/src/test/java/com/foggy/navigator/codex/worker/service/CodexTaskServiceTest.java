@@ -255,6 +255,94 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void createTaskDirect_doesNotTreatDirectoryIdAsLogicalAgentId() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+        when(sessionManager.createSession(any())).thenReturn("session-new");
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "directoryId", "dir-1"
+        ), "user-1", "tenant-1");
+
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                "session-new".equals(entity.getSessionId())
+                        && "codex-worker".equals(entity.getProviderType())
+                        && "codex-worker".equals(entity.getAgentId())
+                        && !"dir-1".equals(entity.getAgentId())
+        ));
+        verify(sessionEntityRepository).save(argThat((SessionEntity entity) ->
+                "session-new".equals(entity.getId())
+                        && "codex-worker".equals(entity.getProviderType())
+                        && "codex-worker".equals(entity.getAgentId())
+                        && !"dir-1".equals(entity.getAgentId())
+        ));
+    }
+
+    @Test
+    void resumeTask_reusesLogicalAgentIdFromExistingSessionWhenRequestOmitsAgentId() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId("thread-1", "worker-1", "user-1"))
+                .thenReturn(true);
+        when(taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatus("thread-1", "worker-1", "user-1", "RUNNING"))
+                .thenReturn(false);
+        when(sessionManager.getSession("session-1")).thenReturn(Session.builder()
+                .id("session-1")
+                .userId("user-1")
+                .build());
+        SessionEntity existingSession = new SessionEntity();
+        existingSession.setId("session-1");
+        existingSession.setUserId("user-1");
+        existingSession.setAgentId("agent-codex-1");
+        existingSession.setProviderType("codex-worker");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(existingSession));
+
+        DispatchTaskDTO result = service.resumeTask("user-1", "tenant-1", Map.of(
+                "workerId", "worker-1",
+                "sessionId", "session-1",
+                "prompt", "continue",
+                "codexThreadId", "thread-1"
+        ));
+
+        assertEquals("agent-codex-1", result.getAgentId());
+        verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
+                "session-1".equals(entity.getSessionId())
+                        && "agent-codex-1".equals(entity.getAgentId())
+        ));
+    }
+
+    @Test
+    void getTaskById_recoversLogicalAgentIdFromUnifiedSessionStore() {
+        CodexTaskEntity entity = createTask(
+                "task-1", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 3, 26, 10, 0)
+        );
+        entity.setResolvedAgentId(null);
+        when(taskRepository.findByTaskId("task-1")).thenReturn(Optional.of(entity));
+
+        SessionTaskEntity sessionTask = new SessionTaskEntity();
+        sessionTask.setTaskId("task-1");
+        sessionTask.setSessionId("session-1");
+        sessionTask.setAgentId("agent-codex-1");
+        when(sessionTaskRepository.findByTaskId("task-1")).thenReturn(Optional.of(sessionTask));
+
+        DispatchTaskDTO dto = service.getTaskById("task-1").orElseThrow();
+
+        assertEquals("agent-codex-1", dto.getAgentId());
+        assertEquals("codex-worker", dto.getProviderType());
+    }
+
+    @Test
     void completeTask_publishesTaskStatusChangeEvent() {
         CodexTaskEntity entity = createTask(
                 "task-1", "session-1", "worker-1", "dir-1", "RUNNING",

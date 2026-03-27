@@ -28,6 +28,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class JpaSessionManager implements SessionManager {
 
+    private static final Set<String> KNOWN_PROVIDER_TYPES = Set.of("claude-worker", "codex-worker");
+
     private final SessionRepository sessionRepository;
     private final SessionMessageRepository messageRepository;
     private final ObjectMapper objectMapper;
@@ -41,9 +43,9 @@ public class JpaSessionManager implements SessionManager {
         entity.setUserId(request.getUserId());
         entity.setTenantId(request.getTenantId());
         entity.setAgentId(request.getAgentId());
-        // 自动推导 providerType（agentId 本身就是 provider type 的约定命名）
-        if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
-            entity.setProviderType(request.getAgentId());
+        String providerType = resolveProviderType(request);
+        if (providerType != null) {
+            entity.setProviderType(providerType);
             entity.setBindingSource("EXPLICIT_AGENT");
         }
         entity.setParentSessionId(request.getParentSessionId());
@@ -53,6 +55,16 @@ public class JpaSessionManager implements SessionManager {
         entity.setLastActivityAt(LocalDateTime.now());
         sessionRepository.save(entity);
         return sessionId;
+    }
+
+    private String resolveProviderType(SessionCreateRequest request) {
+        if (request.getProviderType() != null && !request.getProviderType().isBlank()) {
+            return request.getProviderType();
+        }
+        if (request.getAgentId() != null && KNOWN_PROVIDER_TYPES.contains(request.getAgentId())) {
+            return request.getAgentId();
+        }
+        return null;
     }
 
     @Override

@@ -7,6 +7,8 @@ import lombok.Data;
  */
 @Data
 public class ResumeTaskForm {
+    /** 逻辑 CodingAgent ID（可选，缺省时回落到已绑定 session agent） */
+    private String agentId;
     private String workerId;
     private String claudeSessionId;
     private String prompt;

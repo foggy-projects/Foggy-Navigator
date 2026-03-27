@@ -70,12 +70,12 @@ public class TaskDispatchFacade {
      * 4. 返回统一 DTO
      */
     public DispatchTaskDTO createTask(TaskDispatchRequest request, AgentResolveContext context) {
-        DispatchTaskDTO directTask = tryCreateTaskDirect(request, context);
-        if (directTask != null) {
-            return directTask;
+        CreateExecutionTarget target = resolveCreateExecutionTarget(request);
+        if (target.directProviderRoute()) {
+            return createTaskDirect(target.providerType(), request, context);
         }
 
-        AgentLookup lookup = resolveAgentLookup(request);
+        AgentLookup lookup = target.agentLookup();
 
         A2aAgent agent = agentResolver.resolveAgent(lookup.lookupId, context)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not available: " + lookup.lookupId));
@@ -84,6 +84,8 @@ public class TaskDispatchFacade {
                 .orElseThrow(() -> new IllegalArgumentException("No provider found for agent: " + lookup.lookupId));
 
         String agentId = resolveLogicalAgentId(agent, lookup.lookupId);
+        validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
+        validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
 
         // 绑定校验
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
@@ -248,6 +250,8 @@ public class TaskDispatchFacade {
      */
     public DispatchTaskDTO resumeTask(TaskDispatchRequest request, AgentResolveContext context) {
         String providerType = resolveResumeProviderType(request, context);
+        validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
+        validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
 
         // 找到对应 Provider 直接调用 resumeTask
         TaskQueryProvider provider = taskQueryProviders.stream()
@@ -260,8 +264,8 @@ public class TaskDispatchFacade {
     }
 
     /**
-     * resume 优先复用 session 已绑定的 provider，避免同目录/同 worker 下的跨 provider 误路由。
-     * 仅当旧 session 尚未绑定 providerType 时，才回退到 agentId/directoryId/workerId 推导。
+     * resume 优先复用 session 已绑定的 provider，避免跨 provider 误路由。
+     * 仅当旧 session 尚未绑定 providerType 时，才允许通过显式 provider/modelConfig/agent 做迁移兜底。
      */
     private String resolveResumeProviderType(TaskDispatchRequest request, AgentResolveContext context) {
         String sessionId = request.getSessionId();
@@ -274,31 +278,23 @@ public class TaskDispatchFacade {
                 }
             }
         }
-        // fallback: 尝试多个标识符解析 provider（directoryId 可能未绑定，需 fallback 到 workerId）
-        return resolveProviderTypeWithFallback(request, context);
+        return resolveResumeProviderTypeFromLegacyContext(request, context);
     }
 
-    /**
-     * 带 fallback 的 provider 类型解析。
-     * 依次尝试 agentId → directoryId → workerId，第一个命中即返回。
-     * 适用于 resume 场景：directoryId 未绑定时可用 workerId 兜底。
-     */
-    private String resolveProviderTypeWithFallback(TaskDispatchRequest request, AgentResolveContext context) {
-        // 按优先级构造候选 lookupId 列表
-        String[] candidates = {
-                request.getAgentId(),
-                request.getDirectoryId(),
-                request.getWorkerId()
-        };
-        for (String candidate : candidates) {
-            if (candidate != null && !candidate.isBlank()) {
-                Optional<String> pt = agentResolver.getProviderType(candidate, context);
-                if (pt.isPresent()) {
-                    return pt.get();
-                }
-            }
+    private String resolveResumeProviderTypeFromLegacyContext(TaskDispatchRequest request, AgentResolveContext context) {
+        String requestedProviderType = resolveRequestedProviderType(request);
+        if (requestedProviderType != null && !requestedProviderType.isBlank()) {
+            return requestedProviderType;
         }
-        throw new IllegalArgumentException("No provider found for resume request (tried agentId/directoryId/workerId)");
+
+        String agentLookupId = resolveBoundOrExplicitAgentId(request.getAgentId(), request.getSessionId());
+        if (agentLookupId != null && !agentLookupId.isBlank()) {
+            return agentResolver.getProviderType(agentLookupId, context)
+                    .orElseThrow(() -> new IllegalArgumentException("No provider found for agent: " + agentLookupId));
+        }
+
+        throw new IllegalArgumentException(
+                "No provider found for resume request; old sessions require session.providerType or explicit providerType/modelConfigId/agentId");
     }
 
     /**
@@ -469,6 +465,8 @@ public class TaskDispatchFacade {
 
     private Map<String, Object> buildResumeParams(TaskDispatchRequest request) {
         Map<String, Object> params = new LinkedHashMap<>();
+        putIfNotBlank(params, "agentId", request.getAgentId());
+        putIfNotBlank(params, "providerType", request.getProviderType());
         putIfNotBlank(params, "workerId", request.getWorkerId());
         putIfNotBlank(params, "claudeSessionId", request.getClaudeSessionId());
         putIfNotBlank(params, "prompt", request.getPrompt());
@@ -537,9 +535,7 @@ public class TaskDispatchFacade {
                     .map(SessionTaskEntity::getProviderType)
                     .orElse(null);
             if (providerType != null && !providerType.isBlank()) {
-                return taskQueryProviders.stream()
-                        .filter(provider -> providerType.equals(provider.getProviderType()))
-                        .findFirst()
+                return findTaskQueryProviderByType(providerType)
                         .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerType));
             }
         }
@@ -548,6 +544,15 @@ public class TaskDispatchFacade {
             if (p.getTaskById(taskId).isPresent()) return p;
         }
         throw new IllegalArgumentException("Task not found: " + taskId);
+    }
+
+    private Optional<TaskQueryProvider> findTaskQueryProviderByType(String providerType) {
+        if (providerType == null || providerType.isBlank()) {
+            return Optional.empty();
+        }
+        return taskQueryProviders.stream()
+                .filter(provider -> providerType.equals(provider.getProviderType()))
+                .findFirst();
     }
 
     private boolean isProviderTaskAlreadyMissing(IllegalArgumentException exception, String taskId) {
@@ -566,6 +571,7 @@ public class TaskDispatchFacade {
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         putIfNotBlank(metadata, "sessionId", request.getSessionId());
+        putIfNotBlank(metadata, "providerType", request.getProviderType());
         putIfNotBlank(metadata, "workerId", request.getWorkerId());
         putIfNotBlank(metadata, "cwd", request.getCwd());
         putIfNotBlank(metadata, "directoryId", request.getDirectoryId());
@@ -1165,53 +1171,49 @@ public class TaskDispatchFacade {
         return null;
     }
 
-    private AgentLookup resolveAgentLookup(TaskDispatchRequest request) {
+    private AgentLookup resolveCreateAgentLookup(TaskDispatchRequest request) {
         if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
             return new AgentLookup(request.getAgentId(), "EXPLICIT_AGENT");
         }
-        if (request.getDirectoryId() != null && !request.getDirectoryId().isBlank()) {
-            return new AgentLookup(request.getDirectoryId(), "DIRECTORY_ID");
+        String sessionAgentId = resolveBoundOrExplicitAgentId(null, request.getSessionId());
+        if (sessionAgentId != null && !sessionAgentId.isBlank()) {
+            return new AgentLookup(sessionAgentId, "SESSION_AGENT");
         }
-        if (request.getWorkerId() != null && !request.getWorkerId().isBlank()) {
-            return new AgentLookup(request.getWorkerId(), "WORKER_ID");
-        }
-        throw new IllegalArgumentException("agentId, directoryId or workerId is required");
+        throw new IllegalArgumentException(
+                "logical agent is required when provider routing cannot be resolved directly; pass agentId or providerType/modelConfigId");
     }
 
-    private DispatchTaskDTO tryCreateTaskDirect(TaskDispatchRequest request, AgentResolveContext context) {
+    private CreateExecutionTarget resolveCreateExecutionTarget(TaskDispatchRequest request) {
+        String requestedProviderType = resolveRequestedProviderType(request);
+        if (shouldUseDirectProviderRoute(request, requestedProviderType)) {
+            return CreateExecutionTarget.direct(requestedProviderType);
+        }
+        return CreateExecutionTarget.a2a(resolveCreateAgentLookup(request));
+    }
+
+    private boolean shouldUseDirectProviderRoute(TaskDispatchRequest request, String providerType) {
+        if (providerType == null || providerType.isBlank()) {
+            return false;
+        }
         if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
-            return null;
+            return false;
         }
         if (request.getWorkerId() == null || request.getWorkerId().isBlank()) {
-            return null;
+            return false;
         }
-        if (request.getModelConfigId() == null || request.getModelConfigId().isBlank()) {
-            return null;
-        }
-
-        String providerType = llmModelManager.getModelConfig(request.getModelConfigId())
-                .map(cfg -> mapWorkerBackendToProviderType(cfg.getWorkerBackend()))
-                .orElse(null);
-        if (providerType == null || providerType.isBlank()) {
-            return null;
-        }
-
-        // claude-worker 有完整 A2a 解析链，带 sessionId 时优先走绑定路径
         if ("claude-worker".equals(providerType)
                 && request.getSessionId() != null && !request.getSessionId().isBlank()) {
-            return null;
+            return false;
         }
+        return findTaskQueryProviderByType(providerType).isPresent();
+    }
 
-        TaskQueryProvider provider = taskQueryProviders.stream()
-                .filter(p -> providerType.equals(p.getProviderType()))
-                .findFirst()
-                .orElse(null);
-        if (provider == null) {
-            log.warn("Direct task route skipped: provider {} not available for modelConfigId={}",
-                    providerType, request.getModelConfigId());
-            return null;
-        }
+    private DispatchTaskDTO createTaskDirect(String providerType, TaskDispatchRequest request, AgentResolveContext context) {
+        validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
+        validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
 
+        TaskQueryProvider provider = findTaskQueryProviderByType(providerType)
+                .orElseThrow(() -> new IllegalArgumentException("Provider not available: " + providerType));
         Map<String, Object> params = buildDirectCreateParams(request);
         DispatchTaskDTO dto = provider.createTaskDirect(params, context.getUserId(), context.getTenantId());
         log.info("Dispatched task directly via provider: providerType={}, taskId={}, workerId={}, directoryId={}",
@@ -1222,6 +1224,7 @@ public class TaskDispatchFacade {
     private Map<String, Object> buildDirectCreateParams(TaskDispatchRequest request) {
         Map<String, Object> params = new LinkedHashMap<>();
         putIfNotBlank(params, "agentId", request.getAgentId());
+        putIfNotBlank(params, "providerType", request.getProviderType());
         putIfNotBlank(params, "workerId", request.getWorkerId());
         putIfNotBlank(params, "prompt", request.getPrompt());
         putIfNotBlank(params, "cwd", request.getCwd());
@@ -1252,6 +1255,64 @@ public class TaskDispatchFacade {
         };
     }
 
+    private String resolveRequestedProviderType(TaskDispatchRequest request) {
+        if (request.getProviderType() != null && !request.getProviderType().isBlank()) {
+            return request.getProviderType();
+        }
+        return resolveProviderTypeFromModelConfig(request.getModelConfigId());
+    }
+
+    private String resolveBoundOrExplicitAgentId(@Nullable String requestedAgentId, @Nullable String sessionId) {
+        if (requestedAgentId != null && !requestedAgentId.isBlank()) {
+            return requestedAgentId;
+        }
+        if (sessionId == null || sessionId.isBlank()) {
+            return null;
+        }
+        return sessionRepository.findById(sessionId)
+                .map(SessionEntity::getAgentId)
+                .filter(agentId -> !agentId.isBlank())
+                .orElse(null);
+    }
+
+    private String resolveProviderTypeFromModelConfig(String modelConfigId) {
+        if (modelConfigId == null || modelConfigId.isBlank()) {
+            return null;
+        }
+        return llmModelManager.getModelConfig(modelConfigId)
+                .map(cfg -> mapWorkerBackendToProviderType(cfg.getWorkerBackend()))
+                .orElse(null);
+    }
+
+    private void validateRequestedProviderTypeCompatibility(String requestedProviderType, String resolvedProviderType) {
+        if (requestedProviderType == null || requestedProviderType.isBlank()
+                || resolvedProviderType == null || resolvedProviderType.isBlank()) {
+            return;
+        }
+
+        if (!resolvedProviderType.equals(requestedProviderType)) {
+            throw new IllegalArgumentException(
+                    "providerType " + requestedProviderType + " conflicts with resolved provider " + resolvedProviderType);
+        }
+    }
+
+    private void validateModelConfigProviderCompatibility(String modelConfigId, String providerType) {
+        if (modelConfigId == null || modelConfigId.isBlank() || providerType == null || providerType.isBlank()) {
+            return;
+        }
+
+        String modelProviderType = resolveProviderTypeFromModelConfig(modelConfigId);
+        if (modelProviderType == null || modelProviderType.isBlank()) {
+            return;
+        }
+
+        if (!providerType.equals(modelProviderType)) {
+            throw new IllegalArgumentException(
+                    "modelConfigId " + modelConfigId + " targets provider " + modelProviderType
+                            + ", but resolved provider is " + providerType);
+        }
+    }
+
     private String resolveLogicalAgentId(A2aAgent agent, String lookupId) {
         if (agent.getAgentCard() != null
                 && agent.getAgentCard().getId() != null
@@ -1268,6 +1329,19 @@ public class TaskDispatchFacade {
         private AgentLookup(String lookupId, String bindingSource) {
             this.lookupId = lookupId;
             this.bindingSource = bindingSource;
+        }
+    }
+
+    private record CreateExecutionTarget(@Nullable String providerType,
+                                         @Nullable AgentLookup agentLookup,
+                                         boolean directProviderRoute) {
+
+        private static CreateExecutionTarget direct(String providerType) {
+            return new CreateExecutionTarget(providerType, null, true);
+        }
+
+        private static CreateExecutionTarget a2a(AgentLookup agentLookup) {
+            return new CreateExecutionTarget(null, agentLookup, false);
         }
     }
 

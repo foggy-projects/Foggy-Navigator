@@ -107,6 +107,7 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         String effectiveDirectoryId = requestedDirectoryId != null ? requestedDirectoryId : entity.getDefaultDirectoryId();
 
         CreateTaskForm form = new CreateTaskForm();
+        form.setAgentId(entity.getAgentId());
         form.setWorkerId(entity.getWorkerId());
         form.setPrompt(prompt);
         form.setCwd(effectiveCwd);
