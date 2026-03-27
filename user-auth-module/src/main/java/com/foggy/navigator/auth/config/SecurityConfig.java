@@ -78,6 +78,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/sessions", "/api/v1/sessions/**").permitAll()
                         .requestMatchers("/api/v1/config", "/api/v1/config/**").permitAll()
                         .requestMatchers("/api/v1/claude-workers", "/api/v1/claude-workers/**").permitAll()
+                        .requestMatchers("/api/v1/codex-workers", "/api/v1/codex-workers/**").permitAll()
                         .requestMatchers("/api/v1/claude-tasks", "/api/v1/claude-tasks/**").permitAll()
                         .requestMatchers("/api/v1/codex-tasks", "/api/v1/codex-tasks/**").permitAll()
                         .requestMatchers("/api/v1/tasks", "/api/v1/tasks/**").permitAll()
