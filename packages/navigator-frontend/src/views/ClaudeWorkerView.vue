@@ -2091,7 +2091,7 @@ import {
 import * as sshApi from '@/api/ssh'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse } from '@/types'
 import type { AipMessageType } from '@foggy/chat'
 
 const MAX_PANES = 1
@@ -2149,32 +2149,53 @@ async function loadCliProcesses() {
   loadingProcesses.value = true
   try {
     const workerId = selectedWorkerId.value
-    const [claudeResult, codexResult] = await Promise.allSettled([
-      dirApi.listCliProcesses(workerId),
-      dirApi.listCodexCliProcesses(workerId),
-    ])
+    const worker = selectedWorkerEntity.value
+    const requests: Array<{
+      type: 'claude' | 'codex'
+      promise: Promise<CliProcessListResponse>
+    }> = [
+      {
+        type: 'claude',
+        promise: dirApi.listCliProcesses(workerId),
+      },
+    ]
+
+    if (worker?.codexBaseUrl?.trim()) {
+      requests.push({
+        type: 'codex',
+        promise: dirApi.listCodexCliProcesses(workerId, { suppressErrorMessage: true }),
+      })
+    }
+
+    const results = await Promise.allSettled(requests.map(request => request.promise))
 
     const merged: CliProcessInfo[] = []
     let activeTaskCount = 0
+    const failedTypes: Array<'claude' | 'codex'> = []
 
-    if (claudeResult.status === 'fulfilled') {
-      merged.push(...claudeResult.value.processes.map(processInfo => ({
-        ...processInfo,
-        process_type: processInfo.process_type || 'claude',
-      })))
-      activeTaskCount += claudeResult.value.active_task_count
-    }
+    results.forEach((result, index) => {
+      const request = requests[index]
+      if (!request) return
 
-    if (codexResult.status === 'fulfilled') {
-      merged.push(...codexResult.value.processes.map(processInfo => ({
-        ...processInfo,
-        process_type: processInfo.process_type || 'codex',
-      })))
-      activeTaskCount += codexResult.value.active_task_count
-    }
+      if (result.status === 'fulfilled') {
+        merged.push(...result.value.processes.map(processInfo => ({
+          ...processInfo,
+          process_type: processInfo.process_type || request.type,
+        })))
+        activeTaskCount += result.value.active_task_count
+        return
+      }
+
+      failedTypes.push(request.type)
+    })
 
     cliProcesses.value = merged.sort((a, b) => b.pid - a.pid)
     cliProcessActiveTaskCount.value = activeTaskCount
+
+    if (merged.length === 0 && failedTypes.length === requests.length) {
+      const labels = failedTypes.map(type => (type === 'codex' ? 'Codex' : 'Claude')).join(' / ')
+      ElMessage.error(`获取 ${labels} CLI 进程失败`)
+    }
   } catch {
     cliProcesses.value = []
     cliProcessActiveTaskCount.value = 0

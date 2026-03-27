@@ -89,13 +89,18 @@ export async function syncWorkerSkills(workerId: string): Promise<{ status: stri
 export async function listCliProcesses(workerId: string): Promise<CliProcessListResponse> {
   const rx = (await client.get(
     `/claude-workers/${workerId}/processes`,
+    { suppressErrorMessage: true } as any,
   )) as unknown as RX<CliProcessListResponse>
   return rx.data
 }
 
-export async function listCodexCliProcesses(workerId: string): Promise<CliProcessListResponse> {
+export async function listCodexCliProcesses(
+  workerId: string,
+  options?: { suppressErrorMessage?: boolean },
+): Promise<CliProcessListResponse> {
   const rx = (await client.get(
     `/codex-workers/${workerId}/processes`,
+    { suppressErrorMessage: options?.suppressErrorMessage } as any,
   )) as unknown as RX<CliProcessListResponse>
   return rx.data
 }
