@@ -2674,6 +2674,18 @@ function providerTypeFromWorkerBackend(workerBackend?: string | null): string | 
   return undefined
 }
 
+function providerTypeFromAgentType(agentType?: string | null): string | undefined {
+  if (agentType === 'LOCAL_CODEX_WORKER') return 'codex-worker'
+  if (agentType === 'LOCAL_CLAUDE_WORKER') return 'claude-worker'
+  return undefined
+}
+
+const selectedAgentProviderType = computed(() => {
+  if (!selectedAgentId.value) return undefined
+  const agent = agentState.agents.value.find(a => a.agentId === selectedAgentId.value)
+  return providerTypeFromAgentType(agent?.agentType)
+})
+
 const claudeModelOptions = computed(() => {
   const backend = platformModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
   const backendModels = ALL_MODELS.filter(m => m.backend === backend)
@@ -4660,11 +4672,13 @@ async function handleCreateTask() {
       workerId: selectedWorkerId.value,
       prompt,
     }
-    // Pass logical agent when available. Otherwise pass providerType from the selected model config.
-    if (selectedAgentId.value) {
+    // Determine routing: if modelConfig's provider matches agent's provider, use agentId (A2A route).
+    // If they differ (e.g. Claude agent + Codex model), skip agentId and use providerType (direct route).
+    const modelProviderType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+    if (selectedAgentId.value && (!modelProviderType || modelProviderType === selectedAgentProviderType.value)) {
       form.agentId = selectedAgentId.value
-    } else {
-      form.providerType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+    } else if (modelProviderType) {
+      form.providerType = modelProviderType
     }
 
     if (selectedDirectoryId.value) {

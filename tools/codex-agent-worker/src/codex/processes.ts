@@ -32,7 +32,7 @@ export function buildListProcessesWindowsScript(): string {
     '} | ForEach-Object {',
     '  $startedAt = $null',
     '  if ($_.CreationDate) {',
-    '    $startedAt = [Management.ManagementDateTimeConverter]::ToDateTime($_.CreationDate).ToString("o")',
+    '    $startedAt = ([datetime]$_.CreationDate).ToString("o")',
     '  }',
     '  [pscustomobject]@{',
     '    pid = [int]$_.ProcessId',
