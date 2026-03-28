@@ -29,4 +29,6 @@ public class CreateTaskForm {
     private String permissionMode;
     /** 平台 LLM 模型配置 ID，用于从平台配置中获取 apiKey + baseUrl */
     private String modelConfigId;
+    /** A2A 多轮会话标识（contextId），持久化到 task entity 供轮询 API 返回 */
+    private String contextId;
 }
