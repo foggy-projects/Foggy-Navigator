@@ -7,6 +7,8 @@ description: Coding Agent 后端服务开发指导。当用户需要开发 codin
 
 为 `addons/coding-agent` 模块提供 Java 后端服务开发、单元测试编写、配置管理的标准化指导。
 
+> **重要架构变更（需求 26）**：任务创建/恢复/查询现在经由 `session-module` 的 `TaskDispatchFacade` 统一分派，不再由 coding-agent 直接暴露任务 API。coding-agent 模块作为 **执行层**（通过 A2aAgentProvider SPI）被 TaskDispatchFacade 调用，返回统一的 `DispatchTaskDTO`。修改任务流程时需同时关注 session-module 的路由逻辑。
+
 ## 使用场景
 
 当用户需要以下操作时激活：

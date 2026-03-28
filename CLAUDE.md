@@ -101,8 +101,11 @@ Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实
 
 - **SPI 接口**: `A2aAgent`（执行）+ `A2aAgentProvider`（提供者模式），位于 `navigator-spi/spi/agent/`
 - **统一注册**: `DefaultA2aAgentRegistry`（session-module）聚合所有 Provider
-- **REST 端点**: `GET /api/v1/agents`（发现）、`POST /api/v1/agents/{id}/ask`（调用）
+- **统一分派**: `TaskDispatchFacade`（session-module）是所有 Worker 任务的入口，支持 A2A 路由和 Direct Provider 路由
+- **会话绑定**: `SessionBindingService`（session-module）管理 Session ↔ Agent 绑定生命周期，绑定后不可切换
+- **REST 端点**: `GET /api/v1/agents`（发现）、`POST /api/v1/agents/{id}/ask`（调用）、`POST /api/v1/tasks`（任务分派）
 - **当前实现**: `ClaudeWorkerAgentProvider` → `ClaudeWorkerA2aAgent`（通过 `syncQuery` 同步执行）
+- **三个核心语义**（需求 26）：`logicalAgentId`（逻辑 Agent）、`providerType`（执行后端）、`modelConfigId`（模型配置）— 禁止混淆
 - **扩展**: 新 addon 只需实现 `A2aAgentProvider` + `@Component`，自动注入 Registry
 
 详见 [A2A Agent 架构文档](docs/a2a-agent-architecture.md)
