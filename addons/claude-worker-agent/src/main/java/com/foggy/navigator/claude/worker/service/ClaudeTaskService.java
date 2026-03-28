@@ -2411,6 +2411,16 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     @Override
+    public void cancelTask(String taskId, String userId) {
+        ClaudeTaskEntity task = taskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!task.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Task not found or access denied: " + taskId);
+        }
+        abortTask(taskId);
+    }
+
+    @Override
     public Optional<DispatchTaskDTO> getTaskById(String taskId) {
         return taskRepository.findByTaskId(taskId).map(this::toDispatchDTO);
     }
