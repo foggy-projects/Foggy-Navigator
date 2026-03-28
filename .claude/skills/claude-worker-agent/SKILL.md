@@ -22,12 +22,31 @@ description: Claude Worker Agent 全栈开发指导（Java 后端 + Python Worke
 
 ## 架构概览
 
+### 任务分派层（需求 26 重构后）
+
 ```
 前端 (ClaudeWorkerView.vue)
-  │  POST /api/v1/claude-tasks { prompt, workerId, directoryId, agentTeamsJson }
+  │  POST /api/v1/tasks { agentId, providerType, modelConfigId, prompt, ... }
   ▼
-Java 后端 (addons/claude-worker-agent)
-  │  ClaudeTaskController → ClaudeTaskService → ApplicationEventPublisher
+统一分派层 (session-module)
+  │  TaskDispatchFacade.createTask(request, context)
+  │  ├── [A2A 路由] agentId → UnifiedAgentResolver → ClaudeWorkerA2aAgent
+  │  └── [Direct 路由] providerType=claude-worker → TaskQueryProvider.createTaskDirect()
+  │  SessionBindingService.getOrBind() ← 建立/验证 Session ↔ Agent 绑定
+  ▼
+  返回 DispatchTaskDTO（统一任务视图，含 providerType + logicalAgentId）
+```
+
+**三个核心语义**（禁止混淆）：
+- `logicalAgentId`：哪个 Coding Agent 负责任务（SessionEntity.agentId）
+- `providerType`：执行后端 "claude-worker" / "codex-worker"（SessionEntity.providerType，绑定后不可变）
+- `modelConfigId`：API Key / BaseURL / 模型参数
+
+### 执行层
+
+```
+ClaudeWorkerA2aAgent / ClaudeWorkerFacadeImpl
+  │  ClaudeTaskService.createTask() → ApplicationEventPublisher
   │  发布 ClaudeTaskStartEvent
   ▼
 WorkerStreamRelay (@Async @EventListener)
@@ -133,11 +152,20 @@ tools/claude-agent-worker/
 
 ## 核心流程
 
-### 任务创建流程
+### 任务创建流程（经统一分派层）
 
 ```
-1. ClaudeTaskController.createTask()
-2. ClaudeTaskService.createTask()
+1. 前端 POST /api/v1/tasks → TaskController
+2. TaskDispatchFacade.createTask(request, context)
+   a. resolveCreateExecutionTarget(request)
+      - 有 providerType + workerId → Direct 路由
+      - 否则 → A2A 路由（通过 agentId 解析）
+   b. [A2A 路由] UnifiedAgentResolver.resolveAgent() → ClaudeWorkerA2aAgent
+      → resolveLogicalAgentId() 确保不将 provider 常量写入 agentId
+   c. SessionBindingService.getOrBind(sessionId, agentId, providerType, bindingSource)
+      → 建立或验证 Session ↔ Agent 绑定（绑定后不可切换）
+   d. agent.sendTask(message) → 委托到 ClaudeWorkerFacadeImpl
+3. ClaudeTaskService.createTask()（模块内部）
    a. 验证 Worker 归属和状态
    b. 如果有 directoryId → 解析 cwd 和 agentTeamsJson
    c. 创建 Foggy Session (sessionManager.createSession)
@@ -145,13 +173,22 @@ tools/claude-agent-worker/
    e. 持久化 ClaudeTaskEntity (status=RUNNING)
    f. resolveAuth() → 解析 per-conversation auth
    g. 发布 ClaudeTaskStartEvent
-3. WorkerStreamRelay.onTaskStart() (@Async)
+4. WorkerStreamRelay.onTaskStart() (@Async)
    a. 发送 SESSION_START AgentMessage
    b. 创建 ClaudeWorkerClient
    c. client.streamQuery() → SSE 流订阅
    d. 每个 SSE 事件 → relayEvent() → AgentMessage → eventPublisher
    e. result 事件 → taskService.completeTask()
    f. error 事件 → taskService.failTask()
+5. 返回 DispatchTaskDTO（统一任务视图）
+```
+
+### Resume 任务路由规则
+
+```
+1. 始终使用 SessionEntity.providerType（已绑定的执行后端）
+2. 不允许跨 Provider 切换（codex session 不能 resume 到 claude）
+3. 仅验证 modelConfigId / agentId，不覆盖
 ```
 
 ### Auth 解析流程

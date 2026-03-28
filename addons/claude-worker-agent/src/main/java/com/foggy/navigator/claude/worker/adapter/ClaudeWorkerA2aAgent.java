@@ -122,13 +122,14 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
             form.setMaxTurns(n.intValue());
         }
 
+        // contextId 持久化到 task entity（轮询 API 返回 + 多轮会话恢复）
+        final String finalContextId = contextId != null ? contextId : IdGenerator.shortId();
+        form.setContextId(finalContextId);
+
         TaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
 
         // 设置去重键
         taskService.setDedupKey(task.getTaskId(), dedupKey);
-
-        // 保存 contextId → claudeSessionId 映射
-        final String finalContextId = contextId != null ? contextId : IdGenerator.shortId();
         if (contextStore != null && task.getClaudeSessionId() != null) {
             contextStore.saveSessionRef(finalContextId, "claude-worker",
                     task.getClaudeSessionId(), entity.getUserId(), entity.getAgentId());

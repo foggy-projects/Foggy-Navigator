@@ -189,6 +189,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
         entity.setAgentTeamsConfigId(resolvedConfigId);
+        entity.setContextId(form.getContextId());
         persistTask(entity);
 
         log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}, agentTeams={}",

@@ -571,6 +571,29 @@ ClaudeWorkerView 是 Claude Worker 功能的主页面，采用左右分栏布局
 - 工具调用卡片
 - 任务状态/费用显示
 
+**任务创建路由逻辑（需求 26 重构后）**：
+
+前端根据选中的 Agent 和模型配置，自动决定 A2A 或 Direct 路由：
+
+```typescript
+// 辅助函数
+providerTypeFromAgentType(agentType)       // Agent 类型 → Provider
+providerTypeFromWorkerBackend(workerBackend) // 模型配置 → Provider
+
+// 路由决策
+const modelProviderType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+if (selectedAgentId.value && (!modelProviderType || modelProviderType === selectedAgentProviderType.value)) {
+  form.agentId = selectedAgentId.value       // → A2A 路由
+} else if (modelProviderType) {
+  form.providerType = modelProviderType       // → Direct Provider 路由
+}
+```
+
+**关键规则**：
+- 如果 Agent 的 Provider 与模型配置的 Provider 一致 → A2A 路由（传 agentId）
+- 如果不一致 → Direct 路由（传 providerType，不传 agentId）
+- 前端不再硬编码 `claude-worker` 覆盖
+
 **核心数据结构**：
 
 ```typescript

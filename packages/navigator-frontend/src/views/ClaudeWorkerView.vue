@@ -3489,9 +3489,22 @@ onMounted(async () => {
     await workerState.loadConversationConfigs(sessionIds)
   }
   // Start polling active tasks every 30s (fallback for SSE disconnects)
-  activeTasksInterval = setInterval(() => {
-    workerState.loadActiveTasks()
-    workerState.loadAwaitingReplyTasks()
+  activeTasksInterval = setInterval(async () => {
+    // 1. Sync task lists from backend
+    await Promise.all([workerState.loadActiveTasks(), workerState.loadAwaitingReplyTasks()])
+    // 2. Sync open pane task statuses (catches missed SSE task_status_change events)
+    for (const pane of getAllPanes()) {
+      pane.syncTaskStatus()
+    }
+    // 3. Refresh interactionState for active + awaiting sessions (catches missed SSE interactionState updates)
+    const sessionIds = [
+      ...workerState.activeTasks.value.map((t) => t.sessionId),
+      ...workerState.awaitingReplyTasks.value.map((t) => t.sessionId),
+    ]
+    const unique = [...new Set(sessionIds)]
+    if (unique.length > 0) {
+      workerState.loadConversationConfigs(unique)
+    }
   }, 30000)
 })
 
@@ -5599,6 +5612,9 @@ function paneInteractionState(paneState: TaskPaneState): string | undefined {
   const status = paneState.task.value?.status
   if (status === 'RUNNING') return 'PROCESSING'
   if (status === 'AWAITING_PERMISSION') return 'AWAITING_REPLY'
+  // Terminal task statuses always mean AWAITING_REPLY, regardless of DB interactionState
+  // (defends against backend race where reconnect overwrites interactionState after completion)
+  if (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED') return 'AWAITING_REPLY'
   return getInteractionState(paneState.task.value?.sessionId)
 }
 
@@ -5617,6 +5633,8 @@ function attentionStatusLabel(conv: ConversationGroup): string {
   const status = conv.latestTask.status
   if (status === 'RUNNING') return '运行中'
   if (status === 'AWAITING_PERMISSION') return '等待授权'
+  // Terminal task statuses always mean 待回复, regardless of DB interactionState
+  if (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED') return '待回复'
   // Fallback to interactionState for non-running tasks
   const state = conv.config?.interactionState
   if (state === 'AWAITING_REPLY') return '待回复'

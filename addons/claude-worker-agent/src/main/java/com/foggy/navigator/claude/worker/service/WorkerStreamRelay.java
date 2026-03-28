@@ -447,11 +447,22 @@ public class WorkerStreamRelay {
 
             Thread.sleep(delayMs);
 
+            // Re-check task status after sleep — task may have completed during the backoff delay
+            // (e.g. a "result" event arrived on a concurrent stream while we were sleeping)
+            var freshTaskOpt = taskRepository.findByTaskId(taskId);
+            if (freshTaskOpt.isPresent()) {
+                String freshStatus = freshTaskOpt.get().getStatus();
+                if (!"RUNNING".equals(freshStatus) && !"AWAITING_PERMISSION".equals(freshStatus)) {
+                    log.info("Task {} status changed to {} during reconnect backoff, aborting reconnect", taskId, freshStatus);
+                    return false;
+                }
+            }
+
             ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
             ClaudeWorkerClient client = workerService.createClient(worker);
 
             AtomicReference<String> detectedModel = new AtomicReference<>();
-            ClaudeTaskEntity entity = taskRepository.findByTaskId(taskId).orElse(null);
+            ClaudeTaskEntity entity = freshTaskOpt.orElse(null);
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(
                     entity != null ? entity.getClaudeSessionId() : null);
 
