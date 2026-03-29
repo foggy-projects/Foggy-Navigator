@@ -3176,16 +3176,13 @@ interface ConversationGroup {
   config?: ConversationConfig
 }
 
-function getTaskResumeRef(task: Pick<ClaudeTask, 'claudeSessionId' | 'codexThreadId'>): string {
-  if (task.claudeSessionId) return `claude:${task.claudeSessionId}`
-  if (task.codexThreadId) return `codex:${task.codexThreadId}`
-  return ''
+/** 会话是否可以 resume（有 sessionId 即可，provider 内部状态由后端恢复） */
+function getTaskResumeRef(task: Pick<ClaudeTask, 'sessionId'>): string {
+  return task.sessionId || ''
 }
 
 function getConversationResumeRef(conv: ConversationGroup): string {
-  if (conv.claudeSessionId) return `claude:${conv.claudeSessionId}`
-  if (conv.codexThreadId) return `codex:${conv.codexThreadId}`
-  return ''
+  return conv.sessionId || ''
 }
 
 function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] {
@@ -5061,7 +5058,7 @@ async function handlePaneSend(paneId: string, content: string) {
   const oldTask = pane?.task.value
   const workerId = oldTask?.workerId || selectedWorkerId.value
   if (!pane || !oldTask || !workerId) return
-  if (!oldTask.claudeSessionId && !oldTask.codexThreadId) return
+  if (!oldTask.sessionId) return
 
   // Inject @agent context into prompt if available
   let finalPrompt = content
@@ -5095,13 +5092,7 @@ async function handlePaneSend(paneId: string, content: string) {
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
-    // providerType 由后端从 modelConfigId 推导，前端不再传递
-    if (oldTask.claudeSessionId) {
-      resumeForm.claudeSessionId = oldTask.claudeSessionId
-    }
-    if (oldTask.codexThreadId) {
-      resumeForm.codexThreadId = oldTask.codexThreadId
-    }
+    // providerType / claudeSessionId / codexThreadId 由后端从 session 恢复，前端不再传递
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -5669,13 +5660,7 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
-    // providerType 由后端从 modelConfigId 推导，前端不再传递
-    if (task.claudeSessionId) {
-      resumeForm.claudeSessionId = task.claudeSessionId
-    }
-    if (task.codexThreadId) {
-      resumeForm.codexThreadId = task.codexThreadId
-    }
+    // providerType / claudeSessionId / codexThreadId 由后端从 session 恢复，前端不再传递
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }

@@ -92,14 +92,21 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setImages((String) params.get("images"));
-        form.setCodexThreadId((String) params.get("codexThreadId"));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
         }
 
+        // codexThreadId 从 SessionEntity.providerStateJson 恢复，不再从 request 透传
         String sessionId = (String) params.get("sessionId");
+        if (sessionId != null && !sessionId.isBlank() && sessionEntityRepository != null) {
+            String codexThreadId = readJsonValue(
+                    sessionEntityRepository.findById(sessionId)
+                            .map(SessionEntity::getProviderStateJson).orElse(null),
+                    "codexThreadId");
+            form.setCodexThreadId(codexThreadId);
+        }
         if (form.getCodexThreadId() == null || form.getCodexThreadId().isBlank()) {
-            throw new IllegalArgumentException("resume 操作必须指定 codexThreadId");
+            throw new IllegalArgumentException("resume 操作必须指定 codexThreadId（需从 session 恢复）");
         }
         if (sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("resume 操作必须指定 sessionId");
@@ -798,6 +805,18 @@ public class CodexTaskService implements TaskQueryProvider {
             return OBJECT_MAPPER.writeValueAsString(values);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize session provider state", e);
+        }
+    }
+
+    private String readJsonValue(String json, String key) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            Map<String, Object> values = OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+            Object value = values.get(key);
+            return value != null ? value.toString() : null;
+        } catch (Exception e) {
+            log.warn("Failed to read key '{}' from JSON: {}", key, json);
+            return null;
         }
     }
 

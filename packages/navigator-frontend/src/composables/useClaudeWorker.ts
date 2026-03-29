@@ -119,8 +119,6 @@ export function useClaudeWorker() {
 
   async function resumeTask(form: {
     workerId: string
-    claudeSessionId?: string
-    codexThreadId?: string
     prompt: string
     cwd?: string
     directoryId?: string

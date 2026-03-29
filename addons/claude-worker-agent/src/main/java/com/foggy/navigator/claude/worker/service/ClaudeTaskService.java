@@ -2634,7 +2634,6 @@ public class ClaudeTaskService implements TaskQueryProvider {
         ResumeTaskForm form = new ResumeTaskForm();
         form.setAgentId((String) params.get("agentId"));
         form.setWorkerId((String) params.get("workerId"));
-        form.setClaudeSessionId((String) params.get("claudeSessionId"));
         form.setPrompt((String) params.get("prompt"));
         form.setCwd((String) params.get("cwd"));
         form.setDirectoryId((String) params.get("directoryId"));
@@ -2647,6 +2646,15 @@ public class ClaudeTaskService implements TaskQueryProvider {
         form.setAgentTeamsConfigId((String) params.get("agentTeamsConfigId"));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
+        }
+        // claudeSessionId 从 SessionEntity.providerStateJson 恢复，不再从 request 透传
+        String sessionId = form.getSessionId();
+        if (sessionId != null && !sessionId.isEmpty()) {
+            String claudeSessionId = readJsonValue(
+                    sessionEntityRepository.findById(sessionId)
+                            .map(SessionEntity::getProviderStateJson).orElse(null),
+                    "claudeSessionId");
+            form.setClaudeSessionId(claudeSessionId);
         }
         TaskDTO taskDTO = resumeTask(userId, tenantId, form);
         return getTaskById(taskDTO.getTaskId()).orElseThrow();

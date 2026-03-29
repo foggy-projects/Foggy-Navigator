@@ -1269,8 +1269,7 @@ public class TaskDispatchFacade {
         putIfNotBlank(params, "permissionMode", request.getPermissionMode());
         putIfNotBlank(params, "agentTeamsConfigId", request.getAgentTeamsConfigId());
         putIfNotBlank(params, "agentTeamsJson", request.getAgentTeamsJson());
-        putIfNotBlank(params, "codexThreadId", request.getCodexThreadId());
-        putIfNotBlank(params, "claudeSessionId", request.getClaudeSessionId());
+        // claudeSessionId / codexThreadId 不再透传 — Provider 从 SessionEntity.providerStateJson 恢复
         if (request.getMaxTurns() != null) {
             params.put("maxTurns", request.getMaxTurns());
         }

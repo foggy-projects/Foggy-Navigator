@@ -73,7 +73,6 @@ export async function createTaskUnified(form: {
   modelConfigId?: string
   agentId?: string
   contextId?: string
-  codexThreadId?: string
 }): Promise<DispatchTask> {
   const rx = (await client.post('/tasks', normalizeTaskForm(form))) as unknown as RX<DispatchTask>
   return rx.data
@@ -143,8 +142,6 @@ export async function resyncTaskUnified(taskId: string): Promise<unknown> {
  */
 export async function resumeTaskUnified(form: {
   workerId: string
-  claudeSessionId?: string
-  codexThreadId?: string
   prompt: string
   cwd?: string
   directoryId?: string

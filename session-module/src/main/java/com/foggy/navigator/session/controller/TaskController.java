@@ -170,7 +170,7 @@ public class TaskController {
     // ── Phase 3: 统一端点扩展 ──
 
     /**
-     * 恢复任务（续接已有 claudeSessionId）
+     * 恢复任务（续接已有会话）
      */
     @PostMapping("/resume")
     public RX<DispatchTaskDTO> resumeTask(@RequestBody TaskDispatchRequest request) {
