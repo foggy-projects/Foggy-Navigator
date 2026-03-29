@@ -484,26 +484,7 @@ public class TaskDispatchFacade {
     }
 
     private Map<String, Object> buildResumeParams(TaskDispatchRequest request) {
-        Map<String, Object> params = new LinkedHashMap<>();
-        putIfNotBlank(params, "agentId", request.getAgentId());
-        putIfNotBlank(params, "providerType", request.getProviderType());
-        putIfNotBlank(params, "workerId", request.getWorkerId());
-        putIfNotBlank(params, "claudeSessionId", request.getClaudeSessionId());
-        putIfNotBlank(params, "prompt", request.getPrompt());
-        putIfNotBlank(params, "cwd", request.getCwd());
-        putIfNotBlank(params, "directoryId", request.getDirectoryId());
-        putIfNotBlank(params, "sessionId", request.getSessionId());
-        putIfNotBlank(params, "model", request.getModel());
-        putIfNotBlank(params, "modelConfigId", request.getModelConfigId());
-        putIfNotBlank(params, "permissionMode", request.getPermissionMode());
-        putIfNotBlank(params, "agentTeamsConfigId", request.getAgentTeamsConfigId());
-        putIfNotBlank(params, "agentTeamsJson", request.getAgentTeamsJson());
-        putIfNotBlank(params, "codexThreadId", request.getCodexThreadId());
-        if (request.getMaxTurns() != null) params.put("maxTurns", request.getMaxTurns());
-        if (request.getImages() != null && !request.getImages().isEmpty()) {
-            params.put("images", String.join(",", request.getImages()));
-        }
-        return params;
+        return toCommonParams(request);
     }
 
     // ── Worker Session 查询（统一端点） ──
@@ -589,24 +570,8 @@ public class TaskDispatchFacade {
         List<A2aPart> parts = new ArrayList<>();
         parts.add(A2aPart.text(request.getPrompt()));
 
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        putIfNotBlank(metadata, "sessionId", request.getSessionId());
-        putIfNotBlank(metadata, "providerType", request.getProviderType());
-        putIfNotBlank(metadata, "workerId", request.getWorkerId());
-        putIfNotBlank(metadata, "cwd", request.getCwd());
-        putIfNotBlank(metadata, "directoryId", request.getDirectoryId());
-        putIfNotBlank(metadata, "model", request.getModel());
-        putIfNotBlank(metadata, "modelConfigId", request.getModelConfigId());
-        putIfNotBlank(metadata, "permissionMode", request.getPermissionMode());
-        putIfNotBlank(metadata, "agentTeamsConfigId", request.getAgentTeamsConfigId());
-        putIfNotBlank(metadata, "agentTeamsJson", request.getAgentTeamsJson());
-        putIfNotBlank(metadata, "codexThreadId", request.getCodexThreadId());
-        if (request.getMaxTurns() != null) {
-            metadata.put("maxTurns", request.getMaxTurns());
-        }
-        if (request.getImages() != null && !request.getImages().isEmpty()) {
-            metadata.put("images", String.join(",", request.getImages()));
-        }
+        // 复用公共参数转换，A2A message 的 metadata 和 Direct params 共享同一组字段
+        Map<String, Object> metadata = toCommonParams(request);
 
         return A2aMessage.builder()
                 .role("user")
@@ -1286,7 +1251,11 @@ public class TaskDispatchFacade {
         return dto;
     }
 
-    private Map<String, Object> buildDirectCreateParams(TaskDispatchRequest request) {
+    /**
+     * Request → Map 公共转换：提取所有标准字段到 Map（供 Direct/Resume/A2A 各路径复用）。
+     */
+    @SuppressWarnings("deprecation")
+    private Map<String, Object> toCommonParams(TaskDispatchRequest request) {
         Map<String, Object> params = new LinkedHashMap<>();
         putIfNotBlank(params, "agentId", request.getAgentId());
         putIfNotBlank(params, "providerType", request.getProviderType());
@@ -1301,6 +1270,7 @@ public class TaskDispatchFacade {
         putIfNotBlank(params, "agentTeamsConfigId", request.getAgentTeamsConfigId());
         putIfNotBlank(params, "agentTeamsJson", request.getAgentTeamsJson());
         putIfNotBlank(params, "codexThreadId", request.getCodexThreadId());
+        putIfNotBlank(params, "claudeSessionId", request.getClaudeSessionId());
         if (request.getMaxTurns() != null) {
             params.put("maxTurns", request.getMaxTurns());
         }
@@ -1308,6 +1278,10 @@ public class TaskDispatchFacade {
             params.put("images", String.join(",", request.getImages()));
         }
         return params;
+    }
+
+    private Map<String, Object> buildDirectCreateParams(TaskDispatchRequest request) {
+        return toCommonParams(request);
     }
 
     private String mapWorkerBackendToProviderType(String workerBackend) {
