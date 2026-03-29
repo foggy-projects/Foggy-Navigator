@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  one-api:
+    image: justsong/one-api:latest
+    container_name: llm-gateway
+    restart: always
+    ports:
+      - "${GATEWAY_PORT:-3000}:3000"
+    environment:
+      - TZ=Asia/Shanghai
+      # SQLite (默认，轻量部署无需外部数据库)
+      - SQL_DSN=
+      # 初始 root 密码（首次启动后建议在 Web UI 中修改）
+      - INITIAL_ROOT_TOKEN=${INITIAL_ROOT_TOKEN:-}
+      # 会话密钥（生产环境务必修改）
+      - SESSION_SECRET=${SESSION_SECRET:-foggy-llm-gateway-secret}
+      # 内存缓存（无需 Redis 即可运行）
+      - MEMORY_CACHE_ENABLED=true
+      # 频率限制（每分钟全局请求数，0=不限制）
+      - GLOBAL_API_RATE_LIMIT=${GLOBAL_API_RATE_LIMIT:-180}
+      # 日志
+      - LOG_MAX_DAYS=${LOG_MAX_DAYS:-30}
+    volumes:
+      - ./data:/data
+    networks:
+      - gateway-net
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  gateway-net:
+    driver: bridge

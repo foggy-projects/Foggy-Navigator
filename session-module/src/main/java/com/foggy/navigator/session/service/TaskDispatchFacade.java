@@ -250,6 +250,7 @@ public class TaskDispatchFacade {
      */
     public DispatchTaskDTO resumeTask(TaskDispatchRequest request, AgentResolveContext context) {
         String providerType = resolveResumeProviderType(request, context);
+        normalizeResumeRequest(request, providerType);
         validateRequestedProviderTypeCompatibility(request.getProviderType(), providerType);
         validateModelConfigProviderCompatibility(request.getModelConfigId(), providerType);
 
@@ -1283,6 +1284,38 @@ public class TaskDispatchFacade {
         return llmModelManager.getModelConfig(modelConfigId)
                 .map(cfg -> mapWorkerBackendToProviderType(cfg.getWorkerBackend()))
                 .orElse(null);
+    }
+
+    /**
+     * Resume 上下文规范化 —— session 已绑定 provider 时，
+     * 将 request 中与 session provider 不兼容的字段静默修正，
+     * 避免前端传入的 modelConfigId / providerType 与 session 绑定冲突。
+     * <p>
+     * 仅在 resume 路径调用；createTask 首次绑定时保留硬校验。
+     */
+    private void normalizeResumeRequest(TaskDispatchRequest request, String resolvedProviderType) {
+        if (resolvedProviderType == null || resolvedProviderType.isBlank()) {
+            return;
+        }
+
+        // 1. providerType 对齐
+        String reqProvider = request.getProviderType();
+        if (reqProvider != null && !reqProvider.isBlank() && !resolvedProviderType.equals(reqProvider)) {
+            log.info("Resume normalize: overriding providerType {} → {} (session-bound)",
+                    reqProvider, resolvedProviderType);
+            request.setProviderType(resolvedProviderType);
+        }
+
+        // 2. modelConfigId 兼容性检查，不兼容则清空（让 provider 内部用自己的默认配置）
+        String modelConfigId = request.getModelConfigId();
+        if (modelConfigId != null && !modelConfigId.isBlank()) {
+            String modelProviderType = resolveProviderTypeFromModelConfig(modelConfigId);
+            if (modelProviderType != null && !resolvedProviderType.equals(modelProviderType)) {
+                log.info("Resume normalize: clearing modelConfigId {} (targets {}, session bound to {})",
+                        modelConfigId, modelProviderType, resolvedProviderType);
+                request.setModelConfigId(null);
+            }
+        }
     }
 
     private void validateRequestedProviderTypeCompatibility(String requestedProviderType, String resolvedProviderType) {
