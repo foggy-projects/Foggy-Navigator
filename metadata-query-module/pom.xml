@@ -16,7 +16,7 @@
     <description>元数据统一查询模块 - 基于语义层的灵活查询服务</description>
 
     <properties>
-        <foggy-model.version>8.1.8.beta</foggy-model.version>
+        <foggy-model.version>8.1.9.beta</foggy-model.version>
     </properties>
 
     <dependencies>
