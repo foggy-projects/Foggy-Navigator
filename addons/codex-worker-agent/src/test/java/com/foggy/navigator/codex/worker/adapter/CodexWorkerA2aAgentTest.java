@@ -225,14 +225,6 @@ class CodexWorkerA2aAgentTest {
         assertFalse(result.get().getArtifacts().isEmpty());
     }
 
-    @Test
-    void isAvailable_returnsTrue() {
-        CodingAgentEntity entity = defaultEntity();
-        CodexWorkerA2aAgent agent = new CodexWorkerA2aAgent(entity, taskService, "D:\\default", null);
-
-        assertTrue(agent.isAvailable());
-    }
-
     // ---- helpers ----
 
     private CodingAgentEntity defaultEntity() {

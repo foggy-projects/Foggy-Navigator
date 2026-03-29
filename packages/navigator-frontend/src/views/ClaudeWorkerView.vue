@@ -2681,23 +2681,6 @@ function isSelectablePlatformModel(model: LlmModelConfig): boolean {
   return model.hasApiKey || model.workerBackend === 'OPENAI_CODEX'
 }
 
-function providerTypeFromWorkerBackend(workerBackend?: string | null): string | undefined {
-  if (workerBackend === 'OPENAI_CODEX') return 'codex-worker'
-  if (workerBackend === 'CLAUDE_CODE') return 'claude-worker'
-  return undefined
-}
-
-function providerTypeFromAgentType(agentType?: string | null): string | undefined {
-  if (agentType === 'LOCAL_CODEX_WORKER') return 'codex-worker'
-  if (agentType === 'LOCAL_CLAUDE_WORKER') return 'claude-worker'
-  return undefined
-}
-
-const selectedAgentProviderType = computed(() => {
-  if (!selectedAgentId.value) return undefined
-  const agent = agentState.agents.value.find(a => a.agentId === selectedAgentId.value)
-  return providerTypeFromAgentType(agent?.agentType)
-})
 
 const claudeModelOptions = computed(() => {
   const backend = platformModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
@@ -4696,18 +4679,14 @@ async function handleCreateTask() {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
       model?: string; maxTurns?: number; agentTeamsJson?: string; agentTeamsConfigId?: string
-      images?: string; permissionMode?: string; modelConfigId?: string; agentId?: string; providerType?: string
+      images?: string; permissionMode?: string; modelConfigId?: string; agentId?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
     }
-    // Determine routing: if modelConfig's provider matches agent's provider, use agentId (A2A route).
-    // If they differ (e.g. Claude agent + Codex model), skip agentId and use providerType (direct route).
-    const modelProviderType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
-    if (selectedAgentId.value && (!modelProviderType || modelProviderType === selectedAgentProviderType.value)) {
+    // 路由统一由后端处理：前端只传 agentId + modelConfigId
+    if (selectedAgentId.value) {
       form.agentId = selectedAgentId.value
-    } else if (modelProviderType) {
-      form.providerType = modelProviderType
     }
 
     if (selectedDirectoryId.value) {
@@ -5116,8 +5095,7 @@ async function handlePaneSend(paneId: string, content: string) {
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
-    resumeForm.providerType = oldTask.providerType
-      || providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+    // providerType 由后端从 modelConfigId 推导，前端不再传递
     if (oldTask.claudeSessionId) {
       resumeForm.claudeSessionId = oldTask.claudeSessionId
     }
@@ -5463,8 +5441,7 @@ async function executeContextRepair() {
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
-    resumeForm.providerType = task.providerType
-      || providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+    // providerType 由后端从 modelConfigId 推导，前端不再传递
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -5692,8 +5669,7 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
-    resumeForm.providerType = task.providerType
-      || providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+    // providerType 由后端从 modelConfigId 推导，前端不再传递
     if (task.claudeSessionId) {
       resumeForm.claudeSessionId = task.claudeSessionId
     }

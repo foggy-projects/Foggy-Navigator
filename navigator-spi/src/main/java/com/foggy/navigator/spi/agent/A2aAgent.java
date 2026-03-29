@@ -22,7 +22,4 @@ public interface A2aAgent {
 
     /** Cancel a running task */
     void cancelTask(String taskId);
-
-    /** Check if agent is currently available */
-    boolean isAvailable();
 }

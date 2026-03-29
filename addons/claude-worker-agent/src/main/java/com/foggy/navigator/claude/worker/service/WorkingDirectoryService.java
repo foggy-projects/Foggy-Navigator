@@ -2,6 +2,7 @@ package com.foggy.navigator.claude.worker.service;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
+import com.foggy.navigator.common.util.DirectoryAgentId;
 import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
@@ -475,6 +476,10 @@ public class WorkingDirectoryService {
         if (agent != null) {
             dto.setAgentId(agent.getAgentId());
             dto.setAgentName(agent.getName());
+        } else {
+            // 无绑定 Agent 时合成隐式 agentId，前端统一按 agentId 路由
+            dto.setAgentId(DirectoryAgentId.of(entity.getDirectoryId()));
+            dto.setAgentName(entity.getProjectName());
         }
         return dto;
     }

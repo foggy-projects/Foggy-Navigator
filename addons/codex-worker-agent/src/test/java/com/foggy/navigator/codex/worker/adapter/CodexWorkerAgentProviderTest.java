@@ -1,10 +1,8 @@
 package com.foggy.navigator.codex.worker.adapter;
 
-import com.foggy.navigator.codex.worker.repository.CodexAgentDirectoryBindingRepository;
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
-import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
@@ -26,8 +24,6 @@ class CodexWorkerAgentProviderTest {
     @Mock
     private CodexCodingAgentRepository agentRepository;
     @Mock
-    private CodexAgentDirectoryBindingRepository bindingRepository;
-    @Mock
     private CodexTaskService taskService;
     @Mock
     private WorkerManagementFacade workerManagementFacade;
@@ -36,7 +32,7 @@ class CodexWorkerAgentProviderTest {
 
     @BeforeEach
     void setUp() {
-        provider = new CodexWorkerAgentProvider(agentRepository, bindingRepository,
+        provider = new CodexWorkerAgentProvider(agentRepository,
                 taskService, null, workerManagementFacade);
     }
 
@@ -52,20 +48,12 @@ class CodexWorkerAgentProviderTest {
     }
 
     @Test
-    void resolveAgent_byDirectoryBinding() {
+    void resolveAgent_byName_secondLevel() {
         CodingAgentEntity entity = codexAgent("agent-1", "user-1", "codex-bot");
+        when(agentRepository.findByAgentIdAndUserId("codex-bot", "user-1")).thenReturn(Optional.empty());
+        when(agentRepository.findByNameAndUserId("codex-bot", "user-1")).thenReturn(Optional.of(entity));
 
-        when(agentRepository.findByAgentIdAndUserId("dir-1", "user-1")).thenReturn(Optional.empty());
-        when(agentRepository.findByNameAndUserId("dir-1", "user-1")).thenReturn(Optional.empty());
-        when(agentRepository.findByDefaultDirectoryIdAndUserId("dir-1", "user-1")).thenReturn(Optional.empty());
-
-        AgentDirectoryBindingEntity binding = new AgentDirectoryBindingEntity();
-        binding.setAgentId("agent-1");
-        binding.setDirectoryId("dir-1");
-        when(bindingRepository.findByDirectoryId("dir-1")).thenReturn(List.of(binding));
-        when(agentRepository.findByAgentIdAndUserId("agent-1", "user-1")).thenReturn(Optional.of(entity));
-
-        Optional<A2aAgent> result = provider.resolveAgent("dir-1", "user-1");
+        Optional<A2aAgent> result = provider.resolveAgent("codex-bot", "user-1");
 
         assertTrue(result.isPresent());
         assertEquals("agent-1", result.get().getAgentCard().getId());
@@ -75,9 +63,6 @@ class CodexWorkerAgentProviderTest {
     void resolveAgent_notFound_returnsEmpty() {
         when(agentRepository.findByAgentIdAndUserId("unknown", "user-1")).thenReturn(Optional.empty());
         when(agentRepository.findByNameAndUserId("unknown", "user-1")).thenReturn(Optional.empty());
-        when(agentRepository.findByDefaultDirectoryIdAndUserId("unknown", "user-1")).thenReturn(Optional.empty());
-        when(bindingRepository.findByDirectoryId("unknown")).thenReturn(List.of());
-        when(agentRepository.findByWorkerIdAndUserId("unknown", "user-1")).thenReturn(List.of());
 
         Optional<A2aAgent> result = provider.resolveAgent("unknown", "user-1");
 

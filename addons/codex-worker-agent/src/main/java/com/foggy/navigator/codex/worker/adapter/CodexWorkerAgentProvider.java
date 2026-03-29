@@ -1,11 +1,10 @@
 package com.foggy.navigator.codex.worker.adapter;
 
-import com.foggy.navigator.codex.worker.repository.CodexAgentDirectoryBindingRepository;
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
-import com.foggy.navigator.common.dto.a2a.A2aAgentSkill;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.util.AgentCardBuilder;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
@@ -26,7 +25,6 @@ import java.util.Optional;
 public class CodexWorkerAgentProvider implements A2aAgentProvider {
 
     private final CodexCodingAgentRepository agentRepository;
-    private final CodexAgentDirectoryBindingRepository bindingRepository;
     private final CodexTaskService taskService;
     @Nullable
     private final AgentContextStore contextStore;
@@ -65,21 +63,13 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
         return workerManagementFacade.getDirectoryPath(userId, entity.getDefaultDirectoryId());
     }
 
+    /**
+     * Agent 解析：agentId 精确匹配 → name 匹配。
+     * directory/binding/workerId 等间接查找已由 TaskDispatchFacade 的 directory# 机制处理。
+     */
     private Optional<CodingAgentEntity> resolveManagedEntity(String lookupId, String userId) {
         return agentRepository.findByAgentIdAndUserId(lookupId, userId)
                 .or(() -> agentRepository.findByNameAndUserId(lookupId, userId))
-                .or(() -> agentRepository.findByDefaultDirectoryIdAndUserId(lookupId, userId)
-                        .filter(this::isManagedAgent))
-                .or(() -> bindingRepository.findByDirectoryId(lookupId).stream()
-                        .map(binding -> agentRepository.findByAgentIdAndUserId(binding.getAgentId(), userId))
-                        .filter(Optional::isPresent)
-                        .map(Optional::get)
-                        .filter(this::isManagedAgent)
-                        .findFirst())
-                // workerId fallback: 仅在未命中 directoryId 时兜底
-                .or(() -> agentRepository.findByWorkerIdAndUserId(lookupId, userId).stream()
-                        .filter(this::isManagedAgent)
-                        .findFirst())
                 .filter(this::isManagedAgent);
     }
 
@@ -88,24 +78,8 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {
-        String desc = entity.getDescription();
-        if (entity.getProjectSummary() != null) {
-            desc = (desc != null ? desc + "\n\n" : "") + "## 项目概述\n" + entity.getProjectSummary();
-        }
-        return A2aAgentCard.builder()
-                .id(entity.getAgentId())
-                .name(entity.getName())
-                .description(desc)
-                .url(entity.getEndpointUrl())
-                .version("1.0.0")
-                .skills(List.of(
-                        A2aAgentSkill.builder()
-                                .id("coding")
-                                .name("Coding")
-                                .description("Execute coding tasks via OpenAI Codex")
-                                .tags(List.of("coding", "codex-worker"))
-                                .build()
-                ))
-                .build();
+        return AgentCardBuilder.fromEntity(entity,
+                "coding", "Execute coding tasks via OpenAI Codex",
+                List.of("coding", "codex-worker"));
     }
 }

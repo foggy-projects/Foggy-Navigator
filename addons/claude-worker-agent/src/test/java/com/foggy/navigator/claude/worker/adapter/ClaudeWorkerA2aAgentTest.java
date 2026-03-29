@@ -364,12 +364,6 @@ class ClaudeWorkerA2aAgentTest {
         }
 
         @Test
-        void isAvailable_returnsTrue() {
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
-            assertTrue(agent.isAvailable());
-        }
-
-        @Test
         void getAgentCard_returnsCorrectFields() {
             ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
             A2aAgentCard card = agent.getAgentCard();

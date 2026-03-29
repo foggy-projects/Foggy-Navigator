@@ -5,6 +5,7 @@ import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.util.AgentCardBuilder;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentContextStore;
@@ -47,25 +48,9 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
 
     @Override
     public A2aAgentCard getAgentCard() {
-        String desc = entity.getDescription();
-        if (entity.getProjectSummary() != null) {
-            desc = (desc != null ? desc + "\n\n" : "") + "## 项目概述\n" + entity.getProjectSummary();
-        }
-        return A2aAgentCard.builder()
-                .id(entity.getAgentId())
-                .name(entity.getName())
-                .description(desc)
-                .url(entity.getEndpointUrl())
-                .version("1.0.0")
-                .skills(List.of(
-                        A2aAgentSkill.builder()
-                                .id("coding")
-                                .name("Coding")
-                                .description("Execute coding tasks via Claude Code CLI")
-                                .tags(List.of("coding", "claude-worker"))
-                                .build()
-                ))
-                .build();
+        return AgentCardBuilder.fromEntity(entity,
+                "coding", "Execute coding tasks via Claude Code CLI",
+                List.of("coding", "claude-worker"));
     }
 
     @Override
@@ -175,11 +160,6 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
     @Override
     public void cancelTask(String taskId) {
         taskService.abortTask(taskId);
-    }
-
-    @Override
-    public boolean isAvailable() {
-        return true;
     }
 
     // ===== 内部工具方法 =====
