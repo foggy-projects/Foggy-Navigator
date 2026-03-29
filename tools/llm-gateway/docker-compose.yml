@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
-  one-api:
-    image: justsong/one-api:latest
+  new-api:
+    image: calciumion/new-api:latest
     container_name: llm-gateway
     restart: always
     ports:
@@ -27,11 +25,11 @@ services:
       - gateway-net
     # 健康检查
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/status"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/status || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 30s
 
 networks:
   gateway-net:
