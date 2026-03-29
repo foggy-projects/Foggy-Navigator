@@ -19,6 +19,7 @@ export async function registerAgent(form: {
   defaultDirectoryId: string
   skills?: string
   defaultBranch?: string
+  defaultModelConfigId?: string
 }): Promise<CodingAgent> {
   const rx = (await client.post('/coding-agents', form)) as unknown as RX<CodingAgent>
   return rx.data
@@ -26,7 +27,7 @@ export async function registerAgent(form: {
 
 export async function updateAgent(
   agentId: string,
-  form: { name?: string; description?: string; skills?: string; defaultBranch?: string; defaultDirectoryId?: string; projectSummary?: string },
+  form: { name?: string; description?: string; skills?: string; defaultBranch?: string; defaultDirectoryId?: string; projectSummary?: string; defaultModelConfigId?: string },
 ): Promise<CodingAgent> {
   const rx = (await client.put(`/coding-agents/${agentId}`, form)) as unknown as RX<CodingAgent>
   return rx.data

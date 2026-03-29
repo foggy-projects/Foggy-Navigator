@@ -431,6 +431,8 @@ export interface CodingAgent {
   skills?: string
   defaultBranch?: string
   projectSummary?: string
+  defaultModelConfigId?: string
+  defaultModelConfigName?: string
   defaultDirectory?: DirectorySummary
   authorizedDirectories?: DirectorySummary[]
   createdAt: string

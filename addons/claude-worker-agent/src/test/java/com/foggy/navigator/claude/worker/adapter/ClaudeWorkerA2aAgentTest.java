@@ -184,10 +184,56 @@ class ClaudeWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            // Context ID should be preserved in the returned task
-            // Note: claudeSessionId goes into form but is not explicitly set by A2aAgent
-            // (it's handled by ClaudeTaskService internally when resuming)
+            // claudeSessionId 应被传递给 CreateTaskForm（修复后的行为）
             verify(contextStore).findSessionRef("ctx-1", "user-1", 24);
+            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+            assertEquals("claude-sess-existing", captor.getValue().getClaudeSessionId(),
+                    "contextStore 查到的 claudeSessionId 应传给 CreateTaskForm");
+        }
+
+        @Test
+        void contextRestore_noMatch_claudeSessionIdIsNull() {
+            when(contextStore.findSessionRef("ctx-new", "user-1", 24))
+                    .thenReturn(Optional.empty());
+            when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
+            when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
+
+            ClaudeWorkerA2aAgent agent = agentWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("new task")))
+                    .contextId("ctx-new")
+                    .metadata(Map.of())
+                    .build();
+
+            agent.sendTask(message);
+
+            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+            assertNull(captor.getValue().getClaudeSessionId(),
+                    "contextStore 查不到时 claudeSessionId 应为 null");
+        }
+
+        @Test
+        void noContextId_claudeSessionIdIsNull() {
+            when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
+            when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
+
+            ClaudeWorkerA2aAgent agent = agentWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("no context")))
+                    .metadata(Map.of())
+                    .build();
+
+            agent.sendTask(message);
+
+            // 没有 contextId → 不查 contextStore → claudeSessionId 为 null
+            verify(contextStore, never()).findSessionRef(anyString(), anyString(), anyInt());
+            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            verify(taskService).createTask(anyString(), anyString(), captor.capture());
+            assertNull(captor.getValue().getClaudeSessionId());
         }
 
         @Test

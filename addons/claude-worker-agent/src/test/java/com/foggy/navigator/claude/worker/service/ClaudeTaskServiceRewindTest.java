@@ -50,10 +50,12 @@ class ClaudeTaskServiceRewindTest {
         var credentialEncryptor = mock(com.foggy.navigator.common.security.CredentialEncryptor.class);
         var txTemplate = mock(TransactionTemplate.class);
 
+        var codingAgentRepository = mock(com.foggy.navigator.claude.worker.repository.CodingAgentRepository.class);
         service = new ClaudeTaskService(
                 taskRepository,
                 workerService,
                 agentTeamsConfigService,
+                codingAgentRepository,
                 directoryService,
                 workingDirectoryRepository,
                 sessionManager,

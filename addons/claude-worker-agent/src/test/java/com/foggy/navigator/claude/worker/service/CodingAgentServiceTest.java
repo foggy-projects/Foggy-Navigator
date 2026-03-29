@@ -45,7 +45,8 @@ class CodingAgentServiceTest {
         workerService = mock(ClaudeWorkerService.class);
         directoryRepository = mock(WorkingDirectoryRepository.class);
         claudeWorkerFacade = mock(ClaudeWorkerFacade.class);
-        service = new CodingAgentService(agentRepository, bindingRepository, workerService, directoryRepository, claudeWorkerFacade);
+        var llmModelManager = mock(com.foggy.navigator.spi.config.LlmModelManager.class);
+        service = new CodingAgentService(agentRepository, bindingRepository, workerService, directoryRepository, claudeWorkerFacade, llmModelManager);
 
         // Default: worker belongs to user
         ClaudeWorkerEntity worker = createWorker();
@@ -154,6 +155,41 @@ class CodingAgentServiceTest {
         }
 
         @Test
+        void registerAgent_withDefaultModelConfigId_persists() {
+            when(bindingRepository.findByAgentId(anyString())).thenReturn(List.of());
+            when(directoryRepository.findByDirectoryId(DIR_ID)).thenReturn(Optional.of(createDirectory(DIR_ID)));
+
+            RegisterAgentForm form = new RegisterAgentForm();
+            form.setName("model-agent");
+            form.setWorkerId(WORKER_ID);
+            form.setDefaultDirectoryId(DIR_ID);
+            form.setDefaultModelConfigId("llm-config-123");
+
+            service.registerAgent(USER_ID, TENANT_ID, form);
+
+            ArgumentCaptor<CodingAgentEntity> captor = ArgumentCaptor.forClass(CodingAgentEntity.class);
+            verify(agentRepository).save(captor.capture());
+            assertEquals("llm-config-123", captor.getValue().getDefaultModelConfigId());
+        }
+
+        @Test
+        void registerAgent_withoutDefaultModelConfigId_isNull() {
+            when(bindingRepository.findByAgentId(anyString())).thenReturn(List.of());
+            when(directoryRepository.findByDirectoryId(DIR_ID)).thenReturn(Optional.of(createDirectory(DIR_ID)));
+
+            RegisterAgentForm form = new RegisterAgentForm();
+            form.setName("no-model-agent");
+            form.setWorkerId(WORKER_ID);
+            form.setDefaultDirectoryId(DIR_ID);
+
+            service.registerAgent(USER_ID, TENANT_ID, form);
+
+            ArgumentCaptor<CodingAgentEntity> captor = ArgumentCaptor.forClass(CodingAgentEntity.class);
+            verify(agentRepository).save(captor.capture());
+            assertNull(captor.getValue().getDefaultModelConfigId());
+        }
+
+        @Test
         void registerAgent_directoryNotFound_throws() {
             when(directoryRepository.findByDirectoryIdAndUserId("missing", USER_ID))
                     .thenReturn(Optional.empty());
@@ -192,6 +228,61 @@ class CodingAgentServiceTest {
             assertEquals("Updated description", result.getDescription());
             assertEquals("main", result.getDefaultBranch());
             verify(agentRepository).save(any());
+        }
+
+        @Test
+        void updateAgent_setDefaultModelConfigId() {
+            CodingAgentEntity existing = createAgentEntity(AGENT_ID);
+            when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
+                    .thenReturn(Optional.of(existing));
+            when(bindingRepository.findByAgentId(AGENT_ID)).thenReturn(List.of());
+
+            UpdateAgentForm form = new UpdateAgentForm();
+            form.setDefaultModelConfigId("new-llm-config");
+
+            service.updateAgent(USER_ID, AGENT_ID, form);
+
+            ArgumentCaptor<CodingAgentEntity> captor = ArgumentCaptor.forClass(CodingAgentEntity.class);
+            verify(agentRepository).save(captor.capture());
+            assertEquals("new-llm-config", captor.getValue().getDefaultModelConfigId());
+        }
+
+        @Test
+        void updateAgent_clearDefaultModelConfigId() {
+            CodingAgentEntity existing = createAgentEntity(AGENT_ID);
+            existing.setDefaultModelConfigId("old-config");
+            when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
+                    .thenReturn(Optional.of(existing));
+            when(bindingRepository.findByAgentId(AGENT_ID)).thenReturn(List.of());
+
+            UpdateAgentForm form = new UpdateAgentForm();
+            form.setDefaultModelConfigId(""); // Empty = clear
+
+            service.updateAgent(USER_ID, AGENT_ID, form);
+
+            ArgumentCaptor<CodingAgentEntity> captor = ArgumentCaptor.forClass(CodingAgentEntity.class);
+            verify(agentRepository).save(captor.capture());
+            assertNull(captor.getValue().getDefaultModelConfigId(), "空字符串应清除 defaultModelConfigId");
+        }
+
+        @Test
+        void updateAgent_nullDefaultModelConfigId_noChange() {
+            CodingAgentEntity existing = createAgentEntity(AGENT_ID);
+            existing.setDefaultModelConfigId("keep-this");
+            when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
+                    .thenReturn(Optional.of(existing));
+            when(bindingRepository.findByAgentId(AGENT_ID)).thenReturn(List.of());
+
+            UpdateAgentForm form = new UpdateAgentForm();
+            form.setName("updated-name");
+            // defaultModelConfigId is null → should NOT change existing value
+
+            service.updateAgent(USER_ID, AGENT_ID, form);
+
+            ArgumentCaptor<CodingAgentEntity> captor = ArgumentCaptor.forClass(CodingAgentEntity.class);
+            verify(agentRepository).save(captor.capture());
+            assertEquals("keep-this", captor.getValue().getDefaultModelConfigId(),
+                    "null 不应修改已有的 defaultModelConfigId");
         }
 
         @Test

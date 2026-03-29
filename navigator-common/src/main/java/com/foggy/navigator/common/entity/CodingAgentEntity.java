@@ -63,6 +63,10 @@ public class CodingAgentEntity {
     @Column(columnDefinition = "TEXT")
     private String skills;
 
+    /** 默认 LLM 模型配置 ID（可选，用于定时任务等无显式指定场景） */
+    @Column(length = 64)
+    private String defaultModelConfigId;
+
     /** 默认拉代码的分支 (如 "dev", "main") */
     @Column(length = 128)
     private String defaultBranch;
