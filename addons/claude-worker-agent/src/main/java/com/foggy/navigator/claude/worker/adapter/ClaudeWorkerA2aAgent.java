@@ -126,6 +126,11 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         final String finalContextId = contextId != null ? contextId : IdGenerator.shortId();
         form.setContextId(finalContextId);
 
+        // 多轮会话：传递已有 claudeSessionId 给 Worker（使其恢复 CLI session）
+        if (claudeSessionId != null) {
+            form.setClaudeSessionId(claudeSessionId);
+        }
+
         TaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
 
         // 设置去重键

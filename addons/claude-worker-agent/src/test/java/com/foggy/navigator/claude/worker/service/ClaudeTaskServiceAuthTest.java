@@ -68,9 +68,10 @@ class ClaudeTaskServiceAuthTest {
         when(userAuthService.generateServiceToken(anyString())).thenReturn("mock-jwt-token");
 
         var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
+        var codingAgentRepository = mock(com.foggy.navigator.claude.worker.repository.CodingAgentRepository.class);
         service = new ClaudeTaskService(
                 taskRepository,
-                workerService, agentTeamsConfigService, directoryService,
+                workerService, agentTeamsConfigService, codingAgentRepository, directoryService,
                 workingDirectoryRepository,
                 sessionManager, publisher, llmModelManager, userAuthService,
                 credentialEncryptor,
@@ -405,6 +406,157 @@ class ClaudeTaskServiceAuthTest {
 
         assertEquals("agent-claude-1", result.getAgentId());
         assertEquals("claude-worker", result.getProviderType());
+    }
+
+    // ===== resolveEffectiveModelConfigId priority tests =====
+
+    @Test
+    void createTask_noExplicitModelConfig_usesAgentModelOverride() {
+        // Arrange: No explicit modelConfigId, but AgentModelOverride exists
+        String overrideConfigId = "override-model-config";
+        LlmModelConfigDTO overrideConfig = createModelConfig(overrideConfigId, "Override-GPT", "https://override.api.com");
+        // resolveModelForAgent(tenantId, agentId, null) → returns the override
+        when(llmModelManager.resolveModelForAgent(eq(TENANT_ID), anyString(), isNull()))
+                .thenReturn(Optional.of(overrideConfig));
+        when(llmModelManager.getModelConfig(overrideConfigId)).thenReturn(Optional.of(overrideConfig));
+        when(llmModelManager.getDecryptedApiKey(overrideConfigId)).thenReturn("sk-override-key");
+        when(credentialEncryptor.encrypt("sk-override-key")).thenReturn("encrypted-override");
+
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Test task");
+        form.setCwd("/test/path");
+        form.setAgentId("agent-123");
+        // No modelConfigId set → should fall through to AgentModelOverride
+
+        service.createTask(USER_ID, TENANT_ID, form);
+
+        // Should use the override config's API key
+        verify(llmModelManager).getDecryptedApiKey(overrideConfigId);
+    }
+
+    @Test
+    void createTask_noExplicitModelConfig_noOverride_usesAgentEntityDefault() {
+        // Arrange: No explicit, no override, but Agent entity has defaultModelConfigId
+        String agentDefaultConfigId = "agent-default-config";
+        LlmModelConfigDTO agentDefaultConfig = createModelConfig(agentDefaultConfigId, "Agent-Default", null);
+        when(llmModelManager.resolveModelForAgent(anyString(), anyString(), isNull()))
+                .thenReturn(Optional.empty());
+        when(llmModelManager.getModelConfig(agentDefaultConfigId)).thenReturn(Optional.of(agentDefaultConfig));
+        when(llmModelManager.getDecryptedApiKey(agentDefaultConfigId)).thenReturn("sk-agent-default-key");
+        when(credentialEncryptor.encrypt("sk-agent-default-key")).thenReturn("encrypted-agent-default");
+
+        // Mock CodingAgentEntity with defaultModelConfigId
+        var codingAgentRepository = mock(com.foggy.navigator.claude.worker.repository.CodingAgentRepository.class);
+        com.foggy.navigator.common.entity.CodingAgentEntity agentEntity = new com.foggy.navigator.common.entity.CodingAgentEntity();
+        agentEntity.setAgentId("agent-123");
+        agentEntity.setDefaultModelConfigId(agentDefaultConfigId);
+        when(codingAgentRepository.findByAgentId("agent-123")).thenReturn(Optional.of(agentEntity));
+
+        // Re-create service with this repo
+        UserAuthService userAuthService = mock(UserAuthService.class);
+        when(userAuthService.generateServiceToken(anyString())).thenReturn("mock-jwt-token");
+        var localService = new ClaudeTaskService(
+                taskRepository, workerService, mock(AgentTeamsConfigService.class), codingAgentRepository,
+                directoryService, workingDirectoryRepository, sessionManager, publisher,
+                llmModelManager, userAuthService, credentialEncryptor,
+                mock(org.springframework.transaction.support.TransactionTemplate.class));
+        ReflectionTestUtils.setField(localService, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(localService, "sessionEntityRepository", sessionEntityRepository);
+
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Test task");
+        form.setCwd("/test/path");
+        form.setAgentId("agent-123");
+        // No modelConfigId, no override → use entity default
+
+        localService.createTask(USER_ID, TENANT_ID, form);
+
+        verify(llmModelManager).getDecryptedApiKey(agentDefaultConfigId);
+    }
+
+    @Test
+    void createTask_explicitModelConfig_overridesAll() {
+        // Arrange: Both explicit modelConfigId AND AgentModelOverride exist
+        String explicitConfigId = "explicit-config";
+        String overrideConfigId = "override-config";
+
+        LlmModelConfigDTO explicitConfig = createModelConfig(explicitConfigId, "Explicit-GPT", null);
+        LlmModelConfigDTO overrideConfig = createModelConfig(overrideConfigId, "Override-GPT", null);
+        when(llmModelManager.getModelConfig(explicitConfigId)).thenReturn(Optional.of(explicitConfig));
+        when(llmModelManager.getDecryptedApiKey(explicitConfigId)).thenReturn("sk-explicit");
+        when(credentialEncryptor.encrypt("sk-explicit")).thenReturn("encrypted-explicit");
+
+        // Override exists but should NOT be used
+        when(llmModelManager.resolveModelForAgent(anyString(), anyString(), isNull()))
+                .thenReturn(Optional.of(overrideConfig));
+
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Test task");
+        form.setCwd("/test/path");
+        form.setAgentId("agent-123");
+        form.setModelConfigId(explicitConfigId); // Explicit wins
+
+        service.createTask(USER_ID, TENANT_ID, form);
+
+        // Should use explicit, never touch override
+        verify(llmModelManager).getDecryptedApiKey(explicitConfigId);
+        verify(llmModelManager, never()).getDecryptedApiKey(overrideConfigId);
+    }
+
+    @Test
+    void createTask_withClaudeSessionId_passesToWorkerEvent() {
+        // Arrange: form has claudeSessionId (from contextStore via A2aAgent)
+        String modelConfigId = "model-1";
+        LlmModelConfigDTO config = createModelConfig(modelConfigId, "Test", null);
+        when(llmModelManager.getModelConfig(modelConfigId)).thenReturn(Optional.of(config));
+        when(llmModelManager.getDecryptedApiKey(modelConfigId)).thenReturn("sk-test");
+        when(credentialEncryptor.encrypt("sk-test")).thenReturn("encrypted");
+
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Continue task");
+        form.setCwd("/test/path");
+        form.setModelConfigId(modelConfigId);
+        form.setClaudeSessionId("claude-sess-resume-123");
+
+        service.createTask(USER_ID, TENANT_ID, form);
+
+        // Verify WorkerTaskStartEvent contains the claudeSessionId
+        ArgumentCaptor<com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent> eventCaptor =
+                ArgumentCaptor.forClass(com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        assertEquals("claude-sess-resume-123",
+                eventCaptor.getValue().getProviderConfigString("claudeSessionId"),
+                "claudeSessionId 应传递到 WorkerTaskStartEvent.providerConfig");
+    }
+
+    @Test
+    void createTask_noClaudeSessionId_sendsEmptyString() {
+        // Arrange: No claudeSessionId (new session)
+        String modelConfigId = "model-1";
+        LlmModelConfigDTO config = createModelConfig(modelConfigId, "Test", null);
+        when(llmModelManager.getModelConfig(modelConfigId)).thenReturn(Optional.of(config));
+        when(llmModelManager.getDecryptedApiKey(modelConfigId)).thenReturn("sk-test");
+        when(credentialEncryptor.encrypt("sk-test")).thenReturn("encrypted");
+
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("New task");
+        form.setCwd("/test/path");
+        form.setModelConfigId(modelConfigId);
+        // No claudeSessionId
+
+        service.createTask(USER_ID, TENANT_ID, form);
+
+        ArgumentCaptor<com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent> eventCaptor =
+                ArgumentCaptor.forClass(com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        assertEquals("",
+                eventCaptor.getValue().getProviderConfigString("claudeSessionId"),
+                "无 claudeSessionId 时应传空字符串");
     }
 
     private WorkingDirectoryEntity createWorkingDirectory(String directoryId, String path) {

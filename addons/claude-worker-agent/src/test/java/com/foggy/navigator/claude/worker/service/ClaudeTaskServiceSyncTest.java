@@ -53,9 +53,10 @@ class ClaudeTaskServiceSyncTest {
         UserAuthService userAuthService = mock(UserAuthService.class);
         var credentialEncryptor = mock(com.foggy.navigator.common.security.CredentialEncryptor.class);
         var agentTeamsConfigService = mock(AgentTeamsConfigService.class);
+        var codingAgentRepository = mock(com.foggy.navigator.claude.worker.repository.CodingAgentRepository.class);
         service = new ClaudeTaskService(
                 taskRepository, workerService,
-                agentTeamsConfigService, dirService, directoryRepository, sessionManager, publisher, llmModelManager,
+                agentTeamsConfigService, codingAgentRepository, dirService, directoryRepository, sessionManager, publisher, llmModelManager,
                 userAuthService, credentialEncryptor,
                 mock(org.springframework.transaction.support.TransactionTemplate.class));
 

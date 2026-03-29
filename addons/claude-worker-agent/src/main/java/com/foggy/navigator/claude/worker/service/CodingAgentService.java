@@ -10,7 +10,9 @@ import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -33,6 +35,7 @@ public class CodingAgentService {
     private final ClaudeWorkerService workerService;
     private final WorkingDirectoryRepository directoryRepository;
     private final ClaudeWorkerFacade claudeWorkerFacade;
+    private final LlmModelManager llmModelManager;
 
     /**
      * 注册新 Agent
@@ -88,6 +91,7 @@ public class CodingAgentService {
         entity.setDefaultDirectoryId(form.getDefaultDirectoryId());
         entity.setSkills(form.getSkills());
         entity.setDefaultBranch(form.getDefaultBranch());
+        entity.setDefaultModelConfigId(form.getDefaultModelConfigId());
         agentRepository.save(entity);
 
         // 自动绑定 defaultDirectory
@@ -132,6 +136,13 @@ public class CodingAgentService {
                 directoryRepository.findByDirectoryIdAndUserId(form.getDefaultDirectoryId(), userId)
                         .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + form.getDefaultDirectoryId()));
                 entity.setDefaultDirectoryId(form.getDefaultDirectoryId());
+            }
+        }
+        if (form.getDefaultModelConfigId() != null) {
+            if (form.getDefaultModelConfigId().isEmpty()) {
+                entity.setDefaultModelConfigId(null);
+            } else {
+                entity.setDefaultModelConfigId(form.getDefaultModelConfigId());
             }
         }
 
@@ -287,6 +298,13 @@ public class CodingAgentService {
                 .map(this::toDirectorySummary)
                 .toList();
 
+        // 查询默认 LLM 模型配置名称
+        String modelConfigName = null;
+        if (entity.getDefaultModelConfigId() != null) {
+            modelConfigName = llmModelManager.getModelConfig(entity.getDefaultModelConfigId())
+                    .map(LlmModelConfigDTO::getName).orElse(null);
+        }
+
         return CodingAgentDTO.builder()
                 .agentId(entity.getAgentId())
                 .name(entity.getName())
@@ -298,6 +316,8 @@ public class CodingAgentService {
                 .skills(entity.getSkills())
                 .defaultBranch(entity.getDefaultBranch())
                 .projectSummary(entity.getProjectSummary())
+                .defaultModelConfigId(entity.getDefaultModelConfigId())
+                .defaultModelConfigName(modelConfigName)
                 .defaultDirectory(defaultDir)
                 .authorizedDirectories(authorizedDirs)
                 .createdAt(entity.getCreatedAt())

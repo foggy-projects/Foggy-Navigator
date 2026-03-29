@@ -30,7 +30,9 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.model.form.ResumeTaskForm;
+import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeTaskRepository;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
@@ -82,6 +84,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
     private final ClaudeTaskRepository taskRepository;
     private final ClaudeWorkerService workerService;
     private final AgentTeamsConfigService agentTeamsConfigService;
+    private final CodingAgentRepository codingAgentRepository;
 
     /** @Lazy 打破 ClaudeTaskService ↔ WorkerStreamRelay 的循环依赖 */
     @Autowired @Lazy
@@ -204,8 +207,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
 
         // 5. 解析 per-conversation auth（含平台模型配置 fallback）
-        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
-        Map<String, String> extraEnvVars = resolveEnvVars(form.getModelConfigId(), directoryId, userId);
+        // 优先级：显式指定 > AgentModelOverride > Agent.defaultModelConfigId > Directory 默认
+        String effectiveModelConfigId = resolveEffectiveModelConfigId(
+                form.getModelConfigId(), logicalAgentId, tenantId);
+        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, effectiveModelConfigId);
+        Map<String, String> extraEnvVars = resolveEnvVars(effectiveModelConfigId, directoryId, userId);
 
         // 5.5. 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
@@ -217,7 +223,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 .model(form.getModel()).maxTurns(form.getMaxTurns())
                 .apiKey(authParams[0]).providerType(AGENT_ID)
                 .providerConfig(Map.of(
-                        "claudeSessionId", "",
+                        "claudeSessionId", form.getClaudeSessionId() != null ? form.getClaudeSessionId() : "",
                         "agentTeamsJson", agentTeamsJson != null ? agentTeamsJson : "",
                         "images", form.getImages() != null ? form.getImages() : "",
                         "authToken", authParams[1] != null ? authParams[1] : "",
@@ -1266,6 +1272,49 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
 
         return new String[]{null, null, null};
+    }
+
+    /**
+     * 解析有效的 modelConfigId — 多级优先级链
+     * <p>
+     * 优先级：
+     * 1. 显式指定（调用方每次传入）
+     * 2. AgentModelOverride（租户管理员级覆盖，agent_model_override 表）
+     * 3. CodingAgentEntity.defaultModelConfigId（Agent 创建者设置）
+     * 4-6: 由 resolveAuth 内部处理（directory 默认 → 手动 auth → null）
+     */
+    private String resolveEffectiveModelConfigId(String explicitId, String agentId, String tenantId) {
+        // 优先级 1：调用方显式指定
+        if (explicitId != null && !explicitId.isEmpty()) {
+            return explicitId;
+        }
+
+        if (agentId != null && !agentId.isEmpty()) {
+            // 优先级 2：AgentModelOverride（租户管理员覆盖）
+            // resolveModelForAgent 先查 override 表，再查 category default
+            // 传 null category → category default 无结果 → 仅取 override 部分
+            try {
+                Optional<LlmModelConfigDTO> override = llmModelManager.resolveModelForAgent(tenantId, agentId, null);
+                if (override.isPresent()) {
+                    log.info("ModelConfig resolved from AgentModelOverride: agentId={}, configId={}",
+                            agentId, override.get().getId());
+                    return override.get().getId();
+                }
+            } catch (Exception e) {
+                log.debug("AgentModelOverride lookup skipped for agentId={}: {}", agentId, e.getMessage());
+            }
+
+            // 优先级 3：CodingAgentEntity.defaultModelConfigId
+            CodingAgentEntity agentEntity = codingAgentRepository.findByAgentId(agentId).orElse(null);
+            if (agentEntity != null && agentEntity.getDefaultModelConfigId() != null
+                    && !agentEntity.getDefaultModelConfigId().isEmpty()) {
+                log.info("ModelConfig resolved from Agent entity default: agentId={}, configId={}",
+                        agentId, agentEntity.getDefaultModelConfigId());
+                return agentEntity.getDefaultModelConfigId();
+            }
+        }
+
+        return null; // 继续由 resolveAuth 内的 directory 优先级处理
     }
 
     /**

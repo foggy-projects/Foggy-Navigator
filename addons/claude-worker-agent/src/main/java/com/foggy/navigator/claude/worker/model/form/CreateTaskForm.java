@@ -31,4 +31,6 @@ public class CreateTaskForm {
     private String modelConfigId;
     /** A2A 多轮会话标识（contextId），持久化到 task entity 供轮询 API 返回 */
     private String contextId;
+    /** Claude CLI session ID（A2A 多轮复用时由 contextStore 解析传入） */
+    private String claudeSessionId;
 }

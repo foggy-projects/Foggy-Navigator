@@ -1,6 +1,6 @@
 ---
 name: scheduled-task
-description: 创建 AI 定时任务（如每日报告、定期分析），一站式完成 Agent 选择/创建、Sharing Key 配置、Prompt 设计、cron 脚本生成、报告投递。触发词：/scheduled-task, /cron, 提及"定时任务"、"每天执行"、"定期分析"、"自动报告"、"cron"。
+description: 创建 AI 定时任务（如每日报告、定期分析），一站式完成 Agent 选择/创建、defaultModelConfigId 配置、Sharing Key 配置、Prompt 设计、contextId 多轮会话、cron 脚本生成、报告投递。触发词：/scheduled-task, /st-cron, /cron, 提及"定时任务"、"每天执行"、"定期分析"、"自动报告"、"cron"、"scheduled"。
 ---
 
 # AI 定时任务配置向导
@@ -55,9 +55,21 @@ echo "NAVIGATOR_TOKEN=${NAVIGATOR_TOKEN:+OK}" && echo "NAVIGATOR_API_BASE=${NAVI
 | **多久一次** | 执行频率？ | "每天早上 8 点" |
 | **报告给谁** | 结果发到哪里？ | "发邮件给我" / "记录就行" |
 
+### 关于 Agent 标识
+
+**前端 `@` 选择**：用户在输入框中 `@agentName` 选择 Agent 时，系统会自动插入 `@agentName(agentId:xxx)` 格式。如果用户已经通过 `@` 选择了 Agent，可以直接从消息中提取 agentId，**跳过 Step 1 的列表查询**。
+
+**后端支持 agentName 查找**：`POST /api/v1/agents/{identifier}/ask` 的 `identifier` 既可以是 `agentId`，也可以是 `agentName`（后端自动按优先级匹配）。
+
+**多 Agent 协作定时任务**：如果任务需要多个 Agent 协作（如 Agent A 拉代码分析 → Agent B 生成报告），有两种方式：
+1. **串行编排**：为每个 Agent 分别创建 Sharing Key，cron 脚本中按顺序调用
+2. **Prompt 内 `@agent`**：在单个任务的 Prompt 中使用 `@otherAgentName 请帮我...`，当前 Agent 会委派子任务给目标 Agent
+
 ### Step 1: 选择或创建 Agent
 
-**列出当前可用 Agent：**
+**如果用户已通过 `@agentName` 选择了 Agent**：从消息上下文提取 agentId，跳到 Step 1.5。
+
+**否则，列出当前可用 Agent：**
 
 ```bash
 curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents \
@@ -100,6 +112,53 @@ print('Written to', tmp)
 ```
 
 记下返回的 `agentId`。
+
+### Step 1.5: 为 Agent 配置默认 LLM（defaultModelConfigId）
+
+定时任务调用时不会手动指定 LLM 配置，因此 **Agent 必须有 `defaultModelConfigId`**，否则任务无法启动。
+
+**检查 Agent 是否已配置 defaultModelConfigId：**
+
+```bash
+curl -s {{NAVIGATOR_API_BASE}}/api/v1/coding-agents/$AGENT_ID \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data | {agentId, name, defaultModelConfigId, defaultModelConfigName}'
+```
+
+如果 `defaultModelConfigId` 为 null，需要查询可用 LLM 配置并绑定：
+
+```bash
+# 1. 列出所有可用 LLM 配置
+curl -s {{NAVIGATOR_API_BASE}}/api/v1/platform-configs/llm-models \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data[] | {id, name, provider}'
+```
+
+向用户展示列表，让用户选择合适的模型配置（通常选 claude-opus 或 claude-sonnet 等），然后：
+
+```bash
+python3 -c "
+import json, tempfile, os
+data = {'defaultModelConfigId': '选择的 LLM 配置 ID'}
+tmp = os.path.join(tempfile.gettempdir(), '_update_agent.json')
+with open(tmp, 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False)
+print('Written to', tmp)
+" && curl -s -X PUT {{NAVIGATOR_API_BASE}}/api/v1/coding-agents/$AGENT_ID \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
+  -H "Content-Type: application/json; charset=UTF-8" \
+  --data-binary @"$(python3 -c 'import tempfile,os;print(os.path.join(tempfile.gettempdir(),\"_update_agent.json\"))')" | jq '.data | {agentId, name, defaultModelConfigId, defaultModelConfigName}'
+```
+
+**LLM 配置优先级**（供参考，调用时按顺序查找）：
+
+```
+1. 请求中显式传入 modelConfigId       ← cron 脚本中可指定
+2. AgentModelOverride（租户管理员覆盖）
+3. CodingAgentEntity.defaultModelConfigId  ← 本步骤配置
+4. WorkingDirectory 的默认配置
+5. Worker 全局 .env 中的 auth 配置
+```
+
+确认 Agent 已有 `defaultModelConfigId` 后继续。
 
 ### Step 2: 设计 Prompt
 
@@ -426,6 +485,8 @@ curl -s -X DELETE {{NAVIGATOR_API_BASE}}/api/v1/sharing-keys/{keyId} \
 | 返回 "Daily call limit exceeded" | 今日调用次数是否超限？ | 调大 `maxDailyCalls` |
 | 返回 "Sharing key has expired" | Key 是否已过期？ | 创建新 Key 或更新过期时间 |
 | 返回 "Shared agent not available" | Agent 是否存在？Worker 是否在线？ | 检查 Agent 列表和 Worker 状态 |
+| 任务启动失败（LLM 未配置） | Agent.defaultModelConfigId 是否为 null？ | 执行 Step 1.5 为 Agent 绑定默认 LLM 配置 |
+| 多轮会话未续传 | contextId 是否每次传入相同值？ | 确保 cron 脚本中 CONTEXT_ID 格式稳定（避免含时间戳） |
 | curl 超时 | AI 分析耗时过长 | 增加 `--max-time`，或降低 `maxTurns` |
 
 ## 注意事项

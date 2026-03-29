@@ -14,4 +14,6 @@ public class RegisterAgentForm {
     private String defaultDirectoryId;
     private String skills;
     private String defaultBranch;
+    /** 默认 LLM 模型配置 ID */
+    private String defaultModelConfigId;
 }

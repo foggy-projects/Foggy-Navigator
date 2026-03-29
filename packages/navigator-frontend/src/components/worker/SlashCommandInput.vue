@@ -36,6 +36,7 @@
             @mouseenter="atActiveIndex = i"
           >
             <span class="slash-name">@{{ agent.name }}</span>
+            <span class="slash-agent-id">{{ agent.agentId }}</span>
             <span class="slash-desc">{{ agent.description || '' }}</span>
           </div>
         </div>
@@ -303,7 +304,7 @@ function selectAgent(idx: number) {
   const agent = filteredAgents.value[idx]
   if (!agent) return
   const text = props.modelValue
-  const replacement = '@' + agent.name + ' '
+  const replacement = '@' + agent.name + '(agentId:' + agent.agentId + ') '
   const newText =
     text.slice(0, atTriggerPos.value) + replacement + text.slice(atCursorPos.value)
   const newCursor = atTriggerPos.value + replacement.length
@@ -934,6 +935,14 @@ onUnmounted(() => document.removeEventListener('mousedown', handleClickOutside))
   color: #303133;
   font-family: 'Cascadia Code', 'Fira Code', monospace;
   white-space: nowrap;
+}
+
+.slash-agent-id {
+  font-size: 11px;
+  color: #c0c4cc;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  white-space: nowrap;
+  margin-left: 4px;
 }
 
 .slash-desc {

@@ -635,6 +635,9 @@
                     &#128193; {{ dirNameById(agent.defaultDirectoryId) }}
                     <span v-if="dirBranchById(agent.defaultDirectoryId)" class="agent-branch">({{ dirBranchById(agent.defaultDirectoryId) }})</span>
                   </span>
+                  <span v-if="agent.defaultModelConfigName" class="agent-model-tag">
+                    {{ agent.defaultModelConfigName }}
+                  </span>
                   <span v-if="agent.authorizedDirectories" class="agent-dir-count">
                     {{ agent.authorizedDirectories.length }} 个授权目录
                   </span>
@@ -1915,6 +1918,11 @@
         <el-form-item label="默认分支">
           <el-input v-model="agentForm.defaultBranch" placeholder="留空则由任务决定" />
         </el-form-item>
+        <el-form-item v-if="platformModels.length > 0" label="默认 LLM 配置">
+          <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="使用目录默认配置" clearable>
+            <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAgentRegisterDialog = false">取消</el-button>
@@ -1943,6 +1951,11 @@
         </el-form-item>
         <el-form-item label="默认分支">
           <el-input v-model="agentForm.defaultBranch" placeholder="留空则由任务决定" />
+        </el-form-item>
+        <el-form-item v-if="platformModels.length > 0" label="默认 LLM 配置">
+          <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="使用目录默认配置" clearable>
+            <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
+          </el-select>
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -2107,7 +2120,7 @@ const showAgentBindingDialog = ref(false)
 const editingAgent = ref<CodingAgent | null>(null)
 const bindingAgent = ref<CodingAgent | null>(null)
 const bindingDirectories = ref<DirectorySummary[]>([])
-const agentForm = ref({ name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '' })
+const agentForm = ref({ name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '', defaultModelConfigId: '' })
 const generatingSummary = ref(false)
 const bindDirectoryId = ref('')
 
@@ -2760,7 +2773,7 @@ function dirBranchById(dirId?: string): string | undefined {
 }
 
 function openAgentRegisterDialog() {
-  agentForm.value = { name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '' }
+  agentForm.value = { name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '', defaultModelConfigId: '' }
   showAgentRegisterDialog.value = true
 }
 
@@ -2772,6 +2785,7 @@ function openAgentEditDialog(agent: CodingAgent) {
     defaultDirectoryId: agent.defaultDirectoryId || '',
     defaultBranch: agent.defaultBranch || '',
     projectSummary: agent.projectSummary || '',
+    defaultModelConfigId: agent.defaultModelConfigId || '',
   }
   showAgentEditDialog.value = true
 }
@@ -2786,6 +2800,7 @@ async function handleRegisterAgent() {
       workerId: selectedWorkerId.value,
       defaultDirectoryId: agentForm.value.defaultDirectoryId,
       defaultBranch: agentForm.value.defaultBranch || undefined,
+      defaultModelConfigId: agentForm.value.defaultModelConfigId || undefined,
     })
     showAgentRegisterDialog.value = false
     ElMessage.success('Agent 注册成功')
@@ -2806,6 +2821,7 @@ async function handleUpdateAgent() {
       defaultBranch: agentForm.value.defaultBranch || undefined,
       defaultDirectoryId: agentForm.value.defaultDirectoryId || undefined,
       projectSummary: agentForm.value.projectSummary || undefined,
+      defaultModelConfigId: agentForm.value.defaultModelConfigId ?? undefined,
     })
     showAgentEditDialog.value = false
     ElMessage.success('Agent 更新成功')
@@ -5040,7 +5056,17 @@ async function handleAskAgent(paneId: string, agent: { agentId: string; name: st
 
 /** Handle inline send from pane input (replaces dialog-based resume) */
 async function handlePaneSend(paneId: string, content: string) {
-  // Intercept @agent mentions
+  // Intercept @agent mentions — supports both:
+  //   @agentName(agentId:xxx) question  (new format with embedded agentId)
+  //   @agentName question               (legacy format, name-based lookup)
+  const atMatchNew = content.match(/^@(\S+?)\(agentId:([^)]+)\)\s+([\s\S]+)/)
+  if (atMatchNew && atMatchNew[1] && atMatchNew[2] && atMatchNew[3]) {
+    const agentName = atMatchNew[1]
+    const agentId = atMatchNew[2]
+    const question = atMatchNew[3].trim()
+    await handleAskAgent(paneId, { agentId, name: agentName }, question)
+    return
+  }
   const atMatch = content.match(/^@(\S+)\s+([\s\S]+)/)
   if (atMatch && atMatch[1] && atMatch[2]) {
     const agentName = atMatch[1]
@@ -7035,6 +7061,10 @@ function handlePopOutTerminal() {
 
 .agent-branch {
   color: #909399;
+}
+
+.agent-model-tag {
+  color: #409eff;
 }
 
 .agent-dir-count {
