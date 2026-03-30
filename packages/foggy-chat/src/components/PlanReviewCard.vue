@@ -22,13 +22,10 @@
       </div>
       <!-- 4 action buttons -->
       <div v-if="isPending" class="plan-options">
-        <button class="btn btn-option btn-bypass" @click="handleApprove('clearAndBypass')">
-          清空上下文，跳过权限执行
-        </button>
-        <button class="btn btn-option btn-bypass" @click="handleApprove('bypass')">
+        <button class="btn btn-option btn-approve" @click="handleApprove('bypass')">
           跳过权限执行
         </button>
-        <button class="btn btn-option btn-approve" @click="handleApprove('acceptEdits')">
+        <button class="btn btn-option btn-bypass" @click="handleApprove('acceptEdits')">
           手动审批编辑
         </button>
       </div>
