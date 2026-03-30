@@ -434,7 +434,7 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="API Key" :required="llmForm.workerBackend !== 'OPENAI_CODEX' && llmDialogMode === 'add'">
-              <el-input v-model="llmForm.apiKey" type="password" show-password :placeholder="llmForm.workerBackend === 'OPENAI_CODEX' ? '留空使用订阅模式' : (llmDialogMode === 'edit' ? '留空保持不变' : 'API Key')" />
+              <el-input v-model="llmForm.apiKey" type="password" show-password :placeholder="llmDialogMode === 'edit' ? '留空保持不变' : (llmForm.workerBackend === 'OPENAI_CODEX' ? '留空使用订阅模式' : 'API Key')" />
             </el-form-item>
           </el-col>
         </el-row>
