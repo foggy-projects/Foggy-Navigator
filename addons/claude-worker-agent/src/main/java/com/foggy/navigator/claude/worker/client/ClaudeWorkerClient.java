@@ -37,6 +37,7 @@ public class ClaudeWorkerClient {
                 .baseUrl(baseUrl)
                 .defaultHeader("Authorization", "Bearer " + authToken)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(4 * 1024 * 1024)) // 4MB for large tool outputs
                 .build();
     }
 
