@@ -481,10 +481,52 @@
             指定此编程模型由哪个 Worker 后端执行
           </div>
         </el-form-item>
-        <el-form-item label="环境变量">
+        <el-form-item>
+          <template #label>
+            环境变量
+            <el-popover placement="right" :width="460" trigger="click">
+              <template #reference>
+                <el-icon style="cursor: pointer; margin-left: 4px; vertical-align: middle; color: #409eff"><QuestionFilled /></el-icon>
+              </template>
+              <div style="font-size: 13px; line-height: 1.8">
+                <p style="margin: 0 0 8px; font-weight: 600">常用环境变量参考</p>
+                <template v-if="llmForm.workerBackend === 'CLAUDE_CODE'">
+                  <el-descriptions :column="1" size="small" border>
+                    <el-descriptions-item label="CLAUDE_AUTOCOMPACT_PCT_OVERRIDE">
+                      自动压缩触发比例（0-100）。如 80 表示上下文占 80% 时触发压缩。<br/>
+                      <el-tag size="small" type="info">建议值：80</el-tag>
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </template>
+                <template v-else-if="llmForm.workerBackend === 'OPENAI_CODEX'">
+                  <el-descriptions :column="1" size="small" border>
+                    <el-descriptions-item label="model_context_window">
+                      模型可用的上下文窗口大小（token 数）。代理非原生模型时需按实际能力配置。<br/>
+                      <el-tag size="small" type="info">GPT-5.4: 1000000</el-tag>
+                      <el-tag size="small" type="info">128K 模型: 128000</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="model_auto_compact_token_limit">
+                      触发自动历史压缩的 token 阈值。达到此值时 Codex 自动压缩对话历史。<br/>
+                      <el-tag size="small" type="info">建议值：上下文窗口的 80%</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="tool_output_token_limit">
+                      单个工具输出的 token 上限。超长输出会被截断。<br/>
+                      <el-tag size="small" type="info">建议值：50000</el-tag>
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </template>
+                <template v-else>
+                  <p style="color: #909399">选择 Worker 后端后显示对应的环境变量说明</p>
+                </template>
+                <p style="margin: 8px 0 0; color: #909399; font-size: 12px">
+                  点击变量名可快速添加到列表
+                </p>
+              </div>
+            </el-popover>
+          </template>
           <div style="width: 100%">
             <div v-for="(item, idx) in llmForm.envVars" :key="idx" style="display: flex; gap: 8px; margin-bottom: 8px; width: 100%">
-              <el-input v-model="item.key" placeholder="变量名，如 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" style="flex: 1" />
+              <el-input v-model="item.key" placeholder="变量名" style="flex: 1" />
               <el-input v-model="item.value" placeholder="值" style="width: 120px" />
               <el-button size="small" type="danger" text @click="llmForm.envVars.splice(idx, 1)">删除</el-button>
             </div>
@@ -638,6 +680,7 @@
 import { ref, onMounted } from 'vue'
 import { resetSetupStatus } from '@/router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   listGitProviders as apiListGit,
   saveGitProvider as apiSaveGit,
