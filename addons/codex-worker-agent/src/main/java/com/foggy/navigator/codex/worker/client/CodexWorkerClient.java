@@ -69,12 +69,14 @@ public class CodexWorkerClient {
      * @param maxTurns      最大轮次
      * @param apiKey        OpenAI API Key（可选，覆盖 Worker 默认）
      * @param baseUrl       OpenAI Base URL（可选，覆盖 Worker 默认）
+     * @param envVars       额外环境变量（可选，含 Codex CLI config 如 model_context_window）
      * @return SSE 事件流
      */
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd,
                                                       String codexThreadId, String model,
                                                       Integer maxTurns, String images,
-                                                      String apiKey, String baseUrl) {
+                                                      String apiKey, String baseUrl,
+                                                      java.util.Map<String, String> envVars) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) body.put("cwd", cwd);
@@ -91,6 +93,7 @@ public class CodexWorkerClient {
         }
         if (apiKey != null) body.put("api_key", apiKey);
         if (baseUrl != null) body.put("base_url", baseUrl);
+        if (envVars != null && !envVars.isEmpty()) body.put("env_vars", envVars);
 
         return webClient.post()
                 .uri("/api/v1/query")

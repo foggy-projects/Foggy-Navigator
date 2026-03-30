@@ -178,20 +178,23 @@ public class CodexTaskService implements TaskQueryProvider {
         persistTask(entity);
         log.info("Created Codex task: taskId={}, workerId={}, sessionId={}", taskId, form.getWorkerId(), sessionId);
 
-        // 解析 auth（apiKey + baseUrl，无配置时 Worker 使用本地凭证）
-        String[] auth = resolveCodexAuth(form.getModelConfigId());
+        // 解析 auth + envVars（apiKey + baseUrl + 环境变量，无配置时 Worker 使用本地凭证）
+        CodexAuthResult auth = resolveCodexAuth(form.getModelConfigId());
 
         // 发布统一事件触发 CodexStreamRelay（通过 providerType 条件过滤）
         Map<String, Object> providerConfig = new LinkedHashMap<>();
         putIfNotBlank(providerConfig, "codexThreadId", form.getCodexThreadId());
         putIfNotBlank(providerConfig, "images", form.getImages());
-        putIfNotBlank(providerConfig, "baseUrl", auth[1]);
+        putIfNotBlank(providerConfig, "baseUrl", auth.baseUrl);
+        if (auth.envVars != null && !auth.envVars.isEmpty()) {
+            providerConfig.put("extraEnvVars", auth.envVars);
+        }
 
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
                 .prompt(form.getPrompt()).cwd(cwd)
                 .model(form.getModel()).maxTurns(form.getMaxTurns())
-                .apiKey(auth[0]).providerType(AGENT_ID)
+                .apiKey(auth.apiKey).providerType(AGENT_ID)
                 .providerConfig(providerConfig)
                 .build());
 
@@ -943,30 +946,36 @@ public class CodexTaskService implements TaskQueryProvider {
         return sessionId;
     }
 
+    /** Codex auth 解析结果 */
+    private record CodexAuthResult(String apiKey, String baseUrl, Map<String, String> envVars) {
+        static final CodexAuthResult EMPTY = new CodexAuthResult(null, null, null);
+    }
+
     /**
-     * 解析 Codex auth 配置：apiKey + baseUrl。
+     * 解析 Codex auth 配置：apiKey + baseUrl + envVars。
      * <p>
      * 两种模式：
-     * - API Key 模式：modelConfig 配置了 apiKey → 解密返回，baseUrl 可选
-     * - Subscription 模式：modelConfig 无 apiKey → 返回 [null, null]，Worker 使用本地 ~/.codex/auth.json
-     *
-     * @return [apiKey, baseUrl]，任一可为 null
+     * - API Key 模式：modelConfig 配置了 apiKey → 解密返回，baseUrl/envVars 可选
+     * - Subscription 模式：modelConfig 无 apiKey → Worker 使用本地 ~/.codex/auth.json
+     * <p>
+     * envVars 用于传递 Codex CLI 配置（如 model_context_window、model_auto_compact_token_limit）
      */
-    private String[] resolveCodexAuth(String modelConfigId) {
+    private CodexAuthResult resolveCodexAuth(String modelConfigId) {
         if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
-            return new String[]{null, null};
+            return CodexAuthResult.EMPTY;
         }
         try {
             var modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
             if (modelConfig == null) {
-                return new String[]{null, null};
+                return CodexAuthResult.EMPTY;
             }
             String apiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
             String baseUrl = modelConfig.getBaseUrl();
-            return new String[]{apiKey, baseUrl};
+            Map<String, String> envVars = modelConfig.getEnvVars();
+            return new CodexAuthResult(apiKey, baseUrl, envVars);
         } catch (Exception e) {
             log.warn("Failed to resolve Codex auth from modelConfigId={}: {}", modelConfigId, e.getMessage());
-            return new String[]{null, null};
+            return CodexAuthResult.EMPTY;
         }
     }
 

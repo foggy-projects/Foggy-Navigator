@@ -16,6 +16,7 @@ export interface QueryRequest {
   images?: ImageAttachment[] // Historical field name; payload may include non-image attachments too.
   api_key?: string     // Per-request OpenAI API key override
   base_url?: string    // Per-request OpenAI base URL override
+  env_vars?: Record<string, string>  // Extra env vars (includes Codex CLI config like model_context_window)
 }
 
 /**

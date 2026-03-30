@@ -429,7 +429,8 @@ export async function runQuery(
   maxTurns: number | undefined,
   images: ImageAttachment[] | undefined,
   apiKey: string | undefined,
-  baseUrl: string | undefined
+  baseUrl: string | undefined,
+  envVars: Record<string, string> | undefined
 ): Promise<void> {
   const broadcast = new EventBroadcast(taskId)
   taskBroadcasts.set(taskId, broadcast)
@@ -485,6 +486,22 @@ export async function runQuery(
     }
     if (effectiveBaseUrl) {
       codexOptions.baseUrl = effectiveBaseUrl
+    }
+
+    // 从 envVars 提取 Codex CLI 配置项（如 model_context_window、model_auto_compact_token_limit）
+    if (envVars) {
+      const codexConfig: Record<string, string | number> = {}
+      const codexConfigKeys = ['model_context_window', 'model_auto_compact_token_limit', 'tool_output_token_limit']
+      for (const key of codexConfigKeys) {
+        const val = envVars[key]
+        if (val != null && val !== '') {
+          const num = Number(val)
+          codexConfig[key] = Number.isNaN(num) ? val : num
+        }
+      }
+      if (Object.keys(codexConfig).length > 0) {
+        codexOptions.config = { ...codexOptions.config, ...codexConfig }
+      }
     }
 
     const codex = new Codex(codexOptions)

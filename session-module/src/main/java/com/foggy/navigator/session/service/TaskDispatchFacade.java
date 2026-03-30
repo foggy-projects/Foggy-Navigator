@@ -605,12 +605,20 @@ public class TaskDispatchFacade {
                     .codexThreadId(strVal(meta, "codexThreadId"));
         }
 
+        // 从 metadata 提取 source / fileCheckpointingEnabled（Provider 可能已设置）
+        if (meta != null) {
+            if (meta.get("source") instanceof String s) builder.source(s);
+            if (meta.get("fileCheckpointingEnabled") instanceof Boolean b) builder.fileCheckpointingEnabled(b);
+        }
+
         // 从 request 补充（如果 metadata 里没有）
         if (request != null) {
             DispatchTaskDTO dto = builder.build();
             if (dto.getSessionId() == null) builder.sessionId(request.getSessionId());
             if (dto.getWorkerId() == null) builder.workerId(request.getWorkerId());
             if (dto.getDirectoryId() == null) builder.directoryId(request.getDirectoryId());
+            // 通过 Facade 创建的任务均来自平台
+            if (dto.getSource() == null) builder.source("PLATFORM");
             builder.prompt(request.getPrompt())
                     .cwd(request.getCwd())
                     .model(request.getModel());

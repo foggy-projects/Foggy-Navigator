@@ -92,13 +92,15 @@ public class CodexStreamRelay {
             String codexThreadId = event.getProviderConfigString("codexThreadId");
             String images = blankToNull(event.getProviderConfigString("images"));
             String baseUrl = blankToNull(event.getProviderConfigString("baseUrl"));
+            @SuppressWarnings("unchecked")
+            Map<String, String> extraEnvVars = event.getProviderConfigValue("extraEnvVars");
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(codexThreadId);
 
             Flux<ServerSentEvent<String>> sseFlux = client.streamQuery(
                     event.getPrompt(), event.getCwd(),
                     codexThreadId, event.getModel(),
-                    event.getMaxTurns(), images, event.getApiKey(), baseUrl);
+                    event.getMaxTurns(), images, event.getApiKey(), baseUrl, extraEnvVars);
 
             Disposable subscription = subscribeSseFlux(sseFlux, taskId, sessionId, workerId,
                     detectedModel, detectedCodexThreadId, 0);

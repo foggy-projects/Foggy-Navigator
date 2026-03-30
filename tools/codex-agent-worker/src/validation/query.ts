@@ -150,6 +150,7 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
       images,
       api_key: apiKey,
       base_url: baseUrl,
+      env_vars: body.env_vars as Record<string, string> | undefined,
     },
   }
 }

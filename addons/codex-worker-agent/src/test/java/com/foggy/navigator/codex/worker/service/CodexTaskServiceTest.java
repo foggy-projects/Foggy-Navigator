@@ -80,7 +80,7 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void resolveCodexAuth_returnsNullsWhenNoApiKey() {
+    void resolveCodexAuth_returnsEmptyWhenNoApiKey() {
         LlmModelConfigDTO config = new LlmModelConfigDTO();
         config.setWorkerBackend("OPENAI_CODEX");
         config.setBaseUrl(null);
@@ -88,11 +88,12 @@ class CodexTaskServiceTest {
         when(llmModelManager.getModelConfig("cfg-1")).thenReturn(Optional.of(config));
         when(llmModelManager.getDecryptedApiKey("cfg-1")).thenReturn(null);
 
-        String[] result = ReflectionTestUtils.invokeMethod(service, "resolveCodexAuth", "cfg-1");
+        Object result = ReflectionTestUtils.invokeMethod(service, "resolveCodexAuth", "cfg-1");
 
         assertNotNull(result);
-        assertNull(result[0]); // apiKey
-        assertNull(result[1]); // baseUrl
+        // CodexAuthResult record — access via reflection
+        assertNull(ReflectionTestUtils.invokeMethod(result, "apiKey"));
+        assertNull(ReflectionTestUtils.invokeMethod(result, "baseUrl"));
     }
 
     @Test
@@ -104,11 +105,11 @@ class CodexTaskServiceTest {
         when(llmModelManager.getModelConfig("cfg-2")).thenReturn(Optional.of(config));
         when(llmModelManager.getDecryptedApiKey("cfg-2")).thenReturn("sk-live");
 
-        String[] result = ReflectionTestUtils.invokeMethod(service, "resolveCodexAuth", "cfg-2");
+        Object result = ReflectionTestUtils.invokeMethod(service, "resolveCodexAuth", "cfg-2");
 
         assertNotNull(result);
-        assertEquals("sk-live", result[0]);
-        assertEquals("https://api.openai.com/v1", result[1]);
+        assertEquals("sk-live", ReflectionTestUtils.invokeMethod(result, "apiKey"));
+        assertEquals("https://api.openai.com/v1", ReflectionTestUtils.invokeMethod(result, "baseUrl"));
     }
 
     @Test
