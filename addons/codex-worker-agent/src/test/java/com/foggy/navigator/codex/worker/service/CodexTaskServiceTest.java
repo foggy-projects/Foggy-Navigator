@@ -30,7 +30,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -80,20 +80,23 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void resolveApiKey_returnsNullForCodexSubscriptionMode() {
+    void resolveCodexAuth_returnsNullsWhenNoApiKey() {
         LlmModelConfigDTO config = new LlmModelConfigDTO();
         config.setWorkerBackend("OPENAI_CODEX");
         config.setBaseUrl(null);
 
         when(llmModelManager.getModelConfig("cfg-1")).thenReturn(Optional.of(config));
+        when(llmModelManager.getDecryptedApiKey("cfg-1")).thenReturn(null);
 
-        Object result = ReflectionTestUtils.invokeMethod(service, "resolveApiKey", "cfg-1");
+        String[] result = ReflectionTestUtils.invokeMethod(service, "resolveCodexAuth", "cfg-1");
 
-        assertNull(result);
+        assertNotNull(result);
+        assertNull(result[0]); // apiKey
+        assertNull(result[1]); // baseUrl
     }
 
     @Test
-    void resolveApiKey_returnsDecryptedKeyForNonSubscriptionConfig() {
+    void resolveCodexAuth_returnsApiKeyAndBaseUrl() {
         LlmModelConfigDTO config = new LlmModelConfigDTO();
         config.setWorkerBackend("OPENAI_CODEX");
         config.setBaseUrl("https://api.openai.com/v1");
@@ -101,9 +104,11 @@ class CodexTaskServiceTest {
         when(llmModelManager.getModelConfig("cfg-2")).thenReturn(Optional.of(config));
         when(llmModelManager.getDecryptedApiKey("cfg-2")).thenReturn("sk-live");
 
-        Object result = ReflectionTestUtils.invokeMethod(service, "resolveApiKey", "cfg-2");
+        String[] result = ReflectionTestUtils.invokeMethod(service, "resolveCodexAuth", "cfg-2");
 
-        assertEquals("sk-live", result);
+        assertNotNull(result);
+        assertEquals("sk-live", result[0]);
+        assertEquals("https://api.openai.com/v1", result[1]);
     }
 
     @Test

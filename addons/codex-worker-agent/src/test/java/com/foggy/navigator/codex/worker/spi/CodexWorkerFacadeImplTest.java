@@ -60,7 +60,7 @@ class CodexWorkerFacadeImplTest {
     void syncQueryAggregatesUpstreamTaskAndMetrics() {
         mockWorker("worker-1", "gpt-5.4-mini");
         when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("thread-0"),
-                eq("gpt-5.4-mini"), eq(2), eq(null), eq(null)))
+                eq("gpt-5.4-mini"), eq(2), eq(null), eq(null), eq(null)))
                 .thenReturn(Flux.just(
                         sse("""
                                 {"type":"assistant_text","task_id":"worker-task-9","session_id":"thread-1","content":"Hello "}
@@ -95,7 +95,7 @@ class CodexWorkerFacadeImplTest {
                 "check repo", "D:/repo", null, "thread-0"))
                 .thenReturn("local-task-1");
         when(client.streamQuery(eq("check repo"), eq("D:/repo"), eq("thread-0"),
-                eq("gpt-5.4-mini"), eq(2), eq(null), eq(null)))
+                eq("gpt-5.4-mini"), eq(2), eq(null), eq(null), eq(null)))
                 .thenReturn(Flux.just(
                         sse("""
                                 {"type":"result","task_id":"worker-task-9","session_id":"thread-1","result":"Final answer","duration_ms":9159,"input_tokens":101,"output_tokens":22,"num_turns":2,"model":"gpt-5.4-mini","cost_usd":0.12}

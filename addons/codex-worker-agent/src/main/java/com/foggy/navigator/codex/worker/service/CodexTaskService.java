@@ -178,19 +178,20 @@ public class CodexTaskService implements TaskQueryProvider {
         persistTask(entity);
         log.info("Created Codex task: taskId={}, workerId={}, sessionId={}", taskId, form.getWorkerId(), sessionId);
 
-        // 解析 API Key（如有模型配置）
-        String apiKey = resolveApiKey(form.getModelConfigId());
+        // 解析 auth（apiKey + baseUrl，无配置时 Worker 使用本地凭证）
+        String[] auth = resolveCodexAuth(form.getModelConfigId());
 
         // 发布统一事件触发 CodexStreamRelay（通过 providerType 条件过滤）
         Map<String, Object> providerConfig = new LinkedHashMap<>();
         putIfNotBlank(providerConfig, "codexThreadId", form.getCodexThreadId());
         putIfNotBlank(providerConfig, "images", form.getImages());
+        putIfNotBlank(providerConfig, "baseUrl", auth[1]);
 
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
                 .prompt(form.getPrompt()).cwd(cwd)
                 .model(form.getModel()).maxTurns(form.getMaxTurns())
-                .apiKey(apiKey).providerType(AGENT_ID)
+                .apiKey(auth[0]).providerType(AGENT_ID)
                 .providerConfig(providerConfig)
                 .build());
 
@@ -942,24 +943,30 @@ public class CodexTaskService implements TaskQueryProvider {
         return sessionId;
     }
 
-    private String resolveApiKey(String modelConfigId) {
+    /**
+     * 解析 Codex auth 配置：apiKey + baseUrl。
+     * <p>
+     * 两种模式：
+     * - API Key 模式：modelConfig 配置了 apiKey → 解密返回，baseUrl 可选
+     * - Subscription 模式：modelConfig 无 apiKey → 返回 [null, null]，Worker 使用本地 ~/.codex/auth.json
+     *
+     * @return [apiKey, baseUrl]，任一可为 null
+     */
+    private String[] resolveCodexAuth(String modelConfigId) {
         if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
-            return null;
+            return new String[]{null, null};
         }
         try {
             var modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
             if (modelConfig == null) {
-                return null;
+                return new String[]{null, null};
             }
-            if ("OPENAI_CODEX".equals(modelConfig.getWorkerBackend())
-                    && (modelConfig.getBaseUrl() == null || modelConfig.getBaseUrl().isBlank())) {
-                // Codex subscription mode should use local ~/.codex/auth.json instead of a platform API key.
-                return null;
-            }
-            return llmModelManager.getDecryptedApiKey(modelConfigId);
+            String apiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
+            String baseUrl = modelConfig.getBaseUrl();
+            return new String[]{apiKey, baseUrl};
         } catch (Exception e) {
-            log.warn("Failed to resolve API key from modelConfigId={}: {}", modelConfigId, e.getMessage());
-            return null;
+            log.warn("Failed to resolve Codex auth from modelConfigId={}: {}", modelConfigId, e.getMessage());
+            return new String[]{null, null};
         }
     }
 

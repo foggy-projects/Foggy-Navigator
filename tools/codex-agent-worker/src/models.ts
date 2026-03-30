@@ -15,6 +15,7 @@ export interface QueryRequest {
   max_turns?: number
   images?: ImageAttachment[] // Historical field name; payload may include non-image attachments too.
   api_key?: string     // Per-request OpenAI API key override
+  base_url?: string    // Per-request OpenAI base URL override
 }
 
 /**

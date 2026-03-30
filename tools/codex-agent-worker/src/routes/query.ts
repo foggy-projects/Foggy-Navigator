@@ -62,7 +62,8 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     body.model,
     body.max_turns,
     body.images,
-    body.api_key
+    body.api_key,
+    body.base_url
   )
 
   // Wait a tick for broadcast to be registered
