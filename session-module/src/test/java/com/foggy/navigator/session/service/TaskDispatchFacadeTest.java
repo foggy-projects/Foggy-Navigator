@@ -180,12 +180,16 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
-    void createTask_usesExplicitProviderTypeForDirectRoute() {
+    void createTask_usesModelConfigIdForDirectRoute() {
+        LlmModelConfigDTO codexConfig = new LlmModelConfigDTO();
+        codexConfig.setWorkerBackend("OPENAI_CODEX");
+        when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(codexConfig));
+
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-1")
                 .directoryId("dir-2")
                 .prompt("hi")
-                .providerType("codex-worker")
+                .modelConfigId("cfg-codex")
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
@@ -208,12 +212,10 @@ class TaskDispatchFacadeTest {
 
         assertEquals("task-codex-provider-1", result.getTaskId());
         verify(taskQueryProvider).createTaskDirect(
-                argThat(params -> "codex-worker".equals(params.get("providerType"))
-                        && "worker-1".equals(params.get("workerId"))
+                argThat(params -> "worker-1".equals(params.get("workerId"))
                         && "dir-2".equals(params.get("directoryId"))),
                 eq("user-1"),
                 eq("tenant-1"));
-        verifyNoInteractions(agentResolver, bindingService, agent, llmModelManager);
     }
 
     @Test
@@ -328,7 +330,6 @@ class TaskDispatchFacadeTest {
                 .workerId("worker-1")
                 .sessionId("session-1")
                 .prompt("continue")
-                .codexThreadId("thread-1")
                 .providerType("codex-worker")
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
@@ -353,8 +354,7 @@ class TaskDispatchFacadeTest {
         assertEquals("task-codex-2", result.getTaskId());
         assertEquals("thread-1", result.getCodexThreadId());
         verify(taskQueryProvider).resumeTask(eq("user-1"), eq("tenant-1"),
-                argThat(params -> "thread-1".equals(params.get("codexThreadId"))
-                        && "session-1".equals(params.get("sessionId"))
+                argThat(params -> "session-1".equals(params.get("sessionId"))
                         && "continue".equals(params.get("prompt"))));
         verifyNoInteractions(agentResolver);
     }
@@ -371,7 +371,6 @@ class TaskDispatchFacadeTest {
                 .directoryId("dir-1")
                 .sessionId("session-codex-1")
                 .prompt("continue")
-                .codexThreadId("thread-1")
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
@@ -393,7 +392,6 @@ class TaskDispatchFacadeTest {
                 .taskId("task-codex-resumed")
                 .sessionId("session-codex-1")
                 .providerType("codex-worker")
-                .codexThreadId("thread-1")
                 .build();
 
         when(codexProvider.getProviderType()).thenReturn("codex-worker");
@@ -404,20 +402,18 @@ class TaskDispatchFacadeTest {
 
         assertEquals("task-codex-resumed", result.getTaskId());
         verify(codexProvider).resumeTask(eq("user-1"), eq("tenant-1"),
-                argThat(params -> "thread-1".equals(params.get("codexThreadId"))
-                        && "session-codex-1".equals(params.get("sessionId"))
+                argThat(params -> "session-codex-1".equals(params.get("sessionId"))
                         && "continue".equals(params.get("prompt"))));
         verifyNoInteractions(agentResolver);
         verify(claudeProvider, never()).resumeTask(anyString(), anyString(), any());
     }
 
     @Test
-    void resumeTask_rejectsModelConfigThatConflictsWithSessionBoundProvider() {
+    void resumeTask_silentlyClearsModelConfigThatConflictsWithSessionBoundProvider() {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-1")
                 .sessionId("session-codex-1")
                 .prompt("continue")
-                .codexThreadId("thread-1")
                 .modelConfigId("cfg-claude")
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
@@ -438,23 +434,23 @@ class TaskDispatchFacadeTest {
         when(sessionRepository.findById("session-codex-1")).thenReturn(Optional.of(session));
         when(llmModelManager.getModelConfig("cfg-claude")).thenReturn(Optional.of(modelConfig));
 
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> facade.resumeTask(request, context));
+        DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
+                .taskId("task-codex-resumed").providerType("codex-worker").build();
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        when(taskQueryProvider.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(resumedTask);
 
-        assertTrue(error.getMessage().contains("cfg-claude"));
-        assertTrue(error.getMessage().contains("claude-worker"));
-        assertTrue(error.getMessage().contains("codex-worker"));
-        verify(taskQueryProvider, never()).resumeTask(any(), any(), any());
-        verifyNoInteractions(agentResolver);
+        // normalizeResumeRequest 静默清除冲突的 modelConfigId，不再抛异常
+        DispatchTaskDTO result = facade.resumeTask(request, context);
+        assertEquals("task-codex-resumed", result.getTaskId());
+        verify(taskQueryProvider).resumeTask(eq("user-1"), eq("tenant-1"), any());
     }
 
     @Test
-    void resumeTask_rejectsExplicitProviderTypeThatConflictsWithSessionBoundProvider() {
+    void resumeTask_silentlyCorrectsExplicitProviderTypeThatConflictsWithSessionBoundProvider() {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-1")
                 .sessionId("session-codex-1")
                 .prompt("continue")
-                .codexThreadId("thread-1")
                 .providerType("claude-worker")
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
@@ -471,12 +467,15 @@ class TaskDispatchFacadeTest {
 
         when(sessionRepository.findById("session-codex-1")).thenReturn(Optional.of(session));
 
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> facade.resumeTask(request, context));
+        DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
+                .taskId("task-codex-resumed").providerType("codex-worker").build();
+        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
+        when(taskQueryProvider.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(resumedTask);
 
-        assertTrue(error.getMessage().contains("claude-worker"));
-        assertTrue(error.getMessage().contains("codex-worker"));
-        verify(taskQueryProvider, never()).resumeTask(any(), any(), any());
+        // normalizeResumeRequest 静默修正 providerType，不再抛异常
+        DispatchTaskDTO result = facade.resumeTask(request, context);
+        assertEquals("task-codex-resumed", result.getTaskId());
+        verify(taskQueryProvider).resumeTask(eq("user-1"), eq("tenant-1"), any());
         verifyNoInteractions(agentResolver, llmModelManager);
     }
 
@@ -790,7 +789,6 @@ class TaskDispatchFacadeTest {
                 .workerId("worker-1")
                 .sessionId("session-1")
                 .prompt("continue")
-                .claudeSessionId("cs-1")
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")

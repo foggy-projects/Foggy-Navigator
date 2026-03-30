@@ -157,7 +157,6 @@ class TaskControllerTest {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .workerId("worker-1")
                 .sessionId("session-1")
-                .claudeSessionId("cs-1")
                 .prompt("continue")
                 .build();
 
