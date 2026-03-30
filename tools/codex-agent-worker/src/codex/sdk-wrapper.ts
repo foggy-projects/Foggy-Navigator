@@ -488,9 +488,13 @@ export async function runQuery(
       codexOptions.baseUrl = effectiveBaseUrl
     }
 
-    // 从 envVars 提取 Codex CLI 配置项（如 model_context_window、model_auto_compact_token_limit）
+    // Codex CLI 配置项默认值 + envVars 覆盖
+    const codexConfigDefaults: Record<string, number> = {
+      tool_output_token_limit: 10000,
+      model_auto_compact_token_limit: 140000,
+    }
+    const codexConfig: Record<string, string | number> = { ...codexConfigDefaults }
     if (envVars) {
-      const codexConfig: Record<string, string | number> = {}
       const codexConfigKeys = ['model_context_window', 'model_auto_compact_token_limit', 'tool_output_token_limit']
       for (const key of codexConfigKeys) {
         const val = envVars[key]
@@ -499,10 +503,8 @@ export async function runQuery(
           codexConfig[key] = Number.isNaN(num) ? val : num
         }
       }
-      if (Object.keys(codexConfig).length > 0) {
-        codexOptions.config = { ...codexOptions.config, ...codexConfig }
-      }
     }
+    codexOptions.config = { ...codexOptions.config, ...codexConfig }
 
     const codex = new Codex(codexOptions)
 
