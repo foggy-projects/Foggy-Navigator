@@ -138,8 +138,24 @@ public class ContextResolvingA2aAgent implements A2aAgent {
                 .agentId(agentId)
                 .build();
 
+        if (firstTurn) {
+            Optional<A2aTask> duplicate = inner.findRecentDuplicate(context);
+            if (duplicate.isPresent()) {
+                A2aTask task = duplicate.get();
+                if (task.getContextId() == null) {
+                    task.setContextId(resolvedContextId);
+                }
+                return task;
+            }
+        }
+
         // 3. Delegate to inner agent
         A2aTask task = inner.sendTask(context);
+
+        if (firstTurn && task.getStatus() != null
+                && task.getStatus().getState() != A2aTaskState.FAILED) {
+            inner.rememberDuplicate(context, task);
+        }
 
         // 4. Save/update context after task creation
         if (contextStore != null && task.getStatus() != null

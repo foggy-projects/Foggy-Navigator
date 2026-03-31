@@ -26,4 +26,18 @@ public interface InnerA2aAgent {
     default boolean isSessionBusy(String agentSessionRef) {
         return false;
     }
+
+    /**
+     * 查找近期重复请求对应的任务；默认不去重。
+     */
+    default Optional<A2aTask> findRecentDuplicate(A2aContext context) {
+        return Optional.empty();
+    }
+
+    /**
+     * 在新任务成功创建后记录 dedup 键；默认不处理。
+     */
+    default void rememberDuplicate(A2aContext context, A2aTask task) {
+        // Optional hook for implementations with request dedup support.
+    }
 }

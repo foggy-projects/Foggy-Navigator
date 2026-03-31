@@ -248,7 +248,6 @@ class ClaudeWorkerA2aAgentTest {
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
             when(contextStore.findContextForAgent("ctx-1", "user-1", "agent-1", 24))
                     .thenReturn(Optional.of(ctxEntity));
-            when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
             A2aAgent agent = pipelineWithContextStore();
@@ -357,7 +356,6 @@ class ClaudeWorkerA2aAgentTest {
             ctxEntity.setContextAlias("my-alias");
             when(contextStore.findByAlias("my-alias", "user-1", "agent-1", 24))
                     .thenReturn(Optional.of(ctxEntity));
-            when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
             A2aAgent agent = pipelineWithContextStore();
@@ -388,7 +386,6 @@ class ClaudeWorkerA2aAgentTest {
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
             when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1", 24))
                     .thenReturn(Optional.of(ctxEntity));
-            when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
             A2aAgent agent = pipelineWithContextStore();
@@ -413,7 +410,6 @@ class ClaudeWorkerA2aAgentTest {
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
             when(contextStore.findContextForAgent("ctx-nav-only", "user-1", "agent-1", 24))
                     .thenReturn(Optional.of(ctxEntity));
-            when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
             A2aAgent agent = pipelineWithContextStore();
@@ -433,10 +429,9 @@ class ClaudeWorkerA2aAgentTest {
         }
 
         @Test
-        void dedupHit_preservesExistingContextMapping() {
+        void dedupHit_isHandledByDecoratorBeforeTaskCreation() {
             AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
             ctxEntity.setContextId("ctx-continue");
-            ctxEntity.setAgentSessionRef("claude-sess-existing");
             when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1", 24))
                     .thenReturn(Optional.of(ctxEntity));
             TaskDTO existing = TaskDTO.builder()
@@ -456,9 +451,9 @@ class ClaudeWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            verify(contextStore).saveSessionRefFull(eq("ctx-continue"), eq("claude-worker"),
-                    eq("claude-sess-existing"), isNull(), eq("user-1"), eq("agent-1"), isNull());
             verify(taskService, never()).createTask(anyString(), anyString(), any());
+            verify(contextStore, never()).saveSessionRefFull(anyString(), anyString(),
+                    any(), any(), anyString(), anyString(), any());
         }
 
         @Test
