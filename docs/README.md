@@ -7,6 +7,7 @@
 | 文档 | 说明 | 状态 |
 |------|------|------|
 | [系统架构概览](./00-system-overview.md) | 当前系统定位、功能架构、模块职责、关键流程 | 已更新 (v4.0) |
+| [功能架构总说明](./functional-architecture-summary.md) | 面向团队沟通的收官版功能架构说明 | 已新增 |
 | [功能架构说明](./02-modules/functional-architecture.md) | 当前一级功能域与功能总图 | 已新增 |
 | [文档状态清单](./documentation-status.md) | 区分当前有效、部分有效与历史参考文档 | 已新增 |
 | [术语表](./terminology-glossary.md) | 统一 Worker、会话、任务、A2A、Coding Agent 等术语 | 已新增 |

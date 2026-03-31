@@ -18,6 +18,7 @@
 | 文档 | 状态 | 用途 |
 |------|------|------|
 | [系统架构概览](./00-system-overview.md) | 当前有效 | 当前系统定位、一级能力面、模块分层 |
+| [功能架构总说明](./functional-architecture-summary.md) | 当前有效 | 面向团队沟通的高层总说明与统一表达 |
 | [功能架构说明](./02-modules/functional-architecture.md) | 当前有效 | 当前功能地图与功能域边界 |
 | [术语表](./terminology-glossary.md) | 当前有效 | 统一 Worker、会话、任务、A2A、Coding Agent 等术语 |
 | [工作区与 Worker 中心](./02-modules/worker-workspace-center.md) | 当前有效 | Worker、目录、文件、Git 相关功能说明 |
