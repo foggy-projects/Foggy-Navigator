@@ -26,6 +26,7 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
@@ -72,6 +73,10 @@ public class CodexTaskService implements TaskQueryProvider {
     @Autowired(required = false)
     @Nullable
     private SessionEntityRepository sessionEntityRepository;
+
+    @Autowired
+    @Lazy
+    private CodexStreamRelay streamRelay;
 
     /**
      * 创建并启动 Codex 任务
@@ -548,6 +553,31 @@ public class CodexTaskService implements TaskQueryProvider {
             }
         }
         log.info("Codex task deleted: taskId={}, userId={}", taskId, userId);
+    }
+
+    @Override
+    public Object resyncTask(String taskId, String userId) {
+        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!"FAILED".equals(entity.getStatus())) {
+            throw new IllegalStateException("Only FAILED tasks can be resynced, current: " + entity.getStatus());
+        }
+        if (entity.getWorkerTaskId() == null) {
+            throw new IllegalStateException("No worker task ID, cannot resync");
+        }
+
+        entity.setStatus("RUNNING");
+        entity.setErrorMessage(null);
+        persistTask(entity);
+        log.info("Resync: reset task {} to RUNNING, attempting SSE reconnect", taskId);
+
+        try {
+            streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
+        } catch (Exception e) {
+            log.warn("Resync: SSE reconnect failed for task {}: {}", taskId, e.getMessage());
+        }
+
+        return Map.of("status", "RESYNCED", "action", "RECONNECTED", "taskId", taskId);
     }
 
     private Map<String, Object> buildSessionPage(List<CodexTaskEntity> tasks, int page, int size, String interactionState) {
