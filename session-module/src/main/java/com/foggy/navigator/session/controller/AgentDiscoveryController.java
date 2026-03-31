@@ -65,6 +65,8 @@ public class AgentDiscoveryController {
         String userId = UserContext.getCurrentUserId();
         String question = body.get("question");
         String sessionId = body.get("sessionId");
+        String systemPrompt = body.get("systemPrompt");
+        String firstMsg = body.get("firstMsg");
         if (question == null || question.isBlank()) {
             return RX.failA("question is required");
         }
@@ -84,9 +86,20 @@ public class AgentDiscoveryController {
         message.setContextAlias(contextAlias);
 
         // 将 sessionId 通过 metadata 传递给 Agent（后台回调用于持久化消息）
+        Map<String, Object> metadata = new HashMap<>();
         if (sessionId != null && !sessionId.isBlank()) {
-            message.setMetadata(Map.of("tracked", true, "sessionId", sessionId));
+            metadata.put("tracked", true);
+            metadata.put("sessionId", sessionId);
             updateParticipatingAgents(sessionId, agentId);
+        }
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            metadata.put("systemPrompt", systemPrompt);
+        }
+        if (firstMsg != null && !firstMsg.isBlank()) {
+            metadata.put("firstMsg", firstMsg);
+        }
+        if (!metadata.isEmpty()) {
+            message.setMetadata(metadata);
         }
 
         A2aTask task = agent.sendTask(message);  // ← 立即返回 SUBMITTED

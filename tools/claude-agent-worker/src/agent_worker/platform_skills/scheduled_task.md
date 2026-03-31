@@ -160,9 +160,27 @@ print('Written to', tmp)
 
 确认 Agent 已有 `defaultModelConfigId` 后继续。
 
+### Step 1.6: 检查 Agent 是否支持 systemPrompt
+
+并非所有 A2aAgent 都支持独立的 system prompt 通道。创建定时任务前，**必须先查询 Agent Card 能力**：
+
+```bash
+curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents/$AGENT_ID/card \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data | {id, name, capabilities}'
+```
+
+重点查看：`capabilities.supportsSystemPrompt`
+
+- `true`：可以使用独立的 `systemPrompt` + 普通 `question`
+- `false` 或 `null`：不要传 `systemPrompt`；如需首轮可见初始化上下文，改用 `firstMsg`
+
 ### Step 2: 设计 Prompt
 
-根据用户需求，帮用户设计两部分内容：
+根据用户需求，帮用户设计内容。**设计方式取决于 Step 1.6 的能力检测结果**：
+
+**如果 Agent 支持 `systemPrompt`：**
+
+设计两部分内容：
 
 **systemPrompt（角色约束，写入 Sharing Key 配置）：**
 - 定义 AI 的角色和边界
@@ -173,10 +191,25 @@ print('Written to', tmp)
 - 包含动态变量（如日期、时间范围）
 - 明确分析维度和输出要求
 
+**如果 Agent 不支持 `systemPrompt`：**
+
+设计两部分内容：
+
+**firstMsg（首轮附加消息，写入定时任务请求体）：**
+- 首次创建会话时拼到用户消息前面
+- 用户在会话中可观测
+- 适合写角色定义、输出格式要求、操作边界等初始化上下文
+
+**Prompt 模板（写入 cron 脚本，每次执行时发送）：**
+- 只放本次任务的动态要求
+- 如日期范围、分析对象、执行窗口等
+
+此时不要在 Sharing Key 中写 `systemPrompt`，保持为空。
+
 **设计示例 — 每日代码提交分析：**
 
-systemPrompt:
-```
+firstMsg:
+``` 
 你是一个代码审查助手。你的职责是分析 Git 提交记录，生成结构化的日报。
 输出格式：Markdown，包含以下章节：
 1. 提交概览（总数、作者分布）
@@ -194,8 +227,8 @@ Prompt 模板:
 
 **设计示例 — 每周工作报告：**
 
-systemPrompt:
-```
+firstMsg:
+``` 
 你是一个项目经理助手。分析本周的代码变更和任务完成情况，生成周报。
 输出格式：Markdown 周报，包含：本周完成、进行中的工作、下周计划建议。
 ```
@@ -215,7 +248,42 @@ import json, tempfile, os
 data = {
     'agentId': '用户选择的 Agent ID',
     'label': '定时任务名称（如 daily-commit-report）',
+    'maxTurns': 5,
+    'maxDailyCalls': 10
+}
+"@
+```
+
+**如果 Agent 支持 `systemPrompt`**，继续给 `data` 增加：
+
+```bash
+python3 -c "
+import json, tempfile, os
+data = {
+    'agentId': '用户选择的 Agent ID',
+    'label': '定时任务名称（如 daily-commit-report）',
     'systemPrompt': '上一步设计的 systemPrompt',
+    'maxTurns': 5,
+    'maxDailyCalls': 10
+}
+tmp = os.path.join(tempfile.gettempdir(), '_create_key.json')
+with open(tmp, 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False)
+print('Written to', tmp)
+" && curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/sharing-keys \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
+  -H "Content-Type: application/json; charset=UTF-8" \
+  --data-binary @"$(python3 -c 'import tempfile,os;print(os.path.join(tempfile.gettempdir(),\"_create_key.json\"))')" | jq '.data'
+```
+
+**如果 Agent 不支持 `systemPrompt`**，使用不带 `systemPrompt` 的版本：
+
+```bash
+python3 -c "
+import json, tempfile, os
+data = {
+    'agentId': '用户选择的 Agent ID',
+    'label': '定时任务名称（如 daily-commit-report）',
     'maxTurns': 5,
     'maxDailyCalls': 10
 }
@@ -296,8 +364,9 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行定时任务..." | tee -a "$LOG
 REQUEST_BODY=$(python3 -c "
 import json
 data = {
-    'question': '{Prompt 模板，包含动态日期变量}',
-    'contextAlias': '$CONTEXT_ALIAS'
+    'question': '{最终 Prompt 模板；仅包含本次动态任务要求}',
+    'contextAlias': '$CONTEXT_ALIAS',
+    'firstMsg': '{若 Agent 不支持 systemPrompt，则此处放首轮初始化上下文；支持时可省略}'
 }
 print(json.dumps(data, ensure_ascii=False))
 ")

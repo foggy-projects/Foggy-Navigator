@@ -74,10 +74,20 @@ public class AgentApi {
      * @return 提交后的任务（状态为 SUBMITTED）
      */
     public AgentTask ask(String agentId, String question, String contextId, Integer maxTurns) {
+        return ask(agentId, question, contextId, maxTurns, null, null);
+    }
+
+    /**
+     * 提交 Agent 任务，支持原生 systemPrompt 和首轮 firstMsg。
+     */
+    public AgentTask ask(String agentId, String question, String contextId, Integer maxTurns,
+                         String systemPrompt, String firstMsg) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("question", question);
         if (contextId != null) body.put("contextId", contextId);
         if (maxTurns != null) body.put("maxTurns", maxTurns);
+        if (systemPrompt != null) body.put("systemPrompt", systemPrompt);
+        if (firstMsg != null) body.put("firstMsg", firstMsg);
         return http.post("/api/v1/open/agents/" + agentId + "/ask",
                 body, new TypeReference<>() {});
     }

@@ -417,8 +417,18 @@ public class OpenApiController {
                 ? form.getContextId() : IdGenerator.shortId();
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(form.getQuestion())));
         message.setContextId(contextId);
+        Map<String, Object> metadata = new java.util.HashMap<>();
         if (form.getMaxTurns() != null) {
-            message.setMetadata(Map.of("maxTurns", form.getMaxTurns()));
+            metadata.put("maxTurns", form.getMaxTurns());
+        }
+        if (form.getSystemPrompt() != null && !form.getSystemPrompt().isBlank()) {
+            metadata.put("systemPrompt", form.getSystemPrompt());
+        }
+        if (form.getFirstMsg() != null && !form.getFirstMsg().isBlank()) {
+            metadata.put("firstMsg", form.getFirstMsg());
+        }
+        if (!metadata.isEmpty()) {
+            message.setMetadata(metadata);
         }
 
         A2aTask task = agent.sendTask(message);

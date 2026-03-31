@@ -130,6 +130,46 @@ class CodexWorkerA2aAgentTest {
                 captor.getValue().getImages());
     }
 
+    @Test
+    void sendTask_rejectsUnsupportedSystemPrompt() {
+        A2aAgent agent = pipelineWithoutContextStore();
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("hello")))
+                .metadata(Map.of("systemPrompt", "You are strict"))
+                .build();
+
+        A2aTask result = agent.sendTask(message);
+
+        assertEquals(A2aTaskState.FAILED, result.getStatus().getState());
+        assertTrue(result.getStatus().getDescription().contains("firstMsg"));
+        verify(taskService, never()).createTask(anyString(), anyString(), any());
+    }
+
+    @Test
+    void sendTask_appliesFirstMsgOnFirstTurn() {
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+                .taskId("task-first-msg")
+                .sessionId("session-first-msg")
+                .workerId("worker-1")
+                .build());
+
+        A2aAgent agent = pipelineWithoutContextStore();
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("implement feature")))
+                .metadata(Map.of("firstMsg", "Project context"))
+                .build();
+
+        agent.sendTask(message);
+
+        ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+        verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+        assertTrue(captor.getValue().getPrompt().contains("[Initial Message]"));
+        assertTrue(captor.getValue().getPrompt().contains("Project context"));
+        assertTrue(captor.getValue().getPrompt().contains("[User Message]"));
+    }
+
     // ===== Context store tests =====
 
     @Nested
@@ -219,6 +259,32 @@ class CodexWorkerA2aAgentTest {
                     "Alias resolution should provide codexThreadId");
             assertEquals("nav-sess-alias", captor.getValue().getSessionId(),
                     "Alias resolution should provide navigatorSessionId");
+        }
+
+        @Test
+        void firstMsg_isIgnoredOnResume() {
+            when(contextStore.findSessionRefForAgent("ctx-continue", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of("thread-existing"));
+            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+                    .taskId("task-continue")
+                    .sessionId("session-continue")
+                    .workerId("worker-1")
+                    .codexThreadId("thread-existing")
+                    .build());
+
+            A2aAgent agent = pipelineWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("continue work")))
+                    .contextId("ctx-continue")
+                    .metadata(Map.of("firstMsg", "Should not reapply"))
+                    .build();
+
+            agent.sendTask(message);
+
+            ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+            verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+            assertEquals("continue work", captor.getValue().getPrompt());
         }
     }
 
@@ -322,6 +388,7 @@ class CodexWorkerA2aAgentTest {
 
             assertEquals("agent-1", card.getId());
             assertEquals("codex-agent", card.getName());
+            assertFalse(Boolean.TRUE.equals(card.getCapabilities().getSupportsSystemPrompt()));
         }
     }
 }

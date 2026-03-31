@@ -12,6 +12,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -23,6 +27,9 @@ public class ContextResolvingA2aAgent implements A2aAgent {
 
     private static final Logger log = LoggerFactory.getLogger(ContextResolvingA2aAgent.class);
     private static final int CONTEXT_TTL_HOURS = 24;
+    private static final String META_SYSTEM_PROMPT = "systemPrompt";
+    private static final String META_FIRST_MSG = "firstMsg";
+    private static final String META_FIRST_MSG_APPLIED = "firstMsgApplied";
 
     private final InnerA2aAgent inner;
     private final AgentContextStore contextStore;
@@ -106,9 +113,16 @@ public class ContextResolvingA2aAgent implements A2aAgent {
                     "Session has a running task, please wait for it to complete or cancel it first.");
         }
 
+        boolean firstTurn = agentSessionRef == null || agentSessionRef.isBlank();
+        A2aMessage effectiveMessage = applyPromptPolicy(message, firstTurn, resolvedContextId);
+        if (effectiveMessage == null) {
+            return buildFailedTask(resolvedContextId,
+                    "Agent does not support systemPrompt; use firstMsg for first-turn visible context instead.");
+        }
+
         // 2. Build A2aContext
         A2aContext context = A2aContext.builder()
-                .message(message)
+                .message(effectiveMessage)
                 .contextId(resolvedContextId)
                 .contextAlias(contextAlias)
                 .agentSessionRef(agentSessionRef)
@@ -166,6 +180,69 @@ public class ContextResolvingA2aAgent implements A2aAgent {
                         .timestamp(Instant.now())
                         .build())
                 .build();
+    }
+
+    private A2aMessage applyPromptPolicy(A2aMessage message, boolean firstTurn, String contextId) {
+        Map<String, Object> metadata = message.getMetadata() != null
+                ? new HashMap<>(message.getMetadata())
+                : new HashMap<>();
+        String systemPrompt = stringMeta(metadata.get(META_SYSTEM_PROMPT));
+        String firstMsg = stringMeta(metadata.get(META_FIRST_MSG));
+
+        if (systemPrompt != null && !supportsSystemPrompt()) {
+            log.warn("Agent {} rejected unsupported systemPrompt for contextId={}", agentEntity.getAgentId(), contextId);
+            return null;
+        }
+
+        boolean firstMsgApplied = false;
+        List<A2aPart> parts = message.getParts();
+        if (firstTurn && firstMsg != null && parts != null && !parts.isEmpty()) {
+            parts = prependFirstMsg(parts, firstMsg);
+            firstMsgApplied = true;
+        }
+        metadata.put(META_FIRST_MSG_APPLIED, firstMsgApplied);
+
+        return A2aMessage.builder()
+                .role(message.getRole())
+                .parts(parts)
+                .taskId(message.getTaskId())
+                .contextId(message.getContextId())
+                .contextAlias(message.getContextAlias())
+                .metadata(metadata)
+                .build();
+    }
+
+    private boolean supportsSystemPrompt() {
+        A2aAgentCard card = inner.getAgentCard();
+        return card != null
+                && card.getCapabilities() != null
+                && Boolean.TRUE.equals(card.getCapabilities().getSupportsSystemPrompt());
+    }
+
+    private List<A2aPart> prependFirstMsg(List<A2aPart> parts, String firstMsg) {
+        List<A2aPart> effective = new ArrayList<>(parts.size());
+        boolean injected = false;
+        for (A2aPart part : parts) {
+            if (!injected && part != null && "text".equals(part.getType())) {
+                String text = part.getText() != null ? part.getText() : "";
+                effective.add(A2aPart.text("[Initial Message]\n" + firstMsg + "\n\n[User Message]\n" + text));
+                injected = true;
+            } else {
+                effective.add(part);
+            }
+        }
+        if (!injected) {
+            effective.add(0, A2aPart.text("[Initial Message]\n" + firstMsg));
+        }
+        return effective;
+    }
+
+    private String stringMeta(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString();
+        return text.isBlank() ? null : text;
     }
 
     private static String deriveProviderType(CodingAgentEntity entity) {

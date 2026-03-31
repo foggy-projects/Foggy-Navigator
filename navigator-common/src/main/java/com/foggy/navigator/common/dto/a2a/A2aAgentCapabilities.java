@@ -16,4 +16,5 @@ public class A2aAgentCapabilities {
     private Boolean streaming;
     private Boolean pushNotifications;
     private Boolean stateTransitionHistory;
+    private Boolean supportsSystemPrompt;
 }

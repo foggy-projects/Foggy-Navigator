@@ -1,6 +1,7 @@
 package com.foggy.navigator.common.util;
 
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
+import com.foggy.navigator.common.dto.a2a.A2aAgentCapabilities;
 import com.foggy.navigator.common.dto.a2a.A2aAgentSkill;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 
@@ -42,6 +43,9 @@ public final class AgentCardBuilder {
                                 .tags(skillTags)
                                 .build()
                 ))
+                .capabilities(A2aAgentCapabilities.builder()
+                        .supportsSystemPrompt(Boolean.FALSE)
+                        .build())
                 .build();
     }
 

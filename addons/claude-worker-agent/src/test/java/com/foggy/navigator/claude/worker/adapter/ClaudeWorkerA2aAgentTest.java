@@ -119,6 +119,43 @@ class ClaudeWorkerA2aAgentTest {
         assertEquals("D:\\requested", captor.getValue().getCwd());
     }
 
+    @Test
+    void sendTask_rejectsUnsupportedSystemPrompt() {
+        A2aAgent agent = pipelineWithoutContextStore();
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("hello")))
+                .metadata(Map.of("systemPrompt", "Be concise"))
+                .build();
+
+        A2aTask result = agent.sendTask(message);
+
+        assertEquals(A2aTaskState.FAILED, result.getStatus().getState());
+        assertTrue(result.getStatus().getDescription().contains("firstMsg"));
+        verify(taskService, never()).createTask(anyString(), anyString(), any());
+    }
+
+    @Test
+    void sendTask_appliesFirstMsgOnFirstTurn() {
+        when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(defaultTaskDTO());
+
+        A2aAgent agent = pipelineWithoutContextStore();
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("implement feature")))
+                .metadata(Map.of("firstMsg", "Repository rules"))
+                .build();
+
+        agent.sendTask(message);
+
+        ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+        verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+        assertTrue(captor.getValue().getPrompt().contains("[Initial Message]"));
+        assertTrue(captor.getValue().getPrompt().contains("Repository rules"));
+        assertTrue(captor.getValue().getPrompt().contains("[User Message]"));
+    }
+
     // ===== P0: Dedup tests =====
 
     @Nested
@@ -319,6 +356,28 @@ class ClaudeWorkerA2aAgentTest {
         }
 
         @Test
+        void firstMsg_isIgnoredOnResume() {
+            when(contextStore.findSessionRefForAgent("ctx-continue", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of("claude-sess-existing"));
+            when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
+            when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
+
+            A2aAgent agent = pipelineWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("continue work")))
+                    .contextId("ctx-continue")
+                    .metadata(Map.of("firstMsg", "Should not reapply"))
+                    .build();
+
+            agent.sendTask(message);
+
+            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+            assertEquals("continue work", captor.getValue().getPrompt());
+        }
+
+        @Test
         void contextMismatch_returnsFailedTask() {
             when(contextStore.findSessionRefForAgent("ctx-wrong", "user-1", "agent-1", 24))
                     .thenThrow(new ContextAgentMismatchException("ctx-wrong", "agent-other", "agent-1"));
@@ -441,6 +500,7 @@ class ClaudeWorkerA2aAgentTest {
             assertEquals("agent-one", card.getName());
             assertEquals(1, card.getSkills().size());
             assertEquals("coding", card.getSkills().get(0).getId());
+            assertFalse(Boolean.TRUE.equals(card.getCapabilities().getSupportsSystemPrompt()));
         }
     }
 }
