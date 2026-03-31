@@ -6,85 +6,119 @@
 
 ## Background
 
-在 `29-a2a-system-prompt-first-msg-semantics.md` 落地后，联调中又暴露出两类实现层问题：
+After landing `29-a2a-system-prompt-first-msg-semantics.md`, follow-up integration exposed several implementation-level gaps:
 
-1. shared ask 链路为了缓存 Navigator session，额外向 `agent_conversation_contexts` 写入了一条 `shared-nav:{sharingKeyId}:{contextId}` 伪 context 记录。
-2. `firstMsg` 在特定情况下会重复注入，导致 prompt 中出现重复的 `[Initial Message]`。
+1. The shared ask flow wrote an extra pseudo context row into `agent_conversation_contexts` using the form `shared-nav:{sharingKeyId}:{contextId}` only to cache the Navigator session.
+2. `firstMsg` could be injected repeatedly, causing duplicated `[Initial Message]` blocks in the final prompt.
+3. Claude request dedup lived only inside the Claude inner A2A implementation, so provider behavior diverged and repeated prompts inside an existing conversation could be swallowed incorrectly.
 
-这份文档记录本次实现层调整，供后续复盘。
+This note records the follow-up adjustments that were made and the intended platform semantics.
 
-## Decision
+## Decisions
 
-### 1. `contextId` 作为唯一真相
+### 1. `contextId` is the single source of truth
 
-shared ask 不再维护 `shared-nav:*` 伪 context。
+Shared ask no longer maintains any `shared-nav:*` pseudo context.
 
-收敛后的原则：
+The unified rule is:
 
-- 真实 `contextId` 是唯一会话主键
-- `contextAlias` 只用于解析到真实 `contextId`
-- `navigatorSessionId` 和 `agentSessionRef` 都只挂在真实 `contextId` 对应的 `AgentConversationContextEntity` 上
-- `agent_conversation_contexts` 不再承载 shared 内部 session cache
+- The real `contextId` is the only conversation key.
+- `contextAlias` is only a lookup mechanism that resolves to the real `contextId`.
+- `navigatorSessionId` and `agentSessionRef` are both stored only on the real `AgentConversationContextEntity`.
+- `agent_conversation_contexts` no longer serves as a shared-internal session cache.
 
-### 2. `contextId` 路径恢复完整上下文
+### 2. Restoring by `contextId` must restore the full context
 
-为支撑上面的收敛，`contextId` 的恢复逻辑不再只读取 `agentSessionRef`，而是直接恢复完整的 `AgentConversationContextEntity`，至少包含：
+To support the rule above, recovery by `contextId` no longer reads only `agentSessionRef`.
+It restores the full `AgentConversationContextEntity`, including at least:
 
 - `agentSessionRef`
 - `navigatorSessionId`
 - `contextAlias`
 
-这样 shared ask、普通 ask、openapi ask 都能走同一条恢复路径。
+This keeps shared ask, normal ask, and OpenAPI ask on the same recovery path.
 
-### 3. `firstMsg` 注入改为幂等
+### 3. `firstMsg` injection is idempotent
 
-`prependFirstMsg(...)` 增加幂等保护：
+`prependFirstMsg(...)` now has idempotency protection:
 
-- 如果消息文本已经以 `[Initial Message]` 开头，则不再重复拼接
+- If the message text already starts with `[Initial Message]`, it is not prepended again.
 
-### 4. dedup 命中时保留旧 context
+### 4. First-turn detection uses `navigatorSessionId`
 
-Claude dedup 命中场景下，返回的 task metadata 可能不包含新的 `claudeSessionId/sessionId`。
+Whether a request is the first turn is determined by the presence of `navigatorSessionId`:
 
-调整后的回写规则：
+- No `navigatorSessionId`: treat as first turn.
+- Existing `navigatorSessionId`: treat as a continued conversation.
 
-- task metadata 有新值时，用新值
-- task metadata 没有新值时，保留旧 context 中已有的 `agentSessionRef/navigatorSessionId`
+`agentSessionRef` is no longer the source of truth for this decision.
+This avoids repeated `firstMsg` injection when the provider session reference is temporarily absent but the Navigator session already exists.
 
-避免因为 context 被覆写为空，导致下一轮再次被误判为首轮并重复注入 `firstMsg`。
+### 5. Dedup no longer lives only in Claude
+
+Request dedup is moved to the shared A2A decorator layer.
+
+The new rule is:
+
+- Dedup is only applied on first-turn requests.
+- Once a request already belongs to an existing Navigator session, it is treated as a continuation and is not deduplicated.
+
+This keeps platform behavior consistent across agents and prevents normal repeated prompts inside an existing conversation from being swallowed.
+
+Claude still provides the implementation-specific hooks for:
+
+- looking up a recent duplicate task
+- recording the dedup key after task creation
+
+But the decision of whether dedup should run is now made in the shared decorator.
+
+### 6. Dedup hits must not erase existing context
+
+In Claude dedup-hit scenarios, the returned task metadata may not contain a fresh `claudeSessionId` or `sessionId`.
+
+The write-back rule is:
+
+- If task metadata contains a new value, use it.
+- If task metadata does not contain a new value, keep the existing `agentSessionRef` and `navigatorSessionId` from the restored context.
+
+This prevents the stored context from being overwritten with null values and then being misclassified as first turn on the next request.
 
 ## Scope
 
-涉及模块：
+Modules involved:
 
 - `session-module`
 - `navigator-spi`
 - `addons/claude-worker-agent`
 - `addons/codex-worker-agent`
 
-涉及关键类：
+Key classes involved:
 
 - `SharedAskController`
 - `ContextResolvingA2aAgent`
+- `InnerA2aAgent`
 - `AgentContextStore`
 - `AgentContextStoreImpl`
+- `ClaudeWorkerInnerA2aAgent`
 - `ClaudeWorkerA2aAgentTest`
 - `CodexWorkerA2aAgentTest`
 
 ## Expected Result
 
-调整后预期：
+After these adjustments:
 
-1. shared ask 新请求不再新增 `shared-nav:*` 记录
-2. 同一 shared 会话仅保留真实 `contextId` 对应的 context 记录
-3. `contextId` 可直接恢复 `navigatorSessionId + agentSessionRef`
-4. `[Initial Message]` 不会重复注入
-5. dedup 命中后不会因为 context 丢失而再次触发首轮注入
+1. Shared ask no longer creates `shared-nav:*` rows.
+2. One shared conversation keeps only one real `contextId` record in `agent_conversation_contexts`.
+3. `contextId` can directly recover both `navigatorSessionId` and `agentSessionRef`.
+4. `[Initial Message]` is not injected repeatedly.
+5. Existing Navigator sessions are treated as continued conversations even if `agentSessionRef` is empty.
+6. Dedup only protects first-turn idempotency and does not suppress normal repeated prompts during continuation.
 
 ## Follow-up
 
-本轮仅记录与实现收敛，不继续扩展。后续可复盘：
+This document only records the implemented convergence and the latest dedup semantics.
+Open items for later review:
 
-- 是否需要清理历史遗留的 `shared-nav:*` 记录
-- 是否为 `firstMsg` 增加显式“已注入”标记
-- dedup 命中时是否应该统一补齐 task metadata 的 `agentSessionRef/sessionId`
+- whether historical `shared-nav:*` rows should be cleaned up explicitly
+- whether `firstMsg` should carry an explicit "already applied" marker in metadata
+- whether dedup-hit tasks should always backfill more complete metadata
