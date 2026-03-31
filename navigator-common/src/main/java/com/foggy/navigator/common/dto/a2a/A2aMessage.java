@@ -20,6 +20,7 @@ public class A2aMessage {
     private List<A2aPart> parts;
     private String taskId;
     private String contextId;
+    private String contextAlias;
     private Map<String, Object> metadata;
 
     public static A2aMessage user(List<A2aPart> parts) {

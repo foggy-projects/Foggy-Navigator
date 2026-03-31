@@ -11,6 +11,7 @@ import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.InnerA2aAgent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
@@ -123,7 +124,8 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
 
     private A2aAgent toA2aAgent(CodingAgentEntity entity) {
         String cwd = resolveDefaultCwd(entity);
-        return new ClaudeWorkerA2aAgent(entity, taskService, cwd, contextStore);
+        InnerA2aAgent inner = new ClaudeWorkerInnerA2aAgent(entity, taskService, cwd);
+        return new ContextResolvingA2aAgent(inner, contextStore, entity);
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {

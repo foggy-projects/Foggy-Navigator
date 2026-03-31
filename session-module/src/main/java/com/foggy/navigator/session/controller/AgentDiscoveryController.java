@@ -77,8 +77,11 @@ public class AgentDiscoveryController {
             contextId = IdGenerator.shortId();
         }
 
+        String contextAlias = body.get("contextAlias");
+
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(question)));
         message.setContextId(contextId);
+        message.setContextAlias(contextAlias);
 
         // 将 sessionId 通过 metadata 传递给 Agent（后台回调用于持久化消息）
         if (sessionId != null && !sessionId.isBlank()) {

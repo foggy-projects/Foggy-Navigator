@@ -64,6 +64,9 @@ public class TaskDispatchRequest {
     /** A2A 多轮上下文 ID */
     private String contextId;
 
+    /** 上下文别名（用于按别名复用会话） */
+    private String contextAlias;
+
     /** 是否为 resume 操作 */
     private boolean resume;
 }

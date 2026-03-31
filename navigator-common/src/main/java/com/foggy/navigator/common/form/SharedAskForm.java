@@ -13,4 +13,7 @@ public class SharedAskForm {
 
     /** 多轮对话上下文 ID（可选，用于追问） */
     private String contextId;
+
+    /** 上下文别名（可选，用于按别名复用会话） */
+    private String contextAlias;
 }

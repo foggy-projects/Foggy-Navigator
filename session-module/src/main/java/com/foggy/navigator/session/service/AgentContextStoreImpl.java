@@ -59,4 +59,30 @@ public class AgentContextStoreImpl implements AgentContextStore {
         entity.setLastAccessedAt(LocalDateTime.now());
         repository.save(entity);
     }
+
+    @Override
+    public Optional<AgentConversationContextEntity> findByAlias(
+            String contextAlias, String userId, String targetAgentId, int ttlHours) {
+        return repository.findByContextAliasAndUserIdAndTargetAgentId(contextAlias, userId, targetAgentId)
+                .filter(e -> e.getLastAccessedAt().isAfter(LocalDateTime.now().minusHours(ttlHours)));
+    }
+
+    @Override
+    public void saveSessionRefFull(String contextId, String agentType,
+            String agentSessionRef, String navigatorSessionId,
+            String userId, String targetAgentId, String contextAlias) {
+        AgentConversationContextEntity entity = repository.findById(contextId).orElse(null);
+        if (entity == null) {
+            entity = new AgentConversationContextEntity();
+            entity.setContextId(contextId);
+            entity.setUserId(userId);
+            entity.setTargetAgentId(targetAgentId);
+        }
+        entity.setAgentType(agentType);
+        entity.setAgentSessionRef(agentSessionRef);
+        entity.setNavigatorSessionId(navigatorSessionId);
+        entity.setContextAlias(contextAlias);
+        entity.setLastAccessedAt(LocalDateTime.now());
+        repository.save(entity);
+    }
 }

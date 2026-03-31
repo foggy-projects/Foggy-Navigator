@@ -577,6 +577,7 @@ public class TaskDispatchFacade {
                 .role("user")
                 .parts(parts)
                 .contextId(request.getContextId())
+                .contextAlias(request.getContextAlias())
                 .metadata(metadata)
                 .build();
     }

@@ -1,5 +1,6 @@
 package com.foggy.navigator.spi.agent;
 
+import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.exception.ContextAgentMismatchException;
 
 import java.util.Optional;
@@ -40,4 +41,17 @@ public interface AgentContextStore {
      */
     void saveSessionRef(String contextId, String agentType,
                         String agentSessionRef, String userId, String targetAgentId);
+
+    /**
+     * 按 contextAlias + userId + targetAgentId 查找上下文实体
+     */
+    Optional<AgentConversationContextEntity> findByAlias(
+            String contextAlias, String userId, String targetAgentId, int ttlHours);
+
+    /**
+     * 保存/更新会话映射（含 navigatorSessionId）
+     */
+    void saveSessionRefFull(String contextId, String agentType,
+            String agentSessionRef, String navigatorSessionId,
+            String userId, String targetAgentId, String contextAlias);
 }

@@ -284,7 +284,7 @@ print('Written to', tmp)
 
 NAVIGATOR_URL="{{NAVIGATOR_API_BASE}}"
 SHARING_KEY="{用户的 Sharing Key}"
-CONTEXT_ID="{agent名称}-{任务名称}"  # 固定值 = 永续单会话（默认，AI 可回顾历史）
+CONTEXT_ALIAS="{任务名称}"  # 业务别名（如 daily-report），后端自动按 alias+agent 匹配会话
 LOG_DIR="$HOME/.foggy-tasks"
 LOG_FILE="$LOG_DIR/{任务名称}-$(date '+%Y%m%d_%H%M%S').log"
 
@@ -297,7 +297,7 @@ REQUEST_BODY=$(python3 -c "
 import json
 data = {
     'question': '{Prompt 模板，包含动态日期变量}',
-    'contextId': '$CONTEXT_ID'
+    'contextAlias': '$CONTEXT_ALIAS'
 }
 print(json.dumps(data, ensure_ascii=False))
 ")
@@ -401,24 +401,28 @@ schtasks /create /tn "Foggy-DailyReport" /tr "bash C:\Users\%USERNAME%\foggy-dai
 
 ---
 
-## contextId 策略
+## 会话续接策略
 
-调用者可以在**首次调用时就自己生成 contextId**（如 UUID 或有意义的字符串），无需先调一次拿返回值再保存。后端行为：
+### contextAlias（推荐）
 
-- **contextId 无记录** → 自动新建会话
-- **contextId 有记录且绑定同一 Agent** → 继续已有会话（多轮对话）
-- **contextId 有记录但绑定不同 Agent** → 返回 FAILED 错误（`contextId is bound to agent X, cannot use with agent Y`），需换一个 contextId 或调用正确的 Agent
+传 `contextAlias` 字段（业务语义名称），后端自动按 `alias + userId + agentId` 匹配会话：
 
-**重要**：contextId 与 Agent 是绑定关系，不同 Agent 不能复用同一个 contextId。建议在 contextId 中包含 Agent 标识以避免冲突。
+- **首次调用** → 自动新建会话 + 生成 contextId
+- **后续调用同一 alias** → 继续已有会话（复用 sessionId + claudeSessionId）
+- **不同 Agent 用同一 alias** → 各自独立，互不冲突
 
-**默认推荐永续单会话**（固定 contextId），让 AI 可以回顾历史执行结果、对比趋势。仅当用户明确要求"每次独立"时才不传 contextId。
+**无需包含 agent 名称**，后端已按 agentId 隔离。
 
-| 策略 | contextId 格式 | 效果 | 适用场景 |
-|------|---------------|------|----------|
-| **永续单会话（默认）** | `{agent-name}-{task-name}` | 所有调用共用一个会话，AI 可回顾全部历史 | 大多数定时任务 |
-| **按天分组** | `{agent-name}-daily-$(date '+%Y%m%d')` | 同一天的多次调用在同一会话中 | 一天内多次执行、需要当日上下文 |
-| **按周分组** | `{agent-name}-weekly-$(date '+%YW%V')` | 一周的调用在同一会话中 | 周报、需要本周上下文 |
-| **每次独立** | 不传 contextId | 每次调用都是全新会话 | 用户明确要求每次独立执行 |
+| 策略 | contextAlias 值 | 效果 | 适用场景 |
+|------|----------------|------|----------|
+| **永续单会话（默认）** | `daily-report` | 所有调用共用一个会话，AI 可回顾全部历史 | 大多数定时任务 |
+| **按天分组** | `report-$(date '+%Y%m%d')` | 同一天的多次调用在同一会话中 | 一天内多次执行、需要当日上下文 |
+| **按周分组** | `report-$(date '+%YW%V')` | 一周的调用在同一会话中 | 周报、需要本周上下文 |
+| **每次独立** | 不传 | 每次调用都是全新会话 | 用户明确要求每次独立执行 |
+
+### contextId（兼容）
+
+也可直接传 `contextId`（UUID 或自定义字符串），按 PK 精确匹配。contextId 与 Agent 绑定，不同 Agent 不能复用同一个 contextId（返回 FAILED 错误）。
 
 ---
 
@@ -495,7 +499,7 @@ curl -s -X DELETE {{NAVIGATOR_API_BASE}}/api/v1/sharing-keys/{keyId} \
 | 返回 "Shared agent not available" | Agent 是否存在？Worker 是否在线？ | 检查 Agent 列表和 Worker 状态 |
 | 任务启动失败（LLM 未配置） | Agent.defaultModelConfigId 是否为 null？ | 执行 Step 1.5 为 Agent 绑定默认 LLM 配置 |
 | 多轮会话未续传 | contextId 是否每次传入相同值？ | 确保 cron 脚本中 CONTEXT_ID 格式稳定（避免含时间戳） |
-| contextId bound to agent X | 同一 contextId 被不同 Agent 使用 | contextId 与 Agent 绑定，需在 ID 中包含 agent 标识或换一个 ID |
+| contextId bound to agent X | 同一 contextId 被不同 Agent 使用 | 改用 contextAlias（自动按 agent 隔离），或换一个 contextId |
 | curl 超时 | AI 分析耗时过长 | 增加 `--max-time`，或降低 `maxTurns` |
 
 ## 注意事项

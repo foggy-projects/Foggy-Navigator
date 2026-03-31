@@ -88,6 +88,7 @@ public class SharedAskController {
 
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(prompt)));
         message.setContextId(contextId);
+        message.setContextAlias(form.getContextAlias());
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("maxTurns", keyEntity.getMaxTurns());
         if (navigatorSessionId != null) {
