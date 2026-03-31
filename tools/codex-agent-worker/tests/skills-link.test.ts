@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { ensureUserSkillsLink } from '../src/startup/skills-link.ts'
+import { ensureProjectSkillsLink, ensureUserSkillsLink } from '../src/startup/skills-link.ts'
 
 test('ensureUserSkillsLink creates .agents/skills link and source directory', async () => {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-skills-home-'))
@@ -27,4 +27,24 @@ test('ensureUserSkillsLink skips when .agents/skills already exists as directory
 
   assert.equal(result.status, 'skipped')
   assert.match(result.reason, /real directory/)
+})
+
+test('ensureProjectSkillsLink creates .agents/skills link when project source exists', async () => {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-skills-project-'))
+  await fs.mkdir(path.join(projectDir, '.claude', 'skills'), { recursive: true })
+
+  const result = await ensureProjectSkillsLink(projectDir)
+
+  assert.equal(result.status, 'created')
+  const linkStat = await fs.lstat(path.join(projectDir, '.agents', 'skills'))
+  assert.equal(linkStat.isSymbolicLink(), true)
+})
+
+test('ensureProjectSkillsLink skips when project source directory does not exist', async () => {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-skills-project-'))
+
+  const result = await ensureProjectSkillsLink(projectDir)
+
+  assert.equal(result.status, 'skipped')
+  assert.equal(result.reason, 'source directory does not exist')
 })
