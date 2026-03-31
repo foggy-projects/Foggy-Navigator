@@ -161,14 +161,27 @@ public class ClaudeTaskService implements TaskQueryProvider {
 
         String logicalAgentId = resolveLogicalAgentId(form.getAgentId(), null);
 
-        // 3. 创建 Foggy Session
-        String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
-                .userId(userId)
-                .tenantId(tenantId)
-                .agentId(logicalAgentId)
-                .providerType(AGENT_ID)
-                .taskName(truncate(form.getPrompt(), 100))
-                .build());
+        // 3. 创建或复用 Foggy Session（同一 contextId 复用同一 session）
+        String sessionId = null;
+        if (form.getContextId() != null && !form.getContextId().isBlank()) {
+            sessionId = taskRepository.findTopByContextIdAndUserIdOrderByCreatedAtDesc(
+                    form.getContextId(), userId)
+                    .map(ClaudeTaskEntity::getSessionId)
+                    .filter(sid -> sessionManager.getSession(sid) != null)
+                    .orElse(null);
+            if (sessionId != null) {
+                log.info("Reusing session {} for contextId={}", sessionId, form.getContextId());
+            }
+        }
+        if (sessionId == null) {
+            sessionId = sessionManager.createSession(SessionCreateRequest.builder()
+                    .userId(userId)
+                    .tenantId(tenantId)
+                    .agentId(logicalAgentId)
+                    .providerType(AGENT_ID)
+                    .taskName(truncate(form.getPrompt(), 100))
+                    .build());
+        }
 
         // 3.5. 添加用户 prompt 作为 USER 消息
         sessionManager.addMessage(sessionId, com.foggy.navigator.agent.framework.session.Message.builder()
