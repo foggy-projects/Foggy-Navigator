@@ -1,6 +1,7 @@
 package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
+import com.foggy.navigator.common.exception.ContextAgentMismatchException;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,26 @@ public class AgentContextStoreImpl implements AgentContextStore {
                 .filter(e -> e.getAgentSessionRef() != null)
                 .filter(e -> e.getLastAccessedAt().isAfter(LocalDateTime.now().minusHours(ttlHours)))
                 .map(AgentConversationContextEntity::getAgentSessionRef);
+    }
+
+    @Override
+    public Optional<String> findSessionRefForAgent(String contextId, String userId,
+                                                   String expectedAgentId, int ttlHours) {
+        Optional<AgentConversationContextEntity> opt = repository.findByContextIdAndUserId(contextId, userId);
+        if (opt.isEmpty()) {
+            return Optional.empty();
+        }
+
+        AgentConversationContextEntity e = opt.get();
+        // TTL 过期 → 视为不存在
+        if (e.getLastAccessedAt().isBefore(LocalDateTime.now().minusHours(ttlHours))) {
+            return Optional.empty();
+        }
+        // Agent 不匹配 → 抛异常
+        if (e.getTargetAgentId() != null && !e.getTargetAgentId().equals(expectedAgentId)) {
+            throw new ContextAgentMismatchException(contextId, e.getTargetAgentId(), expectedAgentId);
+        }
+        return Optional.ofNullable(e.getAgentSessionRef());
     }
 
     @Override

@@ -5,6 +5,7 @@ import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.exception.ContextAgentMismatchException;
 import com.foggy.navigator.common.util.AgentCardBuilder;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -66,11 +67,24 @@ class ClaudeWorkerA2aAgent implements A2aAgent {
         String requestedCwd = stringMeta(meta, "cwd");
         String requestedDirectoryId = stringMeta(meta, "directoryId");
 
-        // 多轮会话：通过 contextId 恢复已有 claudeSessionId
+        // 多轮会话：通过 contextId 恢复已有 claudeSessionId（含 Agent 归属校验）
         String claudeSessionId = null;
         if (contextId != null && contextStore != null) {
-            claudeSessionId = contextStore.findSessionRef(
-                    contextId, entity.getUserId(), CONTEXT_TTL_HOURS).orElse(null);
+            try {
+                claudeSessionId = contextStore.findSessionRefForAgent(
+                        contextId, entity.getUserId(), entity.getAgentId(), CONTEXT_TTL_HOURS).orElse(null);
+            } catch (ContextAgentMismatchException e) {
+                log.warn("A2A context mismatch: {}", e.getMessage());
+                return A2aTask.builder()
+                        .id("error-" + IdGenerator.shortId())
+                        .contextId(contextId)
+                        .status(A2aTaskStatus.builder()
+                                .state(A2aTaskState.FAILED)
+                                .description(e.getMessage())
+                                .timestamp(Instant.now())
+                                .build())
+                        .build();
+            }
             if (claudeSessionId != null) {
                 log.debug("Resuming A2A context {} with claudeSessionId {}", contextId, claudeSessionId);
             }

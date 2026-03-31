@@ -284,7 +284,7 @@ print('Written to', tmp)
 
 NAVIGATOR_URL="{{NAVIGATOR_API_BASE}}"
 SHARING_KEY="{用户的 Sharing Key}"
-CONTEXT_ID="{任务名称}-$(date '+%Y%m%d')"  # 按天分组会话
+CONTEXT_ID="{agent名称}-{任务名称}-$(date '+%Y%m%d')"  # 按天分组会话（含 agent 标识避免冲突）
 LOG_DIR="$HOME/.foggy-tasks"
 LOG_FILE="$LOG_DIR/{任务名称}-$(date '+%Y%m%d_%H%M%S').log"
 
@@ -403,13 +403,19 @@ schtasks /create /tn "Foggy-DailyReport" /tr "bash C:\Users\%USERNAME%\foggy-dai
 
 ## contextId 策略
 
-定时任务的 `contextId` 决定了会话如何聚合：
+调用者可以在**首次调用时就自己生成 contextId**（如 UUID 或有意义的字符串），无需先调一次拿返回值再保存。后端行为：
+
+- **contextId 无记录** → 自动新建会话
+- **contextId 有记录且绑定同一 Agent** → 继续已有会话（多轮对话）
+- **contextId 有记录但绑定不同 Agent** → 返回 FAILED 错误（`contextId is bound to agent X, cannot use with agent Y`），需换一个 contextId 或调用正确的 Agent
+
+**重要**：contextId 与 Agent 是绑定关系，不同 Agent 不能复用同一个 contextId。建议在 contextId 中包含 Agent 标识以避免冲突。
 
 | 策略 | contextId 格式 | 效果 |
 |------|---------------|------|
-| **按天分组** | `task-name-20260312` | 同一天的多次调用在同一会话中（适合日报） |
-| **按周分组** | `task-name-2026W11` | 一周的调用在同一会话中（适合周报） |
-| **永续单会话** | `task-name-permanent` | 所有调用共用一个会话（AI 可回顾全部历史） |
+| **按天分组** | `{agent-name}-daily-20260312` | 同一天的多次调用在同一会话中（适合日报） |
+| **按周分组** | `{agent-name}-weekly-2026W11` | 一周的调用在同一会话中（适合周报） |
+| **永续单会话** | `{agent-name}-permanent` | 所有调用共用一个会话（AI 可回顾全部历史） |
 | **每次独立** | 不传 contextId | 每次调用都是全新会话 |
 
 ---
@@ -487,6 +493,7 @@ curl -s -X DELETE {{NAVIGATOR_API_BASE}}/api/v1/sharing-keys/{keyId} \
 | 返回 "Shared agent not available" | Agent 是否存在？Worker 是否在线？ | 检查 Agent 列表和 Worker 状态 |
 | 任务启动失败（LLM 未配置） | Agent.defaultModelConfigId 是否为 null？ | 执行 Step 1.5 为 Agent 绑定默认 LLM 配置 |
 | 多轮会话未续传 | contextId 是否每次传入相同值？ | 确保 cron 脚本中 CONTEXT_ID 格式稳定（避免含时间戳） |
+| contextId bound to agent X | 同一 contextId 被不同 Agent 使用 | contextId 与 Agent 绑定，需在 ID 中包含 agent 标识或换一个 ID |
 | curl 超时 | AI 分析耗时过长 | 增加 `--max-time`，或降低 `maxTurns` |
 
 ## 注意事项
