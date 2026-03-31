@@ -176,8 +176,12 @@ class CodexWorkerA2aAgentTest {
     class ContextStoreTests {
         @Test
         void contextRestore_resumesWithCodexThreadId() {
-            when(contextStore.findSessionRefForAgent("ctx-1", "user-1", "agent-1", 24))
-                    .thenReturn(Optional.of("thread-existing"));
+            AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
+            ctxEntity.setContextId("ctx-1");
+            ctxEntity.setAgentSessionRef("thread-existing");
+            ctxEntity.setNavigatorSessionId("nav-sess-existing");
+            when(contextStore.findContextForAgent("ctx-1", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
                     .taskId("task-2")
                     .sessionId("session-2")
@@ -194,11 +198,12 @@ class CodexWorkerA2aAgentTest {
 
             A2aTask result = agent.sendTask(message);
 
-            verify(contextStore).findSessionRefForAgent("ctx-1", "user-1", "agent-1", 24);
+            verify(contextStore).findContextForAgent("ctx-1", "user-1", "agent-1", 24);
             ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("thread-existing", captor.getValue().getCodexThreadId(),
                     "contextStore 查到的 codexThreadId 应通过 A2aContext 传给 CreateCodexTaskForm");
+            assertEquals("nav-sess-existing", captor.getValue().getSessionId());
             assertEquals("ctx-1", result.getContextId());
         }
 
@@ -263,8 +268,12 @@ class CodexWorkerA2aAgentTest {
 
         @Test
         void firstMsg_isIgnoredOnResume() {
-            when(contextStore.findSessionRefForAgent("ctx-continue", "user-1", "agent-1", 24))
-                    .thenReturn(Optional.of("thread-existing"));
+            AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
+            ctxEntity.setContextId("ctx-continue");
+            ctxEntity.setAgentSessionRef("thread-existing");
+            ctxEntity.setNavigatorSessionId("nav-sess-existing");
+            when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
                     .taskId("task-continue")
                     .sessionId("session-continue")
@@ -285,6 +294,35 @@ class CodexWorkerA2aAgentTest {
             ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("continue work", captor.getValue().getPrompt());
+        }
+
+        @Test
+        void firstMsg_isIgnoredWhenNavigatorSessionExistsEvenIfAgentSessionMissing() {
+            AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
+            ctxEntity.setContextId("ctx-nav-only");
+            ctxEntity.setNavigatorSessionId("nav-sess-existing");
+            when(contextStore.findContextForAgent("ctx-nav-only", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of(ctxEntity));
+            when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
+                    .taskId("task-nav-only")
+                    .sessionId("session-nav-only")
+                    .workerId("worker-1")
+                    .build());
+
+            A2aAgent agent = pipelineWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("continue work")))
+                    .contextId("ctx-nav-only")
+                    .metadata(Map.of("firstMsg", "Should not reapply"))
+                    .build();
+
+            agent.sendTask(message);
+
+            ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
+            verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+            assertEquals("continue work", captor.getValue().getPrompt());
+            assertEquals("nav-sess-existing", captor.getValue().getSessionId());
         }
     }
 

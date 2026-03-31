@@ -130,6 +130,26 @@ class AgentContextStoreImplTest {
     }
 
     @Test
+    void findContextForAgent_sameAgent_returnsEntityWithNavigatorSessionId() {
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId("ctx-1");
+        entity.setUserId("u1");
+        entity.setTargetAgentId("agent-1");
+        entity.setAgentSessionRef("claude-session-abc");
+        entity.setNavigatorSessionId("nav-session-1");
+        entity.setLastAccessedAt(LocalDateTime.now().minusHours(1));
+
+        when(repository.findByContextIdAndUserId("ctx-1", "u1"))
+                .thenReturn(Optional.of(entity));
+
+        Optional<AgentConversationContextEntity> result =
+                store.findContextForAgent("ctx-1", "u1", "agent-1", 24);
+        assertTrue(result.isPresent());
+        assertEquals("claude-session-abc", result.get().getAgentSessionRef());
+        assertEquals("nav-session-1", result.get().getNavigatorSessionId());
+    }
+
+    @Test
     void findSessionRefForAgent_differentAgent_throwsMismatch() {
         AgentConversationContextEntity entity = new AgentConversationContextEntity();
         entity.setContextId("ctx-1");

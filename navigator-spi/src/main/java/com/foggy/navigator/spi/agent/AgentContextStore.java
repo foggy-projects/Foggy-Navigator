@@ -37,6 +37,14 @@ public interface AgentContextStore {
                                             String expectedAgentId, int ttlHours);
 
     /**
+     * 查找完整上下文记录（带 TTL 检查 + Agent 归属校验）。
+     */
+    default Optional<AgentConversationContextEntity> findContextForAgent(
+            String contextId, String userId, String expectedAgentId, int ttlHours) {
+        return Optional.empty();
+    }
+
+    /**
      * 保存/更新会话映射
      */
     void saveSessionRef(String contextId, String agentType,

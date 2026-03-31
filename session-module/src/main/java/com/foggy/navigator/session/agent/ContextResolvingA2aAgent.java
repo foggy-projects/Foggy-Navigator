@@ -30,6 +30,7 @@ public class ContextResolvingA2aAgent implements A2aAgent {
     private static final String META_SYSTEM_PROMPT = "systemPrompt";
     private static final String META_FIRST_MSG = "firstMsg";
     private static final String META_FIRST_MSG_APPLIED = "firstMsgApplied";
+    private static final String INITIAL_MESSAGE_PREFIX = "[Initial Message]\n";
 
     private final InnerA2aAgent inner;
     private final AgentContextStore contextStore;
@@ -74,8 +75,13 @@ public class ContextResolvingA2aAgent implements A2aAgent {
             // 1a. Try contextId first (direct PK lookup)
             if (contextId != null && !contextId.isBlank()) {
                 try {
-                    agentSessionRef = contextStore.findSessionRefForAgent(
-                            contextId, userId, agentId, CONTEXT_TTL_HOURS).orElse(null);
+                    Optional<AgentConversationContextEntity> existing = contextStore.findContextForAgent(
+                            contextId, userId, agentId, CONTEXT_TTL_HOURS);
+                    if (existing.isPresent()) {
+                        AgentConversationContextEntity ctx = existing.get();
+                        agentSessionRef = ctx.getAgentSessionRef();
+                        navigatorSessionId = ctx.getNavigatorSessionId();
+                    }
                 } catch (ContextAgentMismatchException e) {
                     log.warn("A2A context mismatch: {}", e.getMessage());
                     return buildFailedTask(contextId, e.getMessage());
@@ -113,7 +119,7 @@ public class ContextResolvingA2aAgent implements A2aAgent {
                     "Session has a running task, please wait for it to complete or cancel it first.");
         }
 
-        boolean firstTurn = agentSessionRef == null || agentSessionRef.isBlank();
+        boolean firstTurn = navigatorSessionId == null || navigatorSessionId.isBlank();
         A2aMessage effectiveMessage = applyPromptPolicy(message, firstTurn, resolvedContextId);
         if (effectiveMessage == null) {
             return buildFailedTask(resolvedContextId,
@@ -138,14 +144,14 @@ public class ContextResolvingA2aAgent implements A2aAgent {
         // 4. Save/update context after task creation
         if (contextStore != null && task.getStatus() != null
                 && task.getStatus().getState() != A2aTaskState.FAILED) {
-            String taskAgentSessionRef = null;
+            String taskAgentSessionRef = agentSessionRef;
             String taskNavigatorSessionId = navigatorSessionId;
             if (task.getMetadata() != null) {
                 Object csid = task.getMetadata().get("claudeSessionId");
                 if (csid == null) csid = task.getMetadata().get("codexThreadId");
-                if (csid != null) taskAgentSessionRef = csid.toString();
+                if (csid != null && !csid.toString().isBlank()) taskAgentSessionRef = csid.toString();
                 Object nsid = task.getMetadata().get("sessionId");
-                if (nsid != null) taskNavigatorSessionId = nsid.toString();
+                if (nsid != null && !nsid.toString().isBlank()) taskNavigatorSessionId = nsid.toString();
             }
             contextStore.saveSessionRefFull(resolvedContextId, providerType,
                     taskAgentSessionRef, taskNavigatorSessionId,
@@ -225,14 +231,18 @@ public class ContextResolvingA2aAgent implements A2aAgent {
         for (A2aPart part : parts) {
             if (!injected && part != null && "text".equals(part.getType())) {
                 String text = part.getText() != null ? part.getText() : "";
-                effective.add(A2aPart.text("[Initial Message]\n" + firstMsg + "\n\n[User Message]\n" + text));
+                if (text.startsWith(INITIAL_MESSAGE_PREFIX)) {
+                    effective.add(part);
+                } else {
+                    effective.add(A2aPart.text(INITIAL_MESSAGE_PREFIX + firstMsg + "\n\n[User Message]\n" + text));
+                }
                 injected = true;
             } else {
                 effective.add(part);
             }
         }
         if (!injected) {
-            effective.add(0, A2aPart.text("[Initial Message]\n" + firstMsg));
+            effective.add(0, A2aPart.text(INITIAL_MESSAGE_PREFIX + firstMsg));
         }
         return effective;
     }

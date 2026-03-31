@@ -1,7 +1,5 @@
 package com.foggy.navigator.session.controller;
 
-import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
-import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.dto.a2a.A2aArtifact;
 import com.foggy.navigator.common.dto.a2a.A2aMessage;
@@ -11,16 +9,13 @@ import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.entity.AgentConsultationEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
 import com.foggy.navigator.common.form.SharedAskForm;
-import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.session.registry.DefaultA2aAgentRegistry;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
 import com.foggy.navigator.session.service.SharingKeyService;
 import com.foggy.navigator.spi.agent.A2aAgent;
-import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.lang.Nullable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -30,7 +25,6 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -45,9 +39,6 @@ public class SharedAskController {
     private final SharingKeyService sharingKeyService;
     private final DefaultA2aAgentRegistry registry;
     private final AgentConsultationRepository consultationRepository;
-    private final SessionManager sessionManager;
-    @Nullable
-    private final AgentContextStore contextStore;
 
     @PostMapping("/ask")
     public RX<A2aTask> ask(
@@ -80,23 +71,15 @@ public class SharedAskController {
         }
         String firstMsg = form.getFirstMsg();
 
-        String contextId = form.getContextId();
-        if (contextId == null || contextId.isBlank()) {
-            contextId = IdGenerator.shortId();
-        }
-
-        String navigatorSessionId = ensureNavigatorSession(keyEntity, card.getName(), contextId);
-
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(question)));
-        message.setContextId(contextId);
+        String contextId = form.getContextId();
+        if (contextId != null && !contextId.isBlank()) {
+            message.setContextId(contextId);
+        }
         message.setContextAlias(form.getContextAlias());
 
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("maxTurns", keyEntity.getMaxTurns());
-        if (navigatorSessionId != null) {
-            metadata.put("tracked", true);
-            metadata.put("sessionId", navigatorSessionId);
-        }
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             metadata.put("systemPrompt", systemPrompt);
         }
@@ -109,11 +92,11 @@ public class SharedAskController {
         A2aTask task = agent.sendTask(message);
         long durationMs = System.currentTimeMillis() - start;
 
-        if (task.getContextId() == null) {
+        if (task.getContextId() == null && contextId != null && !contextId.isBlank()) {
             task.setContextId(contextId);
         }
 
-        recordSharedConsultation(keyEntity, card.getName(), question, task, durationMs, contextId);
+        recordSharedConsultation(keyEntity, card.getName(), question, task, durationMs, task.getContextId());
         return RX.ok(task);
     }
 
@@ -143,41 +126,6 @@ public class SharedAskController {
             consultationRepository.save(entity);
         } catch (Exception e) {
             log.warn("Failed to record shared consultation: {}", e.getMessage());
-        }
-    }
-
-    private String ensureNavigatorSession(SharingKeyEntity keyEntity, String agentName, String contextId) {
-        try {
-            String storeKey = "shared-nav:" + keyEntity.getId() + ":" + contextId;
-            if (contextStore != null) {
-                Optional<String> existing = contextStore.findSessionRef(
-                        storeKey, keyEntity.getOwnerUserId(), 720);
-                if (existing.isPresent()) {
-                    if (sessionManager.getSession(existing.get()) != null) {
-                        return existing.get();
-                    }
-                    log.warn("Shared navigator session {} was deleted, recreating", existing.get());
-                }
-            }
-
-            String label = keyEntity.getLabel() != null ? keyEntity.getLabel() : agentName;
-            String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
-                    .userId(keyEntity.getOwnerUserId())
-                    .agentId("claude-worker")
-                    .taskName("Shared: " + label)
-                    .build());
-
-            if (contextStore != null) {
-                contextStore.saveSessionRef(storeKey, "shared-nav",
-                        sessionId, keyEntity.getOwnerUserId(), keyEntity.getAgentId());
-            }
-
-            log.info("Created navigator session for shared call: sessionId={}, keyId={}, contextId={}",
-                    sessionId, keyEntity.getId(), contextId);
-            return sessionId;
-        } catch (Exception e) {
-            log.warn("Failed to create navigator session for shared call: {}", e.getMessage());
-            return null;
         }
     }
 

@@ -27,6 +27,13 @@ public class AgentContextStoreImpl implements AgentContextStore {
     @Override
     public Optional<String> findSessionRefForAgent(String contextId, String userId,
                                                    String expectedAgentId, int ttlHours) {
+        return findContextForAgent(contextId, userId, expectedAgentId, ttlHours)
+                .map(AgentConversationContextEntity::getAgentSessionRef);
+    }
+
+    @Override
+    public Optional<AgentConversationContextEntity> findContextForAgent(
+            String contextId, String userId, String expectedAgentId, int ttlHours) {
         Optional<AgentConversationContextEntity> opt = repository.findByContextIdAndUserId(contextId, userId);
         if (opt.isEmpty()) {
             return Optional.empty();
@@ -41,7 +48,7 @@ public class AgentContextStoreImpl implements AgentContextStore {
         if (e.getTargetAgentId() != null && !e.getTargetAgentId().equals(expectedAgentId)) {
             throw new ContextAgentMismatchException(contextId, e.getTargetAgentId(), expectedAgentId);
         }
-        return Optional.ofNullable(e.getAgentSessionRef());
+        return Optional.of(e);
     }
 
     @Override
