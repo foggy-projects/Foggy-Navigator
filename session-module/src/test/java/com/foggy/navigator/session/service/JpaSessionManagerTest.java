@@ -1,7 +1,9 @@
 package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.agent.framework.session.*;
+import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.spi.config.LlmModelManager;
+import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import org.junit.jupiter.api.Test;
@@ -43,6 +45,9 @@ class JpaSessionManagerTest {
 
     @Autowired
     private SessionMessageRepository messageRepository;
+
+    @Autowired
+    private AgentConversationContextRepository contextRepository;
 
     @Test
     void createSession_shouldReturnSessionId() {
@@ -193,6 +198,24 @@ class JpaSessionManagerTest {
 
         Session session = sessionManager.getSession(sessionId);
         assertEquals(SessionStatus.COMPLETED, session.getStatus());
+    }
+
+    @Test
+    void deleteSession_shouldAlsoDeleteAgentConversationContextsByNavigatorSessionId() {
+        String sessionId = sessionManager.createSession(createTestRequest());
+        AgentConversationContextEntity context = new AgentConversationContextEntity();
+        context.setContextId("ctx-1");
+        context.setAgentType("codex-worker");
+        context.setAgentSessionRef("thread-1");
+        context.setNavigatorSessionId(sessionId);
+        context.setUserId("user-1");
+        context.setTargetAgentId("agent-1");
+        contextRepository.save(context);
+
+        sessionManager.deleteSession(sessionId);
+
+        assertFalse(sessionRepository.findById(sessionId).isPresent());
+        assertFalse(contextRepository.findById("ctx-1").isPresent());
     }
 
     @Test

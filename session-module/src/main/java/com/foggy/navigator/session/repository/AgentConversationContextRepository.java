@@ -12,4 +12,6 @@ public interface AgentConversationContextRepository
 
     Optional<AgentConversationContextEntity> findByContextAliasAndUserIdAndTargetAgentId(
             String contextAlias, String userId, String targetAgentId);
+
+    long deleteByNavigatorSessionId(String navigatorSessionId);
 }

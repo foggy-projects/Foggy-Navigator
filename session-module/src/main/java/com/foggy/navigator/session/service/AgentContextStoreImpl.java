@@ -85,4 +85,12 @@ public class AgentContextStoreImpl implements AgentContextStore {
         entity.setLastAccessedAt(LocalDateTime.now());
         repository.save(entity);
     }
+
+    @Override
+    public void deleteByNavigatorSessionId(String navigatorSessionId) {
+        if (navigatorSessionId == null || navigatorSessionId.isBlank()) {
+            return;
+        }
+        repository.deleteByNavigatorSessionId(navigatorSessionId);
+    }
 }

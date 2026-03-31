@@ -239,4 +239,18 @@ class AgentContextStoreImplTest {
         assertEquals("user-42", captor.getValue().getUserId());
         assertEquals("agent-x", captor.getValue().getTargetAgentId());
     }
+
+    @Test
+    void deleteByNavigatorSessionId_delegatesToRepository() {
+        store.deleteByNavigatorSessionId("session-1");
+
+        verify(repository).deleteByNavigatorSessionId("session-1");
+    }
+
+    @Test
+    void deleteByNavigatorSessionId_blank_isIgnored() {
+        store.deleteByNavigatorSessionId("  ");
+
+        verify(repository, never()).deleteByNavigatorSessionId(any());
+    }
 }

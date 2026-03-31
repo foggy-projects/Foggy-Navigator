@@ -54,4 +54,11 @@ public interface AgentContextStore {
     void saveSessionRefFull(String contextId, String agentType,
             String agentSessionRef, String navigatorSessionId,
             String userId, String targetAgentId, String contextAlias);
+
+    /**
+     * 按 Navigator session ID 删除关联的上下文映射。
+     */
+    default void deleteByNavigatorSessionId(String navigatorSessionId) {
+        // Optional capability for stores that persist navigatorSessionId.
+    }
 }
