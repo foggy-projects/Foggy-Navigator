@@ -145,7 +145,7 @@ public class TaskController {
         try {
             Object result = taskDispatchFacade.resyncTask(taskId, userId);
             return RX.ok(result);
-        } catch (UnsupportedOperationException e) {
+        } catch (UnsupportedOperationException | IllegalStateException | IllegalArgumentException e) {
             return RX.failA(e.getMessage());
         }
     }
