@@ -38,6 +38,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Session Module (for ContextResolvingA2aAgent shared infra) -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>session-module</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- User Auth Module -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>

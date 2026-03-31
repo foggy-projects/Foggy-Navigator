@@ -5,9 +5,11 @@ import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
+import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
+import com.foggy.navigator.spi.agent.InnerA2aAgent;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,10 +50,13 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
     @Override
     public Optional<A2aAgent> resolveAgent(String agentId, String userId) {
         return resolveManagedEntity(agentId, userId)
-                .map(entity -> {
-                    String cwd = resolveDefaultCwd(entity, userId);
-                    return new CodexWorkerA2aAgent(entity, taskService, cwd, contextStore);
-                });
+                .map(entity -> toA2aAgent(entity, userId));
+    }
+
+    private A2aAgent toA2aAgent(CodingAgentEntity entity, String userId) {
+        String cwd = resolveDefaultCwd(entity, userId);
+        InnerA2aAgent inner = new CodexWorkerInnerA2aAgent(entity, taskService, cwd);
+        return new ContextResolvingA2aAgent(inner, contextStore, entity);
     }
 
     /**

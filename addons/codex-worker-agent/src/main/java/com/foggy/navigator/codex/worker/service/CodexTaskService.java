@@ -83,7 +83,12 @@ public class CodexTaskService implements TaskQueryProvider {
      */
     @Transactional
     public CodexTaskDTO createTask(String userId, String tenantId, CreateCodexTaskForm form) {
-        return createAndStartTask(userId, tenantId, form, null);
+        // 如果 form 携带 sessionId（由 ContextResolvingA2aAgent 传入），则复用已有会话
+        String existingSessionId = form.getSessionId();
+        if (existingSessionId != null && existingSessionId.isBlank()) {
+            existingSessionId = null;
+        }
+        return createAndStartTask(userId, tenantId, form, existingSessionId);
     }
 
     @Override
@@ -305,6 +310,14 @@ public class CodexTaskService implements TaskQueryProvider {
         if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())) {
             abortTask(taskId);
         }
+    }
+
+    /**
+     * 检查指定 Codex 会话是否有正在运行的任务（并发保护）
+     */
+    public boolean hasRunningTask(String codexThreadId, String workerId, String userId) {
+        return taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatus(
+                codexThreadId, workerId, userId, "RUNNING");
     }
 
     /**

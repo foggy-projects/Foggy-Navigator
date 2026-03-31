@@ -199,11 +199,95 @@ AgentDiscoveryController、SharedAskController 从请求中提取 `contextAlias`
 18. mvn compile + 全量测试
 19. 手动测试：POST /api/v1/shared/ask 两次同 contextAlias，确认相同 sessionId
 
-## 验收标准
+## 验收标准（Phase 1-4 已完成 ✅）
 
-1. `POST /shared/ask` 传 `contextAlias="time-writer-task"` 两次 → 返回相同 sessionId + 相同 claudeSessionId
-2. `POST /shared/ask` 传 `contextAlias="time-writer-task"` 用不同 agent → 返回 FAILED + 错误信息
-3. `POST /agents/{id}/ask` 传 `contextId` 或 `contextAlias` 均正常工作
-4. 原有 contextId 逻辑不受影响
-5. ClaudeTaskService.createTask() 不含 context 查找逻辑
-6. mvn compile + mvn test 通过
+1. ✅ `POST /shared/ask` 传 `contextAlias="time-writer-task"` 两次 → 返回相同 sessionId + 相同 claudeSessionId
+2. ✅ `POST /shared/ask` 传 `contextAlias="time-writer-task"` 用不同 agent → 返回 FAILED + 错误信息
+3. ✅ `POST /agents/{id}/ask` 传 `contextId` 或 `contextAlias` 均正常工作
+4. ✅ 原有 contextId 逻辑不受影响
+5. ✅ ClaudeTaskService.createTask() 不含 context 查找逻辑
+6. ✅ mvn compile + mvn test 通过（55 tests, 0 failures）
+
+---
+
+## Phase 5: Codex Pipeline 复用 + 并发保护 + 去重装饰器
+
+### 5.1 CodexWorkerA2aAgent → CodexWorkerInnerA2aAgent
+
+与 Claude 相同的改造：
+- 实现 `InnerA2aAgent` 接口（`sendTask(A2aContext)` 替代 `sendTask(A2aMessage)`）
+- 移除 contextStore 逻辑（由外层 ContextResolvingA2aAgent 负责）
+- 从 `A2aContext` 获取 `agentSessionRef`（codexThreadId）和 `navigatorSessionId`
+- `CreateCodexTaskForm` 加 `sessionId` 字段
+- `CodexTaskService.createTask()` 支持 `form.getSessionId()` 复用 session
+
+### 5.2 CodexWorkerAgentProvider 组装 Pipeline
+
+```java
+private A2aAgent toA2aAgent(CodingAgentEntity entity, String userId) {
+    String cwd = resolveDefaultCwd(entity, userId);
+    InnerA2aAgent inner = new CodexWorkerInnerA2aAgent(entity, taskService, cwd);
+    return new ContextResolvingA2aAgent(inner, contextStore, entity);
+}
+```
+
+### 5.3 并发保护（在 ContextResolvingA2aAgent 中）
+
+在 `sendTask()` 委托 inner 之前，检查 agentSessionRef 对应的 session 是否有 RUNNING 任务：
+
+```java
+// 如果已有 agentSessionRef，检查是否有正在运行的任务
+if (agentSessionRef != null) {
+    // 通过 inner agent 的 task service 查询是否有 RUNNING 任务
+    // 有 → 返回 FAILED + "Session has a running task, please wait or cancel it first"
+}
+```
+
+**实现方式**：在 `AgentContextStore` SPI 新增 `hasRunningTask(agentSessionRef)` 或在 inner agent 接口新增 `isSessionBusy(agentSessionRef)` 方法。
+
+考虑到并发检查需要访问 task repository，而 ContextResolvingA2aAgent 是跨 provider 共用的（不应依赖特定 task service），最佳位置是：
+- 在 `InnerA2aAgent` 接口新增 `default boolean isSessionBusy(String agentSessionRef) { return false; }`
+- Claude/Codex 各自实现该方法查询自己的 task repository
+
+### 5.4 去重装饰器 DedupA2aAgent
+
+从 `ClaudeWorkerInnerA2aAgent` 提取去重逻辑为独立装饰器：
+
+```java
+class DedupA2aAgent implements A2aAgent {
+    private final A2aAgent delegate;
+    private final DedupKeyStore dedupStore;  // 新 SPI 或用 AgentContextStore
+
+    public A2aTask sendTask(A2aMessage message) {
+        String key = computeDedupKey(userId, agentId, prompt);
+        Optional<A2aTask> existing = dedupStore.findRecent(key, 60);
+        if (existing.isPresent()) return existing.get();
+        A2aTask result = delegate.sendTask(message);
+        dedupStore.save(key, result);
+        return result;
+    }
+}
+```
+
+**注意**：去重需要访问 task repository（查重复任务），而这是 provider-specific 的。有两种选择：
+- A. 去重留在 InnerA2aAgent 内部（当前方案，简单）
+- B. 抽象为装饰器 + 泛化的 DedupStore 接口
+
+**决定**：先按 A 方案（去重保持在 Inner 内部），因为 Claude 和 Codex 的去重键计算和查询方式不同。如果未来更多 agent 需要去重，再抽象。
+
+### 5.5 Pipeline 最终形态
+
+```
+Controller → A2aAgent
+  └── ContextResolvingA2aAgent（装饰者：上下文解析 + 并发保护 + session 复用）
+        └── InnerA2aAgent（内层：任务创建 + 去重）
+              ├── ClaudeWorkerInnerA2aAgent
+              └── CodexWorkerInnerA2aAgent
+```
+
+### Phase 5 验收标准
+
+1. CodexWorkerA2aAgent 改为 InnerA2aAgent，复用 ContextResolvingA2aAgent
+2. Codex contextAlias 正常工作（session 复用）
+3. 并发保护：session 有 RUNNING 任务时，新请求返回 FAILED
+4. mvn compile + mvn test 通过

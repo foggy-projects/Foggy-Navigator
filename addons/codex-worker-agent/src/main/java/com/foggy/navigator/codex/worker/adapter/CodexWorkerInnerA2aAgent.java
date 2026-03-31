@@ -6,8 +6,7 @@ import com.foggy.navigator.codex.worker.service.CodexTaskService;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
-import com.foggy.navigator.spi.agent.A2aAgent;
-import com.foggy.navigator.spi.agent.AgentContextStore;
+import com.foggy.navigator.spi.agent.InnerA2aAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,34 +15,26 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
- * A2aAgent 适配器 — 异步模式，返回 SUBMITTED 后在后台由 CodexStreamRelay 处理。
+ * InnerA2aAgent 实现 — 接收已解析的 A2aContext，执行实际的 Codex Worker 任务创建。
  * <p>
- * 与旧版同步模式的区别：
- * <ul>
- *   <li>旧版：sendTask() 阻塞调 syncQuery()，返回 COMPLETED/FAILED</li>
- *   <li>新版：sendTask() 创建 tracked task + 发布事件，立即返回 SUBMITTED</li>
- * </ul>
+ * 异步模式：sendTask() 创建 tracked task + 发布事件，立即返回 SUBMITTED。
+ * 上下文解析（contextId/contextAlias → session）由外层 ContextResolvingA2aAgent 负责。
  */
-class CodexWorkerA2aAgent implements A2aAgent {
+class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
 
-    private static final Logger log = LoggerFactory.getLogger(CodexWorkerA2aAgent.class);
-    private static final int CONTEXT_TTL_HOURS = 24;
+    private static final Logger log = LoggerFactory.getLogger(CodexWorkerInnerA2aAgent.class);
 
     private final CodingAgentEntity entity;
     private final CodexTaskService taskService;
     private final String defaultCwd;
-    private final AgentContextStore contextStore;
 
-    CodexWorkerA2aAgent(CodingAgentEntity entity, CodexTaskService taskService,
-                        String defaultCwd, AgentContextStore contextStore) {
+    CodexWorkerInnerA2aAgent(CodingAgentEntity entity, CodexTaskService taskService, String defaultCwd) {
         this.entity = entity;
         this.taskService = taskService;
         this.defaultCwd = defaultCwd;
-        this.contextStore = contextStore;
     }
 
     @Override
@@ -54,27 +45,17 @@ class CodexWorkerA2aAgent implements A2aAgent {
     }
 
     @Override
-    public A2aTask sendTask(A2aMessage message) {
+    public A2aTask sendTask(A2aContext context) {
+        A2aMessage message = context.getMessage();
+
         String prompt = message.getParts().stream()
                 .filter(p -> "text".equals(p.getType()))
                 .map(A2aPart::getText)
                 .collect(Collectors.joining("\n"));
 
-        String contextId = message.getContextId();
-
-        // 多轮会话：通过 contextId 恢复已有 codexThreadId
-        String codexThreadId = null;
-        if (contextId != null && contextStore != null) {
-            codexThreadId = contextStore.findSessionRef(
-                    contextId, entity.getUserId(), CONTEXT_TTL_HOURS).orElse(null);
-            if (codexThreadId != null) {
-                log.debug("Resuming A2A context {} with codexThreadId {}", contextId, codexThreadId);
-            }
-        }
-
         // 提取 metadata
         Map<String, Object> meta = message.getMetadata() != null ? message.getMetadata() : Map.of();
-        Integer maxTurns = meta != null && meta.get("maxTurns") instanceof Number n ? n.intValue() : null;
+        Integer maxTurns = meta.get("maxTurns") instanceof Number n ? n.intValue() : null;
         String model = stringMeta(meta, "model");
         String requestedCwd = stringMeta(meta, "cwd");
         String requestedDirectoryId = stringMeta(meta, "directoryId");
@@ -85,7 +66,6 @@ class CodexWorkerA2aAgent implements A2aAgent {
         String effectiveDirectoryId = requestedDirectoryId != null ? requestedDirectoryId : entity.getDefaultDirectoryId();
 
         // 通过 CodexTaskService.createTask() 创建任务并发布 WorkerTaskStartEvent
-        // CodexStreamRelay 监听事件后异步执行 SSE 流消费
         CreateCodexTaskForm form = new CreateCodexTaskForm();
         form.setWorkerId(entity.getWorkerId());
         form.setPrompt(prompt);
@@ -94,19 +74,18 @@ class CodexWorkerA2aAgent implements A2aAgent {
         form.setModel(model);
         form.setMaxTurns(maxTurns);
         form.setImages(images);
-        form.setCodexThreadId(codexThreadId);
         form.setModelConfigId(modelConfigId);
+
+        // 多轮会话：从已解析上下文获取 codexThreadId（使 Worker 恢复 Codex session）
+        form.setCodexThreadId(context.getAgentSessionRef());
+
+        // 复用 Navigator 平台 session（由 decorator 从 context store 解析）
+        form.setSessionId(context.getNavigatorSessionId());
 
         CodexTaskDTO task = taskService.createTask(entity.getUserId(), entity.getTenantId(), form);
 
-        // 保存 contextId → codexThreadId 映射（如果后续 relay 拿到新的 threadId 会更新）
-        if (contextId != null && contextStore != null && codexThreadId != null) {
-            contextStore.saveSessionRef(contextId, "codex-worker",
-                    codexThreadId, entity.getUserId(), entity.getAgentId());
-        }
-
         log.info("Codex A2A sendTask: agentId={}, taskId={}, contextId={}",
-                entity.getAgentId(), task.getTaskId(), contextId);
+                entity.getAgentId(), task.getTaskId(), context.getContextId());
 
         // 返回 SUBMITTED 状态，后台异步执行
         Map<String, Object> taskMeta = new LinkedHashMap<>();
@@ -117,7 +96,7 @@ class CodexWorkerA2aAgent implements A2aAgent {
 
         return A2aTask.builder()
                 .id(task.getTaskId())
-                .contextId(contextId)
+                .contextId(context.getContextId())
                 .status(A2aTaskStatus.builder()
                         .state(A2aTaskState.SUBMITTED)
                         .description("Task submitted, executing in background")
@@ -143,6 +122,12 @@ class CodexWorkerA2aAgent implements A2aAgent {
         taskService.abortTask(taskId);
     }
 
+    @Override
+    public boolean isSessionBusy(String agentSessionRef) {
+        if (agentSessionRef == null || agentSessionRef.isBlank()) return false;
+        return taskService.hasRunningTask(agentSessionRef, entity.getWorkerId(), entity.getUserId());
+    }
+
     private A2aTask toA2aTask(CodexTaskDTO dto) {
         A2aTaskState state = switch (dto.getStatus()) {
             case "PENDING" -> A2aTaskState.SUBMITTED;
@@ -153,11 +138,11 @@ class CodexWorkerA2aAgent implements A2aAgent {
             default -> A2aTaskState.WORKING;
         };
 
-        Map<String, Object> meta = new LinkedHashMap<>();
-        meta.put("sessionId", dto.getSessionId());
-        meta.put("workerId", dto.getWorkerId());
-        meta.put("workerTaskId", dto.getWorkerTaskId());
-        meta.put("codexThreadId", dto.getCodexThreadId());
+        Map<String, Object> taskMeta = new LinkedHashMap<>();
+        taskMeta.put("sessionId", dto.getSessionId());
+        taskMeta.put("workerId", dto.getWorkerId());
+        taskMeta.put("workerTaskId", dto.getWorkerTaskId());
+        taskMeta.put("codexThreadId", dto.getCodexThreadId());
 
         A2aTask.A2aTaskBuilder builder = A2aTask.builder()
                 .id(dto.getTaskId())
@@ -166,7 +151,7 @@ class CodexWorkerA2aAgent implements A2aAgent {
                         .description(dto.getStatus())
                         .timestamp(Instant.now())
                         .build())
-                .metadata(meta);
+                .metadata(taskMeta);
 
         if (dto.getResultText() != null) {
             builder.artifacts(List.of(A2aArtifact.builder()

@@ -147,6 +147,12 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
         taskService.abortTask(taskId);
     }
 
+    @Override
+    public boolean isSessionBusy(String agentSessionRef) {
+        if (agentSessionRef == null || agentSessionRef.isBlank()) return false;
+        return taskService.hasRunningTask(agentSessionRef, entity.getWorkerId());
+    }
+
     // ===== 内部工具方法 =====
 
     /**

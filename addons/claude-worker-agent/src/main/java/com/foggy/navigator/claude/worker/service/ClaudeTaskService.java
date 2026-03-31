@@ -925,6 +925,13 @@ public class ClaudeTaskService implements TaskQueryProvider {
      * 4. 更新 DB 状态 → ABORTED
      */
     @SuppressWarnings("unchecked")
+    /**
+     * 检查指定 Claude 会话是否有正在运行的任务（并发保护）
+     */
+    public boolean hasRunningTask(String claudeSessionId, String workerId) {
+        return taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus(claudeSessionId, workerId, "RUNNING");
+    }
+
     public void abortTask(String taskId) {
         ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
         String workerTaskId = resolveWorkerTaskLookupId(task);

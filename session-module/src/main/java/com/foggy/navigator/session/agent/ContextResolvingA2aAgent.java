@@ -1,4 +1,4 @@
-package com.foggy.navigator.claude.worker.adapter;
+package com.foggy.navigator.session.agent;
 
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
@@ -16,8 +16,10 @@ import java.util.Optional;
 
 /**
  * A2aAgent 装饰者 — 在委托 InnerA2aAgent 前解析上下文（contextId/contextAlias → session）
+ * <p>
+ * 共享基础设施：位于 session-module，供 claude-worker-agent / codex-worker-agent 等 addon 复用。
  */
-class ContextResolvingA2aAgent implements A2aAgent {
+public class ContextResolvingA2aAgent implements A2aAgent {
 
     private static final Logger log = LoggerFactory.getLogger(ContextResolvingA2aAgent.class);
     private static final int CONTEXT_TTL_HOURS = 24;
@@ -25,11 +27,23 @@ class ContextResolvingA2aAgent implements A2aAgent {
     private final InnerA2aAgent inner;
     private final AgentContextStore contextStore;
     private final CodingAgentEntity agentEntity;
+    private final String providerType;
 
-    ContextResolvingA2aAgent(InnerA2aAgent inner, AgentContextStore contextStore, CodingAgentEntity agentEntity) {
+    public ContextResolvingA2aAgent(InnerA2aAgent inner, AgentContextStore contextStore,
+                                    CodingAgentEntity agentEntity, String providerType) {
         this.inner = inner;
         this.contextStore = contextStore;
         this.agentEntity = agentEntity;
+        this.providerType = providerType;
+    }
+
+    /**
+     * 便捷构造：自动从 agentEntity.agentType 推导 providerType。
+     * LOCAL_CLAUDE_WORKER → "claude-worker"，LOCAL_CODEX_WORKER → "codex-worker"，其他 → "worker"
+     */
+    public ContextResolvingA2aAgent(InnerA2aAgent inner, AgentContextStore contextStore,
+                                    CodingAgentEntity agentEntity) {
+        this(inner, contextStore, agentEntity, deriveProviderType(agentEntity));
     }
 
     @Override
@@ -85,6 +99,13 @@ class ContextResolvingA2aAgent implements A2aAgent {
             resolvedContextId = IdGenerator.shortId();
         }
 
+        // 1c. 并发保护：检查 agent session 是否有正在运行的任务
+        if (agentSessionRef != null && inner.isSessionBusy(agentSessionRef)) {
+            log.warn("Session busy: agentSessionRef={}, contextId={}", agentSessionRef, resolvedContextId);
+            return buildFailedTask(resolvedContextId,
+                    "Session has a running task, please wait for it to complete or cancel it first.");
+        }
+
         // 2. Build A2aContext
         A2aContext context = A2aContext.builder()
                 .message(message)
@@ -103,16 +124,17 @@ class ContextResolvingA2aAgent implements A2aAgent {
         // 4. Save/update context after task creation
         if (contextStore != null && task.getStatus() != null
                 && task.getStatus().getState() != A2aTaskState.FAILED) {
-            String taskClaudeSessionId = null;
+            String taskAgentSessionRef = null;
             String taskNavigatorSessionId = navigatorSessionId;
             if (task.getMetadata() != null) {
                 Object csid = task.getMetadata().get("claudeSessionId");
-                if (csid != null) taskClaudeSessionId = csid.toString();
+                if (csid == null) csid = task.getMetadata().get("codexThreadId");
+                if (csid != null) taskAgentSessionRef = csid.toString();
                 Object nsid = task.getMetadata().get("sessionId");
                 if (nsid != null) taskNavigatorSessionId = nsid.toString();
             }
-            contextStore.saveSessionRefFull(resolvedContextId, "claude-worker",
-                    taskClaudeSessionId, taskNavigatorSessionId,
+            contextStore.saveSessionRefFull(resolvedContextId, providerType,
+                    taskAgentSessionRef, taskNavigatorSessionId,
                     userId, agentId, contextAlias);
         }
 
@@ -144,5 +166,14 @@ class ContextResolvingA2aAgent implements A2aAgent {
                         .timestamp(Instant.now())
                         .build())
                 .build();
+    }
+
+    private static String deriveProviderType(CodingAgentEntity entity) {
+        if (entity == null || entity.getAgentType() == null) return "worker";
+        return switch (entity.getAgentType()) {
+            case "LOCAL_CLAUDE_WORKER" -> "claude-worker";
+            case "LOCAL_CODEX_WORKER" -> "codex-worker";
+            default -> "worker";
+        };
     }
 }
