@@ -1,215 +1,180 @@
-# Session Module — 会话管理与任务分派
+# Session Module
 
-> **最后更新**: 2026-03-28（需求 26 重构后）
+> 当前实现对应的会话、统一任务分发与实时通信模块说明
 
 ## 1. 模块定位
 
-session-module 是 Foggy Navigator 的**会话持久化、任务分派与实时通信**核心模块，承担以下职责：
+`session-module` 是 Foggy Navigator 的核心业务模块之一，负责把“会话、消息、统一任务分发、Agent 发现、SSE 推送”收口到一个平台层。
 
-| 职责 | 关键类 |
-|------|--------|
-| 会话 CRUD + 消息持久化 | JpaSessionManager, SessionController |
-| **统一任务分派**（A2A / Direct 双路由） | TaskDispatchFacade, TaskController |
-| **会话-Agent 绑定管理** | SessionBindingService |
-| Agent 发现与解析 | DefaultA2aAgentRegistry, UnifiedAgentResolver |
-| SSE 实时推送 | UnifiedSseEmitter, UnifiedSseController |
-| AgentMessage 事件监听 | SessionEventListener |
+它既服务主会话界面，也服务 Workers、任务看板、跨项目阶段回跳和通知链路。
 
-## 2. 架构概览
+## 2. 当前职责
 
-### 2.1 两条调用链
-
-**Tutor Agent 路径**（agent-framework 内建）：
-
-```
-Frontend → SessionController → JpaSessionManager + AgentInvoker
-                                                      ↓ (异步)
-                                            AgentMessage (Spring Event)
-                                                      ↓
-                                            SessionEventListener
-                                            ├── 持久化到 DB
-                                            └── SSE 推送到前端
-```
-
-**Worker 任务分派路径**（需求 26 重构后）：
-
-```
-Frontend → TaskController
-               ↓
-     TaskDispatchFacade.createTask(request, context)
-               ↓
-     resolveCreateExecutionTarget(request)
-         ┌─────────┴─────────┐
-         ▼                   ▼
-   [Direct Route]      [A2A Route]
-   providerType 明确     agentId 解析
-   → createTaskDirect() → UnifiedAgentResolver.resolveAgent()
-                              ↓
-                   resolveLogicalAgentId()
-                              ↓
-              SessionBindingService.getOrBind()
-              (建立/验证 Session ↔ Agent 绑定)
-                              ↓
-                   agent.sendTask(message)
-                              ↓
-                   toDispatchDTO() → DispatchTaskDTO
-```
-
-### 2.2 三个核心语义（需求 26）
-
-| 概念 | 字段 | 含义 | 存储 |
-|------|------|------|------|
-| 逻辑 Agent | `logicalAgentId` | 哪个 Coding Agent 负责任务 | SessionEntity.agentId |
-| 执行后端 | `providerType` | claude-worker / codex-worker | SessionEntity.providerType（不可变） |
-| 模型配置 | `modelConfigId` | API Key / BaseURL / 模型参数 | SessionEntity.authModelConfigId |
-
-**关键规则**：`agentId` 字段禁止存储 Provider 常量（如 "claude-worker"），必须存真实 Agent ID。
-
-## 3. 会话绑定生命周期
-
-`SessionBindingService` 管理 Session ↔ Agent 的绑定关系：
-
-```java
-@Transactional
-public String getOrBind(String sessionId, String agentId, String providerType, String bindingSource)
-```
-
-| 场景 | 行为 |
+| 职责 | 关键对象 |
 |------|------|
-| 新会话首次 createTask | 写入 agentId + providerType + bindingSource |
-| 同 Agent 后续 createTask | 验证一致性，通过 |
-| 不同 Agent 的 createTask | 抛 `SessionAgentBoundMismatchException` |
-| 遗留会话（agentId 有但 providerType 空） | 自动回填 providerType，bindingSource = "RESTORED" |
-| Resume 任务 | 始终使用已绑定的 providerType，不允许切换 |
+| Session 生命周期管理 | `SessionController`、`SessionManager`、`JpaSessionManager` |
+| 消息持久化与查询 | `SessionController`、`SessionRepository` |
+| 统一任务分发 | `TaskController`、`TaskDispatchFacade` |
+| Session 与 Agent/Provider 绑定 | `SessionBindingService` |
+| A2A Agent 发现与问答 | `AgentDiscoveryController`、`DefaultA2aAgentRegistry`、`UnifiedAgentResolver` |
+| SSE 推送与订阅 | `UnifiedSseController`、`UnifiedSseEmitter` |
+| 分享问答 | `SharingKeyController`、`SharedAskController` |
+| 会话配置管理 | `SessionConfigController` |
 
-### Provider Type 路由优先级（新建任务）
+## 3. 在当前产品中的位置
 
-```
-1. request.providerType（显式指定）
-2. modelConfigId → LlmModelManager → workerBackend → providerType
-3. agentId → UnifiedAgentResolver.getProviderType()
-4. 报错：后端不明确
-```
+### 3.1 它支撑哪些前端入口
 
-## 4. 数据模型
+- `会话`
+- `任务`
+- `Workers` 中的任务交互能力
+- `跨项目` 中阶段会话回跳
+- 通知与 SSE 相关能力
 
-### 4.1 SessionEntity 关键字段
+### 3.2 它不负责什么
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | VARCHAR(64) PK | 会话 ID |
-| userId | VARCHAR(64) | 所属用户 |
-| agentId | VARCHAR(64) | 逻辑 Agent ID |
-| providerType | VARCHAR(32) | 执行后端（绑定后不可变） |
-| bindingSource | VARCHAR(32) | 绑定来源：EXPLICIT_AGENT / LEGACY_MODEL_CONFIG / RESTORED |
-| authModelConfigId | VARCHAR(64) | 认证模型配置 ID |
-| status | VARCHAR(32) | 会话状态 |
-| providerStateJson | TEXT | Provider 特定状态 |
-| participatingAgentIds | TEXT | 参与过的 Agent ID 列表 (JSON) |
+- 不负责远程 Worker 的目录、文件、进程治理
+- 不直接实现 Claude/Codex/OpenHands 具体执行逻辑
+- 不定义 LLM、Git、凭证等平台配置资源
 
-### 4.2 SessionTaskEntity 关键字段
+这些能力分别属于 addon 模块或配置模块。
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| taskId | VARCHAR(64) UK | 平台任务 ID |
-| sessionId | VARCHAR(64) | 所属会话 |
-| providerType | VARCHAR(32) NOT NULL | 执行该任务的 Provider |
-| agentId | VARCHAR(64) | 执行任务的逻辑 Agent |
-| providerTaskId | VARCHAR(128) | 上游 Provider 侧任务 ID |
-| taskStateJson | TEXT | Provider 特定任务状态 |
+## 4. 当前核心模型
 
-### 4.3 DispatchTaskDTO（统一任务视图）
+### 4.1 Session 视角
 
-跨 Provider 通用的任务 DTO：
+Session 是平台级主对象，承接：
 
-- **通用字段**：taskId, sessionId, agentId, providerType, status, model, prompt, cwd, directoryId, costUsd, inputTokens, outputTokens, durationMs, numTurns, resultText, errorMessage
-- **Claude 扩展**：claudeSessionId, checkpoints
-- **Codex 扩展**：codexThreadId
-- **A2A 扩展**：contextId
-- **UI 冗余**：directoryName
+- 用户消息
+- Agent 回复
+- 父子会话关系
+- Agent 参与记录
+- provider 绑定关系
+- 可选模型配置
 
-## 5. REST API
+### 4.2 Task 视角
 
-### 5.1 会话管理（SessionController）
+Task 是执行视角的主对象，负责表达：
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/sessions` | 创建会话 |
-| GET | `/api/v1/sessions` | 查询会话列表 |
-| GET | `/api/v1/sessions/{id}` | 获取单个会话 |
-| DELETE | `/api/v1/sessions/{id}` | 删除会话 |
-| GET | `/api/v1/sessions/{id}/messages` | 获取消息列表 |
-| POST | `/api/v1/sessions/{id}/messages` | 发送消息 |
-| GET | `/api/v1/sessions/{id}/stream` | SSE 事件流 |
+- 哪个任务在执行
+- 属于哪个 Session
+- 由哪个 provider 执行
+- 目前执行状态如何
+- 是否可取消、恢复、重连、重同步
 
-### 5.2 Agent 发现（AgentDiscoveryController）
+### 4.3 Agent 视角
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/agents` | 列出所有 Agent |
-| GET | `/api/v1/agents/{id}/card` | 获取 Agent 名片 |
-| POST | `/api/v1/agents/{id}/ask` | 向 Agent 提问（同步） |
-| GET | `/api/v1/agents/consultations` | 查询 @Agent 咨询记录 |
+`session-module` 不实现具体业务 Agent，但负责：
 
-### 5.3 任务分派（TaskController / AgentTaskController）
+- 发现可用 Agent
+- 根据 `agentId` 解析到对应实现
+- 通过 A2A 或统一分发入口对接执行
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/tasks` | 创建任务（经 TaskDispatchFacade 路由） |
-| POST | `/api/v1/tasks/resume` | 恢复任务 |
-| GET | `/api/v1/tasks/{taskId}` | 查询任务 |
-| POST | `/api/v1/tasks/{taskId}/cancel` | 取消任务 |
-| GET | `/api/v1/tasks/active` | 列出活跃任务 |
+## 5. 当前两条核心链路
 
-## 6. 模块结构
+### 5.1 会话消息链路
 
-```
-session-module/src/main/java/com/foggy/navigator/session/
-├── config/          # SessionModuleAutoConfiguration
-├── controller/
-│   ├── SessionController.java        # 会话 CRUD
-│   ├── TaskController.java           # 统一任务分派
-│   ├── AgentTaskController.java      # Agent 任务管理
-│   ├── AgentDiscoveryController.java # A2A Agent 发现
-│   ├── SessionConfigController.java  # 会话配置
-│   ├── SharedAskController.java      # Sharing Key 公开提问
-│   ├── SharingKeyController.java     # Sharing Key 管理
-│   └── UnifiedSseController.java     # 统一 SSE 推送
-├── registry/
-│   ├── DefaultA2aAgentRegistry.java  # 聚合所有 A2aAgentProvider
-│   ├── UnifiedAgentResolver.java     # 上下文感知 Agent 解析
-│   └── JpaAgentRegistry.java         # Agent 配置持久化
-├── service/
-│   ├── JpaSessionManager.java        # SessionManager JPA 实现
-│   ├── TaskDispatchFacade.java       # 统一任务分派入口（核心）
-│   ├── SessionBindingService.java    # 会话-Agent 绑定管理
-│   ├── AgentTaskService.java         # Agent 任务生命周期
-│   ├── SessionMetadataService.java   # 会话元数据
-│   └── SharingKeyService.java        # Sharing Key 服务
-├── dto/             # SessionConfigDTO, UnifiedSessionDTO
-├── sse/             # UnifiedSseEmitter
-├── event/           # SessionEventListener
-├── exception/       # SessionAgentBoundMismatchException
-└── repository/      # JPA Repositories
+```text
+前端发送消息
+  -> SessionController
+  -> SessionManager 持久化用户消息
+  -> AgentInvoker 异步调用目标 Agent
+  -> Agent 输出消息/事件
+  -> Session 事件监听与持久化
+  -> UnifiedSseEmitter 推送到前端
 ```
 
-## 7. Bean 优先级
+### 5.2 统一任务分发链路
 
-- `SessionModuleAutoConfiguration` 使用 `@AutoConfigureBefore(AgentFrameworkAutoConfiguration.class)`
-- JpaSessionManager 通过 `@Service` 注册，先于 InMemorySessionManager
-- AgentFrameworkAutoConfiguration 的 `@ConditionalOnMissingBean(SessionManager.class)` 自动退让
+```text
+前端创建任务
+  -> TaskController
+  -> TaskDispatchFacade
+  -> 解析 providerType / modelConfigId / agentId
+  -> SessionBindingService 建立或校验绑定
+  -> 走 Direct Route 或 A2A Route
+  -> 返回统一任务 DTO
+```
 
-## 8. 测试
+## 6. Session 绑定机制
 
-| 测试类 | 覆盖范围 |
-|--------|---------|
-| JpaSessionManagerTest | 会话 CRUD、消息持久化 |
-| TaskDispatchFacadeTest | 任务分派路由（A2A/Direct）、agentId 保持 |
-| SessionBindingServiceTest | 绑定生命周期（新建/验证/遗留/冲突） |
+`SessionBindingService` 负责把 Session 与执行上下文绑定起来。
 
-## 9. 相关文档
+绑定后，平台会固定：
 
+- `agentId`
+- `providerType`
+- `authModelConfigId`
+
+这保证以下动作在同一执行语义下进行：
+
+- 继续对话
+- 恢复任务
+- 重连任务
+- 重同步任务
+
+## 7. 当前暴露的能力面
+
+### 7.1 会话能力
+
+- 创建、查询、删除 Session
+- 查询消息
+- 发送消息
+- 获取 Guide Cards
+
+### 7.2 配置能力
+
+- 绑定认证配置
+- 归档 / 取消归档
+- Hold / Unhold
+- 批量绑定认证
+
+### 7.3 任务能力
+
+- 创建任务
+- 查询任务
+- 取消、恢复、重连、重同步、回溯
+- 查询目录级和 Worker 级任务信息
+
+### 7.4 A2A 能力
+
+- 列出 Agent
+- 获取 Agent Card
+- 对指定 Agent 发问
+- 查询会话中的 Agent consultation 记录
+
+### 7.5 分享能力
+
+- 创建分享 Key
+- 查询分享 Key
+- 更新 / 删除分享 Key
+- 通过分享入口公开提问
+
+### 7.6 SSE 能力
+
+- 建立统一 SSE 连接
+- 订阅和取消订阅
+- 查询当前订阅
+- 推送消息、任务状态、通知和助手通知
+
+## 8. 与其他模块的关系
+
+| 关联模块 | 关系 |
+|------|------|
+| `agent-framework` | 会话消息链路中的 Agent 调用底座 |
+| `tutor-agent` | 会话默认入口 Agent |
+| `metadata-config-module` | 任务分发时会读取模型配置与资源配置 |
+| `user-auth-module` | 所有会话与任务能力依赖用户身份 |
+| `addons/claude-worker-agent` | 提供 Worker 执行能力、目录会话与跨项目会话来源 |
+| `addons/codex-worker-agent` | 提供 Codex 类执行能力 |
+| `addons/task-assistant` | 通过事件和 SSE 向会话侧发通知 |
+
+## 9. 当前阅读建议
+
+如果要理解当前主产品链路，建议和以下文档一起看：
+
+- [系统架构概览](../00-system-overview.md)
+- [功能架构说明](./functional-architecture.md)
+- [会话协作中心](./session-collaboration.md)
+- [任务治理中心](./task-governance.md)
 - [A2A Agent 架构](../a2a-agent-architecture.md)
-- [需求 26 — Worker 执行上下文路由](../requirement-tracker/2026-Q1/26-worker-execution-context-routing-design.md)
-- [需求 25 — 会话存储统一](../requirement-tracker/2026-Q1/25-session-storage-unification-design.md)
-- 开发指导：`.claude/skills/session-module/SKILL.md`

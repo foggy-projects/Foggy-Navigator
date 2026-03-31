@@ -1,271 +1,205 @@
 # Foggy Navigator 系统架构概览
 
-> 个人 AI Agent 编排中枢 - 系统架构与设计原则
+> 基于当前代码实现整理的系统定位、功能架构与模块分层
 
-## 1. 系统定位与目标
+## 1. 当前系统定位
 
-### 1.1 核心愿景
+Foggy Navigator 当前不是“数据分析/语义层平台”，而是一个以 **多 Agent 编排、远程编程工作区管理、会话与任务治理** 为核心的平台。
 
-**Foggy Navigator** 是一个个人 AI Agent 编排中枢，核心目标是将多种 AI 能力统一编排到一个平台中：
+系统当前主轴有三条：
 
-- **多 Agent 协作**：导师 Agent 统一入口，按需分派到专业 Agent（编程、语义层、分析等）
-- **分布式能力**：调度多台主机上的 Claude Code 完成远程编程任务
-- **插件化扩展**：以 Addon 模式接入新能力（编程、语义层服务、外部工具等）
-- **AI 分身**：提供 AI 替身回答同事/朋友的常见问题
-- **外部工具集成**：接入 ClawdBot 等第三方 AI 工具
+1. 以会话为中心的 Agent 交互入口  
+   用户通过统一会话界面与 Tutor Agent、Claude Worker Agent、Codex Worker Agent 等能力交互。
+2. 以 Worker 和目录为中心的远程编程工作台  
+   用户可以管理远程 Worker、工作目录、Git 状态、Worktree、文件浏览、终端与编程任务。
+3. 以任务和事件为中心的平台治理能力  
+   平台提供统一任务分发、跨项目阶段编排、监控、通知、用户与配置治理能力。
 
-### 1.2 设计原则
+## 2. 当前功能架构
 
-1. **平台化**：核心框架与业务能力分离，Agent/Addon 可插拔
-2. **配置化**：Agent、Skill 通过 YAML + Markdown 定义，减少硬编码
-3. **SPI 解耦**：模块间通过 SPI Facade 接口通信，松耦合
-4. **可观察**：TraceId 全链路传播、结构化日志、LLM 调用指标
-5. **渐进式**：MVP 优先，以 Addon 方式逐步扩展能力
+### 2.1 一级功能域
 
----
+| 功能域 | 用户可见入口 | 核心目标 | 主要模块 |
+|------|------|------|------|
+| 工作区与 Worker 中心 | `Workers` | 管理远程 Worker、目录、文件、Git 与编程执行环境 | `addons/claude-worker-agent`、`addons/codex-worker-agent`、`packages/navigator-frontend` |
+| 会话协作中心 | `会话` | 统一承接用户与 Agent 的对话、消息流和委派跳转 | `session-module`、`tutor-agent`、`agent-framework` |
+| 任务治理中心 | `任务` | 统一查看和治理平台侧 Agent Task / Worker Task | `session-module` |
+| 跨项目编排 | `跨项目` | 把一个目标拆成多阶段、多目录、多 Agent 的串行协作流程 | `addons/claude-worker-agent` |
+| 平台设置与资源治理 | `设置`、`初始化配置` | 管理 Git、LLM、Worker、凭证、记忆、Agent 模型覆盖等 | `metadata-config-module`、`addons/task-assistant`、`addons/claude-worker-agent` |
+| 用户与访问控制 | `登录`、`用户` | 登录认证、用户管理、角色状态、API Key 管理 | `user-auth-module` |
+| 监控、通知与开放集成 | `监控`、SSE、Open API | 提供事件面板、通知流和对外集成接口 | `monitoring-module`、`session-module`、`navigator-open-sdk`、`addons/claude-worker-agent` |
 
-## 2. 系统整体架构
+### 2.2 前端功能地图
 
-### 2.1 分层架构
+当前主前端 `packages/navigator-frontend` 的路由直接对应产品功能面：
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     表现层 (Presentation)                    │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Navigator Frontend (Vue 3 + Element Plus)           │   │
-│  │  - 聊天界面  - 会话管理  - 工人管理  - SSE 推送     │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────────┐
-│                     API 层 (REST + SSE)                      │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  Session API │  │  Auth API    │  │  Config API  │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└─────────────────────────────────────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────────┐
-│                   Agent 框架层 (Core)                        │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  agent-framework                                      │   │
-│  │  - AgentRegistry    - SkillManager   - LlmAdapter    │   │
-│  │  - AgentInvoker     - BuiltInTool    - ToolExecutor  │   │
-│  │  - SessionRouter    - TraceId/MDC    - CircuitBreaker│   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ Tutor Agent  │  │ Coding Agent │  │Claude Worker │      │
-│  │ (导师)       │  │ (OpenHands)  │  │  Agent       │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-│                     Addons（可插拔）                          │
-└─────────────────────────────────────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────────┐
-│                 基础模块层 (Foundation)                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ session-     │  │ user-auth-   │  │ metadata-    │      │
-│  │ module       │  │ module       │  │ config-module│      │
-│  │ (会话+SSE)   │  │ (JWT认证)    │  │ (Skill配置)  │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-│  ┌──────────────┐  ┌──────────────┐                        │
-│  │ navigator-   │  │ navigator-   │                        │
-│  │ common       │  │ spi          │                        │
-│  │ (公共DTO)    │  │ (SPI接口)    │                        │
-│  └──────────────┘  └──────────────┘                        │
-└─────────────────────────────────────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────────┐
-│                 基础设施层 (Infrastructure)                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   MySQL      │  │  LLM API     │  │  Docker      │      │
-│  │  (持久化)    │  │ (OpenAI兼容) │  │ (外部服务)    │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└─────────────────────────────────────────────────────────────┘
+- `/`：Workers，主工作台
+- `/chat`、`/c/:id`：会话中心
+- `/tasks`：任务看板
+- `/cross-tasks`：跨项目任务
+- `/monitoring`：监控事件
+- `/users`：用户管理
+- `/settings`：平台设置
+- `/setup`：初始化引导
+- `/files`：文件浏览器
+
+### 2.3 后端分层
+
+```text
+Navigator Frontend (Vue 3)
+  -> REST + SSE
+
+Launcher
+  -> 聚合启动业务模块与 addon
+
+业务能力层
+  -> session-module
+  -> user-auth-module
+  -> metadata-config-module
+  -> metadata-query-module
+  -> monitoring-module
+  -> tutor-agent
+  -> addons/claude-worker-agent
+  -> addons/codex-worker-agent
+  -> addons/coding-agent
+  -> addons/task-assistant
+
+平台底座层
+  -> agent-framework
+  -> navigator-spi
+  -> navigator-common
+
+对外集成层
+  -> navigator-open-sdk
+  -> Open API / Worker API / SSE
 ```
 
-### 2.2 核心流程：用户对话
+## 3. 关键模块职责
 
-```
-1. 用户发送消息
-   ↓
-2. SessionController 接收 → 创建/查找会话
-   ↓
-3. AgentRouter 路由到目标 Agent（默认 tutor-agent）
-   ↓
-4. DefaultAgentInvoker 执行 Agent 循环（最多 10 轮）：
-   ├─ LLM 生成回复或 tool_call
-   ├─ ToolExecutor 执行 BuiltInTool
-   ├─ 将工具结果喂回 LLM
-   └─ 重复直到 LLM 返回纯文本或达到上限
-   ↓
-5. SSE 实时推送 Agent 回复到前端
-```
+### 3.1 聚合与底座
 
-### 2.3 Agent 分派流程
-
-```
-用户 → Tutor Agent
-         ├─ 检查系统状态 → check-system-status Skill
-         ├─ 编程任务 → dispatch-coding-task → Coding Agent (OpenHands)
-         ├─ Claude 任务 → Claude Worker Agent (远程主机)
-         └─ 其他引导 → help-troubleshoot / suggest-next-step
-```
-
----
-
-## 3. 模块职责
-
-### 3.1 核心模块
-
-| 模块 | 职责 | 状态 |
-|------|------|------|
-| **navigator-common** | 公共 Entity、DTO、枚举、CredentialEncryptor | 已完成 |
-| **navigator-spi** | SPI Facade 接口（CodingAgentFacade、ClaudeWorkerFacade、SkillConfigManager） | 已完成 |
-| **agent-framework** | Agent 核心框架：LLM 调用、Skill 解析、工具执行、会话路由、熔断器 | 已完成 |
-| **session-module** | 会话管理、消息持久化、SSE 推送、JpaAgentRegistry | 已完成 |
-| **user-auth-module** | JWT 认证、用户管理、租户隔离 | 已完成 |
-| **metadata-config-module** | Skill 配置管理 | 已完成 |
-| **tutor-agent** | 导师 Agent：引导用户、分派任务、6 个 Skill、BuiltInTools | 已完成 |
-| **launcher** | Spring Boot 启动器，聚合所有模块 | 已完成 |
-
-### 3.2 Addon 模块
-
-| Addon | 职责 | 状态 |
-|-------|------|------|
-| **coding-agent** | OpenHands 集成，Docker 容器化编程环境，Git 操作 | 已完成 |
-| **claude-worker-agent** | 远程 Claude Code 工人管理，跨主机任务分发 | 已完成 |
-
-### 3.3 前端模块
-
-| 模块 | 职责 | 状态 |
-|------|------|------|
-| **foggy-chat** | 聊天组件库（ChatPanel、useChatStore、消息组件） | 已完成 |
-| **navigator-frontend** | Navigator 前端应用（Vue 3 + Element Plus + Pinia） | 已完成 |
-
-### 3.4 外部服务（Docker 容器）
-
-| 服务 | 职责 | 集成方式 |
-|------|------|---------|
-| **foggy-data-mcp-bridge** | 语义层 MCP 服务（TM/QM 建模、数据查询） | Docker 端口 7108 |
-| **Claude Code Worker** | 远程 Claude Code SDK 封装（FastAPI） | Docker 端口 3031 |
-| **OpenHands** | 编程 Agent 运行时 | Docker 容器 |
-
----
-
-## 4. 关键设计模式
-
-### 4.1 SPI Facade 模式
-
-模块间通过 `navigator-spi` 中的接口通信，避免直接依赖：
-
-```
-tutor-agent  ──→  CodingAgentFacade (SPI)  ←──  coding-agent (实现)
-tutor-agent  ──→  ClaudeWorkerFacade (SPI)  ←──  claude-worker-agent (实现)
-```
-
-### 4.2 BuiltInTool 模式
-
-Agent 的工具以 Spring Bean 形式注册：
-
-```java
-@Slf4j @Component @RequiredArgsConstructor
-public class DispatchCodingTaskTool implements BuiltInTool {
-    private final CodingAgentFacade codingAgentFacade; // 注入 SPI
-    // ...
-}
-```
-
-### 4.3 Agent 配置持久化
-
-- `JpaAgentRegistry`（session-module）从数据库加载 Agent 配置
-- `TutorAgentRegistrar` 从 YAML seed 数据初始化（DB 不存在时）
-- `InMemoryAgentRegistry` 作为 `@ConditionalOnMissingBean` 回退
-
-### 4.4 LLM 韧性
-
-- **超时**：60 秒默认
-- **重试**：最多 2 次，指数退避
-- **熔断器**：5 次失败后开启，30 秒冷却期
-
----
-
-## 5. 可观察性
-
-### 5.1 当前已实现
-
-| 能力 | 实现方式 |
-|------|---------|
-| **TraceId** | TraceIdFilter 生成 16 位 hex ID → MDC，跨异步线程传播 |
-| **Agent 日志** | DefaultAgentInvoker 记录每轮 LLM 调用详情（model、duration、tokens、toolCalls） |
-| **结构化日志** | SLF4J + MDC（traceId、sessionId、agentId） |
-
-### 5.2 待实现
-
-| 能力 | 计划 |
+| 模块 | 职责 |
 |------|------|
-| **Micrometer 指标** | Agent 请求计数、LLM token 使用量、响应时间分布 |
-| **Prometheus 导出** | `/actuator/prometheus` 端点 |
+| `launcher` | 聚合并启动整个平台 |
+| `navigator-common` | 公共 Entity、DTO、表单、枚举、通用工具 |
+| `navigator-spi` | 业务模块之间的 SPI 接口 |
+| `agent-framework` | Agent 调用、工具执行、Skill 解析、上下文编排 |
 
----
+### 3.2 核心业务模块
 
-## 6. 技术栈
-
-| 组件 | 技术选型 |
-|------|---------|
-| 后端框架 | Spring Boot 3.x |
-| AI 框架 | LangChain4j |
-| 数据库 | MySQL 8.0+ |
-| 认证 | JWT (jjwt) |
-| 前端 | Vue 3 + Element Plus + Pinia + Vite |
-| 前端推送 | SSE (Server-Sent Events) |
-| Skill 解析 | Commonmark (Markdown) |
-| 加密 | Spring Security Crypto (AES-256) |
-| 测试 | JUnit 5 + Mockito / Vitest |
-
----
-
-## 7. 演进路线
-
-### 已完成
-
-- Agent 框架核心（配置化 Agent、Skill 系统、工具执行循环）
-- 导师 Agent + 6 个 Skill
-- OpenHands 编程 Agent 集成
-- Claude Worker Agent（远程 Claude Code）
-- 会话管理 + SSE 实时推送
-- JWT 认证
-- 前端聊天界面
-- LLM 韧性（超时、重试、熔断）
-- TraceId 全链路追踪
-
-### 近期计划
-
-- 语义层服务接入（foggy-data-mcp-bridge 作为 Docker Addon）
-- Micrometer 指标采集
-- AI 分身能力
-
-### 远期展望
-
-- 外部工具集成（ClawdBot 等）
-- 记忆系统（长期记忆、向量检索）
-- RAG 增强
-- 多租户 / 企业级部署
-
----
-
-## 8. 参考文档
-
-| 文档 | 说明 |
+| 模块 | 职责 |
 |------|------|
-| [Agent 框架设计](./agent-framework-requirements.md) | 公共 Agent 框架接口与实现要求 |
-| [Agent 框架指南](./agent-framework-guide.md) | 框架使用指南 |
-| [导师 Agent 设计](./tutor-agent-design.md) | 导师 Agent 详细设计 |
-| [会话模块设计](./02-modules/session-module.md) | 会话与消息管理设计 |
-| [编程 Agent 集成](./02-modules/coding-agent-integration.md) | OpenHands 集成方案 |
-| [可观察性系统](./02-modules/observability-system.md) | 监控与追踪设计 |
+| `session-module` | 会话、消息、统一任务分发、SSE、分享与 Agent 发现 |
+| `user-auth-module` | 登录认证、用户管理、API Key 管理 |
+| `metadata-config-module` | 平台配置写接口，管理 Git/LLM/凭证/记忆/覆盖配置 |
+| `metadata-query-module` | 平台配置读接口与查询能力 |
+| `monitoring-module` | 监控事件与统计接口 |
+| `tutor-agent` | 默认引导型 Agent，承接统一会话入口 |
+
+### 3.3 Addon 能力模块
+
+| 模块 | 职责 |
+|------|------|
+| `addons/claude-worker-agent` | 远程 Claude Worker、目录、文件浏览、跨项目任务、Open API |
+| `addons/codex-worker-agent` | Codex Worker 任务和进程治理 |
+| `addons/coding-agent` | OpenHands 集成、容器/会话/事件/Git 环境管理 |
+| `addons/task-assistant` | 针对任务生命周期生成通知和摘要的助手能力 |
+| `addons/echo-agent` | 示例/测试型 Agent |
+
+## 4. 当前核心业务流程
+
+### 4.1 会话驱动流程
+
+```text
+用户进入会话页
+  -> 创建或打开 Session
+  -> 发送消息
+  -> session-module 路由到目标 Agent
+  -> Agent 执行并产生消息/任务/委派
+  -> SSE 持续推送消息、状态、通知
+  -> 前端实时更新会话内容
+```
+
+### 4.2 Worker 驱动流程
+
+```text
+用户进入 Workers
+  -> 选择 Worker
+  -> 选择目录 / 项目 / worktree
+  -> 发起任务
+  -> TaskDispatchFacade 统一分发到 Claude / Codex / A2A Agent
+  -> 用户在历史区查看任务状态、回复、重连、回溯、同步
+```
+
+### 4.3 跨项目编排流程
+
+```text
+用户创建跨项目任务
+  -> 定义多个阶段
+  -> 为阶段绑定 Agent、目录、Prompt、分支
+  -> 系统按阶段推进
+  -> 阶段完成后产出 handoff 信息
+  -> 人工审核后推进下一阶段
+```
+
+### 4.4 平台治理流程
+
+```text
+初始化配置 / 设置页
+  -> 管理 Git 提供方
+  -> 管理 LLM 模型
+  -> 管理 Agent 模型覆盖
+  -> 管理 Worker / 凭证 / 记忆
+  -> 管理任务助手配置
+```
+
+## 5. 设计边界与现状判断
+
+### 5.1 当前已经落地的重点
+
+- 统一会话入口与 SSE 实时通信
+- 统一任务分发与任务面板
+- Claude Worker 工作区管理
+- 文件浏览、Git diff、Git history、搜索
+- 跨项目阶段式任务编排
+- 平台级 Git/LLM/凭证/记忆治理
+- 用户管理与 API Key
+- 监控事件与统计
+- 对外 Open API / SDK
+
+### 5.2 当前不是主轴或仍偏支撑的能力
+
+- `addons/coding-agent` 已存在，但在主前端中不是主要导航入口，更多是独立集成能力
+- `echo-agent` 属于示例/测试能力
+- 历史文档中的“语义层管理、数据分析 Agent、权限建模平台”不再是当前产品主线
+
+## 6. 文档使用建议
+
+当前文档体系应按三层理解：
+
+1. `docs/00-system-overview.md`  
+   作为当前系统定位与总架构唯一总览口径。
+2. `docs/02-modules/*.md`  
+   分别描述各一级功能域或关键模块。
+3. `docs/01-overview/*`  
+   仅保留为历史设计参考，不作为当前实现依据。
+
+术语如有歧义，优先以 [术语表](./terminology-glossary.md) 为准。
+
+## 7. 相关文档
+
+- [功能架构说明](./02-modules/functional-architecture.md)
+- [术语表](./terminology-glossary.md)
+- [工作区与 Worker 中心](./02-modules/worker-workspace-center.md)
+- [会话协作中心](./02-modules/session-collaboration.md)
+- [任务治理中心](./02-modules/task-governance.md)
+- [跨项目编排](./02-modules/cross-project-orchestration.md)
+- [平台设置与资源治理](./02-modules/platform-governance.md)
+- [用户与访问控制](./02-modules/user-and-access-control.md)
+- [监控、通知与开放集成](./02-modules/observability-notification-integration.md)
 
 ---
 
-**文档版本**: 3.0.0
-**更新日期**: 2026-02-09
-**重大变更**: 从"AI 数据分析平台"转型为"个人 AI Agent 编排中枢"，移除数据源/语义层配置模块
+**文档版本**: 4.0.0  
+**更新日期**: 2026-03-31  
+**基准**: 当前仓库代码结构、前端路由、控制器接口与模块依赖

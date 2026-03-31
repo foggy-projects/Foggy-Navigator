@@ -1,5 +1,12 @@
 # Foggy Navigator 业务架构设计方案
 
+> 历史参考文档
+>
+> 本文档属于项目早期业务设想，不能作为当前功能架构依据。
+> 当前系统说明请优先参考：
+> - [系统架构概览](../00-system-overview.md)
+> - [功能架构说明](../02-modules/functional-architecture.md)
+
 ## 1. 业务背景和定位
 
 ### 1.1 项目定位

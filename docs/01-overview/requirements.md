@@ -1,5 +1,12 @@
 # 企业级动态 Agent 编排系统 - 需求文档
 
+> 历史参考文档
+>
+> 本文档反映的是项目早期需求草案，不对应当前 Foggy Navigator 的实际产品定位。
+> 当前系统说明请优先参考：
+> - [系统架构概览](../00-system-overview.md)
+> - [功能架构说明](../02-modules/functional-architecture.md)
+
 ## 1. 项目概述
 
 ### 1.1 项目背景
