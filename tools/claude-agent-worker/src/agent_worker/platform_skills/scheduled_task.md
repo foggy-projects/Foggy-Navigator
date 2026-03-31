@@ -284,7 +284,7 @@ print('Written to', tmp)
 
 NAVIGATOR_URL="{{NAVIGATOR_API_BASE}}"
 SHARING_KEY="{用户的 Sharing Key}"
-CONTEXT_ID="{agent名称}-{任务名称}-$(date '+%Y%m%d')"  # 按天分组会话（含 agent 标识避免冲突）
+CONTEXT_ID="{agent名称}-{任务名称}"  # 固定值 = 永续单会话（默认，AI 可回顾历史）
 LOG_DIR="$HOME/.foggy-tasks"
 LOG_FILE="$LOG_DIR/{任务名称}-$(date '+%Y%m%d_%H%M%S').log"
 
@@ -411,12 +411,14 @@ schtasks /create /tn "Foggy-DailyReport" /tr "bash C:\Users\%USERNAME%\foggy-dai
 
 **重要**：contextId 与 Agent 是绑定关系，不同 Agent 不能复用同一个 contextId。建议在 contextId 中包含 Agent 标识以避免冲突。
 
-| 策略 | contextId 格式 | 效果 |
-|------|---------------|------|
-| **按天分组** | `{agent-name}-daily-20260312` | 同一天的多次调用在同一会话中（适合日报） |
-| **按周分组** | `{agent-name}-weekly-2026W11` | 一周的调用在同一会话中（适合周报） |
-| **永续单会话** | `{agent-name}-permanent` | 所有调用共用一个会话（AI 可回顾全部历史） |
-| **每次独立** | 不传 contextId | 每次调用都是全新会话 |
+**默认推荐永续单会话**（固定 contextId），让 AI 可以回顾历史执行结果、对比趋势。仅当用户明确要求"每次独立"时才不传 contextId。
+
+| 策略 | contextId 格式 | 效果 | 适用场景 |
+|------|---------------|------|----------|
+| **永续单会话（默认）** | `{agent-name}-{task-name}` | 所有调用共用一个会话，AI 可回顾全部历史 | 大多数定时任务 |
+| **按天分组** | `{agent-name}-daily-$(date '+%Y%m%d')` | 同一天的多次调用在同一会话中 | 一天内多次执行、需要当日上下文 |
+| **按周分组** | `{agent-name}-weekly-$(date '+%YW%V')` | 一周的调用在同一会话中 | 周报、需要本周上下文 |
+| **每次独立** | 不传 contextId | 每次调用都是全新会话 | 用户明确要求每次独立执行 |
 
 ---
 
