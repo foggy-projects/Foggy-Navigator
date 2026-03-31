@@ -2027,6 +2027,11 @@
         <el-option label="临时" value="临时" />
         <el-option label="bugfix" value="bugfix" />
         <el-option label="feature" value="feature" />
+        <el-option label="规划" value="规划" />
+        <el-option label="开发" value="开发" />
+        <el-option label="测试" value="测试" />
+        <el-option label="用户体验" value="用户体验" />
+        <el-option label="代码评审" value="代码评审" />
       </el-select>
       <template #footer>
         <el-button @click="showTagDialog = false">取消</el-button>
@@ -4197,6 +4202,11 @@ function tagColor(tag: string): '' | 'success' | 'warning' | 'danger' | 'info' {
     case '临时': return 'info'
     case 'bugfix': return 'danger'
     case 'feature': return 'success'
+    case '规划': return 'warning'
+    case '开发': return 'success'
+    case '测试': return 'danger'
+    case '用户体验': return ''
+    case '代码评审': return 'warning'
     default: return 'info'
   }
 }
