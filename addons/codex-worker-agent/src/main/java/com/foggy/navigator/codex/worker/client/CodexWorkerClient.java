@@ -30,7 +30,8 @@ public class CodexWorkerClient {
 
         WebClient.Builder builder = WebClient.builder()
                 .baseUrl(baseUrl)
-                .clientConnector(new ReactorClientHttpConnector(httpClient));
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(4 * 1024 * 1024));
 
         if (authToken != null && !authToken.isEmpty()) {
             builder.defaultHeader("Authorization", "Bearer " + authToken);
