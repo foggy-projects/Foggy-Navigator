@@ -2720,6 +2720,36 @@ watch(() => taskForm.value.model, () => {
   saveWorkerLlmSelection(selectedWorkerId.value)
 })
 
+/**
+ * 切换会话时，根据会话最新任务的 modelConfigId 和 model 恢复表单选择。
+ * 这样点击不同会话时，"API: xxx" 和 "模型: xxx" 标签会跟随切换。
+ */
+function restoreSessionModelSelection(task: ClaudeTask) {
+  // 优先使用 modelConfigId 恢复 API 配置
+  const configId = task.modelConfigId
+  if (configId && platformModels.value.some((m) => m.id === configId)) {
+    suppressModelAutoSelect = true
+    platformModelConfigId.value = configId
+    // 恢复模型：优先使用 task.model（实际执行的模型），回退到 claudeModelOptions 第一个
+    const opts = claudeModelOptions.value
+    const taskModel = task.model || ''
+    if (taskModel && opts.some((o) => o.value === taskModel)) {
+      taskForm.value.model = taskModel
+    } else {
+      // 尝试用 shortModel 匹配（task.model 可能是完整名如 "claude-opus-4-20250514"）
+      const matched = opts.find((o) => taskModel.includes(o.value.replace(/\[.*\]/, '')))
+      if (matched) {
+        taskForm.value.model = matched.value
+      } else if (opts.length > 0) {
+        taskForm.value.model = opts[0].value
+      }
+    }
+    suppressModelAutoSelect = false
+    // 同步更新 per-worker 缓存
+    saveWorkerLlmSelection(selectedWorkerId.value)
+  }
+}
+
 async function loadPlatformModelConfig() {
   const seq = ++loadPlatformModelConfigSeq
   try {
@@ -5161,6 +5191,10 @@ function handleDirPageChange(page: number) {
 }
 
 async function viewTask(task: ClaudeTask) {
+  // 恢复会话的模型选择（API 配置 + 模型）
+  const conv = allConversations.value.find(c => c.sessionId === task.sessionId)
+  restoreSessionModelSelection(conv?.latestTask ?? task)
+
   // Per-conversation: match by sessionId (same conversation = same pane)
   const existing = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
   if (existing) {

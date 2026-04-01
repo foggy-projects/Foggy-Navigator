@@ -114,6 +114,8 @@ export interface ClaudeTask {
   durationMs?: number
   numTurns?: number
   model?: string
+  /** 创建任务时使用的平台 LLM 模型配置 ID */
+  modelConfigId?: string
   errorMessage?: string
   /** JSON array of checkpoint objects: [{id, turnIndex, timestamp}] */
   checkpoints?: string
@@ -548,6 +550,8 @@ export interface SessionSearchResult {
   latestTaskId: string
   latestStatus: string
   model?: string
+  /** 平台 LLM 模型配置 ID */
+  modelConfigId?: string
   cwd?: string
   source?: string
   totalCost?: number

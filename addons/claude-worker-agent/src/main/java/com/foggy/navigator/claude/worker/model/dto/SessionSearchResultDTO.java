@@ -31,6 +31,8 @@ public class SessionSearchResultDTO {
     private String latestStatus;
     /** 模型名称 */
     private String model;
+    /** 平台 LLM 模型配置 ID */
+    private String modelConfigId;
     /** 工作目录路径 */
     private String cwd;
     /** 任务来源：PLATFORM / SYNCED */

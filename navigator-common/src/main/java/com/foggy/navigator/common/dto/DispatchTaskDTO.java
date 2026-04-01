@@ -27,6 +27,8 @@ public class DispatchTaskDTO {
     private String directoryId;
     private String status;
     private String model;
+    /** 创建任务时使用的平台 LLM 模型配置 ID */
+    private String modelConfigId;
     private BigDecimal costUsd;
     private Long inputTokens;
     private Long outputTokens;

@@ -215,6 +215,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
         // 优先级：显式指定 > AgentModelOverride > Agent.defaultModelConfigId > Directory 默认
         String effectiveModelConfigId = resolveEffectiveModelConfigId(
                 form.getModelConfigId(), logicalAgentId, tenantId);
+        // 持久化使用的模型配置 ID，便于前端恢复会话模型选择
+        if (effectiveModelConfigId != null && !effectiveModelConfigId.isEmpty()) {
+            entity.setModelConfigId(effectiveModelConfigId);
+            taskRepository.save(entity);
+        }
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, effectiveModelConfigId);
         Map<String, String> extraEnvVars = resolveEnvVars(effectiveModelConfigId, directoryId, userId);
 
@@ -365,8 +370,14 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
 
         // 解析 per-conversation auth（含平台模型配置 fallback）
-        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
-        Map<String, String> extraEnvVars = resolveEnvVars(form.getModelConfigId(), directoryId, userId);
+        String modelConfigId = form.getModelConfigId();
+        // 持久化使用的模型配置 ID，便于前端恢复会话模型选择
+        if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            entity.setModelConfigId(modelConfigId);
+            taskRepository.save(entity);
+        }
+        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, modelConfigId);
+        Map<String, String> extraEnvVars = resolveEnvVars(modelConfigId, directoryId, userId);
 
         // 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
@@ -2436,6 +2447,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                     .latestTaskId(task.getTaskId())
                     .latestStatus(task.getStatus())
                     .model(task.getModel())
+                    .modelConfigId(task.getModelConfigId())
                     .cwd(task.getCwd())
                     .source(task.getSource())
                     .totalCost(costMap.getOrDefault(task.getSessionId(), BigDecimal.ZERO))
@@ -2826,6 +2838,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 .directoryId(entity.getDirectoryId())
                 .status(entity.getStatus())
                 .model(entity.getModel())
+                .modelConfigId(entity.getModelConfigId())
                 .costUsd(entity.getCostUsd())
                 .inputTokens(entity.getInputTokens())
                 .outputTokens(entity.getOutputTokens())
@@ -2905,6 +2918,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 .durationMs(entity.getDurationMs())
                 .numTurns(entity.getNumTurns())
                 .model(entity.getModel())
+                .modelConfigId(entity.getModelConfigId())
                 .errorMessage(entity.getErrorMessage())
                 .resultText(entity.getResultText())
                 .contextId(entity.getContextId())
