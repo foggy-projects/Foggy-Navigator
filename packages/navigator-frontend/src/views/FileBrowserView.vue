@@ -11,6 +11,11 @@
           :title="showHidden ? '隐藏 . 文件' : '显示 . 文件'"
           @click="toggleHidden"
         >.*</button>
+        <button
+          class="refresh-btn"
+          title="刷新文件树"
+          @click="refreshTree"
+        >&#x21bb;</button>
       </div>
 
       <!-- File tree tab -->
@@ -229,6 +234,10 @@
         </div>
         <div v-if="ctxMenu.node && !ctxMenu.node.isDir" class="ctx-item" @click="pinToScripts()">
           固定到常用脚本
+        </div>
+        <div v-if="ctxMenu.node && ctxMenu.node.isDir" class="ctx-divider"></div>
+        <div v-if="ctxMenu.node && ctxMenu.node.isDir" class="ctx-item" @click="refreshFolder()">
+          刷新文件夹
         </div>
         <div class="ctx-divider"></div>
         <div class="ctx-item" @click="toggleIgnore()">
@@ -707,6 +716,46 @@ function toggleHidden() {
   // Reload the entire tree with new setting
   treeData.value = []
   loadDirectory()
+}
+
+async function refreshTree() {
+  const expanded = new Set<string>(treeRef.value?.getExpandedKeys?.() as string[] || [])
+  treeData.value = []
+  await loadDirectory()
+  // Re-expand previously expanded directories by loading their children
+  for (const key of expanded) {
+    const node = findNode(treeData.value, key)
+    if (node && node.isDir) {
+      await loadDirectoryForNode(node)
+    }
+  }
+  treeData.value = [...treeData.value]
+  await nextTick()
+  treeRef.value?.setExpandedKeys?.([...expanded])
+}
+
+async function refreshFolder() {
+  const node = ctxMenu.value.node
+  if (!node || !node.isDir) return
+  closeContextMenu()
+  const expanded = new Set<string>(treeRef.value?.getExpandedKeys?.() as string[] || [])
+  await loadDirectoryForNode(node)
+  treeData.value = [...treeData.value]
+  await nextTick()
+  // Keep expansion state; ensure this folder stays expanded
+  expanded.add(node.fullPath)
+  treeRef.value?.setExpandedKeys?.([...expanded])
+}
+
+function findNode(nodes: TreeNode[], fullPath: string): TreeNode | null {
+  for (const n of nodes) {
+    if (normalizePath(n.fullPath) === normalizePath(fullPath)) return n
+    if (n.children) {
+      const found = findNode(n.children, fullPath)
+      if (found) return found
+    }
+  }
+  return null
 }
 
 function getRootDir(): string | null {
@@ -1318,6 +1367,18 @@ watch(() => route.query.directoryId, () => {
 
 .toggle-hidden.on {
   color: #e2c08d !important;
+}
+
+.refresh-btn {
+  flex: none !important;
+  width: 32px;
+  font-size: 15px;
+  color: #555 !important;
+  border-bottom-color: transparent !important;
+}
+
+.refresh-btn:hover {
+  color: #ddd !important;
 }
 
 .tree-container {

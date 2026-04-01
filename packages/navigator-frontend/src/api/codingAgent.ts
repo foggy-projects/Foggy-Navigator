@@ -56,10 +56,19 @@ export async function unbindDirectory(agentId: string, directoryId: string): Pro
 }
 
 /** 向 Agent 提问（A2A ask），可选传入 sessionId 记录咨询，contextId 支持多轮对话 */
-export async function askAgent(agentId: string, question: string, sessionId?: string, contextId?: string): Promise<A2aTask> {
+export async function askAgent(
+  agentId: string,
+  question: string,
+  sessionId?: string,
+  contextId?: string,
+  systemPrompt?: string,
+  firstMsg?: string,
+): Promise<A2aTask> {
   const payload: Record<string, string> = { question }
   if (sessionId) payload.sessionId = sessionId
   if (contextId) payload.contextId = contextId
+  if (systemPrompt) payload.systemPrompt = systemPrompt
+  if (firstMsg) payload.firstMsg = firstMsg
   const rx = (await client.post(`/agents/${agentId}/ask`, payload)) as unknown as RX<A2aTask>
   return rx.data
 }

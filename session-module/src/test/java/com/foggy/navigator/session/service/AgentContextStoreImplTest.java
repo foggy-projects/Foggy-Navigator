@@ -1,6 +1,7 @@
 package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
+import com.foggy.navigator.common.exception.ContextAgentMismatchException;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -100,6 +101,109 @@ class AgentContextStoreImplTest {
         assertTrue(result.isEmpty()); // just past boundary
     }
 
+    // ---- findSessionRefForAgent ----
+
+    @Test
+    void findSessionRefForAgent_notFound_returnsEmpty() {
+        when(repository.findByContextIdAndUserId("ctx-new", "u1"))
+                .thenReturn(Optional.empty());
+
+        Optional<String> result = store.findSessionRefForAgent("ctx-new", "u1", "agent-1", 24);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void findSessionRefForAgent_sameAgent_returnsRef() {
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId("ctx-1");
+        entity.setUserId("u1");
+        entity.setTargetAgentId("agent-1");
+        entity.setAgentSessionRef("claude-session-abc");
+        entity.setLastAccessedAt(LocalDateTime.now().minusHours(1));
+
+        when(repository.findByContextIdAndUserId("ctx-1", "u1"))
+                .thenReturn(Optional.of(entity));
+
+        Optional<String> result = store.findSessionRefForAgent("ctx-1", "u1", "agent-1", 24);
+        assertTrue(result.isPresent());
+        assertEquals("claude-session-abc", result.get());
+    }
+
+    @Test
+    void findContextForAgent_sameAgent_returnsEntityWithNavigatorSessionId() {
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId("ctx-1");
+        entity.setUserId("u1");
+        entity.setTargetAgentId("agent-1");
+        entity.setAgentSessionRef("claude-session-abc");
+        entity.setNavigatorSessionId("nav-session-1");
+        entity.setLastAccessedAt(LocalDateTime.now().minusHours(1));
+
+        when(repository.findByContextIdAndUserId("ctx-1", "u1"))
+                .thenReturn(Optional.of(entity));
+
+        Optional<AgentConversationContextEntity> result =
+                store.findContextForAgent("ctx-1", "u1", "agent-1", 24);
+        assertTrue(result.isPresent());
+        assertEquals("claude-session-abc", result.get().getAgentSessionRef());
+        assertEquals("nav-session-1", result.get().getNavigatorSessionId());
+    }
+
+    @Test
+    void findSessionRefForAgent_differentAgent_throwsMismatch() {
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId("ctx-1");
+        entity.setUserId("u1");
+        entity.setTargetAgentId("agent-A");
+        entity.setAgentSessionRef("session-ref");
+        entity.setLastAccessedAt(LocalDateTime.now().minusHours(1));
+
+        when(repository.findByContextIdAndUserId("ctx-1", "u1"))
+                .thenReturn(Optional.of(entity));
+
+        ContextAgentMismatchException ex = assertThrows(
+                ContextAgentMismatchException.class,
+                () -> store.findSessionRefForAgent("ctx-1", "u1", "agent-B", 24));
+
+        assertEquals("ctx-1", ex.getContextId());
+        assertEquals("agent-A", ex.getBoundAgentId());
+        assertEquals("agent-B", ex.getRequestedAgentId());
+    }
+
+    @Test
+    void findSessionRefForAgent_expired_returnsEmpty_ignoresAgentCheck() {
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId("ctx-1");
+        entity.setUserId("u1");
+        entity.setTargetAgentId("agent-A");
+        entity.setAgentSessionRef("session-ref");
+        entity.setLastAccessedAt(LocalDateTime.now().minusHours(25));
+
+        when(repository.findByContextIdAndUserId("ctx-1", "u1"))
+                .thenReturn(Optional.of(entity));
+
+        // Even though agent doesn't match, TTL expired → empty, no exception
+        Optional<String> result = store.findSessionRefForAgent("ctx-1", "u1", "agent-B", 24);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void findSessionRefForAgent_nullTargetAgentId_noException() {
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId("ctx-1");
+        entity.setUserId("u1");
+        entity.setTargetAgentId(null); // legacy record without targetAgentId
+        entity.setAgentSessionRef("session-ref");
+        entity.setLastAccessedAt(LocalDateTime.now());
+
+        when(repository.findByContextIdAndUserId("ctx-1", "u1"))
+                .thenReturn(Optional.of(entity));
+
+        Optional<String> result = store.findSessionRefForAgent("ctx-1", "u1", "any-agent", 24);
+        assertTrue(result.isPresent());
+        assertEquals("session-ref", result.get());
+    }
+
     // ---- saveSessionRef ----
 
     @Test
@@ -154,5 +258,19 @@ class AgentContextStoreImplTest {
         verify(repository).save(captor.capture());
         assertEquals("user-42", captor.getValue().getUserId());
         assertEquals("agent-x", captor.getValue().getTargetAgentId());
+    }
+
+    @Test
+    void deleteByNavigatorSessionId_delegatesToRepository() {
+        store.deleteByNavigatorSessionId("session-1");
+
+        verify(repository).deleteByNavigatorSessionId("session-1");
+    }
+
+    @Test
+    void deleteByNavigatorSessionId_blank_isIgnored() {
+        store.deleteByNavigatorSessionId("  ");
+
+        verify(repository, never()).deleteByNavigatorSessionId(any());
     }
 }

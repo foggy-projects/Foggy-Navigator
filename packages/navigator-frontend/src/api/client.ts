@@ -34,7 +34,7 @@ client.interceptors.response.use(
       setToken(newToken)
     }
     if (isRxEnvelope(response.data) && response.data.code !== 200) {
-      throw new Error(response.data.message || '请求失败')
+      throw new Error(response.data.message || response.data.msg || '请求失败')
     }
     return response.data
   },

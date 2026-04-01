@@ -2027,6 +2027,11 @@
         <el-option label="临时" value="临时" />
         <el-option label="bugfix" value="bugfix" />
         <el-option label="feature" value="feature" />
+        <el-option label="规划" value="规划" />
+        <el-option label="开发" value="开发" />
+        <el-option label="测试" value="测试" />
+        <el-option label="用户体验" value="用户体验" />
+        <el-option label="代码评审" value="代码评审" />
       </el-select>
       <template #footer>
         <el-button @click="showTagDialog = false">取消</el-button>
@@ -2681,23 +2686,6 @@ function isSelectablePlatformModel(model: LlmModelConfig): boolean {
   return model.hasApiKey || model.workerBackend === 'OPENAI_CODEX'
 }
 
-function providerTypeFromWorkerBackend(workerBackend?: string | null): string | undefined {
-  if (workerBackend === 'OPENAI_CODEX') return 'codex-worker'
-  if (workerBackend === 'CLAUDE_CODE') return 'claude-worker'
-  return undefined
-}
-
-function providerTypeFromAgentType(agentType?: string | null): string | undefined {
-  if (agentType === 'LOCAL_CODEX_WORKER') return 'codex-worker'
-  if (agentType === 'LOCAL_CLAUDE_WORKER') return 'claude-worker'
-  return undefined
-}
-
-const selectedAgentProviderType = computed(() => {
-  if (!selectedAgentId.value) return undefined
-  const agent = agentState.agents.value.find(a => a.agentId === selectedAgentId.value)
-  return providerTypeFromAgentType(agent?.agentType)
-})
 
 const claudeModelOptions = computed(() => {
   const backend = platformModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
@@ -2731,6 +2719,36 @@ watch(() => taskForm.value.model, () => {
   if (suppressModelAutoSelect) return
   saveWorkerLlmSelection(selectedWorkerId.value)
 })
+
+/**
+ * 切换会话时，根据会话最新任务的 modelConfigId 和 model 恢复表单选择。
+ * 这样点击不同会话时，"API: xxx" 和 "模型: xxx" 标签会跟随切换。
+ */
+function restoreSessionModelSelection(task: ClaudeTask) {
+  // 优先使用 modelConfigId 恢复 API 配置
+  const configId = task.modelConfigId
+  if (configId && platformModels.value.some((m) => m.id === configId)) {
+    suppressModelAutoSelect = true
+    platformModelConfigId.value = configId
+    // 恢复模型：优先使用 task.model（实际执行的模型），回退到 claudeModelOptions 第一个
+    const opts = claudeModelOptions.value
+    const taskModel = task.model || ''
+    if (taskModel && opts.some((o) => o.value === taskModel)) {
+      taskForm.value.model = taskModel
+    } else {
+      // 尝试用 shortModel 匹配（task.model 可能是完整名如 "claude-opus-4-20250514"）
+      const matched = opts.find((o) => taskModel.includes(o.value.replace(/\[.*\]/, '')))
+      if (matched) {
+        taskForm.value.model = matched.value
+      } else if (opts.length > 0) {
+        taskForm.value.model = opts[0].value
+      }
+    }
+    suppressModelAutoSelect = false
+    // 同步更新 per-worker 缓存
+    saveWorkerLlmSelection(selectedWorkerId.value)
+  }
+}
 
 async function loadPlatformModelConfig() {
   const seq = ++loadPlatformModelConfigSeq
@@ -3193,16 +3211,13 @@ interface ConversationGroup {
   config?: ConversationConfig
 }
 
-function getTaskResumeRef(task: Pick<ClaudeTask, 'claudeSessionId' | 'codexThreadId'>): string {
-  if (task.claudeSessionId) return `claude:${task.claudeSessionId}`
-  if (task.codexThreadId) return `codex:${task.codexThreadId}`
-  return ''
+/** 会话是否可以 resume（有 sessionId 即可，provider 内部状态由后端恢复） */
+function getTaskResumeRef(task: Pick<ClaudeTask, 'sessionId'>): string {
+  return task.sessionId || ''
 }
 
 function getConversationResumeRef(conv: ConversationGroup): string {
-  if (conv.claudeSessionId) return `claude:${conv.claudeSessionId}`
-  if (conv.codexThreadId) return `codex:${conv.codexThreadId}`
-  return ''
+  return conv.sessionId || ''
 }
 
 function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] {
@@ -4217,6 +4232,11 @@ function tagColor(tag: string): '' | 'success' | 'warning' | 'danger' | 'info' {
     case '临时': return 'info'
     case 'bugfix': return 'danger'
     case 'feature': return 'success'
+    case '规划': return 'warning'
+    case '开发': return 'success'
+    case '测试': return 'danger'
+    case '用户体验': return ''
+    case '代码评审': return 'warning'
     default: return 'info'
   }
 }
@@ -4696,18 +4716,14 @@ async function handleCreateTask() {
     const form: {
       workerId: string; prompt: string; cwd?: string; directoryId?: string
       model?: string; maxTurns?: number; agentTeamsJson?: string; agentTeamsConfigId?: string
-      images?: string; permissionMode?: string; modelConfigId?: string; agentId?: string; providerType?: string
+      images?: string; permissionMode?: string; modelConfigId?: string; agentId?: string
     } = {
       workerId: selectedWorkerId.value,
       prompt,
     }
-    // Determine routing: if modelConfig's provider matches agent's provider, use agentId (A2A route).
-    // If they differ (e.g. Claude agent + Codex model), skip agentId and use providerType (direct route).
-    const modelProviderType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
-    if (selectedAgentId.value && (!modelProviderType || modelProviderType === selectedAgentProviderType.value)) {
+    // 路由统一由后端处理：前端只传 agentId + modelConfigId
+    if (selectedAgentId.value) {
       form.agentId = selectedAgentId.value
-    } else if (modelProviderType) {
-      form.providerType = modelProviderType
     }
 
     if (selectedDirectoryId.value) {
@@ -5082,7 +5098,7 @@ async function handlePaneSend(paneId: string, content: string) {
   const oldTask = pane?.task.value
   const workerId = oldTask?.workerId || selectedWorkerId.value
   if (!pane || !oldTask || !workerId) return
-  if (!oldTask.claudeSessionId && !oldTask.codexThreadId) return
+  if (!oldTask.sessionId) return
 
   // Inject @agent context into prompt if available
   let finalPrompt = content
@@ -5116,14 +5132,7 @@ async function handlePaneSend(paneId: string, content: string) {
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
-    resumeForm.providerType = oldTask.providerType
-      || providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
-    if (oldTask.claudeSessionId) {
-      resumeForm.claudeSessionId = oldTask.claudeSessionId
-    }
-    if (oldTask.codexThreadId) {
-      resumeForm.codexThreadId = oldTask.codexThreadId
-    }
+    // providerType / claudeSessionId / codexThreadId 由后端从 session 恢复，前端不再传递
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -5182,6 +5191,10 @@ function handleDirPageChange(page: number) {
 }
 
 async function viewTask(task: ClaudeTask) {
+  // 恢复会话的模型选择（API 配置 + 模型）
+  const conv = allConversations.value.find(c => c.sessionId === task.sessionId)
+  restoreSessionModelSelection(conv?.latestTask ?? task)
+
   // Per-conversation: match by sessionId (same conversation = same pane)
   const existing = panes.value.find((p) => p.task.value?.sessionId === task.sessionId)
   if (existing) {
@@ -5463,8 +5476,7 @@ async function executeContextRepair() {
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
-    resumeForm.providerType = task.providerType
-      || providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+    // providerType 由后端从 modelConfigId 推导，前端不再传递
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }
@@ -5692,14 +5704,7 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     if (selectedAgentId.value) {
       resumeForm.agentId = selectedAgentId.value
     }
-    resumeForm.providerType = task.providerType
-      || providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
-    if (task.claudeSessionId) {
-      resumeForm.claudeSessionId = task.claudeSessionId
-    }
-    if (task.codexThreadId) {
-      resumeForm.codexThreadId = task.codexThreadId
-    }
+    // providerType / claudeSessionId / codexThreadId 由后端从 session 恢复，前端不再传递
     if (taskForm.value.model) {
       resumeForm.model = taskForm.value.model
     }

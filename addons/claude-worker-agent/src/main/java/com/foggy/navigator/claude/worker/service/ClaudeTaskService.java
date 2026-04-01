@@ -161,14 +161,19 @@ public class ClaudeTaskService implements TaskQueryProvider {
 
         String logicalAgentId = resolveLogicalAgentId(form.getAgentId(), null);
 
-        // 3. 创建 Foggy Session
-        String sessionId = sessionManager.createSession(SessionCreateRequest.builder()
-                .userId(userId)
-                .tenantId(tenantId)
-                .agentId(logicalAgentId)
-                .providerType(AGENT_ID)
-                .taskName(truncate(form.getPrompt(), 100))
-                .build());
+        // 3. 创建或复用 Foggy Session
+        String sessionId = form.getSessionId();
+        if (sessionId != null && sessionManager.getSession(sessionId) != null) {
+            log.info("Reusing session {} from form.sessionId", sessionId);
+        } else {
+            sessionId = sessionManager.createSession(SessionCreateRequest.builder()
+                    .userId(userId)
+                    .tenantId(tenantId)
+                    .agentId(logicalAgentId)
+                    .providerType(AGENT_ID)
+                    .taskName(truncate(form.getPrompt(), 100))
+                    .build());
+        }
 
         // 3.5. 添加用户 prompt 作为 USER 消息
         sessionManager.addMessage(sessionId, com.foggy.navigator.agent.framework.session.Message.builder()
@@ -210,6 +215,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
         // 优先级：显式指定 > AgentModelOverride > Agent.defaultModelConfigId > Directory 默认
         String effectiveModelConfigId = resolveEffectiveModelConfigId(
                 form.getModelConfigId(), logicalAgentId, tenantId);
+        // 持久化使用的模型配置 ID，便于前端恢复会话模型选择
+        if (effectiveModelConfigId != null && !effectiveModelConfigId.isEmpty()) {
+            entity.setModelConfigId(effectiveModelConfigId);
+            taskRepository.save(entity);
+        }
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, effectiveModelConfigId);
         Map<String, String> extraEnvVars = resolveEnvVars(effectiveModelConfigId, directoryId, userId);
 
@@ -360,8 +370,14 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
 
         // 解析 per-conversation auth（含平台模型配置 fallback）
-        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, form.getModelConfigId());
-        Map<String, String> extraEnvVars = resolveEnvVars(form.getModelConfigId(), directoryId, userId);
+        String modelConfigId = form.getModelConfigId();
+        // 持久化使用的模型配置 ID，便于前端恢复会话模型选择
+        if (modelConfigId != null && !modelConfigId.isEmpty()) {
+            entity.setModelConfigId(modelConfigId);
+            taskRepository.save(entity);
+        }
+        String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, modelConfigId);
+        Map<String, String> extraEnvVars = resolveEnvVars(modelConfigId, directoryId, userId);
 
         // 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
@@ -920,6 +936,13 @@ public class ClaudeTaskService implements TaskQueryProvider {
      * 4. 更新 DB 状态 → ABORTED
      */
     @SuppressWarnings("unchecked")
+    /**
+     * 检查指定 Claude 会话是否有正在运行的任务（并发保护）
+     */
+    public boolean hasRunningTask(String claudeSessionId, String workerId) {
+        return taskRepository.existsByClaudeSessionIdAndWorkerIdAndStatus(claudeSessionId, workerId, "RUNNING");
+    }
+
     public void abortTask(String taskId) {
         ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
         String workerTaskId = resolveWorkerTaskLookupId(task);
@@ -1146,7 +1169,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
             if (matchedDir != null && matchedDir.getDefaultAuthMode() != null) {
                 String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(matchedDir);
                 bindAuthToSession(
-                        sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
+                        sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2],
+                        matchedDir.getDefaultModelConfigId());
             }
 
             created++;
@@ -1228,7 +1252,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 String authMode = (modelConfig.getBaseUrl() != null && !modelConfig.getBaseUrl().isEmpty())
                         ? "CUSTOM_ENDPOINT" : "API_KEY";
                 bindAuthToSession(
-                        sessionId, workerId, userId, authMode, decryptedApiKey, modelConfig.getBaseUrl());
+                        sessionId, workerId, userId, authMode, decryptedApiKey, modelConfig.getBaseUrl(),
+                        modelConfigId);
 
                 return new String[]{decryptedApiKey, null, modelConfig.getBaseUrl()};
             }
@@ -1250,7 +1275,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
                         String authMode = (dirModelConfig.getBaseUrl() != null && !dirModelConfig.getBaseUrl().isEmpty())
                                 ? "CUSTOM_ENDPOINT" : "API_KEY";
                         bindAuthToSession(
-                                sessionId, workerId, userId, authMode, decryptedApiKey, dirModelConfig.getBaseUrl());
+                                sessionId, workerId, userId, authMode, decryptedApiKey, dirModelConfig.getBaseUrl(),
+                                dir.getDefaultModelConfigId());
                         return new String[]{decryptedApiKey, null, dirModelConfig.getBaseUrl()};
                     }
                 }
@@ -1258,7 +1284,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 if (dir.getDefaultAuthMode() != null) {
                     String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(dir);
                     bindAuthToSession(
-                            sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
+                            sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2],
+                            null);
                     String apiKey = null;
                     String authToken = null;
                     if ("API_KEY".equals(dirAuth[0]) || "CUSTOM_ENDPOINT".equals(dirAuth[0])) {
@@ -2030,7 +2057,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
      * 将 auth 信息直接绑定到 SessionEntity（替代 ConversationConfigService.bindAuthFromDirectory）
      */
     private void bindAuthToSession(String sessionId, String workerId, String userId,
-                                   String authMode, String plainToken, String baseUrl) {
+                                   String authMode, String plainToken, String baseUrl,
+                                   String modelConfigId) {
         if (sessionEntityRepository == null) return;
         SessionEntity session = getOrCreateSessionEntity(sessionId, workerId, userId);
         if (session == null || session.getAuthBoundAt() != null) return;
@@ -2040,9 +2068,9 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
         session.setAuthBaseUrl(blankToNull(baseUrl));
         session.setAuthBoundAt(LocalDateTime.now());
-        session.setAuthModelConfigId(null);
+        session.setAuthModelConfigId(modelConfigId);
         sessionEntityRepository.save(session);
-        log.info("Auth bound to session {}: mode={}", sessionId, authMode);
+        log.info("Auth bound to session {}: mode={}, modelConfigId={}", sessionId, authMode, modelConfigId);
     }
 
     /**
@@ -2424,6 +2452,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                     .latestTaskId(task.getTaskId())
                     .latestStatus(task.getStatus())
                     .model(task.getModel())
+                    .modelConfigId(config != null ? config.getAuthModelConfigId() : task.getModelConfigId())
                     .cwd(task.getCwd())
                     .source(task.getSource())
                     .totalCost(costMap.getOrDefault(task.getSessionId(), BigDecimal.ZERO))
@@ -2634,7 +2663,6 @@ public class ClaudeTaskService implements TaskQueryProvider {
         ResumeTaskForm form = new ResumeTaskForm();
         form.setAgentId((String) params.get("agentId"));
         form.setWorkerId((String) params.get("workerId"));
-        form.setClaudeSessionId((String) params.get("claudeSessionId"));
         form.setPrompt((String) params.get("prompt"));
         form.setCwd((String) params.get("cwd"));
         form.setDirectoryId((String) params.get("directoryId"));
@@ -2647,6 +2675,15 @@ public class ClaudeTaskService implements TaskQueryProvider {
         form.setAgentTeamsConfigId((String) params.get("agentTeamsConfigId"));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
+        }
+        // claudeSessionId 从 SessionEntity.providerStateJson 恢复，不再从 request 透传
+        String sessionId = form.getSessionId();
+        if (sessionId != null && !sessionId.isEmpty()) {
+            String claudeSessionId = readJsonValue(
+                    sessionEntityRepository.findById(sessionId)
+                            .map(SessionEntity::getProviderStateJson).orElse(null),
+                    "claudeSessionId");
+            form.setClaudeSessionId(claudeSessionId);
         }
         TaskDTO taskDTO = resumeTask(userId, tenantId, form);
         return getTaskById(taskDTO.getTaskId()).orElseThrow();
@@ -2806,6 +2843,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 .directoryId(entity.getDirectoryId())
                 .status(entity.getStatus())
                 .model(entity.getModel())
+                .modelConfigId(entity.getModelConfigId())
                 .costUsd(entity.getCostUsd())
                 .inputTokens(entity.getInputTokens())
                 .outputTokens(entity.getOutputTokens())
@@ -2885,6 +2923,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 .durationMs(entity.getDurationMs())
                 .numTurns(entity.getNumTurns())
                 .model(entity.getModel())
+                .modelConfigId(entity.getModelConfigId())
                 .errorMessage(entity.getErrorMessage())
                 .resultText(entity.getResultText())
                 .contextId(entity.getContextId())

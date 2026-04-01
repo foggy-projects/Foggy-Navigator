@@ -428,7 +428,9 @@ export async function runQuery(
   model: string | undefined,
   maxTurns: number | undefined,
   images: ImageAttachment[] | undefined,
-  apiKey: string | undefined
+  apiKey: string | undefined,
+  baseUrl: string | undefined,
+  envVars: Record<string, string> | undefined
 ): Promise<void> {
   const broadcast = new EventBroadcast(taskId)
   taskBroadcasts.set(taskId, broadcast)
@@ -471,6 +473,7 @@ export async function runQuery(
     // 1. API Key 模式：传入 apiKey
     // 2. 订阅模式：不传 apiKey，SDK 通过 Codex CLI 自动读取 ~/.codex/auth.json
     const effectiveApiKey = apiKey || config.openaiApiKey || undefined
+    const effectiveBaseUrl = baseUrl || config.openaiBaseUrl || undefined
     const codexOptions: CodexOptions = {
       env: buildCodexProcessEnv({
         ...process.env,
@@ -481,6 +484,27 @@ export async function runQuery(
     if (effectiveApiKey) {
       codexOptions.apiKey = effectiveApiKey
     }
+    if (effectiveBaseUrl) {
+      codexOptions.baseUrl = effectiveBaseUrl
+    }
+
+    // Codex CLI 配置项默认值 + envVars 覆盖
+    const codexConfigDefaults: Record<string, number> = {
+      tool_output_token_limit: 10000,
+      model_auto_compact_token_limit: 140000,
+    }
+    const codexConfig: Record<string, string | number> = { ...codexConfigDefaults }
+    if (envVars) {
+      const codexConfigKeys = ['model_context_window', 'model_auto_compact_token_limit', 'tool_output_token_limit']
+      for (const key of codexConfigKeys) {
+        const val = envVars[key]
+        if (val != null && val !== '') {
+          const num = Number(val)
+          codexConfig[key] = Number.isNaN(num) ? val : num
+        }
+      }
+    }
+    codexOptions.config = { ...codexOptions.config, ...codexConfig }
 
     const codex = new Codex(codexOptions)
 

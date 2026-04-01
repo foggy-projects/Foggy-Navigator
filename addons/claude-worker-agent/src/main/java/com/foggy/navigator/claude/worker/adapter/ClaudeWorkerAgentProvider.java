@@ -1,17 +1,18 @@
 package com.foggy.navigator.claude.worker.adapter;
 
-import com.foggy.navigator.claude.worker.repository.AgentDirectoryBindingRepository;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
-import com.foggy.navigator.common.dto.a2a.A2aAgentSkill;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.util.AgentCardBuilder;
+import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.agent.InnerA2aAgent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
@@ -28,7 +29,6 @@ import java.util.concurrent.Executor;
 public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
 
     private final CodingAgentRepository agentRepository;
-    private final AgentDirectoryBindingRepository bindingRepository;
     private final ClaudeTaskService taskService;
     private final WorkingDirectoryRepository directoryRepository;
     @Nullable
@@ -107,21 +107,15 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
                 .map(this::toA2aAgent);
     }
 
+    /**
+     * Agent 解析：agentId 精确匹配 → name 匹配。
+     * <p>
+     * directory/binding/workerId 等间接查找已由 TaskDispatchFacade 的 directory# 机制处理，
+     * Provider 只负责解析真实 Agent 实体。
+     */
     private Optional<CodingAgentEntity> resolveManagedEntity(String lookupId, String userId) {
         return agentRepository.findByAgentIdAndUserId(lookupId, userId)
                 .or(() -> agentRepository.findByNameAndUserId(lookupId, userId))
-                .or(() -> agentRepository.findByDefaultDirectoryIdAndUserId(lookupId, userId)
-                        .filter(this::isManagedAgent))
-                .or(() -> bindingRepository.findByDirectoryId(lookupId).stream()
-                        .map(binding -> agentRepository.findByAgentIdAndUserId(binding.getAgentId(), userId))
-                        .filter(Optional::isPresent)
-                        .map(Optional::get)
-                        .filter(this::isManagedAgent)
-                        .findFirst())
-                // workerId fallback: 仅在未命中 directoryId 时兜底
-                .or(() -> agentRepository.findByWorkerIdAndUserId(lookupId, userId).stream()
-                        .filter(this::isManagedAgent)
-                        .findFirst())
                 .filter(this::isManagedAgent);
     }
 
@@ -131,28 +125,13 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
 
     private A2aAgent toA2aAgent(CodingAgentEntity entity) {
         String cwd = resolveDefaultCwd(entity);
-        return new ClaudeWorkerA2aAgent(entity, taskService, cwd, contextStore);
+        InnerA2aAgent inner = new ClaudeWorkerInnerA2aAgent(entity, taskService, cwd);
+        return new ContextResolvingA2aAgent(inner, contextStore, entity);
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {
-        String desc = entity.getDescription();
-        if (entity.getProjectSummary() != null) {
-            desc = (desc != null ? desc + "\n\n" : "") + "## 项目概述\n" + entity.getProjectSummary();
-        }
-        return A2aAgentCard.builder()
-                .id(entity.getAgentId())
-                .name(entity.getName())
-                .description(desc)
-                .url(entity.getEndpointUrl())
-                .version("1.0.0")
-                .skills(List.of(
-                        A2aAgentSkill.builder()
-                                .id("coding")
-                                .name("Coding")
-                                .description("Execute coding tasks via Claude Code CLI")
-                                .tags(List.of("coding", "claude-worker"))
-                                .build()
-                ))
-                .build();
+        return AgentCardBuilder.fromEntity(entity,
+                "coding", "Execute coding tasks via Claude Code CLI",
+                List.of("coding", "claude-worker"));
     }
 }

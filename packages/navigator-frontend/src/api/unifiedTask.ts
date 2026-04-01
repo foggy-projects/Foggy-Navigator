@@ -72,9 +72,7 @@ export async function createTaskUnified(form: {
   permissionMode?: string
   modelConfigId?: string
   agentId?: string
-  providerType?: string
   contextId?: string
-  codexThreadId?: string
 }): Promise<DispatchTask> {
   const rx = (await client.post('/tasks', normalizeTaskForm(form))) as unknown as RX<DispatchTask>
   return rx.data
@@ -144,8 +142,6 @@ export async function resyncTaskUnified(taskId: string): Promise<unknown> {
  */
 export async function resumeTaskUnified(form: {
   workerId: string
-  claudeSessionId?: string
-  codexThreadId?: string
   prompt: string
   cwd?: string
   directoryId?: string
@@ -158,7 +154,6 @@ export async function resumeTaskUnified(form: {
   permissionMode?: string
   modelConfigId?: string
   agentId?: string
-  providerType?: string
 }): Promise<DispatchTask> {
   const rx = (await client.post('/tasks/resume', normalizeTaskForm(form))) as unknown as RX<DispatchTask>
   return rx.data

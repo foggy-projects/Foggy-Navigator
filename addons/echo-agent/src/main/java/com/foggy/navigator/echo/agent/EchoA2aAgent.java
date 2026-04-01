@@ -102,8 +102,4 @@ public class EchoA2aAgent implements A2aAgent {
         }
     }
 
-    @Override
-    public boolean isAvailable() {
-        return true;
-    }
 }

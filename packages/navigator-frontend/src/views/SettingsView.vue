@@ -387,8 +387,8 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item v-if="llmForm.workerBackend !== 'OPENAI_CODEX'" label="API Base URL" required>
-          <el-input v-model="llmForm.baseUrl" placeholder="如：https://dashscope.aliyuncs.com/compatible-mode/v1" />
+        <el-form-item label="API Base URL" :required="llmForm.workerBackend !== 'OPENAI_CODEX'">
+          <el-input v-model="llmForm.baseUrl" :placeholder="llmForm.workerBackend === 'OPENAI_CODEX' ? '留空使用默认 OpenAI 端点（订阅模式无需填写）' : '如：https://dashscope.aliyuncs.com/compatible-mode/v1'" />
         </el-form-item>
         <el-row :gutter="12">
           <el-col :span="12">
@@ -432,15 +432,15 @@
               <el-input v-else v-model="llmForm.modelName" placeholder="如：qwen-max" />
             </el-form-item>
           </el-col>
-          <el-col v-if="llmForm.workerBackend !== 'OPENAI_CODEX'" :span="12">
-            <el-form-item label="API Key" :required="llmDialogMode === 'add'">
-              <el-input v-model="llmForm.apiKey" type="password" show-password :placeholder="llmDialogMode === 'edit' ? '留空保持不变' : 'API Key'" />
+          <el-col :span="12">
+            <el-form-item label="API Key" :required="llmForm.workerBackend !== 'OPENAI_CODEX' && llmDialogMode === 'add'">
+              <el-input v-model="llmForm.apiKey" type="password" show-password :placeholder="llmDialogMode === 'edit' ? '留空保持不变' : (llmForm.workerBackend === 'OPENAI_CODEX' ? '留空使用订阅模式' : 'API Key')" />
             </el-form-item>
           </el-col>
         </el-row>
         <el-form-item v-if="llmForm.workerBackend === 'OPENAI_CODEX'" label="">
-          <div class="form-hint" style="color: #67c23a; font-size: 12px">
-            🔗 Codex 订阅模式：通过 ChatGPT 账号认证（~/.codex/auth.json），无需 API Key
+          <div class="form-hint" style="color: #909399; font-size: 12px">
+            Codex 支持两种认证模式：填写 API Key 使用 API 模式，留空则使用订阅模式（~/.codex/auth.json）
           </div>
         </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'CLAUDE_CODE'" label="可用模型">
@@ -481,10 +481,52 @@
             指定此编程模型由哪个 Worker 后端执行
           </div>
         </el-form-item>
-        <el-form-item label="环境变量">
+        <el-form-item>
+          <template #label>
+            环境变量
+            <el-popover placement="right" :width="460" trigger="click">
+              <template #reference>
+                <el-icon style="cursor: pointer; margin-left: 4px; vertical-align: middle; color: #409eff"><QuestionFilled /></el-icon>
+              </template>
+              <div style="font-size: 13px; line-height: 1.8">
+                <p style="margin: 0 0 8px; font-weight: 600">常用环境变量参考</p>
+                <template v-if="llmForm.workerBackend === 'CLAUDE_CODE'">
+                  <el-descriptions :column="1" size="small" border>
+                    <el-descriptions-item label="CLAUDE_AUTOCOMPACT_PCT_OVERRIDE">
+                      自动压缩触发比例（0-100）。如 80 表示上下文占 80% 时触发压缩。<br/>
+                      <el-tag size="small" type="info">建议值：80</el-tag>
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </template>
+                <template v-else-if="llmForm.workerBackend === 'OPENAI_CODEX'">
+                  <el-descriptions :column="1" size="small" border>
+                    <el-descriptions-item label="model_context_window">
+                      模型可用的上下文窗口大小（token 数）。代理非原生模型时需按实际能力配置。<br/>
+                      <el-tag size="small" type="info">GPT-5.4: 1000000</el-tag>
+                      <el-tag size="small" type="info">128K 模型: 128000</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="model_auto_compact_token_limit">
+                      触发自动历史压缩的 token 阈值。达到此值时 Codex 自动压缩对话历史。<br/>
+                      <el-tag size="small" type="info">建议值：上下文窗口的 80%</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="tool_output_token_limit">
+                      单个工具输出的 token 上限。超长输出会被截断。<br/>
+                      <el-tag size="small" type="info">建议值：50000</el-tag>
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </template>
+                <template v-else>
+                  <p style="color: #909399">选择 Worker 后端后显示对应的环境变量说明</p>
+                </template>
+                <p style="margin: 8px 0 0; color: #909399; font-size: 12px">
+                  点击变量名可快速添加到列表
+                </p>
+              </div>
+            </el-popover>
+          </template>
           <div style="width: 100%">
             <div v-for="(item, idx) in llmForm.envVars" :key="idx" style="display: flex; gap: 8px; margin-bottom: 8px; width: 100%">
-              <el-input v-model="item.key" placeholder="变量名，如 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" style="flex: 1" />
+              <el-input v-model="item.key" placeholder="变量名" style="flex: 1" />
               <el-input v-model="item.value" placeholder="值" style="width: 120px" />
               <el-button size="small" type="danger" text @click="llmForm.envVars.splice(idx, 1)">删除</el-button>
             </div>
@@ -510,7 +552,7 @@
       </el-form>
       <template #footer>
         <el-button @click="showLlmDialog_ = false">取消</el-button>
-        <el-button v-if="llmForm.workerBackend !== 'OPENAI_CODEX'" :loading="testingLlm" @click="handleTestLlm">测试连接</el-button>
+        <el-button :loading="testingLlm" @click="handleTestLlm">测试连接</el-button>
         <el-button type="primary" :loading="saving" @click="saveLlm">保存</el-button>
       </template>
     </el-dialog>
@@ -638,6 +680,7 @@
 import { ref, onMounted } from 'vue'
 import { resetSetupStatus } from '@/router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import {
   listGitProviders as apiListGit,
   saveGitProvider as apiSaveGit,
@@ -856,6 +899,7 @@ async function saveLlm() {
     ElMessage.warning('请填写 API Key')
     return
   }
+  // Codex: apiKey 和 baseUrl 可选（留空 = 订阅模式）
   if (llmForm.value.scope === 'RESTRICTED' && (!llmForm.value.allowedWorkerIds || llmForm.value.allowedWorkerIds.length === 0)) {
     ElMessage.warning('限定模式下请至少选择一个 Worker')
     return
@@ -866,13 +910,12 @@ async function saveLlm() {
       const envVarsMap = Object.fromEntries(
         llmForm.value.envVars.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value])
       )
-      const isCodexAdd = llmForm.value.workerBackend === 'OPENAI_CODEX'
       await apiSaveLlm({
         name: llmForm.value.name,
         category: llmForm.value.category,
-        baseUrl: isCodexAdd ? '' : llmForm.value.baseUrl,
+        baseUrl: llmForm.value.baseUrl || '',
         modelName: llmForm.value.modelName,
-        apiKey: isCodexAdd ? '' : llmForm.value.apiKey,
+        apiKey: llmForm.value.apiKey || '',
         isDefault: llmForm.value.isDefault,
         scope: llmForm.value.scope,
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : undefined,
@@ -887,11 +930,10 @@ async function saveLlm() {
       const envVarsMap = Object.fromEntries(
         llmForm.value.envVars.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value])
       )
-      const isCodexEdit = llmForm.value.workerBackend === 'OPENAI_CODEX'
       const form: Record<string, unknown> = {
         name: llmForm.value.name,
         category: llmForm.value.category,
-        baseUrl: isCodexEdit ? '' : llmForm.value.baseUrl,
+        baseUrl: llmForm.value.baseUrl || '',
         modelName: llmForm.value.modelName,
         isDefault: llmForm.value.isDefault,
         scope: llmForm.value.scope,
@@ -903,7 +945,7 @@ async function saveLlm() {
           ? llmForm.value.availableModels
           : null,
       }
-      if (!isCodexEdit && llmForm.value.apiKey) form.apiKey = llmForm.value.apiKey
+      if (llmForm.value.apiKey) form.apiKey = llmForm.value.apiKey
       await apiUpdateLlm(editingLlmId.value, form)
     }
     showLlmDialog_.value = false

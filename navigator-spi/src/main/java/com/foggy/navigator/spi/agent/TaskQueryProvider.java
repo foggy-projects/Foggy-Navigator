@@ -73,7 +73,7 @@ public interface TaskQueryProvider {
 
     // ── Phase 3: 统一任务端点扩展 ──
 
-    /** 恢复任务（续接已有 claudeSessionId） */
+    /** 恢复任务（续接已有会话，Provider 从 SessionEntity.providerStateJson 恢复内部状态） */
     default DispatchTaskDTO resumeTask(String userId, String tenantId, java.util.Map<String, Object> params) {
         throw new UnsupportedOperationException("resume not supported by " + getProviderType());
     }

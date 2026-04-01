@@ -160,9 +160,27 @@ print('Written to', tmp)
 
 确认 Agent 已有 `defaultModelConfigId` 后继续。
 
+### Step 1.6: 检查 Agent 是否支持 systemPrompt
+
+并非所有 A2aAgent 都支持独立的 system prompt 通道。创建定时任务前，**必须先查询 Agent Card 能力**：
+
+```bash
+curl -s {{NAVIGATOR_API_BASE}}/api/v1/agents/$AGENT_ID/card \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" | jq '.data | {id, name, capabilities}'
+```
+
+重点查看：`capabilities.supportsSystemPrompt`
+
+- `true`：可以使用独立的 `systemPrompt` + 普通 `question`
+- `false` 或 `null`：不要传 `systemPrompt`；如需首轮可见初始化上下文，改用 `firstMsg`
+
 ### Step 2: 设计 Prompt
 
-根据用户需求，帮用户设计两部分内容：
+根据用户需求，帮用户设计内容。**设计方式取决于 Step 1.6 的能力检测结果**：
+
+**如果 Agent 支持 `systemPrompt`：**
+
+设计两部分内容：
 
 **systemPrompt（角色约束，写入 Sharing Key 配置）：**
 - 定义 AI 的角色和边界
@@ -173,10 +191,25 @@ print('Written to', tmp)
 - 包含动态变量（如日期、时间范围）
 - 明确分析维度和输出要求
 
+**如果 Agent 不支持 `systemPrompt`：**
+
+设计两部分内容：
+
+**firstMsg（首轮附加消息，写入定时任务请求体）：**
+- 首次创建会话时拼到用户消息前面
+- 用户在会话中可观测
+- 适合写角色定义、输出格式要求、操作边界等初始化上下文
+
+**Prompt 模板（写入 cron 脚本，每次执行时发送）：**
+- 只放本次任务的动态要求
+- 如日期范围、分析对象、执行窗口等
+
+此时不要在 Sharing Key 中写 `systemPrompt`，保持为空。
+
 **设计示例 — 每日代码提交分析：**
 
-systemPrompt:
-```
+firstMsg:
+``` 
 你是一个代码审查助手。你的职责是分析 Git 提交记录，生成结构化的日报。
 输出格式：Markdown，包含以下章节：
 1. 提交概览（总数、作者分布）
@@ -194,8 +227,8 @@ Prompt 模板:
 
 **设计示例 — 每周工作报告：**
 
-systemPrompt:
-```
+firstMsg:
+``` 
 你是一个项目经理助手。分析本周的代码变更和任务完成情况，生成周报。
 输出格式：Markdown 周报，包含：本周完成、进行中的工作、下周计划建议。
 ```
@@ -215,7 +248,42 @@ import json, tempfile, os
 data = {
     'agentId': '用户选择的 Agent ID',
     'label': '定时任务名称（如 daily-commit-report）',
+    'maxTurns': 5,
+    'maxDailyCalls': 10
+}
+"@
+```
+
+**如果 Agent 支持 `systemPrompt`**，继续给 `data` 增加：
+
+```bash
+python3 -c "
+import json, tempfile, os
+data = {
+    'agentId': '用户选择的 Agent ID',
+    'label': '定时任务名称（如 daily-commit-report）',
     'systemPrompt': '上一步设计的 systemPrompt',
+    'maxTurns': 5,
+    'maxDailyCalls': 10
+}
+tmp = os.path.join(tempfile.gettempdir(), '_create_key.json')
+with open(tmp, 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False)
+print('Written to', tmp)
+" && curl -s -X POST {{NAVIGATOR_API_BASE}}/api/v1/sharing-keys \
+  -H "Authorization: Bearer $NAVIGATOR_TOKEN" \
+  -H "Content-Type: application/json; charset=UTF-8" \
+  --data-binary @"$(python3 -c 'import tempfile,os;print(os.path.join(tempfile.gettempdir(),\"_create_key.json\"))')" | jq '.data'
+```
+
+**如果 Agent 不支持 `systemPrompt`**，使用不带 `systemPrompt` 的版本：
+
+```bash
+python3 -c "
+import json, tempfile, os
+data = {
+    'agentId': '用户选择的 Agent ID',
+    'label': '定时任务名称（如 daily-commit-report）',
     'maxTurns': 5,
     'maxDailyCalls': 10
 }
@@ -284,7 +352,7 @@ print('Written to', tmp)
 
 NAVIGATOR_URL="{{NAVIGATOR_API_BASE}}"
 SHARING_KEY="{用户的 Sharing Key}"
-CONTEXT_ID="{任务名称}-$(date '+%Y%m%d')"  # 按天分组会话
+CONTEXT_ALIAS="{任务名称}"  # 业务别名（如 daily-report），后端自动按 alias+agent 匹配会话
 LOG_DIR="$HOME/.foggy-tasks"
 LOG_FILE="$LOG_DIR/{任务名称}-$(date '+%Y%m%d_%H%M%S').log"
 
@@ -296,8 +364,9 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行定时任务..." | tee -a "$LOG
 REQUEST_BODY=$(python3 -c "
 import json
 data = {
-    'question': '{Prompt 模板，包含动态日期变量}',
-    'contextId': '$CONTEXT_ID'
+    'question': '{最终 Prompt 模板；仅包含本次动态任务要求}',
+    'contextAlias': '$CONTEXT_ALIAS',
+    'firstMsg': '{若 Agent 不支持 systemPrompt，则此处放首轮初始化上下文；支持时可省略}'
 }
 print(json.dumps(data, ensure_ascii=False))
 ")
@@ -401,16 +470,28 @@ schtasks /create /tn "Foggy-DailyReport" /tr "bash C:\Users\%USERNAME%\foggy-dai
 
 ---
 
-## contextId 策略
+## 会话续接策略
 
-定时任务的 `contextId` 决定了会话如何聚合：
+### contextAlias（推荐）
 
-| 策略 | contextId 格式 | 效果 |
-|------|---------------|------|
-| **按天分组** | `task-name-20260312` | 同一天的多次调用在同一会话中（适合日报） |
-| **按周分组** | `task-name-2026W11` | 一周的调用在同一会话中（适合周报） |
-| **永续单会话** | `task-name-permanent` | 所有调用共用一个会话（AI 可回顾全部历史） |
-| **每次独立** | 不传 contextId | 每次调用都是全新会话 |
+传 `contextAlias` 字段（业务语义名称），后端自动按 `alias + userId + agentId` 匹配会话：
+
+- **首次调用** → 自动新建会话 + 生成 contextId
+- **后续调用同一 alias** → 继续已有会话（复用 sessionId + claudeSessionId）
+- **不同 Agent 用同一 alias** → 各自独立，互不冲突
+
+**无需包含 agent 名称**，后端已按 agentId 隔离。
+
+| 策略 | contextAlias 值 | 效果 | 适用场景 |
+|------|----------------|------|----------|
+| **永续单会话（默认）** | `daily-report` | 所有调用共用一个会话，AI 可回顾全部历史 | 大多数定时任务 |
+| **按天分组** | `report-$(date '+%Y%m%d')` | 同一天的多次调用在同一会话中 | 一天内多次执行、需要当日上下文 |
+| **按周分组** | `report-$(date '+%YW%V')` | 一周的调用在同一会话中 | 周报、需要本周上下文 |
+| **每次独立** | 不传 | 每次调用都是全新会话 | 用户明确要求每次独立执行 |
+
+### contextId（兼容）
+
+也可直接传 `contextId`（UUID 或自定义字符串），按 PK 精确匹配。contextId 与 Agent 绑定，不同 Agent 不能复用同一个 contextId（返回 FAILED 错误）。
 
 ---
 
@@ -487,6 +568,7 @@ curl -s -X DELETE {{NAVIGATOR_API_BASE}}/api/v1/sharing-keys/{keyId} \
 | 返回 "Shared agent not available" | Agent 是否存在？Worker 是否在线？ | 检查 Agent 列表和 Worker 状态 |
 | 任务启动失败（LLM 未配置） | Agent.defaultModelConfigId 是否为 null？ | 执行 Step 1.5 为 Agent 绑定默认 LLM 配置 |
 | 多轮会话未续传 | contextId 是否每次传入相同值？ | 确保 cron 脚本中 CONTEXT_ID 格式稳定（避免含时间戳） |
+| contextId bound to agent X | 同一 contextId 被不同 Agent 使用 | 改用 contextAlias（自动按 agent 隔离），或换一个 contextId |
 | curl 超时 | AI 分析耗时过长 | 增加 `--max-time`，或降低 `maxTurns` |
 
 ## 注意事项

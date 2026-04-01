@@ -33,4 +33,6 @@ public class CreateTaskForm {
     private String contextId;
     /** Claude CLI session ID（A2A 多轮复用时由 contextStore 解析传入） */
     private String claudeSessionId;
+    /** Navigator 平台 session ID（多轮复用时由 A2aAgent pipeline 传入） */
+    private String sessionId;
 }

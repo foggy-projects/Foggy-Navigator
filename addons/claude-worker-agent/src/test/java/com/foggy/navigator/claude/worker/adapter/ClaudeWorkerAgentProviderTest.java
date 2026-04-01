@@ -1,10 +1,8 @@
 package com.foggy.navigator.claude.worker.adapter;
 
-import com.foggy.navigator.claude.worker.repository.AgentDirectoryBindingRepository;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
-import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -28,8 +26,6 @@ class ClaudeWorkerAgentProviderTest {
     @Mock
     private CodingAgentRepository agentRepository;
     @Mock
-    private AgentDirectoryBindingRepository bindingRepository;
-    @Mock
     private ClaudeTaskService taskService;
     @Mock
     private WorkingDirectoryRepository directoryRepository;
@@ -38,7 +34,7 @@ class ClaudeWorkerAgentProviderTest {
 
     @BeforeEach
     void setUp() {
-        provider = new ClaudeWorkerAgentProvider(agentRepository, bindingRepository, taskService, directoryRepository, null);
+        provider = new ClaudeWorkerAgentProvider(agentRepository, taskService, directoryRepository, null);
     }
 
     private CodingAgentEntity claudeAgent(String agentId, String userId) {
@@ -51,30 +47,10 @@ class ClaudeWorkerAgentProviderTest {
         return e;
     }
 
-    // ===== Resolution chain tests =====
+    // ===== Resolution chain tests (收窄后：agentId → name) =====
 
     @Nested
     class ResolutionChain {
-
-        @Test
-        void resolveAgent_directoryIdResolvesBoundAgent() {
-            CodingAgentEntity entity = claudeAgent("agent-2", "user-1");
-
-            AgentDirectoryBindingEntity binding = new AgentDirectoryBindingEntity();
-            binding.setAgentId("agent-2");
-            binding.setDirectoryId("dir-2");
-
-            when(agentRepository.findByAgentIdAndUserId("dir-2", "user-1")).thenReturn(Optional.empty());
-            when(agentRepository.findByNameAndUserId("dir-2", "user-1")).thenReturn(Optional.empty());
-            when(agentRepository.findByDefaultDirectoryIdAndUserId("dir-2", "user-1")).thenReturn(Optional.empty());
-            when(bindingRepository.findByDirectoryId("dir-2")).thenReturn(List.of(binding));
-            when(agentRepository.findByAgentIdAndUserId("agent-2", "user-1")).thenReturn(Optional.of(entity));
-
-            Optional<A2aAgent> result = provider.resolveAgent("dir-2", "user-1");
-
-            assertTrue(result.isPresent());
-            assertEquals("agent-2", result.get().getAgentCard().getId());
-        }
 
         @Test
         void resolveAgent_byAgentId_directHit() {
@@ -100,38 +76,9 @@ class ClaudeWorkerAgentProviderTest {
         }
 
         @Test
-        void resolveAgent_byDefaultDirectoryId() {
-            CodingAgentEntity entity = claudeAgent("agent-1", "user-1");
-            when(agentRepository.findByAgentIdAndUserId("dir-x", "user-1")).thenReturn(Optional.empty());
-            when(agentRepository.findByNameAndUserId("dir-x", "user-1")).thenReturn(Optional.empty());
-            when(agentRepository.findByDefaultDirectoryIdAndUserId("dir-x", "user-1")).thenReturn(Optional.of(entity));
-
-            Optional<A2aAgent> result = provider.resolveAgent("dir-x", "user-1");
-
-            assertTrue(result.isPresent());
-        }
-
-        @Test
-        void resolveAgent_byWorkerId_lastFallback() {
-            CodingAgentEntity entity = claudeAgent("agent-1", "user-1");
-            when(agentRepository.findByAgentIdAndUserId("wk-1", "user-1")).thenReturn(Optional.empty());
-            when(agentRepository.findByNameAndUserId("wk-1", "user-1")).thenReturn(Optional.empty());
-            when(agentRepository.findByDefaultDirectoryIdAndUserId("wk-1", "user-1")).thenReturn(Optional.empty());
-            when(bindingRepository.findByDirectoryId("wk-1")).thenReturn(List.of());
-            when(agentRepository.findByWorkerIdAndUserId("wk-1", "user-1")).thenReturn(List.of(entity));
-
-            Optional<A2aAgent> result = provider.resolveAgent("wk-1", "user-1");
-
-            assertTrue(result.isPresent());
-        }
-
-        @Test
         void resolveAgent_allPathsExhausted_returnsEmpty() {
             when(agentRepository.findByAgentIdAndUserId("unknown", "user-1")).thenReturn(Optional.empty());
             when(agentRepository.findByNameAndUserId("unknown", "user-1")).thenReturn(Optional.empty());
-            when(agentRepository.findByDefaultDirectoryIdAndUserId("unknown", "user-1")).thenReturn(Optional.empty());
-            when(bindingRepository.findByDirectoryId("unknown")).thenReturn(List.of());
-            when(agentRepository.findByWorkerIdAndUserId("unknown", "user-1")).thenReturn(List.of());
 
             Optional<A2aAgent> result = provider.resolveAgent("unknown", "user-1");
 

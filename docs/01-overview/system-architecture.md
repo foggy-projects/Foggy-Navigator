@@ -1,5 +1,12 @@
 # Foggy Navigator 整体架构设计
 
+> 历史参考文档
+>
+> 本文档包含大量早期中台化和规划态设计，不应直接作为当前实现说明。
+> 当前系统说明请优先参考：
+> - [系统架构概览](../00-system-overview.md)
+> - [功能架构说明](../02-modules/functional-architecture.md)
+
 ## 1. 系统概述
 
 ### 1.1 系统定位

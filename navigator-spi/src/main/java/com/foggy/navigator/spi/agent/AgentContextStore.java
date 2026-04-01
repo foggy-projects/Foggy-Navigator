@@ -1,5 +1,8 @@
 package com.foggy.navigator.spi.agent;
 
+import com.foggy.navigator.common.entity.AgentConversationContextEntity;
+import com.foggy.navigator.common.exception.ContextAgentMismatchException;
+
 import java.util.Optional;
 
 /**
@@ -18,8 +21,52 @@ public interface AgentContextStore {
     Optional<String> findSessionRef(String contextId, String userId, int ttlHours);
 
     /**
+     * 查找会话引用（带 TTL 检查 + Agent 归属校验）
+     * <p>
+     * 调用者可预先生成 contextId（如 UUID），首次调用时后端自动新建映射；
+     * 后续调用时校验 contextId 绑定的 Agent 是否与当前请求一致。
+     *
+     * @param contextId       上下文 ID
+     * @param userId          用户 ID（安全隔离）
+     * @param expectedAgentId 期望的 Agent ID
+     * @param ttlHours        过期时间（小时），超过则视为无效
+     * @return agentSessionRef，过期或不存在返回 empty
+     * @throws ContextAgentMismatchException contextId 已绑定到其他 Agent
+     */
+    Optional<String> findSessionRefForAgent(String contextId, String userId,
+                                            String expectedAgentId, int ttlHours);
+
+    /**
+     * 查找完整上下文记录（带 TTL 检查 + Agent 归属校验）。
+     */
+    default Optional<AgentConversationContextEntity> findContextForAgent(
+            String contextId, String userId, String expectedAgentId, int ttlHours) {
+        return Optional.empty();
+    }
+
+    /**
      * 保存/更新会话映射
      */
     void saveSessionRef(String contextId, String agentType,
                         String agentSessionRef, String userId, String targetAgentId);
+
+    /**
+     * 按 contextAlias + userId + targetAgentId 查找上下文实体
+     */
+    Optional<AgentConversationContextEntity> findByAlias(
+            String contextAlias, String userId, String targetAgentId, int ttlHours);
+
+    /**
+     * 保存/更新会话映射（含 navigatorSessionId）
+     */
+    void saveSessionRefFull(String contextId, String agentType,
+            String agentSessionRef, String navigatorSessionId,
+            String userId, String targetAgentId, String contextAlias);
+
+    /**
+     * 按 Navigator session ID 删除关联的上下文映射。
+     */
+    default void deleteByNavigatorSessionId(String navigatorSessionId) {
+        // Optional capability for stores that persist navigatorSessionId.
+    }
 }

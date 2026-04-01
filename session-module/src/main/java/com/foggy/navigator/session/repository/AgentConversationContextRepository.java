@@ -9,4 +9,9 @@ public interface AgentConversationContextRepository
         extends JpaRepository<AgentConversationContextEntity, String> {
 
     Optional<AgentConversationContextEntity> findByContextIdAndUserId(String contextId, String userId);
+
+    Optional<AgentConversationContextEntity> findByContextAliasAndUserIdAndTargetAgentId(
+            String contextAlias, String userId, String targetAgentId);
+
+    long deleteByNavigatorSessionId(String navigatorSessionId);
 }

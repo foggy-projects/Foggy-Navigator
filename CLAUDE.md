@@ -124,3 +124,4 @@ Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实
    - 用 Playwright 读取浏览器实际运行的函数源码（`comp.setupState.xxx.toString()`），与磁盘源文件对比
    - 如果不一致，执行：`Remove-Item -Recurse -Force packages/navigator-frontend/node_modules/.vite`，然后刷新页面
    - 若仍不一致，重启 Vite dev server（`stop-frontend.ps1` → `start-frontend.ps1`）
+10. **会话 modelConfigId 绑定原则**：一个会话使用 `modelConfigId` 创建后（创建新会话必须指定 modelConfigId），该值永远固定，除非用户主动修改。会话内可以切换 `model`（如 opus → sonnet），但不能自动切换 `modelConfigId`（即 API 凭证/订阅不变）。

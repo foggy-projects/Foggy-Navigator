@@ -12,6 +12,7 @@ export interface AppConfig {
   host: string
   workerName: string
   openaiApiKey: string
+  openaiBaseUrl: string
   workerToken: string
   allowedCwds: string[]
   maxConcurrentTasks: number
@@ -117,6 +118,7 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host: parseHost(env.CODEX_WORKER_HOST),
     workerName: parseWorkerName(env.CODEX_WORKER_NAME),
     openaiApiKey,
+    openaiBaseUrl: getOptionalEnvFromEnv(env, 'OPENAI_BASE_URL') || '',
     workerToken: parseToken(env.CODEX_WORKER_TOKEN),
     allowedCwds: parseAllowedCwds(env.CODEX_ALLOWED_CWDS),
     maxConcurrentTasks: parseMaxConcurrentTasks(env.CODEX_MAX_CONCURRENT_TASKS),

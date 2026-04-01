@@ -119,6 +119,9 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
   const apiKey = validateOptionalString(body.api_key, 'api_key', MAX_API_KEY_LENGTH)
   if (apiKey && typeof apiKey !== 'string') return apiKey
 
+  const baseUrl = validateOptionalString(body.base_url, 'base_url', MAX_API_KEY_LENGTH)
+  if (baseUrl && typeof baseUrl !== 'string') return baseUrl
+
   const model = validateOptionalString(body.model, 'model', MAX_MODEL_LENGTH)
   if (model && typeof model !== 'string') return model
   if (typeof model === 'string') {
@@ -146,6 +149,8 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
       max_turns: maxTurns as number | undefined,
       images,
       api_key: apiKey,
+      base_url: baseUrl,
+      env_vars: body.env_vars as Record<string, string> | undefined,
     },
   }
 }

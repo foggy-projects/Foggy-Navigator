@@ -26,6 +26,7 @@ import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
@@ -73,12 +74,21 @@ public class CodexTaskService implements TaskQueryProvider {
     @Nullable
     private SessionEntityRepository sessionEntityRepository;
 
+    @Autowired
+    @Lazy
+    private CodexStreamRelay streamRelay;
+
     /**
      * 创建并启动 Codex 任务
      */
     @Transactional
     public CodexTaskDTO createTask(String userId, String tenantId, CreateCodexTaskForm form) {
-        return createAndStartTask(userId, tenantId, form, null);
+        // 如果 form 携带 sessionId（由 ContextResolvingA2aAgent 传入），则复用已有会话
+        String existingSessionId = form.getSessionId();
+        if (existingSessionId != null && existingSessionId.isBlank()) {
+            existingSessionId = null;
+        }
+        return createAndStartTask(userId, tenantId, form, existingSessionId);
     }
 
     @Override
@@ -92,14 +102,21 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setImages((String) params.get("images"));
-        form.setCodexThreadId((String) params.get("codexThreadId"));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
         }
 
+        // codexThreadId 从 SessionEntity.providerStateJson 恢复，不再从 request 透传
         String sessionId = (String) params.get("sessionId");
+        if (sessionId != null && !sessionId.isBlank() && sessionEntityRepository != null) {
+            String codexThreadId = readJsonValue(
+                    sessionEntityRepository.findById(sessionId)
+                            .map(SessionEntity::getProviderStateJson).orElse(null),
+                    "codexThreadId");
+            form.setCodexThreadId(codexThreadId);
+        }
         if (form.getCodexThreadId() == null || form.getCodexThreadId().isBlank()) {
-            throw new IllegalArgumentException("resume 操作必须指定 codexThreadId");
+            throw new IllegalArgumentException("resume 操作必须指定 codexThreadId（需从 session 恢复）");
         }
         if (sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("resume 操作必须指定 sessionId");
@@ -171,19 +188,23 @@ public class CodexTaskService implements TaskQueryProvider {
         persistTask(entity);
         log.info("Created Codex task: taskId={}, workerId={}, sessionId={}", taskId, form.getWorkerId(), sessionId);
 
-        // 解析 API Key（如有模型配置）
-        String apiKey = resolveApiKey(form.getModelConfigId());
+        // 解析 auth + envVars（apiKey + baseUrl + 环境变量，无配置时 Worker 使用本地凭证）
+        CodexAuthResult auth = resolveCodexAuth(form.getModelConfigId());
 
         // 发布统一事件触发 CodexStreamRelay（通过 providerType 条件过滤）
         Map<String, Object> providerConfig = new LinkedHashMap<>();
         putIfNotBlank(providerConfig, "codexThreadId", form.getCodexThreadId());
         putIfNotBlank(providerConfig, "images", form.getImages());
+        putIfNotBlank(providerConfig, "baseUrl", auth.baseUrl);
+        if (auth.envVars != null && !auth.envVars.isEmpty()) {
+            providerConfig.put("extraEnvVars", auth.envVars);
+        }
 
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
                 .prompt(form.getPrompt()).cwd(cwd)
                 .model(form.getModel()).maxTurns(form.getMaxTurns())
-                .apiKey(apiKey).providerType(AGENT_ID)
+                .apiKey(auth.apiKey).providerType(AGENT_ID)
                 .providerConfig(providerConfig)
                 .build());
 
@@ -289,6 +310,14 @@ public class CodexTaskService implements TaskQueryProvider {
         if ("RUNNING".equals(entity.getStatus()) || "AWAITING_PERMISSION".equals(entity.getStatus())) {
             abortTask(taskId);
         }
+    }
+
+    /**
+     * 检查指定 Codex 会话是否有正在运行的任务（并发保护）
+     */
+    public boolean hasRunningTask(String codexThreadId, String workerId, String userId) {
+        return taskRepository.existsByCodexThreadIdAndWorkerIdAndUserIdAndStatus(
+                codexThreadId, workerId, userId, "RUNNING");
     }
 
     /**
@@ -537,6 +566,31 @@ public class CodexTaskService implements TaskQueryProvider {
             }
         }
         log.info("Codex task deleted: taskId={}, userId={}", taskId, userId);
+    }
+
+    @Override
+    public Object resyncTask(String taskId, String userId) {
+        CodexTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!"FAILED".equals(entity.getStatus())) {
+            throw new IllegalStateException("Only FAILED tasks can be resynced, current: " + entity.getStatus());
+        }
+        if (entity.getWorkerTaskId() == null) {
+            throw new IllegalStateException("No worker task ID, cannot resync");
+        }
+
+        entity.setStatus("RUNNING");
+        entity.setErrorMessage(null);
+        persistTask(entity);
+        log.info("Resync: reset task {} to RUNNING, attempting SSE reconnect", taskId);
+
+        try {
+            streamRelay.reconnectTask(taskId, entity.getSessionId(), entity.getWorkerId());
+        } catch (Exception e) {
+            log.warn("Resync: SSE reconnect failed for task {}: {}", taskId, e.getMessage());
+        }
+
+        return Map.of("status", "RESYNCED", "action", "RECONNECTED", "taskId", taskId);
     }
 
     private Map<String, Object> buildSessionPage(List<CodexTaskEntity> tasks, int page, int size, String interactionState) {
@@ -801,6 +855,18 @@ public class CodexTaskService implements TaskQueryProvider {
         }
     }
 
+    private String readJsonValue(String json, String key) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            Map<String, Object> values = OBJECT_MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+            Object value = values.get(key);
+            return value != null ? value.toString() : null;
+        } catch (Exception e) {
+            log.warn("Failed to read key '{}' from JSON: {}", key, json);
+            return null;
+        }
+    }
+
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {
         if (value != null && !value.isBlank()) {
             target.put(key, value);
@@ -923,24 +989,36 @@ public class CodexTaskService implements TaskQueryProvider {
         return sessionId;
     }
 
-    private String resolveApiKey(String modelConfigId) {
+    /** Codex auth 解析结果 */
+    private record CodexAuthResult(String apiKey, String baseUrl, Map<String, String> envVars) {
+        static final CodexAuthResult EMPTY = new CodexAuthResult(null, null, null);
+    }
+
+    /**
+     * 解析 Codex auth 配置：apiKey + baseUrl + envVars。
+     * <p>
+     * 两种模式：
+     * - API Key 模式：modelConfig 配置了 apiKey → 解密返回，baseUrl/envVars 可选
+     * - Subscription 模式：modelConfig 无 apiKey → Worker 使用本地 ~/.codex/auth.json
+     * <p>
+     * envVars 用于传递 Codex CLI 配置（如 model_context_window、model_auto_compact_token_limit）
+     */
+    private CodexAuthResult resolveCodexAuth(String modelConfigId) {
         if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
-            return null;
+            return CodexAuthResult.EMPTY;
         }
         try {
             var modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
             if (modelConfig == null) {
-                return null;
+                return CodexAuthResult.EMPTY;
             }
-            if ("OPENAI_CODEX".equals(modelConfig.getWorkerBackend())
-                    && (modelConfig.getBaseUrl() == null || modelConfig.getBaseUrl().isBlank())) {
-                // Codex subscription mode should use local ~/.codex/auth.json instead of a platform API key.
-                return null;
-            }
-            return llmModelManager.getDecryptedApiKey(modelConfigId);
+            String apiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
+            String baseUrl = modelConfig.getBaseUrl();
+            Map<String, String> envVars = modelConfig.getEnvVars();
+            return new CodexAuthResult(apiKey, baseUrl, envVars);
         } catch (Exception e) {
-            log.warn("Failed to resolve API key from modelConfigId={}: {}", modelConfigId, e.getMessage());
-            return null;
+            log.warn("Failed to resolve Codex auth from modelConfigId={}: {}", modelConfigId, e.getMessage());
+            return CodexAuthResult.EMPTY;
         }
     }
 

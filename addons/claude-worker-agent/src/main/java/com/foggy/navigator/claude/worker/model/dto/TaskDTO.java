@@ -32,6 +32,8 @@ public class TaskDTO {
     private Long durationMs;
     private Integer numTurns;
     private String model;
+    /** 创建任务时使用的平台 LLM 模型配置 ID */
+    private String modelConfigId;
     private String errorMessage;
     /** A2A 异步任务完成后保存的结果文本 */
     private String resultText;

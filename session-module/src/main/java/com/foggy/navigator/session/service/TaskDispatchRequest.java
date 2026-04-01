@@ -16,7 +16,13 @@ public class TaskDispatchRequest {
     /** 目标逻辑 Agent ID */
     private String agentId;
 
-    /** 目标执行 Provider（claude-worker / codex-worker） */
+    /**
+     * 目标执行 Provider（claude-worker / codex-worker）。
+     * <p>
+     * @deprecated 前端不再需要显式传递此字段。providerType 由后端从 modelConfigId 推导。
+     *             保留字段仅为 Open API 向后兼容。
+     */
+    @Deprecated
     private String providerType;
 
     /** 平台会话 ID（null 表示新建会话） */
@@ -58,11 +64,8 @@ public class TaskDispatchRequest {
     /** A2A 多轮上下文 ID */
     private String contextId;
 
-    /** Codex Thread ID（续接 Codex 会话） */
-    private String codexThreadId;
-
-    /** Claude Session ID（resume 时续接指定会话） */
-    private String claudeSessionId;
+    /** 上下文别名（用于按别名复用会话） */
+    private String contextAlias;
 
     /** 是否为 resume 操作 */
     private boolean resume;

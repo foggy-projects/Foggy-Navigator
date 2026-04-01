@@ -1,6 +1,7 @@
 package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
+import com.foggy.navigator.common.exception.ContextAgentMismatchException;
 import com.foggy.navigator.session.repository.AgentConversationContextRepository;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,33 @@ public class AgentContextStoreImpl implements AgentContextStore {
     }
 
     @Override
+    public Optional<String> findSessionRefForAgent(String contextId, String userId,
+                                                   String expectedAgentId, int ttlHours) {
+        return findContextForAgent(contextId, userId, expectedAgentId, ttlHours)
+                .map(AgentConversationContextEntity::getAgentSessionRef);
+    }
+
+    @Override
+    public Optional<AgentConversationContextEntity> findContextForAgent(
+            String contextId, String userId, String expectedAgentId, int ttlHours) {
+        Optional<AgentConversationContextEntity> opt = repository.findByContextIdAndUserId(contextId, userId);
+        if (opt.isEmpty()) {
+            return Optional.empty();
+        }
+
+        AgentConversationContextEntity e = opt.get();
+        // TTL 过期 → 视为不存在
+        if (e.getLastAccessedAt().isBefore(LocalDateTime.now().minusHours(ttlHours))) {
+            return Optional.empty();
+        }
+        // Agent 不匹配 → 抛异常
+        if (e.getTargetAgentId() != null && !e.getTargetAgentId().equals(expectedAgentId)) {
+            throw new ContextAgentMismatchException(contextId, e.getTargetAgentId(), expectedAgentId);
+        }
+        return Optional.of(e);
+    }
+
+    @Override
     public void saveSessionRef(String contextId, String agentType,
                                String agentSessionRef, String userId, String targetAgentId) {
         AgentConversationContextEntity entity = repository.findById(contextId).orElse(null);
@@ -37,5 +65,39 @@ public class AgentContextStoreImpl implements AgentContextStore {
         entity.setAgentSessionRef(agentSessionRef);
         entity.setLastAccessedAt(LocalDateTime.now());
         repository.save(entity);
+    }
+
+    @Override
+    public Optional<AgentConversationContextEntity> findByAlias(
+            String contextAlias, String userId, String targetAgentId, int ttlHours) {
+        return repository.findByContextAliasAndUserIdAndTargetAgentId(contextAlias, userId, targetAgentId)
+                .filter(e -> e.getLastAccessedAt().isAfter(LocalDateTime.now().minusHours(ttlHours)));
+    }
+
+    @Override
+    public void saveSessionRefFull(String contextId, String agentType,
+            String agentSessionRef, String navigatorSessionId,
+            String userId, String targetAgentId, String contextAlias) {
+        AgentConversationContextEntity entity = repository.findById(contextId).orElse(null);
+        if (entity == null) {
+            entity = new AgentConversationContextEntity();
+            entity.setContextId(contextId);
+            entity.setUserId(userId);
+            entity.setTargetAgentId(targetAgentId);
+        }
+        entity.setAgentType(agentType);
+        entity.setAgentSessionRef(agentSessionRef);
+        entity.setNavigatorSessionId(navigatorSessionId);
+        entity.setContextAlias(contextAlias);
+        entity.setLastAccessedAt(LocalDateTime.now());
+        repository.save(entity);
+    }
+
+    @Override
+    public void deleteByNavigatorSessionId(String navigatorSessionId) {
+        if (navigatorSessionId == null || navigatorSessionId.isBlank()) {
+            return;
+        }
+        repository.deleteByNavigatorSessionId(navigatorSessionId);
     }
 }

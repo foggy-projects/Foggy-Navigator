@@ -4,8 +4,13 @@ import com.foggy.navigator.claude.worker.model.dto.TaskDTO;
 import com.foggy.navigator.claude.worker.model.form.CreateTaskForm;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.*;
+import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.exception.ContextAgentMismatchException;
+import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
+import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentContextStore;
+import com.foggy.navigator.spi.agent.InnerA2aAgent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -15,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -23,6 +29,12 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+/**
+ * Tests for the ContextResolvingA2aAgent + ClaudeWorkerInnerA2aAgent pipeline.
+ *
+ * Most tests go through the full pipeline (ContextResolvingA2aAgent → ClaudeWorkerInnerA2aAgent)
+ * to verify end-to-end behavior.
+ */
 @ExtendWith(MockitoExtension.class)
 class ClaudeWorkerA2aAgentTest {
 
@@ -46,12 +58,16 @@ class ClaudeWorkerA2aAgentTest {
         entity.setDefaultDirectoryId("dir-default");
     }
 
-    private ClaudeWorkerA2aAgent agentWithContextStore() {
-        return new ClaudeWorkerA2aAgent(entity, taskService, "D:\\default", contextStore);
+    /** Full pipeline with context store */
+    private A2aAgent pipelineWithContextStore() {
+        InnerA2aAgent inner = new ClaudeWorkerInnerA2aAgent(entity, taskService, "D:\\default");
+        return new ContextResolvingA2aAgent(inner, contextStore, entity);
     }
 
-    private ClaudeWorkerA2aAgent agentWithoutContextStore() {
-        return new ClaudeWorkerA2aAgent(entity, taskService, "D:\\default", null);
+    /** Full pipeline without context store (null) */
+    private A2aAgent pipelineWithoutContextStore() {
+        InnerA2aAgent inner = new ClaudeWorkerInnerA2aAgent(entity, taskService, "D:\\default");
+        return new ContextResolvingA2aAgent(inner, null, entity);
     }
 
     private A2aMessage simpleMessage(String prompt) {
@@ -85,7 +101,7 @@ class ClaudeWorkerA2aAgentTest {
                 .directoryId("dir-requested")
                 .build());
 
-        ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+        A2aAgent agent = pipelineWithoutContextStore();
         A2aMessage message = A2aMessage.builder()
                 .role("user")
                 .parts(List.of(A2aPart.text("hi")))
@@ -103,6 +119,63 @@ class ClaudeWorkerA2aAgentTest {
         assertEquals("D:\\requested", captor.getValue().getCwd());
     }
 
+    @Test
+    void sendTask_rejectsUnsupportedSystemPrompt() {
+        A2aAgent agent = pipelineWithoutContextStore();
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("hello")))
+                .metadata(Map.of("systemPrompt", "Be concise"))
+                .build();
+
+        A2aTask result = agent.sendTask(message);
+
+        assertEquals(A2aTaskState.FAILED, result.getStatus().getState());
+        assertTrue(result.getStatus().getDescription().contains("firstMsg"));
+        verify(taskService, never()).createTask(anyString(), anyString(), any());
+    }
+
+    @Test
+    void sendTask_appliesFirstMsgOnFirstTurn() {
+        when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(defaultTaskDTO());
+
+        A2aAgent agent = pipelineWithoutContextStore();
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("implement feature")))
+                .metadata(Map.of("firstMsg", "Repository rules"))
+                .build();
+
+        agent.sendTask(message);
+
+        ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+        verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+        assertTrue(captor.getValue().getPrompt().contains("[Initial Message]"));
+        assertTrue(captor.getValue().getPrompt().contains("Repository rules"));
+        assertTrue(captor.getValue().getPrompt().contains("[User Message]"));
+    }
+
+    @Test
+    void sendTask_doesNotDuplicateInitialMessagePrefix() {
+        when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
+        when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(defaultTaskDTO());
+
+        A2aAgent agent = pipelineWithoutContextStore();
+        A2aMessage message = A2aMessage.builder()
+                .role("user")
+                .parts(List.of(A2aPart.text("[Initial Message]\nRepository rules\n\n[User Message]\nimplement feature")))
+                .metadata(Map.of("firstMsg", "Repository rules"))
+                .build();
+
+        agent.sendTask(message);
+
+        ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+        verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+        String prompt = captor.getValue().getPrompt();
+        assertEquals(1, countOccurrences(prompt, "[Initial Message]"));
+    }
+
     // ===== P0: Dedup tests =====
 
     @Nested
@@ -116,7 +189,7 @@ class ClaudeWorkerA2aAgentTest {
                     .build();
             when(taskService.findRecentByDedupKey(anyString(), eq(60))).thenReturn(Optional.of(existing));
 
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             A2aTask result = agent.sendTask(simpleMessage("hello"));
 
             assertEquals("existing-task", result.getId());
@@ -128,7 +201,7 @@ class ClaudeWorkerA2aAgentTest {
             when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(defaultTaskDTO());
 
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             A2aTask result = agent.sendTask(simpleMessage("hello"));
 
             assertEquals("task-1", result.getId());
@@ -143,7 +216,7 @@ class ClaudeWorkerA2aAgentTest {
             when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             agent.sendTask(simpleMessage("same prompt"));
 
             ArgumentCaptor<String> key1 = ArgumentCaptor.forClass(String.class);
@@ -166,15 +239,18 @@ class ClaudeWorkerA2aAgentTest {
     // ===== P0: Context store tests =====
 
     @Nested
-    class ContextStore {
+    class ContextStoreTests {
         @Test
         void contextRestore_resumesWithClaudeSessionId() {
-            when(contextStore.findSessionRef("ctx-1", "user-1", 24))
-                    .thenReturn(Optional.of("claude-sess-existing"));
-            when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
+            AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
+            ctxEntity.setContextId("ctx-1");
+            ctxEntity.setAgentSessionRef("claude-sess-existing");
+            ctxEntity.setNavigatorSessionId("nav-sess-existing");
+            when(contextStore.findContextForAgent("ctx-1", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
-            ClaudeWorkerA2aAgent agent = agentWithContextStore();
+            A2aAgent agent = pipelineWithContextStore();
             A2aMessage message = A2aMessage.builder()
                     .role("user")
                     .parts(List.of(A2aPart.text("continue")))
@@ -184,22 +260,23 @@ class ClaudeWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            // claudeSessionId 应被传递给 CreateTaskForm（修复后的行为）
-            verify(contextStore).findSessionRef("ctx-1", "user-1", 24);
+            // claudeSessionId 应被传递给 CreateTaskForm（通过 A2aContext.agentSessionRef）
+            verify(contextStore).findContextForAgent("ctx-1", "user-1", "agent-1", 24);
             ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("claude-sess-existing", captor.getValue().getClaudeSessionId(),
-                    "contextStore 查到的 claudeSessionId 应传给 CreateTaskForm");
+                    "contextStore 查到的 claudeSessionId 应通过 A2aContext 传给 CreateTaskForm");
+            assertEquals("nav-sess-existing", captor.getValue().getSessionId());
         }
 
         @Test
         void contextRestore_noMatch_claudeSessionIdIsNull() {
-            when(contextStore.findSessionRef("ctx-new", "user-1", 24))
+            when(contextStore.findContextForAgent("ctx-new", "user-1", "agent-1", 24))
                     .thenReturn(Optional.empty());
             when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
-            ClaudeWorkerA2aAgent agent = agentWithContextStore();
+            A2aAgent agent = pipelineWithContextStore();
             A2aMessage message = A2aMessage.builder()
                     .role("user")
                     .parts(List.of(A2aPart.text("new task")))
@@ -220,7 +297,7 @@ class ClaudeWorkerA2aAgentTest {
             when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
-            ClaudeWorkerA2aAgent agent = agentWithContextStore();
+            A2aAgent agent = pipelineWithContextStore();
             A2aMessage message = A2aMessage.builder()
                     .role("user")
                     .parts(List.of(A2aPart.text("no context")))
@@ -229,8 +306,8 @@ class ClaudeWorkerA2aAgentTest {
 
             agent.sendTask(message);
 
-            // 没有 contextId → 不查 contextStore → claudeSessionId 为 null
-            verify(contextStore, never()).findSessionRef(anyString(), anyString(), anyInt());
+            // 没有 contextId → 不查 findSessionRefForAgent → claudeSessionId 为 null
+            verify(contextStore, never()).findContextForAgent(anyString(), anyString(), anyString(), anyInt());
             ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
             verify(taskService).createTask(anyString(), anyString(), captor.capture());
             assertNull(captor.getValue().getClaudeSessionId());
@@ -241,7 +318,7 @@ class ClaudeWorkerA2aAgentTest {
             when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
-            ClaudeWorkerA2aAgent agent = agentWithContextStore();
+            A2aAgent agent = pipelineWithContextStore();
             A2aMessage message = A2aMessage.builder()
                     .role("user")
                     .parts(List.of(A2aPart.text("do something")))
@@ -251,8 +328,9 @@ class ClaudeWorkerA2aAgentTest {
 
             A2aTask result = agent.sendTask(message);
 
-            verify(contextStore).saveSessionRef(eq("ctx-2"), eq("claude-worker"),
-                    eq("claude-sess-1"), eq("user-1"), eq("agent-1"));
+            // Decorator saves via saveSessionRefFull (not saveSessionRef)
+            verify(contextStore).saveSessionRefFull(eq("ctx-2"), eq("claude-worker"),
+                    eq("claude-sess-1"), eq("session-1"), eq("user-1"), eq("agent-1"), isNull());
             assertEquals("ctx-2", result.getContextId());
         }
 
@@ -261,12 +339,141 @@ class ClaudeWorkerA2aAgentTest {
             when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             A2aTask result = agent.sendTask(simpleMessage("hello"));
 
             assertNotNull(result);
             assertEquals("task-1", result.getId());
             // No contextStore interaction
+        }
+
+        @Test
+        void contextAlias_resolvesExisting() {
+            AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
+            ctxEntity.setContextId("resolved-ctx-id");
+            ctxEntity.setAgentSessionRef("claude-sess-alias");
+            ctxEntity.setNavigatorSessionId("nav-sess-alias");
+            ctxEntity.setContextAlias("my-alias");
+            when(contextStore.findByAlias("my-alias", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of(ctxEntity));
+            when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
+
+            A2aAgent agent = pipelineWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("alias task")))
+                    .contextAlias("my-alias")
+                    .metadata(Map.of())
+                    .build();
+
+            agent.sendTask(message);
+
+            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+            assertEquals("claude-sess-alias", captor.getValue().getClaudeSessionId(),
+                    "Alias resolution should provide claudeSessionId");
+            assertEquals("nav-sess-alias", captor.getValue().getSessionId(),
+                    "Alias resolution should provide navigatorSessionId");
+            assertEquals("resolved-ctx-id", captor.getValue().getContextId(),
+                    "Alias resolution should provide resolved contextId");
+        }
+
+        @Test
+        void firstMsg_isIgnoredOnResume() {
+            AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
+            ctxEntity.setContextId("ctx-continue");
+            ctxEntity.setAgentSessionRef("claude-sess-existing");
+            ctxEntity.setNavigatorSessionId("nav-sess-existing");
+            when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of(ctxEntity));
+            when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
+
+            A2aAgent agent = pipelineWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("continue work")))
+                    .contextId("ctx-continue")
+                    .metadata(Map.of("firstMsg", "Should not reapply"))
+                    .build();
+
+            agent.sendTask(message);
+
+            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+            assertEquals("continue work", captor.getValue().getPrompt());
+        }
+
+        @Test
+        void firstMsg_isIgnoredWhenNavigatorSessionExistsEvenIfAgentSessionMissing() {
+            AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
+            ctxEntity.setContextId("ctx-nav-only");
+            ctxEntity.setNavigatorSessionId("nav-sess-existing");
+            when(contextStore.findContextForAgent("ctx-nav-only", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of(ctxEntity));
+            when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
+
+            A2aAgent agent = pipelineWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("continue work")))
+                    .contextId("ctx-nav-only")
+                    .metadata(Map.of("firstMsg", "Should not reapply"))
+                    .build();
+
+            agent.sendTask(message);
+
+            ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
+            verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+            assertEquals("continue work", captor.getValue().getPrompt());
+            assertEquals("nav-sess-existing", captor.getValue().getSessionId());
+        }
+
+        @Test
+        void dedupHit_isHandledByDecoratorBeforeTaskCreation() {
+            AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
+            ctxEntity.setContextId("ctx-continue");
+            when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1", 24))
+                    .thenReturn(Optional.of(ctxEntity));
+            TaskDTO existing = TaskDTO.builder()
+                    .taskId("existing-task")
+                    .sessionId("session-existing")
+                    .status("RUNNING")
+                    .build();
+            when(taskService.findRecentByDedupKey(anyString(), eq(60))).thenReturn(Optional.of(existing));
+
+            A2aAgent agent = pipelineWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("continue work")))
+                    .contextId("ctx-continue")
+                    .metadata(Map.of("firstMsg", "Should not reapply"))
+                    .build();
+
+            agent.sendTask(message);
+
+            verify(taskService, never()).createTask(anyString(), anyString(), any());
+            verify(contextStore, never()).saveSessionRefFull(anyString(), anyString(),
+                    any(), any(), anyString(), anyString(), any());
+        }
+
+        @Test
+        void contextMismatch_returnsFailedTask() {
+            when(contextStore.findContextForAgent("ctx-wrong", "user-1", "agent-1", 24))
+                    .thenThrow(new ContextAgentMismatchException("ctx-wrong", "agent-other", "agent-1"));
+
+            A2aAgent agent = pipelineWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("mismatched")))
+                    .contextId("ctx-wrong")
+                    .metadata(Map.of())
+                    .build();
+
+            A2aTask result = agent.sendTask(message);
+
+            assertEquals(A2aTaskState.FAILED, result.getStatus().getState());
+            assertTrue(result.getStatus().getDescription().contains("agent-other"));
+            verify(taskService, never()).createTask(anyString(), anyString(), any());
         }
     }
 
@@ -279,7 +486,7 @@ class ClaudeWorkerA2aAgentTest {
             when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             A2aMessage message = A2aMessage.builder()
                     .role("user")
                     .parts(List.of(A2aPart.text("hello")))
@@ -307,7 +514,7 @@ class ClaudeWorkerA2aAgentTest {
                     .taskId("task-1").status("RUNNING").build();
             when(taskService.getTask("user-1", "task-1")).thenReturn(dto);
 
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             Optional<A2aTask> result = agent.getTask("task-1");
 
             assertTrue(result.isPresent());
@@ -320,7 +527,7 @@ class ClaudeWorkerA2aAgentTest {
                     .taskId("task-1").status("COMPLETED").resultText("done!").build();
             when(taskService.getTask("user-1", "task-1")).thenReturn(dto);
 
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             Optional<A2aTask> result = agent.getTask("task-1");
 
             assertTrue(result.isPresent());
@@ -336,7 +543,7 @@ class ClaudeWorkerA2aAgentTest {
                     .taskId("task-1").status("FAILED").errorMessage("boom").build();
             when(taskService.getTask("user-1", "task-1")).thenReturn(dto);
 
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             Optional<A2aTask> result = agent.getTask("task-1");
 
             assertTrue(result.isPresent());
@@ -349,7 +556,7 @@ class ClaudeWorkerA2aAgentTest {
             when(taskService.getTask("user-1", "nonexistent"))
                     .thenThrow(new IllegalArgumentException("not found"));
 
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             Optional<A2aTask> result = agent.getTask("nonexistent");
 
             assertTrue(result.isEmpty());
@@ -357,27 +564,32 @@ class ClaudeWorkerA2aAgentTest {
 
         @Test
         void cancelTask_delegatesToService() {
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             agent.cancelTask("task-1");
 
             verify(taskService).abortTask("task-1");
         }
 
         @Test
-        void isAvailable_returnsTrue() {
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
-            assertTrue(agent.isAvailable());
-        }
-
-        @Test
         void getAgentCard_returnsCorrectFields() {
-            ClaudeWorkerA2aAgent agent = agentWithoutContextStore();
+            A2aAgent agent = pipelineWithoutContextStore();
             A2aAgentCard card = agent.getAgentCard();
 
             assertEquals("agent-1", card.getId());
             assertEquals("agent-one", card.getName());
             assertEquals(1, card.getSkills().size());
             assertEquals("coding", card.getSkills().get(0).getId());
+            assertFalse(Boolean.TRUE.equals(card.getCapabilities().getSupportsSystemPrompt()));
         }
+    }
+
+    private int countOccurrences(String text, String token) {
+        int count = 0;
+        int index = 0;
+        while ((index = text.indexOf(token, index)) >= 0) {
+            count++;
+            index += token.length();
+        }
+        return count;
     }
 }

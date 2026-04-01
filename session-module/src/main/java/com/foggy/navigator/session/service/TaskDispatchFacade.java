@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.*;
+import com.foggy.navigator.common.util.DirectoryAgentId;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
@@ -283,13 +284,31 @@ public class TaskDispatchFacade {
     }
 
     private String resolveResumeProviderTypeFromLegacyContext(TaskDispatchRequest request, AgentResolveContext context) {
-        String requestedProviderType = resolveRequestedProviderType(request);
+        // 1. 从 modelConfigId 推导（优先于已废弃的 request.providerType）
+        String fromModelConfig = resolveProviderTypeFromModelConfig(request.getModelConfigId());
+        if (fromModelConfig != null && !fromModelConfig.isBlank()) {
+            return fromModelConfig;
+        }
+
+        // 2. 从已废弃的 request.providerType（向后兼容 Open API）
+        @SuppressWarnings("deprecation")
+        String requestedProviderType = request.getProviderType();
         if (requestedProviderType != null && !requestedProviderType.isBlank()) {
             return requestedProviderType;
         }
 
+        // 3. 从 agentId 推导（包括 directory# 格式）
         String agentLookupId = resolveBoundOrExplicitAgentId(request.getAgentId(), request.getSessionId());
         if (agentLookupId != null && !agentLookupId.isBlank()) {
+            // directory# 格式的 agentId 需要通过目录的 modelConfigId 推导
+            if (DirectoryAgentId.isDirectoryAgent(agentLookupId)) {
+                String dirId = DirectoryAgentId.extractDirectoryId(agentLookupId);
+                String dirModelConfigId = resolveModelConfigIdFromDirectory(null, dirId);
+                if (dirModelConfigId != null) {
+                    String pt = resolveProviderTypeFromModelConfig(dirModelConfigId);
+                    if (pt != null) return pt;
+                }
+            }
             return agentResolver.getProviderType(agentLookupId, context)
                     .orElseThrow(() -> new IllegalArgumentException("No provider found for agent: " + agentLookupId));
         }
@@ -465,26 +484,7 @@ public class TaskDispatchFacade {
     }
 
     private Map<String, Object> buildResumeParams(TaskDispatchRequest request) {
-        Map<String, Object> params = new LinkedHashMap<>();
-        putIfNotBlank(params, "agentId", request.getAgentId());
-        putIfNotBlank(params, "providerType", request.getProviderType());
-        putIfNotBlank(params, "workerId", request.getWorkerId());
-        putIfNotBlank(params, "claudeSessionId", request.getClaudeSessionId());
-        putIfNotBlank(params, "prompt", request.getPrompt());
-        putIfNotBlank(params, "cwd", request.getCwd());
-        putIfNotBlank(params, "directoryId", request.getDirectoryId());
-        putIfNotBlank(params, "sessionId", request.getSessionId());
-        putIfNotBlank(params, "model", request.getModel());
-        putIfNotBlank(params, "modelConfigId", request.getModelConfigId());
-        putIfNotBlank(params, "permissionMode", request.getPermissionMode());
-        putIfNotBlank(params, "agentTeamsConfigId", request.getAgentTeamsConfigId());
-        putIfNotBlank(params, "agentTeamsJson", request.getAgentTeamsJson());
-        putIfNotBlank(params, "codexThreadId", request.getCodexThreadId());
-        if (request.getMaxTurns() != null) params.put("maxTurns", request.getMaxTurns());
-        if (request.getImages() != null && !request.getImages().isEmpty()) {
-            params.put("images", String.join(",", request.getImages()));
-        }
-        return params;
+        return toCommonParams(request);
     }
 
     // ── Worker Session 查询（统一端点） ──
@@ -570,29 +570,14 @@ public class TaskDispatchFacade {
         List<A2aPart> parts = new ArrayList<>();
         parts.add(A2aPart.text(request.getPrompt()));
 
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        putIfNotBlank(metadata, "sessionId", request.getSessionId());
-        putIfNotBlank(metadata, "providerType", request.getProviderType());
-        putIfNotBlank(metadata, "workerId", request.getWorkerId());
-        putIfNotBlank(metadata, "cwd", request.getCwd());
-        putIfNotBlank(metadata, "directoryId", request.getDirectoryId());
-        putIfNotBlank(metadata, "model", request.getModel());
-        putIfNotBlank(metadata, "modelConfigId", request.getModelConfigId());
-        putIfNotBlank(metadata, "permissionMode", request.getPermissionMode());
-        putIfNotBlank(metadata, "agentTeamsConfigId", request.getAgentTeamsConfigId());
-        putIfNotBlank(metadata, "agentTeamsJson", request.getAgentTeamsJson());
-        putIfNotBlank(metadata, "codexThreadId", request.getCodexThreadId());
-        if (request.getMaxTurns() != null) {
-            metadata.put("maxTurns", request.getMaxTurns());
-        }
-        if (request.getImages() != null && !request.getImages().isEmpty()) {
-            metadata.put("images", String.join(",", request.getImages()));
-        }
+        // 复用公共参数转换，A2A message 的 metadata 和 Direct params 共享同一组字段
+        Map<String, Object> metadata = toCommonParams(request);
 
         return A2aMessage.builder()
                 .role("user")
                 .parts(parts)
                 .contextId(request.getContextId())
+                .contextAlias(request.getContextAlias())
                 .metadata(metadata)
                 .build();
     }
@@ -621,12 +606,20 @@ public class TaskDispatchFacade {
                     .codexThreadId(strVal(meta, "codexThreadId"));
         }
 
+        // 从 metadata 提取 source / fileCheckpointingEnabled（Provider 可能已设置）
+        if (meta != null) {
+            if (meta.get("source") instanceof String s) builder.source(s);
+            if (meta.get("fileCheckpointingEnabled") instanceof Boolean b) builder.fileCheckpointingEnabled(b);
+        }
+
         // 从 request 补充（如果 metadata 里没有）
         if (request != null) {
             DispatchTaskDTO dto = builder.build();
             if (dto.getSessionId() == null) builder.sessionId(request.getSessionId());
             if (dto.getWorkerId() == null) builder.workerId(request.getWorkerId());
             if (dto.getDirectoryId() == null) builder.directoryId(request.getDirectoryId());
+            // 通过 Facade 创建的任务均来自平台
+            if (dto.getSource() == null) builder.source("PLATFORM");
             builder.prompt(request.getPrompt())
                     .cwd(request.getCwd())
                     .model(request.getModel());
@@ -1172,41 +1165,86 @@ public class TaskDispatchFacade {
         return null;
     }
 
-    private AgentLookup resolveCreateAgentLookup(TaskDispatchRequest request) {
-        if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
-            return new AgentLookup(request.getAgentId(), "EXPLICIT_AGENT");
+    /**
+     * 路由决策核心 —— 根据 agentId 格式决定路由路径：
+     * <ol>
+     *   <li>"directory#xxx" → Direct Provider Route（隐式目录 Agent，providerType 从 modelConfigId 推导）</li>
+     *   <li>真实 agentId → A2A Route（通过 UnifiedAgentResolver 解析）</li>
+     *   <li>无 agentId → 尝试 session 绑定的 agentId，或 fallback 到 Direct Provider Route</li>
+     * </ol>
+     */
+    private CreateExecutionTarget resolveCreateExecutionTarget(TaskDispatchRequest request) {
+        String agentId = request.getAgentId();
+
+        // Case 1: directory# 隐式 Agent → Direct Provider Route
+        if (agentId != null && DirectoryAgentId.isDirectoryAgent(agentId)) {
+            return resolveDirectoryAgentTarget(request, agentId);
         }
+
+        // Case 2: 真实 agentId → A2A Route
+        if (agentId != null && !agentId.isBlank()) {
+            return CreateExecutionTarget.a2a(new AgentLookup(agentId, "EXPLICIT_AGENT"));
+        }
+
+        // Case 3: 无 agentId → 尝试 session 绑定
         String sessionAgentId = resolveBoundOrExplicitAgentId(null, request.getSessionId());
         if (sessionAgentId != null && !sessionAgentId.isBlank()) {
-            return new AgentLookup(sessionAgentId, "SESSION_AGENT");
+            if (DirectoryAgentId.isDirectoryAgent(sessionAgentId)) {
+                return resolveDirectoryAgentTarget(request, sessionAgentId);
+            }
+            return CreateExecutionTarget.a2a(new AgentLookup(sessionAgentId, "SESSION_AGENT"));
         }
-        throw new IllegalArgumentException(
-                "logical agent is required when provider routing cannot be resolved directly; pass agentId or providerType/modelConfigId");
+
+        // Case 4: 完全无 Agent → 通过 modelConfigId 推导 providerType，走 Direct Provider Route（向后兼容 ad-hoc cwd）
+        String providerType = resolveProviderTypeFromModelConfig(request.getModelConfigId());
+        if (providerType != null && findTaskQueryProviderByType(providerType).isPresent()) {
+            return CreateExecutionTarget.direct(providerType);
+        }
+
+        throw new IllegalArgumentException("无法确定执行后端：请指定 agentId 或 modelConfigId");
     }
 
-    private CreateExecutionTarget resolveCreateExecutionTarget(TaskDispatchRequest request) {
-        String requestedProviderType = resolveRequestedProviderType(request);
-        if (shouldUseDirectProviderRoute(request, requestedProviderType)) {
-            return CreateExecutionTarget.direct(requestedProviderType);
+    /**
+     * directory# 隐式 Agent 路由：从目录解析 modelConfigId，推导 providerType。
+     * 同时将解析出的 directoryId 回填到 request（供 provider 使用）。
+     */
+    private CreateExecutionTarget resolveDirectoryAgentTarget(TaskDispatchRequest request, String directoryAgentId) {
+        String directoryId = DirectoryAgentId.extractDirectoryId(directoryAgentId);
+
+        // 回填 directoryId（如果 request 中未设置）
+        if (request.getDirectoryId() == null || request.getDirectoryId().isBlank()) {
+            request.setDirectoryId(directoryId);
         }
-        return CreateExecutionTarget.a2a(resolveCreateAgentLookup(request));
+
+        // modelConfigId 解析：显式传入 > 目录默认
+        String modelConfigId = resolveModelConfigIdFromDirectory(request.getModelConfigId(), directoryId);
+        if (modelConfigId == null) {
+            throw new IllegalArgumentException("该工作目录需要配置 LLM 模型才能执行任务（directoryId=" + directoryId + "）");
+        }
+        // 将解析后的 modelConfigId 回填到 request，确保 provider 拿到有效值
+        request.setModelConfigId(modelConfigId);
+
+        String providerType = resolveProviderTypeFromModelConfig(modelConfigId);
+        if (providerType == null) {
+            throw new IllegalArgumentException("modelConfigId " + modelConfigId + " 无法推导执行后端类型");
+        }
+        return CreateExecutionTarget.direct(providerType);
     }
 
-    private boolean shouldUseDirectProviderRoute(TaskDispatchRequest request, String providerType) {
-        if (providerType == null || providerType.isBlank()) {
-            return false;
+    /**
+     * 从目录解析 modelConfigId：显式传入优先，fallback 到目录默认配置。
+     */
+    private String resolveModelConfigIdFromDirectory(String explicitModelConfigId, String directoryId) {
+        if (explicitModelConfigId != null && !explicitModelConfigId.isBlank()) {
+            return explicitModelConfigId;
         }
-        if (request.getAgentId() != null && !request.getAgentId().isBlank()) {
-            return false;
+        if (workingDirectoryRepository != null && directoryId != null && !directoryId.isBlank()) {
+            return workingDirectoryRepository.findByDirectoryId(directoryId)
+                    .map(com.foggy.navigator.common.entity.WorkingDirectoryEntity::getDefaultModelConfigId)
+                    .filter(id -> !id.isBlank())
+                    .orElse(null);
         }
-        if (request.getWorkerId() == null || request.getWorkerId().isBlank()) {
-            return false;
-        }
-        if ("claude-worker".equals(providerType)
-                && request.getSessionId() != null && !request.getSessionId().isBlank()) {
-            return false;
-        }
-        return findTaskQueryProviderByType(providerType).isPresent();
+        return null;
     }
 
     private DispatchTaskDTO createTaskDirect(String providerType, TaskDispatchRequest request, AgentResolveContext context) {
@@ -1222,7 +1260,11 @@ public class TaskDispatchFacade {
         return dto;
     }
 
-    private Map<String, Object> buildDirectCreateParams(TaskDispatchRequest request) {
+    /**
+     * Request → Map 公共转换：提取所有标准字段到 Map（供 Direct/Resume/A2A 各路径复用）。
+     */
+    @SuppressWarnings("deprecation")
+    private Map<String, Object> toCommonParams(TaskDispatchRequest request) {
         Map<String, Object> params = new LinkedHashMap<>();
         putIfNotBlank(params, "agentId", request.getAgentId());
         putIfNotBlank(params, "providerType", request.getProviderType());
@@ -1236,7 +1278,7 @@ public class TaskDispatchFacade {
         putIfNotBlank(params, "permissionMode", request.getPermissionMode());
         putIfNotBlank(params, "agentTeamsConfigId", request.getAgentTeamsConfigId());
         putIfNotBlank(params, "agentTeamsJson", request.getAgentTeamsJson());
-        putIfNotBlank(params, "codexThreadId", request.getCodexThreadId());
+        // claudeSessionId / codexThreadId 不再透传 — Provider 从 SessionEntity.providerStateJson 恢复
         if (request.getMaxTurns() != null) {
             params.put("maxTurns", request.getMaxTurns());
         }
@@ -1244,6 +1286,10 @@ public class TaskDispatchFacade {
             params.put("images", String.join(",", request.getImages()));
         }
         return params;
+    }
+
+    private Map<String, Object> buildDirectCreateParams(TaskDispatchRequest request) {
+        return toCommonParams(request);
     }
 
     private String mapWorkerBackendToProviderType(String workerBackend) {
@@ -1255,13 +1301,6 @@ public class TaskDispatchFacade {
             case "CLAUDE_CODE" -> "claude-worker";
             default -> null;
         };
-    }
-
-    private String resolveRequestedProviderType(TaskDispatchRequest request) {
-        if (request.getProviderType() != null && !request.getProviderType().isBlank()) {
-            return request.getProviderType();
-        }
-        return resolveProviderTypeFromModelConfig(request.getModelConfigId());
     }
 
     private String resolveBoundOrExplicitAgentId(@Nullable String requestedAgentId, @Nullable String sessionId) {

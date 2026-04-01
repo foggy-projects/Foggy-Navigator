@@ -25,4 +25,6 @@ public class CreateCodexTaskForm {
     private String codexThreadId;
     /** 平台 LLM 模型配置 ID，用于从平台配置中获取 apiKey */
     private String modelConfigId;
+    /** Navigator 平台 session ID（非空则复用已有会话，由 ContextResolvingA2aAgent 传入） */
+    private String sessionId;
 }

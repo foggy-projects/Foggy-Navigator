@@ -6,10 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.session.*;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
+import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +35,8 @@ public class JpaSessionManager implements SessionManager {
     private final SessionRepository sessionRepository;
     private final SessionMessageRepository messageRepository;
     private final ObjectMapper objectMapper;
+    @Nullable
+    private final AgentContextStore contextStore;
 
     @Override
     @Transactional
@@ -176,6 +180,9 @@ public class JpaSessionManager implements SessionManager {
     @Override
     @Transactional
     public void deleteSession(String sessionId) {
+        if (contextStore != null) {
+            contextStore.deleteByNavigatorSessionId(sessionId);
+        }
         messageRepository.deleteBySessionId(sessionId);
         sessionRepository.deleteById(sessionId);
         log.info("Session deleted: sessionId={}", sessionId);

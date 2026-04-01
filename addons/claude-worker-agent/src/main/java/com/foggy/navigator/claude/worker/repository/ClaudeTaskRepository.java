@@ -106,6 +106,9 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
             @Param("userId") String userId,
             @Param("sessionIds") List<String> sessionIds);
 
+    /** 根据 contextId 查找最近一条任务（用于多轮会话复用 sessionId） */
+    Optional<ClaudeTaskEntity> findTopByContextIdAndUserIdOrderByCreatedAtDesc(String contextId, String userId);
+
     /** A2A 幂等：根据 dedupKey 查找指定时间之后的最近一条任务（用于防重复提交） */
     Optional<ClaudeTaskEntity> findFirstByDedupKeyAndCreatedAtAfterOrderByCreatedAtDesc(
             String dedupKey, LocalDateTime after);

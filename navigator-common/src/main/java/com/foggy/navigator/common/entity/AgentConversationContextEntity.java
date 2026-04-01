@@ -11,7 +11,8 @@ import java.time.LocalDateTime;
 @Data
 @Entity
 @Table(name = "agent_conversation_contexts", indexes = {
-    @Index(name = "idx_acc_user_agent", columnList = "userId, targetAgentId")
+    @Index(name = "idx_acc_user_agent", columnList = "userId, targetAgentId"),
+    @Index(name = "idx_acc_alias_user_agent", columnList = "contextAlias, userId, targetAgentId", unique = true)
 })
 public class AgentConversationContextEntity {
 
@@ -26,6 +27,14 @@ public class AgentConversationContextEntity {
     /** Agent 侧的会话标识（claudeSessionId 等） */
     @Column(length = 256)
     private String agentSessionRef;
+
+    /** 业务语义别名（如 "time-writer-task"），通过 alias+userId+targetAgentId 定位 */
+    @Column(length = 128)
+    private String contextAlias;
+
+    /** Navigator 平台 session ID（多轮复用） */
+    @Column(length = 64)
+    private String navigatorSessionId;
 
     @Column(length = 64, nullable = false)
     private String userId;

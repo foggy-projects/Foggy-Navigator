@@ -30,7 +30,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -80,20 +80,24 @@ class CodexTaskServiceTest {
     }
 
     @Test
-    void resolveApiKey_returnsNullForCodexSubscriptionMode() {
+    void resolveCodexAuth_returnsEmptyWhenNoApiKey() {
         LlmModelConfigDTO config = new LlmModelConfigDTO();
         config.setWorkerBackend("OPENAI_CODEX");
         config.setBaseUrl(null);
 
         when(llmModelManager.getModelConfig("cfg-1")).thenReturn(Optional.of(config));
+        when(llmModelManager.getDecryptedApiKey("cfg-1")).thenReturn(null);
 
-        Object result = ReflectionTestUtils.invokeMethod(service, "resolveApiKey", "cfg-1");
+        Object result = ReflectionTestUtils.invokeMethod(service, "resolveCodexAuth", "cfg-1");
 
-        assertNull(result);
+        assertNotNull(result);
+        // CodexAuthResult record — access via reflection
+        assertNull(ReflectionTestUtils.invokeMethod(result, "apiKey"));
+        assertNull(ReflectionTestUtils.invokeMethod(result, "baseUrl"));
     }
 
     @Test
-    void resolveApiKey_returnsDecryptedKeyForNonSubscriptionConfig() {
+    void resolveCodexAuth_returnsApiKeyAndBaseUrl() {
         LlmModelConfigDTO config = new LlmModelConfigDTO();
         config.setWorkerBackend("OPENAI_CODEX");
         config.setBaseUrl("https://api.openai.com/v1");
@@ -101,9 +105,11 @@ class CodexTaskServiceTest {
         when(llmModelManager.getModelConfig("cfg-2")).thenReturn(Optional.of(config));
         when(llmModelManager.getDecryptedApiKey("cfg-2")).thenReturn("sk-live");
 
-        Object result = ReflectionTestUtils.invokeMethod(service, "resolveApiKey", "cfg-2");
+        Object result = ReflectionTestUtils.invokeMethod(service, "resolveCodexAuth", "cfg-2");
 
-        assertEquals("sk-live", result);
+        assertNotNull(result);
+        assertEquals("sk-live", ReflectionTestUtils.invokeMethod(result, "apiKey"));
+        assertEquals("https://api.openai.com/v1", ReflectionTestUtils.invokeMethod(result, "baseUrl"));
     }
 
     @Test
@@ -147,12 +153,16 @@ class CodexTaskServiceTest {
                 .id("session-1")
                 .userId("user-1")
                 .build());
+        // providerStateJson 中存储 codexThreadId（resume 从此恢复）
+        SessionEntity sessionWithState = new SessionEntity();
+        sessionWithState.setId("session-1");
+        sessionWithState.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(sessionWithState));
 
         DispatchTaskDTO result = service.resumeTask("user-1", "tenant-1", Map.of(
                 "workerId", "worker-1",
                 "sessionId", "session-1",
                 "prompt", "continue please",
-                "codexThreadId", "thread-1",
                 "images", "[{\"name\":\"screen.png\",\"data\":\"YmFzZTY0\",\"mime_type\":\"image/png\"}]",
                 "directoryId", "dir-1",
                 "cwd", "/repo"
@@ -305,13 +315,13 @@ class CodexTaskServiceTest {
         existingSession.setUserId("user-1");
         existingSession.setAgentId("agent-codex-1");
         existingSession.setProviderType("codex-worker");
+        existingSession.setProviderStateJson("{\"codexThreadId\":\"thread-1\"}");
         when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(existingSession));
 
         DispatchTaskDTO result = service.resumeTask("user-1", "tenant-1", Map.of(
                 "workerId", "worker-1",
                 "sessionId", "session-1",
-                "prompt", "continue",
-                "codexThreadId", "thread-1"
+                "prompt", "continue"
         ));
 
         assertEquals("agent-codex-1", result.getAgentId());

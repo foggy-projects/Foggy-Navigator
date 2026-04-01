@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
 import { runQuery, taskBroadcasts, cleanupOldTasks, getRunningTaskCount } from '../codex/sdk-wrapper.js'
 import type { WorkerEvent } from '../models.js'
+import { ensureProjectSkillsLink } from '../startup/skills-link.js'
 import { validateQueryRequest } from '../validation/query.js'
 
 const router = Router()
@@ -27,6 +28,19 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     if (!allowed) {
       res.status(403).json({ error: `Working directory not allowed: ${cwd}` })
       return
+    }
+  }
+
+  if (cwd) {
+    try {
+      const result = await ensureProjectSkillsLink(cwd)
+      if (result.status === 'created') {
+        console.log(`Created project skills link: ${result.linkPath} -> ${result.targetPath}`)
+      } else if (result.status === 'skipped' && result.reason !== 'source directory does not exist') {
+        console.warn(`Skipped project skills link: ${result.linkPath} (${result.reason})`)
+      }
+    } catch (error) {
+      console.warn(`Failed to initialize project skills link for ${cwd}:`, error)
     }
   }
 
@@ -62,7 +76,9 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     body.model,
     body.max_turns,
     body.images,
-    body.api_key
+    body.api_key,
+    body.base_url,
+    body.env_vars
   )
 
   // Wait a tick for broadcast to be registered
