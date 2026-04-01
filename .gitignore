@@ -167,6 +167,7 @@ exports/
 temp/
 cache/
 .foggy-attachments/
+/.agents/skills
 
 # Backup files
 *.bak

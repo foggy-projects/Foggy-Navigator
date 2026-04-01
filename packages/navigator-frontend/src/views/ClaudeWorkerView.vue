@@ -412,8 +412,20 @@
               <el-option v-for="cfg in agentTeamsConfigs" :key="cfg.configId" :label="cfg.name + (cfg.isDefault ? ' ★' : '')" :value="cfg.configId" />
             </el-select>
             <el-tag v-for="agent in parsedAgentTeams" :key="agent" size="small" type="info" effect="light">{{ agent }}</el-tag>
-            <el-tag v-if="platformModelConfig" size="small" type="success">API: {{ platformModelConfig.name }}</el-tag>
-            <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">模型: {{ shortModel(taskForm.model) }}</el-tag>
+            <el-select
+              v-if="platformModels.length > 0"
+              v-model="platformModelConfigId"
+              size="small"
+              class="toolbar-select"
+              style="width: 140px"
+              placeholder="LLM 配置"
+              clearable
+            >
+              <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
+            </el-select>
+            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 120px">
+              <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
+            </el-select>
             <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">轮次: {{ taskForm.maxTurns }}</el-tag>
           </div>
           <div v-if="attachments.length > 0" class="image-preview-strip compact">
@@ -757,8 +769,20 @@
             <button class="mini-tool-btn" @click="showPencilCanvas = true" title="打开画板">
               <span class="btn-icon">🎨</span><span class="btn-label">画板</span>
             </button>
-            <el-tag v-if="platformModelConfig" size="small" type="success">API: {{ platformModelConfig.name }}</el-tag>
-            <el-tag v-if="taskForm.model" size="small" closable @close="taskForm.model = ''">模型: {{ shortModel(taskForm.model) }}</el-tag>
+            <el-select
+              v-if="platformModels.length > 0"
+              v-model="platformModelConfigId"
+              size="small"
+              class="toolbar-select"
+              style="width: 140px"
+              placeholder="LLM 配置"
+              clearable
+            >
+              <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
+            </el-select>
+            <el-select v-model="taskForm.model" size="small" class="toolbar-select" style="width: 120px">
+              <el-option v-for="opt in claudeModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
+            </el-select>
             <el-tag v-if="taskForm.maxTurns" size="small" closable @close="taskForm.maxTurns = null">轮次: {{ taskForm.maxTurns }}</el-tag>
           </div>
           <div v-if="attachments.length > 0" class="image-preview-strip compact">
