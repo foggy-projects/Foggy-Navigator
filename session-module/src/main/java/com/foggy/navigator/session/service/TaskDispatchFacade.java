@@ -101,7 +101,9 @@ public class TaskDispatchFacade {
         log.info("Dispatched task via Facade: agentId={}, providerType={}, taskId={}",
                 agentId, providerType, a2aTask.getId());
 
-        return toDispatchDTO(a2aTask, agentId, providerType, request);
+        DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, providerType, request);
+        persistModelConfigId(dto.getTaskId(), request.getModelConfigId());
+        return dto;
     }
 
     /**
@@ -262,7 +264,9 @@ public class TaskDispatchFacade {
                 .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + providerType));
 
         Map<String, Object> params = buildResumeParams(request);
-        return provider.resumeTask(context.getUserId(), context.getTenantId(), params);
+        DispatchTaskDTO dto = provider.resumeTask(context.getUserId(), context.getTenantId(), params);
+        persistModelConfigId(dto.getTaskId(), request.getModelConfigId());
+        return dto;
     }
 
     /**
@@ -958,6 +962,7 @@ public class TaskDispatchFacade {
         result.put("latestStatus", view.latestTask().getStatus());
         result.put("model", firstNonBlank(view.latestTask().getModel(),
                 view.session() != null ? view.session().getLatestModel() : null));
+        result.put("modelConfigId", view.latestTask().getModelConfigId());
         result.put("cwd", view.latestTask().getCwd());
         result.put("source", view.latestTask().getSource());
         result.put("totalCost", totalCost);
@@ -1010,6 +1015,7 @@ public class TaskDispatchFacade {
                 .claudeSessionId(asString(state.get("claudeSessionId")))
                 .codexThreadId(asString(state.get("codexThreadId")))
                 .contextId(asString(state.get("contextId")))
+                .modelConfigId(entity.getModelConfigId())
                 .fileCheckpointingEnabled(asBoolean(state.get("fileCheckpointingEnabled")));
         if (state.containsKey("checkpoints")) {
             builder.checkpoints(writeJson(state.get("checkpoints")));
@@ -1130,6 +1136,18 @@ public class TaskDispatchFacade {
             return value;
         }
         return value.substring(0, maxLength);
+    }
+
+    /**
+     * Post-dispatch: 将 request 中的 modelConfigId 持久化到 SessionTaskEntity。
+     * 这是 modelConfigId 写入 session_tasks 的唯一入口，在 Facade 层统一处理，各 Provider 无需关心。
+     */
+    private void persistModelConfigId(String taskId, String modelConfigId) {
+        if (sessionTaskRepository == null || taskId == null || modelConfigId == null || modelConfigId.isBlank()) return;
+        sessionTaskRepository.findByTaskId(taskId).ifPresent(st -> {
+            st.setModelConfigId(modelConfigId);
+            sessionTaskRepository.save(st);
+        });
     }
 
     private String asString(Object value) {
@@ -1257,6 +1275,7 @@ public class TaskDispatchFacade {
         DispatchTaskDTO dto = provider.createTaskDirect(params, context.getUserId(), context.getTenantId());
         log.info("Dispatched task directly via provider: providerType={}, taskId={}, workerId={}, directoryId={}",
                 providerType, dto.getTaskId(), request.getWorkerId(), request.getDirectoryId());
+        persistModelConfigId(dto.getTaskId(), request.getModelConfigId());
         return dto;
     }
 
