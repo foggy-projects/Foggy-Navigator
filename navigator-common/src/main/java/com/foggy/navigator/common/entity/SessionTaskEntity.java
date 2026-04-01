@@ -69,6 +69,10 @@ public class SessionTaskEntity {
     @Column(length = 128)
     private String model;
 
+    /** 创建任务时使用的平台 LLM 模型配置 ID */
+    @Column(length = 64)
+    private String modelConfigId;
+
     @Column(precision = 10, scale = 6)
     private BigDecimal costUsd;
 
