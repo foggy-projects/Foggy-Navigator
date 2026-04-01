@@ -1169,7 +1169,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
             if (matchedDir != null && matchedDir.getDefaultAuthMode() != null) {
                 String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(matchedDir);
                 bindAuthToSession(
-                        sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
+                        sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2],
+                        matchedDir.getDefaultModelConfigId());
             }
 
             created++;
@@ -1251,7 +1252,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 String authMode = (modelConfig.getBaseUrl() != null && !modelConfig.getBaseUrl().isEmpty())
                         ? "CUSTOM_ENDPOINT" : "API_KEY";
                 bindAuthToSession(
-                        sessionId, workerId, userId, authMode, decryptedApiKey, modelConfig.getBaseUrl());
+                        sessionId, workerId, userId, authMode, decryptedApiKey, modelConfig.getBaseUrl(),
+                        modelConfigId);
 
                 return new String[]{decryptedApiKey, null, modelConfig.getBaseUrl()};
             }
@@ -1273,7 +1275,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
                         String authMode = (dirModelConfig.getBaseUrl() != null && !dirModelConfig.getBaseUrl().isEmpty())
                                 ? "CUSTOM_ENDPOINT" : "API_KEY";
                         bindAuthToSession(
-                                sessionId, workerId, userId, authMode, decryptedApiKey, dirModelConfig.getBaseUrl());
+                                sessionId, workerId, userId, authMode, decryptedApiKey, dirModelConfig.getBaseUrl(),
+                                dir.getDefaultModelConfigId());
                         return new String[]{decryptedApiKey, null, dirModelConfig.getBaseUrl()};
                     }
                 }
@@ -1281,7 +1284,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 if (dir.getDefaultAuthMode() != null) {
                     String[] dirAuth = workingDirectoryService.getDecryptedDefaultAuth(dir);
                     bindAuthToSession(
-                            sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2]);
+                            sessionId, workerId, userId, dirAuth[0], dirAuth[1], dirAuth[2],
+                            null);
                     String apiKey = null;
                     String authToken = null;
                     if ("API_KEY".equals(dirAuth[0]) || "CUSTOM_ENDPOINT".equals(dirAuth[0])) {
@@ -2053,7 +2057,8 @@ public class ClaudeTaskService implements TaskQueryProvider {
      * 将 auth 信息直接绑定到 SessionEntity（替代 ConversationConfigService.bindAuthFromDirectory）
      */
     private void bindAuthToSession(String sessionId, String workerId, String userId,
-                                   String authMode, String plainToken, String baseUrl) {
+                                   String authMode, String plainToken, String baseUrl,
+                                   String modelConfigId) {
         if (sessionEntityRepository == null) return;
         SessionEntity session = getOrCreateSessionEntity(sessionId, workerId, userId);
         if (session == null || session.getAuthBoundAt() != null) return;
@@ -2063,9 +2068,9 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
         session.setAuthBaseUrl(blankToNull(baseUrl));
         session.setAuthBoundAt(LocalDateTime.now());
-        session.setAuthModelConfigId(null);
+        session.setAuthModelConfigId(modelConfigId);
         sessionEntityRepository.save(session);
-        log.info("Auth bound to session {}: mode={}", sessionId, authMode);
+        log.info("Auth bound to session {}: mode={}, modelConfigId={}", sessionId, authMode, modelConfigId);
     }
 
     /**
@@ -2447,7 +2452,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
                     .latestTaskId(task.getTaskId())
                     .latestStatus(task.getStatus())
                     .model(task.getModel())
-                    .modelConfigId(task.getModelConfigId())
+                    .modelConfigId(config != null ? config.getAuthModelConfigId() : task.getModelConfigId())
                     .cwd(task.getCwd())
                     .source(task.getSource())
                     .totalCost(costMap.getOrDefault(task.getSessionId(), BigDecimal.ZERO))
