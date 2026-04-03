@@ -15,3 +15,4 @@
 - [04-shared-ask-external-url-propagation.md](./04-shared-ask-external-url-propagation.md)
 - [05-shared-agent-api-expansion.md](./05-shared-agent-api-expansion.md)
 - [06-session-long-history-render-optimization.md](./06-session-long-history-render-optimization.md)
+- [07-a2a-agent-failure-taxonomy-and-refactor.md](./07-a2a-agent-failure-taxonomy-and-refactor.md)
