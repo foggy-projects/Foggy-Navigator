@@ -632,6 +632,54 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         }
     }
 
+    // ── Shared File Operations ──
+
+    @Override
+    public Map<String, Object> listFiles(String userId, String directoryId, String subPath) {
+        WorkingDirectoryEntity dir = getDirectoryEntityChecked(userId, directoryId);
+        String fullPath = buildSafePath(dir.getPath(), subPath);
+        ClaudeWorkerClient client = resolveClient(dir.getWorkerId());
+        return client.listFiles(fullPath, false).block(Duration.ofSeconds(15));
+    }
+
+    @Override
+    public Map<String, Object> readFile(String userId, String directoryId, String subPath) {
+        if (subPath == null || subPath.isBlank()) {
+            throw new IllegalArgumentException("subPath is required for readFile");
+        }
+        WorkingDirectoryEntity dir = getDirectoryEntityChecked(userId, directoryId);
+        String fullPath = buildSafePath(dir.getPath(), subPath);
+        ClaudeWorkerClient client = resolveClient(dir.getWorkerId());
+        return client.readFileContent(fullPath).block(Duration.ofSeconds(15));
+    }
+
+    @Override
+    public Map<String, Object> searchFiles(String userId, String directoryId, String query) {
+        WorkingDirectoryEntity dir = getDirectoryEntityChecked(userId, directoryId);
+        ClaudeWorkerClient client = resolveClient(dir.getWorkerId());
+        return client.searchFiles(dir.getPath(), query, 100).block(Duration.ofSeconds(15));
+    }
+
+    private WorkingDirectoryEntity getDirectoryEntityChecked(String userId, String directoryId) {
+        return directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+    }
+
+    private ClaudeWorkerClient resolveClient(String workerId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        return workerService.createClient(worker);
+    }
+
+    private static String buildSafePath(String basePath, String subPath) {
+        if (subPath == null || subPath.isBlank()) return basePath;
+        if (subPath.contains("..")) {
+            throw new IllegalArgumentException("subPath must not contain '..'");
+        }
+        String normalized = subPath.replace("\\", "/");
+        if (normalized.startsWith("/")) normalized = normalized.substring(1);
+        return basePath + "/" + normalized;
+    }
+
     /**
      * 判断 userId 对应的用户是否与指定 tenantId 属于同一租户
      * 用于 Open API / A2A 场景：员工通过租户级 Agent 访问管理员创建的 Worker

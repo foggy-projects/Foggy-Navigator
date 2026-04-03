@@ -68,4 +68,42 @@ public interface WorkerManagementFacade {
     default CodexConfig getCodexConfig(String workerId) {
         return null;
     }
+
+    // ── Shared File Operations（供 SharedFileController 使用） ──
+
+    /**
+     * 列出指定目录下的文件
+     *
+     * @param userId      用户 ID（归属校验）
+     * @param directoryId 工作目录 ID
+     * @param subPath     子路径（相对于工作目录，可空）
+     * @return Worker 返回的文件列表
+     */
+    default Map<String, Object> listFiles(String userId, String directoryId, String subPath) {
+        throw new UnsupportedOperationException("listFiles not supported");
+    }
+
+    /**
+     * 读取文件内容
+     *
+     * @param userId      用户 ID（归属校验）
+     * @param directoryId 工作目录 ID
+     * @param subPath     文件子路径（相对于工作目录）
+     * @return Worker 返回的文件内容
+     */
+    default Map<String, Object> readFile(String userId, String directoryId, String subPath) {
+        throw new UnsupportedOperationException("readFile not supported");
+    }
+
+    /**
+     * 搜索文件名
+     *
+     * @param userId      用户 ID（归属校验）
+     * @param directoryId 工作目录 ID
+     * @param query       搜索关键词
+     * @return Worker 返回的搜索结果
+     */
+    default Map<String, Object> searchFiles(String userId, String directoryId, String query) {
+        throw new UnsupportedOperationException("searchFiles not supported");
+    }
 }

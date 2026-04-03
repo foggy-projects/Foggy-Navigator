@@ -205,7 +205,8 @@ public class SharingKeyService {
 
     /** 所有有效的操作标识 */
     private static final Set<String> VALID_OPERATIONS = Set.of(
-            "ask", "task:get", "task:cancel", "task:respond", "task:artifacts", "session:get"
+            "ask", "task:get", "task:cancel", "task:respond", "task:artifacts", "session:get",
+            "files:read", "files:list", "files:search"
     );
 
     /**

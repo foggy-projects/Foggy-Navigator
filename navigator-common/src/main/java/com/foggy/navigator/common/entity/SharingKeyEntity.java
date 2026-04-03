@@ -70,7 +70,8 @@ public class SharingKeyEntity {
     /**
      * 允许的操作列表（逗号分隔），null 表示允许全部操作。
      * <p>
-     * 有效操作标识：ask, task:get, task:cancel, task:respond, task:artifacts, session:get
+     * 有效操作标识：ask, task:get, task:cancel, task:respond, task:artifacts, session:get,
+     * files:read, files:list, files:search
      */
     @Column(length = 512)
     private String allowedOperations;

@@ -256,7 +256,21 @@
 
 有效操作标识：`ask`, `task:get`, `task:cancel`, `task:respond`, `task:artifacts`, `session:get`
 
-### 待实施
+### Batch 3: files/read|list|search 文件接口（2026-04-03）✅
 
-- Batch 3: `files/read|list|search` 文件接口
-- Batch 4 (可延期): `exec` 命令执行
+**已实施**：
+
+1. **WorkerManagementFacade SPI** 新增 `listFiles`、`readFile`、`searchFiles` 三个 default 方法
+2. **ClaudeWorkerFacadeImpl** 实现三个文件操作方法，复用现有 WorkingDirectoryRepository + ClaudeWorkerClient
+   - 含 `buildSafePath` 路径穿越防护（禁止 `..`）
+   - 含 userId + directoryId 归属校验
+3. **SharedFileController** 新建（session-module）：
+   - `GET /api/v1/shared/files/list?directoryId=&path=`
+   - `GET /api/v1/shared/files/read?directoryId=&path=`
+   - `GET /api/v1/shared/files/search?directoryId=&q=`
+4. **allowedOperations** 扩展新增：`files:read`, `files:list`, `files:search`
+5. 安全：每个端点调用 `checkOperation` + facade 内部 userId/directoryId 校验 + 路径穿越防护
+
+### Batch 4 (延期)
+
+- `exec` 命令执行 — 高风险，需要独立安全设计（沙箱 + 命令白名单 + feature flag），不在当前版本实施
