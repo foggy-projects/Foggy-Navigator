@@ -312,6 +312,33 @@ class SharingKeyServiceTest {
         assertEquals(1, result.getTodayCalls());
     }
 
+    @Test
+    void validateForKeyOnly_quotaExceeded_doesNotConsumeAndStillPasses() {
+        SharingKeyEntity entity = buildEntity("sk-1", "agent-1", "u1");
+        entity.setTodayCalls(50);
+        entity.setMaxDailyCalls(50);
+        entity.setCallDate(LocalDate.now());
+        when(repository.findBySharingKey("shk-full-key")).thenReturn(Optional.of(entity));
+
+        SharingKeyEntity result = service.validateForKeyOnly("shk-full-key");
+
+        assertSame(entity, result);
+        assertEquals(50, result.getTodayCalls());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void validateForKeyOnly_disabledKey_throws() {
+        SharingKeyEntity entity = buildEntity("sk-1", "agent-1", "u1");
+        entity.setEnabled(false);
+        when(repository.findBySharingKey("shk-full-key")).thenReturn(Optional.of(entity));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.validateForKeyOnly("shk-full-key"));
+        assertTrue(ex.getMessage().contains("disabled"));
+        verify(repository, never()).save(any());
+    }
+
     // ---- helper ----
 
     private SharingKeyEntity buildEntity(String id, String agentId, String ownerUserId) {
