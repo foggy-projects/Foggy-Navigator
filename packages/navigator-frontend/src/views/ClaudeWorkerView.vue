@@ -2655,6 +2655,24 @@ const platformModelConfig = computed(() =>
   platformModels.value.find((m) => m.id === platformModelConfigId.value) || null,
 )
 
+function providerTypeFromWorkerBackend(workerBackend?: string | null): string | undefined {
+  if (workerBackend === 'OPENAI_CODEX') return 'codex-worker'
+  if (workerBackend === 'CLAUDE_CODE') return 'claude-worker'
+  return undefined
+}
+
+function providerTypeFromAgentType(agentType?: string | null): string | undefined {
+  if (agentType === 'LOCAL_CODEX_WORKER') return 'codex-worker'
+  if (agentType === 'LOCAL_CLAUDE_WORKER') return 'claude-worker'
+  return undefined
+}
+
+const selectedAgentProviderType = computed(() => {
+  if (!selectedAgentId.value) return undefined
+  const agent = agentState.agents.value.find(a => a.agentId === selectedAgentId.value)
+  return providerTypeFromAgentType(agent?.agentType)
+})
+
 // --- Per-worker LLM 选择缓存：切换 Worker 时记住每个 Worker 的 API 凭证 + 模型选择 ---
 const LLM_CACHE_KEY = 'foggy:workerLlmSelection'
 type LlmSelection = { apiConfigId: string; model: string }
@@ -4745,8 +4763,9 @@ async function handleCreateTask() {
       workerId: selectedWorkerId.value,
       prompt,
     }
-    // 路由统一由后端处理：前端只传 agentId + modelConfigId
-    if (selectedAgentId.value) {
+    // provider 不一致时不要带 agentId，避免 A2A 路由与 modelConfigId 指向不同后端。
+    const modelProviderType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
+    if (selectedAgentId.value && (!modelProviderType || modelProviderType === selectedAgentProviderType.value)) {
       form.agentId = selectedAgentId.value
     }
 

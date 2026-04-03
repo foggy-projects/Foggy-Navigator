@@ -115,7 +115,7 @@ Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实
 1. **JPA 单体设计**：Entity 间不用关联注解，用外键字段 + Service 层组合查询
 2. **统一返回**：Controller 返回 `RX<T>`，成功 `RX.ok(data)`，失败 `RX.failA/B/C(msg)`
 3. **接口参数**：使用 Form/DTO 而非 Entity，详见 `/form-design` 技能
-4. **需求记录**：`docs/requirement-tracker/YYYY-QX/DD-需求简述.md`，用户确认后再开发
+4. **需求记录**：`docs/version-tracker/<version>/NN-事项简述.md`，按版本号跟踪需求、缺陷与重构项，用户确认后再开发
 5. **先调研再实现**：集成外部系统（Claude Code SDK、OpenHands 等）的功能时，必须先调研目标系统的已有机制和内部数据结构，再设计实现方案。禁止在不了解底层机制的情况下"猜测式"实现。
 6. **语义对齐**：实现涉及用户交互的功能前，先明确关键语义（操作是否产生新实体、是否等待用户确认、UI 状态如何变化），必要时主动向用户确认，避免多轮返工。
 7. **SecurityConfig.java**：增加新的http端口注意更新权限

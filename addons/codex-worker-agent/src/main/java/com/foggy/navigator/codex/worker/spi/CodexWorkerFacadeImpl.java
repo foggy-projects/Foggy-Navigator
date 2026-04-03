@@ -62,8 +62,6 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
         if (!task.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
-        streamRelay.abortRemoteTask(task);
-        streamRelay.abortStream(taskId);
         taskService.abortTask(taskId);
         return Map.of("taskId", taskId, "status", "ABORTED");
     }

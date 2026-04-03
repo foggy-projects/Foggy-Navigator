@@ -334,10 +334,13 @@ public class CodexTaskService implements TaskQueryProvider {
             return;
         }
 
+        streamRelay.abortRemoteTask(entity);
+        streamRelay.abortStream(taskId);
+
         String previousStatus = entity.getStatus();
         entity.setStatus("ABORTED");
         persistTask(entity);
-        log.info("Aborted Codex task: taskId={}", taskId);
+        log.info("Aborted Codex task: taskId={}, previousStatus={}", taskId, previousStatus);
         publishStatusChange(entity, previousStatus);
     }
 
