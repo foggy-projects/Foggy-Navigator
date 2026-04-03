@@ -39,68 +39,10 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
-import MarkdownIt from 'markdown-it'
-import hljs from 'highlight.js/lib/core'
-import javascript from 'highlight.js/lib/languages/javascript'
-import typescript from 'highlight.js/lib/languages/typescript'
-import python from 'highlight.js/lib/languages/python'
-import java from 'highlight.js/lib/languages/java'
-import sql from 'highlight.js/lib/languages/sql'
-import json from 'highlight.js/lib/languages/json'
-import bash from 'highlight.js/lib/languages/bash'
-import xml from 'highlight.js/lib/languages/xml'
-import css from 'highlight.js/lib/languages/css'
-import 'highlight.js/styles/github-dark.css'
+import { AipMessageType } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
 import { copyToClipboard } from '../utils/clipboard'
-
-// Register commonly used languages
-hljs.registerLanguage('javascript', javascript)
-hljs.registerLanguage('js', javascript)
-hljs.registerLanguage('typescript', typescript)
-hljs.registerLanguage('ts', typescript)
-hljs.registerLanguage('python', python)
-hljs.registerLanguage('py', python)
-hljs.registerLanguage('java', java)
-hljs.registerLanguage('sql', sql)
-hljs.registerLanguage('json', json)
-hljs.registerLanguage('bash', bash)
-hljs.registerLanguage('sh', bash)
-hljs.registerLanguage('shell', bash)
-hljs.registerLanguage('html', xml)
-hljs.registerLanguage('xml', xml)
-hljs.registerLanguage('css', css)
-
-// HTML-escape for storing raw code in data attribute
-function escapeAttr(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
-function wrapCodeBlock(highlightedHtml: string, rawCode: string, lang: string): string {
-  const langLabel = lang ? `<span class="code-lang-label">${lang}</span>` : ''
-  return `<div class="code-block-wrapper">${langLabel}<button class="code-copy-btn" data-code="${escapeAttr(rawCode)}">复制</button><pre class="hljs"><code>${highlightedHtml}</code></pre></div>`
-}
-
-const md = new MarkdownIt({
-  html: false,
-  linkify: true,
-  breaks: true,
-  highlight: (str: string, lang: string): string => {
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return wrapCodeBlock(hljs.highlight(str, { language: lang }).value, str, lang)
-      } catch {
-        // ignore
-      }
-    }
-    // Auto-detect if no language specified
-    try {
-      return wrapCodeBlock(hljs.highlightAuto(str).value, str, '')
-    } catch {
-      return ''
-    }
-  },
-})
+import { renderMarkdown } from '../utils/markdownRenderer'
 
 const props = defineProps<{
   message: ChatMessage
@@ -109,6 +51,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'rewind'): void
+  (e: 'link-click', payload: { href: string; text: string }): void
 }>()
 
 const senderLabel = computed(() => {
@@ -136,8 +79,10 @@ function cleanContent(content: string): string {
   return cleaned.trim()
 }
 
+const isStreaming = computed(() => props.message.type === AipMessageType.TEXT_CHUNK)
+
 const renderedContent = computed(() => {
-  return md.render(cleanContent(props.message.content || ''))
+  return renderMarkdown(props.message.id, cleanContent(props.message.content || ''), isStreaming.value)
 })
 
 const copied = ref(false)
@@ -156,6 +101,16 @@ const contentRef = ref<HTMLElement | null>(null)
 
 function handleContentClick(e: Event) {
   const target = e.target as HTMLElement
+
+  // 链接点击拦截 — 抛给宿主层处理
+  const anchor = target.closest('a') as HTMLAnchorElement | null
+  if (anchor) {
+    e.preventDefault()
+    e.stopPropagation()
+    emit('link-click', { href: anchor.getAttribute('href') || '', text: anchor.textContent || '' })
+    return
+  }
+
   if (!target.classList.contains('code-copy-btn')) return
 
   e.preventDefault()

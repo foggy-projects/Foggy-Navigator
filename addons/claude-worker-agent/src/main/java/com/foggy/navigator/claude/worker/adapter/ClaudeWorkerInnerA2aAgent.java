@@ -14,6 +14,7 @@ import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.agent.RemoteTaskIdResolution;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -142,6 +143,31 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
     @Override
     public void cancelTask(String taskId) {
         taskService.abortTask(taskId);
+    }
+
+    @Override
+    public RemoteTaskIdResolution resolveRemoteTaskId(String taskId) {
+        try {
+            var task = taskService.getTaskEntity(taskId);
+            // Claude 允许 fallback 到平台 taskId（Worker 支持 foggy_task_id 别名）
+            return RemoteTaskIdResolution.withFallback(
+                    task.getWorkerTaskId(),
+                    task.getTaskId(),
+                    true
+            );
+        } catch (IllegalArgumentException e) {
+            return RemoteTaskIdResolution.withFallback(null, taskId, true);
+        }
+    }
+
+    @Override
+    public void abortWorkerTask(String taskId, String remoteTaskId) {
+        taskService.doAbortWorkerTask(taskId, remoteTaskId);
+    }
+
+    @Override
+    public void onPostAbort(String taskId) {
+        taskService.doPostAbort(taskId);
     }
 
     @Override

@@ -7,6 +7,7 @@ import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.agent.RemoteTaskIdResolution;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -121,6 +122,24 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
     public void cancelTask(String taskId) {
         taskService.abortTask(taskId);
     }
+
+    @Override
+    public RemoteTaskIdResolution resolveRemoteTaskId(String taskId) {
+        try {
+            var task = taskService.getTaskEntity(taskId);
+            // Codex 严格依赖 workerTaskId，不允许 fallback
+            return RemoteTaskIdResolution.of(task.getWorkerTaskId(), false);
+        } catch (IllegalArgumentException e) {
+            return RemoteTaskIdResolution.of(null, false);
+        }
+    }
+
+    @Override
+    public void abortWorkerTask(String taskId, String remoteTaskId) {
+        taskService.doAbortWorkerTask(taskId, remoteTaskId);
+    }
+
+    // onPostAbort: Codex 无后置钩子，使用 InnerA2aAgent 默认 no-op
 
     @Override
     public boolean isSessionBusy(String agentSessionRef) {

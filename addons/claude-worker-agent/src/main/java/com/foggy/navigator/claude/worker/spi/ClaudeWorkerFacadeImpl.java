@@ -99,7 +99,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         if (!task.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
-        streamRelay.abortStream(taskId);
+        // 不再单独调用 streamRelay.abortStream — taskService.abortTask 内部已统一处理
         taskService.abortTask(taskId);
         return Map.of("taskId", taskId, "status", "ABORTED");
     }
@@ -630,6 +630,54 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
             }
             return assistantText.isEmpty() ? null : assistantText.toString();
         }
+    }
+
+    // ── Shared File Operations ──
+
+    @Override
+    public Map<String, Object> listFiles(String userId, String directoryId, String subPath) {
+        WorkingDirectoryEntity dir = getDirectoryEntityChecked(userId, directoryId);
+        String fullPath = buildSafePath(dir.getPath(), subPath);
+        ClaudeWorkerClient client = resolveClient(dir.getWorkerId());
+        return client.listFiles(fullPath, false).block(Duration.ofSeconds(15));
+    }
+
+    @Override
+    public Map<String, Object> readFile(String userId, String directoryId, String subPath) {
+        if (subPath == null || subPath.isBlank()) {
+            throw new IllegalArgumentException("subPath is required for readFile");
+        }
+        WorkingDirectoryEntity dir = getDirectoryEntityChecked(userId, directoryId);
+        String fullPath = buildSafePath(dir.getPath(), subPath);
+        ClaudeWorkerClient client = resolveClient(dir.getWorkerId());
+        return client.readFileContent(fullPath).block(Duration.ofSeconds(15));
+    }
+
+    @Override
+    public Map<String, Object> searchFiles(String userId, String directoryId, String query) {
+        WorkingDirectoryEntity dir = getDirectoryEntityChecked(userId, directoryId);
+        ClaudeWorkerClient client = resolveClient(dir.getWorkerId());
+        return client.searchFiles(dir.getPath(), query, 100).block(Duration.ofSeconds(15));
+    }
+
+    private WorkingDirectoryEntity getDirectoryEntityChecked(String userId, String directoryId) {
+        return directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+    }
+
+    private ClaudeWorkerClient resolveClient(String workerId) {
+        ClaudeWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        return workerService.createClient(worker);
+    }
+
+    private static String buildSafePath(String basePath, String subPath) {
+        if (subPath == null || subPath.isBlank()) return basePath;
+        if (subPath.contains("..")) {
+            throw new IllegalArgumentException("subPath must not contain '..'");
+        }
+        String normalized = subPath.replace("\\", "/");
+        if (normalized.startsWith("/")) normalized = normalized.substring(1);
+        return basePath + "/" + normalized;
     }
 
     /**

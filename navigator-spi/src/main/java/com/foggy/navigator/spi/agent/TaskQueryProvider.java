@@ -78,7 +78,14 @@ public interface TaskQueryProvider {
         throw new UnsupportedOperationException("resume not supported by " + getProviderType());
     }
 
-    /** 取消运行中的任务 */
+    /**
+     * 取消运行中的任务。
+     *
+     * @deprecated 统一取消链路已收敛到 A2A 装饰层（AbortCoordinatingA2aAgent），
+     *             不再经由 TaskQueryProvider fallback。此方法保留仅为向后兼容，
+     *             后续版本将移除。
+     */
+    @Deprecated(since = "1.0.0-SNAPSHOT", forRemoval = true)
     default void cancelTask(String taskId, String userId) {
         throw new UnsupportedOperationException("cancel not supported by " + getProviderType());
     }

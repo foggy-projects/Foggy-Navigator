@@ -58,6 +58,7 @@
         @reconnect="handleReconnect"
         @load-more="paneState.loadMoreHistory()"
         @load-all="(limit?: number) => paneState.loadAllHistory(limit)"
+        @link-click="(payload) => emit('link-click', props.paneState.paneId, payload)"
       >
         <template #empty>
           <div class="waiting-hint">
@@ -138,6 +139,7 @@ const emit = defineEmits<{
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
   (e: 'rewind', paneId: string, turnIndex: number): void
   (e: 'reconnect', paneId: string, taskId: string): void
+  (e: 'link-click', paneId: string, payload: { href: string; text: string }): void
   (e: 'focus'): void
 }>()
 

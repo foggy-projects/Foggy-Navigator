@@ -27,4 +27,7 @@ public class SharingKeyUpdateForm {
 
     /** 是否启用 */
     private Boolean enabled;
+
+    /** 允许的操作列表（null 表示不修改，空列表表示允许全部） */
+    private java.util.List<String> allowedOperations;
 }

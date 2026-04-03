@@ -27,4 +27,7 @@ public class SharingKeyCreateForm {
 
     /** 过期时间（可选，null 表示永不过期） */
     private LocalDateTime expiresAt;
+
+    /** 允许的操作列表（可选，null 表示允许全部），如 ["ask", "task:get"] */
+    private java.util.List<String> allowedOperations;
 }

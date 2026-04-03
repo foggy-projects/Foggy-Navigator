@@ -30,7 +30,7 @@
         >
           <template #default="{ data }">
             <span
-              class="tree-node"
+              :class="['tree-node', { 'is-selected': data.fullPath === selectedTreePath }]"
               @contextmenu.prevent="handleContextMenu($event, data)"
               @touchstart.passive="handleTouchStart($event, data)"
               @touchend="handleTouchEnd($event)"
@@ -286,6 +286,11 @@ const { isTouchDevice } = useTouchDetect()
 const route = useRoute()
 const directoryId = computed(() => (route.query.directoryId as string) || '')
 const workerId = computed(() => (route.query.workerId as string) || '')
+const deepLinkFilePath = computed(() => {
+  const raw = (route.query.filePath as string) || ''
+  try { return decodeURIComponent(raw) } catch { return raw }
+})
+const deepLinkLine = computed(() => parseInt(route.query.line as string) || 0)
 
 // ---- Monaco lazy import ---------------------------------------------------
 let monaco: typeof import('monaco-editor') | null = null
@@ -466,6 +471,65 @@ function getSubPath(fullPath: string): string {
     }
   }
   return fullPath
+}
+
+/**
+ * Deeplink 定位 — 按相对路径逐级展开目录树并打开目标文件
+ */
+async function navigateToFile(relativePath: string) {
+  if (!relativePath) return
+
+  const segments = relativePath.split('/')
+  const fileName = segments.pop()
+  if (!fileName) return
+
+  // 逐级展开父目录
+  let currentNodes = treeData.value
+  const expandKeys: string[] = []
+
+  for (const seg of segments) {
+    const dirNode = currentNodes.find(n => n.label === seg && n.isDir)
+    if (!dirNode) {
+      ElMessage.warning('文件不存在或已被移动: 找不到目录 ' + seg)
+      return
+    }
+    expandKeys.push(dirNode.fullPath)
+    if (!dirNode.children || dirNode.children.length === 0) {
+      await loadDirectoryForNode(dirNode)
+      treeData.value = [...treeData.value]
+      await nextTick()
+    }
+    currentNodes = dirNode.children || []
+  }
+
+  // 找到目标文件节点
+  const fileNode = currentNodes.find(n => n.label === fileName && !n.isDir)
+  if (!fileNode) {
+    // 也可能是目录
+    const dirNode = currentNodes.find(n => n.label === fileName && n.isDir)
+    if (dirNode) {
+      expandKeys.push(dirNode.fullPath)
+      selectedTreePath.value = dirNode.fullPath
+      if (!dirNode.children || dirNode.children.length === 0) {
+        await loadDirectoryForNode(dirNode)
+        treeData.value = [...treeData.value]
+        await nextTick()
+      }
+      const existing = treeRef.value?.getExpandedKeys?.() as string[] || []
+      treeRef.value?.setExpandedKeys?.([...new Set([...existing, ...expandKeys])])
+      return
+    }
+    ElMessage.warning('文件不存在或已被移动')
+    return
+  }
+
+  // 展开所有父目录
+  const existing = treeRef.value?.getExpandedKeys?.() as string[] || []
+  treeRef.value?.setExpandedKeys?.([...new Set([...existing, ...expandKeys])])
+
+  // 选中并打开文件
+  selectedTreePath.value = fileNode.fullPath
+  await loadFile(fileNode.fullPath)
 }
 
 // ---- Context menu ---------------------------------------------------------
@@ -1238,8 +1302,12 @@ onMounted(async () => {
 
   // Load initial tree + ignored patterns
   if (directoryId.value) {
-    loadDirectory()
+    await loadDirectory()
     loadIgnoredPatterns()
+    // Deeplink 定位：如果 URL 携带 filePath 参数，自动展开并打开目标文件
+    if (deepLinkFilePath.value) {
+      await navigateToFile(deepLinkFilePath.value)
+    }
   }
 })
 
@@ -1406,6 +1474,11 @@ watch(() => route.query.directoryId, () => {
   gap: 4px;
   font-size: 13px;
   line-height: 28px;
+}
+
+.tree-node.is-selected {
+  background: #094771;
+  border-radius: 3px;
 }
 
 .tree-icon {

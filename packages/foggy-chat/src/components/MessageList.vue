@@ -1,6 +1,6 @@
 <template>
-  <div ref="listRef" class="message-list" @scroll="handleScroll">
-    <!-- Load more history indicator -->
+  <div class="message-list-container">
+    <!-- Load more history indicator (outside scroller, pinned top) -->
     <div v-if="hasMoreHistory" ref="loadMoreRef" class="load-more-area">
       <div v-if="loadingMore" class="loading-hint">
         <span class="loading-spinner"></span>
@@ -22,93 +22,114 @@
         </el-dropdown>
       </template>
     </div>
+
     <div v-if="messages.length === 0" class="empty-state">
       <slot name="empty">
         <div class="empty-hint">暂无消息</div>
       </slot>
     </div>
-    <template v-for="(item, idx) in groupedItems" :key="item.key">
-      <!-- Tool call group (2+ consecutive tool messages) -->
-      <ToolCallGroup
-        v-if="item.kind === 'tool-group'"
-        :items="item.messages"
-        :is-last-group="idx === groupedItems.length - 1 || isLastToolGroup(idx)"
-      />
-      <!-- Context compression hint -->
-      <div
-        v-else-if="item.kind === 'compression'"
-        class="compression-hint"
-      >
-        <span class="compression-line"></span>
-        <span class="compression-text">{{ item.msg.content }}</span>
-        <span class="compression-line"></span>
-      </div>
-      <!-- Waiting for response hint -->
-      <div
-        v-else-if="item.kind === 'waiting'"
-        class="waiting-hint"
-      >
-        <span class="waiting-dot"></span>
-        <span class="waiting-text">{{ item.msg.content }}</span>
-      </div>
-      <!-- Single messages -->
-      <template v-else>
-        <MessageBubble
-          v-if="isBubble(item.msg)"
-          :message="item.msg"
-          :rewindable="isRewindable(item.msg)"
-          @rewind="handleRewind(item.msg)"
-        />
-        <ToolCallBlock
-          v-else-if="isToolCall(item.msg)"
-          :message="item.msg"
-        />
-        <ThinkingIndicator
-          v-else-if="item.msg.type === AipMessageType.THINKING"
-          :thought="item.msg.thought"
-        />
-        <ErrorBlock
-          v-else-if="isError(item.msg)"
-          :error="item.msg.error || item.msg.content"
-          :reconnectable="item.msg.reconnectable"
-          :task-id="(item.msg.raw as Record<string, unknown>)?.taskId as string"
-          @reconnect="(taskId: string) => emit('reconnect', taskId)"
-        />
-        <TaskCompletionCard
-          v-else-if="item.msg.type === AipMessageType.TASK_COMPLETED"
-          :message="item.msg"
-        />
-        <PlanReviewCard
-          v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST && item.msg.planReview"
-          :message="item.msg"
-          @respond="(pid, decision, denyMsg, planAction) => emit('planRespond', pid, decision, denyMsg, planAction)"
-        />
-        <UserQuestionCard
-          v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST && item.msg.questions?.length"
-          :message="item.msg"
-          @respond="(pid, answers) => emit('questionRespond', pid, answers)"
-        />
-        <PermissionRequestCard
-          v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST"
-          :message="item.msg"
-          @respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
-        />
-        <MessageBubble
-          v-else-if="item.msg.type === AipMessageType.SESSION_START"
-          :message="item.msg"
-        />
-        <MessageBubble
-          v-else-if="item.msg.type === AipMessageType.STATE_SYNC"
-          :message="item.msg"
-        />
+
+    <DynamicScroller
+      v-else
+      ref="scrollerRef"
+      :items="groupedItems"
+      :min-item-size="40"
+      key-field="key"
+      class="message-list-scroller"
+      @scroll="handleScroll"
+    >
+      <template #default="{ item, index, active }">
+        <DynamicScrollerItem :item="item" :active="active" :data-index="index">
+          <!-- Tool call group (2+ consecutive tool messages) -->
+          <ToolCallGroup
+            v-if="item.kind === 'tool-group'"
+            :items="item.messages"
+            :is-last-group="index === groupedItems.length - 1 || isLastToolGroup(index)"
+          />
+          <!-- Context compression hint -->
+          <div
+            v-else-if="item.kind === 'compression'"
+            class="compression-hint"
+          >
+            <span class="compression-line"></span>
+            <span class="compression-text">{{ item.msg.content }}</span>
+            <span class="compression-line"></span>
+          </div>
+          <!-- Waiting for response hint -->
+          <div
+            v-else-if="item.kind === 'waiting'"
+            class="waiting-hint"
+          >
+            <span class="waiting-dot"></span>
+            <span class="waiting-text">{{ item.msg.content }}</span>
+          </div>
+          <!-- Single messages -->
+          <template v-else>
+            <MessageBubble
+              v-if="isBubble(item.msg)"
+              :message="item.msg"
+              :rewindable="isRewindable(item.msg)"
+              @rewind="handleRewind(item.msg)"
+              @link-click="(payload) => emit('link-click', payload)"
+            />
+            <ToolCallBlock
+              v-else-if="isToolCall(item.msg)"
+              :message="item.msg"
+            />
+            <ThinkingIndicator
+              v-else-if="item.msg.type === AipMessageType.THINKING"
+              :thought="item.msg.thought"
+            />
+            <ErrorBlock
+              v-else-if="isError(item.msg)"
+              :error="item.msg.error || item.msg.content"
+              :reconnectable="item.msg.reconnectable"
+              :task-id="(item.msg.raw as Record<string, unknown>)?.taskId as string"
+              @reconnect="(taskId: string) => emit('reconnect', taskId)"
+            />
+            <TaskCompletionCard
+              v-else-if="item.msg.type === AipMessageType.TASK_COMPLETED"
+              :message="item.msg"
+            />
+            <PlanReviewCard
+              v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST && item.msg.planReview"
+              :message="item.msg"
+              @respond="(pid, decision, denyMsg, planAction) => emit('planRespond', pid, decision, denyMsg, planAction)"
+            />
+            <UserQuestionCard
+              v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST && item.msg.questions?.length"
+              :message="item.msg"
+              @respond="(pid, answers) => emit('questionRespond', pid, answers)"
+            />
+            <PermissionRequestCard
+              v-else-if="item.msg.type === AipMessageType.CONFIRMATION_REQUEST"
+              :message="item.msg"
+              @respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
+            />
+            <MessageBubble
+              v-else-if="item.msg.type === AipMessageType.SESSION_START"
+              :message="item.msg"
+              @link-click="(payload) => emit('link-click', payload)"
+            />
+            <MessageBubble
+              v-else-if="item.msg.type === AipMessageType.STATE_SYNC"
+              :message="item.msg"
+              @link-click="(payload) => emit('link-click', payload)"
+            />
+          </template>
+        </DynamicScrollerItem>
       </template>
-    </template>
-    <ThinkingIndicator v-if="isThinking && !hasTrailingThinking" />
+    </DynamicScroller>
+
+    <!-- Trailing thinking indicator (outside scroller) -->
+    <ThinkingIndicator v-if="isThinking && !hasTrailingThinking && messages.length > 0" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch, nextTick, computed, onMounted, onBeforeUnmount } from 'vue'
+import { DynamicScroller, DynamicScrollerItem } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import { AipMessageType } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
 import MessageBubble from './MessageBubble.vue'
@@ -164,19 +185,17 @@ const emit = defineEmits<{
   (e: 'reconnect', taskId: string): void
   (e: 'loadMore'): void
   (e: 'loadAll', limit?: number): void
+  (e: 'link-click', payload: { href: string; text: string }): void
 }>()
 
 function handleLoadAllCommand(command: number) {
   emit('loadAll', command)
 }
 
-const listRef = ref<HTMLElement>()
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const scrollerRef = ref<any>()
 const loadMoreRef = ref<HTMLElement>()
 const userScrolledUp = ref(false)
-
-// Scroll-position preservation for prepend
-let previousScrollHeight = 0
-let previousFirstMsgId = ''
 
 function isBubble(msg: ChatMessage) {
   return msg.type === AipMessageType.TEXT_COMPLETE || msg.type === AipMessageType.TEXT_CHUNK
@@ -251,7 +270,6 @@ const groupedItems = computed<GroupedItem[]>(() => {
 })
 
 function isLastToolGroup(idx: number): boolean {
-  // Check if this is the last tool-group in the list
   for (let i = idx + 1; i < groupedItems.value.length; i++) {
     if (groupedItems.value[i].kind === 'tool-group') return false
   }
@@ -285,61 +303,39 @@ const hasTrailingThinking = computed(() => {
   return last?.type === AipMessageType.THINKING
 })
 
+// ── Scroll management ──
+
 function scrollToBottom() {
   nextTick(() => {
-    if (listRef.value && !userScrolledUp.value) {
-      listRef.value.scrollTop = listRef.value.scrollHeight
+    if (scrollerRef.value && !userScrolledUp.value) {
+      scrollerRef.value.scrollToBottom()
     }
   })
 }
 
 function handleScroll() {
-  if (!listRef.value) return
-  const { scrollTop, scrollHeight, clientHeight } = listRef.value
+  if (!scrollerRef.value) return
+  const el = scrollerRef.value.$el as HTMLElement
+  if (!el) return
+  const { scrollTop, scrollHeight, clientHeight } = el
   userScrolledUp.value = scrollHeight - scrollTop - clientHeight > 80
 }
 
-// Record scroll height BEFORE DOM update (for prepend scroll preservation)
+// Watch messages array length — scroll to bottom for appends
+let previousFirstMsgId = ''
+
 watch(
   () => props.messages.length,
-  () => {
-    if (listRef.value) {
-      previousScrollHeight = listRef.value.scrollHeight
-      previousFirstMsgId = props.messages[0]?.id ?? ''
-    }
-  },
-  { flush: 'pre' },
-)
-
-// After DOM update: detect prepend (first message changed) and restore scroll position
-watch(
-  () => props.messages[0]?.id,
-  (newFirstId) => {
-    if (previousFirstMsgId && newFirstId && newFirstId !== previousFirstMsgId && listRef.value) {
-      // Messages were prepended — restore scroll position
-      nextTick(() => {
-        if (listRef.value) {
-          const newScrollHeight = listRef.value.scrollHeight
-          const heightDiff = newScrollHeight - previousScrollHeight
-          listRef.value.scrollTop = heightDiff
-        }
-      })
-      return // don't scroll to bottom on prepend
-    }
-  },
-)
-
-// Watch messages array length — scroll to bottom for appends (new messages at the end)
-watch(() => props.messages.length, (newLen, oldLen) => {
-  // Only auto-scroll for appends (length increased and first message didn't change)
-  if (newLen > (oldLen ?? 0)) {
+  (_newLen, _oldLen) => {
     const firstIdNow = props.messages[0]?.id ?? ''
     if (firstIdNow === previousFirstMsgId || !previousFirstMsgId) {
       // Messages appended at the end — scroll to bottom
       scrollToBottom()
     }
-  }
-})
+    previousFirstMsgId = firstIdNow
+  },
+)
+
 // Watch last message content for TEXT_CHUNK streaming updates
 watch(
   () => props.messages[props.messages.length - 1]?.content,
@@ -352,14 +348,16 @@ onMounted(scrollToBottom)
 let intersectionObserver: IntersectionObserver | null = null
 
 onMounted(() => {
-  if (!listRef.value) return
+  // Use the scroller's root element as the intersection root
+  const rootEl = scrollerRef.value?.$el as HTMLElement | undefined
+  if (!rootEl) return
   intersectionObserver = new IntersectionObserver(
     (entries) => {
       if (entries[0]?.isIntersecting && props.hasMoreHistory && !props.loadingMore) {
         emit('loadMore')
       }
     },
-    { root: listRef.value, threshold: 0.1 },
+    { root: rootEl, threshold: 0.1 },
   )
 })
 
@@ -378,12 +376,17 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.message-list {
+.message-list-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.message-list-scroller {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
-  display: flex;
-  flex-direction: column;
 }
 
 .empty-state {

@@ -7,14 +7,16 @@ import com.foggy.navigator.common.form.SharingKeyUpdateForm;
 import com.foggy.navigator.session.registry.DefaultA2aAgentRegistry;
 import com.foggy.navigator.session.repository.SharingKeyRepository;
 import com.foggy.navigator.session.util.SharingKeyGenerator;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -23,12 +25,26 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SharingKeyService {
 
     private final SharingKeyRepository repository;
     private final SharingKeyGenerator keyGenerator;
     private final DefaultA2aAgentRegistry agentRegistry;
+    private final String externalUrl;
+
+    public SharingKeyService(SharingKeyRepository repository,
+                             SharingKeyGenerator keyGenerator,
+                             DefaultA2aAgentRegistry agentRegistry,
+                             @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}") String externalUrl) {
+        this.repository = repository;
+        this.keyGenerator = keyGenerator;
+        this.agentRegistry = agentRegistry;
+        this.externalUrl = normalizeUrl(externalUrl);
+    }
+
+    private static String normalizeUrl(String url) {
+        return (url != null && url.endsWith("/")) ? url.substring(0, url.length() - 1) : url;
+    }
 
     // ==================== Owner 管理 ====================
 
@@ -57,6 +73,7 @@ public class SharingKeyService {
         entity.setMaxTurns(form.getMaxTurns() != null ? form.getMaxTurns() : 1);
         entity.setMaxDailyCalls(form.getMaxDailyCalls() != null ? form.getMaxDailyCalls() : 50);
         entity.setExpiresAt(form.getExpiresAt());
+        entity.setAllowedOperations(joinOperations(form.getAllowedOperations()));
         entity.setEnabled(true);
         entity.setTodayCalls(0);
 
@@ -94,6 +111,7 @@ public class SharingKeyService {
         if (form.getMaxDailyCalls() != null) entity.setMaxDailyCalls(form.getMaxDailyCalls());
         if (form.getExpiresAt() != null) entity.setExpiresAt(form.getExpiresAt());
         if (form.getEnabled() != null) entity.setEnabled(form.getEnabled());
+        if (form.getAllowedOperations() != null) entity.setAllowedOperations(joinOperations(form.getAllowedOperations()));
 
         repository.save(entity);
         log.info("Sharing key updated: keyId={}", id);
@@ -185,6 +203,44 @@ public class SharingKeyService {
         return entity;
     }
 
+    /** 所有有效的操作标识 */
+    private static final Set<String> VALID_OPERATIONS = Set.of(
+            "ask", "task:get", "task:cancel", "task:respond", "task:artifacts", "session:get",
+            "files:read", "files:list", "files:search"
+    );
+
+    /**
+     * 检查 Sharing Key 是否允许指定操作。
+     * allowedOperations 为 null 表示允许全部操作（向后兼容）。
+     *
+     * @param entity    已验证的 SharingKeyEntity
+     * @param operation 操作标识（如 "ask", "task:cancel"）
+     * @throws IllegalArgumentException 当操作不被允许时
+     */
+    public void checkOperation(SharingKeyEntity entity, String operation) {
+        String allowed = entity.getAllowedOperations();
+        if (allowed == null || allowed.isBlank()) {
+            return; // null = 允许全部
+        }
+        Set<String> ops = Set.of(allowed.split(","));
+        if (!ops.contains(operation)) {
+            throw new IllegalArgumentException("Operation '" + operation + "' is not allowed for this sharing key");
+        }
+    }
+
+    private static String joinOperations(List<String> ops) {
+        if (ops == null) return null;
+        if (ops.isEmpty()) return null; // 空列表 = 允许全部
+        return ops.stream()
+                .filter(VALID_OPERATIONS::contains)
+                .collect(Collectors.joining(","));
+    }
+
+    private static List<String> splitOperations(String ops) {
+        if (ops == null || ops.isBlank()) return null;
+        return Arrays.asList(ops.split(","));
+    }
+
     private SharingKeyDTO toDTO(SharingKeyEntity entity) {
         SharingKeyDTO dto = new SharingKeyDTO();
         dto.setId(entity.getId());
@@ -201,6 +257,9 @@ public class SharingKeyService {
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setSharingKey(null);  // 不返回明文
         dto.setMaskedKey(keyGenerator.mask(entity.getSharingKey()));
+        dto.setAllowedOperations(splitOperations(entity.getAllowedOperations()));
+        dto.setInvokeBaseUrl(externalUrl);
+        dto.setInvokeUrl(externalUrl + "/api/v1/shared/ask");
 
         // agentName 冗余展示：尝试从 registry 获取
         try {

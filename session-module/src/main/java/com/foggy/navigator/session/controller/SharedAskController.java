@@ -53,6 +53,7 @@ public class SharedAskController {
         SharingKeyEntity keyEntity;
         try {
             keyEntity = sharingKeyService.validateAndConsume(sharingKey);
+            sharingKeyService.checkOperation(keyEntity, "ask");
         } catch (IllegalArgumentException e) {
             return RX.failA(e.getMessage());
         }
