@@ -216,3 +216,28 @@
 ## Status
 
 本项作为 `1.0.0-SNAPSHOT` 版本需求记录，可直接交付技术进入分析与分批设计。
+
+## Implementation Status
+
+### Batch 1: respond + artifacts（2026-04-03）✅
+
+**已实施**：在 `SharedTaskController` 中新增两个端点：
+
+1. **POST /api/v1/shared/tasks/{taskId}/respond**
+   - 外部系统通过 Sharing Key 回复 Agent 的权限确认 / 用户问题
+   - 使用 `validateForKeyOnly`（不消耗额度）
+   - 复用 `taskDispatchFacade.respondToTask()` 路由到对应 Provider
+   - 处理 `UnsupportedOperationException`（Agent 不支持 respond）
+
+2. **GET /api/v1/shared/tasks/{taskId}/artifacts**
+   - 获取任务产物（A2A artifacts — Agent 生成的文本/代码等输出）
+   - 通过 `agent.getTask(taskId)` 获取完整 A2aTask
+   - 返回 `List<A2aArtifact>`
+
+安全：复用现有 `findAuthorizedTask()` 归属校验（key → agent → task），`/api/v1/shared/**` 已在 SecurityConfig 中 permitAll。
+
+### 待实施
+
+- Batch 2: `allowedOperations` 权限模型
+- Batch 3: `files/read|list|search` 文件接口
+- Batch 4 (可延期): `exec` 命令执行

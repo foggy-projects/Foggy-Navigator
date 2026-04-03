@@ -3,6 +3,7 @@ package com.foggy.navigator.session.controller;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.dto.a2a.A2aArtifact;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
@@ -17,11 +18,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -96,6 +99,61 @@ public class SharedTaskController {
                 return RX.failA("Session not found: " + sessionId);
             }
             return RX.ok(sessionManager.getAllMessages(sessionId));
+        } catch (IllegalArgumentException e) {
+            return RX.failA(e.getMessage());
+        }
+    }
+
+    /**
+     * 回复权限请求 / 用户问题（外部系统通过 Sharing Key 回复 Agent 的确认请求）
+     */
+    @PostMapping("/tasks/{taskId}/respond")
+    public RX<String> respondToTask(
+            @RequestHeader("X-Sharing-Key") String sharingKey,
+            @PathVariable String taskId,
+            @RequestBody Map<String, Object> body) {
+        try {
+            SharingKeyEntity keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
+            Optional<DispatchTaskDTO> taskOpt = findAuthorizedTask(taskId, keyEntity);
+            if (taskOpt.isEmpty()) {
+                return RX.failA("Task not found: " + taskId);
+            }
+
+            taskDispatchFacade.respondToTask(taskId, keyEntity.getOwnerUserId(), body);
+            return RX.ok("Response sent");
+        } catch (UnsupportedOperationException e) {
+            return RX.failA("Respond not supported for this agent: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return RX.failA(e.getMessage());
+        }
+    }
+
+    /**
+     * 获取任务产物（A2A artifacts — Agent 生成的文本/代码等输出）
+     */
+    @GetMapping("/tasks/{taskId}/artifacts")
+    public RX<List<A2aArtifact>> getArtifacts(
+            @RequestHeader("X-Sharing-Key") String sharingKey,
+            @PathVariable String taskId) {
+        try {
+            SharingKeyEntity keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
+            Optional<DispatchTaskDTO> taskOpt = findAuthorizedTask(taskId, keyEntity);
+            if (taskOpt.isEmpty()) {
+                return RX.failA("Task not found: " + taskId);
+            }
+
+            A2aAgent agent = resolveSharedAgent(keyEntity);
+            if (agent == null) {
+                return RX.failA("Shared agent not available");
+            }
+
+            Optional<A2aTask> a2aTaskOpt = agent.getTask(taskId);
+            if (a2aTaskOpt.isEmpty()) {
+                return RX.failA("Task details not available");
+            }
+
+            List<A2aArtifact> artifacts = a2aTaskOpt.get().getArtifacts();
+            return RX.ok(artifacts != null ? artifacts : List.of());
         } catch (IllegalArgumentException e) {
             return RX.failA(e.getMessage());
         }
