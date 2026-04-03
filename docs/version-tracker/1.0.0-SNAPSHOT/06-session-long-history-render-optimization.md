@@ -169,3 +169,29 @@
 ## Status
 
 本项作为 `1.0.0-SNAPSHOT` 版本优化需求记录，可直接交付技术进入设计与性能验证。
+
+## Implementation Status
+
+**状态**: ✅ 已实施（2026-04-03）
+
+### 已完成的改造
+
+1. **虚拟列表**
+   - MessageList.vue 改为 `DynamicScroller` + `DynamicScrollerItem`（vue-virtual-scroller v2）
+   - 仅渲染可视区附近消息，长会话不再全量 DOM 渲染
+   - 保留 loadMore / loadAll / 自动跟随 / IntersectionObserver 等全部原有行为
+
+2. **全局 MarkdownIt 单例 + 渲染缓存**
+   - 新增 `markdownRenderer.ts`，抽取单例 md 实例（原来每个 MessageBubble 各创建一个）
+   - LRU 缓存（Map，max 500）：以 `messageId + contentHash` 为 key，已完成消息直接命中缓存
+   - MessageBubble.vue 从 ~70 行 hljs/md 初始化代码精简为 1 行 `import { renderMarkdown }`
+
+3. **Streaming 降级高亮**
+   - 两个 MarkdownIt 实例：`mdFull`（完整 hljs 高亮）和 `mdLite`（plain text code block）
+   - `TEXT_CHUNK` 阶段使用 `mdLite`，跳过 `hljs.highlightAuto()`
+   - `TEXT_COMPLETE` 后使用 `mdFull` 完整渲染并入缓存
+
+### 验证结果
+
+- `bash scripts/build-frontend.sh` — foggy-chat-core + foggy-chat + navigator-frontend 全部编译通过
+- TypeScript 类型检查通过
