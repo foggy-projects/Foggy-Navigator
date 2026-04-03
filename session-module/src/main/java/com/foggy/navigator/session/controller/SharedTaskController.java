@@ -47,6 +47,7 @@ public class SharedTaskController {
             @PathVariable String taskId) {
         try {
             SharingKeyEntity keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
+            sharingKeyService.checkOperation(keyEntity, "task:get");
             Optional<DispatchTaskDTO> taskOpt = findAuthorizedTask(taskId, keyEntity);
             if (taskOpt.isEmpty()) {
                 return RX.failA("Task not found: " + taskId);
@@ -71,6 +72,7 @@ public class SharedTaskController {
             @PathVariable String taskId) {
         try {
             SharingKeyEntity keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
+            sharingKeyService.checkOperation(keyEntity, "task:cancel");
             Optional<DispatchTaskDTO> taskOpt = findAuthorizedTask(taskId, keyEntity);
             if (taskOpt.isEmpty()) {
                 return RX.failA("Task not found: " + taskId);
@@ -93,6 +95,7 @@ public class SharedTaskController {
             @PathVariable String sessionId) {
         try {
             SharingKeyEntity keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
+            sharingKeyService.checkOperation(keyEntity, "session:get");
             Optional<SessionEntity> sessionOpt = sessionRepository.findByIdAndUserId(sessionId, keyEntity.getOwnerUserId())
                     .filter(session -> keyEntity.getAgentId().equals(session.getAgentId()));
             if (sessionOpt.isEmpty()) {
@@ -114,6 +117,7 @@ public class SharedTaskController {
             @RequestBody Map<String, Object> body) {
         try {
             SharingKeyEntity keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
+            sharingKeyService.checkOperation(keyEntity, "task:respond");
             Optional<DispatchTaskDTO> taskOpt = findAuthorizedTask(taskId, keyEntity);
             if (taskOpt.isEmpty()) {
                 return RX.failA("Task not found: " + taskId);
@@ -137,6 +141,7 @@ public class SharedTaskController {
             @PathVariable String taskId) {
         try {
             SharingKeyEntity keyEntity = sharingKeyService.validateForKeyOnly(sharingKey);
+            sharingKeyService.checkOperation(keyEntity, "task:artifacts");
             Optional<DispatchTaskDTO> taskOpt = findAuthorizedTask(taskId, keyEntity);
             if (taskOpt.isEmpty()) {
                 return RX.failA("Task not found: " + taskId);

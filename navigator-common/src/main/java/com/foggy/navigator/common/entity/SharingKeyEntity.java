@@ -67,6 +67,14 @@ public class SharingKeyEntity {
     @Column(nullable = false)
     private Boolean enabled;
 
+    /**
+     * 允许的操作列表（逗号分隔），null 表示允许全部操作。
+     * <p>
+     * 有效操作标识：ask, task:get, task:cancel, task:respond, task:artifacts, session:get
+     */
+    @Column(length = 512)
+    private String allowedOperations;
+
     /** 最后使用时间 */
     private LocalDateTime lastUsedAt;
 

@@ -53,6 +53,11 @@ public class SharingKeyDTO {
     /** 掩码后的密钥（列表展示用） */
     private String maskedKey;
 
+    /**
+     * 允许的操作列表（如 ["ask", "task:get", "task:cancel"]），null 表示允许全部。
+     */
+    private java.util.List<String> allowedOperations;
+
     /** Navigator 对外可达地址（由 navigator.api.external-url 配置） */
     private String invokeBaseUrl;
 

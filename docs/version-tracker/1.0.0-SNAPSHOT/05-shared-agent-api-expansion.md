@@ -236,8 +236,27 @@
 
 安全：复用现有 `findAuthorizedTask()` 归属校验（key → agent → task），`/api/v1/shared/**` 已在 SecurityConfig 中 permitAll。
 
+### Batch 2: allowedOperations 权限模型（2026-04-03）✅
+
+**已实施**：
+
+1. **SharingKeyEntity** 新增 `allowedOperations` 字段（VARCHAR 512，逗号分隔，null = 允许全部）
+2. **SharingKeyDTO** 新增 `allowedOperations: List<String>`
+3. **SharingKeyCreateForm / UpdateForm** 新增 `allowedOperations: List<String>`
+4. **SharingKeyService** 新增 `checkOperation(entity, operation)` 方法
+   - null allowedOperations = 允许全部（向后兼容历史 key）
+   - create/update 时保存，toDTO 时转换
+5. **所有 Shared API 端点**接入 `checkOperation`：
+   - `SharedAskController.ask` → `"ask"`
+   - `SharedTaskController.getTask` → `"task:get"`
+   - `SharedTaskController.cancelTask` → `"task:cancel"`
+   - `SharedTaskController.respondToTask` → `"task:respond"`
+   - `SharedTaskController.getArtifacts` → `"task:artifacts"`
+   - `SharedTaskController.getSessionMessages` → `"session:get"`
+
+有效操作标识：`ask`, `task:get`, `task:cancel`, `task:respond`, `task:artifacts`, `session:get`
+
 ### 待实施
 
-- Batch 2: `allowedOperations` 权限模型
 - Batch 3: `files/read|list|search` 文件接口
 - Batch 4 (可延期): `exec` 命令执行
