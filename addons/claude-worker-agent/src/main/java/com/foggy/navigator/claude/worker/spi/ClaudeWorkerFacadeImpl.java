@@ -99,7 +99,7 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
         if (!task.getUserId().equals(userId)) {
             throw new IllegalArgumentException("Task not found: " + taskId);
         }
-        streamRelay.abortStream(taskId);
+        // 不再单独调用 streamRelay.abortStream — taskService.abortTask 内部已统一处理
         taskService.abortTask(taskId);
         return Map.of("taskId", taskId, "status", "ABORTED");
     }

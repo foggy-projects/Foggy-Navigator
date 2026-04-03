@@ -944,34 +944,55 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     public void abortTask(String taskId) {
+        // Terminal-state guard（Claude 原先缺失，现统一补上）
         ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
-        String workerTaskId = resolveWorkerTaskLookupId(task);
+        if (task != null && ("COMPLETED".equals(task.getStatus()) || "FAILED".equals(task.getStatus())
+                || "ABORTED".equals(task.getStatus()))) {
+            log.info("Task {} already in terminal state ({}), skipping abort", taskId, task.getStatus());
+            return;
+        }
 
-        // 2. 通知 Worker 中止 CLI（在清理流之前，确保 Worker task 还在 registry）
+        String remoteId = resolveWorkerTaskLookupId(task);
+        doAbortWorkerTask(taskId, remoteId);
+        doPostAbort(taskId);
+    }
+
+    /**
+     * 远端中止 + 流清理 + 状态落库 + 事件发布。
+     * <p>
+     * 由 {@code ClaudeWorkerInnerA2aAgent.abortWorkerTask()} 和 {@code abortTask()} 复用。
+     * 不包含 Provider 专属后置钩子。
+     *
+     * @param taskId       平台侧 taskId
+     * @param remoteTaskId 已解析的远端 Worker 任务标识（可能为 null）
+     */
+    public void doAbortWorkerTask(String taskId, String remoteTaskId) {
+        ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
+
+        // 1. 通知 Worker 中止 CLI（在清理流之前，确保 Worker task 还在 registry）
         try {
             if (task != null) {
                 ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
                 ClaudeWorkerClient client = workerService.createClient(worker);
 
-                if (workerTaskId != null && !workerTaskId.isBlank()) {
-                    // 优先使用持久化 workerTaskId；缺失时退回 Foggy taskId 别名
-                    client.abortTask(workerTaskId).block(Duration.ofSeconds(5));
-                    log.info("Worker abort sent: taskId={}, workerTaskId={}", taskId, workerTaskId);
+                if (remoteTaskId != null && !remoteTaskId.isBlank()) {
+                    client.abortTask(remoteTaskId).block(Duration.ofSeconds(5));
+                    log.info("Worker abort sent: taskId={}, remoteTaskId={}", taskId, remoteTaskId);
                 } else if ("A2A".equals(task.getSource())) {
                     // A2A fallback：异步任务没有 SSE 流，通过进程列表匹配 PID → SIGTERM
                     killCliByTaskId(client, taskId);
                 } else {
-                    log.warn("Cannot abort task {}: no workerTaskId mapping and not A2A", taskId);
+                    log.warn("Cannot abort task {}: no remoteTaskId and not A2A", taskId);
                 }
             }
         } catch (Exception e) {
             log.warn("Failed to notify worker for abort task {}: {}", taskId, e.getMessage());
         }
 
-        // 3. 清理本地 SSE 流订阅（停止重连、dispose Flux、清除映射）
+        // 2. 清理本地 SSE 流订阅（停止重连、dispose Flux、清除映射）
         streamRelay.abortStream(taskId);
 
-        // 4. 更新 DB 状态 → ABORTED（单独事务，避免网络 IO 阻塞事务）
+        // 3. 更新 DB 状态 → ABORTED（单独事务，避免网络 IO 阻塞事务）
         txTemplate.executeWithoutResult(status -> {
             taskRepository.findByTaskId(taskId).ifPresent(entity -> {
                 String prev = entity.getStatus();
@@ -979,11 +1000,24 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 persistTask(entity);
                 log.info("Task aborted: taskId={}", taskId);
                 publishStatusChange(entity, prev);
-                updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY");
             });
         });
+    }
 
-        // 5. 异步扫描 JSONL 补齐 checkpoints（中止的任务也可能已有有效 checkpoint）
+    /**
+     * Claude 专属 abort 后置钩子：更新 session interaction state + 异步扫描 checkpoints。
+     * <p>
+     * 由 {@code ClaudeWorkerInnerA2aAgent.onPostAbort()} 和 {@code abortTask()} 复用。
+     *
+     * @param taskId 平台侧 taskId
+     */
+    public void doPostAbort(String taskId) {
+        // 更新 session interaction state → AWAITING_REPLY
+        taskRepository.findByTaskId(taskId).ifPresent(entity ->
+                updateSessionInteractionState(entity.getSessionId(), "AWAITING_REPLY")
+        );
+
+        // 异步扫描 JSONL 补齐 checkpoints（中止的任务也可能已有有效 checkpoint）
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String claudeSessionId = entity.getClaudeSessionId();
             if (claudeSessionId != null && !claudeSessionId.isEmpty()) {

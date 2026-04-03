@@ -321,7 +321,8 @@ public class CodexTaskService implements TaskQueryProvider {
     }
 
     /**
-     * 中止任务
+     * 中止任务（完整流程：terminal guard + doAbortWorkerTask）。
+     * Provider Controller 和 SPI 入口调用此方法。
      */
     @Transactional
     public void abortTask(String taskId) {
@@ -334,6 +335,25 @@ public class CodexTaskService implements TaskQueryProvider {
             return;
         }
 
+        String remoteTaskId = entity.getWorkerTaskId();
+        doAbortWorkerTask(taskId, remoteTaskId);
+    }
+
+    /**
+     * 远端中止 + 流清理 + 状态落库 + 事件发布。
+     * <p>
+     * 由 {@code CodexWorkerInnerA2aAgent.abortWorkerTask()} 和 {@code abortTask()} 复用。
+     * 不包含 terminal-state guard（调用方负责）。
+     *
+     * @param taskId       平台侧 taskId
+     * @param remoteTaskId 已解析的远端 Worker 任务标识（可能为 null，由装饰层通过 resolveRemoteTaskId 提供）
+     */
+    @Transactional
+    public void doAbortWorkerTask(String taskId, String remoteTaskId) {
+        CodexTaskEntity entity = taskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+
+        // 通知远端 Worker 中止（复用 streamRelay 的远端中止能力）
         streamRelay.abortRemoteTask(entity);
         streamRelay.abortStream(taskId);
 

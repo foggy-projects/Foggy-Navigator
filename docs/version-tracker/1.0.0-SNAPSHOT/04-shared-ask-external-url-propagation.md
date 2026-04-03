@@ -188,3 +188,33 @@ Sharing Key 是外部调用入口。对外部系统而言，拿到 key 却拿不
 ## Status
 
 本项作为 `1.0.0-SNAPSHOT` 版本需求记录，可直接交付技术进入方案细化与开发分析。
+
+## Implementation Status
+
+**状态**: ✅ 已实施（2026-04-03）
+
+### 已完成的改造
+
+1. **SharingKeyDTO 扩展**
+   - 新增 `invokeBaseUrl` 和 `invokeUrl` 字段
+   - 所有 Sharing Key 的 create/list/get/update 响应均包含真实可访问的调用地址
+
+2. **SharingKeyService 统一填充**
+   - 注入 `navigator.api.external-url` 配置
+   - `toDTO()` 自动组装 `invokeBaseUrl` 和 `invokeUrl`（= baseUrl + `/api/v1/shared/ask`）
+
+3. **Launcher 启动校验**
+   - 新增 `ExternalUrlStartupValidator`（ApplicationRunner）
+   - `external-url` 未配置 → WARN 提示
+   - `external-url` 含 localhost/127.0.0.1 → WARN 提示远端不可达
+   - 正常配置 → INFO 确认
+
+4. **AI-facing 模板排查**
+   - `platform_skills/` 下的运行时模板已全部使用 `{{NAVIGATOR_API_BASE}}`
+   - Python Worker config.py 的 localhost 默认值是合理的本地开发默认
+   - `.claude/skills/` 和 `docs/` 中的 localhost 引用属于开发者文档，非运行时 AI-facing
+
+### 验证结果
+
+- 全模块编译通过
+- 全量单元测试通过

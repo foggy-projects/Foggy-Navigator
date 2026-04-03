@@ -686,4 +686,40 @@ Claude/Codex 的差异只保留在：
 - abort 后副作用
 - terminal-state 的幂等处理
 
-只要把这些规则固化到装饰层和统一模板里，后续增加新的 `A2aAgent` 就会从“复制行为”转成“补 Worker 适配”，扩展成本会明显下降。
+只要把这些规则固化到装饰层和统一模板里，后续增加新的 `A2aAgent` 就会从”复制行为”转成”补 Worker 适配”，扩展成本会明显下降。
+
+## Implementation Status
+
+**状态**: ✅ 已实施（2026-04-03）
+
+### 已完成的改造
+
+1. **SPI 契约扩展** (navigator-spi)
+   - 新增 `RemoteTaskIdResolution` 值对象 — 统一远端任务标识解析结果
+   - `InnerA2aAgent` 新增 3 个 default 方法：`resolveRemoteTaskId`、`abortWorkerTask`、`onPostAbort`
+   - `TaskQueryProvider.cancelTask` 标记为 `@Deprecated(forRemoval = true)`
+
+2. **AbortCoordinatingA2aAgent 装饰层** (session-module)
+   - 新增装饰者，位于 `ContextResolvingA2aAgent` 外层
+   - 统一中止生命周期：加载任务 → terminal-state guard → 解析远端 ID → abortWorkerTask → onPostAbort
+   - 其余操作（sendTask/getTask/getAgentCard）透传给 delegate
+
+3. **Provider Inner Agent 改造**
+   - Claude: 实现 `resolveRemoteTaskId`（支持 taskId fallback）、`abortWorkerTask`、`onPostAbort`（session state + checkpoint）
+   - Codex: 实现 `resolveRemoteTaskId`（不允许 fallback）、`abortWorkerTask`
+   - Claude 补上了 terminal-state guard（原先缺失）
+   - `ClaudeTaskService.abortTask` 拆分为 `doAbortWorkerTask` + `doPostAbort`
+   - `CodexTaskService.abortTask` 拆分为 terminal guard + `doAbortWorkerTask`
+   - 修复 `ClaudeWorkerFacadeImpl` 双重 `abortStream` bug
+
+4. **装饰链接线**
+   - `ClaudeWorkerAgentProvider.toA2aAgent()` 和 `CodexWorkerAgentProvider.toA2aAgent()` 均已接入装饰链
+
+5. **TaskDispatchFacade 清理**
+   - `cancelTask()` 去掉 Provider fallback，解析不到 A2aAgent 时 fail-fast
+   - 旧测试 `cancelTask_fallsBackToProviderWhenAgentNotResolvable` 更新为 `cancelTask_failsFastWhenAgentNotResolvable`
+
+### 验证结果
+
+- 全模块编译通过
+- 全量单元测试通过（155+ tests, 0 failures）

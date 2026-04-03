@@ -188,28 +188,23 @@ public class TaskDispatchFacade {
     }
 
     /**
-     * 取消任务
+     * 取消任务 — 统一走 A2A 路径，不再 fallback 到 TaskQueryProvider。
+     * <p>
+     * 中止生命周期由 {@link com.foggy.navigator.session.agent.AbortCoordinatingA2aAgent} 统一编排：
+     * terminal-state guard → 远端任务标识解析 → Worker abort → 流清理 → 状态落库 → post-abort hook。
+     *
+     * @throws IllegalArgumentException 当 agentId 无法解析到 A2aAgent 时 fail-fast
      */
     public void cancelTask(String taskId, String agentId, AgentResolveContext context) {
-        // 优先尝试 A2a Agent 路径
-        Optional<A2aAgent> agentOpt = agentResolver.resolveAgent(agentId, context);
-        if (agentOpt.isPresent()) {
-            if (context.getSessionId() != null) {
-                bindingService.validateBinding(context.getSessionId(), agentId);
-            }
-            agentOpt.get().cancelTask(taskId);
-            log.info("Cancelled task via A2a Agent: taskId={}, agentId={}", taskId, agentId);
-            return;
-        }
+        A2aAgent agent = agentResolver.resolveAgent(agentId, context)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Cannot cancel task " + taskId + ": no A2A agent found for agentId=" + agentId));
 
-        // Fallback: 通过 TaskQueryProvider 路由取消（Codex 等无 A2a 实例的 provider）
-        try {
-            TaskQueryProvider provider = findProviderForTask(taskId);
-            provider.cancelTask(taskId, context.getUserId());
-            log.info("Cancelled task via Provider: taskId={}, providerType={}", taskId, provider.getProviderType());
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Cannot cancel task " + taskId + ": " + e.getMessage(), e);
+        if (context.getSessionId() != null) {
+            bindingService.validateBinding(context.getSessionId(), agentId);
         }
+        agent.cancelTask(taskId);
+        log.info("Cancelled task via A2a Agent: taskId={}, agentId={}", taskId, agentId);
     }
 
     // ── 任务操作（路由到 TaskQueryProvider） ──

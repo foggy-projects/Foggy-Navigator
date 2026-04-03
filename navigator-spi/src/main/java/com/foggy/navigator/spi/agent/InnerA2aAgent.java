@@ -40,4 +40,46 @@ public interface InnerA2aAgent {
     default void rememberDuplicate(A2aContext context, A2aTask task) {
         // Optional hook for implementations with request dedup support.
     }
+
+    // ── Abort Coordination SPI（供 AbortCoordinatingA2aAgent 装饰层调用） ──
+
+    /**
+     * 解析远端 Worker 任务标识。
+     * <p>
+     * 装饰层在执行中止前调用此方法，获取统一的远端任务 ID。
+     * 同一 Provider 的 abort / status / subscribe 应复用同一解析规则。
+     *
+     * @param taskId 平台侧 taskId
+     * @return 解析结果，包含优先 ID、备选 ID 和 fallback 策略
+     */
+    default RemoteTaskIdResolution resolveRemoteTaskId(String taskId) {
+        return RemoteTaskIdResolution.of(taskId, false);
+    }
+
+    /**
+     * 执行远端中止 + 本地流清理 + 状态落库 + 事件发布。
+     * <p>
+     * 这是"真正停止执行"的内部动作，由装饰层在完成 terminal-state guard 后调用。
+     * 不包含 Provider 专属后置钩子（见 {@link #onPostAbort}）。
+     *
+     * @param taskId       平台侧 taskId
+     * @param remoteTaskId 已解析的远端 Worker 任务标识（可能为 null）
+     */
+    default void abortWorkerTask(String taskId, String remoteTaskId) {
+        // 向后兼容：未迁移的实现走 legacy cancelTask
+        cancelTask(taskId);
+    }
+
+    /**
+     * Provider 专属的 abort 后置钩子。
+     * <p>
+     * 在 abortWorkerTask 完成后由装饰层调用。
+     * 例如 Claude 在此更新 session interaction state 和扫描 checkpoints。
+     * 默认为空操作。
+     *
+     * @param taskId 平台侧 taskId
+     */
+    default void onPostAbort(String taskId) {
+        // no-op by default
+    }
 }

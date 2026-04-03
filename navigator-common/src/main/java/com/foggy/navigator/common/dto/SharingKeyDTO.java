@@ -52,4 +52,10 @@ public class SharingKeyDTO {
 
     /** 掩码后的密钥（列表展示用） */
     private String maskedKey;
+
+    /** Navigator 对外可达地址（由 navigator.api.external-url 配置） */
+    private String invokeBaseUrl;
+
+    /** 完整的 shared ask 调用地址（invokeBaseUrl + /api/v1/shared/ask） */
+    private String invokeUrl;
 }

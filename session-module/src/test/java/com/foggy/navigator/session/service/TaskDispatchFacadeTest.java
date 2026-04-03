@@ -36,6 +36,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -737,25 +738,18 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
-    void cancelTask_fallsBackToProviderWhenAgentNotResolvable() {
+    void cancelTask_failsFastWhenAgentNotResolvable() {
         // agentResolver 找不到 "codex-worker"（不是有效的 agent 实体 ID）
         when(agentResolver.resolveAgent(eq("codex-worker"), any())).thenReturn(Optional.empty());
-        // findProviderForTask 通过 SessionTaskRepository 找到 provider
-        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
-        SessionTaskEntity task = sessionTask(
-                "task-codex-1", "session-1", "codex-worker", "worker-1", "dir-1",
-                "RUNNING", LocalDateTime.of(2026, 3, 25, 10, 0), "{}");
-        when(sessionTaskRepository.findByTaskId("task-codex-1")).thenReturn(Optional.of(task));
-        when(taskQueryProvider.getProviderType()).thenReturn("codex-worker");
 
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1").requestSource("UI").build();
 
-        facade.cancelTask("task-codex-1", "codex-worker", context);
+        // 不再 fallback 到 Provider，直接 fail-fast
+        assertThrows(IllegalArgumentException.class,
+                () -> facade.cancelTask("task-codex-1", "codex-worker", context));
 
-        // 应走 provider fallback，而不是 A2a Agent
         verify(agent, never()).cancelTask(anyString());
-        verify(taskQueryProvider).cancelTask("task-codex-1", "user-1");
     }
 
     @Test

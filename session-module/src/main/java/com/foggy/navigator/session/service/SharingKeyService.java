@@ -7,8 +7,8 @@ import com.foggy.navigator.common.form.SharingKeyUpdateForm;
 import com.foggy.navigator.session.registry.DefaultA2aAgentRegistry;
 import com.foggy.navigator.session.repository.SharingKeyRepository;
 import com.foggy.navigator.session.util.SharingKeyGenerator;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,12 +23,26 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SharingKeyService {
 
     private final SharingKeyRepository repository;
     private final SharingKeyGenerator keyGenerator;
     private final DefaultA2aAgentRegistry agentRegistry;
+    private final String externalUrl;
+
+    public SharingKeyService(SharingKeyRepository repository,
+                             SharingKeyGenerator keyGenerator,
+                             DefaultA2aAgentRegistry agentRegistry,
+                             @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}") String externalUrl) {
+        this.repository = repository;
+        this.keyGenerator = keyGenerator;
+        this.agentRegistry = agentRegistry;
+        this.externalUrl = normalizeUrl(externalUrl);
+    }
+
+    private static String normalizeUrl(String url) {
+        return (url != null && url.endsWith("/")) ? url.substring(0, url.length() - 1) : url;
+    }
 
     // ==================== Owner 管理 ====================
 
@@ -201,6 +215,8 @@ public class SharingKeyService {
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setSharingKey(null);  // 不返回明文
         dto.setMaskedKey(keyGenerator.mask(entity.getSharingKey()));
+        dto.setInvokeBaseUrl(externalUrl);
+        dto.setInvokeUrl(externalUrl + "/api/v1/shared/ask");
 
         // agentName 冗余展示：尝试从 registry 获取
         try {

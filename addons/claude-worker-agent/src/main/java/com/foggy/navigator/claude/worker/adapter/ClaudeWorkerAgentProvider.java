@@ -7,6 +7,7 @@ import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
+import com.foggy.navigator.session.agent.AbortCoordinatingA2aAgent;
 import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
@@ -126,7 +127,9 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
     private A2aAgent toA2aAgent(CodingAgentEntity entity) {
         String cwd = resolveDefaultCwd(entity);
         InnerA2aAgent inner = new ClaudeWorkerInnerA2aAgent(entity, taskService, cwd);
-        return new ContextResolvingA2aAgent(inner, contextStore, entity);
+        A2aAgent contextAgent = new ContextResolvingA2aAgent(inner, contextStore, entity);
+        // 装饰链：AbortCoordinatingA2aAgent → ContextResolvingA2aAgent → InnerA2aAgent
+        return new AbortCoordinatingA2aAgent(contextAgent, inner, taskService);
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {
