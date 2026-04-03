@@ -12,3 +12,6 @@
 - [01-codex-task-abort-kill-failure.md](./01-codex-task-abort-kill-failure.md)
 - [02-app-server-event-stream-lag-session-failure.md](./02-app-server-event-stream-lag-session-failure.md)
 - [03-abort-task-entry-flow-analysis.md](./03-abort-task-entry-flow-analysis.md)
+- [04-shared-ask-external-url-propagation.md](./04-shared-ask-external-url-propagation.md)
+- [05-shared-agent-api-expansion.md](./05-shared-agent-api-expansion.md)
+- [06-session-long-history-render-optimization.md](./06-session-long-history-render-optimization.md)
