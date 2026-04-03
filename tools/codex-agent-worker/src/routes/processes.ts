@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express'
 import { taskRegistry } from '../codex/sdk-wrapper.js'
-import { killCodexCliProcess, listCodexCliProcesses } from '../codex/processes.js'
+import { CodexProcessKillError, killCodexCliProcess, listCodexCliProcesses } from '../codex/processes.js'
 
 const router = Router()
 
@@ -62,6 +62,34 @@ router.post('/api/v1/processes/:pid/kill', async (req: Request, res: Response) =
       message: `Process ${pid} terminated ${force ? 'forcefully' : 'gracefully'}`,
     })
   } catch (error: any) {
+    try {
+      const remainingProcesses = await listCodexCliProcesses()
+      if (!remainingProcesses.some(processInfo => processInfo.pid === pid)) {
+        res.json({
+          pid,
+          status: 'not_found',
+          message: `Process ${pid} no longer exists`,
+        })
+        return
+      }
+    } catch {
+      // Keep the original kill error if the follow-up process listing also fails.
+    }
+
+    if (error instanceof CodexProcessKillError) {
+      console.error('Failed to kill Codex CLI process', {
+        pid,
+        attempts: error.attempts,
+      })
+      res.status(500).json({
+        pid,
+        status: 'failed',
+        message: error.message,
+        attempts: error.attempts,
+      })
+      return
+    }
+
     res.status(500).json({
       pid,
       status: 'failed',

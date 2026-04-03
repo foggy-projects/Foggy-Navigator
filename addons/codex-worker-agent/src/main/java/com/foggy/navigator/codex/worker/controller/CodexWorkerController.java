@@ -1,5 +1,7 @@
 package com.foggy.navigator.codex.worker.controller;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.codex.worker.client.CodexWorkerClientFactory;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
@@ -8,9 +10,13 @@ import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @RestController
 @RequestMapping("/api/v1/codex-workers")
@@ -18,6 +24,8 @@ import java.util.Map;
 @Slf4j
 @RequiredArgsConstructor
 public class CodexWorkerController {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final WorkerManagementFacade workerManagementFacade;
     private final CodexWorkerClientFactory clientFactory;
@@ -59,8 +67,33 @@ public class CodexWorkerController {
         try {
             return RX.ok(client.killCliProcess(pid, force).block(Duration.ofSeconds(10)));
         } catch (Exception e) {
-            log.warn("Failed to kill Codex CLI process {} for worker {}: {}", pid, workerId, e.getMessage());
-            return RX.failA("终止 Codex CLI 进程失败: " + e.getMessage());
+            String detail = extractWorkerErrorDetail(e);
+            log.warn("Failed to kill Codex CLI process {} for worker {}: {}", pid, workerId, detail);
+            return RX.failA("终止 Codex CLI 进程失败: " + detail);
         }
+    }
+
+    private String extractWorkerErrorDetail(Exception error) {
+        if (error instanceof WebClientResponseException responseException) {
+            String body = responseException.getResponseBodyAsString();
+            if (body != null && !body.isBlank()) {
+                try {
+                    Map<String, Object> payload = OBJECT_MAPPER.readValue(body, new TypeReference<>() {});
+                    String detail = Stream.of(payload.get("message"), payload.get("error"))
+                            .filter(Objects::nonNull)
+                            .map(Object::toString)
+                            .filter(text -> !text.isBlank())
+                            .distinct()
+                            .collect(Collectors.joining(" | "));
+                    if (!detail.isBlank()) {
+                        return detail;
+                    }
+                } catch (Exception ignored) {
+                    return body;
+                }
+                return body;
+            }
+        }
+        return error.getMessage();
     }
 }

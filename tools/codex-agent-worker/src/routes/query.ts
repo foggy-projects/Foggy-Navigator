@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config.js'
 import { runQuery, taskBroadcasts, cleanupOldTasks, getRunningTaskCount } from '../codex/sdk-wrapper.js'
 import type { WorkerEvent } from '../models.js'
-import { ensureProjectSkillsLink } from '../startup/skills-link.js'
+import { ensureProjectCodexSkillsLink, ensureProjectSkillsLink } from '../startup/skills-link.js'
 import { validateQueryRequest } from '../validation/query.js'
 
 const router = Router()
@@ -41,6 +41,17 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
       }
     } catch (error) {
       console.warn(`Failed to initialize project skills link for ${cwd}:`, error)
+    }
+
+    try {
+      const result = await ensureProjectCodexSkillsLink(cwd)
+      if (result.status === 'created') {
+        console.log(`Created project Codex skills link: ${result.linkPath} -> ${result.targetPath}`)
+      } else if (result.status === 'skipped' && result.reason !== 'source directory does not exist') {
+        console.warn(`Skipped project Codex skills link: ${result.linkPath} (${result.reason})`)
+      }
+    } catch (error) {
+      console.warn(`Failed to initialize project Codex skills link for ${cwd}:`, error)
     }
   }
 

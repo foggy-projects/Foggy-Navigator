@@ -138,16 +138,7 @@ public class SharingKeyService {
      */
     @Transactional
     public SharingKeyEntity validateAndConsume(String sharingKey) {
-        SharingKeyEntity entity = repository.findBySharingKey(sharingKey)
-                .orElseThrow(() -> new IllegalArgumentException("Invalid sharing key"));
-
-        if (!entity.getEnabled()) {
-            throw new IllegalArgumentException("Sharing key is disabled");
-        }
-
-        if (entity.getExpiresAt() != null && entity.getExpiresAt().isBefore(LocalDateTime.now())) {
-            throw new IllegalArgumentException("Sharing key has expired");
-        }
+        SharingKeyEntity entity = validateBase(sharingKey);
 
         // 每日限额检查（日期变更时重置计数）
         LocalDate today = LocalDate.now();
@@ -168,7 +159,31 @@ public class SharingKeyService {
         return entity;
     }
 
+    /**
+     * 仅验证共享密钥有效性，不消费调用额度。
+     *
+     * 查询/取消/会话读取等只读操作使用该方法，不受每日限额影响。
+     */
+    @Transactional(readOnly = true)
+    public SharingKeyEntity validateForKeyOnly(String sharingKey) {
+        return validateBase(sharingKey);
+    }
+
     // ==================== 内部方法 ====================
+
+    private SharingKeyEntity validateBase(String sharingKey) {
+        SharingKeyEntity entity = repository.findBySharingKey(sharingKey)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid sharing key"));
+
+        if (!entity.getEnabled()) {
+            throw new IllegalArgumentException("Sharing key is disabled");
+        }
+
+        if (entity.getExpiresAt() != null && entity.getExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new IllegalArgumentException("Sharing key has expired");
+        }
+        return entity;
+    }
 
     private SharingKeyDTO toDTO(SharingKeyEntity entity) {
         SharingKeyDTO dto = new SharingKeyDTO();

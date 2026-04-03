@@ -56,6 +56,8 @@ class CodexTaskServiceTest {
     private SessionTaskRepository sessionTaskRepository;
     @Mock
     private SessionEntityRepository sessionEntityRepository;
+    @Mock
+    private CodexStreamRelay streamRelay;
 
     private CodexTaskService service;
 
@@ -66,6 +68,7 @@ class CodexTaskServiceTest {
         ReflectionTestUtils.setField(service, "sessionManager", sessionManager);
         ReflectionTestUtils.setField(service, "sessionTaskRepository", sessionTaskRepository);
         ReflectionTestUtils.setField(service, "sessionEntityRepository", sessionEntityRepository);
+        ReflectionTestUtils.setField(service, "streamRelay", streamRelay);
 
         lenient().when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
         lenient().when(sessionTaskRepository.save(any(SessionTaskEntity.class)))
@@ -291,6 +294,31 @@ class CodexTaskServiceTest {
                         && "codex-worker".equals(entity.getProviderType())
                         && "codex-worker".equals(entity.getAgentId())
                         && !"dir-1".equals(entity.getAgentId())
+        ));
+    }
+
+    @Test
+    void abortTask_relaysRemoteAbortAndClosesStreamBeforeMarkingAborted() {
+        CodexTaskEntity entity = createTask(
+                "task-abort", "session-1", "worker-1", "dir-1", "RUNNING",
+                LocalDateTime.of(2026, 4, 2, 10, 0)
+        );
+        entity.setWorkerTaskId("worker-task-1");
+
+        when(taskRepository.findByTaskId("task-abort")).thenReturn(Optional.of(entity));
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.abortTask("task-abort");
+
+        verify(streamRelay).abortRemoteTask(entity);
+        verify(streamRelay).abortStream("task-abort");
+        verify(taskRepository).save(argThat((CodexTaskEntity saved) ->
+                "task-abort".equals(saved.getTaskId()) && "ABORTED".equals(saved.getStatus())
+        ));
+        verify(eventPublisher).publishEvent(argThat((TaskStatusChangeEvent event) ->
+                "task-abort".equals(event.getTaskId())
+                        && "RUNNING".equals(event.getPreviousStatus())
+                        && "ABORTED".equals(event.getStatus())
         ));
     }
 
