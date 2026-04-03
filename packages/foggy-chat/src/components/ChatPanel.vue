@@ -25,6 +25,7 @@
       @reconnect="(taskId: string) => emit('reconnect', taskId)"
       @load-more="emit('loadMore')"
       @load-all="(limit?: number) => emit('loadAll', limit)"
+      @link-click="(payload) => emit('link-click', payload)"
     >
       <template #empty>
         <slot name="empty">
@@ -80,6 +81,7 @@ const emit = defineEmits<{
   (e: 'reconnect', taskId: string): void
   (e: 'loadMore'): void
   (e: 'loadAll', limit?: number): void
+  (e: 'link-click', payload: { href: string; text: string }): void
 }>()
 
 const connectionLabel = computed(() => {

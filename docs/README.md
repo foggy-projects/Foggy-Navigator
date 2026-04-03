@@ -67,9 +67,9 @@
 | [03-implementation/](./03-implementation/) | 实施与工程细节 |
 | [frontend-design/](./frontend-design/) | 前端设计文档 |
 | [dev-specs/](./dev-specs/) | 开发规格 |
-| [version-tracker/](./version-tracker/) | 按版本号跟踪的需求、缺陷与重构记录 |
-| [requirement-tracker/](./requirement-tracker/) | 历史季度制需求跟踪记录 |
+| [version-tracker/](./version-tracker/) | 新增事项唯一登记入口，按版本号跟踪需求、缺陷与重构记录 |
+| [requirement-tracker/](./requirement-tracker/) | 历史季度制归档目录，停止新增写入 |
 
 ---
 
-**更新日期**: 2026-04-02
+**更新日期**: 2026-04-03

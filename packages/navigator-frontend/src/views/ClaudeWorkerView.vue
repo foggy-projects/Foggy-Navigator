@@ -465,6 +465,7 @@
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
           @reconnect="handlePaneReconnect"
+          @link-click="handleLinkClick"
           @focus="focusedPaneId = $event"
         >
           <template #header-extra="{ paneState }">
@@ -822,6 +823,7 @@
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
           @reconnect="handlePaneReconnect"
+          @link-click="handleLinkClick"
           @focus="focusedPaneId = $event"
         >
           <template #header-extra="{ paneState }">
@@ -4126,6 +4128,83 @@ function openFileBrowser() {
   if (!selectedDirectoryId.value) return
   const url = `${window.location.origin}/#/files?directoryId=${selectedDirectoryId.value}&workerId=${selectedWorkerId.value}`
   window.open(url, '_blank', 'width=1400,height=900')
+}
+
+/**
+ * 聊天链接点击处理 — 识别工作区内文件路径并打开文件浏览器 deeplink
+ */
+function handleLinkClick(paneId: string, payload: { href: string; text: string }) {
+  const href = payload.href
+
+  // 尝试从 href 或链接文本中提取本地路径
+  const rawPath = normalizeLinkHref(href) || normalizeLinkHref(payload.text)
+
+  if (!rawPath || !isLocalFilePath(rawPath)) {
+    // 不是本地文件路径，走默认浏览器打开
+    if (href) window.open(href, '_blank')
+    return
+  }
+
+  // 从 pane 的 task 中获取 directoryId 和 workerId
+  const pane = panes.value.find(p => p.paneId === paneId)
+  const task = pane?.task.value
+  const dirId = task?.directoryId || selectedDirectoryId.value
+  const wkId = task?.workerId || selectedWorkerId.value
+
+  if (!dirId) {
+    ElMessage.warning('当前未选择工作目录，无法定位文件')
+    return
+  }
+
+  // 查找目录的根路径
+  const dir = workerState.directories.value.find(d => d.directoryId === dirId)
+  const dirRootPath = dir?.path
+  if (!dirRootPath) {
+    ElMessage.warning('无法获取工作目录路径')
+    return
+  }
+
+  // normalize 两边路径后做前缀匹配（大小写不敏感）
+  const normalizedHref = rawPath.replace(/\\/g, '/').replace(/\/+$/, '')
+  const normalizedRoot = dirRootPath.replace(/\\/g, '/').replace(/\/+$/, '')
+
+  if (!normalizedHref.toLowerCase().startsWith(normalizedRoot.toLowerCase())) {
+    ElMessage.warning('该链接不在当前工作目录下，无法自动定位')
+    return
+  }
+
+  // 计算相对路径
+  let relativePath = normalizedHref.substring(normalizedRoot.length)
+  if (relativePath.startsWith('/')) relativePath = relativePath.substring(1)
+
+  if (!relativePath) {
+    // 指向目录根本身，直接打开文件浏览器
+    openFileBrowser()
+    return
+  }
+
+  // 生成 deeplink 并打开文件浏览器窗口
+  const filePath = encodeURIComponent(relativePath)
+  const url = `${window.location.origin}/#/files?directoryId=${dirId}&workerId=${wkId}&filePath=${filePath}`
+  window.open(url, '_blank', 'width=1400,height=900')
+}
+
+/** 将链接 href 标准化为本地路径 */
+function normalizeLinkHref(href: string): string {
+  if (!href) return ''
+  let p = href.trim()
+  // 移除 file:/// 前缀
+  p = p.replace(/^file:\/\/\//, '')
+  // 统一斜杠
+  p = p.replace(/\\/g, '/')
+  // URL 解码（处理中文路径等）
+  try { p = decodeURIComponent(p) } catch { /* ignore */ }
+  return p
+}
+
+/** 判断路径是否为本地文件路径 */
+function isLocalFilePath(path: string): boolean {
+  return /^[A-Za-z]:\//.test(path) || /^[A-Za-z]:\\/.test(path)
 }
 
 async function openCodeServer(network: 'internal' | 'public') {

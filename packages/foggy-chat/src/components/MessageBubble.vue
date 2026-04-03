@@ -51,6 +51,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'rewind'): void
+  (e: 'link-click', payload: { href: string; text: string }): void
 }>()
 
 const senderLabel = computed(() => {
@@ -100,6 +101,16 @@ const contentRef = ref<HTMLElement | null>(null)
 
 function handleContentClick(e: Event) {
   const target = e.target as HTMLElement
+
+  // 链接点击拦截 — 抛给宿主层处理
+  const anchor = target.closest('a') as HTMLAnchorElement | null
+  if (anchor) {
+    e.preventDefault()
+    e.stopPropagation()
+    emit('link-click', { href: anchor.getAttribute('href') || '', text: anchor.textContent || '' })
+    return
+  }
+
   if (!target.classList.contains('code-copy-btn')) return
 
   e.preventDefault()

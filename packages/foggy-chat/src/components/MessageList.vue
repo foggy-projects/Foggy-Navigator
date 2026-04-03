@@ -70,6 +70,7 @@
               :message="item.msg"
               :rewindable="isRewindable(item.msg)"
               @rewind="handleRewind(item.msg)"
+              @link-click="(payload) => emit('link-click', payload)"
             />
             <ToolCallBlock
               v-else-if="isToolCall(item.msg)"
@@ -108,10 +109,12 @@
             <MessageBubble
               v-else-if="item.msg.type === AipMessageType.SESSION_START"
               :message="item.msg"
+              @link-click="(payload) => emit('link-click', payload)"
             />
             <MessageBubble
               v-else-if="item.msg.type === AipMessageType.STATE_SYNC"
               :message="item.msg"
+              @link-click="(payload) => emit('link-click', payload)"
             />
           </template>
         </DynamicScrollerItem>
@@ -182,6 +185,7 @@ const emit = defineEmits<{
   (e: 'reconnect', taskId: string): void
   (e: 'loadMore'): void
   (e: 'loadAll', limit?: number): void
+  (e: 'link-click', payload: { href: string; text: string }): void
 }>()
 
 function handleLoadAllCommand(command: number) {
