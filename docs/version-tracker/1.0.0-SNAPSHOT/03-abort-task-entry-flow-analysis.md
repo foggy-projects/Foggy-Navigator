@@ -68,23 +68,23 @@
 
 ```mermaid
 flowchart TD
-    A[Frontend Abort Button] --> B[POST /api/v1/tasks/{taskId}/cancel]
-    B --> C[TaskController.cancelTask]
-    C --> D[TaskDispatchFacade.cancelTask]
+    A["Frontend Abort Button"] --> B["POST /api/v1/tasks/{taskId}/cancel"]
+    B --> C["TaskController.cancelTask"]
+    C --> D["TaskDispatchFacade.cancelTask"]
     D --> E{Can resolve A2A agent?}
-    E -->|Yes| F[A2aAgent.cancelTask(taskId)]
-    E -->|No| G[TaskQueryProvider.cancelTask(taskId, userId)]
+    E -->|Yes| F["A2aAgent.cancelTask(taskId)"]
+    E -->|No| G["TaskQueryProvider.cancelTask(taskId, userId)"]
 
-    H[POST /api/v1/agents/{agentId}/tasks/{taskId}/cancel] --> I[AgentDiscoveryController.cancelTask]
+    H["POST /api/v1/agents/{agentId}/tasks/{taskId}/cancel"] --> I["AgentDiscoveryController.cancelTask"]
     I --> F
 
-    J[POST /api/v1/claude-tasks/{taskId}/abort] --> K[ClaudeTaskController.abortTask]
-    K --> L[ClaudeTaskService.abortTask]
+    J["POST /api/v1/claude-tasks/{taskId}/abort"] --> K["ClaudeTaskController.abortTask"]
+    K --> L["ClaudeTaskService.abortTask"]
 
-    M[POST /api/v1/codex-tasks/{taskId}/abort] --> N[CodexTaskController.abortTask]
-    N --> O[CodexTaskService.abortTask]
+    M["POST /api/v1/codex-tasks/{taskId}/abort"] --> N["CodexTaskController.abortTask"]
+    N --> O["CodexTaskService.abortTask"]
 
-    T[POST /api/v1/open/agents/{agentId}/tasks/{taskId}/cancel] --> U[OpenApiController.cancelTask]
+    T["POST /api/v1/open/agents/{agentId}/tasks/{taskId}/cancel"] --> U["OpenApiController.cancelTask"]
     U --> F
 
     F --> P{Concrete agent type}
@@ -92,8 +92,8 @@ flowchart TD
     P -->|Codex| O
 
     G --> Q{Provider type}
-    Q -->|Claude| R[ClaudeTaskService.cancelTask]
-    Q -->|Codex| S[CodexTaskService.cancelTask]
+    Q -->|Claude| R["ClaudeTaskService.cancelTask"]
+    Q -->|Codex| S["CodexTaskService.cancelTask"]
     R --> L
     S --> O
 ```
