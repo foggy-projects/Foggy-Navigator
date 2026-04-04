@@ -2696,6 +2696,7 @@ function persistLlmCache() {
 const workerLlmSelectionCache = loadLlmCacheFromStorage()
 let suppressModelAutoSelect = false
 let loadPlatformModelConfigSeq = 0 // 防止异步竞态：只有最新一次调用的结果才生效
+let sessionRestoreVersion = 0 // 会话级恢复版本号：防止 loadPlatformModelConfig 异步覆盖会话模型
 
 function saveWorkerLlmSelection(workerId: string | null) {
   if (!workerId || !platformModelConfigId.value) return
@@ -2747,11 +2748,11 @@ watch(claudeModelOptions, (opts) => {
   }
 })
 
-// 切换 LLM 配置时，自动选中新配置可用模型列表中的第一个（默认）模型，并持久化选择
+// 切换 LLM 配置时，仅当当前模型不在新配置可用列表中时才回退到默认模型，并持久化选择
 watch(platformModelConfigId, () => {
   if (suppressModelAutoSelect) return
   const opts = claudeModelOptions.value
-  if (opts.length > 0) {
+  if (opts.length > 0 && !opts.some(o => o.value === taskForm.value.model)) {
     taskForm.value.model = opts[0].value
   }
   // 用户手动切换配置时立即持久化（suppress 时是恢复缓存，不需要重复保存）
@@ -2769,6 +2770,7 @@ watch(() => taskForm.value.model, () => {
  * 这样点击不同会话时，"API: xxx" 和 "模型: xxx" 标签会跟随切换。
  */
 function restoreSessionModelSelection(task: ClaudeTask) {
+  sessionRestoreVersion++ // 递增版本号，使进行中的 loadPlatformModelConfig 跳过模型选择
   // 优先使用 modelConfigId 恢复 API 配置
   const configId = task.modelConfigId
   if (configId && platformModels.value.some((m) => m.id === configId)) {
@@ -2796,6 +2798,7 @@ function restoreSessionModelSelection(task: ClaudeTask) {
 
 async function loadPlatformModelConfig() {
   const seq = ++loadPlatformModelConfigSeq
+  const restoreVer = sessionRestoreVersion // 捕获当前会话恢复版本
   try {
     const [overrides, models] = await Promise.all([
       listAgentModelOverrides(),
@@ -2804,6 +2807,8 @@ async function loadPlatformModelConfig() {
     // 防止竞态：如果在 await 期间又发起了新的调用，丢弃本次过期结果
     if (seq !== loadPlatformModelConfigSeq) return
     platformModels.value = models.filter(isSelectablePlatformModel)
+    // 如果在 await 期间已发生会话级恢复，跳过模型选择（会话优先级高于 Worker 级默认）
+    if (restoreVer !== sessionRestoreVersion) return
     // 优先从 per-worker 缓存恢复选择
     if (restoreWorkerLlmSelection(selectedWorkerId.value)) {
       return
@@ -3821,6 +3826,14 @@ function selectDirectory(workerId: string, directoryId: string) {
   loadAgentTeamsConfigs()
   // Auto-sync SSH sessions from backend (once per directory per page load)
   syncSshSessions()
+  // 切换目录后，恢复新 workspace 已有 pane 的会话模型选择
+  nextTick(() => {
+    const ws = getOrCreateWorkspace(directoryId)
+    const targetPane = ws.panes.value[0]
+    if (targetPane?.task.value) {
+      restoreSessionModelSelection(targetPane.task.value)
+    }
+  })
 }
 
 async function loadDirectoryTasks() {

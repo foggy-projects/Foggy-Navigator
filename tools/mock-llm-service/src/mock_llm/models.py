@@ -162,7 +162,9 @@ class AnthropicMessagesRequest(BaseModel):
     model: str
     max_tokens: int = 4096
     messages: List[AnthropicMessage]
-    system: Optional[str] = None
+    # Claude Code CLI may send either a plain system string or a list of
+    # content blocks with cache-control metadata.
+    system: Optional[str | List[Dict[str, Any]]] = None
     stream: Optional[bool] = False
     tools: Optional[List[Dict[str, Any]]] = None
     temperature: Optional[float] = None
