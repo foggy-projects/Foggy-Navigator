@@ -2698,6 +2698,29 @@ let suppressModelAutoSelect = false
 let loadPlatformModelConfigSeq = 0 // 防止异步竞态：只有最新一次调用的结果才生效
 let sessionRestoreVersion = 0 // 会话级恢复版本号：防止 loadPlatformModelConfig 异步覆盖会话模型
 
+// --- Per-session 模型缓存：task.model 会被 CLI 响应覆盖为完整模型名，无法映射回下拉选项 ---
+// 在发送任务时记录 sessionId → 用户实际选择的短模型名，恢复时优先使用
+const SESSION_MODEL_CACHE_KEY = 'foggy:sessionModelSelection'
+const sessionModelCache: Map<string, string> = (() => {
+  try {
+    const raw = localStorage.getItem(SESSION_MODEL_CACHE_KEY)
+    if (raw) return new Map(Object.entries(JSON.parse(raw)))
+  } catch { /* ignore */ }
+  return new Map()
+})()
+function saveSessionModel(sessionId: string | undefined | null, model: string) {
+  if (!sessionId || !model) return
+  sessionModelCache.set(sessionId, model)
+  try {
+    // 限制缓存大小，保留最近 200 条
+    if (sessionModelCache.size > 200) {
+      const keys = [...sessionModelCache.keys()]
+      for (let i = 0; i < keys.length - 200; i++) sessionModelCache.delete(keys[i]!)
+    }
+    localStorage.setItem(SESSION_MODEL_CACHE_KEY, JSON.stringify(Object.fromEntries(sessionModelCache)))
+  } catch { /* ignore */ }
+}
+
 function saveWorkerLlmSelection(workerId: string | null) {
   if (!workerId || !platformModelConfigId.value) return
   workerLlmSelectionCache.set(workerId, {
@@ -2776,18 +2799,24 @@ function restoreSessionModelSelection(task: ClaudeTask) {
   if (configId && platformModels.value.some((m) => m.id === configId)) {
     suppressModelAutoSelect = true
     platformModelConfigId.value = configId
-    // 恢复模型：优先使用 task.model（实际执行的模型），回退到 claudeModelOptions 第一个
+    // 恢复模型：优先 per-session 缓存（用户实际选择），再尝试 task.model 匹配
     const opts = claudeModelOptions.value
-    const taskModel = task.model || ''
-    if (taskModel && opts.some((o) => o.value === taskModel)) {
-      taskForm.value.model = taskModel
+    const sessionId = task.sessionId || ''
+    const cachedModel = sessionModelCache.get(sessionId)
+    if (cachedModel && opts.some((o) => o.value === cachedModel)) {
+      taskForm.value.model = cachedModel
     } else {
-      // 尝试用 shortModel 匹配（task.model 可能是完整名如 "claude-opus-4-20250514"）
-      const matched = opts.find((o) => taskModel.includes(o.value.replace(/\[.*\]/, '')))
-      if (matched) {
-        taskForm.value.model = matched.value
-      } else if (opts.length > 0) {
-        taskForm.value.model = opts[0].value
+      const taskModel = task.model || ''
+      if (taskModel && opts.some((o) => o.value === taskModel)) {
+        taskForm.value.model = taskModel
+      } else {
+        // 尝试用 shortModel 匹配（task.model 可能是完整名如 "claude-opus-4-20250514"）
+        const matched = opts.find((o) => taskModel.includes(o.value.replace(/\[.*\]/, '')))
+        if (matched) {
+          taskForm.value.model = matched.value
+        } else if (opts.length > 0) {
+          taskForm.value.model = opts[0].value
+        }
       }
     }
     suppressModelAutoSelect = false
@@ -4936,6 +4965,8 @@ async function handleCreateTask() {
     }
 
     const task = await workerState.createTask(form)
+    // 记录 session → 用户选择的短模型名，供后续 restoreSessionModelSelection 恢复
+    saveSessionModel(task.sessionId, taskForm.value.model)
     taskMemory.addToHistory(prompt)
     taskMemory.clearDraft()
     taskForm.value.prompt = ''
@@ -5305,6 +5336,8 @@ async function handlePaneSend(paneId: string, content: string) {
     if (!newTask?.sessionId) {
       throw new Error('继续会话失败：服务端未返回有效任务数据')
     }
+    // 记录 session → 用户选择的短模型名，供后续 restoreSessionModelSelection 恢复
+    saveSessionModel(newTask.sessionId, taskForm.value.model)
     // Don't revoke blob URLs that will be displayed in chat messages
     const preserveUrls = new Set(chatImages.map(ci => ci.url))
     clearAttachments(preserveUrls)
