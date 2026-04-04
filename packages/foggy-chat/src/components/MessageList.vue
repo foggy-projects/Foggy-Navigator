@@ -1,28 +1,5 @@
 <template>
   <div class="message-list-container">
-    <!-- Load more history indicator (outside scroller, pinned top) -->
-    <div v-if="hasMoreHistory" ref="loadMoreRef" class="load-more-area">
-      <div v-if="loadingMore" class="loading-hint">
-        <span class="loading-spinner"></span>
-        <span>加载更早的消息...</span>
-      </div>
-      <template v-else>
-        <el-button size="small" text @click="emit('loadMore')">
-          加载更早的消息
-        </el-button>
-        <span class="load-more-divider">|</span>
-        <el-dropdown size="small" trigger="click" split-button @click="emit('loadAll')" @command="handleLoadAllCommand">
-          加载全部{{ totalMessages ? ` (${totalMessages})` : '' }}
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item :command="500">最近 500 条</el-dropdown-item>
-              <el-dropdown-item :command="1000">最近 1000 条</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </template>
-    </div>
-
     <div v-if="messages.length === 0" class="empty-state">
       <slot name="empty">
         <div class="empty-hint">暂无消息</div>
@@ -38,8 +15,39 @@
       class="message-list-scroller"
       @scroll="handleScroll"
     >
+      <!-- Load more area inside scroller (prevents clipping first message) -->
+      <template #before>
+        <div v-if="hasMoreHistory" ref="loadMoreRef" class="load-more-area">
+          <div v-if="loadingMore" class="loading-hint">
+            <span class="loading-spinner"></span>
+            <span>加载更早的消息...</span>
+          </div>
+          <template v-else>
+            <el-button size="small" text @click="emit('loadMore')">
+              加载更早的消息
+            </el-button>
+            <span class="load-more-divider">|</span>
+            <el-dropdown size="small" trigger="click" split-button @click="emit('loadAll')" @command="handleLoadAllCommand">
+              加载全部{{ totalMessages ? ` (${totalMessages})` : '' }}
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item :command="500">最近 500 条</el-dropdown-item>
+                  <el-dropdown-item :command="1000">最近 1000 条</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
+        </div>
+      </template>
+
       <template #default="{ item, index, active }">
         <DynamicScrollerItem :item="item" :active="active" :data-index="index">
+          <!--
+            Wrapper div ensures padding-bottom is included in DynamicScrollerItem's
+            measured height (offsetHeight). Using margin would be excluded from
+            measurement, causing items to overlap.
+          -->
+          <div class="scroller-item-wrapper">
           <!-- Tool call group (2+ consecutive tool messages) -->
           <ToolCallGroup
             v-if="item.kind === 'tool-group'"
@@ -117,6 +125,7 @@
               @link-click="(payload) => emit('link-click', payload)"
             />
           </template>
+          </div>
         </DynamicScrollerItem>
       </template>
     </DynamicScroller>
@@ -389,6 +398,16 @@ onBeforeUnmount(() => {
   padding: 16px;
 }
 
+/*
+ * Wrapper inside DynamicScrollerItem — padding-bottom provides inter-item
+ * spacing that is included in the item's measured offsetHeight.
+ * Using margin-bottom on child components would NOT be measured, causing
+ * items to overlap in the virtual list.
+ */
+.scroller-item-wrapper {
+  padding-bottom: 12px;
+}
+
 .empty-state {
   flex: 1;
   display: flex;
@@ -444,7 +463,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 8px 0;
   padding: 0 8px;
 }
 
@@ -465,7 +483,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 8px 0;
   padding: 6px 12px;
 }
 

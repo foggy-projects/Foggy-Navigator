@@ -138,7 +138,6 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .message-bubble {
-  margin-bottom: 12px;
   padding: 10px 14px;
   border-radius: 8px;
   max-width: 80%;
