@@ -1,0 +1,180 @@
+- generic [ref=e36]:
+  - banner [ref=e37]:
+    - generic [ref=e38] [cursor=pointer]: Foggy Navigator
+    - menubar [ref=e39]:
+      - menuitem "Workers" [ref=e40] [cursor=pointer]
+      - menuitem "会话" [ref=e41] [cursor=pointer]
+      - menuitem "任务" [ref=e42] [cursor=pointer]
+      - menuitem "跨项目" [ref=e43] [cursor=pointer]
+      - menuitem "监控" [ref=e44] [cursor=pointer]
+      - menuitem "用户" [ref=e45] [cursor=pointer]
+      - menuitem "设置" [ref=e46] [cursor=pointer]
+    - generic [ref=e47]:
+      - generic "通知" [ref=e49] [cursor=pointer]:
+        - img [ref=e50]
+      - button "root" [ref=e55] [cursor=pointer]:
+        - text: root
+        - img [ref=e57]
+  - generic [ref=e60]:
+    - complementary [ref=e61]:
+      - generic [ref=e62]:
+        - heading "Workers" [level=3] [ref=e63]
+        - button "+ 添加" [ref=e65] [cursor=pointer]:
+          - generic [ref=e66]: + 添加
+      - generic [ref=e67]:
+        - generic [ref=e68] [cursor=pointer]:
+          - generic [ref=e69]:
+            - generic [ref=e70]: ▶
+            - generic [ref=e72]: 本机测试
+          - generic [ref=e73]: foggy
+        - generic [ref=e74] [cursor=pointer]:
+          - generic [ref=e75]:
+            - generic [ref=e76]: ▼
+            - generic [ref=e78]: LocalDev
+          - generic [ref=e79]: foggy
+        - generic [ref=e94] [cursor=pointer]: test1
+        - generic [ref=e97] [cursor=pointer]: TestProject
+      - button "返回会话" [ref=e81] [cursor=pointer]:
+        - generic [ref=e82]:
+          - img [ref=e84]
+          - text: 返回会话
+    - main [ref=e87]:
+      - button "Choose File" [ref=e88]
+      - generic [ref=e240]:
+        - generic [ref=e241]:
+          - heading "TestProject" [level=2] [ref=e242]
+          - code [ref=e243]: "D: oggy-projects\\Foggy-Navigator-wt-qd-win11-dev"
+          - generic [ref=e245]: Auth 未配置
+        - generic [ref=e246]:
+          - button "同步 Git" [ref=e247] [cursor=pointer]:
+            - generic [ref=e248]: 同步 Git
+          - button "同步会话" [ref=e249] [cursor=pointer]:
+            - generic [ref=e250]: 同步会话
+          - button "创建 Worktree" [ref=e251] [cursor=pointer]:
+            - generic [ref=e252]: 创建 Worktree
+          - button "浏览文件" [ref=e253] [cursor=pointer]:
+            - generic [ref=e254]: 浏览文件
+          - button "VS Code" [ref=e256] [cursor=pointer]:
+            - generic [ref=e257]:
+              - text: VS Code
+              - img [ref=e259]
+          - button "终端" [ref=e261] [cursor=pointer]:
+            - generic [ref=e262]: 终端
+          - button "⤢" [ref=e263] [cursor=pointer]:
+            - generic [ref=e264]: ⤢
+          - button "编辑" [ref=e265] [cursor=pointer]:
+            - generic [ref=e266]: 编辑
+          - button "删除" [ref=e267] [cursor=pointer]:
+            - generic [ref=e268]: 删除
+      - generic [ref=e316]:
+        - generic [ref=e317]:
+          - textbox "新建任务... (Ctrl+Enter 发送, ./ 搜索文件)" [ref=e320]
+          - button "运行" [disabled] [ref=e321]:
+            - generic [ref=e322]: 运行
+        - generic [ref=e323]:
+          - button "📎 附件" [ref=e324] [cursor=pointer]:
+            - generic [ref=e325]: 📎
+            - generic [ref=e326]: 附件
+          - button "🎨 画板" [ref=e327] [cursor=pointer]:
+            - generic [ref=e328]: 🎨
+            - generic [ref=e329]: 画板
+          - button "📁 搜索" [ref=e330] [cursor=pointer]:
+            - generic [ref=e331]: 📁
+            - generic [ref=e332]: 搜索
+          - generic [ref=e334] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e336]
+              - generic [ref=e337]: test
+            - img [ref=e340]
+          - generic [ref=e343] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e345]
+              - generic [ref=e346]: Opus (1M)
+            - img [ref=e349]
+      - generic [ref=e352]:
+        - generic [ref=e353]:
+          - generic [ref=e354]:
+            - generic [ref=e355]: A
+            - generic "请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。" [ref=e357]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version...
+          - generic [ref=e358]: 待回复
+          - button "搁置" [ref=e359] [cursor=pointer]:
+            - generic [ref=e360]: 搁置
+          - button "归档" [ref=e361] [cursor=pointer]:
+            - generic [ref=e362]: 归档
+          - button "删除" [ref=e363] [cursor=pointer]:
+            - generic [ref=e364]: 删除
+          - button "重新同步" [ref=e365] [cursor=pointer]:
+            - generic [ref=e366]: 重新同步
+          - button "关闭" [ref=e368] [cursor=pointer]:
+            - generic [ref=e369]: 关闭
+        - generic [ref=e374]:
+          - generic [ref=e377]:
+            - generic [ref=e378]:
+              - generic [ref=e379]: 用户
+              - generic [ref=e380]: 22:04:35
+            - paragraph [ref=e382]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。
+            - generic "复制" [ref=e384] [cursor=pointer]: 📋 复制
+          - generic [ref=e387]:
+            - generic [ref=e388]:
+              - generic [ref=e389]: Agent
+              - generic [ref=e390]: 22:04:36
+            - paragraph [ref=e392]: Connecting to worker...
+            - generic "复制" [ref=e394] [cursor=pointer]: 📋 复制
+          - generic [ref=e397]:
+            - generic [ref=e398]: ⚠
+            - generic [ref=e399]: "[CLIConnectionError] Failed to start Claude Code: [WinError 267] 目录名称无效。"
+    - complementary [ref=e219]:
+      - generic [ref=e220]:
+        - heading "历史会话" [level=3] [ref=e221]
+        - generic [ref=e222]:
+          - button "🔍" [ref=e223] [cursor=pointer]:
+            - generic [ref=e224]: 🔍
+          - button "↻" [ref=e225] [cursor=pointer]:
+            - generic [ref=e226]: ↻
+          - button "选择" [ref=e400] [cursor=pointer]:
+            - generic [ref=e401]: 选择
+      - generic [ref=e227]:
+        - generic [ref=e228]:
+          - generic [ref=e229] [cursor=pointer]: 全部
+          - generic [ref=e230] [cursor=pointer]: 待回复
+          - generic [ref=e231] [cursor=pointer]: 处理中
+          - generic [ref=e232] [cursor=pointer]: 已搁置
+          - generic [ref=e233] [cursor=pointer]: 已归档
+        - generic [ref=e234]:
+          - generic [ref=e235] [cursor=pointer]: 平台
+          - generic [ref=e236] [cursor=pointer]: 同步
+          - generic [ref=e237] [cursor=pointer]: 全部来源
+      - generic [ref=e238]:
+        - generic [ref=e402]:
+          - generic [ref=e403] [cursor=pointer]:
+            - generic [ref=e404]: ▼ ● 需要关注 (1)
+            - button "↻" [ref=e405]:
+              - generic [ref=e406]: ↻
+          - generic [ref=e407]:
+            - generic [ref=e408]: LocalDev
+            - generic [ref=e409]: (1)
+          - generic [ref=e410] [cursor=pointer]:
+            - generic [ref=e411]:
+              - generic [ref=e412]: A
+              - generic [ref=e414]: TestProject
+              - generic [ref=e416]: 待回复
+            - generic "请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。" [ref=e418]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 do...
+            - generic "请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。" [ref=e420]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 do...
+            - generic [ref=e421]:
+              - generic [ref=e422]: 22:04
+              - generic [ref=e423]:
+                - button "继续" [ref=e424]:
+                  - generic [ref=e425]: 继续
+                - button "⋯" [ref=e427]
+          - generic [ref=e430]: 历史会话
+        - generic [ref=e433] [cursor=pointer]:
+          - generic [ref=e434]:
+            - generic [ref=e435]: A
+            - generic "待回复" [ref=e436]
+            - generic "请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。" [ref=e437]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/ver...
+            - generic "FAILED" [ref=e438]
+          - generic "请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。" [ref=e440]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/ver...
+          - generic [ref=e441]:
+            - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e442]': 🔑
+            - generic [ref=e443]: 22:04
+            - button "⋯" [ref=e446]

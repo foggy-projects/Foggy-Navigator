@@ -2051,6 +2051,23 @@ public class ClaudeTaskService implements TaskQueryProvider {
     }
 
     /**
+     * 清空 Session 的 claudeSessionId（用于首轮回退后重新开始对话）。
+     * 同时清除 providerStateJson 中的 claudeSessionId 值。
+     */
+    private void clearClaudeSessionId(String sessionId) {
+        if (sessionEntityRepository == null || sessionId == null) return;
+        sessionEntityRepository.findById(sessionId).ifPresent(session -> {
+            String providerState = session.getProviderStateJson();
+            if (providerState != null && !providerState.isBlank()) {
+                session.setProviderStateJson(
+                        mergeJsonValue(providerState, "claudeSessionId", null)
+                );
+            }
+            sessionEntityRepository.save(session);
+        });
+    }
+
+    /**
      * 获取或创建 SessionEntity（替代 ConversationConfigService.getOrCreate）
      */
     private SessionEntity getOrCreateSessionEntity(String sessionId, String workerId, String userId) {
@@ -2653,8 +2670,20 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 }
 
                 String userPrompt = rewindResult != null ? (String) rewindResult.get("user_prompt") : "";
-                truncateSessionMessagesQuietly(task.getSessionId(), turnIndex != null ? turnIndex : 1);
-                return buildRewindResult(taskId, null, userPrompt, turnIndex, claudeSessionId);
+                int effectiveTurn = turnIndex != null ? turnIndex : 1;
+                truncateSessionMessagesQuietly(task.getSessionId(), effectiveTurn);
+
+                // 首轮回退：Worker 已删除 session 文件，清空 claudeSessionId
+                // 后续消息将以全新 CLI 会话启动，不再尝试 --resume
+                Boolean sessionCleared = rewindResult != null ? (Boolean) rewindResult.get("session_cleared") : null;
+                String effectiveClaudeSessionId = claudeSessionId;
+                if (Boolean.TRUE.equals(sessionCleared)) {
+                    clearClaudeSessionId(task.getSessionId());
+                    effectiveClaudeSessionId = null;
+                    log.info("First-turn rewind: cleared claudeSessionId for session {}", task.getSessionId());
+                }
+
+                return buildRewindResult(taskId, null, userPrompt, turnIndex, effectiveClaudeSessionId);
             } catch (IllegalStateException e) {
                 throw e;
             } catch (Exception e) {
@@ -2674,18 +2703,25 @@ public class ClaudeTaskService implements TaskQueryProvider {
 
             String userPrompt = "";
             int effectiveTurn = turnIndex != null ? turnIndex : 1;
+            String effectiveClaudeSessionId = claudeSessionId;
             try {
                 Map<String, Object> convResult = client.rewindConversation(claudeSessionId, effectiveTurn)
                         .block(Duration.ofSeconds(15));
                 if (convResult != null && convResult.get("user_prompt") != null) {
                     userPrompt = convResult.get("user_prompt").toString();
                 }
+                // 首轮回退：Worker 已删除 session 文件
+                if (convResult != null && Boolean.TRUE.equals(convResult.get("session_cleared"))) {
+                    clearClaudeSessionId(task.getSessionId());
+                    effectiveClaudeSessionId = null;
+                    log.info("First-turn file rewind: cleared claudeSessionId for session {}", task.getSessionId());
+                }
             } catch (Exception convEx) {
                 log.warn("File rewind succeeded but conversation rewind failed for task {}: {}", taskId, convEx.getMessage());
             }
 
             truncateSessionMessagesQuietly(task.getSessionId(), effectiveTurn);
-            return buildRewindResult(taskId, checkpointId, userPrompt, turnIndex, claudeSessionId);
+            return buildRewindResult(taskId, checkpointId, userPrompt, turnIndex, effectiveClaudeSessionId);
         } catch (Exception e) {
             log.warn("Failed to rewind files: taskId={}, error={}", taskId, e.getMessage());
             throw new IllegalStateException("回退失败: " + e.getMessage(), e);
@@ -2712,13 +2748,36 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
         // claudeSessionId 从 SessionEntity.providerStateJson 恢复，不再从 request 透传
         String sessionId = form.getSessionId();
+        String claudeSessionId = null;
         if (sessionId != null && !sessionId.isEmpty()) {
-            String claudeSessionId = readJsonValue(
+            claudeSessionId = readJsonValue(
                     sessionEntityRepository.findById(sessionId)
                             .map(SessionEntity::getProviderStateJson).orElse(null),
                     "claudeSessionId");
-            form.setClaudeSessionId(claudeSessionId);
         }
+
+        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
+            // 首轮回退后 claudeSessionId 已被清空，降级为 createTask（新建 CLI 会话，复用 sessionId）
+            log.info("resumeTask fallback to createTask: claudeSessionId is null for session {}", sessionId);
+            CreateTaskForm createForm = new CreateTaskForm();
+            createForm.setAgentId(form.getAgentId());
+            createForm.setWorkerId(form.getWorkerId());
+            createForm.setPrompt(form.getPrompt());
+            createForm.setCwd(form.getCwd());
+            createForm.setDirectoryId(form.getDirectoryId());
+            createForm.setSessionId(sessionId);
+            createForm.setModel(form.getModel());
+            createForm.setModelConfigId(form.getModelConfigId());
+            createForm.setPermissionMode(form.getPermissionMode());
+            createForm.setImages(form.getImages());
+            createForm.setMaxTurns(form.getMaxTurns());
+            createForm.setAgentTeamsJson(form.getAgentTeamsJson());
+            createForm.setAgentTeamsConfigId(form.getAgentTeamsConfigId());
+            TaskDTO taskDTO = createTask(userId, tenantId, createForm);
+            return getTaskById(taskDTO.getTaskId()).orElseThrow();
+        }
+
+        form.setClaudeSessionId(claudeSessionId);
         TaskDTO taskDTO = resumeTask(userId, tenantId, form);
         return getTaskById(taskDTO.getTaskId()).orElseThrow();
     }

@@ -14,3 +14,7 @@
 - [04-shared-ask-external-url-propagation.md](./04-shared-ask-external-url-propagation.md)
 - [05-shared-agent-api-expansion.md](./05-shared-agent-api-expansion.md)
 - [06-session-long-history-render-optimization.md](./06-session-long-history-render-optimization.md)
+- [08-playwright-experience-report.md](./08-playwright-experience-report.md)
+- [09-claude-worker-rewind-first-turn-session-corruption.md](./09-claude-worker-rewind-first-turn-session-corruption.md)
+- [10-claude-worker-session-model-selection-sync-analysis.md](./10-claude-worker-session-model-selection-sync-analysis.md)
+- [11-playwright-revalidation-report.md](./11-playwright-revalidation-report.md)
