@@ -24,6 +24,8 @@ $DockerDir = Join-Path $ScriptDir "docker"
 $ContainerName = "foggy-navigator-nginx"
 $NginxPort = 80
 $LogDir = Join-Path $ScriptDir "logs"
+$Lockfile = Join-Path $ScriptDir "pnpm-lock.yaml"
+$ModulesMeta = Join-Path $ScriptDir "node_modules/.modules.yaml"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 function Write-ColorText {
@@ -37,6 +39,30 @@ $ColorMap = @{
     Yellow = "Yellow"
     Cyan   = "Cyan"
     Gray   = "Gray"
+}
+
+function Test-PnpmInstallRequired {
+    $requiredPaths = @(
+        (Join-Path $ScriptDir "packages\navigator-frontend\node_modules\@foggy\chat"),
+        (Join-Path $ScriptDir "packages\foggy-chat\node_modules\@foggy\chat-core"),
+        (Join-Path $ScriptDir "packages\foggy-chat\node_modules\vue-virtual-scroller")
+    )
+
+    if (-not (Test-Path $ModulesMeta)) {
+        return $true
+    }
+
+    if ((Test-Path $Lockfile) -and ((Get-Item $Lockfile).LastWriteTime -gt (Get-Item $ModulesMeta).LastWriteTime)) {
+        return $true
+    }
+
+    foreach ($path in $requiredPaths) {
+        if (-not (Test-Path $path)) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 # ── Banner ────────────────────────────────────────────────────────────────────
@@ -62,9 +88,8 @@ if (-not $SkipBuild) {
     }
 
     # Install dependencies if needed
-    $NodeModulesPath = Join-Path $FrontendDir "node_modules"
-    if (-not (Test-Path $NodeModulesPath)) {
-        Write-ColorText "[1/3] Installing dependencies..." "Yellow"
+    if (Test-PnpmInstallRequired) {
+        Write-ColorText "[1/3] Installing dependencies (workspace missing/stale)..." "Yellow"
         Push-Location $ScriptDir
         try {
             pnpm install --no-frozen-lockfile

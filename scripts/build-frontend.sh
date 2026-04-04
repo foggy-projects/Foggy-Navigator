@@ -5,17 +5,43 @@
 
 set -e
 
+# Resolve project root (script lives in scripts/)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOCKFILE="$PROJECT_ROOT/pnpm-lock.yaml"
+MODULES_META="$PROJECT_ROOT/node_modules/.modules.yaml"
+cd "$PROJECT_ROOT"
+
+needs_pnpm_install() {
+    local required_paths=(
+        "$PROJECT_ROOT/packages/navigator-frontend/node_modules/@foggy/chat"
+        "$PROJECT_ROOT/packages/foggy-chat/node_modules/@foggy/chat-core"
+        "$PROJECT_ROOT/packages/foggy-chat/node_modules/vue-virtual-scroller"
+    )
+
+    if [ ! -f "$MODULES_META" ]; then
+        return 0
+    fi
+
+    if [ -f "$LOCKFILE" ] && [ "$LOCKFILE" -nt "$MODULES_META" ]; then
+        return 0
+    fi
+
+    for path in "${required_paths[@]}"; do
+        if [ ! -e "$path" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
-
-# Resolve project root (script lives in scripts/)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$PROJECT_ROOT"
 
 echo ""
 echo -e "${CYAN}========================================${NC}"
@@ -30,8 +56,8 @@ if ! command -v pnpm &> /dev/null; then
 fi
 
 # Step 1: Install dependencies if needed
-if [ ! -d "packages/navigator-frontend/node_modules" ]; then
-    echo -e "${YELLOW}[1/3] Installing dependencies...${NC}"
+if needs_pnpm_install; then
+    echo -e "${YELLOW}[1/3] Installing dependencies (workspace missing/stale)...${NC}"
     pnpm install --no-frozen-lockfile
     if [ $? -ne 0 ]; then
         echo -e "${RED}  pnpm install failed!${NC}"
