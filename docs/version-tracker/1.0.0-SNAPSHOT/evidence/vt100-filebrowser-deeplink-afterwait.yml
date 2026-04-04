@@ -1,0 +1,192 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - generic [ref=e5] [cursor=pointer]: Foggy Navigator
+      - menubar [ref=e6]:
+        - menuitem "Workers" [ref=e7] [cursor=pointer]
+        - menuitem "会话" [ref=e8] [cursor=pointer]
+        - menuitem "任务" [ref=e9] [cursor=pointer]
+        - menuitem "跨项目" [ref=e10] [cursor=pointer]
+        - menuitem "监控" [ref=e11] [cursor=pointer]
+        - menuitem "用户" [ref=e12] [cursor=pointer]
+        - menuitem "设置" [ref=e13] [cursor=pointer]
+      - generic [ref=e14]:
+        - generic "通知" [ref=e16] [cursor=pointer]:
+          - img [ref=e17]
+        - button "root" [ref=e22] [cursor=pointer]:
+          - text: root
+          - img [ref=e24]
+    - generic [ref=e27]:
+      - complementary [ref=e28]:
+        - generic [ref=e29]:
+          - button "文件" [ref=e30] [cursor=pointer]
+          - button "Git 改动" [ref=e31] [cursor=pointer]
+          - button ".*" [ref=e32] [cursor=pointer]
+          - button "↻" [ref=e33] [cursor=pointer]
+        - tree [ref=e35]:
+          - generic [ref=e52]:
+            - treeitem "📁 .agents" [ref=e53]:
+              - generic [ref=e55] [cursor=pointer]:
+                - generic [ref=e56]: 📁
+                - generic [ref=e57]: .agents
+            - treeitem "📁 .claude" [ref=e58]:
+              - generic [ref=e60] [cursor=pointer]:
+                - generic [ref=e61]: 📁
+                - generic [ref=e62]: .claude
+            - treeitem "📁 .codex" [ref=e63]:
+              - generic [ref=e65] [cursor=pointer]:
+                - generic [ref=e66]: 📁
+                - generic [ref=e67]: .codex
+            - treeitem "📁 .foggy-attachments" [ref=e68]:
+              - generic [ref=e70] [cursor=pointer]:
+                - generic [ref=e71]: 📁
+                - generic [ref=e72]: .foggy-attachments
+            - treeitem "📁 .playwright-cli" [ref=e73]:
+              - generic [ref=e75] [cursor=pointer]:
+                - generic [ref=e76]: 📁
+                - generic [ref=e77]: .playwright-cli
+            - treeitem "📁 addons" [ref=e78]:
+              - generic [ref=e80] [cursor=pointer]:
+                - generic [ref=e81]: 📁
+                - generic [ref=e82]: addons
+            - treeitem "📁 agent-framework" [ref=e83]:
+              - generic [ref=e85] [cursor=pointer]:
+                - generic [ref=e86]: 📁
+                - generic [ref=e87]: agent-framework
+            - treeitem "📁 docker" [ref=e88]:
+              - generic [ref=e90] [cursor=pointer]:
+                - generic [ref=e91]: 📁
+                - generic [ref=e92]: docker
+            - treeitem "📁 docs" [expanded] [ref=e93]:
+              - generic [ref=e94] [cursor=pointer]:
+                - img [ref=e96]
+                - generic [ref=e98]:
+                  - generic [ref=e99]: 📁
+                  - generic [ref=e100]: docs
+            - treeitem "📁 01-overview" [ref=e101]:
+              - generic [ref=e103] [cursor=pointer]:
+                - generic [ref=e104]: 📁
+                - generic [ref=e105]: 01-overview
+            - treeitem "📁 02-modules" [ref=e106]:
+              - generic [ref=e108] [cursor=pointer]:
+                - generic [ref=e109]: 📁
+                - generic [ref=e110]: 02-modules
+            - treeitem "📁 03-implementation" [ref=e111]:
+              - generic [ref=e113] [cursor=pointer]:
+                - generic [ref=e114]: 📁
+                - generic [ref=e115]: 03-implementation
+            - treeitem "📁 dev-specs" [ref=e116]:
+              - generic [ref=e118] [cursor=pointer]:
+                - generic [ref=e119]: 📁
+                - generic [ref=e120]: dev-specs
+            - treeitem "📁 frontend-design" [ref=e121]:
+              - generic [ref=e123] [cursor=pointer]:
+                - generic [ref=e124]: 📁
+                - generic [ref=e125]: frontend-design
+            - treeitem "📁 migration" [ref=e126]:
+              - generic [ref=e128] [cursor=pointer]:
+                - generic [ref=e129]: 📁
+                - generic [ref=e130]: migration
+            - treeitem "📁 requirement-tracker" [ref=e131]:
+              - generic [ref=e133] [cursor=pointer]:
+                - generic [ref=e134]: 📁
+                - generic [ref=e135]: requirement-tracker
+            - treeitem "📁 test-cases" [ref=e136]:
+              - generic [ref=e138] [cursor=pointer]:
+                - generic [ref=e139]: 📁
+                - generic [ref=e140]: test-cases
+            - treeitem "📁 version-tracker" [expanded] [ref=e141]:
+              - generic [ref=e142] [cursor=pointer]:
+                - img [ref=e144]
+                - generic [ref=e146]:
+                  - generic [ref=e147]: 📁
+                  - generic [ref=e148]: version-tracker
+            - treeitem "📁 1.0.0-SNAPSHOT" [expanded] [ref=e149]:
+              - generic [ref=e150] [cursor=pointer]:
+                - img [ref=e152]
+                - generic [ref=e154]:
+                  - generic [ref=e155]: 📁
+                  - generic [ref=e156]: 1.0.0-SNAPSHOT
+            - treeitem "📄 01-codex-task-abort-kill-failure.md" [ref=e157]:
+              - generic [ref=e159] [cursor=pointer]:
+                - generic [ref=e160]: 📄
+                - generic [ref=e161]: 01-codex-task-abort-kill-failure.md
+            - treeitem "📄 03-abort-task-entry-flow-analysis.md" [ref=e162]:
+              - generic [ref=e164] [cursor=pointer]:
+                - generic [ref=e165]: 📄
+                - generic [ref=e166]: 03-abort-task-entry-flow-analysis.md
+            - treeitem "📄 04-shared-ask-external-url-propagation.md" [ref=e167]:
+              - generic [ref=e169] [cursor=pointer]:
+                - generic [ref=e170]: 📄
+                - generic [ref=e171]: 04-shared-ask-external-url-propagation.md
+            - treeitem "📄 05-shared-agent-api-expansion.md" [ref=e172]:
+              - generic [ref=e174] [cursor=pointer]:
+                - generic [ref=e175]: 📄
+                - generic [ref=e176]: 05-shared-agent-api-expansion.md
+            - treeitem "📄 06-session-long-history-render-optimization.md" [ref=e177]:
+              - generic [ref=e179] [cursor=pointer]:
+                - generic [ref=e180]: 📄
+                - generic [ref=e181]: 06-session-long-history-render-optimization.md
+            - treeitem "📄 07-chat-doc-link-open-file-browser-deeplink.md" [ref=e182]:
+              - generic [ref=e184] [cursor=pointer]:
+                - generic [ref=e185]: 📄
+                - generic [ref=e186]: 07-chat-doc-link-open-file-browser-deeplink.md
+      - main [ref=e39]:
+        - generic [ref=e40]:
+          - generic [ref=e188]:
+            - generic [ref=e189] [cursor=pointer]: D:/
+            - generic [ref=e190] [cursor=pointer]: foggy-projects/
+            - generic [ref=e191] [cursor=pointer]: Foggy-Navigator-wt-qd-win11-dev/
+            - generic [ref=e192] [cursor=pointer]: docs/
+            - generic [ref=e193] [cursor=pointer]: version-tracker/
+            - generic [ref=e194] [cursor=pointer]: 1.0.0-SNAPSHOT/
+            - generic [ref=e195]: README.md
+          - generic [ref=e41]:
+            - button "搜索文件 (Ctrl+P)" [ref=e42] [cursor=pointer]:
+              - img [ref=e43]
+            - button "搜索内容 (Ctrl+Shift+F)" [ref=e45] [cursor=pointer]:
+              - img [ref=e46]
+            - generic [ref=e197]: markdown
+            - generic [ref=e198]: 610 B
+            - generic [ref=e199]: 16 行
+        - generic "D:/foggy-projects/Foggy-Navigator-wt-qd-win11-dev/docs/version-tracker/1.0.0-SNAPSHOT/README.md" [ref=e201] [cursor=pointer]:
+          - generic [ref=e202]: README.md
+          - generic [ref=e203]: ×
+        - code [ref=e205]:
+          - generic [ref=e206]:
+            - textbox "Editor content"
+            - textbox [ref=e207]
+            - generic [ref=e209]:
+              - generic [ref=e212]: "1"
+              - generic [ref=e214]: "2"
+              - generic [ref=e216]: "3"
+              - generic [ref=e218]: "4"
+              - generic [ref=e220]: "5"
+              - generic [ref=e222]: "6"
+              - generic [ref=e224]: "7"
+              - generic [ref=e226]: "8"
+              - generic [ref=e228]: "9"
+              - generic [ref=e230]: "10"
+              - generic [ref=e232]: "11"
+              - generic [ref=e234]: "12"
+              - generic [ref=e236]: "13"
+              - generic [ref=e238]: "14"
+              - generic [ref=e240]: "15"
+              - generic [ref=e242]: "16"
+              - generic [ref=e244]: "17"
+            - generic [ref=e264]:
+              - generic [ref=e266]: "# 1.0.0-SNAPSHOT"
+              - generic [ref=e269]: 当前版本跟踪目录，用于统一存放已经讨论完成、可直接交付技术的事项：
+              - generic [ref=e272]: "- 需求"
+              - generic [ref=e274]: "- 缺陷"
+              - generic [ref=e276]: "- 重构"
+              - generic [ref=e278]: "- 延期处理事项"
+              - generic [ref=e281]: "## 条目列表"
+              - generic [ref=e284]: "- [01-codex-task-abort-kill-failure.md](./01-codex-task-abort-kill-failure.md)"
+              - generic [ref=e286]: "- [03-abort-task-entry-flow-analysis.md](./03-abort-task-entry-flow-analysis.md)"
+              - generic [ref=e288]: "- [04-shared-ask-external-url-propagation.md](./04-shared-ask-external-url-propagation.md)"
+              - generic [ref=e290]: "- [05-shared-agent-api-expansion.md](./05-shared-agent-api-expansion.md)"
+              - generic [ref=e292]: "- [06-session-long-history-render-optimization.md](./06-session-long-history-render-optimization.md)"
+  - generic [ref=e298]:
+    - alert
+    - alert

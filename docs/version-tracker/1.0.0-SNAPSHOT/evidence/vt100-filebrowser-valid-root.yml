@@ -1,0 +1,170 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - generic [ref=e5] [cursor=pointer]: Foggy Navigator
+      - menubar [ref=e6]:
+        - menuitem "Workers" [ref=e7] [cursor=pointer]
+        - menuitem "会话" [ref=e8] [cursor=pointer]
+        - menuitem "任务" [ref=e9] [cursor=pointer]
+        - menuitem "跨项目" [ref=e10] [cursor=pointer]
+        - menuitem "监控" [ref=e11] [cursor=pointer]
+        - menuitem "用户" [ref=e12] [cursor=pointer]
+        - menuitem "设置" [ref=e13] [cursor=pointer]
+      - generic [ref=e14]:
+        - generic "通知" [ref=e16] [cursor=pointer]:
+          - img [ref=e17]
+        - button "root" [ref=e22] [cursor=pointer]:
+          - text: root
+          - img [ref=e24]
+    - generic [ref=e27]:
+      - complementary [ref=e28]:
+        - generic [ref=e29]:
+          - button "文件" [ref=e30] [cursor=pointer]
+          - button "Git 改动" [ref=e31] [cursor=pointer]
+          - button ".*" [ref=e32] [cursor=pointer]
+          - button "↻" [ref=e33] [cursor=pointer]
+        - tree [ref=e35]:
+          - generic [ref=e38]:
+            - treeitem "📁 .agents" [ref=e39]:
+              - generic [ref=e41] [cursor=pointer]:
+                - generic [ref=e42]: 📁
+                - generic [ref=e43]: .agents
+            - treeitem "📁 .claude" [ref=e44]:
+              - generic [ref=e46] [cursor=pointer]:
+                - generic [ref=e47]: 📁
+                - generic [ref=e48]: .claude
+            - treeitem "📁 .codex" [ref=e49]:
+              - generic [ref=e51] [cursor=pointer]:
+                - generic [ref=e52]: 📁
+                - generic [ref=e53]: .codex
+            - treeitem "📁 .foggy-attachments" [ref=e54]:
+              - generic [ref=e56] [cursor=pointer]:
+                - generic [ref=e57]: 📁
+                - generic [ref=e58]: .foggy-attachments
+            - treeitem "📁 .playwright-cli" [ref=e59]:
+              - generic [ref=e61] [cursor=pointer]:
+                - generic [ref=e62]: 📁
+                - generic [ref=e63]: .playwright-cli
+            - treeitem "📁 addons" [ref=e64]:
+              - generic [ref=e66] [cursor=pointer]:
+                - generic [ref=e67]: 📁
+                - generic [ref=e68]: addons
+            - treeitem "📁 agent-framework" [ref=e69]:
+              - generic [ref=e71] [cursor=pointer]:
+                - generic [ref=e72]: 📁
+                - generic [ref=e73]: agent-framework
+            - treeitem "📁 docker" [ref=e74]:
+              - generic [ref=e76] [cursor=pointer]:
+                - generic [ref=e77]: 📁
+                - generic [ref=e78]: docker
+            - treeitem "📁 docs" [ref=e79]:
+              - generic [ref=e81] [cursor=pointer]:
+                - generic [ref=e82]: 📁
+                - generic [ref=e83]: docs
+            - treeitem "📁 launcher" [ref=e84]:
+              - generic [ref=e86] [cursor=pointer]:
+                - generic [ref=e87]: 📁
+                - generic [ref=e88]: launcher
+            - treeitem "📁 logs" [ref=e89]:
+              - generic [ref=e91] [cursor=pointer]:
+                - generic [ref=e92]: 📁
+                - generic [ref=e93]: logs
+            - treeitem "📁 META-INF" [ref=e94]:
+              - generic [ref=e96] [cursor=pointer]:
+                - generic [ref=e97]: 📁
+                - generic [ref=e98]: META-INF
+            - treeitem "📁 metadata-config-module" [ref=e99]:
+              - generic [ref=e101] [cursor=pointer]:
+                - generic [ref=e102]: 📁
+                - generic [ref=e103]: metadata-config-module
+            - treeitem "📁 metadata-query-module" [ref=e104]:
+              - generic [ref=e106] [cursor=pointer]:
+                - generic [ref=e107]: 📁
+                - generic [ref=e108]: metadata-query-module
+            - treeitem "📁 mock" [ref=e109]:
+              - generic [ref=e111] [cursor=pointer]:
+                - generic [ref=e112]: 📁
+                - generic [ref=e113]: mock
+            - treeitem "📁 monitoring-module" [ref=e114]:
+              - generic [ref=e116] [cursor=pointer]:
+                - generic [ref=e117]: 📁
+                - generic [ref=e118]: monitoring-module
+            - treeitem "📁 navigator-common" [ref=e119]:
+              - generic [ref=e121] [cursor=pointer]:
+                - generic [ref=e122]: 📁
+                - generic [ref=e123]: navigator-common
+            - treeitem "📁 navigator-open-sdk" [ref=e124]:
+              - generic [ref=e126] [cursor=pointer]:
+                - generic [ref=e127]: 📁
+                - generic [ref=e128]: navigator-open-sdk
+            - treeitem "📁 navigator-spi" [ref=e129]:
+              - generic [ref=e131] [cursor=pointer]:
+                - generic [ref=e132]: 📁
+                - generic [ref=e133]: navigator-spi
+            - treeitem "📁 nginx" [ref=e134]:
+              - generic [ref=e136] [cursor=pointer]:
+                - generic [ref=e137]: 📁
+                - generic [ref=e138]: nginx
+            - treeitem "📁 node_modules" [ref=e139]:
+              - generic [ref=e141] [cursor=pointer]:
+                - generic [ref=e142]: 📁
+                - generic [ref=e143]: node_modules
+            - treeitem "📁 packages" [ref=e144]:
+              - generic [ref=e146] [cursor=pointer]:
+                - generic [ref=e147]: 📁
+                - generic [ref=e148]: packages
+            - treeitem "📁 scripts" [ref=e149]:
+              - generic [ref=e151] [cursor=pointer]:
+                - generic [ref=e152]: 📁
+                - generic [ref=e153]: scripts
+            - treeitem "📁 session-module" [ref=e154]:
+              - generic [ref=e156] [cursor=pointer]:
+                - generic [ref=e157]: 📁
+                - generic [ref=e158]: session-module
+            - treeitem "📁 test-results" [ref=e159]:
+              - generic [ref=e161] [cursor=pointer]:
+                - generic [ref=e162]: 📁
+                - generic [ref=e163]: test-results
+            - treeitem "📁 tests" [ref=e164]:
+              - generic [ref=e166] [cursor=pointer]:
+                - generic [ref=e167]: 📁
+                - generic [ref=e168]: tests
+            - treeitem "📁 tools" [ref=e169]:
+              - generic [ref=e171] [cursor=pointer]:
+                - generic [ref=e172]: 📁
+                - generic [ref=e173]: tools
+            - treeitem "📁 tutor-agent" [ref=e174]:
+              - generic [ref=e176] [cursor=pointer]:
+                - generic [ref=e177]: 📁
+                - generic [ref=e178]: tutor-agent
+            - treeitem "📁 user-auth-module" [ref=e179]:
+              - generic [ref=e181] [cursor=pointer]:
+                - generic [ref=e182]: 📁
+                - generic [ref=e183]: user-auth-module
+            - treeitem "📄 .git" [ref=e184]:
+              - generic [ref=e186] [cursor=pointer]:
+                - generic [ref=e187]: 📄
+                - generic [ref=e188]: .git
+            - treeitem "📄 .gitattributes" [ref=e189]:
+              - generic [ref=e191] [cursor=pointer]:
+                - generic [ref=e192]: 📄
+                - generic [ref=e193]: .gitattributes
+            - treeitem "📄 .gitignore" [ref=e194]:
+              - generic [ref=e196] [cursor=pointer]:
+                - generic [ref=e197]: 📄
+                - generic [ref=e198]: .gitignore
+      - main [ref=e201]:
+        - generic [ref=e202]:
+          - generic [ref=e203]:
+            - generic [ref=e204] [cursor=pointer]: D:/
+            - generic [ref=e205] [cursor=pointer]: foggy-projects/
+            - generic [ref=e206]: Foggy-Navigator-wt-qd-win11-dev
+          - generic [ref=e207]:
+            - button "搜索文件 (Ctrl+P)" [ref=e208] [cursor=pointer]:
+              - img [ref=e209]
+            - button "搜索内容 (Ctrl+Shift+F)" [ref=e211] [cursor=pointer]:
+              - img [ref=e212]
+        - generic [ref=e215]: 选择文件查看内容
+  - generic [ref=e216]:
+    - alert
+    - alert

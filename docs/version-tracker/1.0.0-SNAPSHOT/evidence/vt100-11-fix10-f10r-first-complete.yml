@@ -1,0 +1,429 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5] [cursor=pointer]: Foggy Navigator
+    - menubar [ref=e6]:
+      - menuitem "Workers" [ref=e7] [cursor=pointer]
+      - menuitem "会话" [ref=e8] [cursor=pointer]
+      - menuitem "任务" [ref=e9] [cursor=pointer]
+      - menuitem "跨项目" [ref=e10] [cursor=pointer]
+      - menuitem "监控" [ref=e11] [cursor=pointer]
+      - menuitem "用户" [ref=e12] [cursor=pointer]
+      - menuitem "设置" [ref=e13] [cursor=pointer]
+    - generic [ref=e14]:
+      - generic "通知" [ref=e16] [cursor=pointer]:
+        - img [ref=e17]
+      - button "root" [ref=e22] [cursor=pointer]:
+        - text: root
+        - img [ref=e24]
+  - generic [ref=e27]:
+    - complementary [ref=e28]:
+      - generic [ref=e29]:
+        - heading "Workers" [level=3] [ref=e30]
+        - button "+ 添加" [ref=e32] [cursor=pointer]:
+          - generic [ref=e33]: + 添加
+      - generic [ref=e34]:
+        - generic [ref=e35] [cursor=pointer]:
+          - generic [ref=e36]:
+            - generic [ref=e37]: ▶
+            - generic [ref=e39]: 本机测试
+          - generic [ref=e40]: foggy
+        - generic [ref=e41] [cursor=pointer]:
+          - generic [ref=e42]:
+            - generic [ref=e43]: ▼
+            - generic [ref=e45]: LocalDev
+          - generic [ref=e46]: foggy
+        - generic [ref=e61] [cursor=pointer]: test1
+        - generic [ref=e64] [cursor=pointer]: TestProject
+      - button "返回会话" [ref=e48] [cursor=pointer]:
+        - generic [ref=e49]:
+          - img [ref=e51]
+          - text: 返回会话
+    - main [ref=e54]:
+      - button "Choose File" [ref=e55]
+      - generic [ref=e598]:
+        - generic [ref=e599]:
+          - heading "TestProject" [level=2] [ref=e600]
+          - code [ref=e601]: D:\workspace\fsbi
+          - generic [ref=e603]: Auth 未配置
+        - generic [ref=e604]:
+          - button "同步 Git" [ref=e605] [cursor=pointer]:
+            - generic [ref=e606]: 同步 Git
+          - button "同步会话" [ref=e607] [cursor=pointer]:
+            - generic [ref=e608]: 同步会话
+          - button "创建 Worktree" [ref=e609] [cursor=pointer]:
+            - generic [ref=e610]: 创建 Worktree
+          - button "浏览文件" [ref=e611] [cursor=pointer]:
+            - generic [ref=e612]: 浏览文件
+          - button "VS Code" [ref=e614] [cursor=pointer]:
+            - generic [ref=e615]:
+              - text: VS Code
+              - img [ref=e617]
+          - button "终端" [ref=e619] [cursor=pointer]:
+            - generic [ref=e620]: 终端
+          - button "⤢" [ref=e621] [cursor=pointer]:
+            - generic [ref=e622]: ⤢
+          - button "编辑" [ref=e623] [cursor=pointer]:
+            - generic [ref=e624]: 编辑
+          - button "删除" [ref=e625] [cursor=pointer]:
+            - generic [ref=e626]: 删除
+      - generic [ref=e781]:
+        - generic [ref=e782]:
+          - textbox "新建任务... (Ctrl+Enter 发送, ./ 搜索文件)" [ref=e785]
+          - button "运行" [disabled] [ref=e786]:
+            - generic [ref=e787]: 运行
+        - generic [ref=e788]:
+          - button "📎 附件" [ref=e789] [cursor=pointer]:
+            - generic [ref=e790]: 📎
+            - generic [ref=e791]: 附件
+          - button "🎨 画板" [ref=e792] [cursor=pointer]:
+            - generic [ref=e793]: 🎨
+            - generic [ref=e794]: 画板
+          - button "📁 搜索" [ref=e795] [cursor=pointer]:
+            - generic [ref=e796]: 📁
+            - generic [ref=e797]: 搜索
+          - generic [ref=e799] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e801]
+              - generic [ref=e802]: test
+            - img [ref=e805]
+          - generic [ref=e808] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e810]
+              - generic [ref=e811]: Haiku
+            - img [ref=e814]
+      - generic [ref=e817]:
+        - generic [ref=e818]:
+          - generic [ref=e819]:
+            - generic [ref=e820]: A
+            - generic [ref=e890]: "4.7"
+            - generic "模型同步修复复测F10R：只回复 F10R_OK" [ref=e822]
+          - generic [ref=e823]: 待回复
+          - button "搁置" [ref=e891] [cursor=pointer]:
+            - generic [ref=e892]: 搁置
+          - button "归档" [ref=e893] [cursor=pointer]:
+            - generic [ref=e894]: 归档
+          - button "删除" [ref=e895] [cursor=pointer]:
+            - generic [ref=e896]: 删除
+          - generic [ref=e824]:
+            - generic [ref=e897]: $0.0232
+            - generic [ref=e898]: 8.2s
+            - button "关闭" [ref=e827] [cursor=pointer]:
+              - generic [ref=e828]: 关闭
+        - generic [ref=e830]:
+          - generic [ref=e833]:
+            - generic [ref=e902]:
+              - generic [ref=e903]:
+                - generic [ref=e904]: 用户
+                - generic [ref=e905]: 22:44:59
+              - paragraph [ref=e907]: 模型同步修复复测F10R：只回复 F10R_OK
+              - generic [ref=e908]:
+                - generic "复制" [ref=e909] [cursor=pointer]: 📋 复制
+                - generic "回退到此" [ref=e910] [cursor=pointer]: ↩ 回退到此
+            - generic [ref=e911]:
+              - generic [ref=e912]:
+                - generic [ref=e913]: Agent
+                - generic [ref=e914]: 22:44:59
+              - paragraph [ref=e916]: Connecting to worker...
+              - generic "复制" [ref=e918] [cursor=pointer]: 📋 复制
+            - generic [ref=e848]:
+              - generic [ref=e849]:
+                - generic [ref=e850]: Agent
+                - generic [ref=e851]: 22:45:00
+              - paragraph [ref=e919]: Task started
+              - generic "复制" [ref=e855] [cursor=pointer]: 📋 复制
+            - generic [ref=e920]:
+              - generic [ref=e921]:
+                - generic [ref=e922]: Agent
+                - generic [ref=e923]: 22:45:08
+              - paragraph [ref=e925]: F10R_OK
+              - generic "复制" [ref=e927] [cursor=pointer]: 📋 复制
+          - generic [ref=e868]:
+            - textbox "输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)" [ref=e871]
+            - button "发送" [disabled] [ref=e872]:
+              - generic [ref=e873]: 发送
+    - complementary [ref=e228]:
+      - generic [ref=e229]:
+        - heading "历史会话" [level=3] [ref=e230]
+        - generic [ref=e231]:
+          - button "🔍" [ref=e232] [cursor=pointer]:
+            - generic [ref=e233]: 🔍
+          - button "↻" [ref=e234] [cursor=pointer]:
+            - generic [ref=e235]: ↻
+          - button "选择" [ref=e674] [cursor=pointer]:
+            - generic [ref=e675]: 选择
+      - generic [ref=e238]:
+        - generic [ref=e239]:
+          - generic [ref=e240] [cursor=pointer]: 全部
+          - generic [ref=e241] [cursor=pointer]: 待回复
+          - generic [ref=e242] [cursor=pointer]: 处理中
+          - generic [ref=e243] [cursor=pointer]: 已搁置
+          - generic [ref=e244] [cursor=pointer]: 已归档
+        - generic [ref=e245]:
+          - generic [ref=e246] [cursor=pointer]: 平台
+          - generic [ref=e247] [cursor=pointer]: 同步
+          - generic [ref=e248] [cursor=pointer]: 全部来源
+      - generic [ref=e249]:
+        - generic [ref=e250]:
+          - generic [ref=e251] [cursor=pointer]:
+            - generic [ref=e252]: ▼ ● 需要关注 (12)
+            - button "↻" [ref=e253]:
+              - generic [ref=e254]: ↻
+          - generic [ref=e315]:
+            - generic [ref=e316]: LocalDev
+            - generic [ref=e317]: (9)
+          - generic [ref=e928] [cursor=pointer]:
+            - generic [ref=e929]:
+              - generic [ref=e930]: A
+              - generic [ref=e932]: TestProject
+              - generic [ref=e934]: 待回复
+            - generic "模型同步修复复测F10R：只回复 F10R_OK" [ref=e936]
+            - generic "模型同步修复复测F10R：只回复 F10R_OK" [ref=e938]
+            - generic [ref=e939]:
+              - generic [ref=e940]: $0.02
+              - generic [ref=e941]: 0min
+              - generic [ref=e942]: 22:44
+              - generic [ref=e943]:
+                - button "继续" [ref=e944]:
+                  - generic [ref=e945]: 继续
+                - button "⋯" [ref=e947]
+          - generic [ref=e318] [cursor=pointer]:
+            - generic [ref=e319]:
+              - generic [ref=e321]: TestProject
+              - generic [ref=e323]: 待回复
+            - generic "模型同步复测E4R：只回复 E4R_OK" [ref=e325]
+            - generic "第二轮：只回复 E4R_2_OK" [ref=e327]
+            - generic [ref=e328]:
+              - generic [ref=e329]: $0.14
+              - generic [ref=e330]: 0min
+              - generic [ref=e331]: 19:36
+              - generic [ref=e332]:
+                - button "继续" [ref=e333]:
+                  - generic [ref=e334]: 继续
+                - button "⋯" [ref=e336]
+          - generic [ref=e337] [cursor=pointer]:
+            - generic [ref=e338]:
+              - generic [ref=e340]: TestProject
+              - generic [ref=e342]: 待回复
+            - generic "回退复测D4R：先回复 D4R_OK" [ref=e344]
+            - generic "回退后继续复测D4R：只回复 AFTER_REWIND_D4R_OK" [ref=e346]: 回退后继续复测D4R：只回复 AFTER_REWIND_D4...
+            - generic [ref=e347]:
+              - generic [ref=e348]: $0.25
+              - generic [ref=e349]: 0min
+              - generic [ref=e350]: 19:34
+              - generic [ref=e351]:
+                - button "继续" [ref=e352]:
+                  - generic [ref=e353]: 继续
+                - button "⋯" [ref=e355]
+          - generic [ref=e356] [cursor=pointer]:
+            - generic [ref=e357]:
+              - generic [ref=e359]: TestProject
+              - generic [ref=e361]: 待回复
+            - generic "模型同步复测C1：只回复 C1_OK" [ref=e363]
+            - generic "第二轮：只回复 C1_2_OK" [ref=e365]
+            - generic [ref=e366]:
+              - generic [ref=e367]: $0.12
+              - generic [ref=e368]: 0min
+              - generic [ref=e369]: 15:41
+              - generic [ref=e370]:
+                - button "继续" [ref=e371]:
+                  - generic [ref=e372]: 继续
+                - button "⋯" [ref=e374]
+          - generic [ref=e375] [cursor=pointer]:
+            - generic [ref=e376]:
+              - generic [ref=e378]: TestProject
+              - generic [ref=e380]: 待回复
+            - generic "回退复测B3：先回复 B3_OK" [ref=e382]
+            - generic "回退后继续复测B3：只回复 AFTER_REWIND_B3_OK" [ref=e384]: 回退后继续复测B3：只回复 AFTER_REWIND_B3_...
+            - generic [ref=e385]:
+              - generic [ref=e386]: $0.03
+              - generic [ref=e387]: 15:37
+              - generic [ref=e388]:
+                - button "继续" [ref=e389]:
+                  - generic [ref=e390]: 继续
+                - button "⋯" [ref=e392]
+          - generic [ref=e393] [cursor=pointer]:
+            - generic [ref=e394]:
+              - generic [ref=e396]: test1
+              - generic [ref=e398]: 待回复
+            - generic "模型同步复测A2：只回复 A2_OK" [ref=e400]
+            - generic "模型同步复测A2：只回复 A2_OK" [ref=e402]
+            - generic [ref=e403]:
+              - generic [ref=e404]: 15:31
+              - generic [ref=e405]:
+                - button "继续" [ref=e406]:
+                  - generic [ref=e407]: 继续
+                - button "⋯" [ref=e409]
+          - generic [ref=e410] [cursor=pointer]:
+            - generic [ref=e411]:
+              - generic [ref=e413]: TestProject
+              - generic [ref=e415]: 待回复
+            - generic "模型同步回归B：只回复 B_OK" [ref=e417]
+            - generic "回退后继续：只回复 AFTER_REWIND_OK" [ref=e419]
+            - generic [ref=e420]:
+              - generic [ref=e421]: $0.14
+              - generic [ref=e422]: 13:47
+              - generic [ref=e423]:
+                - button "继续" [ref=e424]:
+                  - generic [ref=e425]: 继续
+                - button "⋯" [ref=e427]
+          - generic [ref=e428] [cursor=pointer]:
+            - generic [ref=e429]:
+              - generic [ref=e431]: test1
+              - generic [ref=e433]: 待回复
+            - generic "模型同步回归A：只回复 A_OK" [ref=e435]
+            - generic "模型同步回归A：只回复 A_OK" [ref=e437]
+            - generic [ref=e438]:
+              - generic [ref=e439]: 13:40
+              - generic [ref=e440]:
+                - button "继续" [ref=e441]:
+                  - generic [ref=e442]: 继续
+                - button "⋯" [ref=e444]
+          - generic [ref=e445] [cursor=pointer]:
+            - generic [ref=e446]:
+              - generic [ref=e448]: TestProject
+              - generic [ref=e450]: 待回复
+            - generic "请先回复：测试开始。然后用两条简短项目符号说明你已就绪。" [ref=e452]
+            - generic "请先回复：测试开始。然后用两条简短项目符号说明你已就绪。" [ref=e454]
+            - generic [ref=e455]:
+              - generic [ref=e456]: $0.11
+              - generic [ref=e457]: 0min
+              - generic [ref=e458]: 13:17
+              - generic [ref=e459]:
+                - button "继续" [ref=e460]:
+                  - generic [ref=e461]: 继续
+                - button "⋯" [ref=e463]
+          - generic [ref=e255]:
+            - generic [ref=e256]: 本机测试
+            - generic [ref=e257]: (3)
+          - generic [ref=e258] [cursor=pointer]:
+            - generic [ref=e259]:
+              - generic [ref=e261]: tmp
+              - generic [ref=e263]: 待回复
+            - generic "hi" [ref=e265]
+            - generic "hi" [ref=e267]
+            - generic [ref=e268]:
+              - generic [ref=e269]: $0.03
+              - generic [ref=e270]: 0min
+              - generic [ref=e271]: 22:39
+              - generic [ref=e272]:
+                - button "继续" [ref=e273]:
+                  - generic [ref=e274]: 继续
+                - button "⋯" [ref=e276]
+          - generic [ref=e277] [cursor=pointer]:
+            - generic [ref=e278]:
+              - generic [ref=e280]: tmp
+              - generic [ref=e282]: 待回复
+            - generic "test" [ref=e284]
+            - generic "test" [ref=e286]
+            - generic [ref=e287]:
+              - generic [ref=e288]: $0.11
+              - generic [ref=e289]: 0min
+              - generic [ref=e290]: 22:38
+              - generic [ref=e291]:
+                - button "继续" [ref=e292]:
+                  - generic [ref=e293]: 继续
+                - button "⋯" [ref=e295]
+          - generic [ref=e296] [cursor=pointer]:
+            - generic [ref=e297]:
+              - generic [ref=e299]: tmp
+              - generic [ref=e301]: 待回复
+            - generic "当前目录" [ref=e303]
+            - generic "当前目录" [ref=e305]
+            - generic [ref=e306]:
+              - generic [ref=e307]: $0.13
+              - generic [ref=e308]: 0min
+              - generic [ref=e309]: 04/03
+              - generic [ref=e310]:
+                - button "继续" [ref=e311]:
+                  - generic [ref=e312]: 继续
+                - button "⋯" [ref=e314]
+          - generic [ref=e466]: 历史会话
+        - generic [ref=e676]:
+          - generic [ref=e948] [cursor=pointer]:
+            - generic [ref=e949]:
+              - generic [ref=e950]: A
+              - generic "待回复" [ref=e951]
+              - generic "模型同步修复复测F10R：只回复 F10R_OK" [ref=e952]
+              - generic "COMPLETED" [ref=e953]
+            - generic "模型同步修复复测F10R：只回复 F10R_OK" [ref=e955]
+            - generic [ref=e956]:
+              - generic [ref=e957]: "4.7"
+              - generic [ref=e958]: $0.02
+              - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e959]': 🔑
+              - generic [ref=e960]: 22:44
+              - button "⋯" [ref=e963]
+          - generic [ref=e677] [cursor=pointer]:
+            - generic [ref=e678]:
+              - generic "待回复" [ref=e679]
+              - generic "模型同步复测E4R：只回复 E4R_OK" [ref=e680]
+              - generic "COMPLETED" [ref=e681]
+            - generic "第二轮：只回复 E4R_2_OK" [ref=e683]
+            - generic [ref=e684]:
+              - generic [ref=e685]: 2轮
+              - generic [ref=e686]: "5"
+              - generic [ref=e687]: $0.14
+              - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e688]': 🔑
+              - generic [ref=e689]: 19:36
+              - button "⋯" [ref=e692]
+          - generic [ref=e693] [cursor=pointer]:
+            - generic [ref=e694]:
+              - generic "待回复" [ref=e695]
+              - generic "回退复测D4R：先回复 D4R_OK" [ref=e696]
+              - generic "COMPLETED" [ref=e697]
+            - generic "回退后继续复测D4R：只回复 AFTER_REWIND_D4R_OK" [ref=e699]
+            - generic [ref=e700]:
+              - generic [ref=e701]: 3轮
+              - generic [ref=e702]: "5"
+              - generic [ref=e703]: $0.25
+              - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e704]': 🔑
+              - generic [ref=e705]: 19:34
+              - button "⋯" [ref=e708]
+          - generic [ref=e709] [cursor=pointer]:
+            - generic [ref=e710]:
+              - generic "待回复" [ref=e711]
+              - generic "模型同步复测C1：只回复 C1_OK" [ref=e712]
+              - generic "COMPLETED" [ref=e713]
+            - generic "第二轮：只回复 C1_2_OK" [ref=e715]
+            - generic [ref=e716]:
+              - generic [ref=e717]: 2轮
+              - generic [ref=e718]: "5"
+              - generic [ref=e719]: $0.12
+              - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e720]': 🔑
+              - generic [ref=e721]: 15:41
+              - button "⋯" [ref=e724]
+          - generic [ref=e725] [cursor=pointer]:
+            - generic [ref=e726]:
+              - generic "待回复" [ref=e727]
+              - generic "回退复测B3：先回复 B3_OK" [ref=e728]
+              - generic "FAILED" [ref=e729]
+            - generic "回退后继续复测B3：只回复 AFTER_REWIND_B3_OK" [ref=e731]
+            - generic [ref=e732]:
+              - generic [ref=e733]: 3轮
+              - generic [ref=e734]: $0.03
+              - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e735]': 🔑
+              - generic [ref=e736]: 15:37
+              - button "⋯" [ref=e739]
+          - generic [ref=e740] [cursor=pointer]:
+            - generic [ref=e741]:
+              - generic "待回复" [ref=e742]
+              - generic "模型同步回归B：只回复 B_OK" [ref=e743]
+              - generic "FAILED" [ref=e744]
+            - generic "回退后继续：只回复 AFTER_REWIND_OK" [ref=e746]
+            - generic [ref=e747]:
+              - generic [ref=e748]: 3轮
+              - generic [ref=e749]: $0.14
+              - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e750]': 🔑
+              - generic [ref=e751]: 13:47
+              - button "⋯" [ref=e754]
+          - generic [ref=e755] [cursor=pointer]:
+            - generic [ref=e756]:
+              - generic "待回复" [ref=e757]
+              - generic "请先回复：测试开始。然后用两条简短项目符号说明你已就绪。" [ref=e758]
+              - generic "COMPLETED" [ref=e759]
+            - generic "请先回复：测试开始。然后用两条简短项目符号说明你已就绪。" [ref=e761]
+            - generic [ref=e762]:
+              - generic [ref=e763]: "5"
+              - generic [ref=e764]: $0.11
+              - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e765]': 🔑
+              - generic [ref=e766]: 13:17
+              - button "⋯" [ref=e769]

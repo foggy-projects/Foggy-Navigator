@@ -1,0 +1,206 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - generic [ref=e5] [cursor=pointer]: Foggy Navigator
+      - menubar [ref=e6]:
+        - menuitem "Workers" [ref=e7] [cursor=pointer]
+        - menuitem "会话" [ref=e8] [cursor=pointer]
+        - menuitem "任务" [ref=e9] [cursor=pointer]
+        - menuitem "跨项目" [ref=e10] [cursor=pointer]
+        - menuitem "监控" [ref=e11] [cursor=pointer]
+        - menuitem "用户" [ref=e12] [cursor=pointer]
+        - menuitem "设置" [ref=e13] [cursor=pointer]
+      - generic [ref=e14]:
+        - generic "通知" [ref=e16] [cursor=pointer]:
+          - img [ref=e17]
+        - button "root" [ref=e22] [cursor=pointer]:
+          - text: root
+          - img [ref=e24]
+    - generic [ref=e27]:
+      - complementary [ref=e28]:
+        - generic [ref=e29]:
+          - button "文件" [ref=e30] [cursor=pointer]
+          - button "Git 改动" [ref=e31] [cursor=pointer]
+          - button ".*" [ref=e32] [cursor=pointer]
+          - button "↻" [ref=e33] [cursor=pointer]
+        - tree [ref=e35]:
+          - generic [ref=e38]:
+            - treeitem "📁 .git" [ref=e39]:
+              - generic [ref=e41] [cursor=pointer]:
+                - generic [ref=e42]: 📁
+                - generic [ref=e43]: .git
+            - treeitem "📁 .idea" [ref=e44]:
+              - generic [ref=e46] [cursor=pointer]:
+                - generic [ref=e47]: 📁
+                - generic [ref=e48]: .idea
+            - treeitem "📁 foggy-fsbi-ai" [ref=e49]:
+              - generic [ref=e51] [cursor=pointer]:
+                - generic [ref=e52]: 📁
+                - generic [ref=e53]: foggy-fsbi-ai
+            - treeitem "📁 foggy-fsbi-common" [ref=e54]:
+              - generic [ref=e56] [cursor=pointer]:
+                - generic [ref=e57]: 📁
+                - generic [ref=e58]: foggy-fsbi-common
+            - treeitem "📁 foggy-fsbi-domain" [ref=e59]:
+              - generic [ref=e61] [cursor=pointer]:
+                - generic [ref=e62]: 📁
+                - generic [ref=e63]: foggy-fsbi-domain
+            - treeitem "📁 foggy-fsbi-olap" [ref=e64]:
+              - generic [ref=e66] [cursor=pointer]:
+                - generic [ref=e67]: 📁
+                - generic [ref=e68]: foggy-fsbi-olap
+            - treeitem "📁 foggy-fsbi-ui" [ref=e69]:
+              - generic [ref=e71] [cursor=pointer]:
+                - generic [ref=e72]: 📁
+                - generic [ref=e73]: foggy-fsbi-ui
+            - treeitem "📁 loggg" [ref=e74]:
+              - generic [ref=e76] [cursor=pointer]:
+                - generic [ref=e77]: 📁
+                - generic [ref=e78]: loggg
+            - treeitem "📁 services" [ref=e79]:
+              - generic [ref=e81] [cursor=pointer]:
+                - generic [ref=e82]: 📁
+                - generic [ref=e83]: services
+            - treeitem "📄 .gitignore" [active] [ref=e84]:
+              - generic [ref=e86] [cursor=pointer]:
+                - generic [ref=e87]: 📄
+                - generic [ref=e88]: .gitignore
+            - treeitem "📄 pom.xml" [ref=e89]:
+              - generic [ref=e91] [cursor=pointer]:
+                - generic [ref=e92]: 📄
+                - generic [ref=e93]: pom.xml
+      - main [ref=e95]:
+        - generic [ref=e96]:
+          - generic [ref=e97]:
+            - generic [ref=e98] [cursor=pointer]: D:/
+            - generic [ref=e99] [cursor=pointer]: workspace/
+            - generic [ref=e100] [cursor=pointer]: fsbi/
+            - generic [ref=e111]: pom.xml
+          - generic [ref=e101]:
+            - button "搜索文件 (Ctrl+P)" [ref=e102] [cursor=pointer]:
+              - img [ref=e103]
+            - button "搜索内容 (Ctrl+Shift+F)" [ref=e105] [cursor=pointer]:
+              - img [ref=e106]
+            - generic [ref=e178]: xml
+            - generic [ref=e112]: 10.1 KB
+            - generic [ref=e113]: 277 行
+        - generic [ref=e114]:
+          - generic "D:/workspace/fsbi/.gitignore" [ref=e115] [cursor=pointer]:
+            - generic [ref=e116]: .gitignore
+            - generic [ref=e117]: ×
+          - generic "D:/workspace/fsbi/pom.xml" [ref=e179] [cursor=pointer]:
+            - generic [ref=e180]: pom.xml
+            - generic [ref=e181]: ×
+        - code [ref=e182]:
+          - generic [ref=e183]:
+            - textbox "Editor content"
+            - textbox [ref=e184]
+            - generic [ref=e186]:
+              - generic [ref=e189]: "1"
+              - generic [ref=e190]:
+                - generic [ref=e191] [cursor=pointer]: 
+                - generic [ref=e192]: "2"
+              - generic [ref=e194]: "3"
+              - generic [ref=e196]: "4"
+              - generic [ref=e197]:
+                - generic [ref=e198] [cursor=pointer]: 
+                - generic [ref=e199]: "5"
+              - generic [ref=e201]: "6"
+              - generic [ref=e203]: "7"
+              - generic [ref=e205]: "8"
+              - generic [ref=e207]: "9"
+              - generic [ref=e209]: "10"
+              - generic [ref=e211]: "11"
+              - generic [ref=e213]: "12"
+              - generic [ref=e215]: "13"
+              - generic [ref=e217]: "14"
+              - generic [ref=e219]: "15"
+              - generic [ref=e220]:
+                - generic [ref=e221] [cursor=pointer]: 
+                - generic [ref=e222]: "16"
+              - generic [ref=e224]: "17"
+              - generic [ref=e225]:
+                - generic [ref=e226] [cursor=pointer]: 
+                - generic [ref=e227]: "18"
+              - generic [ref=e229]: "19"
+              - generic [ref=e231]: "20"
+              - generic [ref=e233]: "21"
+              - generic [ref=e234]:
+                - generic [ref=e235] [cursor=pointer]: 
+                - generic [ref=e236]: "22"
+              - generic [ref=e238]: "23"
+              - generic [ref=e240]: "24"
+              - generic [ref=e242]: "25"
+              - generic [ref=e244]: "26"
+              - generic [ref=e246]: "27"
+              - generic [ref=e248]: "28"
+              - generic [ref=e249]:
+                - generic [ref=e250] [cursor=pointer]: 
+                - generic [ref=e251]: "29"
+              - generic [ref=e252]:
+                - generic [ref=e253] [cursor=pointer]: 
+                - generic [ref=e254]: "30"
+              - generic [ref=e256]: "31"
+              - generic [ref=e258]: "32"
+              - generic [ref=e260]: "33"
+              - generic [ref=e262]: "34"
+              - generic [ref=e263]:
+                - generic [ref=e264] [cursor=pointer]: 
+                - generic [ref=e265]: "35"
+              - generic [ref=e267]: "36"
+              - generic [ref=e269]: "37"
+              - generic [ref=e271]: "38"
+              - generic [ref=e273]: "39"
+              - generic [ref=e275]: "40"
+              - generic [ref=e277]: "41"
+              - generic [ref=e278]:
+                - generic [ref=e279] [cursor=pointer]: 
+                - generic [ref=e280]: "42"
+              - generic [ref=e281]:
+                - generic [ref=e282] [cursor=pointer]: 
+                - generic [ref=e283]: "43"
+              - generic [ref=e285]: "44"
+            - generic [ref=e403]:
+              - generic [ref=e405]: <?xml version="1.0" encoding="UTF-8"?>
+              - generic [ref=e407]: <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+              - generic [ref=e409]: xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+              - generic [ref=e411]: <modelVersion>4.0.0</modelVersion>
+              - generic [ref=e413]: <parent>
+              - generic [ref=e415]: <groupId>com.foggysource</groupId>
+              - generic [ref=e417]: <artifactId>foggy-project-parent</artifactId>
+              - generic [ref=e419]: <version>foggy-project-4.0.0-SNAPSHOT</version>
+              - generic [ref=e421]: <relativePath/>
+              - generic [ref=e423]: </parent>
+              - generic [ref=e426]: <groupId>com.foggysource</groupId>
+              - generic [ref=e428]: <artifactId>foggy-fsbi</artifactId>
+              - generic [ref=e430]: <version>foggy-fsbi-1.0.0-SNAPSHOT</version>
+              - generic [ref=e432]: <packaging>pom</packaging>
+              - generic [ref=e434]: <properties>
+              - generic [ref=e436]: <!-- dev切到该版本，其他分支暂时还是用config-4.0.d.3-beta -->
+              - generic [ref=e438]: <!-- <foggy-framework-tools-config.version>config-4.0.d.4-SNAPSHOT</foggy-framework-tools-config.version>-->
+              - generic [ref=e440]: </properties>
+              - generic [ref=e443]: <modules>
+              - generic [ref=e445]: <!-- <module>foggy-fsbi-common</module>-->
+              - generic [ref=e447]: <module>foggy-fsbi-domain</module>
+              - generic [ref=e449]: <module>foggy-fsbi-olap</module>
+              - generic [ref=e451]: <module>foggy-fsbi-ui</module>
+              - generic [ref=e453]: <module>foggy-fsbi-ai</module>
+              - generic [ref=e455]: </modules>
+              - generic [ref=e458]: <repositories>
+              - generic [ref=e460]: <repository>
+              - generic [ref=e462]: <id>foggy</id>
+              - generic [ref=e464]: <name>Internal Releases</name>
+              - generic [ref=e466]: <url>https://nexus.foggysource.com:8443/nexus/content/repositories/foggy/</url>
+              - generic [ref=e468]: </repository>
+              - generic [ref=e470]: <repository>
+              - generic [ref=e472]: <id>foggy-snapshots</id>
+              - generic [ref=e474]: <name>Internal Releases</name>
+              - generic [ref=e476]: <url>https://nexus.foggysource.com:8443/nexus/content/repositories/snapshots/</url>
+              - generic [ref=e478]: </repository>
+              - generic [ref=e481]: </repositories>
+              - generic [ref=e483]: <distributionManagement>
+              - generic [ref=e485]: <repository>
+              - generic [ref=e487]: <id>foggy</id>
+  - generic [ref=e110]:
+    - alert
+    - alert

@@ -1,0 +1,215 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5] [cursor=pointer]: Foggy Navigator
+    - menubar [ref=e6]:
+      - menuitem "Workers" [ref=e7] [cursor=pointer]
+      - menuitem "会话" [ref=e8] [cursor=pointer]
+      - menuitem "任务" [ref=e9] [cursor=pointer]
+      - menuitem "跨项目" [ref=e10] [cursor=pointer]
+      - menuitem "监控" [ref=e11] [cursor=pointer]
+      - menuitem "用户" [ref=e12] [cursor=pointer]
+      - menuitem "设置" [ref=e13] [cursor=pointer]
+    - generic [ref=e14]:
+      - generic "通知" [ref=e16] [cursor=pointer]:
+        - img [ref=e17]
+      - button "root" [ref=e22] [cursor=pointer]:
+        - text: root
+        - img [ref=e24]
+  - generic [ref=e27]:
+    - complementary [ref=e28]:
+      - generic [ref=e29]:
+        - heading "Workers" [level=3] [ref=e30]
+        - button "+ 添加" [ref=e32] [cursor=pointer]:
+          - generic [ref=e33]: + 添加
+      - generic [ref=e34]:
+        - generic [ref=e35] [cursor=pointer]:
+          - generic [ref=e36]:
+            - generic [ref=e37]: ▶
+            - generic [ref=e39]: 本机测试
+          - generic [ref=e40]: foggy
+        - generic [ref=e41] [cursor=pointer]:
+          - generic [ref=e42]:
+            - generic [ref=e43]: ▼
+            - generic [ref=e45]: LocalDev
+          - generic [ref=e46]: foggy
+        - generic [ref=e61] [cursor=pointer]: test1
+        - generic [ref=e64] [cursor=pointer]: TestProject
+      - button "返回会话" [ref=e48] [cursor=pointer]:
+        - generic [ref=e49]:
+          - img [ref=e51]
+          - text: 返回会话
+    - main [ref=e54]:
+      - button "Choose File" [ref=e55]
+      - generic [ref=e261]:
+        - generic [ref=e262]:
+          - heading "TestProject" [level=2] [ref=e263]
+          - code [ref=e264]: D:\workspace\fsbi
+          - generic [ref=e266]: Auth 未配置
+        - generic [ref=e267]:
+          - button "同步 Git" [ref=e268] [cursor=pointer]:
+            - generic [ref=e269]: 同步 Git
+          - button "同步会话" [ref=e270] [cursor=pointer]:
+            - generic [ref=e271]: 同步会话
+          - button "创建 Worktree" [ref=e272] [cursor=pointer]:
+            - generic [ref=e273]: 创建 Worktree
+          - button "浏览文件" [ref=e274] [cursor=pointer]:
+            - generic [ref=e275]: 浏览文件
+          - button "VS Code" [ref=e277] [cursor=pointer]:
+            - generic [ref=e278]:
+              - text: VS Code
+              - img [ref=e280]
+          - button "终端" [ref=e282] [cursor=pointer]:
+            - generic [ref=e283]: 终端
+          - button "⤢" [ref=e284] [cursor=pointer]:
+            - generic [ref=e285]: ⤢
+          - button "编辑" [ref=e286] [cursor=pointer]:
+            - generic [ref=e287]: 编辑
+          - button "删除" [ref=e288] [cursor=pointer]:
+            - generic [ref=e289]: 删除
+      - generic [ref=e353]:
+        - generic [ref=e354]:
+          - textbox "新建任务... (Ctrl+Enter 发送, ./ 搜索文件)" [ref=e357]
+          - button "运行" [disabled] [ref=e358]:
+            - generic [ref=e359]: 运行
+        - generic [ref=e360]:
+          - button "📎 附件" [ref=e361] [cursor=pointer]:
+            - generic [ref=e362]: 📎
+            - generic [ref=e363]: 附件
+          - button "🎨 画板" [ref=e364] [cursor=pointer]:
+            - generic [ref=e365]: 🎨
+            - generic [ref=e366]: 画板
+          - button "📁 搜索" [ref=e367] [cursor=pointer]:
+            - generic [ref=e368]: 📁
+            - generic [ref=e369]: 搜索
+          - generic [ref=e371] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e373]
+              - generic [ref=e374]: test
+            - img [ref=e377]
+          - generic [ref=e380] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e382]
+              - generic [ref=e383]: Opus (1M)
+            - img [ref=e386]
+      - generic [ref=e389]:
+        - generic [ref=e390]:
+          - generic [ref=e391]:
+            - generic [ref=e392]: A
+            - generic [ref=e459]: "5"
+            - generic "请先回复：测试开始。然后用一句话说明当前工作目录。" [ref=e394]
+          - generic [ref=e395]: 待回复
+          - button "搁置" [ref=e460] [cursor=pointer]:
+            - generic [ref=e461]: 搁置
+          - button "归档" [ref=e462] [cursor=pointer]:
+            - generic [ref=e463]: 归档
+          - button "删除" [ref=e464] [cursor=pointer]:
+            - generic [ref=e465]: 删除
+          - generic [ref=e396]:
+            - generic [ref=e466]: $0.1143
+            - generic [ref=e467]: 8.7s
+            - button "关闭" [ref=e399] [cursor=pointer]:
+              - generic [ref=e400]: 关闭
+        - generic [ref=e402]:
+          - generic [ref=e405]:
+            - generic [ref=e470]:
+              - generic [ref=e471]:
+                - generic [ref=e472]: 用户
+                - generic [ref=e473]: 22:30:18
+              - paragraph [ref=e475]: 请先回复：测试开始。然后用一句话说明当前工作目录。
+              - generic [ref=e476]:
+                - generic "复制" [ref=e477] [cursor=pointer]: 📋 复制
+                - generic "回退到此" [ref=e478] [cursor=pointer]: ↩ 回退到此
+            - generic [ref=e479]:
+              - generic [ref=e480]:
+                - generic [ref=e481]: Agent
+                - generic [ref=e482]: 22:30:19
+              - paragraph [ref=e484]: Connecting to worker...
+              - generic "复制" [ref=e486] [cursor=pointer]: 📋 复制
+            - generic [ref=e418]:
+              - generic [ref=e419]:
+                - generic [ref=e420]: Agent
+                - generic [ref=e421]: 22:30:19
+              - paragraph [ref=e487]: Task started
+              - generic "复制" [ref=e425] [cursor=pointer]: 📋 复制
+            - generic [ref=e488]:
+              - generic [ref=e489]:
+                - generic [ref=e490]: Agent
+                - generic [ref=e491]: 22:30:28
+              - generic [ref=e492]:
+                - paragraph [ref=e493]: 测试开始。
+                - paragraph [ref=e494]:
+                  - text: 当前工作目录是
+                  - code [ref=e495]: C:\Users\oldse\.claude
+                  - text: 。
+              - generic "复制" [ref=e497] [cursor=pointer]: 📋 复制
+          - generic [ref=e437]:
+            - textbox "输入后续指令... (Ctrl+Enter 发送, / 命令, @ 提及 Agent, ./ 搜索文件)" [ref=e440]
+            - button "发送" [disabled] [ref=e441]:
+              - generic [ref=e442]: 发送
+    - complementary [ref=e186]:
+      - generic [ref=e187]:
+        - heading "历史会话" [level=3] [ref=e188]
+        - generic [ref=e189]:
+          - button "🔍" [ref=e190] [cursor=pointer]:
+            - generic [ref=e191]: 🔍
+          - button "↻" [ref=e192] [cursor=pointer]:
+            - generic [ref=e193]: ↻
+          - button "选择" [ref=e337] [cursor=pointer]:
+            - generic [ref=e338]: 选择
+      - generic [ref=e196]:
+        - generic [ref=e197]:
+          - generic [ref=e198] [cursor=pointer]: 全部
+          - generic [ref=e199] [cursor=pointer]: 待回复
+          - generic [ref=e200] [cursor=pointer]: 处理中
+          - generic [ref=e201] [cursor=pointer]: 已搁置
+          - generic [ref=e202] [cursor=pointer]: 已归档
+        - generic [ref=e203]:
+          - generic [ref=e204] [cursor=pointer]: 平台
+          - generic [ref=e205] [cursor=pointer]: 同步
+          - generic [ref=e206] [cursor=pointer]: 全部来源
+      - generic [ref=e207]:
+        - generic [ref=e208]:
+          - generic [ref=e209] [cursor=pointer]:
+            - generic [ref=e210]: ▼ ● 需要关注 (1)
+            - button "↻" [ref=e211]:
+              - generic [ref=e212]: ↻
+          - generic [ref=e213]:
+            - generic [ref=e214]: LocalDev
+            - generic [ref=e215]: (1)
+          - generic [ref=e216] [cursor=pointer]:
+            - generic [ref=e217]:
+              - generic [ref=e219]: TestProject
+              - generic [ref=e221]: 待回复
+            - generic "请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。" [ref=e223]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 do...
+            - generic "请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。" [ref=e225]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 do...
+            - generic [ref=e226]:
+              - generic [ref=e227]: 22:04
+              - generic [ref=e228]:
+                - button "继续" [ref=e229]:
+                  - generic [ref=e230]: 继续
+                - button "⋯" [ref=e232]
+          - generic [ref=e235]: 历史会话
+        - generic [ref=e339]:
+          - generic [ref=e498] [cursor=pointer]:
+            - generic [ref=e499]:
+              - generic [ref=e500]: A
+              - generic "处理中" [ref=e501]
+              - generic "请先回复：测试开始。然后用一句话说明当前工作目录。" [ref=e502]
+              - generic "COMPLETED" [ref=e503]
+            - generic "请先回复：测试开始。然后用一句话说明当前工作目录。" [ref=e505]
+            - generic [ref=e506]:
+              - generic [ref=e507]: "5"
+              - generic [ref=e508]: $0.11
+              - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e509]': 🔑
+              - generic [ref=e510]: 22:30
+              - button "⋯" [ref=e513]
+          - generic [ref=e340] [cursor=pointer]:
+            - generic [ref=e341]:
+              - generic "待回复" [ref=e342]
+              - generic "请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。" [ref=e343]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/ver...
+              - generic "FAILED" [ref=e344]
+            - generic "请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/version-tracker 目录。" [ref=e346]: 请先简单回复一句『测试开始』，然后继续分析当前工作区的 docs/ver...
+            - generic [ref=e347]:
+              - 'generic "Auth: CUSTOM_ENDPOINT" [ref=e348]': 🔑
+              - generic [ref=e349]: 22:04
+              - button "⋯" [ref=e352]

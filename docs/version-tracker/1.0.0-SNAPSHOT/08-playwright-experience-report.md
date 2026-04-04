@@ -185,14 +185,12 @@ D:\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev
 
 本次关键证据来自以下浏览器快照与日志：
 
-- `.playwright-cli/page-2026-04-03T14-04-42-999Z.yml`
+- `evidence/page-2026-04-03T14-04-42-999Z.yml`
   - `LocalDev / TestProject` 任务启动后出现 `WinError 267`
-- `vt100-filebrowser-valid-root.yml`
+- `evidence/vt100-filebrowser-valid-root.yml`
   - 健康目录文件树正常加载
-- `vt100-filebrowser-deeplink-afterwait.yml`
+- `evidence/vt100-filebrowser-deeplink-afterwait.yml`
   - deeplink 首次打开后，自动展开并打开 `README.md`
-- `.playwright-cli/console-2026-04-03T14-03-13-655Z.log`
-  - 异常目录文件浏览器失败日志
 
 ## Retest Update
 
@@ -311,11 +309,11 @@ cwd=D:\workspace\fsbi
 
 ### Additional Evidence
 
-- `vt100-testproject-filebrowser.yml`
+- `evidence/vt100-testproject-filebrowser.yml`
   - 修复后 `TestProject` 文件浏览器根树正常加载
-- `vt100-testproject-chat-afterwait.yml`
+- `evidence/vt100-testproject-chat-afterwait.yml`
   - 修复后任务成功启动并产出消息，同时可见消息列表布局异常
-- `vt100-testproject-chat-afterwait.png`
+- `evidence/vt100-testproject-chat-afterwait.png`
   - 直接显示首条用户消息被顶部区域遮挡、消息间距缺失
 
 ## Decision

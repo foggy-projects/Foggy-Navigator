@@ -1,0 +1,114 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - generic [ref=e5] [cursor=pointer]: Foggy Navigator
+      - menubar [ref=e6]:
+        - menuitem "Workers" [ref=e7] [cursor=pointer]
+        - menuitem "会话" [ref=e8] [cursor=pointer]
+        - menuitem "任务" [ref=e9] [cursor=pointer]
+        - menuitem "跨项目" [ref=e10] [cursor=pointer]
+        - menuitem "监控" [ref=e11] [cursor=pointer]
+        - menuitem "用户" [ref=e12] [cursor=pointer]
+        - menuitem "设置" [ref=e13] [cursor=pointer]
+      - generic [ref=e14]:
+        - generic "通知" [ref=e16] [cursor=pointer]:
+          - img [ref=e17]
+        - button "root" [ref=e22] [cursor=pointer]:
+          - text: root
+          - img [ref=e24]
+    - generic [ref=e27]:
+      - complementary [ref=e28]:
+        - generic [ref=e29]:
+          - button "文件" [ref=e30] [cursor=pointer]
+          - button "Git 改动" [ref=e31] [cursor=pointer]
+          - button ".*" [ref=e32] [cursor=pointer]
+          - button "↻" [ref=e33] [cursor=pointer]
+        - tree [ref=e35]:
+          - generic [ref=e38]:
+            - treeitem "📁 .git" [ref=e39]:
+              - generic [ref=e41] [cursor=pointer]:
+                - generic [ref=e42]: 📁
+                - generic [ref=e43]: .git
+            - treeitem "📁 .idea" [ref=e44]:
+              - generic [ref=e46] [cursor=pointer]:
+                - generic [ref=e47]: 📁
+                - generic [ref=e48]: .idea
+            - treeitem "📁 foggy-fsbi-ai" [ref=e49]:
+              - generic [ref=e51] [cursor=pointer]:
+                - generic [ref=e52]: 📁
+                - generic [ref=e53]: foggy-fsbi-ai
+            - treeitem "📁 foggy-fsbi-common" [ref=e54]:
+              - generic [ref=e56] [cursor=pointer]:
+                - generic [ref=e57]: 📁
+                - generic [ref=e58]: foggy-fsbi-common
+            - treeitem "📁 foggy-fsbi-domain" [ref=e59]:
+              - generic [ref=e61] [cursor=pointer]:
+                - generic [ref=e62]: 📁
+                - generic [ref=e63]: foggy-fsbi-domain
+            - treeitem "📁 foggy-fsbi-olap" [ref=e64]:
+              - generic [ref=e66] [cursor=pointer]:
+                - generic [ref=e67]: 📁
+                - generic [ref=e68]: foggy-fsbi-olap
+            - treeitem "📁 foggy-fsbi-ui" [ref=e69]:
+              - generic [ref=e71] [cursor=pointer]:
+                - generic [ref=e72]: 📁
+                - generic [ref=e73]: foggy-fsbi-ui
+            - treeitem "📁 loggg" [ref=e74]:
+              - generic [ref=e76] [cursor=pointer]:
+                - generic [ref=e77]: 📁
+                - generic [ref=e78]: loggg
+            - treeitem "📁 services" [ref=e79]:
+              - generic [ref=e81] [cursor=pointer]:
+                - generic [ref=e82]: 📁
+                - generic [ref=e83]: services
+            - treeitem "📄 .gitignore" [expanded] [active] [ref=e84]:
+              - generic [ref=e86] [cursor=pointer]:
+                - generic [ref=e87]: 📄
+                - generic [ref=e88]: .gitignore
+            - treeitem "📄 pom.xml" [ref=e89]:
+              - generic [ref=e91] [cursor=pointer]:
+                - generic [ref=e92]: 📄
+                - generic [ref=e93]: pom.xml
+      - main [ref=e95]:
+        - generic [ref=e96]:
+          - generic [ref=e97]:
+            - generic [ref=e98] [cursor=pointer]: D:/
+            - generic [ref=e99] [cursor=pointer]: workspace/
+            - generic [ref=e100] [cursor=pointer]: fsbi/
+            - generic [ref=e111]: .gitignore
+          - generic [ref=e101]:
+            - button "搜索文件 (Ctrl+P)" [ref=e102] [cursor=pointer]:
+              - img [ref=e103]
+            - button "搜索内容 (Ctrl+Shift+F)" [ref=e105] [cursor=pointer]:
+              - img [ref=e106]
+            - generic [ref=e112]: 237 B
+            - generic [ref=e113]: 8 行
+        - generic "D:/workspace/fsbi/.gitignore" [ref=e115] [cursor=pointer]:
+          - generic [ref=e116]: .gitignore
+          - generic [ref=e117]: ×
+        - code [ref=e119]:
+          - generic [ref=e120]:
+            - textbox "Editor content"
+            - textbox [ref=e121]
+            - generic [ref=e123]:
+              - generic [ref=e126]: "1"
+              - generic [ref=e128]: "2"
+              - generic [ref=e130]: "3"
+              - generic [ref=e132]: "4"
+              - generic [ref=e134]: "5"
+              - generic [ref=e136]: "6"
+              - generic [ref=e138]: "7"
+              - generic [ref=e140]: "8"
+              - generic [ref=e142]: "9"
+            - generic [ref=e154]:
+              - generic [ref=e156]: /loggg/richfit.log
+              - generic [ref=e158]: /loggg/richfit.log.2024-06-18
+              - generic [ref=e160]: /loggg/richfit.log.2024-09-26
+              - generic [ref=e162]: /loggg/richfit.log.2025-02-01
+              - generic [ref=e164]: /loggg/richfit.log.2025-02-02
+              - generic [ref=e166]: /loggg/richfit.log.2025-02-03
+              - generic [ref=e168]: /loggg/richfit.log.2025-02-04
+              - generic [ref=e170]: /loggg/richfit.log.2025-02-05
+  - generic [ref=e110]:
+    - alert
+    - alert
