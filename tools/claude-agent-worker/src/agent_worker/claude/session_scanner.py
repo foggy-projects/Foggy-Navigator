@@ -425,7 +425,42 @@ def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
     if cutoff_line == -1:
         return {"status": "error", "message": f"Turn {turn_index} not found (only {user_turn} user turns)"}
 
-    # ── Build the truncated file ──────────────────────────────────
+    # ── Save a backup (only if one doesn't already exist) ──────────
+    backup_path = filepath.with_suffix(".jsonl.rewind-backup.bak")
+    if not backup_path.exists():
+        try:
+            import shutil
+            shutil.copy2(filepath, backup_path)
+        except OSError as exc:
+            logger.warning("Failed to create rewind backup for %s: %s", session_id, exc)
+
+    # ── Special case: rewind to first turn ────────────────────────
+    # When rewinding to the very first user turn, no conversation lines
+    # should remain.  Rather than constructing a minimal JSONL that
+    # Claude CLI may reject, we delete the session file entirely and
+    # signal the caller via ``session_cleared=True``.  The caller
+    # (Java ClaudeTaskService) should clear the claudeSessionId so
+    # the next message starts a fresh CLI session instead of trying
+    # to --resume a non-existent file.
+    if turn_index == 1:
+        try:
+            filepath.unlink()
+        except OSError as exc:
+            return {"status": "error", "message": f"Failed to delete session file: {exc}"}
+
+        logger.info(
+            "Rewound session %s to turn 1: deleted session file, "
+            "user_prompt=%s",
+            session_id, repr(user_prompt[:80]) if user_prompt else None,
+        )
+        return {
+            "status": "rewound",
+            "user_prompt": user_prompt,
+            "turn_index": turn_index,
+            "session_cleared": True,
+        }
+
+    # ── Build the truncated file (turn_index > 1) ────────────────
     # Keep only lines before the cutoff that are NOT already sidechain.
     kept_lines: list[str] = []
     for i, raw_line in enumerate(lines):
@@ -444,26 +479,6 @@ def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
         if obj.get("isSidechain") is True:
             continue
         kept_lines.append(raw_line)
-
-    # When rewinding to the very first turn (cutoff_line == 0), no
-    # conversation lines remain — but that is valid: the caller will
-    # re-send the extracted user_prompt as a fresh message.  We still
-    # need a minimal file so the CLI can accept the session_id.
-    # Keep only initial metadata lines (queue-operation, file-history-snapshot, system)
-    # that appeared before the first conversation message.
-    if not kept_lines:
-        for raw_line in lines[:cutoff_line + 5]:
-            stripped = raw_line.strip()
-            if not stripped:
-                continue
-            try:
-                obj = json.loads(stripped)
-            except json.JSONDecodeError:
-                continue
-            if obj.get("type") in ("queue-operation", "file-history-snapshot", "system"):
-                kept_lines.append(raw_line)
-            elif obj.get("type") in ("user", "assistant"):
-                break  # stop at first conversation message
 
     # Find the last real user prompt text for last-prompt entry
     last_prompt_text = user_prompt
@@ -500,15 +515,6 @@ def rewind_session_conversation(session_id: str, turn_index: int) -> dict:
     }, ensure_ascii=False) + "\n")
 
     # ── Write back atomically ─────────────────────────────────────
-    # Save a backup (only if one doesn't already exist).
-    backup_path = filepath.with_suffix(".jsonl.rewind-backup.bak")
-    if not backup_path.exists():
-        try:
-            import shutil
-            shutil.copy2(filepath, backup_path)
-        except OSError as exc:
-            logger.warning("Failed to create rewind backup for %s: %s", session_id, exc)
-
     tmp_path = filepath.with_suffix(".jsonl.tmp")
     try:
         with open(tmp_path, "w", encoding="utf-8") as fh:
