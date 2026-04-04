@@ -2748,13 +2748,36 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
         // claudeSessionId 从 SessionEntity.providerStateJson 恢复，不再从 request 透传
         String sessionId = form.getSessionId();
+        String claudeSessionId = null;
         if (sessionId != null && !sessionId.isEmpty()) {
-            String claudeSessionId = readJsonValue(
+            claudeSessionId = readJsonValue(
                     sessionEntityRepository.findById(sessionId)
                             .map(SessionEntity::getProviderStateJson).orElse(null),
                     "claudeSessionId");
-            form.setClaudeSessionId(claudeSessionId);
         }
+
+        if (claudeSessionId == null || claudeSessionId.isEmpty()) {
+            // 首轮回退后 claudeSessionId 已被清空，降级为 createTask（新建 CLI 会话，复用 sessionId）
+            log.info("resumeTask fallback to createTask: claudeSessionId is null for session {}", sessionId);
+            CreateTaskForm createForm = new CreateTaskForm();
+            createForm.setAgentId(form.getAgentId());
+            createForm.setWorkerId(form.getWorkerId());
+            createForm.setPrompt(form.getPrompt());
+            createForm.setCwd(form.getCwd());
+            createForm.setDirectoryId(form.getDirectoryId());
+            createForm.setSessionId(sessionId);
+            createForm.setModel(form.getModel());
+            createForm.setModelConfigId(form.getModelConfigId());
+            createForm.setPermissionMode(form.getPermissionMode());
+            createForm.setImages(form.getImages());
+            createForm.setMaxTurns(form.getMaxTurns());
+            createForm.setAgentTeamsJson(form.getAgentTeamsJson());
+            createForm.setAgentTeamsConfigId(form.getAgentTeamsConfigId());
+            TaskDTO taskDTO = createTask(userId, tenantId, createForm);
+            return getTaskById(taskDTO.getTaskId()).orElseThrow();
+        }
+
+        form.setClaudeSessionId(claudeSessionId);
         TaskDTO taskDTO = resumeTask(userId, tenantId, form);
         return getTaskById(taskDTO.getTaskId()).orElseThrow();
     }

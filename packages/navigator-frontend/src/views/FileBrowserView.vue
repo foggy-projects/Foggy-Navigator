@@ -1363,6 +1363,13 @@ watch(() => route.query.directoryId, () => {
     loadIgnoredPatterns()
   }
 })
+
+// 同标签内 filePath 变化时，自动导航到新文件
+watch(deepLinkFilePath, (newPath) => {
+  if (newPath && directoryId.value) {
+    navigateToFile(newPath)
+  }
+})
 </script>
 
 <style scoped>

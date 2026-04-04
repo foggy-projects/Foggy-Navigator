@@ -3827,11 +3827,17 @@ function selectDirectory(workerId: string, directoryId: string) {
   // Auto-sync SSH sessions from backend (once per directory per page load)
   syncSshSessions()
   // 切换目录后，恢复新 workspace 已有 pane 的会话模型选择
+  const restoreVer = sessionRestoreVersion
   nextTick(() => {
+    // 如果在 nextTick 之前 viewTask 已执行了会话级恢复，跳过以免覆盖
+    if (restoreVer !== sessionRestoreVersion) return
     const ws = getOrCreateWorkspace(directoryId)
     const targetPane = ws.panes.value[0]
     if (targetPane?.task.value) {
       restoreSessionModelSelection(targetPane.task.value)
+    } else {
+      // 无活跃 pane，从 per-worker 缓存恢复模型选择
+      restoreWorkerLlmSelection(workerId)
     }
   })
 }
