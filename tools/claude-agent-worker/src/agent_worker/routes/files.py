@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import mimetypes
 import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 
 from ..auth import verify_token
 from ..models import (
@@ -31,6 +33,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["files"], dependencies=[Depends(verify_token)])
 
 _MAX_FILE_SIZE = 1 * 1024 * 1024  # 1 MB
+_MAX_RAW_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 _MAX_DIR_ENTRIES = 2000
 _BINARY_CHECK_SIZE = 8 * 1024  # 8 KB
 
@@ -93,6 +96,12 @@ def _detect_language(filepath: str) -> str:
         return "dockerfile"
     _, ext = os.path.splitext(name)
     return _LANG_MAP.get(ext, "plaintext")
+
+
+def _detect_media_type(filepath: str) -> str:
+    """Detect HTTP media type from file extension."""
+    media_type, _ = mimetypes.guess_type(filepath)
+    return media_type or "application/octet-stream"
 
 
 def _is_binary(data: bytes) -> bool:
@@ -220,6 +229,46 @@ async def read_file_content(
         language=language,
         size=file_size,
         line_count=line_count,
+    )
+
+
+@router.get("/files/raw")
+async def read_file_raw(
+    path: str = Query(..., description="Absolute path to the file"),
+) -> Response:
+    """Read raw file bytes for browser preview/download."""
+    resolved = validate_path(path)
+
+    if not os.path.isfile(resolved):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path is not a file: {path}",
+        )
+
+    file_size = os.path.getsize(resolved)
+    if file_size > _MAX_RAW_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large for raw preview: {file_size} bytes",
+        )
+
+    try:
+        with open(resolved, "rb") as f:
+            raw = f.read()
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission denied: {path}",
+        )
+
+    filename = os.path.basename(resolved)
+    return Response(
+        content=raw,
+        media_type=_detect_media_type(resolved),
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
     )
 
 

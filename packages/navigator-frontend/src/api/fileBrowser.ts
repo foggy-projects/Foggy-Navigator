@@ -159,6 +159,16 @@ export async function readFileContent(
   return rx.data
 }
 
+export async function readRawFile(
+  directoryId: string,
+  subPath: string,
+): Promise<Blob> {
+  return await client.get('/file-browser/raw', {
+    params: { directoryId, subPath },
+    responseType: 'blob',
+  }) as unknown as Blob
+}
+
 export async function getGitDiffSummary(directoryId: string): Promise<GitDiffSummary> {
   const rx = (await client.get('/file-browser/git-diff', {
     params: { directoryId },

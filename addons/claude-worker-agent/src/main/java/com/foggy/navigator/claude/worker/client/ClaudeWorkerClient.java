@@ -5,6 +5,7 @@ import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -37,7 +38,7 @@ public class ClaudeWorkerClient {
                 .baseUrl(baseUrl)
                 .defaultHeader("Authorization", "Bearer " + authToken)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
-                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(4 * 1024 * 1024)) // 4MB for large tool outputs
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(24 * 1024 * 1024)) // cover tool outputs and file preview payloads
                 .build();
     }
 
@@ -470,6 +471,19 @@ public class ClaudeWorkerClient {
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
                 .doOnError(e -> log.warn("Read file content failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
+    }
+
+    /**
+     * 读取文件原始字节
+     */
+    public Mono<ResponseEntity<byte[]>> readRawFile(String path) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/files/raw")
+                        .queryParam("path", path)
+                        .build())
+                .retrieve()
+                .toEntity(byte[].class)
+                .doOnError(e -> log.warn("Read raw file failed for worker {}, path {}: {}", workerId, path, e.getMessage()));
     }
 
     /**

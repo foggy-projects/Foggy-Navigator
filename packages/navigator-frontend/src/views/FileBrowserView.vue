@@ -211,6 +211,9 @@
         <div v-if="editorLoading" class="center-hint">加载中...</div>
         <div v-else-if="showBinaryHint" class="center-hint">二进制文件，无法预览</div>
         <div v-else-if="showTooLargeHint" class="center-hint">文件过大 ({{ formatSize(currentFileSize) }})，无法预览</div>
+        <div v-else-if="showImagePreview" class="image-preview-shell">
+          <img :src="currentImagePreviewUrl" :alt="currentFilePath" class="image-preview-img" />
+        </div>
         <div v-else-if="!activeTabId && !diffMode" class="center-hint">选择文件查看内容</div>
         <div ref="editorEl" class="monaco-mount" :class="{ hidden: !showEditor }"></div>
         <div ref="diffEditorEl" class="monaco-mount" :class="{ hidden: !diffMode }"></div>
@@ -266,6 +269,7 @@ import { ElMessage } from 'element-plus'
 import {
   listDirectory,
   readFileContent,
+  readRawFile,
   searchFiles,
   getGitDiffSummary,
   getFileDiff,
@@ -305,9 +309,11 @@ interface EditorTab {
   id: string        // fullPath as unique key
   label: string     // file name for display
   fullPath: string
+  kind: 'text' | 'image'
   language: string
   size: number
   lineCount: number
+  previewUrl?: string
 }
 
 // Non-reactive Maps for Monaco objects (not serializable)
@@ -331,11 +337,21 @@ const currentLineCount = ref(0)
 const showBinaryHint = ref(false)
 const showTooLargeHint = ref(false)
 const selectedDiffFile = ref('')
+const currentImagePreviewUrl = ref('')
 
 const showHidden = ref(true)
 
 const showEditor = computed(
-  () => !diffMode.value && activeTabId.value && !showBinaryHint.value && !showTooLargeHint.value && !editorLoading.value,
+  () => !diffMode.value
+    && activeTabId.value
+    && !currentImagePreviewUrl.value
+    && !showBinaryHint.value
+    && !showTooLargeHint.value
+    && !editorLoading.value,
+)
+
+const showImagePreview = computed(
+  () => !diffMode.value && activeTabId.value && !!currentImagePreviewUrl.value && !editorLoading.value,
 )
 
 // ---- Breadcrumbs ----------------------------------------------------------
@@ -414,6 +430,11 @@ function populateChildren(nodes: TreeNode[], parentPath: string, children: TreeN
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+function isPreviewableImagePath(path: string): boolean {
+  const normalized = path.toLowerCase()
+  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].some(ext => normalized.endsWith(ext))
 }
 
 async function handleNodeClick(data: TreeNode) {
@@ -877,32 +898,45 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 }
 
 // ---- Tab operations -------------------------------------------------------
-function switchTab(id: string) {
-  if (!editorInstance || !monaco) return
+function revokePreviewUrl(url?: string) {
+  if (url) {
+    URL.revokeObjectURL(url)
+  }
+}
 
+function switchTab(id: string) {
   // Save current tab's view state
-  if (activeTabId.value && tabModels.has(activeTabId.value)) {
+  if (editorInstance && activeTabId.value && tabModels.has(activeTabId.value)) {
     tabViewStates.set(activeTabId.value, editorInstance.saveViewState())
   }
 
+  const tab = openTabs.value.find(t => t.id === id)
+  if (!tab) return
+
   activeTabId.value = id
-  const model = tabModels.get(id)
-  if (model) {
-    editorInstance.setModel(model)
-    const savedState = tabViewStates.get(id) || null
-    if (savedState) {
-      editorInstance.restoreViewState(savedState)
+  currentImagePreviewUrl.value = ''
+
+  if (tab.kind === 'image') {
+    if (editorInstance) {
+      editorInstance.setModel(null)
+    }
+    currentImagePreviewUrl.value = tab.previewUrl || ''
+  } else {
+    const model = tabModels.get(id)
+    if (editorInstance && model) {
+      editorInstance.setModel(model)
+      const savedState = tabViewStates.get(id) || null
+      if (savedState) {
+        editorInstance.restoreViewState(savedState)
+      }
     }
   }
 
   // Update current file info from tab
-  const tab = openTabs.value.find(t => t.id === id)
-  if (tab) {
-    currentFilePath.value = tab.fullPath
-    currentLanguage.value = tab.language
-    currentFileSize.value = tab.size
-    currentLineCount.value = tab.lineCount
-  }
+  currentFilePath.value = tab.fullPath
+  currentLanguage.value = tab.language
+  currentFileSize.value = tab.size
+  currentLineCount.value = tab.lineCount
 
   diffMode.value = false
   showBinaryHint.value = false
@@ -910,6 +944,8 @@ function switchTab(id: string) {
 }
 
 function closeTab(id: string) {
+  const tab = openTabs.value.find(t => t.id === id)
+
   // Dispose model
   const model = tabModels.get(id)
   if (model) {
@@ -917,6 +953,9 @@ function closeTab(id: string) {
     tabModels.delete(id)
   }
   tabViewStates.delete(id)
+  if (tab?.kind === 'image') {
+    revokePreviewUrl(tab.previewUrl)
+  }
 
   // Remove from list
   const idx = openTabs.value.findIndex(t => t.id === id)
@@ -931,6 +970,7 @@ function closeTab(id: string) {
     } else {
       // All tabs closed
       activeTabId.value = ''
+      currentImagePreviewUrl.value = ''
       currentFilePath.value = ''
       currentLanguage.value = 'plaintext'
       currentFileSize.value = 0
@@ -953,8 +993,14 @@ async function loadFile(fullPath: string) {
     return
   }
 
+  const previousTabId = activeTabId.value
   diffMode.value = false
   editorLoading.value = true
+  if (editorInstance && activeTabId.value && tabModels.has(activeTabId.value)) {
+    tabViewStates.set(activeTabId.value, editorInstance.saveViewState())
+  }
+  activeTabId.value = ''
+  currentImagePreviewUrl.value = ''
   showBinaryHint.value = false
   showTooLargeHint.value = false
   currentFilePath.value = fullPath
@@ -968,6 +1014,26 @@ async function loadFile(fullPath: string) {
     currentLineCount.value = result.line_count
 
     if (result.is_binary) {
+      if (isPreviewableImagePath(fullPath)) {
+        const blob = await readRawFile(directoryId.value, subPath)
+        const previewUrl = URL.createObjectURL(blob)
+        const fileName = fullPath.replace(/\\/g, '/').split('/').pop() || fullPath
+        const tab: EditorTab = {
+          id: fullPath,
+          label: fileName,
+          fullPath,
+          kind: 'image',
+          language: blob.type || 'image',
+          size: result.size,
+          lineCount: 0,
+          previewUrl,
+        }
+        openTabs.value.push(tab)
+        activeTabId.value = tab.id
+        currentImagePreviewUrl.value = previewUrl
+        editorLoading.value = false
+        return
+      }
       showBinaryHint.value = true
       editorLoading.value = false
       return
@@ -979,11 +1045,6 @@ async function loadFile(fullPath: string) {
     }
 
     if (!monaco || !editorInstance) return
-
-    // Save current tab's view state before switching
-    if (activeTabId.value && tabModels.has(activeTabId.value)) {
-      tabViewStates.set(activeTabId.value, editorInstance.saveViewState())
-    }
 
     // Create new model for this file
     const model = monaco.editor.createModel(result.content || '', result.language)
@@ -997,6 +1058,7 @@ async function loadFile(fullPath: string) {
       id: tabId,
       label: fileName,
       fullPath,
+      kind: 'text',
       language: result.language,
       size: result.size,
       lineCount: result.line_count,
@@ -1008,6 +1070,9 @@ async function loadFile(fullPath: string) {
     editorInstance.setModel(model)
   } catch (e) {
     console.error('Failed to load file:', e)
+    if (previousTabId && openTabs.value.some(tab => tab.id === previousTabId)) {
+      switchTab(previousTabId)
+    }
     ElMessage.error('加载文件失败')
   } finally {
     editorLoading.value = false
@@ -1329,6 +1394,11 @@ onBeforeUnmount(() => {
   for (const model of tabModels.values()) {
     model.dispose()
   }
+  for (const tab of openTabs.value) {
+    if (tab.kind === 'image') {
+      revokePreviewUrl(tab.previewUrl)
+    }
+  }
   tabModels.clear()
   tabViewStates.clear()
   if (editorInstance) {
@@ -1352,10 +1422,16 @@ watch(() => route.query.directoryId, () => {
     for (const model of tabModels.values()) {
       model.dispose()
     }
+    for (const tab of openTabs.value) {
+      if (tab.kind === 'image') {
+        revokePreviewUrl(tab.previewUrl)
+      }
+    }
     tabModels.clear()
     tabViewStates.clear()
     openTabs.value = []
     activeTabId.value = ''
+    currentImagePreviewUrl.value = ''
     if (editorInstance) {
       editorInstance.setModel(null)
     }
@@ -1741,6 +1817,33 @@ watch(deepLinkFilePath, (newPath) => {
   height: 100%;
   color: #666;
   font-size: 14px;
+}
+
+.image-preview-shell {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background:
+    linear-gradient(45deg, #252526 25%, transparent 25%),
+    linear-gradient(-45deg, #252526 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #252526 75%),
+    linear-gradient(-45deg, transparent 75%, #252526 75%);
+  background-size: 24px 24px;
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+  overflow: auto;
+}
+
+.image-preview-img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  border-radius: 6px;
+  background: #fff;
 }
 
 .git-list .center-hint {
