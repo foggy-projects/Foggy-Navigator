@@ -1,5 +1,5 @@
 <template>
-  <div class="message-list-container">
+  <div ref="containerRef" class="message-list-container">
     <div v-if="messages.length === 0" class="empty-state">
       <slot name="empty">
         <div class="empty-hint">暂无消息</div>
@@ -132,6 +132,22 @@
 
     <!-- Trailing thinking indicator (outside scroller) -->
     <ThinkingIndicator v-if="isThinking && !hasTrailingThinking && messages.length > 0" />
+
+    <!-- Scroll to bottom floating button -->
+    <Transition name="jump-btn">
+      <button
+        v-if="showJumpToBottom"
+        class="jump-to-bottom-btn"
+        :class="{ 'icon-only': iconOnly }"
+        :title="iconOnly ? '回到底部' : undefined"
+        @click="forceScrollToBottom"
+      >
+        <svg class="jump-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+        <span v-if="!iconOnly" class="jump-label">回到底部</span>
+      </button>
+    </Transition>
   </div>
 </template>
 
@@ -312,6 +328,39 @@ const hasTrailingThinking = computed(() => {
   return last?.type === AipMessageType.THINKING
 })
 
+// ── Scroll-to-bottom button ──
+
+const showJumpToBottom = computed(() => {
+  return userScrolledUp.value && props.messages.length > 0
+})
+
+// Detect narrow container — show icon-only button when width < 300px
+const containerRef = ref<HTMLElement>()
+const iconOnly = ref(false)
+let resizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  const el = containerRef.value
+  if (!el) return
+  resizeObserver = new ResizeObserver((entries) => {
+    const width = entries[0]?.contentRect?.width ?? 0
+    iconOnly.value = width < 300
+  })
+  resizeObserver.observe(el)
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
+
+function forceScrollToBottom() {
+  userScrolledUp.value = false
+  nextTick(() => {
+    scrollerRef.value?.scrollToBottom()
+  })
+}
+
 // ── Scroll management ──
 
 function scrollToBottom() {
@@ -390,6 +439,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 
 .message-list-scroller {
@@ -504,5 +554,66 @@ onBeforeUnmount(() => {
 @keyframes waiting-pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
+}
+
+/* ── Jump to bottom button ── */
+
+.jump-to-bottom-btn {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 20px;
+  background: #fff;
+  color: #606266;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  user-select: none;
+}
+
+.jump-to-bottom-btn:hover {
+  background: #ecf5ff;
+  color: #409eff;
+  border-color: #b3d8ff;
+  box-shadow: 0 2px 12px rgba(64, 158, 255, 0.2);
+}
+
+.jump-to-bottom-btn:active {
+  background: #d9ecff;
+}
+
+.jump-to-bottom-btn.icon-only {
+  padding: 8px;
+  border-radius: 50%;
+}
+
+.jump-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.jump-label {
+  white-space: nowrap;
+}
+
+/* Transition */
+.jump-btn-enter-active,
+.jump-btn-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.jump-btn-enter-from,
+.jump-btn-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 </style>
