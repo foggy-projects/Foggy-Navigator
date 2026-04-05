@@ -1,6 +1,6 @@
 <template>
   <view class="tasks-page">
-    <!-- 创建任务输入栏 -->
+    <!-- 创建会话输入栏 -->
     <view class="task-input-bar">
       <view class="project-name-row">
         <text class="project-name">{{ projectName }}</text>
@@ -69,18 +69,19 @@
       </view>
     </view>
 
-    <!-- 任务列表 (使用原生页面滚动) -->
+    <!-- 会话列表 (使用原生页面滚动) -->
     <view class="task-list">
-      <view v-if="loading && displayTasks.length === 0" class="loading-wrap">
+      <view v-if="loading && displayGroups.length === 0" class="loading-wrap">
         <text class="loading-text">加载中...</text>
       </view>
-      <template v-else-if="displayTasks.length > 0">
-        <TaskCard
-          v-for="task in displayTasks"
-          :key="task.taskId"
-          :task="task"
-          @tap="openTask(task)"
-          @longpress="showTaskActions(task)"
+      <template v-else-if="displayGroups.length > 0">
+        <SessionCard
+          v-for="group in displayGroups"
+          :key="group.sessionId"
+          :group="group"
+          :model-configs="platformModels"
+          @tap="openSession(group)"
+          @longpress="showSessionActions(group)"
         />
         <view v-if="hasMore" class="load-more">
           <text class="load-more-text" @tap="loadMore">加载更多</text>
@@ -89,8 +90,8 @@
       <EmptyState
         v-else-if="!loading"
         icon="&#x1F4CB;"
-        title="暂无任务"
-        :description="stateFilter === 'ALL' ? '输入任务描述并点击运行' : '当前筛选条件下暂无任务'"
+        title="暂无会话"
+        :description="stateFilter === 'ALL' ? '输入任务描述并点击运行' : '当前筛选条件下暂无会话'"
       />
     </view>
   </view>
@@ -99,11 +100,13 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { onLoad, onShow, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app'
-import * as workerApi from '@/api/claudeWorker'
+import { createTaskUnified, listTasksByDirPagedUnified, deleteTaskUnified } from '@/api/unifiedTask'
+import { listConversationConfigs, updateConversationPin, archiveConversation, holdConversation, unholdConversation, unarchiveConversation } from '@/api/conversationConfig'
 import { listModelConfigs, listAgentModelOverrides } from '@/api/platform'
-import type { ClaudeTask, LlmModelConfig } from '@/api/types'
+import type { DispatchTask, ConversationGroup, ConversationConfig, LlmModelConfig } from '@/api/types'
+import { buildConversationGroups, getGroupInteractionState } from '@/composables/useConversationGroup'
 import { useInputMemory } from '@/composables/useInputMemory'
-import TaskCard from '@/components/TaskCard.vue'
+import SessionCard from '@/components/SessionCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 
 const workerId = ref('')
@@ -112,9 +115,14 @@ const projectName = ref('')
 const promptInput = ref('')
 const creating = ref(false)
 const loading = ref(false)
-const tasks = ref<ClaudeTask[]>([])
+
+// Session-driven data
+const tasks = ref<DispatchTask[]>([])
+const conversationConfigs = ref<Map<string, ConversationConfig>>(new Map())
+const groups = ref<ConversationGroup[]>([])
 const page = ref(0)
-const totalPages = ref(0)
+const totalSessions = ref(0)
+const PAGE_SIZE = 20
 
 // Platform models
 const platformModels = ref<LlmModelConfig[]>([])
@@ -137,7 +145,7 @@ const selectedModel = ref('')
 const selectedTurns = ref(0)
 const selectedPermission = ref<string>('bypassPermissions')
 
-// Filter state — "活跃" (ACTIVE) is default: shows 待回复 + 处理中
+// Filter state
 const STATE_FILTERS = [
   { label: '活跃', value: 'ACTIVE', cls: 'filter-tag--active' },
   { label: '待回复', value: 'AWAITING_REPLY', cls: 'filter-tag--awaiting' },
@@ -154,29 +162,32 @@ const SOURCE_FILTERS = [
 const stateFilter = ref('ACTIVE')
 const sourceFilter = ref('PLATFORM')
 
-// Active status set for client-side filtering
-const ACTIVE_STATUSES = new Set(['AWAITING_PERMISSION', 'PENDING', 'RUNNING'])
+// Active interaction states for client-side filtering
+const ACTIVE_STATES = new Set(['PROCESSING', 'AWAITING_REPLY'])
 
 // Draft & history
 const memoryScope = computed(() => directoryId.value ? 'task-' + directoryId.value : '')
 const { saveDraft, loadDraft, clearDraft, addToHistory, recentItems } = useInputMemory(memoryScope)
 
 const historyItems = computed(() => recentItems(10))
-const hasMore = computed(() => page.value + 1 < totalPages.value)
+const hasMore = computed(() => (page.value + 1) * PAGE_SIZE < totalSessions.value)
 
 // Combined filter: server-side state + client-side source + client-side active
-const displayTasks = computed(() => {
-  let list = tasks.value
+const displayGroups = computed(() => {
+  let list = groups.value
 
-  // Client-side "ACTIVE" filter: only show active tasks (待回复 + 处理中)
+  // Client-side "ACTIVE" filter: only show active sessions
   if (stateFilter.value === 'ACTIVE') {
-    list = list.filter(t => ACTIVE_STATUSES.has(t.status))
+    list = list.filter(g => {
+      const state = getGroupInteractionState(g)
+      return state ? ACTIVE_STATES.has(state) : false
+    })
   }
 
   // Client-side source filter
   if (sourceFilter.value !== 'ALL') {
-    list = list.filter(t => {
-      const isPlatform = t.source === 'PLATFORM' || t.source == null
+    list = list.filter(g => {
+      const isPlatform = g.latestTask.source === 'PLATFORM' || g.latestTask.source == null
       return sourceFilter.value === 'PLATFORM' ? isPlatform : !isPlatform
     })
   }
@@ -192,7 +203,7 @@ function currentStateParam(): string | undefined {
 
 function setStateFilter(val: string) {
   stateFilter.value = val
-  loadTasks()
+  loadSessions()
 }
 
 function setSourceFilter(val: string) {
@@ -211,19 +222,19 @@ onLoad((options) => {
   // Restore draft
   const draft = loadDraft()
   if (draft) promptInput.value = draft
-  loadTasks()
+  loadSessions()
   loadPlatformModels()
 })
 
 onShow(() => {
   if (directoryId.value) {
-    loadTasks()
+    loadSessions()
   }
 })
 
 // 原生下拉刷新
 onPullDownRefresh(async () => {
-  await loadTasks()
+  await loadSessions()
   uni.stopPullDownRefresh()
 })
 
@@ -251,16 +262,22 @@ async function loadPlatformModels() {
   }
 }
 
-async function loadTasks() {
+async function loadSessions() {
   if (!directoryId.value) return
   loading.value = true
   try {
-    const result = await workerApi.listTasksByDirectoryPaged(directoryId.value, 0, 20, currentStateParam())
+    const result = await listTasksByDirPagedUnified(directoryId.value, 0, PAGE_SIZE, currentStateParam())
     tasks.value = result.content
-    totalPages.value = result.totalPages
+    totalSessions.value = result.totalSessions
     page.value = 0
+
+    // Batch-load conversation configs
+    await loadConfigs(tasks.value)
+
+    // Build conversation groups
+    rebuildGroups()
   } catch (e) {
-    console.error('Failed to load tasks:', e)
+    console.error('Failed to load sessions:', e)
   } finally {
     loading.value = false
   }
@@ -271,22 +288,46 @@ async function loadMore() {
   loading.value = true
   try {
     const nextPage = page.value + 1
-    const result = await workerApi.listTasksByDirectoryPaged(directoryId.value, nextPage, 20, currentStateParam())
+    const result = await listTasksByDirPagedUnified(directoryId.value, nextPage, PAGE_SIZE, currentStateParam())
     tasks.value.push(...result.content)
     page.value = nextPage
-    totalPages.value = result.totalPages
+    totalSessions.value = result.totalSessions
+
+    // Load configs for new tasks
+    await loadConfigs(result.content)
+
+    // Rebuild groups
+    rebuildGroups()
   } catch (e) {
-    console.error('Failed to load more tasks:', e)
+    console.error('Failed to load more sessions:', e)
   } finally {
     loading.value = false
   }
+}
+
+async function loadConfigs(taskList: DispatchTask[]) {
+  const sessionIds = [...new Set(taskList.map(t => t.sessionId).filter(Boolean))]
+  const newIds = sessionIds.filter(id => !conversationConfigs.value.has(id))
+  if (newIds.length === 0) return
+  try {
+    const configs = await listConversationConfigs(newIds)
+    for (const cfg of configs) {
+      conversationConfigs.value.set(cfg.sessionId, cfg)
+    }
+  } catch {
+    // best-effort: configs are optional
+  }
+}
+
+function rebuildGroups() {
+  groups.value = buildConversationGroups(tasks.value, conversationConfigs.value)
 }
 
 async function handleCreateTask() {
   if (!promptInput.value.trim() || !workerId.value) return
   creating.value = true
   try {
-    const form: Parameters<typeof workerApi.createTask>[0] = {
+    const form: Parameters<typeof createTaskUnified>[0] = {
       workerId: workerId.value,
       prompt: promptInput.value.trim(),
       directoryId: directoryId.value,
@@ -296,16 +337,14 @@ async function handleCreateTask() {
     if (selectedTurns.value) form.maxTurns = selectedTurns.value
     if (selectedPermission.value) form.permissionMode = selectedPermission.value
 
-    const task = await workerApi.createTask(form)
+    const task = await createTaskUnified(form)
     addToHistory(promptInput.value.trim())
     clearDraft()
     promptInput.value = ''
-    // Navigate to task detail
+    // Navigate to session detail
     uni.navigateTo({
       url: `/pages/worker/task-detail?taskId=${task.taskId}&sessionId=${task.sessionId}`,
     })
-    // Refresh list on return
-    tasks.value.unshift(task)
   } catch (e) {
     console.error('Failed to create task:', e)
     uni.showToast({ title: '创建任务失败', icon: 'error' })
@@ -314,33 +353,104 @@ async function handleCreateTask() {
   }
 }
 
-function openTask(task: ClaudeTask) {
+function openSession(group: ConversationGroup) {
   uni.navigateTo({
-    url: `/pages/worker/task-detail?taskId=${task.taskId}&sessionId=${task.sessionId}`,
+    url: `/pages/worker/task-detail?taskId=${group.latestTask.taskId}&sessionId=${group.sessionId}`,
   })
 }
 
-function showTaskActions(task: ClaudeTask) {
-  uni.showActionSheet({
-    itemList: ['删除任务'],
-    success: async (res) => {
-      if (res.tapIndex === 0) {
-        uni.showModal({
-          title: '确认删除',
-          content: '确定删除此任务？',
-          success: async (modalRes) => {
-            if (modalRes.confirm) {
-              try {
-                await workerApi.deleteTask(task.taskId)
-                tasks.value = tasks.value.filter(t => t.taskId !== task.taskId)
-                uni.showToast({ title: '已删除', icon: 'success' })
-              } catch {
-                uni.showToast({ title: '删除失败', icon: 'error' })
-              }
+function showSessionActions(group: ConversationGroup) {
+  const isPinned = group.config?.pinned ?? false
+  const interactionState = group.config?.interactionState
+  const isArchived = interactionState === 'ARCHIVED'
+  const isOnHold = interactionState === 'ON_HOLD'
+
+  const actions: { label: string; handler: () => Promise<void> }[] = [
+    {
+      label: isPinned ? '取消置顶' : '置顶',
+      handler: async () => {
+        try {
+          const cfg = await updateConversationPin(group.sessionId, !isPinned)
+          conversationConfigs.value.set(group.sessionId, cfg)
+          rebuildGroups()
+        } catch { uni.showToast({ title: '操作失败', icon: 'error' }) }
+      },
+    },
+  ]
+
+  if (isArchived) {
+    actions.push({
+      label: '取消归档',
+      handler: async () => {
+        try {
+          const cfg = await unarchiveConversation(group.sessionId)
+          conversationConfigs.value.set(group.sessionId, cfg)
+          rebuildGroups()
+        } catch { uni.showToast({ title: '操作失败', icon: 'error' }) }
+      },
+    })
+  } else {
+    if (isOnHold) {
+      actions.push({
+        label: '取消搁置',
+        handler: async () => {
+          try {
+            const cfg = await unholdConversation(group.sessionId)
+            conversationConfigs.value.set(group.sessionId, cfg)
+            rebuildGroups()
+          } catch { uni.showToast({ title: '操作失败', icon: 'error' }) }
+        },
+      })
+    } else {
+      actions.push({
+        label: '搁置',
+        handler: async () => {
+          try {
+            const cfg = await holdConversation(group.sessionId)
+            conversationConfigs.value.set(group.sessionId, cfg)
+            rebuildGroups()
+          } catch { uni.showToast({ title: '操作失败', icon: 'error' }) }
+        },
+      })
+    }
+    actions.push({
+      label: '归档',
+      handler: async () => {
+        try {
+          const cfg = await archiveConversation(group.sessionId)
+          conversationConfigs.value.set(group.sessionId, cfg)
+          rebuildGroups()
+        } catch { uni.showToast({ title: '操作失败', icon: 'error' }) }
+      },
+    })
+  }
+
+  actions.push({
+    label: '删除最近任务',
+    handler: async () => {
+      uni.showModal({
+        title: '确认删除',
+        content: '确定删除此会话的最近任务？',
+        success: async (modalRes) => {
+          if (modalRes.confirm) {
+            try {
+              await deleteTaskUnified(group.latestTask.taskId)
+              // Reload to reflect changes
+              await loadSessions()
+              uni.showToast({ title: '已删除', icon: 'success' })
+            } catch {
+              uni.showToast({ title: '删除失败', icon: 'error' })
             }
-          },
-        })
-      }
+          }
+        },
+      })
+    },
+  })
+
+  uni.showActionSheet({
+    itemList: actions.map(a => a.label),
+    success: (res) => {
+      actions[res.tapIndex].handler()
     },
   })
 }
@@ -534,7 +644,7 @@ function showPermissionPicker() {
   color: #409eff;
   background-color: #ecf5ff;
 }
-/* 任务列表 */
+/* 会话列表 */
 .task-list {
   padding: 20rpx 24rpx;
 }

@@ -1,11 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as workerApi from '@/api/claudeWorker'
-import type { ClaudeWorker, WorkingDirectory, ClaudeTask, PageResult } from '@/api/types'
+import { listTasksByDirPagedUnified } from '@/api/unifiedTask'
+import { listConversationConfigs } from '@/api/conversationConfig'
+import type { ClaudeWorker, WorkingDirectory, DispatchTask, ConversationConfig, SessionPageResult } from '@/api/types'
 
 export const useWorkerStore = defineStore('worker', () => {
   const workers = ref<ClaudeWorker[]>([])
   const directories = ref<Map<string, WorkingDirectory[]>>(new Map())
+  const conversationConfigs = ref<Map<string, ConversationConfig>>(new Map())
   const loading = ref(false)
 
   async function loadWorkers() {
@@ -66,17 +69,34 @@ export const useWorkerStore = defineStore('worker', () => {
     }
   }
 
+  /** Load tasks by directory using unified task API (session-paginated) */
   async function loadTasksByDirectory(
     directoryId: string,
     page: number,
     size: number,
-  ): Promise<PageResult<ClaudeTask>> {
-    return await workerApi.listTasksByDirectoryPaged(directoryId, page, size)
+    state?: string,
+  ): Promise<SessionPageResult<DispatchTask>> {
+    return await listTasksByDirPagedUnified(directoryId, page, size, state)
+  }
+
+  /** Batch-load conversation configs for given session IDs */
+  async function loadConversationConfigs(sessionIds: string[]): Promise<void> {
+    const newIds = sessionIds.filter(id => !conversationConfigs.value.has(id))
+    if (newIds.length === 0) return
+    try {
+      const configs = await listConversationConfigs(newIds)
+      for (const cfg of configs) {
+        conversationConfigs.value.set(cfg.sessionId, cfg)
+      }
+    } catch {
+      // best-effort
+    }
   }
 
   return {
     workers,
     directories,
+    conversationConfigs,
     loading,
     loadWorkers,
     loadDirectories,
@@ -87,5 +107,6 @@ export const useWorkerStore = defineStore('worker', () => {
     getWorktreesForDirectory,
     healthCheck,
     loadTasksByDirectory,
+    loadConversationConfigs,
   }
 })

@@ -13,3 +13,6 @@
 - [07-a2a-agent-failure-taxonomy-and-refactor.md](./07-a2a-agent-failure-taxonomy-and-refactor.md)
 - [08-shared-ask-context-concurrency-risk.md](./08-shared-ask-context-concurrency-risk.md)
 - [09-file-browser-image-preview.md](./09-file-browser-image-preview.md)
+- [10-file-browser-pdf-preview-plan.md](./10-file-browser-pdf-preview-plan.md)
+- [11-session-scroll-to-bottom-plan.md](./11-session-scroll-to-bottom-plan.md)
+- [12-codex-completed-task-cancel-a2a-resolution-failure.md](./12-codex-completed-task-cancel-a2a-resolution-failure.md)

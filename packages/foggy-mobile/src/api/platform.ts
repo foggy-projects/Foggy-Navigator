@@ -8,8 +8,9 @@ export async function getSetupStatus(): Promise<SetupStatus> {
   return rx.data
 }
 
-export async function listModelConfigs(): Promise<LlmModelConfig[]> {
-  const rx = (await client.get(`${BASE}/llm`)) as unknown as RX<LlmModelConfig[]>
+export async function listModelConfigs(workerId?: string): Promise<LlmModelConfig[]> {
+  const params = workerId ? { workerId } : {}
+  const rx = (await client.get(`${BASE}/llm`, { params })) as unknown as RX<LlmModelConfig[]>
   return rx.data
 }
 

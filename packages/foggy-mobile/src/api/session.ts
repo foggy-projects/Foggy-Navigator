@@ -1,5 +1,5 @@
 import client from './client'
-import type { RX, Session, Message, GuideCard } from './types'
+import type { RX, Session, Message, GuideCard, PaginatedMessages } from './types'
 
 export async function listSessions(): Promise<Session[]> {
   const rx = (await client.get('/sessions')) as unknown as RX<Session[]>
@@ -17,6 +17,21 @@ export async function deleteSession(id: string): Promise<void> {
 
 export async function getMessages(sessionId: string): Promise<Message[]> {
   const rx = (await client.get(`/sessions/${sessionId}/messages`)) as unknown as RX<Message[]>
+  return rx.data
+}
+
+/**
+ * Load latest messages with pagination (tail-based).
+ * offset=0 returns the most recent `limit` messages.
+ */
+export async function getLatestMessages(
+  sessionId: string,
+  limit = 50,
+  offset = 0,
+): Promise<PaginatedMessages> {
+  const rx = (await client.get(`/sessions/${sessionId}/messages/latest`, {
+    params: { limit, offset },
+  })) as unknown as RX<PaginatedMessages>
   return rx.data
 }
 

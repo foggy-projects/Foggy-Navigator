@@ -212,3 +212,11 @@ python -m pytest tools/claude-agent-worker/tests/e2e/test_e2e_rewind.py -q
 
 - Java 全模块编译通过，全量单元测试通过
 - Python session_scanner 单元测试 35 passed
+
+## 验收签收
+
+- 签收状态：✅ 已签收
+- 签收日期：2026-04-05
+- 签收方式：版本文档审计签收
+- 签收依据：条目已明确“已修复”，并附单测与 E2E 回归验证结果。
+- 关联台账：[12-acceptance-signoff.md](./12-acceptance-signoff.md)
