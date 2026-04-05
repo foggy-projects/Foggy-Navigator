@@ -6,10 +6,16 @@ const STORAGE_KEY = 'nav-ui-prefs'
 export interface UserPreferences {
   /** Whether the "需要关注" section is collapsed */
   attentionCollapsed: boolean
+  /** Whether the left Workers sidebar is collapsed */
+  leftPanelCollapsed: boolean
+  /** Whether the right history panel is collapsed */
+  rightPanelCollapsed: boolean
 }
 
 const DEFAULTS: UserPreferences = {
   attentionCollapsed: false,
+  leftPanelCollapsed: false,
+  rightPanelCollapsed: false,
 }
 
 function loadFromStorage(): UserPreferences {
