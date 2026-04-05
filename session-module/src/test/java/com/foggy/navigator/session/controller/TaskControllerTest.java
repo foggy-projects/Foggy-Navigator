@@ -132,6 +132,7 @@ class TaskControllerTest {
         DispatchTaskDTO dto = DispatchTaskDTO.builder()
                 .taskId("task-1")
                 .agentId("agent-1")
+                .status("RUNNING")
                 .build();
         when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
                 .thenReturn(Optional.of(dto));

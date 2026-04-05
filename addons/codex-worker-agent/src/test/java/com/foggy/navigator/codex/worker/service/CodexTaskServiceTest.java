@@ -286,13 +286,13 @@ class CodexTaskServiceTest {
         verify(sessionTaskRepository).save(argThat((SessionTaskEntity entity) ->
                 "session-new".equals(entity.getSessionId())
                         && "codex-worker".equals(entity.getProviderType())
-                        && "codex-worker".equals(entity.getAgentId())
+                        && entity.getAgentId() == null
                         && !"dir-1".equals(entity.getAgentId())
         ));
         verify(sessionEntityRepository).save(argThat((SessionEntity entity) ->
                 "session-new".equals(entity.getId())
                         && "codex-worker".equals(entity.getProviderType())
-                        && "codex-worker".equals(entity.getAgentId())
+                        && entity.getAgentId() == null
                         && !"dir-1".equals(entity.getAgentId())
         ));
     }

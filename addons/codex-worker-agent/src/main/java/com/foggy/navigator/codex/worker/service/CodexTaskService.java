@@ -935,7 +935,8 @@ public class CodexTaskService implements TaskQueryProvider {
                 return sessionAgentId;
             }
         }
-        return AGENT_ID;
+        // 没有真实逻辑 Agent 时返回 null，不再回退到 provider 常量（需求 26 约束）
+        return null;
     }
 
     private String resolveLogicalAgentId(CodexTaskEntity entity) {
@@ -956,7 +957,8 @@ public class CodexTaskService implements TaskQueryProvider {
                 return sessionAgentId;
             }
         }
-        return AGENT_ID;
+        // 没有真实逻辑 Agent 时返回 null，不再回退到 provider 常量（需求 26 约束）
+        return null;
     }
 
     private String resolveSessionAgentId(String sessionId) {
