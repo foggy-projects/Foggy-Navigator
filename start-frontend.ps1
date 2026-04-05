@@ -14,12 +14,38 @@ param(
 $FRONTEND_PORT = 5174
 $FRONTEND_DIR = "packages\navigator-frontend"
 $NGINX_DIST = "dist\nginx"
+$LOCKFILE = Join-Path $PSScriptRoot "pnpm-lock.yaml"
+$MODULES_META = Join-Path $PSScriptRoot "node_modules/.modules.yaml"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Navigator Frontend" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
+
+function Test-PnpmInstallRequired {
+    $requiredPaths = @(
+        (Join-Path $PSScriptRoot "packages\navigator-frontend\node_modules\@foggy\chat"),
+        (Join-Path $PSScriptRoot "packages\foggy-chat\node_modules\@foggy\chat-core"),
+        (Join-Path $PSScriptRoot "packages\foggy-chat\node_modules\vue-virtual-scroller")
+    )
+
+    if (-not (Test-Path $MODULES_META)) {
+        return $true
+    }
+
+    if ((Test-Path $LOCKFILE) -and ((Get-Item $LOCKFILE).LastWriteTime -gt (Get-Item $MODULES_META).LastWriteTime)) {
+        return $true
+    }
+
+    foreach ($path in $requiredPaths) {
+        if (-not (Test-Path $path)) {
+            return $true
+        }
+    }
+
+    return $false
+}
 
 # Check pnpm
 if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
@@ -28,9 +54,9 @@ if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
 }
 
 # ── Step 1: Install dependencies ──────────────────────────────────────────────
-if (-not (Test-Path "$FRONTEND_DIR\node_modules")) {
-    Write-Host "[1] Installing dependencies..." -ForegroundColor Yellow
-    Set-Location $FRONTEND_DIR
+if (Test-PnpmInstallRequired) {
+    Write-Host "[1] Installing dependencies (workspace missing/stale)..." -ForegroundColor Yellow
+    Set-Location $PSScriptRoot
     pnpm install
     Set-Location $PSScriptRoot
 } else {

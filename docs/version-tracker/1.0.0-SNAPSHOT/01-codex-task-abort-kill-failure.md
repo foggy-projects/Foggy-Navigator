@@ -144,3 +144,11 @@ node --import tsx --test tests/processes.test.ts
 ## Status
 
 本项已完成修复，并建议保留为后续 abort/cancel 统一重构的回归参考项。
+
+## 验收签收
+
+- 签收状态：✅ 已签收
+- 签收日期：2026-04-05
+- 签收方式：版本文档审计签收
+- 签收依据：条目已明确“已完成修复”，并附回归验证记录。
+- 关联台账：[12-acceptance-signoff.md](./12-acceptance-signoff.md)

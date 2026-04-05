@@ -31,6 +31,7 @@ const label = computed(() => {
     ONLINE: '在线', OFFLINE: '离线', UNKNOWN: '未知',
     ACTIVE: '活跃', CLOSED: '已关闭',
     PENDING: '等待中', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败', ABORTED: '已中止',
+    AWAITING_PERMISSION: '待审批',
     CONNECTED: '已连接', CONNECTING: '连接中', DISCONNECTED: '已断开', ERROR: '错误',
   }
   return map[s] || props.status

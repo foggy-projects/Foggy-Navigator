@@ -195,3 +195,11 @@
 
 - `bash scripts/build-frontend.sh` — foggy-chat-core + foggy-chat + navigator-frontend 全部编译通过
 - TypeScript 类型检查通过
+
+## 验收签收
+
+- 签收状态：✅ 已签收
+- 签收日期：2026-04-05
+- 签收方式：版本文档审计签收
+- 签收依据：条目已明确“已实施”，并附构建与类型验证结果。
+- 关联台账：[12-acceptance-signoff.md](./12-acceptance-signoff.md)

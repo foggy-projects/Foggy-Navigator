@@ -187,15 +187,33 @@ public class TaskDispatchFacade {
                 .toList();
     }
 
+    private static final Set<String> TERMINAL_STATES = Set.of("COMPLETED", "FAILED", "ABORTED");
+
     /**
      * 取消任务 — 统一走 A2A 路径，不再 fallback 到 TaskQueryProvider。
      * <p>
      * 中止生命周期由 {@link com.foggy.navigator.session.agent.AbortCoordinatingA2aAgent} 统一编排：
      * terminal-state guard → 远端任务标识解析 → Worker abort → 流清理 → 状态落库 → post-abort hook。
+     * <p>
+     * 当 agentId 为空（direct provider route 无逻辑 Agent）时，先检查任务是否已在终态，
+     * 是则幂等返回；否则 fail-fast。
      *
      * @throws IllegalArgumentException 当 agentId 无法解析到 A2aAgent 时 fail-fast
      */
     public void cancelTask(String taskId, String agentId, AgentResolveContext context) {
+        // agentId 为空时的防御：direct provider route 可能没有逻辑 Agent
+        if (agentId == null || agentId.isBlank()) {
+            Optional<DispatchTaskDTO> taskOpt = getTask(taskId, context);
+            if (taskOpt.isPresent() && taskOpt.get().getStatus() != null
+                    && TERMINAL_STATES.contains(taskOpt.get().getStatus())) {
+                log.info("cancelTask: task {} has no agentId but already terminal ({}), skipping",
+                        taskId, taskOpt.get().getStatus());
+                return;
+            }
+            throw new IllegalArgumentException(
+                    "Cannot cancel task " + taskId + ": agentId is missing and task is not in terminal state");
+        }
+
         A2aAgent agent = agentResolver.resolveAgent(agentId, context)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Cannot cancel task " + taskId + ": no A2A agent found for agentId=" + agentId));

@@ -3,7 +3,9 @@
     <!-- 状态栏 -->
     <view v-if="taskStream.task.value" class="task-status-bar">
       <StatusBadge :status="taskStream.task.value.status" :show-label="true" />
+      <InteractionBadge v-if="interactionState" :state="interactionState" />
       <text v-if="taskStream.task.value.model" class="status-model">{{ taskStream.task.value.model }}</text>
+      <text v-if="modelConfigLabel" class="status-config">{{ modelConfigLabel }}</text>
       <text v-if="taskStream.task.value.costUsd != null" class="status-cost">
         ${{ taskStream.task.value.costUsd.toFixed(4) }}
       </text>
@@ -17,6 +19,16 @@
       <text class="connection-text">
         {{ connectionBannerStatus === 'connecting' ? '连接中...' : '连接断开' }}
       </text>
+    </view>
+
+    <!-- 加载更早消息 -->
+    <view v-if="taskStream.hasMoreHistory.value" class="load-more-bar">
+      <text
+        v-if="!taskStream.loadingMore.value"
+        class="load-more-text"
+        @tap="taskStream.loadMoreHistory()"
+      >加载更早消息</text>
+      <text v-else class="load-more-text loading">加载中...</text>
     </view>
 
     <!-- 消息流 -->
@@ -39,7 +51,27 @@
         </button>
       </view>
 
-      <!-- 已完成/失败: 续对输入 -->
+      <!-- 失败: 恢复操作按钮 -->
+      <view v-else-if="isFailed" class="recovery-bar">
+        <button class="recovery-btn" @tap="handleReconnect">
+          重连
+        </button>
+        <button class="recovery-btn" @tap="handleResync">
+          重同步
+        </button>
+        <view v-if="canResume" class="resume-section">
+          <ChatInput
+            v-model="resumeInput"
+            placeholder="输入续对消息..."
+            send-label="继续"
+            :history-items="historyItems"
+            @send="handleResume"
+            @sent="onSent"
+          />
+        </view>
+      </view>
+
+      <!-- 已完成: 续对输入 -->
       <view v-else-if="canResume">
         <ChatInput
           v-model="resumeInput"
@@ -59,8 +91,20 @@ import { ref, computed, watch } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { useTaskStream } from '@/composables/useTaskStream'
 import { useInputMemory } from '@/composables/useInputMemory'
-import * as workerApi from '@/api/claudeWorker'
+import { useSessionModelCache } from '@/composables/useSessionModelCache'
+import { listConversationConfigs } from '@/api/conversationConfig'
+import {
+  getTaskUnified,
+  cancelTaskUnified,
+  resumeTaskUnified,
+  respondToTaskUnified,
+  reconnectTaskUnified,
+  resyncTaskUnified,
+} from '@/api/unifiedTask'
+import { listModelConfigs } from '@/api/platform'
+import type { ConversationConfig, LlmModelConfig } from '@/api/types'
 import StatusBadge from '@/components/StatusBadge.vue'
+import InteractionBadge from '@/components/InteractionBadge.vue'
 import MessageList from '@/components/MessageList.vue'
 import ChatInput from '@/components/ChatInput.vue'
 import { formatDuration } from '@/utils/time'
@@ -69,6 +113,11 @@ const taskId = ref('')
 const sessionId = ref('')
 const aborting = ref(false)
 const resumeInput = ref('')
+const conversationConfig = ref<ConversationConfig | null>(null)
+const platformModels = ref<LlmModelConfig[]>([])
+
+// Model cache
+const { initFromTask, getSessionModel } = useSessionModelCache()
 
 // Draft & history
 const memoryScope = computed(() => sessionId.value ? 'pane-' + sessionId.value : '')
@@ -81,10 +130,10 @@ watch(resumeInput, (val) => {
 })
 
 const taskStream = useTaskStream(() => {
-  // 任务完成时刷新任务状态
+  // Refresh task status on completion
   if (taskId.value) {
-    workerApi.getTask(taskId.value).then((t) => {
-      taskStream.task.value = t
+    getTaskUnified(taskId.value).then((t) => {
+      if (t) taskStream.task.value = t
     })
   }
 })
@@ -96,11 +145,24 @@ const isRunning = computed(() => {
   return status === 'RUNNING' || status === 'PENDING' || status === 'AWAITING_PERMISSION'
 })
 
+const isFailed = computed(() => {
+  return taskStream.task.value?.status === 'FAILED'
+})
+
 const connectionBannerStatus = computed(() => taskStream.chatState.connectionStatus.value)
 
 const canResume = computed(() => {
   const status = taskStream.task.value?.status
   return (status === 'COMPLETED' || status === 'FAILED') && !!taskStream.task.value?.claudeSessionId
+})
+
+const interactionState = computed(() => conversationConfig.value?.interactionState)
+
+const modelConfigLabel = computed(() => {
+  const configId = taskStream.task.value?.modelConfigId
+  if (!configId) return ''
+  const cfg = platformModels.value.find(m => m.id === configId)
+  return cfg ? cfg.name : ''
 })
 
 onLoad(async (options) => {
@@ -111,10 +173,22 @@ onLoad(async (options) => {
   const draft = loadDraft()
   if (draft) resumeInput.value = draft
 
+  // Load platform models for config name display
+  loadPlatformModelsQuiet()
+
   if (taskId.value) {
     try {
-      const task = await workerApi.getTask(taskId.value)
+      const task = await getTaskUnified(taskId.value)
+      if (!task) return
       taskStream.task.value = task
+      sessionId.value = task.sessionId
+
+      // Init model cache from this task
+      initFromTask(task)
+
+      // Load conversation config
+      loadConversationConfig(task.sessionId)
+
       if (task.sessionId) {
         await taskStream.connect(task.sessionId)
       }
@@ -128,11 +202,30 @@ onUnload(() => {
   taskStream.disconnect()
 })
 
+async function loadPlatformModelsQuiet() {
+  try {
+    platformModels.value = await listModelConfigs()
+  } catch {
+    // best-effort
+  }
+}
+
+async function loadConversationConfig(sid: string) {
+  try {
+    const configs = await listConversationConfigs([sid])
+    if (configs.length > 0) {
+      conversationConfig.value = configs[0]
+    }
+  } catch {
+    // best-effort
+  }
+}
+
 async function handleAbort() {
   if (!taskId.value) return
   aborting.value = true
   try {
-    await workerApi.abortTask(taskId.value)
+    await cancelTaskUnified(taskId.value)
     if (taskStream.task.value) {
       taskStream.task.value.status = 'ABORTED'
     }
@@ -149,26 +242,59 @@ async function handleResume(prompt: string) {
   const task = taskStream.task.value
   if (!task?.claudeSessionId) return
 
+  // Get cached model selection for this session
+  const cached = getSessionModel(task.sessionId)
+
   try {
-    const newTask = await workerApi.resumeTask({
+    const newTask = await resumeTaskUnified({
       workerId: task.workerId,
-      claudeSessionId: task.claudeSessionId,
       prompt,
       directoryId: task.directoryId,
       sessionId: task.sessionId,
+      model: cached?.model || task.model,
+      modelConfigId: cached?.modelConfigId || task.modelConfigId,
     })
     taskStream.resumeInPlace(newTask)
     taskId.value = newTask.taskId
+    // Update model cache
+    initFromTask(newTask)
   } catch (e) {
-    // 不再显示 toast — client.ts 拦截器已自动展示后端错误信息
     console.error('Failed to resume task:', e)
+  }
+}
+
+async function handleReconnect() {
+  if (!taskId.value) return
+  try {
+    await reconnectTaskUnified(taskId.value)
+    uni.showToast({ title: '已重连', icon: 'success' })
+    await taskStream.syncTaskStatus()
+  } catch (e) {
+    console.error('Failed to reconnect:', e)
+    uni.showToast({ title: '重连失败', icon: 'error' })
+  }
+}
+
+async function handleResync() {
+  if (!taskId.value) return
+  try {
+    await resyncTaskUnified(taskId.value)
+    uni.showToast({ title: '已重同步', icon: 'success' })
+    await taskStream.syncTaskStatus()
+    // Reload messages after resync
+    if (sessionId.value) {
+      await taskStream.connect(sessionId.value)
+    }
+  } catch (e) {
+    console.error('Failed to resync:', e)
+    uni.showToast({ title: '重同步失败', icon: 'error' })
   }
 }
 
 async function handlePlanRespond(permissionId: string, decision: string, denyMessage?: string, planAction?: string) {
   if (!taskId.value) return
   try {
-    await workerApi.respondToPermission(taskId.value, {
+    await respondToTaskUnified(taskId.value, {
       permissionId,
       decision,
       denyMessage: denyMessage || (decision === 'deny' ? 'Plan rejected by user' : undefined),
@@ -187,7 +313,7 @@ async function handlePlanRespond(permissionId: string, decision: string, denyMes
 async function handleQuestionRespond(permissionId: string, answers: Record<string, string>) {
   if (!taskId.value) return
   try {
-    await workerApi.respondToPermission(taskId.value, {
+    await respondToTaskUnified(taskId.value, {
       permissionId,
       decision: 'allow',
       answers,
@@ -205,7 +331,7 @@ async function handleQuestionRespond(permissionId: string, answers: Record<strin
 async function handlePermissionRespond(permissionId: string, decision: string, scope: string) {
   if (!taskId.value) return
   try {
-    await workerApi.respondToPermission(taskId.value, {
+    await respondToTaskUnified(taskId.value, {
       permissionId,
       decision,
       scope,
@@ -225,7 +351,6 @@ function onSent(content: string) {
   clearDraft()
   resumeInput.value = ''
 }
-
 </script>
 
 <style scoped>
@@ -248,6 +373,14 @@ function onSent(content: string) {
   font-size: 24rpx;
   color: #909399;
   background-color: #f0f0f0;
+  padding: 4rpx 12rpx;
+  border-radius: 8rpx;
+  margin-right: 16rpx;
+}
+.status-config {
+  font-size: 22rpx;
+  color: #2e7d32;
+  background-color: #e8f5e9;
   padding: 4rpx 12rpx;
   border-radius: 8rpx;
   margin-right: 16rpx;
@@ -287,6 +420,29 @@ function onSent(content: string) {
   align-items: center;
   justify-content: center;
 }
+.recovery-bar {
+  padding: 20rpx 24rpx;
+  padding-bottom: calc(20rpx + env(safe-area-inset-bottom));
+  background: #ffffff;
+  border-top: 2rpx solid #f0f0f0;
+}
+.recovery-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 68rpx;
+  padding: 0 32rpx;
+  font-size: 28rpx;
+  background-color: #ecf5ff;
+  color: #409eff;
+  border-radius: 12rpx;
+  border: none;
+  margin-right: 16rpx;
+  margin-bottom: 16rpx;
+}
+.resume-section {
+  margin-top: 16rpx;
+}
 .connection-banner {
   display: flex;
   flex-direction: row;
@@ -297,6 +453,7 @@ function onSent(content: string) {
 }
 .connection-text {
   margin-left: 16rpx;
+  font-size: 24rpx;
 }
 .connection-banner.connecting {
   background: #fdf6ec;
@@ -306,7 +463,17 @@ function onSent(content: string) {
   background: #fef0f0;
   color: #f56c6c;
 }
-.connection-text {
-  font-size: 24rpx;
+.load-more-bar {
+  padding: 16rpx 24rpx;
+  text-align: center;
+  background-color: #ffffff;
+  border-bottom: 2rpx solid #f0f0f0;
+}
+.load-more-text {
+  font-size: 26rpx;
+  color: #667eea;
+}
+.load-more-text.loading {
+  color: #909399;
 }
 </style>

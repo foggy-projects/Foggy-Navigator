@@ -19,6 +19,8 @@ DOCKER_DIR="$SCRIPT_DIR/docker"
 CONTAINER_NAME="foggy-navigator-nginx"
 NGINX_PORT=80
 LOG_DIR="$SCRIPT_DIR/logs"
+LOCKFILE="$SCRIPT_DIR/pnpm-lock.yaml"
+MODULES_META="$SCRIPT_DIR/node_modules/.modules.yaml"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -28,6 +30,30 @@ CYAN='\033[0;36m'
 GRAY='\033[0;37m'
 BOLD='\033[1m'
 NC='\033[0m'
+
+needs_pnpm_install() {
+    local required_paths=(
+        "$SCRIPT_DIR/packages/navigator-frontend/node_modules/@foggy/chat"
+        "$SCRIPT_DIR/packages/foggy-chat/node_modules/@foggy/chat-core"
+        "$SCRIPT_DIR/packages/foggy-chat/node_modules/vue-virtual-scroller"
+    )
+
+    if [ ! -f "$MODULES_META" ]; then
+        return 0
+    fi
+
+    if [ -f "$LOCKFILE" ] && [ "$LOCKFILE" -nt "$MODULES_META" ]; then
+        return 0
+    fi
+
+    for path in "${required_paths[@]}"; do
+        if [ ! -e "$path" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 SKIP_BUILD=false
@@ -59,8 +85,8 @@ if [ "$SKIP_BUILD" = false ]; then
     fi
 
     # Install dependencies if needed
-    if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-        echo -e "${YELLOW}[1/3] Installing dependencies...${NC}"
+    if needs_pnpm_install; then
+        echo -e "${YELLOW}[1/3] Installing dependencies (workspace missing/stale)...${NC}"
         (cd "$SCRIPT_DIR" && pnpm install --no-frozen-lockfile)
         if [ $? -ne 0 ]; then
             echo -e "${RED}  pnpm install failed!${NC}"

@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from agent_worker.routes.files import (
     _build_pathspec_excludes,
     _detect_language,
+    _detect_media_type,
     _is_binary,
     _load_foggy_ignore,
     _get_exclude_patterns,
@@ -79,6 +80,23 @@ class TestDetectLanguage:
 
     def test_nested_path(self):
         assert _detect_language("a/b/c/deep.rs") == "rust"
+
+
+# ---------------------------------------------------------------------------
+# _detect_media_type
+# ---------------------------------------------------------------------------
+
+class TestDetectMediaType:
+    """HTTP media type detection from file extension."""
+
+    def test_png(self):
+        assert _detect_media_type("screenshots/example.png") == "image/png"
+
+    def test_svg(self):
+        assert _detect_media_type("icons/example.svg") == "image/svg+xml"
+
+    def test_unknown_extension_returns_octet_stream(self):
+        assert _detect_media_type("archive.unknownext") == "application/octet-stream"
 
 
 # ---------------------------------------------------------------------------

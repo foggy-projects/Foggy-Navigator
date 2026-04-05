@@ -24,8 +24,20 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 任务管理 API
+ * 任务管理 API（已废弃）
+ *
+ * <p>所有端点已迁移到统一 API：</p>
+ * <ul>
+ *   <li>任务操作 → {@code /api/v1/tasks} (TaskController)</li>
+ *   <li>会话配置 → {@code /api/v1/sessions/{id}/config/*} (SessionConfigController)</li>
+ * </ul>
+ *
+ * <p>保留此 Controller 仅为兼容旧版客户端过渡期使用。
+ * 所有新客户端应直接使用统一端点。</p>
+ *
+ * @deprecated 请使用 TaskController + SessionConfigController
  */
+@Deprecated(since = "1.0.2 — use /api/v1/tasks + /api/v1/sessions/{id}/config/*")
 @RestController
 @RequestMapping("/api/v1/claude-tasks")
 @RequireAuth

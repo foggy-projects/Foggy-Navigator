@@ -188,3 +188,5 @@ packages/foggy-mobile/uniCloud-aliyun/
 .playwright-cli/
 /vt100-*.yml
 /vt100-*.png
+/app102*.yaml
+/app102*.yml

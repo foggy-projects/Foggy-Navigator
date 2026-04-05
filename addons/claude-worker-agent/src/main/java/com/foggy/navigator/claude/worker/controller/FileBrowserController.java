@@ -9,6 +9,9 @@ import com.foggy.navigator.common.context.UserContext;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
@@ -65,6 +68,40 @@ public class FileBrowserController {
         } catch (Exception e) {
             log.warn("Failed to read file for directory {}: {}", directoryId, e.getMessage());
             return RX.failA(formatFriendlyError(e, "读取文件失败"));
+        }
+    }
+
+    /**
+     * 读取文件原始字节，用于图片等二进制预览
+     */
+    @GetMapping("/raw")
+    public ResponseEntity<byte[]> readRaw(
+            @RequestParam String directoryId,
+            @RequestParam String subPath) {
+        ClaudeWorkerClient client = resolveClient(directoryId);
+        WorkingDirectoryEntity entity = getEntity(directoryId);
+        String fullPath = buildPath(entity.getPath(), subPath);
+        try {
+            ResponseEntity<byte[]> response = client.readRawFile(fullPath).block(TIMEOUT);
+            if (response == null) {
+                return ResponseEntity.internalServerError()
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .body("读取原始文件失败: Worker 未返回内容".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            HttpHeaders headers = new HttpHeaders();
+            MediaType contentType = response.getHeaders().getContentType();
+            headers.setContentType(contentType != null ? contentType : MediaType.APPLICATION_OCTET_STREAM);
+            String contentDisposition = response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION);
+            if (contentDisposition != null) {
+                headers.set(HttpHeaders.CONTENT_DISPOSITION, contentDisposition);
+            }
+            headers.setCacheControl("no-store");
+            return new ResponseEntity<>(response.getBody(), headers, response.getStatusCode());
+        } catch (Exception e) {
+            log.warn("Failed to read raw file for directory {}: {}", directoryId, e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .contentType(MediaType.TEXT_PLAIN)
+                    .body(formatFriendlyError(e, "读取原始文件失败").getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
     }
 

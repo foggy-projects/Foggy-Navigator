@@ -1,5 +1,11 @@
+/**
+ * Claude Worker API — Worker and Directory management only.
+ *
+ * Task-related functions have been migrated to unifiedTask.ts (/api/v1/tasks).
+ * Session config functions are in conversationConfig.ts (/api/v1/sessions/{id}/config).
+ */
 import client from './client'
-import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, PageResult } from './types'
+import type { RX, ClaudeWorker, WorkingDirectory } from './types'
 
 // ===== Worker API =====
 
@@ -22,76 +28,5 @@ export async function listDirectoriesByWorker(workerId: string): Promise<Working
 
 export async function syncDirectoryGitInfo(directoryId: string): Promise<WorkingDirectory> {
   const rx = (await client.post(`/working-directories/${directoryId}/sync`)) as unknown as RX<WorkingDirectory>
-  return rx.data
-}
-
-// ===== Task API =====
-
-export async function createTask(form: {
-  workerId: string
-  prompt: string
-  cwd?: string
-  directoryId?: string
-  model?: string
-  maxTurns?: number
-  permissionMode?: string
-  modelConfigId?: string
-}): Promise<ClaudeTask> {
-  const rx = (await client.post('/claude-tasks', form)) as unknown as RX<ClaudeTask>
-  return rx.data
-}
-
-export async function resumeTask(form: {
-  workerId: string
-  claudeSessionId: string
-  prompt: string
-  cwd?: string
-  directoryId?: string
-  sessionId?: string
-  model?: string
-  maxTurns?: number
-  permissionMode?: string
-}): Promise<ClaudeTask> {
-  const rx = (await client.post('/claude-tasks/resume', form)) as unknown as RX<ClaudeTask>
-  return rx.data
-}
-
-export async function getTask(taskId: string): Promise<ClaudeTask> {
-  const rx = (await client.get(`/claude-tasks/${taskId}`)) as unknown as RX<ClaudeTask>
-  return rx.data
-}
-
-export async function listTasksByDirectoryPaged(
-  directoryId: string,
-  page: number,
-  size: number,
-  state?: string,
-): Promise<PageResult<ClaudeTask>> {
-  const params: Record<string, unknown> = { page, size }
-  if (state) params.state = state
-  const rx = (await client.get(`/claude-tasks/directory/${directoryId}/page`, {
-    params,
-  })) as unknown as RX<PageResult<ClaudeTask>>
-  return rx.data
-}
-
-export async function abortTask(taskId: string): Promise<{ taskId: string; status: string }> {
-  const rx = (await client.post(`/claude-tasks/${taskId}/abort`)) as unknown as RX<{ taskId: string; status: string }>
-  return rx.data
-}
-
-export async function deleteTask(taskId: string): Promise<{ taskId: string; deleted: boolean }> {
-  const rx = (await client.delete(`/claude-tasks/${taskId}`)) as unknown as RX<{ taskId: string; deleted: boolean }>
-  return rx.data
-}
-
-export async function respondToPermission(
-  taskId: string,
-  form: { permissionId: string; decision: string; denyMessage?: string; scope?: string; answers?: Record<string, string>; planAction?: string },
-): Promise<{ taskId: string; permissionId: string; decision: string }> {
-  const rx = (await client.post(
-    `/claude-tasks/${taskId}/respond`,
-    form,
-  )) as unknown as RX<{ taskId: string; permissionId: string; decision: string }>
   return rx.data
 }

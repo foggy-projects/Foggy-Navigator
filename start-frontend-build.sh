@@ -7,6 +7,9 @@ NGINX_PORT=80
 FRONTEND_DIR="packages/navigator-frontend"
 BUILD_OUTPUT_DIR="dist/nginx"
 NGINX_CONFIG_FILE="nginx/navigator.conf"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOCKFILE="$SCRIPT_DIR/pnpm-lock.yaml"
+MODULES_META="$SCRIPT_DIR/node_modules/.modules.yaml"
 
 # Colors
 RED='\033[0;31m'
@@ -15,6 +18,30 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 GRAY='\033[0;37m'
 NC='\033[0m' # No Color
+
+needs_pnpm_install() {
+    local required_paths=(
+        "$SCRIPT_DIR/packages/navigator-frontend/node_modules/@foggy/chat"
+        "$SCRIPT_DIR/packages/foggy-chat/node_modules/@foggy/chat-core"
+        "$SCRIPT_DIR/packages/foggy-chat/node_modules/vue-virtual-scroller"
+    )
+
+    if [ ! -f "$MODULES_META" ]; then
+        return 0
+    fi
+
+    if [ -f "$LOCKFILE" ] && [ "$LOCKFILE" -nt "$MODULES_META" ]; then
+        return 0
+    fi
+
+    for path in "${required_paths[@]}"; do
+        if [ ! -e "$path" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
 
 echo ""
 echo -e "${CYAN}========================================${NC}"
@@ -29,9 +56,9 @@ if ! command -v pnpm &> /dev/null; then
 fi
 
 # Install dependencies if needed
-if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-    echo -e "${YELLOW}[1/4] Installing dependencies...${NC}"
-    pnpm install --no-frozen-lockfile
+if needs_pnpm_install; then
+    echo -e "${YELLOW}[1/4] Installing dependencies (workspace missing/stale)...${NC}"
+    (cd "$SCRIPT_DIR" && pnpm install --no-frozen-lockfile)
     if [ $? -ne 0 ]; then
         echo -e "${RED}  pnpm install failed!${NC}"
         exit 1

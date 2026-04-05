@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 统一任务 API —— 屏蔽 Claude / Codex / 未来 Agent 差异。
@@ -79,27 +80,34 @@ public class TaskController {
     /**
      * 取消任务
      */
+    private static final Set<String> TERMINAL_STATES = Set.of("COMPLETED", "FAILED", "ABORTED");
+
     @PostMapping("/{taskId}/cancel")
     public RX<String> cancelTask(@PathVariable String taskId,
                                   @RequestBody(required = false) Map<String, String> body) {
         String userId = UserContext.getCurrentUserId();
-        String agentId = body != null ? body.get("agentId") : null;
-
-        // 如果没有传 agentId，从任务记录中查找
-        if (agentId == null || agentId.isBlank()) {
-            AgentResolveContext ctx = AgentResolveContext.builder()
-                    .userId(userId).requestSource("UI").build();
-            DispatchTaskDTO task = taskDispatchFacade.getTask(taskId, ctx).orElse(null);
-            if (task == null) {
-                return RX.failA("Task not found: " + taskId);
-            }
-            agentId = task.getAgentId();
-        }
-
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId(userId)
                 .requestSource("UI")
                 .build();
+
+        // 统一先查任务，用于 terminal-state guard 和 agentId 回填
+        DispatchTaskDTO task = taskDispatchFacade.getTask(taskId, context).orElse(null);
+        if (task == null) {
+            return RX.failA("Task not found: " + taskId);
+        }
+
+        // Terminal-state guard：已完成/失败/中止的任务直接返回成功（幂等）
+        if (task.getStatus() != null && TERMINAL_STATES.contains(task.getStatus())) {
+            log.info("cancelTask: task {} already in terminal state ({}), returning no-op", taskId, task.getStatus());
+            return RX.ok("Task already in terminal state: " + task.getStatus());
+        }
+
+        // 优先使用请求体传入的 agentId，否则从任务记录回填
+        String agentId = body != null ? body.get("agentId") : null;
+        if (agentId == null || agentId.isBlank()) {
+            agentId = task.getAgentId();
+        }
 
         taskDispatchFacade.cancelTask(taskId, agentId, context);
         return RX.ok("Task cancelled");

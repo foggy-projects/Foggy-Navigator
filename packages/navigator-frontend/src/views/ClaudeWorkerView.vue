@@ -1,23 +1,26 @@
 <template>
   <div :class="['worker-layout', { 'fullscreen-active': isSessionFullscreen }]">
     <!-- Left Panel: Two-level Tree Sidebar -->
-    <aside class="worker-sidebar">
+    <aside :class="['worker-sidebar', { collapsed: prefs.leftPanelCollapsed }]">
       <div class="sidebar-header">
         <h3>Workers</h3>
-        <el-dropdown trigger="click" @command="handleAddCommand">
-          <el-button type="primary" size="small">+ 添加</el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="worker">添加 Worker</el-dropdown-item>
-              <el-dropdown-item command="directory" :disabled="!selectedWorkerId">
-                添加工作目录
-              </el-dropdown-item>
-              <el-dropdown-item command="project" :disabled="!selectedWorkerId">
-                添加项目目录
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <div class="sidebar-header-actions">
+          <el-dropdown trigger="click" @command="handleAddCommand">
+            <el-button type="primary" size="small">+ 添加</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="worker">添加 Worker</el-dropdown-item>
+                <el-dropdown-item command="directory" :disabled="!selectedWorkerId">
+                  添加工作目录
+                </el-dropdown-item>
+                <el-dropdown-item command="project" :disabled="!selectedWorkerId">
+                  添加项目目录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <span class="panel-collapse-btn" title="收起侧栏" @click="prefs.leftPanelCollapsed = true">&laquo;</span>
+        </div>
       </div>
       <div class="worker-list">
         <template v-for="worker in workerState.workers.value" :key="worker.workerId">
@@ -166,6 +169,9 @@
 
     <!-- Middle Panel: Main Content Area -->
     <main :class="['worker-main', { 'has-panes': panes.length > 0 }]" @paste="handlePaste" @drop="handleDrop" @dragover="handleDragOver">
+      <!-- Expand buttons for collapsed panels -->
+      <span v-if="prefs.leftPanelCollapsed" class="panel-expand-btn left-expand" title="展开侧栏" @click="prefs.leftPanelCollapsed = false">&raquo;</span>
+      <span v-if="prefs.rightPanelCollapsed" class="panel-expand-btn right-expand" title="展开历史" @click="prefs.rightPanelCollapsed = false">&laquo;</span>
       <!-- Hidden file input for attachment picker (images + files) -->
       <input ref="fileInputRef" type="file" multiple class="sr-only" @change="handleFileSelect">
       <!-- Fullscreen exit bar (only visible in fullscreen mode) -->
@@ -909,8 +915,9 @@
     </main>
 
     <!-- Right Panel: Task History -->
-    <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" class="worker-history">
+    <aside v-if="selectedWorkerId || workerState.activeTasks.value.length > 0" :class="['worker-history', { collapsed: prefs.rightPanelCollapsed }]">
       <div class="history-header">
+        <span class="panel-collapse-btn" title="收起历史" @click="prefs.rightPanelCollapsed = true">&raquo;</span>
         <h3>历史会话</h3>
         <div class="history-header-actions">
           <template v-if="batchSelectMode">
@@ -6248,6 +6255,13 @@ function handlePopOutTerminal() {
   flex-direction: column;
   background: #f7f8fa;
   border-right: 1px solid #e4e7ed;
+  transition: width 0.3s ease;
+  overflow: hidden;
+}
+
+.worker-sidebar.collapsed {
+  width: 0;
+  border-right: none;
 }
 
 .sidebar-header {
@@ -6262,6 +6276,71 @@ function handlePopOutTerminal() {
   margin: 0;
   font-size: 16px;
   color: #303133;
+}
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Panel collapse / expand buttons */
+.panel-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #909399;
+  font-size: 14px;
+  user-select: none;
+  flex-shrink: 0;
+  transition: color 0.2s, background-color 0.2s;
+}
+
+.panel-collapse-btn:hover {
+  color: #409eff;
+  background: #ecf5ff;
+}
+
+.panel-expand-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  width: 20px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f0f2f5;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #909399;
+  font-size: 14px;
+  user-select: none;
+  transition: color 0.2s, background-color 0.2s;
+}
+
+.panel-expand-btn:hover {
+  color: #409eff;
+  background: #ecf5ff;
+  border-color: #409eff;
+}
+
+.left-expand {
+  left: 0;
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+}
+
+.right-expand {
+  right: 0;
+  border-right: none;
+  border-radius: 4px 0 0 4px;
 }
 
 .worker-list {
@@ -6452,6 +6531,7 @@ function handlePopOutTerminal() {
   flex-direction: column;
   overflow-y: auto;
   padding: 20px 24px;
+  position: relative;
 }
 
 /* When panes are open: no scroll, pane grid fills remaining space */
@@ -6467,6 +6547,13 @@ function handlePopOutTerminal() {
   flex-direction: column;
   background: #fafafa;
   border-left: 1px solid #e4e7ed;
+  transition: width 0.3s ease;
+  overflow: hidden;
+}
+
+.worker-history.collapsed {
+  width: 0;
+  border-left: none;
 }
 
 .history-header {
