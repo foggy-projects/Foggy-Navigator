@@ -18,6 +18,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -246,7 +247,7 @@ class ClaudeWorkerA2aAgentTest {
             ctxEntity.setContextId("ctx-1");
             ctxEntity.setAgentSessionRef("claude-sess-existing");
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
-            when(contextStore.findContextForAgent("ctx-1", "user-1", "agent-1", 24))
+            when(contextStore.findContextForAgent("ctx-1", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
@@ -261,7 +262,7 @@ class ClaudeWorkerA2aAgentTest {
             agent.sendTask(message);
 
             // claudeSessionId 应被传递给 CreateTaskForm（通过 A2aContext.agentSessionRef）
-            verify(contextStore).findContextForAgent("ctx-1", "user-1", "agent-1", 24);
+            verify(contextStore).findContextForAgent("ctx-1", "user-1", "agent-1");
             ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("claude-sess-existing", captor.getValue().getClaudeSessionId(),
@@ -271,7 +272,7 @@ class ClaudeWorkerA2aAgentTest {
 
         @Test
         void contextRestore_noMatch_claudeSessionIdIsNull() {
-            when(contextStore.findContextForAgent("ctx-new", "user-1", "agent-1", 24))
+            when(contextStore.findContextForAgent("ctx-new", "user-1", "agent-1"))
                     .thenReturn(Optional.empty());
             when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
@@ -307,7 +308,7 @@ class ClaudeWorkerA2aAgentTest {
             agent.sendTask(message);
 
             // 没有 contextId → 不查 findSessionRefForAgent → claudeSessionId 为 null
-            verify(contextStore, never()).findContextForAgent(anyString(), anyString(), anyString(), anyInt());
+            verify(contextStore, never()).findContextForAgent(anyString(), anyString(), anyString());
             ArgumentCaptor<CreateTaskForm> captor = ArgumentCaptor.forClass(CreateTaskForm.class);
             verify(taskService).createTask(anyString(), anyString(), captor.capture());
             assertNull(captor.getValue().getClaudeSessionId());
@@ -354,7 +355,7 @@ class ClaudeWorkerA2aAgentTest {
             ctxEntity.setAgentSessionRef("claude-sess-alias");
             ctxEntity.setNavigatorSessionId("nav-sess-alias");
             ctxEntity.setContextAlias("my-alias");
-            when(contextStore.findByAlias("my-alias", "user-1", "agent-1", 24))
+            when(contextStore.findByAlias("my-alias", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
@@ -379,12 +380,41 @@ class ClaudeWorkerA2aAgentTest {
         }
 
         @Test
+        void contextAlias_lookupMiss_thenSaveDuplicateAlias_bubblesUniqueConstraint() {
+            when(contextStore.findByAlias("daily-alias", "user-1", "agent-1"))
+                    .thenReturn(Optional.empty());
+            when(taskService.findRecentByDedupKey(anyString(), anyInt())).thenReturn(Optional.empty());
+            when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
+            doThrow(new DataIntegrityViolationException(
+                    "Duplicate entry 'daily-alias-user-1-agent-1' for key 'agent_conversation_contexts.idx_acc_alias_user_agent'"))
+                    .when(contextStore)
+                    .saveSessionRefFull(anyString(), eq("claude-worker"),
+                            eq("claude-sess-1"), eq("session-1"),
+                            eq("user-1"), eq("agent-1"), eq("daily-alias"));
+
+            A2aAgent agent = pipelineWithContextStore();
+            A2aMessage message = A2aMessage.builder()
+                    .role("user")
+                    .parts(List.of(A2aPart.text("daily task run")))
+                    .contextAlias("daily-alias")
+                    .metadata(Map.of())
+                    .build();
+
+            DataIntegrityViolationException ex = assertThrows(
+                    DataIntegrityViolationException.class,
+                    () -> agent.sendTask(message));
+
+            assertTrue(ex.getMessage().contains("idx_acc_alias_user_agent"));
+            verify(taskService).createTask(eq("user-1"), eq("tenant-1"), any());
+        }
+
+        @Test
         void firstMsg_isIgnoredOnResume() {
             AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
             ctxEntity.setContextId("ctx-continue");
             ctxEntity.setAgentSessionRef("claude-sess-existing");
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
-            when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1", 24))
+            when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
@@ -408,7 +438,7 @@ class ClaudeWorkerA2aAgentTest {
             AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
             ctxEntity.setContextId("ctx-nav-only");
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
-            when(contextStore.findContextForAgent("ctx-nav-only", "user-1", "agent-1", 24))
+            when(contextStore.findContextForAgent("ctx-nav-only", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(anyString(), anyString(), any())).thenReturn(defaultTaskDTO());
 
@@ -432,7 +462,7 @@ class ClaudeWorkerA2aAgentTest {
         void dedupHit_isHandledByDecoratorBeforeTaskCreation() {
             AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
             ctxEntity.setContextId("ctx-continue");
-            when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1", 24))
+            when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
             TaskDTO existing = TaskDTO.builder()
                     .taskId("existing-task")
@@ -458,7 +488,7 @@ class ClaudeWorkerA2aAgentTest {
 
         @Test
         void contextMismatch_returnsFailedTask() {
-            when(contextStore.findContextForAgent("ctx-wrong", "user-1", "agent-1", 24))
+            when(contextStore.findContextForAgent("ctx-wrong", "user-1", "agent-1"))
                     .thenThrow(new ContextAgentMismatchException("ctx-wrong", "agent-other", "agent-1"));
 
             A2aAgent agent = pipelineWithContextStore();

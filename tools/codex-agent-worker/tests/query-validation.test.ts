@@ -21,7 +21,6 @@ test('validateQueryRequest trims and returns normalized payload', () => {
     session_id: 'abc',
     api_key: 'sk-test',
     max_turns: 2,
-    images: undefined,
   })
 })
 

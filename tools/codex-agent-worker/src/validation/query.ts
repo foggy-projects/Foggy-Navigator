@@ -139,18 +139,35 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
   const images = validateImages(body.images)
   if (images && !Array.isArray(images)) return images
 
+  const value: QueryRequest = { prompt }
+
+  if (cwd !== undefined) {
+    value.cwd = cwd
+  }
+  if (sessionId !== undefined) {
+    value.session_id = sessionId
+  }
+  if (model !== undefined) {
+    value.model = model
+  }
+  if (maxTurns !== undefined) {
+    value.max_turns = maxTurns
+  }
+  if (images !== undefined) {
+    value.images = images
+  }
+  if (apiKey !== undefined) {
+    value.api_key = apiKey
+  }
+  if (baseUrl !== undefined) {
+    value.base_url = baseUrl
+  }
+  if (body.env_vars !== undefined) {
+    value.env_vars = body.env_vars as Record<string, string>
+  }
+
   return {
     ok: true,
-    value: {
-      prompt,
-      cwd,
-      session_id: sessionId,
-      model,
-      max_turns: maxTurns as number | undefined,
-      images,
-      api_key: apiKey,
-      base_url: baseUrl,
-      env_vars: body.env_vars as Record<string, string> | undefined,
-    },
+    value,
   }
 }

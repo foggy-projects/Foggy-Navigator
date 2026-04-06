@@ -26,7 +26,6 @@ import java.util.Optional;
 public class ContextResolvingA2aAgent implements A2aAgent {
 
     private static final Logger log = LoggerFactory.getLogger(ContextResolvingA2aAgent.class);
-    private static final int CONTEXT_TTL_HOURS = 24;
     private static final String META_SYSTEM_PROMPT = "systemPrompt";
     private static final String META_FIRST_MSG = "firstMsg";
     private static final String META_FIRST_MSG_APPLIED = "firstMsgApplied";
@@ -76,7 +75,7 @@ public class ContextResolvingA2aAgent implements A2aAgent {
             if (contextId != null && !contextId.isBlank()) {
                 try {
                     Optional<AgentConversationContextEntity> existing = contextStore.findContextForAgent(
-                            contextId, userId, agentId, CONTEXT_TTL_HOURS);
+                            contextId, userId, agentId);
                     if (existing.isPresent()) {
                         AgentConversationContextEntity ctx = existing.get();
                         agentSessionRef = ctx.getAgentSessionRef();
@@ -94,7 +93,7 @@ public class ContextResolvingA2aAgent implements A2aAgent {
             // 1b. Try contextAlias (business alias lookup)
             if (contextAlias != null && !contextAlias.isBlank()) {
                 Optional<AgentConversationContextEntity> existing =
-                        contextStore.findByAlias(contextAlias, userId, agentId, CONTEXT_TTL_HOURS);
+                        contextStore.findByAlias(contextAlias, userId, agentId);
                 if (existing.isPresent()) {
                     AgentConversationContextEntity ctx = existing.get();
                     resolvedContextId = ctx.getContextId();
