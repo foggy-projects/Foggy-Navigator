@@ -15,6 +15,50 @@ set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC='\033[0m'
 
+install_cli_link() {
+    local cli_name="$1"
+    local cli_source="$2"
+    local target_dir=""
+
+    for candidate in "$HOME/.local/bin" "$HOME/bin"; do
+        if echo ":$PATH:" | grep -q ":$candidate:"; then
+            mkdir -p "$candidate"
+            if [ -w "$candidate" ]; then
+                target_dir="$candidate"
+                break
+            fi
+        fi
+    done
+
+    if [ -z "$target_dir" ]; then
+        local old_ifs="$IFS"
+        IFS=':'
+        for dir in $PATH; do
+            [ -n "$dir" ] || continue
+            if [ -d "$dir" ] && [ -w "$dir" ]; then
+                target_dir="$dir"
+                break
+            fi
+        done
+        IFS="$old_ifs"
+    fi
+
+    if [ -z "$target_dir" ]; then
+        target_dir="$HOME/.local/bin"
+        mkdir -p "$target_dir"
+    fi
+
+    local target_path="$target_dir/$cli_name"
+    if ln -snf "$cli_source" "$target_path" 2>/dev/null; then
+        :
+    else
+        cp "$cli_source" "$target_path"
+        chmod +x "$target_path"
+    fi
+
+    echo "$target_path"
+}
+
 # --- Paths ----------------------------------------------------------------
 INSTALL_DIR="${CLAUDE_WORKER_HOME:-$HOME/.claude-worker}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -190,6 +234,8 @@ mkdir -p "$INSTALL_DIR/logs"
 # --- PATH guidance --------------------------------------------------------
 echo ""
 BIN_DIR="$INSTALL_DIR/bin"
+ACTIVE_CLI_PATH=$(install_cli_link "claude-worker" "$INSTALL_DIR/bin/claude-worker")
+ACTIVE_CLI_DIR=$(dirname "$ACTIVE_CLI_PATH")
 SHELL_RC=""
 case "$SHELL" in
     */zsh)  SHELL_RC="$HOME/.zshrc";;
@@ -197,9 +243,11 @@ case "$SHELL" in
     *)      SHELL_RC="$HOME/.profile";;
 esac
 
-PATH_LINE="export PATH=\"$BIN_DIR:\$PATH\""
-if ! echo "$PATH" | grep -qF "$BIN_DIR"; then
-    if [ -n "$SHELL_RC" ] && ! grep -qF "$BIN_DIR" "$SHELL_RC" 2>/dev/null; then
+echo -e "${GREEN}CLI shim: $ACTIVE_CLI_PATH${NC}"
+
+PATH_LINE="export PATH=\"$ACTIVE_CLI_DIR:\$PATH\""
+if ! echo ":$PATH:" | grep -q ":$ACTIVE_CLI_DIR:"; then
+    if [ -n "$SHELL_RC" ] && ! grep -qF "$ACTIVE_CLI_DIR" "$SHELL_RC" 2>/dev/null; then
         echo -e "${YELLOW}To add 'claude-worker' to your PATH, run:${NC}"
         echo -e "  echo '$PATH_LINE' >> $SHELL_RC && source $SHELL_RC"
         echo ""
@@ -222,6 +270,7 @@ echo -e "  ${CYAN}claude-worker status${NC}    Check status & health"
 echo -e "  ${CYAN}claude-worker version${NC}   Show version"
 echo -e "  ${CYAN}claude-worker logs${NC}      Tail log output"
 echo -e "  ${CYAN}claude-worker upgrade${NC}   Upgrade to new version"
+echo -e "  ${CYAN}$ACTIVE_CLI_PATH start${NC}   Direct command path"
 echo ""
 echo -e "Config:  $INSTALL_DIR/.env"
 echo -e "Logs:    $INSTALL_DIR/logs/"

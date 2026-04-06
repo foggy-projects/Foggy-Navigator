@@ -6,6 +6,7 @@ import { Codex } from '@openai/codex-sdk'
 import { config } from '../config.js'
 import { taskRegistry } from '../codex/sdk-wrapper.js'
 import type { HealthResponse } from '../models.js'
+import { APP_VERSION } from '../version.js'
 
 const router = Router()
 
@@ -43,7 +44,7 @@ router.get('/health', (_req: Request, res: Response) => {
   const response: HealthResponse = {
     status: 'ok',
     hostname: os.hostname(),
-    version: '1.0.0',
+    version: APP_VERSION,
     worker_name: config.workerName,
     active_tasks: activeTasks,
     codex_sdk_available: codexSdkAvailable,

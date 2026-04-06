@@ -1,0 +1,211 @@
+#!/bin/bash
+# codex-worker -- Unified CLI for Codex Agent Worker
+
+set -e
+
+INSTALL_DIR="${CODEX_WORKER_HOME:-$HOME/.codex-worker}"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/../../package.json" ] && [ ! -f "$INSTALL_DIR/VERSION" ]; then
+    if grep -q '"name":[[:space:]]*"codex-agent-worker"' "$SCRIPT_DIR/../../package.json" 2>/dev/null; then
+        INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+    fi
+fi
+
+if [ -f "$INSTALL_DIR/VERSION" ]; then
+    VERSION=$(cat "$INSTALL_DIR/VERSION" 2>/dev/null || echo "unknown")
+elif [ -f "$INSTALL_DIR/package.json" ]; then
+    VERSION=$(grep '"version"' "$INSTALL_DIR/package.json" | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+else
+    VERSION="unknown"
+fi
+
+PORT=3051
+if [ -f "$INSTALL_DIR/.env" ]; then
+    _port=$(grep "^CODEX_WORKER_PORT=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2)
+    [ -n "$_port" ] && PORT="$_port"
+fi
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; GRAY='\033[0;37m'; NC='\033[0m'
+
+cmd_start() {
+    echo -e "${CYAN}Starting Codex Agent Worker v${VERSION}...${NC}"
+    bash "$INSTALL_DIR/start.sh"
+}
+
+cmd_stop() {
+    bash "$INSTALL_DIR/stop.sh"
+}
+
+cmd_status() {
+    echo -e "${CYAN}Codex Agent Worker${NC}"
+    echo -e "  Version:  ${GREEN}${VERSION}${NC}"
+    echo -e "  Install:  $INSTALL_DIR"
+    echo -e "  Port:     $PORT"
+
+    PIDS=$(lsof -ti:$PORT 2>/dev/null || true)
+    if [ -n "$PIDS" ]; then
+        echo -e "  Status:   ${GREEN}RUNNING${NC} (PID: $PIDS)"
+        HEALTH=$(curl -s --max-time 3 "http://localhost:$PORT/health" 2>/dev/null || echo "")
+        if [ -n "$HEALTH" ]; then
+            echo -e "  Health:   $HEALTH"
+        fi
+    else
+        echo -e "  Status:   ${GRAY}STOPPED${NC}"
+    fi
+}
+
+cmd_version() {
+    echo "codex-worker $VERSION"
+}
+
+cmd_logs() {
+    LOG_FILE="$INSTALL_DIR/logs/worker.log"
+    if [ -f "$LOG_FILE" ]; then
+        tail -f "$LOG_FILE"
+    else
+        echo -e "${YELLOW}No log file found at $LOG_FILE${NC}"
+        echo -e "${YELLOW}The worker may not have been started yet.${NC}"
+    fi
+}
+
+cmd_upgrade() {
+    CURRENT_VERSION="$VERSION"
+
+    echo -e "${CYAN}Codex Agent Worker Upgrade${NC}"
+
+    if [ -n "$1" ] && [ -f "$1" ]; then
+        echo -e "${CYAN}Upgrading from local archive: $1${NC}"
+        _upgrade_from_archive "$1"
+        return
+    fi
+
+    if [ -z "$CODEX_WORKER_URL" ] && [ -f "$INSTALL_DIR/.env" ]; then
+        CODEX_WORKER_URL=$(grep "^CODEX_WORKER_URL=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+    fi
+
+    if [ -n "$CODEX_WORKER_URL" ]; then
+        _upgrade_from_obs "$CODEX_WORKER_URL"
+        return
+    fi
+
+    echo -e "${YELLOW}Usage:${NC}"
+    echo -e "  codex-worker upgrade /path/to/codex-worker-X.Y.Z.tar.gz"
+    echo ""
+    echo -e "${YELLOW}To enable auto-upgrade, set:${NC}"
+    echo -e "  CODEX_WORKER_URL   OBS/HTTP base URL (in .env or environment)"
+    return 1
+}
+
+_upgrade_from_obs() {
+    local BASE_URL="$1"
+    echo -e "${CYAN}Checking latest version from $BASE_URL ...${NC}"
+
+    LATEST_JSON=$(curl -s --max-time 15 "$BASE_URL/latest.json" 2>/dev/null || echo "")
+    if [ -z "$LATEST_JSON" ]; then
+        echo -e "${RED}Could not fetch $BASE_URL/latest.json${NC}"
+        return 1
+    fi
+
+    LATEST_VERSION=$(echo "$LATEST_JSON" | grep '"version"' | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+    if [ -z "$LATEST_VERSION" ]; then
+        echo -e "${RED}Could not parse version from latest.json${NC}"
+        return 1
+    fi
+
+    if [ "$LATEST_VERSION" = "$CURRENT_VERSION" ]; then
+        echo -e "${GREEN}Already up to date (v${CURRENT_VERSION}).${NC}"
+        return 0
+    fi
+
+    echo -e "${CYAN}New version available: $CURRENT_VERSION -> $LATEST_VERSION${NC}"
+
+    case "$(uname -s)" in
+        Linux*) OS_TAG="linux" ;;
+        Darwin*) OS_TAG="macos" ;;
+        *) OS_TAG="linux" ;;
+    esac
+
+    FILE_PATH=$(echo "$LATEST_JSON" | grep "\"$OS_TAG\"" | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+    if [ -z "$FILE_PATH" ]; then
+        echo -e "${RED}No release artifact found for $OS_TAG${NC}"
+        return 1
+    fi
+
+    DOWNLOAD_URL="$BASE_URL/$FILE_PATH"
+    echo -e "${CYAN}Downloading: $DOWNLOAD_URL${NC}"
+
+    TMPDIR=$(mktemp -d)
+    local ARCHIVE_FILE="$TMPDIR/$(basename "$FILE_PATH")"
+    curl -L --max-time 120 -o "$ARCHIVE_FILE" "$DOWNLOAD_URL"
+
+    export CODEX_WORKER_URL="$BASE_URL"
+    _upgrade_from_archive "$ARCHIVE_FILE"
+    rm -rf "$TMPDIR"
+}
+
+_upgrade_from_archive() {
+    local ARCHIVE="$1"
+    local TMPDIR
+    TMPDIR=$(mktemp -d)
+
+    echo -e "${CYAN}Extracting...${NC}"
+    if [[ "$ARCHIVE" == *.zip ]]; then
+        unzip -q "$ARCHIVE" -d "$TMPDIR"
+    else
+        tar xzf "$ARCHIVE" -C "$TMPDIR"
+    fi
+
+    EXTRACTED=$(find "$TMPDIR" -name "install.sh" -maxdepth 2 | head -1)
+    if [ -z "$EXTRACTED" ]; then
+        echo -e "${RED}No install.sh found in archive${NC}"
+        rm -rf "$TMPDIR"
+        return 1
+    fi
+
+    EXTRACTED_DIR=$(dirname "$EXTRACTED")
+    chmod +x "$EXTRACTED_DIR/install.sh"
+    bash "$EXTRACTED_DIR/install.sh" --upgrade
+
+    rm -rf "$TMPDIR"
+
+    NEW_VERSION=$(cat "$INSTALL_DIR/VERSION" 2>/dev/null || echo "unknown")
+    echo -e "${GREEN}Upgraded to v${NEW_VERSION}!${NC}"
+}
+
+cmd_help() {
+    echo "codex-worker v${VERSION} -- Codex Agent Worker CLI"
+    echo ""
+    echo "Usage: codex-worker <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  start              Start the worker service"
+    echo "  stop               Stop the worker service"
+    echo "  status             Show worker status and health"
+    echo "  version            Show installed version"
+    echo "  logs               Tail worker log output"
+    echo "  upgrade [archive]  Upgrade from OBS or local .tar.gz/.zip"
+    echo "  help               Show this help message"
+    echo ""
+    echo "Environment:"
+    echo "  CODEX_WORKER_HOME   Install directory (default: ~/.codex-worker)"
+    echo "  CODEX_WORKER_URL    OBS/HTTP base URL for auto-upgrade"
+    echo ""
+    echo "Config: $INSTALL_DIR/.env"
+}
+
+case "${1:-help}" in
+    start) cmd_start ;;
+    stop) cmd_stop ;;
+    status) cmd_status ;;
+    version|-v|--version) cmd_version ;;
+    logs) cmd_logs ;;
+    upgrade) shift; cmd_upgrade "$@" ;;
+    help|--help|-h) cmd_help ;;
+    *)
+        echo -e "${RED}Unknown command: $1${NC}"
+        cmd_help
+        exit 1
+        ;;
+esac
