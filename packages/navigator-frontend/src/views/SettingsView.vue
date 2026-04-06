@@ -2,6 +2,10 @@
   <div class="settings-layout">
     <div class="settings-header">
       <h2>系统设置</h2>
+      <el-button class="settings-help-button" plain @click="showHelpDrawer = true">
+        <el-icon><QuestionFilled /></el-icon>
+        Worker 安装帮助
+      </el-button>
     </div>
 
     <el-tabs v-model="activeTab" class="settings-tabs">
@@ -340,6 +344,177 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <el-drawer v-model="showHelpDrawer" size="760px" destroy-on-close>
+      <template #header>
+        <div class="help-drawer-header">
+          <div>
+            <div class="help-drawer-eyebrow">Foggy Navigator Help</div>
+            <div class="help-drawer-title">Claude / Codex Worker 安装与配置</div>
+          </div>
+        </div>
+      </template>
+
+      <div class="help-drawer-body">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="这里说明的是远端 Worker 的安装、升级和平台接入方式。平台侧的 addons/claude-worker-agent 与 addons/codex-worker-agent 随 Navigator 服务部署后即可生效。"
+        />
+
+        <el-tabs v-model="helpTab" class="help-tabs">
+          <el-tab-pane label="Claude Worker" name="claude">
+            <section class="help-section">
+              <div class="help-section-title">对应模块</div>
+              <div class="help-section-text">
+                平台侧 addon：<code>addons/claude-worker-agent</code><br>
+                远端执行器：<code>tools/claude-agent-worker</code>
+              </div>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">一键安装</div>
+              <div class="help-section-text">适用于远端开发机、个人电脑或家里主机。</div>
+              <pre class="help-code"># Linux / macOS
+curl -sSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/claude-worker/install.sh | bash
+
+# Windows PowerShell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/claude-worker/install.ps1 | iex</pre>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">升级</div>
+              <pre class="help-code">claude-worker upgrade
+
+# 也可以指定本地安装包
+claude-worker upgrade /path/to/claude-worker-0.2.0-linux.tar.gz</pre>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">配置文件</div>
+              <div class="help-section-text">
+                安装目录默认是 <code>~/.claude-worker/</code>，核心配置写在 <code>~/.claude-worker/.env</code>。
+              </div>
+              <pre class="help-code">AGENT_WORKER_PORT=3031
+AGENT_WORKER_WORKER_NAME=我的-Claude-Worker
+AGENT_WORKER_WORKER_TOKEN=your-token
+
+# Windows: AGENT_WORKER_ALLOWED_CWDS=["D:\\projects"]
+# Linux:   AGENT_WORKER_ALLOWED_CWDS=["/home/user/projects"]
+AGENT_WORKER_ALLOWED_CWDS=[]
+
+# 认证方式三选一
+# 1. 订阅模式（推荐）：先执行 claude login
+# 2. Proxy 模式：
+# AGENT_WORKER_ANTHROPIC_AUTH_TOKEN=any-token
+# AGENT_WORKER_ANTHROPIC_BASE_URL=http://localhost:8082
+# 3. API Key 模式：
+# AGENT_WORKER_ANTHROPIC_API_KEY=sk-ant-api03-xxx</pre>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">启动与平台接入</div>
+              <pre class="help-code">claude-worker start
+claude-worker status</pre>
+              <ul class="help-list">
+                <li>在当前页面的「Claude Workers」里点击「+ 添加 Worker」。</li>
+                <li>地址填写远端机器地址，例如 <code>http://192.168.1.100:3031</code>。</li>
+                <li>认证令牌填写 <code>AGENT_WORKER_WORKER_TOKEN</code>。</li>
+                <li>认证模式按远端机器实际方式选择：订阅模式、API Key 模式或自定义端点。</li>
+                <li>如果希望平台统一下发模型配置，在「LLM 配置」里创建后端为 Claude 的模型项即可。</li>
+              </ul>
+            </section>
+          </el-tab-pane>
+
+          <el-tab-pane label="Codex Worker" name="codex">
+            <section class="help-section">
+              <div class="help-section-title">对应模块</div>
+              <div class="help-section-text">
+                平台侧 addon：<code>addons/codex-worker-agent</code><br>
+                远端执行器：<code>tools/codex-agent-worker</code>
+              </div>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">一键安装</div>
+              <pre class="help-code"># Linux / macOS
+curl -sSL https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker/install.sh | bash
+
+# Windows PowerShell
+irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/codex-worker/install.ps1 | iex</pre>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">升级</div>
+              <pre class="help-code">codex-worker upgrade</pre>
+              <div class="help-section-text">
+                升级时会自动保留已有 <code>.env</code>，并在安装目录重新部署运行文件。
+              </div>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">配置文件</div>
+              <div class="help-section-text">
+                安装目录默认是 <code>~/.codex-worker/</code>，核心配置写在 <code>~/.codex-worker/.env</code>。
+              </div>
+              <pre class="help-code">CODEX_WORKER_PORT=3051
+CODEX_WORKER_HOST=0.0.0.0
+CODEX_WORKER_NAME=我的-Codex-Worker
+CODEX_WORKER_TOKEN=your-token
+CODEX_ALLOWED_CWDS=
+
+# 订阅模式：先执行 codex login，保持 OPENAI_API_KEY 为空
+# API Key 模式：直接填写
+OPENAI_API_KEY=sk-xxx
+# OPENAI_BASE_URL=https://api.openai.com/v1
+
+CODEX_MAX_CONCURRENT_TASKS=6
+CODEX_LOG_LEVEL=info</pre>
+              <ul class="help-list">
+                <li>订阅模式依赖本机 <code>~/.codex/auth.json</code>，先执行 <code>codex login</code>。</li>
+                <li>API Key 模式可由 Worker 本地 <code>OPENAI_API_KEY</code> 提供，也可由平台请求时覆盖下发。</li>
+                <li><code>CODEX_ALLOWED_CWDS</code> 留空表示不限制；填写时必须是绝对路径。</li>
+              </ul>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">启动与平台接入</div>
+              <pre class="help-code">codex-worker start
+codex-worker status</pre>
+              <ul class="help-list">
+                <li>先在「LLM 配置」里新增一个后端为 Codex 的模型配置。</li>
+                <li>订阅模式下 API Key 可以留空；API Key 模式则填写平台侧 Key。</li>
+                <li>在 Workers 页面维护机器时，补齐 Codex Base URL、Codex Token、Codex 默认模型。</li>
+                <li>常见地址是 <code>http://&lt;host&gt;:3051</code>，令牌对应 <code>CODEX_WORKER_TOKEN</code>。</li>
+              </ul>
+            </section>
+          </el-tab-pane>
+
+          <el-tab-pane label="推荐流程" name="workflow">
+            <section class="help-section">
+              <div class="help-section-title">推荐接入顺序</div>
+              <ul class="help-list">
+                <li>先在远端机器安装并启动 Worker，确认 <code>/health</code> 可访问。</li>
+                <li>再回到平台录入 Worker 地址和令牌，执行一次「检测」。</li>
+                <li>最后在「LLM 配置」里补齐模型、后端和 API Key/订阅模式策略。</li>
+                <li>如果平台要统一管控鉴权，优先把 Key 配在「LLM 配置」里，而不是散落在每台机器。</li>
+              </ul>
+            </section>
+
+            <section class="help-section">
+              <div class="help-section-title">排查提示</div>
+              <ul class="help-list">
+                <li>Worker 检测失败，优先检查端口、防火墙、Base URL 是否可从 Navigator 所在机器访问。</li>
+                <li>Claude 无法执行时，检查远端是否已经 <code>claude login</code> 或是否配置了 Proxy / API Key。</li>
+                <li>Codex 无法执行时，检查远端是否已经 <code>codex login</code>，或平台侧/本地侧是否提供了有效的 OpenAI Key。</li>
+                <li>目录相关报错通常是白名单问题：Claude 看 <code>AGENT_WORKER_ALLOWED_CWDS</code>，Codex 看 <code>CODEX_ALLOWED_CWDS</code>。</li>
+              </ul>
+            </section>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+    </el-drawer>
 
     <!-- Git Provider Dialog -->
     <el-dialog v-model="showGitDialog" :title="gitDialogMode === 'add' ? '添加 Git 提供者' : '编辑 Git 提供者'" width="480px">
@@ -725,6 +900,8 @@ import type { TaskAssistantConfig } from '@/api/notification'
 import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, ModelAccessScope, UserMemory, UserMemoryCategory, ApiCredential, AuthType } from '@/types'
 
 const activeTab = ref('git')
+const showHelpDrawer = ref(false)
+const helpTab = ref('claude')
 const saving = ref(false)
 
 // ===== Loading states =====
@@ -1462,6 +1639,10 @@ onMounted(() => {
   color: #303133;
 }
 
+.settings-help-button {
+  gap: 6px;
+}
+
 .settings-tabs {
   background: #fff;
   border-radius: 8px;
@@ -1508,5 +1689,80 @@ onMounted(() => {
 
 .assistant-config {
   padding: 4px 0;
+}
+
+.help-drawer-header {
+  display: flex;
+  align-items: center;
+}
+
+.help-drawer-eyebrow {
+  font-size: 12px;
+  color: #909399;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.help-drawer-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.help-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.help-tabs :deep(.el-tabs__content) {
+  padding-top: 8px;
+}
+
+.help-section {
+  border: 1px solid #ebeef5;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: #fff;
+}
+
+.help-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 8px;
+}
+
+.help-section-text {
+  color: #606266;
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.help-code {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.help-list {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: #606266;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.help-list li + li {
+  margin-top: 6px;
 }
 </style>
