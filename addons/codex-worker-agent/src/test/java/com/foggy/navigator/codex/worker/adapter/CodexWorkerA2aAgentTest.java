@@ -180,7 +180,7 @@ class CodexWorkerA2aAgentTest {
             ctxEntity.setContextId("ctx-1");
             ctxEntity.setAgentSessionRef("thread-existing");
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
-            when(contextStore.findContextForAgent("ctx-1", "user-1", "agent-1", 24))
+            when(contextStore.findContextForAgent("ctx-1", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
                     .taskId("task-2")
@@ -198,7 +198,7 @@ class CodexWorkerA2aAgentTest {
 
             A2aTask result = agent.sendTask(message);
 
-            verify(contextStore).findContextForAgent("ctx-1", "user-1", "agent-1", 24);
+            verify(contextStore).findContextForAgent("ctx-1", "user-1", "agent-1");
             ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
             verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
             assertEquals("thread-existing", captor.getValue().getCodexThreadId(),
@@ -239,7 +239,7 @@ class CodexWorkerA2aAgentTest {
             ctxEntity.setAgentSessionRef("thread-alias");
             ctxEntity.setNavigatorSessionId("nav-sess-alias");
             ctxEntity.setContextAlias("my-alias");
-            when(contextStore.findByAlias("my-alias", "user-1", "agent-1", 24))
+            when(contextStore.findByAlias("my-alias", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
                     .taskId("task-alias")
@@ -272,7 +272,7 @@ class CodexWorkerA2aAgentTest {
             ctxEntity.setContextId("ctx-continue");
             ctxEntity.setAgentSessionRef("thread-existing");
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
-            when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1", 24))
+            when(contextStore.findContextForAgent("ctx-continue", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
                     .taskId("task-continue")
@@ -301,7 +301,7 @@ class CodexWorkerA2aAgentTest {
             AgentConversationContextEntity ctxEntity = new AgentConversationContextEntity();
             ctxEntity.setContextId("ctx-nav-only");
             ctxEntity.setNavigatorSessionId("nav-sess-existing");
-            when(contextStore.findContextForAgent("ctx-nav-only", "user-1", "agent-1", 24))
+            when(contextStore.findContextForAgent("ctx-nav-only", "user-1", "agent-1"))
                     .thenReturn(Optional.of(ctxEntity));
             when(taskService.createTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(CodexTaskDTO.builder()
                     .taskId("task-nav-only")

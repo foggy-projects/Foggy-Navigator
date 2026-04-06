@@ -17,33 +17,28 @@ public class AgentContextStoreImpl implements AgentContextStore {
     private final AgentConversationContextRepository repository;
 
     @Override
-    public Optional<String> findSessionRef(String contextId, String userId, int ttlHours) {
+    public Optional<String> findSessionRef(String contextId, String userId) {
         return repository.findByContextIdAndUserId(contextId, userId)
                 .filter(e -> e.getAgentSessionRef() != null)
-                .filter(e -> e.getLastAccessedAt().isAfter(LocalDateTime.now().minusHours(ttlHours)))
                 .map(AgentConversationContextEntity::getAgentSessionRef);
     }
 
     @Override
     public Optional<String> findSessionRefForAgent(String contextId, String userId,
-                                                   String expectedAgentId, int ttlHours) {
-        return findContextForAgent(contextId, userId, expectedAgentId, ttlHours)
+                                                   String expectedAgentId) {
+        return findContextForAgent(contextId, userId, expectedAgentId)
                 .map(AgentConversationContextEntity::getAgentSessionRef);
     }
 
     @Override
     public Optional<AgentConversationContextEntity> findContextForAgent(
-            String contextId, String userId, String expectedAgentId, int ttlHours) {
+            String contextId, String userId, String expectedAgentId) {
         Optional<AgentConversationContextEntity> opt = repository.findByContextIdAndUserId(contextId, userId);
         if (opt.isEmpty()) {
             return Optional.empty();
         }
 
         AgentConversationContextEntity e = opt.get();
-        // TTL 过期 → 视为不存在
-        if (e.getLastAccessedAt().isBefore(LocalDateTime.now().minusHours(ttlHours))) {
-            return Optional.empty();
-        }
         // Agent 不匹配 → 抛异常
         if (e.getTargetAgentId() != null && !e.getTargetAgentId().equals(expectedAgentId)) {
             throw new ContextAgentMismatchException(contextId, e.getTargetAgentId(), expectedAgentId);
@@ -69,9 +64,8 @@ public class AgentContextStoreImpl implements AgentContextStore {
 
     @Override
     public Optional<AgentConversationContextEntity> findByAlias(
-            String contextAlias, String userId, String targetAgentId, int ttlHours) {
-        return repository.findByContextAliasAndUserIdAndTargetAgentId(contextAlias, userId, targetAgentId)
-                .filter(e -> e.getLastAccessedAt().isAfter(LocalDateTime.now().minusHours(ttlHours)));
+            String contextAlias, String userId, String targetAgentId) {
+        return repository.findByContextAliasAndUserIdAndTargetAgentId(contextAlias, userId, targetAgentId);
     }
 
     @Override

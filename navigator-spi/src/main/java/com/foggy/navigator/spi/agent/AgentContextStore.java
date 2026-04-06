@@ -11,17 +11,16 @@ import java.util.Optional;
 public interface AgentContextStore {
 
     /**
-     * 查找会话引用（带 TTL 检查）
+     * 查找会话引用。
      *
      * @param contextId 上下文 ID
      * @param userId    用户 ID（安全隔离）
-     * @param ttlHours  过期时间（小时），超过则视为无效
-     * @return agentSessionRef（如 claudeSessionId），过期或不存在返回 empty
+     * @return agentSessionRef（如 claudeSessionId），不存在返回 empty
      */
-    Optional<String> findSessionRef(String contextId, String userId, int ttlHours);
+    Optional<String> findSessionRef(String contextId, String userId);
 
     /**
-     * 查找会话引用（带 TTL 检查 + Agent 归属校验）
+     * 查找会话引用（带 Agent 归属校验）
      * <p>
      * 调用者可预先生成 contextId（如 UUID），首次调用时后端自动新建映射；
      * 后续调用时校验 contextId 绑定的 Agent 是否与当前请求一致。
@@ -29,18 +28,17 @@ public interface AgentContextStore {
      * @param contextId       上下文 ID
      * @param userId          用户 ID（安全隔离）
      * @param expectedAgentId 期望的 Agent ID
-     * @param ttlHours        过期时间（小时），超过则视为无效
-     * @return agentSessionRef，过期或不存在返回 empty
+     * @return agentSessionRef，不存在返回 empty
      * @throws ContextAgentMismatchException contextId 已绑定到其他 Agent
      */
     Optional<String> findSessionRefForAgent(String contextId, String userId,
-                                            String expectedAgentId, int ttlHours);
+                                            String expectedAgentId);
 
     /**
-     * 查找完整上下文记录（带 TTL 检查 + Agent 归属校验）。
+     * 查找完整上下文记录（带 Agent 归属校验）。
      */
     default Optional<AgentConversationContextEntity> findContextForAgent(
-            String contextId, String userId, String expectedAgentId, int ttlHours) {
+            String contextId, String userId, String expectedAgentId) {
         return Optional.empty();
     }
 
@@ -54,7 +52,7 @@ public interface AgentContextStore {
      * 按 contextAlias + userId + targetAgentId 查找上下文实体
      */
     Optional<AgentConversationContextEntity> findByAlias(
-            String contextAlias, String userId, String targetAgentId, int ttlHours);
+            String contextAlias, String userId, String targetAgentId);
 
     /**
      * 保存/更新会话映射（含 navigatorSessionId）
