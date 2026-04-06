@@ -79,6 +79,7 @@ import com.foggy.navigator.common.util.IdGenerator;
 public class ClaudeTaskService implements TaskQueryProvider {
 
     private static final String AGENT_ID = "claude-worker";
+    private static final java.util.Set<String> TERMINAL_STATES = java.util.Set.of("COMPLETED", "FAILED", "ABORTED");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ClaudeTaskRepository taskRepository;
@@ -848,6 +849,16 @@ public class ClaudeTaskService implements TaskQueryProvider {
     public void failTask(String taskId, String workerTaskId, String claudeSessionId, String errorMessage) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             String prev = entity.getStatus();
+            // abort 标记检查：cancel 线程已标记 abortRequested，由 cancel 线程统一落库 ABORTED
+            if (Boolean.TRUE.equals(entity.getAbortRequested())) {
+                log.info("failTask: task {} has abortRequested, skipping (cancel thread will finalize)", taskId);
+                return;
+            }
+            // Terminal-state guard：已完成/失败/中止的任务不再更新
+            if (TERMINAL_STATES.contains(prev)) {
+                log.info("failTask: task {} already in terminal state ({}), skipping", taskId, prev);
+                return;
+            }
             entity.setStatus("FAILED");
             entity.setErrorMessage(errorMessage);
             if (workerTaskId != null && !workerTaskId.isBlank()) {
@@ -975,7 +986,14 @@ public class ClaudeTaskService implements TaskQueryProvider {
     public void doAbortWorkerTask(String taskId, String remoteTaskId) {
         ClaudeTaskEntity task = taskRepository.findByTaskId(taskId).orElse(null);
 
-        // 1. 通知 Worker 中止 CLI（在清理流之前，确保 Worker task 还在 registry）
+        // 1. 先置 abortRequested 标记（轻量 UPDATE，独立事务，先 commit）
+        //    Worker 收到 abort 后会立即回复 SSE error 事件，reactor 线程的 failTask()
+        //    检查此标记 → 跳过 DB 更新，从根本上避免两个事务并发 UPDATE 同一行的死锁。
+        //    Worker 离线时标记留存，Reconciler 可据此在 Worker 重连后重试 abort。
+        txTemplate.executeWithoutResult(status ->
+                taskRepository.updateAbortRequestedByTaskId(taskId, true));
+
+        // 2. 通知 Worker 中止 CLI（在清理流之前，确保 Worker task 还在 registry）
         try {
             if (task != null) {
                 ClaudeWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
@@ -995,14 +1013,23 @@ public class ClaudeTaskService implements TaskQueryProvider {
             log.warn("Failed to notify worker for abort task {}: {}", taskId, e.getMessage());
         }
 
-        // 2. 清理本地 SSE 流订阅（停止重连、dispose Flux、清除映射）
+        // 3. 清理本地 SSE 流订阅（停止重连、dispose Flux、清除映射）
         streamRelay.abortStream(taskId);
 
-        // 3. 更新 DB 状态 → ABORTED（单独事务，避免网络 IO 阻塞事务）
+        // 4. 更新 DB 状态 → ABORTED + 清除标记（单独事务）
         txTemplate.executeWithoutResult(status -> {
             taskRepository.findByTaskId(taskId).ifPresent(entity -> {
                 String prev = entity.getStatus();
+                if (TERMINAL_STATES.contains(prev)) {
+                    // reactor 线程可能已抢先设为 FAILED（极端情况：标记 commit 和 Worker
+                    // 通知之间的微小窗口内 Worker 已经自行失败）
+                    log.info("Task {} already in terminal state ({}), clearing abortRequested only", taskId, prev);
+                    entity.setAbortRequested(false);
+                    taskRepository.save(entity);
+                    return;
+                }
                 entity.setStatus("ABORTED");
+                entity.setAbortRequested(false);
                 persistTask(entity);
                 log.info("Task aborted: taskId={}", taskId);
                 publishStatusChange(entity, prev);

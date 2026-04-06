@@ -707,6 +707,52 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void cancelTask_routesViaProviderWhenAgentIdIsProviderConstant() {
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
+                .taskId("task-claude-direct-1")
+                .agentId("claude-worker")
+                .providerType("claude-worker")
+                .status("RUNNING")
+                .build();
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        when(taskQueryProvider.getTaskByIdAndUser("task-claude-direct-1", "user-1"))
+                .thenReturn(Optional.of(task));
+
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+
+        facade.cancelTask("task-claude-direct-1", "claude-worker", context);
+
+        verify(taskQueryProvider).cancelTask("task-claude-direct-1", "user-1");
+        verify(agentResolver, never()).resolveAgent(eq("claude-worker"), any());
+        verify(agent, never()).cancelTask(anyString());
+    }
+
+    @Test
+    void cancelTask_routesViaProviderWhenLogicalAgentIsMissing() {
+        DispatchTaskDTO task = DispatchTaskDTO.builder()
+                .taskId("task-direct-no-agent")
+                .providerType("claude-worker")
+                .status("RUNNING")
+                .build();
+        when(taskQueryProvider.getProviderType()).thenReturn("claude-worker");
+        when(taskQueryProvider.getTaskByIdAndUser("task-direct-no-agent", "user-1"))
+                .thenReturn(Optional.of(task));
+
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .requestSource("UI")
+                .build();
+
+        facade.cancelTask("task-direct-no-agent", null, context);
+
+        verify(taskQueryProvider).cancelTask("task-direct-no-agent", "user-1");
+        verifyNoInteractions(agentResolver, agent);
+    }
+
+    @Test
     void createTask_codexDirectRouteNotSkippedBySessionId() {
         // Codex 任务即使带 sessionId 也应走 direct route（非 claude-worker 不需要 A2a 解析）
         TaskDispatchRequest request = TaskDispatchRequest.builder()
