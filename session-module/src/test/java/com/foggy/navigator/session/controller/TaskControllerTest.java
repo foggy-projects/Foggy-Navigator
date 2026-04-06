@@ -144,6 +144,42 @@ class TaskControllerTest {
     }
 
     @Test
+    void cancelTask_deadlockFallback_terminalState() {
+        // First getTask call (before cancel) returns RUNNING
+        DispatchTaskDTO running = DispatchTaskDTO.builder()
+                .taskId("task-1").agentId("agent-1").status("RUNNING").build();
+        // Second getTask call (after deadlock) returns ABORTED (reactor thread won the race)
+        DispatchTaskDTO aborted = DispatchTaskDTO.builder()
+                .taskId("task-1").agentId("agent-1").status("ABORTED").build();
+        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(running))
+                .thenReturn(Optional.of(aborted));
+        doThrow(new org.springframework.dao.PessimisticLockingFailureException("Deadlock"))
+                .when(taskDispatchFacade).cancelTask(eq("task-1"), eq("agent-1"), any(AgentResolveContext.class));
+
+        RX<String> result = controller.cancelTask("task-1", null);
+
+        // Should return success (idempotent) since task is already in terminal state
+        assertNotNull(result.getData());
+        assertTrue(result.getData().contains("ABORTED"));
+    }
+
+    @Test
+    void cancelTask_deadlockFallback_nonTerminal() {
+        DispatchTaskDTO running = DispatchTaskDTO.builder()
+                .taskId("task-1").agentId("agent-1").status("RUNNING").build();
+        when(taskDispatchFacade.getTask(eq("task-1"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(running));
+        doThrow(new org.springframework.dao.PessimisticLockingFailureException("Deadlock"))
+                .when(taskDispatchFacade).cancelTask(eq("task-1"), eq("agent-1"), any(AgentResolveContext.class));
+
+        RX<String> result = controller.cancelTask("task-1", null);
+
+        // Should return failure (task still not terminal after deadlock)
+        assertNull(result.getData());
+    }
+
+    @Test
     void respondToTask_success() {
         Map<String, Object> body = Map.of("decision", "approve");
 

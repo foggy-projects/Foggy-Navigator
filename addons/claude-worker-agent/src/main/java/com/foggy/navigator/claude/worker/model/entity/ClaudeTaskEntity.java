@@ -112,6 +112,18 @@ public class ClaudeTaskEntity {
     private String agentTeamsConfigId;
 
     /**
+     * 中止请求标记 — 解决 cancel 线程与 SSE reactor 线程的并发死锁。
+     * <p>
+     * cancel 线程先置 true（commit），再通知 Worker；
+     * Worker 回复 SSE error 后，failTask() 检查此标记 → 跳过 DB 更新，
+     * 由 cancel 线程统一落库 ABORTED 并清除标记。
+     * <p>
+     * Worker 离线时此标记留存，Reconciler 可据此在 Worker 重连后重试 abort。
+     */
+    @Column
+    private Boolean abortRequested;
+
+    /**
      * Reconciler 最后一次确认 CLI 进程存活的时间。
      * 超时检查用此字段替代 createdAt，保证真正运行中的任务不会被误判超时。
      * null 表示从未被 reconciler 确认过（任务刚创建或 reconciler 尚未运行）。

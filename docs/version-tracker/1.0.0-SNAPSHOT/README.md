@@ -20,3 +20,4 @@
 - [10-claude-worker-session-model-selection-sync-analysis.md](./10-claude-worker-session-model-selection-sync-analysis.md) - 未签收
 - [11-playwright-revalidation-report.md](./11-playwright-revalidation-report.md) - 支撑记录
 - [12-acceptance-signoff.md](./12-acceptance-signoff.md) - 版本签收台账
+- [13-unified-task-cancel-claude-worker-provider-fallback.md](./13-unified-task-cancel-claude-worker-provider-fallback.md) - 待验证

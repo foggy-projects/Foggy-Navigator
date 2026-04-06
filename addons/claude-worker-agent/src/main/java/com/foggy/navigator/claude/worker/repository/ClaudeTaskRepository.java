@@ -4,6 +4,7 @@ import com.foggy.navigator.claude.worker.model.entity.ClaudeTaskEntity;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -122,6 +123,11 @@ public interface ClaudeTaskRepository extends JpaRepository<ClaudeTaskEntity, Lo
 
     /** 并发保护：检查某个 Claude 会话在指定 Worker 上是否有指定状态的任务 */
     boolean existsByClaudeSessionIdAndWorkerIdAndStatus(String claudeSessionId, String workerId, String status);
+
+    /** 轻量 abort 标记：仅更新 abortRequested 字段，不加载整个实体，最小化锁范围 */
+    @Modifying
+    @Query("UPDATE ClaudeTaskEntity t SET t.abortRequested = :val WHERE t.taskId = :taskId")
+    int updateAbortRequestedByTaskId(@Param("taskId") String taskId, @Param("val") Boolean val);
 
     /** 查询指定 sessionId 列表中每个 session 的最新任务 */
     @Query("SELECT t FROM ClaudeTaskEntity t WHERE t.sessionId IN :sessionIds " +

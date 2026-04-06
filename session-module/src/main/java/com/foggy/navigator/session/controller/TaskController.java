@@ -109,8 +109,19 @@ public class TaskController {
             agentId = task.getAgentId();
         }
 
-        taskDispatchFacade.cancelTask(taskId, agentId, context);
-        return RX.ok("Task cancelled");
+        try {
+            taskDispatchFacade.cancelTask(taskId, agentId, context);
+            return RX.ok("Task cancelled");
+        } catch (org.springframework.dao.PessimisticLockingFailureException e) {
+            // 死锁兜底：cancel 线程与 SSE reactor 线程同时更新任务行导致 MySQL 死锁
+            // 重新查询状态 — 如果已是终态则视为取消成功（幂等）
+            log.warn("cancelTask: deadlock for task {}, re-checking status: {}", taskId, e.getMessage());
+            DispatchTaskDTO refreshed = taskDispatchFacade.getTask(taskId, context).orElse(null);
+            if (refreshed != null && TERMINAL_STATES.contains(refreshed.getStatus())) {
+                return RX.ok("Task already in terminal state: " + refreshed.getStatus());
+            }
+            return RX.failB("Failed to cancel task due to concurrent update, please retry");
+        }
     }
 
     /**
