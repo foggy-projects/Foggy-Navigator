@@ -53,7 +53,7 @@
             />
             <span class="option-label">Other</span>
             <input
-              v-if="isOtherActive(qi)"
+              v-show="isOtherActive(qi)"
               v-model="otherTexts[qi]"
               type="text"
               class="other-input"
