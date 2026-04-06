@@ -256,8 +256,21 @@ async function handleResume(prompt: string) {
     })
     taskStream.resumeInPlace(newTask)
     taskId.value = newTask.taskId
+    sessionId.value = newTask.sessionId
     // Update model cache
     initFromTask(newTask)
+
+    // Sync URL to new taskId (H5 only, via history.replaceState)
+    // #ifdef H5
+    try {
+      const newQuery = `taskId=${newTask.taskId}&sessionId=${newTask.sessionId}`
+      const currentPath = window.location.pathname
+      const newUrl = `${currentPath}?${newQuery}${window.location.hash}`
+      window.history.replaceState(null, '', newUrl)
+    } catch {
+      // best-effort: URL sync is non-critical
+    }
+    // #endif
   } catch (e) {
     console.error('Failed to resume task:', e)
   }
