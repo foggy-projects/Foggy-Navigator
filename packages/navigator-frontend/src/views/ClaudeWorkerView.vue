@@ -2140,8 +2140,10 @@ import {
   listTasksByDirectoryPagedUnified,
 } from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
+import { searchFiles } from '@/api/fileBrowser'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
+import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse } from '@/types'
 import type { AipMessageType } from '@foggy/chat'
 
@@ -4188,18 +4190,7 @@ function openFileBrowser() {
 /**
  * 聊天链接点击处理 — 识别工作区内文件路径并打开文件浏览器 deeplink
  */
-function handleLinkClick(paneId: string, payload: { href: string; text: string }) {
-  const href = payload.href
-
-  // 尝试从 href 或链接文本中提取本地路径
-  const rawPath = normalizeLinkHref(href) || normalizeLinkHref(payload.text)
-
-  if (!rawPath || !isLocalFilePath(rawPath)) {
-    // 不是本地文件路径，走默认浏览器打开
-    if (href) window.open(href, '_blank')
-    return
-  }
-
+async function handleLinkClick(paneId: string, payload: { href: string; text: string }) {
   // 从 pane 的 task 中获取 directoryId 和 workerId
   const pane = panes.value.find(p => p.paneId === paneId)
   const task = pane?.task.value
@@ -4219,47 +4210,27 @@ function handleLinkClick(paneId: string, payload: { href: string; text: string }
     return
   }
 
-  // normalize 两边路径后做前缀匹配（大小写不敏感）
-  const normalizedHref = rawPath.replace(/\\/g, '/').replace(/\/+$/, '')
-  const normalizedRoot = dirRootPath.replace(/\\/g, '/').replace(/\/+$/, '')
+  try {
+    const resolution = await resolveChatLinkTarget({
+      href: payload.href,
+      text: payload.text,
+      origin: window.location.origin,
+      directoryId: dirId,
+      workerId: wkId,
+      directoryRoot: dirRootPath,
+      searchFiles,
+    })
 
-  if (!normalizedHref.toLowerCase().startsWith(normalizedRoot.toLowerCase())) {
-    ElMessage.warning('该链接不在当前工作目录下，无法自动定位')
-    return
+    if (resolution.kind === 'warn') {
+      ElMessage.warning(resolution.message)
+      return
+    }
+
+    window.open(resolution.url, '_blank', 'width=1400,height=900')
+  } catch (error) {
+    console.error('Failed to resolve chat link:', error)
+    ElMessage.warning('链接定位失败，请稍后重试')
   }
-
-  // 计算相对路径
-  let relativePath = normalizedHref.substring(normalizedRoot.length)
-  if (relativePath.startsWith('/')) relativePath = relativePath.substring(1)
-
-  if (!relativePath) {
-    // 指向目录根本身，直接打开文件浏览器
-    openFileBrowser()
-    return
-  }
-
-  // 生成 deeplink 并打开文件浏览器窗口
-  const filePath = encodeURIComponent(relativePath)
-  const url = `${window.location.origin}/#/files?directoryId=${dirId}&workerId=${wkId}&filePath=${filePath}`
-  window.open(url, '_blank', 'width=1400,height=900')
-}
-
-/** 将链接 href 标准化为本地路径 */
-function normalizeLinkHref(href: string): string {
-  if (!href) return ''
-  let p = href.trim()
-  // 移除 file:/// 前缀
-  p = p.replace(/^file:\/\/\//, '')
-  // 统一斜杠
-  p = p.replace(/\\/g, '/')
-  // URL 解码（处理中文路径等）
-  try { p = decodeURIComponent(p) } catch { /* ignore */ }
-  return p
-}
-
-/** 判断路径是否为本地文件路径 */
-function isLocalFilePath(path: string): boolean {
-  return /^[A-Za-z]:\//.test(path) || /^[A-Za-z]:\\/.test(path)
 }
 
 async function openCodeServer(network: 'internal' | 'public') {
