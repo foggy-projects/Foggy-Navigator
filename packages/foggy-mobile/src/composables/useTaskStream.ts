@@ -165,7 +165,17 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
     }
 
     if (thisVersion !== connectVersion) return
-    createSseSubscription(sessionId)
+
+    // Only subscribe to SSE if the task is still active (RUNNING/PENDING/AWAITING_PERMISSION).
+    // For terminal states (COMPLETED/FAILED/ABORTED), SSE would replay cached events
+    // that are already loaded from DB, causing message duplication.
+    const status = task.value?.status
+    const isTerminal = status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED'
+    if (!isTerminal) {
+      createSseSubscription(sessionId)
+    } else {
+      chatState.setConnectionStatus('connected')
+    }
   }
 
   async function loadMoreHistory(): Promise<void> {

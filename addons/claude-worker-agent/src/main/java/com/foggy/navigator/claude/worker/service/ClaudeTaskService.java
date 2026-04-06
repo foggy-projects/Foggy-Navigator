@@ -198,10 +198,13 @@ public class ClaudeTaskService implements TaskQueryProvider {
         entity.setStatus("RUNNING");
         entity.setAgentTeamsConfigId(resolvedConfigId);
         entity.setContextId(form.getContextId());
+        if (form.getModel() != null && !form.getModel().isBlank()) {
+            entity.setModel(form.getModel());
+        }
         persistTask(entity);
 
-        log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}, agentTeams={}",
-                taskId, sessionId, form.getWorkerId(), userId,
+        log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}, model={}, agentTeams={}",
+                taskId, sessionId, form.getWorkerId(), userId, form.getModel(),
                 agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
         publishStatusChange(entity, null);
         updateSessionInteractionState(sessionId, "PROCESSING");
@@ -356,10 +359,13 @@ public class ClaudeTaskService implements TaskQueryProvider {
         entity.setSource("PLATFORM");
         entity.setStatus("RUNNING");
         entity.setAgentTeamsConfigId(resolvedConfigId);
+        if (form.getModel() != null && !form.getModel().isBlank()) {
+            entity.setModel(form.getModel());
+        }
         persistTask(entity);
 
-        log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}, agentTeams={}",
-                taskId, form.getClaudeSessionId(), directoryId,
+        log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}, model={}, agentTeams={}",
+                taskId, form.getClaudeSessionId(), directoryId, form.getModel(),
                 agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
         publishStatusChange(entity, null);
         updateSessionInteractionState(sessionId, "PROCESSING");
