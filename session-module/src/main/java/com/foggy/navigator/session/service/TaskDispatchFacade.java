@@ -102,7 +102,7 @@ public class TaskDispatchFacade {
                 agentId, providerType, a2aTask.getId());
 
         DispatchTaskDTO dto = toDispatchDTO(a2aTask, agentId, providerType, request);
-        persistModelConfigId(dto.getTaskId(), request.getModelConfigId());
+        persistTaskRequestFields(dto.getTaskId(), request);
         return dto;
     }
 
@@ -190,39 +190,53 @@ public class TaskDispatchFacade {
     private static final Set<String> TERMINAL_STATES = Set.of("COMPLETED", "FAILED", "ABORTED");
 
     /**
-     * 取消任务 — 统一走 A2A 路径，不再 fallback 到 TaskQueryProvider。
+     * 取消任务。
      * <p>
-     * 中止生命周期由 {@link com.foggy.navigator.session.agent.AbortCoordinatingA2aAgent} 统一编排：
-     * terminal-state guard → 远端任务标识解析 → Worker abort → 流清理 → 状态落库 → post-abort hook。
-     * <p>
-     * 当 agentId 为空（direct provider route 无逻辑 Agent）时，先检查任务是否已在终态，
-     * 是则幂等返回；否则 fail-fast。
-     *
-     * @throws IllegalArgumentException 当 agentId 无法解析到 A2aAgent 时 fail-fast
+     * 优先走 A2A 路径，以复用 {@link com.foggy.navigator.session.agent.AbortCoordinatingA2aAgent}
+     * 的统一中止编排；但当任务属于 direct provider route，或任务投影中的 agentId
+     * 实际上是 provider 常量（如 claude-worker / codex-worker）时，回退到
+     * {@link TaskQueryProvider#cancelTask(String, String)}。
      */
     public void cancelTask(String taskId, String agentId, AgentResolveContext context) {
-        // agentId 为空时的防御：direct provider route 可能没有逻辑 Agent
-        if (agentId == null || agentId.isBlank()) {
-            Optional<DispatchTaskDTO> taskOpt = getTask(taskId, context);
-            if (taskOpt.isPresent() && taskOpt.get().getStatus() != null
-                    && TERMINAL_STATES.contains(taskOpt.get().getStatus())) {
-                log.info("cancelTask: task {} has no agentId but already terminal ({}), skipping",
-                        taskId, taskOpt.get().getStatus());
+        DispatchTaskDTO task = getTask(taskId, context).orElse(null);
+        if (task != null && task.getStatus() != null && TERMINAL_STATES.contains(task.getStatus())) {
+            log.info("cancelTask: task {} already in terminal state ({}), returning no-op",
+                    taskId, task.getStatus());
+            return;
+        }
+
+        String effectiveAgentId = firstNonBlank(agentId, task != null ? task.getAgentId() : null);
+        String providerType = task != null ? task.getProviderType() : null;
+
+        if (shouldCancelViaProvider(effectiveAgentId, providerType)) {
+            cancelTaskViaProvider(taskId, context.getUserId(), providerType);
+            return;
+        }
+
+        if (effectiveAgentId == null || effectiveAgentId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Cannot cancel task " + taskId + ": agentId is missing and provider route is unavailable");
+        }
+
+        Optional<A2aAgent> agentOpt = agentResolver.resolveAgent(effectiveAgentId, context);
+        if (agentOpt.isEmpty()) {
+            if (providerType != null && !providerType.isBlank()) {
+                log.warn("cancelTask: unresolved agentId {}, fallback to provider {} for task {}",
+                        effectiveAgentId, providerType, taskId);
+                cancelTaskViaProvider(taskId, context.getUserId(), providerType);
                 return;
             }
-            throw new IllegalArgumentException(
-                    "Cannot cancel task " + taskId + ": agentId is missing and task is not in terminal state");
         }
 
-        A2aAgent agent = agentResolver.resolveAgent(agentId, context)
+        A2aAgent agent = agentOpt
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Cannot cancel task " + taskId + ": no A2A agent found for agentId=" + agentId));
+                        "Cannot cancel task " + taskId + ": no A2A agent found for agentId=" + effectiveAgentId));
 
         if (context.getSessionId() != null) {
-            bindingService.validateBinding(context.getSessionId(), agentId);
+            bindingService.validateBinding(context.getSessionId(), effectiveAgentId);
         }
         agent.cancelTask(taskId);
-        log.info("Cancelled task via A2a Agent: taskId={}, agentId={}", taskId, agentId);
+        log.info("Cancelled task via A2a Agent: taskId={}, agentId={}", taskId, effectiveAgentId);
     }
 
     // ── 任务操作（路由到 TaskQueryProvider） ──
@@ -278,7 +292,7 @@ public class TaskDispatchFacade {
 
         Map<String, Object> params = buildResumeParams(request);
         DispatchTaskDTO dto = provider.resumeTask(context.getUserId(), context.getTenantId(), params);
-        persistModelConfigId(dto.getTaskId(), request.getModelConfigId());
+        persistTaskRequestFields(dto.getTaskId(), request);
         return dto;
     }
 
@@ -571,6 +585,23 @@ public class TaskDispatchFacade {
         return taskQueryProviders.stream()
                 .filter(provider -> providerType.equals(provider.getProviderType()))
                 .findFirst();
+    }
+
+    private boolean shouldCancelViaProvider(@Nullable String agentId, @Nullable String providerType) {
+        if (providerType == null || providerType.isBlank()) {
+            return false;
+        }
+        return agentId == null || agentId.isBlank() || providerType.equals(agentId);
+    }
+
+    private void cancelTaskViaProvider(String taskId, String userId, @Nullable String providerType) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("Cannot cancel task " + taskId + ": userId is required for provider route");
+        }
+        TaskQueryProvider provider = findTaskQueryProviderByType(providerType)
+                .orElseGet(() -> findProviderForTask(taskId));
+        provider.cancelTask(taskId, userId);
+        log.info("Cancelled task via provider route: taskId={}, providerType={}", taskId, provider.getProviderType());
     }
 
     private boolean isProviderTaskAlreadyMissing(IllegalArgumentException exception, String taskId) {
@@ -1152,13 +1183,20 @@ public class TaskDispatchFacade {
     }
 
     /**
-     * Post-dispatch: 将 request 中的 modelConfigId 持久化到 SessionTaskEntity。
-     * 这是 modelConfigId 写入 session_tasks 的唯一入口，在 Facade 层统一处理，各 Provider 无需关心。
+     * Post-dispatch: 将 request 中的 model / modelConfigId 持久化到 SessionTaskEntity。
+     * 这是 model 和 modelConfigId 写入 session_tasks 的统一入口，在 Facade 层公共处理，各 Provider 无需关心。
      */
-    private void persistModelConfigId(String taskId, String modelConfigId) {
-        if (sessionTaskRepository == null || taskId == null || modelConfigId == null || modelConfigId.isBlank()) return;
+    private void persistTaskRequestFields(String taskId, TaskDispatchRequest request) {
+        if (sessionTaskRepository == null || taskId == null) return;
+        String model = request.getModel();
+        String modelConfigId = request.getModelConfigId();
+        boolean hasModel = model != null && !model.isBlank();
+        boolean hasModelConfigId = modelConfigId != null && !modelConfigId.isBlank();
+        if (!hasModel && !hasModelConfigId) return;
+
         sessionTaskRepository.findByTaskId(taskId).ifPresent(st -> {
-            st.setModelConfigId(modelConfigId);
+            if (hasModel) st.setModel(model);
+            if (hasModelConfigId) st.setModelConfigId(modelConfigId);
             sessionTaskRepository.save(st);
         });
     }
@@ -1288,7 +1326,7 @@ public class TaskDispatchFacade {
         DispatchTaskDTO dto = provider.createTaskDirect(params, context.getUserId(), context.getTenantId());
         log.info("Dispatched task directly via provider: providerType={}, taskId={}, workerId={}, directoryId={}",
                 providerType, dto.getTaskId(), request.getWorkerId(), request.getDirectoryId());
-        persistModelConfigId(dto.getTaskId(), request.getModelConfigId());
+        persistTaskRequestFields(dto.getTaskId(), request);
         return dto;
     }
 

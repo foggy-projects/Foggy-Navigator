@@ -43,10 +43,16 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
 
   const { subscribeSession, addNotificationListener, connected } = useUnifiedSse()
 
+  // Track message IDs to prevent duplicates (DB messages + SSE messages)
+  const knownMessageIds = new Set<string>()
+
   function handleSseEvent(raw: AgentMessage) {
     // Pass through adapter for chat messages
     const msgs = tutorAgentAdapter.convert(raw, raw.sessionId)
     for (const msg of msgs) {
+      // Deduplicate: skip if messageId already seen (from DB load or prior SSE)
+      if (msg.id && knownMessageIds.has(msg.id)) continue
+      if (msg.id) knownMessageIds.add(msg.id)
       chatState.processAipMessage(msg)
     }
 
@@ -130,6 +136,7 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
     disconnect()
     const thisVersion = ++connectVersion
     chatState.clearMessages()
+    knownMessageIds.clear()
     chatState.setConnectionStatus('connecting')
 
     try {
@@ -142,6 +149,8 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
       hasMoreHistory.value = result.hasMore
 
       for (const msg of result.messages) {
+        // Track DB message IDs for SSE deduplication
+        if (msg.id) knownMessageIds.add(msg.id)
         const chatMsg: ChatMessage = {
           id: msg.id,
           type: AipMessageType.TEXT_COMPLETE,
@@ -156,7 +165,17 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
     }
 
     if (thisVersion !== connectVersion) return
-    createSseSubscription(sessionId)
+
+    // Only subscribe to SSE if the task is still active (RUNNING/PENDING/AWAITING_PERMISSION).
+    // For terminal states (COMPLETED/FAILED/ABORTED), SSE would replay cached events
+    // that are already loaded from DB, causing message duplication.
+    const status = task.value?.status
+    const isTerminal = status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED'
+    if (!isTerminal) {
+      createSseSubscription(sessionId)
+    } else {
+      chatState.setConnectionStatus('connected')
+    }
   }
 
   async function loadMoreHistory(): Promise<void> {
@@ -168,14 +187,17 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
         HISTORY_PAGE_SIZE,
         loadedDbCount.value,
       )
-      // Prepend older messages
-      const olderMessages: ChatMessage[] = result.messages.map(msg => ({
-        id: msg.id,
-        type: AipMessageType.TEXT_COMPLETE,
-        sender: msg.role === 'USER' ? 'user' : 'assistant',
-        content: msg.content,
-        timestamp: new Date(msg.createdAt).getTime(),
-      }))
+      // Prepend older messages (with dedup tracking)
+      const olderMessages: ChatMessage[] = result.messages.map(msg => {
+        if (msg.id) knownMessageIds.add(msg.id)
+        return {
+          id: msg.id,
+          type: AipMessageType.TEXT_COMPLETE,
+          sender: msg.role === 'USER' ? 'user' : 'assistant',
+          content: msg.content,
+          timestamp: new Date(msg.createdAt).getTime(),
+        }
+      })
       chatState.messages.value.unshift(...olderMessages)
       loadedDbCount.value += result.messages.length
       hasMoreHistory.value = result.hasMore

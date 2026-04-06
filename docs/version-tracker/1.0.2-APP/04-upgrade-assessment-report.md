@@ -3,17 +3,25 @@
 ## Date
 
 - 2026-04-05
+- 2026-04-06（补充 H5 Playwright 验收结论）
 
 ## Type
 
 - Assessment Report
 - Feasibility Review
+- H5 Acceptance Update
 
 ## Executive Summary
 
-本报告基于对 `docs/version-tracker/1.0.2-APP/` 三份规划文档与 `packages/foggy-mobile` 实际代码库的深度比对，给出可行性评估和完成度分析。
+本报告基于对 `docs/version-tracker/1.0.2-APP/` 三份规划文档与 `packages/foggy-mobile` 实际代码库的深度比对，并补充 2026-04-06 的 H5 Playwright 实测结果，给出可行性评估、完成度分析和验收结论。
 
-**结论：计划可行，且主体重构已基本完成。** P0 主链路和大部分 P1 能力已落地，剩余工作集中在测试验收、少量文档补充和 P1 设置页增强。
+**结论：计划可行，主体重构已基本完成，但当前版本尚未达到“验收通过”。** H5 主链路已经可以跑通，且统一任务接口、会话列表、分页历史加载、resume 基础能力均已落地；但实测发现 3 个阻断交付质量的问题：
+
+1. 创建会话时 `model` 选择未真正生效，`modelConfigId` 生效但 `model` 被后端默认值覆盖。
+2. 续对成功后页面 URL 仍停留在旧 `taskId`，页面状态与地址存在漂移。
+3. 会话详情重进后存在消息重复渲染。
+
+因此，当前状态更准确地应定义为：**“代码改造基本完成，H5 验收已执行但未通过，还需修复阻断问题后复测。”**
 
 ---
 
@@ -58,6 +66,8 @@
 
 **总体完成率：约 85%**（按加权，测试尚未开始）
 
+补充说明：2026-04-06 已执行 H5 核心回归，但由于发现阻断问题，Milestone G 暂不计入“已完成”。
+
 ### 2.2 代码实探验证
 
 以下是通过代码库实际确认的关键迁移成果：
@@ -97,6 +107,46 @@
 | 移动端代码中无 `/claude-tasks` 实际调用 | ✅ 已确认 |
 | `pages.json` 标题已更新 | ✅ 已确认 |
 
+### 2.3 H5 Playwright 验收结果（2026-04-06）
+
+#### ✅ 已验证通过
+
+| 验收项 | 结果 | 说明 |
+|--------|------|------|
+| 登录并切换服务器后重新鉴权 | ✅ 通过 | 切到 `local / http://localhost:8112` 后可正常登录 |
+| Worker 列表与目录树加载 | ✅ 通过 | Worker 卡片、目录展开、目录进入均正常 |
+| Worker 主页面展示“会话列表”而非“任务列表” | ✅ 通过 | 页面标题、列表语义、卡片内容均为 session 维度 |
+| 会话列表主链路不依赖 `/api/v1/sessions` | ✅ 通过 | 实测请求为 `/api/v1/tasks/directory/{id}/page` + `/api/v1/sessions/configs` |
+| 创建会话成功 | ✅ 通过 | `POST /api/v1/tasks` 成功，能进入 `task-detail` |
+| `modelConfigId` 选择生效 | ✅ 通过 | 实测落库 `modelConfigId=test` |
+| resume 主链路成功 | ✅ 通过 | `POST /api/v1/tasks/resume` 成功返回新 task |
+| 长会话初次打开非全量加载 | ✅ 通过 | 历史消息走 `/sessions/{id}/messages/latest?limit=50&offset=0` |
+| 旧兼容接口不是主链路必经路径 | ✅ 通过 | 抓包未见 `/api/v1/claude-tasks` |
+
+#### ❌ 阻断问题
+
+| # | 问题 | 实测现象 | 影响 |
+|---|------|----------|------|
+| 1 | `model` 选择未真正生效 | 创建页显式选择 `Sonnet 4`，落库 task `model` 实际为 `glm-4.7`；续对后新 task 又变成 `glm-5` | 回归用例“创建会话时选择 model 成功”当前应判失败 |
+| 2 | 续对后 URL 未同步到新 taskId | `/tasks/resume` 成功返回新 task，但页面 URL 仍保留旧 `taskId` | 刷新页面、分享链接、重新进入详情页会落到旧任务 |
+| 3 | 会话详情重进后消息重复 | 重进已完成会话时，同一条 assistant 消息被渲染两次 | 影响历史消息可信度和详情页体验 |
+
+#### ⚠️ 未覆盖项
+
+| 验收项 | 状态 | 说明 |
+|--------|------|------|
+| 权限审批 / 方案审批 / 问题回答 | 未覆盖 | 本次未构造审批型任务 |
+| reconnect / resync | 未覆盖 | 本次未构造失败任务 |
+| App-Plus 回归 | 未覆盖 | Playwright 仅覆盖 H5 |
+| MP-Weixin 回归 | 未覆盖 | Playwright 仅覆盖 H5 |
+
+#### 验收证据
+
+- 抓包日志：`.playwright-cli/network-2026-04-05T12-34-08-673Z.log`
+- 登录页快照：`app102mobile-login.yaml`
+- 会话详情快照：`app102mobile-detail-finished.yaml`
+- 续对后快照：`app102mobile-resume.yaml`
+
 ---
 
 ## 3. 剩余工作清单
@@ -108,10 +158,10 @@
 | 1 | 补最小 shared 类型来源说明（避免 types.ts 再次与 navigator-frontend 漂移） | Milestone A | P1 | 0.5d |
 | 2 | API 层测试覆盖 unified task 主调用 | Milestone G | P0 | 1-2d |
 | 3 | Composable 层测试（useTaskStream, useSession, useUnifiedSse） | Milestone G | P0 | 1-2d |
-| 4 | H5 回归测试 | Milestone G | P0 | 1d |
+| 4 | 修复 H5 验收发现的 3 个阻断问题（model 选择、resume URL、消息去重） | Milestone G | P0 | 1-2d |
 | 5 | App-Plus 回归测试 | Milestone G | P1 | 1d |
 | 6 | MP-Weixin 回归测试 | Milestone G | P1 | 1d |
-| 7 | Core Regression Cases 全部执行（共 14 项） | Milestone G | P0 | 含在回归中 |
+| 7 | 修复后重新执行 H5 Core Regression Cases（补齐审批、reconnect/resync 等未覆盖项） | Milestone G | P0 | 1d |
 
 ### 3.2 可延期（P1 后续迭代）
 
@@ -167,7 +217,7 @@
    SSE 订阅 + 历史消息加载       →  getLatestMessages(sessionId, limit, offset)
 ```
 
-**评估：数据流与 PC 端主链路语义一致，无设计缺陷。**
+**评估：数据流设计与 PC 端主链路语义一致；当前问题主要集中在实现细节和状态同步，而非架构路径本身。**
 
 ### 4.2 语义一致性验证
 
@@ -176,7 +226,7 @@
 | 会话聚合 | ConversationGroup by sessionId | ✅ 相同 | ✅ |
 | 任务创建 | createTaskUnified | ✅ 相同 | ✅ |
 | modelConfigId 绑定 | 会话级后端绑定 | ✅ 相同 | ✅ |
-| model 恢复 | 最新任务 + 前端缓存 | ✅ 相同（useSessionModelCache） | ✅ |
+| model 恢复 | 最新任务 + 前端缓存 | ⚠️ 设计对齐，但 H5 实测未稳定生效 | ⚠️ |
 | 历史消息 | /messages/latest + 分页 | ✅ 相同 | ✅ |
 | SSE | 统一连接 | ✅ 相同（useUnifiedSse） | ✅ |
 | interactionState | 后端 + SSE 同步 | ✅ 相同 | ✅ |
@@ -187,26 +237,29 @@
 
 ### 5.1 总体评价
 
-1.0.2-APP 升级方案设计合理、分阶段清晰、风险可控。**更重要的是，核心重构工作（P0 全部 + P1 大部分）已经落地到代码中**，代码质量与计划文档高度一致。
+1.0.2-APP 升级方案设计合理、分阶段清晰、风险可控。**更重要的是，核心重构工作（P0 全部 + P1 大部分）已经落地到代码中**，且 H5 主链路已经可以跑通。
 
-六大退出标准全部满足：
+但根据 2026-04-06 的 H5 Playwright 验收，当前状态应定义为“**基本完成但未验收通过**”。原因不是主架构方向有误，而是存在 3 个阻断体验和一致性的问题，需要修复后再复测。
+
+退出标准重评估如下：
 
 - [x] 移动端主任务链路基于 `/api/v1/tasks`
 - [x] 移动端 Worker 主展示链路基于"会话列表"而不是"任务列表"
 - [x] 移动端类型定义与当前后端返回结构基本对齐
-- [x] 创建会话和会话续对都支持 `modelConfigId + model`
-- [x] 长历史加载、任务恢复、交互状态具备最小闭环
+- [ ] 创建会话和会话续对都支持 `modelConfigId + model`（`modelConfigId` 可用，但 `model` 选择当前未稳定生效）
+- [ ] 长历史加载、任务恢复、交互状态具备最小闭环（主链路可跑通，但仍有 resume URL 漂移和详情页消息重复问题）
 - [x] `packages/foggy-mobile` 可以继续在当前架构上迭代
 
 ### 5.2 下一步建议
 
 | 优先级 | 行动 | 预计工作量 |
 |--------|------|-----------|
-| **P0** | 执行 H5 端核心回归测试（14 项 regression cases） | 1d |
+| **P0** | 修复 H5 阻断问题：`model` 选择生效、resume 后 URL 同步、详情页消息去重 | 1-2d |
+| **P0** | 修复后重新执行 H5 端核心回归测试（14 项 regression cases） | 1d |
 | **P0** | 补充 API 层 + composable 层单元测试 | 2-3d |
 | **P1** | App-Plus 和 MP-Weixin 多端回归 | 2d |
 | **P1** | 补充 shared 类型来源说明文档 | 0.5d |
 | **P1** | Settings 页平台状态增强 | 1d |
 | **P2** | useSession.ts 通用聊天链路迁移到分页加载 | 0.5d |
 
-**总剩余工作量预估：约 5-7 个工作日**，主要集中在测试验收阶段。
+**总剩余工作量预估：约 6-8 个工作日**，其中 P0 重点已从“开始测试”转为“修复 H5 阻断问题并复测”。 

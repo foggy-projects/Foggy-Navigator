@@ -36,7 +36,7 @@
           <text v-if="selectedModelConfigId" class="option-clear" @tap.stop="selectedModelConfigId = ''">&#x2715;</text>
         </view>
         <view class="option-tag" @tap="showModelPicker">
-          <text class="option-label">{{ selectedModel || '默认模型' }}</text>
+          <text class="option-label">{{ selectedModelLabel || '默认模型' }}</text>
           <text v-if="selectedModel" class="option-clear" @tap.stop="selectedModel = ''">&#x2715;</text>
         </view>
         <view class="option-tag" @tap="showTurnsPicker">
@@ -132,8 +132,32 @@ const selectedModelName = computed(() => {
   return m ? m.name : ''
 })
 
-// Model / turns
-const MODEL_OPTIONS = ['Sonnet 4', 'Opus 4', 'Haiku 4', 'Sonnet 3.5']
+// All known model options (value = what backend accepts, label = UI display)
+// Kept in sync with PC's ClaudeWorkerView.vue ALL_MODELS
+const ALL_MODELS: { value: string; label: string; backend: string }[] = [
+  // Claude models
+  { value: 'opus[1m]', label: 'Opus (1M)', backend: 'CLAUDE_CODE' },
+  { value: 'opus', label: 'Opus', backend: 'CLAUDE_CODE' },
+  { value: 'sonnet[1m]', label: 'Sonnet (1M)', backend: 'CLAUDE_CODE' },
+  { value: 'sonnet', label: 'Sonnet', backend: 'CLAUDE_CODE' },
+  { value: 'haiku', label: 'Haiku', backend: 'CLAUDE_CODE' },
+  // Codex models
+  { value: 'gpt-5.4:low', label: '5.4 Low', backend: 'OPENAI_CODEX' },
+  { value: 'gpt-5.4', label: '5.4 Medium', backend: 'OPENAI_CODEX' },
+  { value: 'gpt-5.4:high', label: '5.4 High', backend: 'OPENAI_CODEX' },
+  { value: 'gpt-5.4-mini', label: '5.4 Mini', backend: 'OPENAI_CODEX' },
+]
+
+// Dynamic model options based on selected platform model config
+const modelOptions = computed(() => {
+  const cfg = platformModels.value.find(m => m.id === selectedModelConfigId.value)
+  const backend = cfg?.workerBackend ?? 'CLAUDE_CODE'
+  const backendModels = ALL_MODELS.filter(m => m.backend === backend)
+  const allowed = cfg?.availableModels
+  if (!allowed || allowed.length === 0) return backendModels
+  return backendModels.filter(opt => allowed.includes(opt.value))
+})
+
 const TURNS_OPTIONS = [10, 25, 50, 200, 999]
 const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'] as const
 const PERMISSION_LABELS: Record<string, string> = {
@@ -141,7 +165,12 @@ const PERMISSION_LABELS: Record<string, string> = {
   acceptEdits: '审批编辑',
   default: '全部审批',
 }
-const selectedModel = ref('')
+const selectedModel = ref('')  // stores model value (e.g. 'opus[1m]'), NOT label
+const selectedModelLabel = computed(() => {
+  if (!selectedModel.value) return ''
+  const opt = ALL_MODELS.find(m => m.value === selectedModel.value)
+  return opt ? opt.label : selectedModel.value
+})
 const selectedTurns = ref(0)
 const selectedPermission = ref<string>('bypassPermissions')
 
@@ -478,10 +507,16 @@ function showApiModelPicker() {
 }
 
 function showModelPicker() {
+  const options = modelOptions.value
+  if (options.length === 0) {
+    uni.showToast({ title: '暂无可用模型', icon: 'none' })
+    return
+  }
+  const labels = options.map(m => m.label)
   uni.showActionSheet({
-    itemList: MODEL_OPTIONS,
+    itemList: labels,
     success: (res) => {
-      selectedModel.value = MODEL_OPTIONS[res.tapIndex]
+      selectedModel.value = options[res.tapIndex].value
     },
   })
 }
