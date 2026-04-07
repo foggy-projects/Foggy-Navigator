@@ -83,6 +83,7 @@ export function normalizeLinkHref(href: string): string {
   } catch {
     // ignore decode failures and keep the raw value
   }
+  value = value.replace(/^\/([A-Za-z]:\/)/, '$1')
   return value
 }
 

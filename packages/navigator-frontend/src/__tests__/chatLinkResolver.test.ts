@@ -89,6 +89,26 @@ describe('resolveChatLinkTarget', () => {
     })
   })
 
+  it('normalizes leading-slash absolute workspace paths without falling back to search', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: '/D:/foggy-projects/Foggy-Navigator-wt-qd-win11-dev/docs/v3.0.0/04-basic%E5%91%BD%E5%90%8D%E6%B2%BB%E7%90%86%E6%B8%85%E5%8D%95.md',
+      text: '04-basic命名治理清单.md',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'open',
+      url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=docs%2Fv3.0.0%2F04-basic%E5%91%BD%E5%90%8D%E6%B2%BB%E7%90%86%E6%B8%85%E5%8D%95.md`,
+    })
+  })
+
   it('preserves same-origin file browser deeplinks', async () => {
     const searchFiles = vi.fn()
 
