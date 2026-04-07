@@ -32,17 +32,29 @@
               :key="project.directoryId"
               class="project-group"
             >
-              <view class="project-header" @tap="toggleProject(project.directoryId)">
-                <view class="dir-info">
+              <view class="project-header" @tap="openTasks(worker.workerId, project)">
+                <view
+                  class="project-toggle"
+                  @tap.stop="toggleProject(project.directoryId)"
+                  v-if="workerStore.getChildDirectories(worker.workerId, project.directoryId).length > 0"
+                >
                   <text class="project-arrow">{{ expandedProjects.has(project.directoryId) ? '▼' : '▶' }}</text>
-                  <text class="project-icon">📦</text>
-                  <text class="dir-name">{{ project.projectName }}</text>
-                  <text
-                    v-if="workerStore.getChildDirectories(worker.workerId, project.directoryId).length > 0"
-                    class="child-count"
-                  >{{ workerStore.getChildDirectories(worker.workerId, project.directoryId).length }}</text>
                 </view>
-                <text class="dir-path">{{ project.path }}</text>
+                <view
+                  class="project-body"
+                  :class="{ 'no-toggle': workerStore.getChildDirectories(worker.workerId, project.directoryId).length === 0 }"
+                >
+                  <view class="dir-info">
+                    <text class="project-icon">📦</text>
+                    <text class="dir-name">{{ project.projectName }}</text>
+                    <text
+                      v-if="workerStore.getChildDirectories(worker.workerId, project.directoryId).length > 0"
+                      class="child-count"
+                    >{{ workerStore.getChildDirectories(worker.workerId, project.directoryId).length }}</text>
+                  </view>
+                  <text class="dir-path">{{ project.path }}</text>
+                </view>
+                <text class="nav-arrow">›</text>
               </view>
               <!-- PROJECT 子目录 -->
               <view v-if="expandedProjects.has(project.directoryId)">
@@ -54,11 +66,14 @@
                     class="directory-item child-item"
                     @tap="openTasks(worker.workerId, child)"
                   >
-                    <view class="dir-info">
-                      <text class="dir-name">{{ child.projectName }}</text>
-                      <text v-if="child.gitBranch" class="dir-branch">{{ child.gitBranch }}</text>
+                    <view class="dir-item-body">
+                      <view class="dir-info">
+                        <text class="dir-name">{{ child.projectName }}</text>
+                        <text v-if="child.gitBranch" class="dir-branch">{{ child.gitBranch }}</text>
+                      </view>
+                      <text class="dir-path">{{ child.path }}</text>
                     </view>
-                    <text class="dir-path">{{ child.path }}</text>
+                    <text class="nav-arrow">›</text>
                   </view>
                   <!-- Worktree 嵌套在源目录下 -->
                   <view
@@ -88,11 +103,14 @@
                 class="directory-item"
                 @tap="openTasks(worker.workerId, dir)"
               >
-                <view class="dir-info">
-                  <text class="dir-name">{{ dir.projectName }}</text>
-                  <text v-if="dir.gitBranch" class="dir-branch">{{ dir.gitBranch }}</text>
+                <view class="dir-item-body">
+                  <view class="dir-info">
+                    <text class="dir-name">{{ dir.projectName }}</text>
+                    <text v-if="dir.gitBranch" class="dir-branch">{{ dir.gitBranch }}</text>
+                  </view>
+                  <text class="dir-path">{{ dir.path }}</text>
                 </view>
-                <text class="dir-path">{{ dir.path }}</text>
+                <text class="nav-arrow">›</text>
               </view>
               <!-- Worktree 嵌套在源目录下 -->
               <view
@@ -216,17 +234,42 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
   border-bottom: 2rpx solid #f0f0f0;
 }
 .project-header {
-  padding: 24rpx 28rpx;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  padding: 0 28rpx 0 0;
   background: #fafafa;
 }
+.project-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 88rpx;
+  min-height: 96rpx;
+  flex-shrink: 0;
+}
 .project-arrow {
-  font-size: 20rpx;
+  font-size: 26rpx;
   color: #909399;
-  margin-right: 8rpx;
+}
+.project-body {
+  flex: 1;
+  padding: 24rpx 0;
+  padding-left: 4rpx;
+  min-width: 0;
+}
+.project-body.no-toggle {
+  padding-left: 28rpx;
 }
 .project-icon {
   font-size: 28rpx;
   margin-right: 8rpx;
+}
+.nav-arrow {
+  font-size: 36rpx;
+  color: #c0c4cc;
+  flex-shrink: 0;
+  padding-left: 12rpx;
 }
 .child-count {
   font-size: 20rpx;
@@ -257,8 +300,15 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
   padding-left: 40rpx;
 }
 .directory-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
   padding: 24rpx 28rpx;
   border-bottom: 2rpx solid #f5f5f5;
+}
+.dir-item-body {
+  flex: 1;
+  min-width: 0;
 }
 .dir-info {
   display: flex;
