@@ -4,7 +4,7 @@ bug_source: user-report
 version: 1.0.0-SNAPSHOT
 ticket: BUG-013
 severity: critical
-status: ready-for-verification
+status: signed-off
 reproduction_status: confirmed
 test_strategy: integration-test
 automation_decision: required
@@ -126,7 +126,7 @@ owner: session-module
 - [x] 补充回归测试：
   - `agentId=claude-worker` 时应走 provider route
   - 逻辑 Agent 缺失但 `providerType=claude-worker` 时应走 provider route
-- [ ] 使用真实环境再次回归统一取消接口
+- [x] 使用真实环境再次回归统一取消接口
 
 ## Verification
 
@@ -146,12 +146,26 @@ mvn -pl session-module -am "-Dtest=TaskDispatchFacadeTest,TaskControllerTest" "-
 
 ### Manual
 
-待验证：
+已验证（2026-04-07）：
 
 1. 在开发环境启动一个 Claude 运行态任务。
 2. 调用 `POST /api/v1/tasks/{taskId}/cancel`。
 3. 确认接口返回成功或 no-op，而不是 `no A2A agent found`。
 4. 确认任务最终状态进入 `ABORTED` 或保持终态幂等。
+
+手工验收结论：
+
+- 真实环境下统一取消接口已能正确路由到 Claude Worker Provider 取消链路
+- 未再复现 `no A2A agent found for agentId=claude-worker`
+- 本项可按真实验收通过处理
+
+## 验收签收
+
+- 签收状态：✅ 已签收
+- 签收日期：2026-04-07
+- 签收方式：版本文档审计签收
+- 签收依据：自动化回归已通过，且用户已完成真实环境取消验收，确认运行态 Claude 任务可正常取消。
+- 关联台账：[12-acceptance-signoff.md](./12-acceptance-signoff.md)
 
 ## References
 

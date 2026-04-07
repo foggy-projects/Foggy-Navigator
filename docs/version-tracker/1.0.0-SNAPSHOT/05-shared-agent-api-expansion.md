@@ -271,6 +271,26 @@
 4. **allowedOperations** 扩展新增：`files:read`, `files:list`, `files:search`
 5. 安全：每个端点调用 `checkOperation` + facade 内部 userId/directoryId 校验 + 路径穿越防护
 
-### Batch 4 (延期)
+### Batch 4 (移出 1.0.0-SNAPSHOT，转待定)
 
 - `exec` 命令执行 — 高风险，需要独立安全设计（沙箱 + 命令白名单 + feature flag），不在当前版本实施
+
+### 当前版本边界调整（2026-04-07）
+
+- `1.0.0-SNAPSHOT` 的签收范围收敛为 Batch 1-3
+- Batch 4 `exec` 从当前版本移出，转入待定事项，不再作为本版本签收前提
+
+### 验证结果
+
+- `mvn -pl session-module -am "-Dtest=SharedTaskControllerTest,SharingKeyServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
+- `SharedTaskControllerTest` 5 passed
+- `SharingKeyServiceTest` 23 passed
+- 总计 28 tests passed, 0 failures, 0 errors
+
+## 验收签收
+
+- 签收状态：✅ 已签收
+- 签收日期：2026-04-07
+- 签收方式：版本文档审计签收
+- 签收依据：Batch 1-3 已实施，且当前版本范围已明确排除 Batch 4；相关单测通过。
+- 关联台账：[12-acceptance-signoff.md](./12-acceptance-signoff.md)

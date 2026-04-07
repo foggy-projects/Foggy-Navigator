@@ -2,7 +2,12 @@
   <view class="worker-card" @tap="$emit('tap')">
     <view class="worker-header">
       <text class="worker-name">{{ worker.name }}</text>
-      <StatusBadge :status="worker.status" :show-label="true" />
+      <view class="header-actions">
+        <view class="health-btn" @tap.stop="$emit('health-check')">
+          <text class="health-btn-text">检测</text>
+        </view>
+        <StatusBadge :status="worker.status" :show-label="true" />
+      </view>
     </view>
     <view class="worker-info">
       <text v-if="worker.hostname" class="worker-hostname">{{ worker.hostname }}</text>
@@ -25,6 +30,7 @@ defineProps<{
 
 defineEmits<{
   tap: []
+  'health-check': []
 }>()
 
 </script>
@@ -49,6 +55,22 @@ defineEmits<{
   color: #303133;
   font-weight: 600;
   flex: 1;
+}
+.header-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 16rpx;
+}
+.health-btn {
+  padding: 6rpx 20rpx;
+  background: #ecf5ff;
+  border-radius: 8rpx;
+  border: 1rpx solid #d9ecff;
+}
+.health-btn-text {
+  font-size: 22rpx;
+  color: #409eff;
 }
 .worker-info {
   display: flex;

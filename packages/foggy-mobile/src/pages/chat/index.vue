@@ -9,13 +9,7 @@
     </view>
 
     <!-- 会话列表 -->
-    <scroll-view
-      scroll-y
-      class="session-list"
-      :refresher-enabled="true"
-      :refresher-triggered="refreshing"
-      @refresherrefresh="onRefresh"
-    >
+    <view class="session-list">
       <view v-if="loading && sessions.length === 0" class="loading-wrap">
         <text class="loading-text">加载中...</text>
       </view>
@@ -24,7 +18,7 @@
           <SessionItem
             :session="session"
             @tap="openSession(session)"
-            @longpress="showSessionActions(session)"
+            @delete="showSessionActions(session)"
           />
         </view>
       </view>
@@ -34,7 +28,7 @@
           description="点击右上角 + 开始新对话"
         />
       </view>
-    </scroll-view>
+    </view>
 
     <!-- #ifdef APP-PLUS -->
     <UpgradePopup />
@@ -44,7 +38,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { onShow, onPullDownRefresh } from '@dcloudio/uni-app'
 import { useSessionStore } from '@/stores/session'
 import type { Session } from '@/api/types'
 import SessionItem from '@/components/SessionItem.vue'
@@ -54,7 +48,6 @@ import UpgradePopup from '@/components/UpgradePopup.vue'
 // #endif
 
 const sessionStore = useSessionStore()
-const refreshing = ref(false)
 const creating = ref(false)
 const loading = computed(() => sessionStore.loading)
 
@@ -68,11 +61,10 @@ onShow(() => {
   sessionStore.loadSessions()
 })
 
-async function onRefresh() {
-  refreshing.value = true
+onPullDownRefresh(async () => {
   await sessionStore.loadSessions()
-  refreshing.value = false
-}
+  uni.stopPullDownRefresh()
+})
 
 async function createNewSession() {
   if (creating.value) return
@@ -114,12 +106,13 @@ function showSessionActions(session: Session) {
 
 <style scoped>
 .chat-list-page {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
+  min-height: 100vh;
   background: #f5f5f5;
 }
 .page-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -150,7 +143,7 @@ function showSessionActions(session: Session) {
   opacity: 0.5;
 }
 .session-list {
-  flex: 1;
+  /* native page scroll, no fixed height */
 }
 .empty-wrap {
   padding: 48rpx;

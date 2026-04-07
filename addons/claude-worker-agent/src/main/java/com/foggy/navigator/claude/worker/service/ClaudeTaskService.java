@@ -736,7 +736,9 @@ public class ClaudeTaskService implements TaskQueryProvider {
             if (numTurns != null) {
                 entity.setNumTurns(numTurns);
             }
-            if (model != null) {
+            // 仅在 entity 尚未持有 model 时写入 Worker 返回值；
+            // 用户创建/续对时显式选择的 model 已在 createTask/resumeTask 中写入，不应被覆盖。
+            if (model != null && (entity.getModel() == null || entity.getModel().isBlank())) {
                 entity.setModel(model);
             }
             entity.setErrorMessage(null);
@@ -781,7 +783,9 @@ public class ClaudeTaskService implements TaskQueryProvider {
         if (claudeSessionId != null && !claudeSessionId.isBlank()) {
             entity.setClaudeSessionId(claudeSessionId);
         }
-        if (model != null && !model.isBlank()) {
+        // 仅在 entity 尚未持有 model 时写入 Worker 实时汇报值（与 completeTask 一致）
+        if (model != null && !model.isBlank()
+                && (entity.getModel() == null || entity.getModel().isBlank())) {
             entity.setModel(model);
         }
         if (ackSeq != null) {

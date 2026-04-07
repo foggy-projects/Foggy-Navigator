@@ -1,58 +1,58 @@
 {
-    "name" : "Foggy Navigator",
-    "appid" : "__UNI__AC2B8DB",
-    "description" : "Foggy Navigator 移动端",
-    "versionName" : "1.0.27",
-    "versionCode" : "127",
-    "transformPx" : false,
-    "vueVersion" : "3",
-    "h5" : {
-        "title" : "Foggy Navigator",
-        "router" : {
-            "mode" : "hash"
+    "name": "Foggy Navigator",
+    "appid": "__UNI__AC2B8DB",
+    "description": "Foggy Navigator 移动端",
+    "versionName": "1.0.33",
+    "versionCode": "133",
+    "transformPx": false,
+    "vueVersion": "3",
+    "h5": {
+        "title": "Foggy Navigator",
+        "router": {
+            "mode": "hash"
         },
-        "devServer" : {
-            "port" : 5175,
-            "proxy" : {
-                "/api" : {
-                    "target" : "http://localhost:8112",
-                    "changeOrigin" : true
+        "devServer": {
+            "port": 5175,
+            "proxy": {
+                "/api": {
+                    "target": "http://localhost:8112",
+                    "changeOrigin": true
                 }
             }
         }
     },
-    "app-plus" : {
-        "privacy" : {
-            "prompt" : "template",
-            "template" : {
-                "title" : "服务协议和隐私政策",
-                "message" : "我们依据《用户服务协议》和《隐私政策》来收集和使用您的个人信息，请仔细阅读并同意后继续使用。",
-                "buttonAccept" : "同意并继续",
-                "buttonRefuse" : "暂不使用"
+    "app-plus": {
+        "privacy": {
+            "prompt": "template",
+            "template": {
+                "title": "服务协议和隐私政策",
+                "message": "我们依据《用户服务协议》和《隐私政策》来收集和使用您的个人信息，请仔细阅读并同意后继续使用。",
+                "buttonAccept": "同意并继续",
+                "buttonRefuse": "暂不使用"
             }
         },
-        "distribute" : {
-            "android" : {
-                "permissions" : [
+        "distribute": {
+            "android": {
+                "permissions": [
                     "<uses-permission android:name=\"android.permission.INTERNET\"/>",
                     "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.REQUEST_INSTALL_PACKAGES\"/>"
                 ],
-                "minSdkVersion" : 21,
-                "targetSdkVersion" : 30
+                "minSdkVersion": 21,
+                "targetSdkVersion": 30
             },
-            "ios" : {
-                "dSYMs" : false
+            "ios": {
+                "dSYMs": false
             }
         },
-        "modules" : {}
+        "modules": {}
     },
-    "mp-weixin" : {
-        "appid" : "",
-        "setting" : {
-            "urlCheck" : false
+    "mp-weixin": {
+        "appid": "",
+        "setting": {
+            "urlCheck": false
         },
-        "usingComponents" : true
+        "usingComponents": true
     }
 }

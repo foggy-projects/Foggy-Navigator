@@ -173,15 +173,13 @@ onLoad(async (options) => {
   const draft = loadDraft()
   if (draft) resumeInput.value = draft
 
-  // Load platform models for config name display
-  loadPlatformModelsQuiet()
-
   if (taskId.value) {
     try {
       const task = await getTaskUnified(taskId.value)
       if (!task) return
       taskStream.task.value = task
       sessionId.value = task.sessionId
+      await loadPlatformModelsQuiet(task.workerId)
 
       // Init model cache from this task
       initFromTask(task)
@@ -202,9 +200,9 @@ onUnload(() => {
   taskStream.disconnect()
 })
 
-async function loadPlatformModelsQuiet() {
+async function loadPlatformModelsQuiet(workerId?: string) {
   try {
-    platformModels.value = await listModelConfigs()
+    platformModels.value = await listModelConfigs(workerId)
   } catch {
     // best-effort
   }

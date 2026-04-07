@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 import logging
 import os
 import re
@@ -71,6 +72,89 @@ def _build_registry_session_lookup() -> dict[str, dict[str, str | None]]:
                 "foggy_session_id": entry.get("foggy_session_id"),
             }
     return lookup
+
+
+def _process_brief(proc: CliProcessInfo) -> dict[str, object]:
+    """Return a compact, log-friendly snapshot of a process."""
+    return {
+        "pid": proc.pid,
+        "claude_session_id": proc.claude_session_id,
+        "foggy_task_id": proc.foggy_task_id,
+        "foggy_session_id": proc.foggy_session_id,
+        "model": proc.model,
+        "is_orphan": proc.is_orphan,
+        "started_at": proc.started_at,
+        "command": (proc.command or "")[:160],
+    }
+
+
+def _build_duplicate_groups(
+    processes: list[CliProcessInfo],
+) -> list[tuple[str, str, list[CliProcessInfo]]]:
+    """Group processes that appear to belong to the same task/session.
+
+    Priority:
+    1. ``foggy_task_id`` — best business-level identity
+    2. ``claude_session_id`` — fallback when only CLI resume session is known
+    """
+    groups: dict[tuple[str, str], list[CliProcessInfo]] = defaultdict(list)
+
+    for proc in processes:
+        if proc.foggy_task_id:
+            groups[("foggy_task_id", proc.foggy_task_id)].append(proc)
+        elif proc.claude_session_id:
+            groups[("claude_session_id", proc.claude_session_id)].append(proc)
+
+    duplicates: list[tuple[str, str, list[CliProcessInfo]]] = []
+    for (identity_type, identity_value), grouped in groups.items():
+        if len(grouped) > 1:
+            duplicates.append((identity_type, identity_value, sorted(grouped, key=lambda p: p.pid)))
+    return duplicates
+
+
+def _find_related_processes(
+    processes: list[CliProcessInfo],
+    target: CliProcessInfo,
+) -> list[CliProcessInfo]:
+    """Return sibling processes likely tied to the same task/session."""
+    related: list[CliProcessInfo] = []
+    for proc in processes:
+        if proc.pid == target.pid:
+            continue
+        same_foggy_task = bool(target.foggy_task_id and proc.foggy_task_id == target.foggy_task_id)
+        same_claude_session = bool(
+            target.claude_session_id
+            and proc.claude_session_id == target.claude_session_id
+        )
+        if same_foggy_task or same_claude_session:
+            related.append(proc)
+    return sorted(related, key=lambda p: p.pid)
+
+
+def _log_process_snapshot(processes: list[CliProcessInfo], active_task_count: int) -> None:
+    """Emit diagnostics for the current process list."""
+    if not processes:
+        logger.debug(
+            "CLI process snapshot: total=0 active_task_count=%d tracked_pids=%d task_registry=%d",
+            active_task_count, len(_tracked_pids), len(task_registry),
+        )
+        return
+
+    briefs = [_process_brief(proc) for proc in sorted(processes, key=lambda p: p.pid)]
+    logger.info(
+        "CLI process snapshot: total=%d active_task_count=%d tracked_pids=%d task_registry=%d processes=%s",
+        len(processes), active_task_count, len(_tracked_pids), len(task_registry), briefs,
+    )
+
+    for identity_type, identity_value, grouped in _build_duplicate_groups(processes):
+        logger.warning(
+            "CLI process duplicate identity detected: %s=%s count=%d pids=%s details=%s",
+            identity_type,
+            identity_value,
+            len(grouped),
+            [proc.pid for proc in grouped],
+            [_process_brief(proc) for proc in grouped],
+        )
 
 
 def _enrich_processes(processes: list[CliProcessInfo]) -> None:
@@ -161,6 +245,7 @@ async def list_processes() -> CliProcessListResponse:
     pids = _find_sdk_cli_pids()
     processes = _get_process_details(pids)
     _enrich_processes(processes)
+    _log_process_snapshot(processes, len(task_registry))
     return CliProcessListResponse(
         processes=processes,
         active_task_count=len(task_registry),
@@ -186,6 +271,27 @@ async def kill_process(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"PID {pid} is not a Claude CLI process or no longer exists",
+        )
+
+    processes = _get_process_details(cli_pids)
+    _enrich_processes(processes)
+    target = next((proc for proc in processes if proc.pid == pid), None)
+    if target is not None:
+        related = _find_related_processes(processes, target)
+        logger.warning(
+            "CLI kill requested: pid=%d force=%s target=%s related_count=%d related=%s",
+            pid,
+            force,
+            _process_brief(target),
+            len(related),
+            [_process_brief(proc) for proc in related],
+        )
+    else:
+        logger.warning(
+            "CLI kill requested for pid=%d force=%s but target details were unavailable; current_pids=%s",
+            pid,
+            force,
+            sorted(cli_pids),
         )
 
     try:

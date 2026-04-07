@@ -1,6 +1,6 @@
 {
   "name": "@foggy/mobile",
-  "version": "1.0.27",
+  "version": "1.0.33",
   "private": true,
   "scripts": {
     "dev:h5": "uni -p h5",
@@ -8,7 +8,9 @@
     "build:h5": "uni build -p h5",
     "build:mp-weixin": "uni build -p mp-weixin",
     "build:app-android": "uni build -p app-android",
-    "build:wgt": "uni build -p app-android && node scripts/pack-wgt.js"
+    "build:wgt": "uni build -p app-android && node scripts/pack-wgt.js",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4080720251210001",
@@ -41,8 +43,11 @@
     "@dcloudio/uni-cli-shared": "3.0.0-4080720251210001",
     "@dcloudio/uni-stacktracey": "3.0.0-4080720251210001",
     "@dcloudio/vite-plugin-uni": "3.0.0-4080720251210001",
+    "@types/node": "^24.10.1",
     "@types/markdown-it": "^14.1.2",
+    "happy-dom": "^20.0.10",
     "typescript": "~5.9.3",
-    "vite": "^5.4.19"
+    "vite": "^5.4.19",
+    "vitest": "^1.6.1"
   }
 }

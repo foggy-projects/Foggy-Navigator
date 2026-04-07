@@ -1,12 +1,54 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { ElMessageBox, ElMessage } from 'element-plus'
+import ElementPlus, { ElMessageBox, ElMessage } from 'element-plus'
 import ClaudeWorkerView from '../ClaudeWorkerView.vue'
 import * as claudeWorkerApi from '@/api/claudeWorker'
+import * as unifiedTaskApi from '@/api/unifiedTask'
+import * as platformApi from '@/api/platform'
+import * as codingAgentApi from '@/api/codingAgent'
 import type { ClaudeTask, ClaudeWorker, WorkingDirectory } from '@/types'
 
 // Mock APIs
 vi.mock('@/api/claudeWorker')
+vi.mock('@/api/codingAgent', () => ({
+  listAgents: vi.fn().mockResolvedValue([]),
+  getAgent: vi.fn(),
+  registerAgent: vi.fn(),
+  updateAgent: vi.fn(),
+  generateSummary: vi.fn(),
+  deleteAgent: vi.fn(),
+  getAgentDirectories: vi.fn(),
+  bindDirectory: vi.fn(),
+  unbindDirectory: vi.fn(),
+  askAgent: vi.fn(),
+}))
+vi.mock('@/api/platform', () => ({
+  listModelConfigs: vi.fn().mockResolvedValue([]),
+  listAgentModelOverrides: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/api/unifiedTask', () => ({
+  createTaskUnified: vi.fn(),
+  cancelTaskUnified: vi.fn(),
+  listTasksUnified: vi.fn().mockResolvedValue([]),
+  respondToTaskUnified: vi.fn(),
+  reconnectTaskUnified: vi.fn(),
+  resyncTaskUnified: vi.fn(),
+  resumeTaskUnified: vi.fn(),
+  deleteTaskUnified: vi.fn(),
+  rewindTaskUnified: vi.fn(),
+  scanCheckpointsUnified: vi.fn(),
+  searchSessionsUnified: vi.fn().mockResolvedValue([]),
+  listTasksPagedUnified: vi.fn().mockResolvedValue({ content: [], totalSessions: 0, page: 0, size: 20 }),
+  listTasksByDirectoryUnified: vi.fn().mockResolvedValue([]),
+  listTasksByDirectoryPagedUnified: vi.fn().mockResolvedValue({ content: [], totalSessions: 0, page: 0, size: 20 }),
+}))
+vi.mock('@/api/ssh', () => ({
+  connectSsh: vi.fn(),
+  disconnectSsh: vi.fn(),
+}))
+vi.mock('@/api/fileBrowser', () => ({
+  searchFiles: vi.fn().mockResolvedValue([]),
+}))
 vi.mock('element-plus', async () => {
   const actual = await vi.importActual('element-plus')
   return {
@@ -34,6 +76,24 @@ vi.mock('vue-router', async () => {
     }),
   }
 })
+
+// Common mount options: register Element Plus globally so el-* components resolve correctly
+const commonGlobal = {
+  plugins: [ElementPlus],
+  stubs: {
+    ElDropdown: true,
+    ElForm: true,
+    ElPagination: true,
+    ChatPanel: true,
+    TaskPaneGrid: true,
+    SshTerminalPanel: true,
+    SshTerminal: true,
+    SlashCommandInput: true,
+    SessionSearchDialog: true,
+    PencilCanvas: true,
+    ScreenshotAnnotator: true,
+  },
+}
 
 describe('ClaudeWorkerView - Resume Task Integration', () => {
   const mockWorker: ClaudeWorker = {
@@ -92,7 +152,7 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
-    // Setup default API responses
+    // Setup default API responses (claudeWorker auto-mock)
     vi.mocked(claudeWorkerApi.listWorkers).mockResolvedValue([mockWorker])
     vi.mocked(claudeWorkerApi.listDirectoriesByWorker).mockResolvedValue([mockDirectory])
     vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mockResolvedValue({
@@ -105,83 +165,74 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       totalSessions: 0,
       page: 0, size: 20,
     })
+    vi.mocked(claudeWorkerApi.listAwaitingReplyTasks).mockResolvedValue([])
+    vi.mocked(claudeWorkerApi.listConversationConfigs).mockResolvedValue([])
+
+    // Re-setup unified / platform / codingAgent mocks (clearAllMocks resets factory defaults)
+    vi.mocked(unifiedTaskApi.listTasksUnified).mockResolvedValue([])
+    vi.mocked(unifiedTaskApi.listTasksPagedUnified).mockResolvedValue({
+      content: [], totalSessions: 0, page: 0, size: 20,
+    } as any)
+    vi.mocked(unifiedTaskApi.listTasksByDirectoryPagedUnified).mockResolvedValue({
+      content: [mockCompletedTask], totalSessions: 1, page: 0, size: 20,
+    } as any)
+    vi.mocked(unifiedTaskApi.listTasksByDirectoryUnified).mockResolvedValue([] as any)
+    vi.mocked(platformApi.listModelConfigs).mockResolvedValue([])
+    vi.mocked(platformApi.listAgentModelOverrides).mockResolvedValue([])
+    vi.mocked(codingAgentApi.listAgents).mockResolvedValue([])
   })
 
   afterEach(() => {
-    vi.restoreAllMocks()
+    vi.clearAllMocks()
   })
 
   describe('Issue 1: Resume should update history list', () => {
     it('should refresh task list after resuming task', async () => {
-      // Mock resume API
-      vi.mocked(claudeWorkerApi.resumeTask).mockResolvedValue(mockResumedTask)
+      // Mock resume API (component uses resumeTaskUnified via workerState.resumeTask)
+      vi.mocked(unifiedTaskApi.resumeTaskUnified).mockResolvedValue(mockResumedTask as any)
       vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: 'echo world' } as any)
 
-      // After resume, return both old and new task
-      vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mockResolvedValueOnce({
-        content: [mockCompletedTask],
-        totalSessions: 1,
-        page: 0, size: 20,
-      })
-
-      const wrapper = mount(ClaudeWorkerView, {
-        global: {
-          stubs: {
-            ElButton: false,
-            ElTag: false,
-            ElDropdown: true,
-            ElForm: true,
-            ElPagination: true,
-            ChatPanel: true,
-            TaskPaneGrid: true,
-          },
-        },
-      })
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
 
       await flushPromises()
 
       // Simulate: expand worker, select directory
-      // (In real test would click elements, here we directly call internal methods)
       const vm = wrapper.vm as any
       vm.selectedWorkerId = 'worker-1'
       vm.selectedDirectoryId = 'dir-1'
       await flushPromises()
 
-      // Record initial API call count
-      const initialCallCount = vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mock.calls
+      // Record initial API call count (component uses listTasksByDirectoryPagedUnified)
+      const initialCallCount = vi.mocked(unifiedTaskApi.listTasksByDirectoryPagedUnified).mock.calls
         .length
 
-      // Mock second call to return both tasks
-      vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mockResolvedValueOnce({
+      // Mock next call to return both tasks
+      vi.mocked(unifiedTaskApi.listTasksByDirectoryPagedUnified).mockResolvedValueOnce({
         content: [mockResumedTask, mockCompletedTask],
         totalSessions: 2,
         page: 0, size: 20,
-      })
+      } as any)
 
       // Simulate clicking "继续" button on completed task
       await vm.handleResumeFromHistory(mockCompletedTask)
       await flushPromises()
 
-      // Verify: listTasksByDirectoryPaged should be called again to refresh
-      const finalCallCount = vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mock.calls.length
+      // Verify: listTasksByDirectoryPagedUnified should be called again to refresh
+      const finalCallCount = vi.mocked(unifiedTaskApi.listTasksByDirectoryPagedUnified).mock.calls.length
       expect(finalCallCount).toBeGreaterThan(initialCallCount)
     })
   })
 
   describe('Issue 2: Task pane should display prompt', () => {
     it('should show task prompt in pane header', async () => {
-      vi.mocked(claudeWorkerApi.resumeTask).mockResolvedValue(mockResumedTask)
+      vi.mocked(unifiedTaskApi.resumeTaskUnified).mockResolvedValue(mockResumedTask as any)
       vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: 'echo world' } as any)
 
       const wrapper = mount(ClaudeWorkerView, {
         global: {
+          ...commonGlobal,
           stubs: {
-            ElButton: false,
-            ElTag: false,
-            ElDropdown: true,
-            ElForm: true,
-            ElPagination: true,
-            ChatPanel: true,
+            ...commonGlobal.stubs,
             TaskPaneGrid: {
               template: '<div class="mock-pane-grid"><slot /></div>',
               props: ['panes'],
@@ -210,26 +261,14 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
 
   describe('Issue 3: Task list should persist after page refresh', () => {
     it('should load resumed task from API after mount', async () => {
-      // Simulate: page was refreshed, now API returns resumed task
-      vi.mocked(claudeWorkerApi.listTasksByDirectoryPaged).mockResolvedValue({
+      // Simulate: page was refreshed, now unified API returns resumed task
+      vi.mocked(unifiedTaskApi.listTasksByDirectoryPagedUnified).mockResolvedValue({
         content: [mockResumedTask, mockCompletedTask],
         totalSessions: 2,
         page: 0, size: 20,
-      })
+      } as any)
 
-      const wrapper = mount(ClaudeWorkerView, {
-        global: {
-          stubs: {
-            ElButton: false,
-            ElTag: false,
-            ElDropdown: true,
-            ElForm: true,
-            ElPagination: true,
-            ChatPanel: true,
-            TaskPaneGrid: true,
-          },
-        },
-      })
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
 
       await flushPromises()
 
@@ -238,8 +277,8 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       vm.selectDirectory('worker-1', 'dir-1')
       await flushPromises()
 
-      // Verify: should call API and load tasks
-      expect(claudeWorkerApi.listTasksByDirectoryPaged).toHaveBeenCalled()
+      // Verify: should call unified API to load tasks
+      expect(unifiedTaskApi.listTasksByDirectoryPagedUnified).toHaveBeenCalled()
 
       // Verify: directoryTasks should include resumed task
       expect(vm.directoryTasks).toHaveLength(2)

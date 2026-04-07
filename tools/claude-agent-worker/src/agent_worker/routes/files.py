@@ -26,7 +26,7 @@ from ..models import (
     FoggyIgnoreResponse,
     GitDiffSummaryResponse,
 )
-from .utils import run_git, validate_path
+from .utils import decode_text_bytes, run_git, validate_path
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +220,7 @@ async def read_file_content(
             is_binary=True,
         )
 
-    content = raw.decode("utf-8", errors="replace")
+    content = decode_text_bytes(raw)
     line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
 
     return FileContentResponse(
@@ -623,9 +623,10 @@ def _fallback_content_search(
                 continue
 
             try:
-                with open(abs_path, "r", encoding="utf-8", errors="ignore") as fh:
-                    lines = fh.readlines()
-            except (OSError, UnicodeDecodeError):
+                with open(abs_path, "rb") as fh:
+                    text = decode_text_bytes(fh.read())
+                    lines = text.splitlines(keepends=True)
+            except OSError:
                 continue
 
             for i, line in enumerate(lines):
@@ -845,7 +846,7 @@ async def get_file_diff(
                 with open(abs_file, "rb") as f:
                     raw = f.read()
                 if not _is_binary(raw):
-                    modified = raw.decode("utf-8", errors="replace").rstrip()
+                    modified = decode_text_bytes(raw).rstrip()
         except OSError:
             pass
 

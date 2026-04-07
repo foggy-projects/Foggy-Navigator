@@ -1,47 +1,50 @@
 <template>
   <view class="worker-page">
-    <scroll-view
-      scroll-y
-      class="worker-list"
-      :refresher-enabled="true"
-      :refresher-triggered="refreshing"
-      @refresherrefresh="onRefresh"
-    >
-      <view v-if="workerStore.loading && workers.length === 0" class="loading-wrap">
-        <text class="loading-text">加载中...</text>
-      </view>
+    <view v-if="workerStore.loading && workers.length === 0" class="loading-wrap">
+      <text class="loading-text">加载中...</text>
+    </view>
 
-      <view v-if="!workerStore.loading && workers.length === 0" class="empty-section">
-        <EmptyState
-          icon="🖥️"
-          title="暂无 Worker"
-          description="请在 Web 端添加 Worker"
+    <view v-if="!workerStore.loading && workers.length === 0" class="empty-section">
+      <EmptyState
+        icon="🖥️"
+        title="暂无 Worker"
+        description="请在 Web 端添加 Worker"
+      />
+    </view>
+
+    <view v-if="workers.length > 0" class="worker-list">
+      <view class="worker-section" v-for="worker in workers" :key="worker.workerId">
+        <WorkerCard
+          :worker="worker"
+          @tap="toggleWorker(worker.workerId)"
+          @health-check="doHealthCheck(worker.workerId)"
         />
-      </view>
 
-      <view v-if="workers.length > 0">
-        <view class="worker-section" v-for="worker in workers" :key="worker.workerId">
-          <WorkerCard
-            :worker="worker"
-            @tap="toggleWorker(worker.workerId)"
-            @longpress="doHealthCheck(worker.workerId)"
-          />
-
-          <!-- 展开的目录列表 -->
-          <view v-if="expandedWorker === worker.workerId" class="directory-list">
-            <view v-if="loadingDirs" class="dir-loading">
-              <text class="loading-text">加载目录...</text>
-            </view>
-            <view v-if="!loadingDirs">
-              <!-- PROJECT 目录 -->
-              <view
-                v-for="project in workerStore.getProjectDirectories(worker.workerId)"
-                :key="project.directoryId"
-                class="project-group"
-              >
-                <view class="project-header" @tap="toggleProject(project.directoryId)">
+        <!-- 展开的目录列表 -->
+        <view v-if="expandedWorker === worker.workerId" class="directory-list">
+          <view v-if="loadingDirs" class="dir-loading">
+            <text class="loading-text">加载目录...</text>
+          </view>
+          <view v-if="!loadingDirs">
+            <!-- PROJECT 目录 -->
+            <view
+              v-for="project in workerStore.getProjectDirectories(worker.workerId)"
+              :key="project.directoryId"
+              class="project-group"
+            >
+              <view class="project-header" @tap="openTasks(worker.workerId, project)">
+                <view
+                  class="project-toggle"
+                  @tap.stop="toggleProject(project.directoryId)"
+                  v-if="workerStore.getChildDirectories(worker.workerId, project.directoryId).length > 0"
+                >
+                  <text class="project-arrow">{{ expandedProjects.has(project.directoryId) ? '▼' : '▶' }}</text>
+                </view>
+                <view
+                  class="project-body"
+                  :class="{ 'no-toggle': workerStore.getChildDirectories(worker.workerId, project.directoryId).length === 0 }"
+                >
                   <view class="dir-info">
-                    <text class="project-arrow">{{ expandedProjects.has(project.directoryId) ? '▼' : '▶' }}</text>
                     <text class="project-icon">📦</text>
                     <text class="dir-name">{{ project.projectName }}</text>
                     <text
@@ -51,90 +54,97 @@
                   </view>
                   <text class="dir-path">{{ project.path }}</text>
                 </view>
-                <!-- PROJECT 子目录 -->
-                <view v-if="expandedProjects.has(project.directoryId)">
-                  <template
-                    v-for="child in workerStore.getChildDirectories(worker.workerId, project.directoryId)"
-                    :key="child.directoryId"
+                <text class="nav-arrow">›</text>
+              </view>
+              <!-- PROJECT 子目录 -->
+              <view v-if="expandedProjects.has(project.directoryId)">
+                <template
+                  v-for="child in workerStore.getChildDirectories(worker.workerId, project.directoryId)"
+                  :key="child.directoryId"
+                >
+                  <view
+                    class="directory-item child-item"
+                    @tap="openTasks(worker.workerId, child)"
                   >
-                    <view
-                      class="directory-item child-item"
-                      @tap="openTasks(worker.workerId, child)"
-                    >
+                    <view class="dir-item-body">
                       <view class="dir-info">
                         <text class="dir-name">{{ child.projectName }}</text>
                         <text v-if="child.gitBranch" class="dir-branch">{{ child.gitBranch }}</text>
                       </view>
                       <text class="dir-path">{{ child.path }}</text>
                     </view>
-                    <!-- Worktree 嵌套在源目录下 -->
-                    <view
-                      v-for="wt in workerStore.getWorktreesForDirectory(worker.workerId, child.directoryId)"
-                      :key="wt.directoryId"
-                      class="directory-item worktree-item"
-                      @tap="openTasks(worker.workerId, wt)"
-                    >
-                      <view class="dir-info">
-                        <text class="worktree-indent">└─</text>
-                        <text class="dir-name">{{ wt.projectName }}</text>
-                        <text v-if="wt.gitBranch" class="dir-branch">{{ wt.gitBranch }}</text>
-                        <text class="worktree-tag">worktree</text>
-                      </view>
-                      <text class="dir-path worktree-path">{{ wt.path }}</text>
+                    <text class="nav-arrow">›</text>
+                  </view>
+                  <!-- Worktree 嵌套在源目录下 -->
+                  <view
+                    v-for="wt in workerStore.getWorktreesForDirectory(worker.workerId, child.directoryId)"
+                    :key="wt.directoryId"
+                    class="directory-item worktree-item"
+                    @tap="openTasks(worker.workerId, wt)"
+                  >
+                    <view class="dir-info">
+                      <text class="worktree-indent">└─</text>
+                      <text class="dir-name">{{ wt.projectName }}</text>
+                      <text v-if="wt.gitBranch" class="dir-branch">{{ wt.gitBranch }}</text>
+                      <text class="worktree-tag">worktree</text>
                     </view>
-                  </template>
-                </view>
+                    <text class="dir-path worktree-path">{{ wt.path }}</text>
+                  </view>
+                </template>
               </view>
+            </view>
 
-              <!-- 独立目录（不属于任何 PROJECT，排除 worktree） -->
-              <template
-                v-for="dir in workerStore.getOrphanDirectories(worker.workerId)"
-                :key="dir.directoryId"
+            <!-- 独立目录（不属于任何 PROJECT，排除 worktree） -->
+            <template
+              v-for="dir in workerStore.getOrphanDirectories(worker.workerId)"
+              :key="dir.directoryId"
+            >
+              <view
+                class="directory-item"
+                @tap="openTasks(worker.workerId, dir)"
               >
-                <view
-                  class="directory-item"
-                  @tap="openTasks(worker.workerId, dir)"
-                >
+                <view class="dir-item-body">
                   <view class="dir-info">
                     <text class="dir-name">{{ dir.projectName }}</text>
                     <text v-if="dir.gitBranch" class="dir-branch">{{ dir.gitBranch }}</text>
                   </view>
                   <text class="dir-path">{{ dir.path }}</text>
                 </view>
-                <!-- Worktree 嵌套在源目录下 -->
-                <view
-                  v-for="wt in workerStore.getWorktreesForDirectory(worker.workerId, dir.directoryId)"
-                  :key="wt.directoryId"
-                  class="directory-item worktree-item"
-                  @tap="openTasks(worker.workerId, wt)"
-                >
-                  <view class="dir-info">
-                    <text class="worktree-indent">└─</text>
-                    <text class="dir-name">{{ wt.projectName }}</text>
-                    <text v-if="wt.gitBranch" class="dir-branch">{{ wt.gitBranch }}</text>
-                    <text class="worktree-tag">worktree</text>
-                  </view>
-                  <text class="dir-path worktree-path">{{ wt.path }}</text>
-                </view>
-              </template>
-
-              <view
-                v-if="workerStore.getProjectDirectories(worker.workerId).length === 0 && workerStore.getOrphanDirectories(worker.workerId).length === 0"
-                class="dir-empty"
-              >
-                <text class="empty-text">暂无工作目录</text>
+                <text class="nav-arrow">›</text>
               </view>
+              <!-- Worktree 嵌套在源目录下 -->
+              <view
+                v-for="wt in workerStore.getWorktreesForDirectory(worker.workerId, dir.directoryId)"
+                :key="wt.directoryId"
+                class="directory-item worktree-item"
+                @tap="openTasks(worker.workerId, wt)"
+              >
+                <view class="dir-info">
+                  <text class="worktree-indent">└─</text>
+                  <text class="dir-name">{{ wt.projectName }}</text>
+                  <text v-if="wt.gitBranch" class="dir-branch">{{ wt.gitBranch }}</text>
+                  <text class="worktree-tag">worktree</text>
+                </view>
+                <text class="dir-path worktree-path">{{ wt.path }}</text>
+              </view>
+            </template>
+
+            <view
+              v-if="workerStore.getProjectDirectories(worker.workerId).length === 0 && workerStore.getOrphanDirectories(worker.workerId).length === 0"
+              class="dir-empty"
+            >
+              <text class="empty-text">暂无工作目录</text>
             </view>
           </view>
         </view>
       </view>
-    </scroll-view>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { onShow, onPullDownRefresh } from '@dcloudio/uni-app'
 import { useWorkerStore } from '@/stores/worker'
 import type { WorkingDirectory } from '@/api/types'
 import WorkerCard from '@/components/WorkerCard.vue'
@@ -144,7 +154,6 @@ const workerStore = useWorkerStore()
 const expandedWorker = ref<string | null>(null)
 const expandedProjects = reactive(new Set<string>())
 const loadingDirs = ref(false)
-const refreshing = ref(false)
 
 const workers = computed(() => workerStore.workers)
 
@@ -152,11 +161,10 @@ onShow(() => {
   workerStore.loadWorkers()
 })
 
-async function onRefresh() {
-  refreshing.value = true
+onPullDownRefresh(async () => {
   await workerStore.loadWorkers()
-  refreshing.value = false
-}
+  uni.stopPullDownRefresh()
+})
 
 async function toggleWorker(workerId: string) {
   if (expandedWorker.value === workerId) {
@@ -198,13 +206,10 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
 
 <style scoped>
 .worker-page {
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - var(--window-top, 0px));
+  min-height: 100vh;
   background: #f5f5f5;
 }
 .worker-list {
-  flex: 1;
   padding: 20rpx 24rpx;
 }
 .loading-wrap {
@@ -229,17 +234,42 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
   border-bottom: 2rpx solid #f0f0f0;
 }
 .project-header {
-  padding: 24rpx 28rpx;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  padding: 0 28rpx 0 0;
   background: #fafafa;
 }
+.project-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 88rpx;
+  min-height: 96rpx;
+  flex-shrink: 0;
+}
 .project-arrow {
-  font-size: 20rpx;
+  font-size: 26rpx;
   color: #909399;
-  margin-right: 8rpx;
+}
+.project-body {
+  flex: 1;
+  padding: 24rpx 0;
+  padding-left: 4rpx;
+  min-width: 0;
+}
+.project-body.no-toggle {
+  padding-left: 28rpx;
 }
 .project-icon {
   font-size: 28rpx;
   margin-right: 8rpx;
+}
+.nav-arrow {
+  font-size: 36rpx;
+  color: #c0c4cc;
+  flex-shrink: 0;
+  padding-left: 12rpx;
 }
 .child-count {
   font-size: 20rpx;
@@ -270,8 +300,15 @@ function openTasks(workerId: string, dir: WorkingDirectory) {
   padding-left: 40rpx;
 }
 .directory-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
   padding: 24rpx 28rpx;
   border-bottom: 2rpx solid #f5f5f5;
+}
+.dir-item-body {
+  flex: 1;
+  min-width: 0;
 }
 .dir-info {
   display: flex;

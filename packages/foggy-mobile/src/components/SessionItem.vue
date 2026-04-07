@@ -3,7 +3,12 @@
     <view class="session-content">
       <view class="session-header">
         <text class="session-title">{{ session.taskName || '新会话' }}</text>
-        <StatusBadge :status="session.status" />
+        <view class="header-right">
+          <StatusBadge :status="session.status" />
+          <view class="delete-btn" @tap.stop="$emit('delete')">
+            <text class="delete-icon">···</text>
+          </view>
+        </view>
       </view>
       <text class="session-time">{{ relativeTime(session.updatedAt) }}</text>
     </view>
@@ -21,6 +26,7 @@ defineProps<{
 
 defineEmits<{
   tap: []
+  delete: []
 }>()
 
 </script>
@@ -30,6 +36,20 @@ defineEmits<{
   background: #ffffff;
   padding: 28rpx 32rpx;
   border-bottom: 2rpx solid #f0f0f0;
+}
+.header-right {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 16rpx;
+}
+.delete-btn {
+  padding: 4rpx 16rpx;
+}
+.delete-icon {
+  font-size: 28rpx;
+  color: #909399;
+  letter-spacing: 2rpx;
 }
 .session-content {
   display: flex;

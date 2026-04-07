@@ -33,8 +33,8 @@ public class SessionEventListener {
         log.debug("Received AgentMessage: sessionId={}, type={}, agentId={}",
                 sessionId, message.getType(), message.getAgentId());
 
-        // 1. 持久化（只保存需要存储的消息类型）
-        if (shouldPersist(message.getType())) {
+        // 1. 持久化（只保存需要存储的消息类型，跳过 result 事件避免重复写入）
+        if (shouldPersist(message.getType()) && !isResultEvent(message)) {
             try {
                 Message msg = toSessionMessage(message);
                 sessionManager.addMessage(sessionId, msg);
@@ -51,6 +51,21 @@ public class SessionEventListener {
     private boolean shouldPersist(MessageType type) {
         return type != MessageType.TEXT_CHUNK
                 && type != MessageType.HEARTBEAT;
+    }
+
+    /**
+     * result 事件（isResult=true）只携带指标（cost/tokens/duration），
+     * 其文本内容与前面的 assistant_text 完全一致。
+     * 如果也持久化，就会在 DB 中产生重复消息。
+     */
+    @SuppressWarnings("unchecked")
+    private boolean isResultEvent(AgentMessage message) {
+        if (message.getType() != MessageType.TEXT_COMPLETE) return false;
+        if (message.getPayload() instanceof Map) {
+            Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+            return Boolean.TRUE.equals(payload.get("isResult"));
+        }
+        return false;
     }
 
     @SuppressWarnings("unchecked")

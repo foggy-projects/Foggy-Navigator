@@ -50,9 +50,10 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
     // Pass through adapter for chat messages
     const msgs = tutorAgentAdapter.convert(raw, raw.sessionId)
     for (const msg of msgs) {
-      // Deduplicate: skip if messageId already seen (from DB load or prior SSE)
-      if (msg.id && knownMessageIds.has(msg.id)) continue
-      if (msg.id) knownMessageIds.add(msg.id)
+      // Deduplicate across DB-loaded history and live SSE events using the shared messageId.
+      const messageId = msg.messageId
+      if (messageId && knownMessageIds.has(messageId)) continue
+      if (messageId) knownMessageIds.add(messageId)
       chatState.processAipMessage(msg)
     }
 
@@ -106,14 +107,13 @@ export function useTaskStream(onTaskFinished?: () => void): TaskStreamState {
     }
   }
 
-  function handleNotification(raw: AgentMessage) {
-    // Sync interactionState from task_update / assistant_notification
+  function handleNotification(eventType: string, data: unknown) {
     if (!task.value) return
-    const payload = raw.payload as Record<string, unknown> | undefined
+    const payload = data as Record<string, unknown> | undefined
     if (!payload) return
 
     // Task status updates for our session
-    if (raw.type === 'task_update' && payload.sessionId === task.value.sessionId) {
+    if (eventType === 'task_update' && payload.sessionId === task.value.sessionId) {
       if (typeof payload.status === 'string') {
         task.value.status = payload.status as DispatchTask['status']
       }

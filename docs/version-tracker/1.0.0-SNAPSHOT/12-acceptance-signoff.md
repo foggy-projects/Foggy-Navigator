@@ -1,6 +1,6 @@
 # 1.0.0-SNAPSHOT 验收签收台账
 
-更新时间：2026-04-05
+更新时间：2026-04-07
 
 ## 说明
 
@@ -15,21 +15,16 @@
 | [01-codex-task-abort-kill-failure.md](./01-codex-task-abort-kill-failure.md) | 已签收 | 已完成修复，并附回归验证 | 2026-04-05 |
 | [03-abort-task-entry-flow-analysis.md](./03-abort-task-entry-flow-analysis.md) | 已签收 | 已实施，并附验证结果 | 2026-04-05 |
 | [04-shared-ask-external-url-propagation.md](./04-shared-ask-external-url-propagation.md) | 已签收 | 已实施，并附验证结果 | 2026-04-05 |
+| [05-shared-agent-api-expansion.md](./05-shared-agent-api-expansion.md) | 已签收 | Batch 1-3 已实施，Batch 4 已移出当前版本，相关单测通过 | 2026-04-07 |
 | [06-session-long-history-render-optimization.md](./06-session-long-history-render-optimization.md) | 已签收 | 已实施，并附构建/类型验证 | 2026-04-05 |
+| [07-chat-doc-link-open-file-browser-deeplink.md](./07-chat-doc-link-open-file-browser-deeplink.md) | 已签收 | 已回写实施结果，并附单测与 Playwright 验证证据 | 2026-04-07 |
 | [09-claude-worker-rewind-first-turn-session-corruption.md](./09-claude-worker-rewind-first-turn-session-corruption.md) | 已签收 | 已修复，并附单测与 E2E 回归验证 | 2026-04-05 |
-
-## 部分完成
-
-| 条目 | 当前判断 | 说明 |
-| --- | --- | --- |
-| [05-shared-agent-api-expansion.md](./05-shared-agent-api-expansion.md) | 部分完成 | Batch 1-3 已实施，Batch 4 明确延期，不满足“全量完成后签收” |
+| [10-claude-worker-session-model-selection-sync-analysis.md](./10-claude-worker-session-model-selection-sync-analysis.md) | 已签收 | 新建会话真实环境复测已确认修复，前端集成回归 `3 passed`；仍有非阻断测试噪音待后续清理 | 2026-04-07 |
+| [13-unified-task-cancel-claude-worker-provider-fallback.md](./13-unified-task-cancel-claude-worker-provider-fallback.md) | 已签收 | 自动化回归已完成，且真实环境取消验收通过 | 2026-04-07 |
 
 ## 未签收
 
-| 条目 | 当前判断 | 说明 |
-| --- | --- | --- |
-| [07-chat-doc-link-open-file-browser-deeplink.md](./07-chat-doc-link-open-file-browser-deeplink.md) | 未签收 | 文档给出了验收标准和方案建议，但未回写“已实施/验证结果” |
-| [10-claude-worker-session-model-selection-sync-analysis.md](./10-claude-worker-session-model-selection-sync-analysis.md) | 未签收 | 条目自身仍写明“待进入修复实现”，尚未在原条目完成闭环 |
+当前未签收项：无。
 
 ## 支撑记录
 
