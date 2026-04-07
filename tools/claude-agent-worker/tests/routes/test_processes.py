@@ -8,8 +8,10 @@ import pytest
 
 from agent_worker.models import CliProcessInfo
 from agent_worker.routes.processes import (
+    _build_duplicate_groups,
     _build_registry_session_lookup,
     _enrich_processes,
+    _find_related_processes,
     _get_process_details,
     _parse_resume_session_id,
     _read_foggy_env,
@@ -195,6 +197,54 @@ class TestEnrichProcesses:
             _enrich_processes(procs)
         assert procs[0].is_orphan is True
         assert procs[0].foggy_task_id is None
+
+
+# ---------------------------------------------------------------------------
+# Grouping helpers
+# ---------------------------------------------------------------------------
+
+class TestProcessGroupingHelpers:
+    """Helpers used by logging should identify duplicate/related processes."""
+
+    def _make_proc(
+        self,
+        pid: int,
+        *,
+        foggy_task_id: str | None = None,
+        claude_session_id: str | None = None,
+    ) -> CliProcessInfo:
+        return CliProcessInfo(
+            pid=pid,
+            command="claude --print",
+            memory_mb=0.0,
+            is_orphan=False,
+            foggy_task_id=foggy_task_id,
+            claude_session_id=claude_session_id,
+        )
+
+    def test_build_duplicate_groups_prefers_foggy_task_id(self):
+        procs = [
+            self._make_proc(1000, foggy_task_id="ft-1", claude_session_id="cs-1"),
+            self._make_proc(1001, foggy_task_id="ft-1", claude_session_id="cs-1"),
+            self._make_proc(2000, claude_session_id="cs-2"),
+        ]
+
+        groups = _build_duplicate_groups(procs)
+
+        assert len(groups) == 1
+        identity_type, identity_value, grouped = groups[0]
+        assert identity_type == "foggy_task_id"
+        assert identity_value == "ft-1"
+        assert [proc.pid for proc in grouped] == [1000, 1001]
+
+    def test_find_related_processes_matches_same_session(self):
+        target = self._make_proc(1000, claude_session_id="cs-1")
+        sibling = self._make_proc(1001, claude_session_id="cs-1")
+        unrelated = self._make_proc(2000, claude_session_id="cs-2")
+
+        related = _find_related_processes([target, sibling, unrelated], target)
+
+        assert [proc.pid for proc in related] == [1001]
 
 
 # ---------------------------------------------------------------------------
