@@ -3,13 +3,15 @@
     {
       "path": "pages/worker/index",
       "style": {
-        "navigationBarTitleText": "Workers"
+        "navigationBarTitleText": "Workers",
+        "enablePullDownRefresh": true
       }
     },
     {
       "path": "pages/chat/index",
       "style": {
-        "navigationBarTitleText": "会话"
+        "navigationBarTitleText": "会话",
+        "enablePullDownRefresh": true
       }
     },
     {
