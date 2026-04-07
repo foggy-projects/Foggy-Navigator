@@ -275,7 +275,7 @@ onReachBottom(() => {
 async function loadPlatformModels() {
   try {
     const [models, overrides] = await Promise.all([
-      listModelConfigs(),
+      listModelConfigs(workerId.value || undefined),
       listAgentModelOverrides(),
     ])
     platformModels.value = models.filter(m => m.hasApiKey)
@@ -285,6 +285,8 @@ async function loadPlatformModels() {
       selectedModelConfigId.value = override.modelConfigId
     } else if (platformModels.value.length > 0) {
       selectedModelConfigId.value = platformModels.value[0]!.id
+    } else {
+      selectedModelConfigId.value = ''
     }
   } catch {
     // best-effort
