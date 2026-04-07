@@ -179,4 +179,59 @@
 
 - 原因已定位
 - 影响链路已明确
-- 待进入修复实现
+- 对修复后新建会话的回归验证已完成，可进入版本签收
+
+## Implementation Status
+
+### 已完成的验收回写（2026-04-07）
+
+结合 [11-playwright-revalidation-report.md](./11-playwright-revalidation-report.md) 的真实环境复测结论，本次进一步把前端集成回归测试补齐并修正到当前实现口径。
+
+本次回写的测试修正全部位于：
+
+- `packages/navigator-frontend/src/views/__tests__/ClaudeWorkerView.integration.test.ts`
+
+已确认的测试修正包括：
+
+1. 补全组件 `onMounted` 和目录切换链路实际依赖的 API mock
+   - `@/api/codingAgent`
+   - `@/api/platform`
+   - `@/api/unifiedTask`
+   - `@/api/ssh`
+   - `@/api/fileBrowser`
+2. 把断言从旧的 `claudeWorkerApi.*` 调整为当前统一任务实现实际调用的：
+   - `unifiedTaskApi.resumeTaskUnified`
+   - `unifiedTaskApi.listTasksByDirectoryPagedUnified`
+3. 在 `mount()` 时全局注册 `ElementPlus`，避免 `el-table-column` 在 happy-dom 下因 slot 解构触发误报
+4. 将 `afterEach` 从 `vi.restoreAllMocks()` 调整为 `vi.clearAllMocks()`，避免 factory mock 实现被还原后影响后续用例
+
+### 验证结果
+
+1. 真实环境复测证据
+   - [11-playwright-revalidation-report.md](./11-playwright-revalidation-report.md) 已确认：对修复后新建会话，切走再点回后顶部模型栏能够恢复到该会话上一次实际使用的模型，继续发送第 2 轮后也未再出现真实执行模型漂移
+2. 前端集成回归
+   - 执行命令：`npm run test -- ClaudeWorkerView.integration.test.ts`
+   - 结果：`3 passed`
+3. 当前验收边界
+   - 本项签收范围明确限定为“修复后新建会话”
+   - 修复前已创建的旧会话不在本次验收范围内，这一边界与 `11` 中的复测说明保持一致
+
+### 非阻断后续项
+
+本次自动化回归虽然通过，但输出中仍存在几类未使测试失败的环境噪音，建议后续单独清理：
+
+- `session` 历史消息接口仍会在测试环境中尝试访问 `/api/v1/sessions/...`
+- `UnifiedSse` 订阅/退订仍会在 happy-dom 下打印网络失败日志
+- `@/api/ssh` mock 当前未补 `listSshSessions` 导出，组件会打印一条已捕获错误日志
+
+这些问题当前不影响 `10` 的修复结论，但说明测试隔离还可以继续收紧。
+
+## 验收签收
+
+- 签收状态：✅ 已签收
+- 签收日期：2026-04-07
+- 签收方式：版本文档审计签收
+- 签收依据：真实环境复测已确认“修复后新建会话”链路恢复正常，且前端集成回归 `3/3` 通过。
+- 验收边界：仅覆盖修复后新建会话；修复前旧会话不在本次签收范围内。
+- 后续事项：保留测试环境噪音清理，不阻断本版本签收。
+- 关联台账：[12-acceptance-signoff.md](./12-acceptance-signoff.md)

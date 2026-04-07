@@ -415,3 +415,38 @@ function handleContentClick(e: Event) {
 1. 改动面清晰，符合现有模块边界。
 2. V1 可以只改前端，不必立即新增后端路径解析接口。
 3. 后续如果要支持跨目录路径反查，再在 `WorkingDirectoryController` / `WorkingDirectoryService` 上补 resolve API 即可，不会推翻现有前端事件链。
+
+## Implementation Status
+
+**状态**: ✅ 已实施（2026-04-04）
+
+### 已完成的改造
+
+1. **共享聊天组件事件透传**
+   - `MessageBubble.vue` 已拦截普通 `<a>` 点击并透传 `link-click`
+   - `MessageList.vue` / `ChatPanel.vue` 已继续向宿主透传该事件
+
+2. **Navigator 宿主层路径解析**
+   - `ClaudeWorkerView.vue` 已接入 `handleLinkClick(...)`
+   - 通过 `resolveChatLinkTarget(...)` 统一处理工作区绝对路径、相对路径、同源文件浏览器 deeplink、外链兜底和失败 warning
+
+3. **文件浏览器 deeplink 消费**
+   - `FileBrowserView.vue` 已支持首次挂载时读取 `filePath`
+   - 已补充 `route.query.filePath` watcher，支持同标签内二次切换目标文件
+   - 目录树选中态通过 `selectedTreePath` 保持
+
+### 验证结果
+
+1. `08-playwright-experience-report.md` 已验证首次 deeplink 打开、自动展开目录树、自动打开目标文件通过。
+2. `11-playwright-revalidation-report.md` 已验证同一文件浏览器标签内仅修改 `filePath` 时，可以切换到新文件。
+3. 当前补跑 `pnpm --filter @foggy/navigator-frontend test -- src/__tests__/chatLinkResolver.test.ts`，结果为 `7 passed`。
+
+## Acceptance Status
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted
+- signed_off_by: engineering-signoff
+- signed_off_at: 2026-04-07
+- acceptance_record: docs/version-tracker/1.0.0-SNAPSHOT/acceptance/07-chat-doc-link-open-file-browser-deeplink-acceptance.md
+- blocking_items: none
+- follow_up_required: no
