@@ -20,7 +20,8 @@
 
 ## Status
 
-- Phase 1 Implemented
+- Phase 1 Implemented → Code Verified (2026-04-07)
+- 待人工体验验收
 
 ## Background
 
@@ -233,20 +234,29 @@
 - 在 `foggy-chat` MessageList.vue 中实现共享"回到底部"悬浮按钮
 - 前端构建验证通过（foggy-chat-core、foggy-chat、navigator-frontend 均成功）
 
+**代码验证（2026-04-07）：**
+
+- [x] `showJumpToBottom` computed 存在且逻辑正确
+- [x] `forceScrollToBottom()` 方法存在，先清 `userScrolledUp` 再调 `scrollToBottom()`
+- [x] 悬浮按钮 DOM 包含 `<Transition>` 动画，`v-if="showJumpToBottom"`
+- [x] `ResizeObserver` 检测容器宽度 < 300px 切换 `iconOnly` 模式
+- [x] `.message-list-container` 已设 `position: relative` 作为定位上下文
+
 ### Testing Progress
 
-- 当前状态：待人工验收
-- 实现后应覆盖：
-  - 用户上滑后按钮出现
-  - 点击后恢复到底部
-  - 流式输出期间再次跟随
-  - 多 Pane 窄宽度布局显示正常
+- 当前状态：代码审查通过，待人工体验验收
+- 自动化测试：N/A（纯前端 UX 增强，无后端逻辑变更）
+- 人工验收项：
+  - [ ] 用户上滑后按钮出现
+  - [ ] 点击后恢复到底部
+  - [ ] 流式输出期间再次跟随
+  - [ ] 多 Pane 窄宽度布局显示正常（< 300px 退化为图标按钮）
 
 ### Experience Progress
 
-- 当前状态：待验证
-- 重点人工验收场景：
-  - 长日志工具调用会话
-  - 连续多轮问答会话
-  - 右侧历史栏展开时的主区布局
-  - 单 Pane 与多 Pane 模式
+- 当前状态：待人工体验验证
+- 重点场景：
+  - [ ] 长日志工具调用会话
+  - [ ] 连续多轮问答会话
+  - [ ] 右侧历史栏展开时的主区布局
+  - [ ] 单 Pane 与多 Pane 模式

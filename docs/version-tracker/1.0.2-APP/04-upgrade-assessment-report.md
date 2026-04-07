@@ -4,24 +4,30 @@
 
 - 2026-04-05
 - 2026-04-06（补充 H5 Playwright 验收结论）
+- 2026-04-07（重启相关服务后 H5 复验）
+- 2026-04-07（后端修复后全新会话 H5 复验）
+- 2026-04-07（再次全新会话 H5 复测）
 
 ## Type
 
 - Assessment Report
 - Feasibility Review
 - H5 Acceptance Update
+- H5 Revalidation Update
+- H5 Fresh Session Revalidation Update
+- H5 Fresh Session Retry Update
 
 ## Executive Summary
 
-本报告基于对 `docs/version-tracker/1.0.2-APP/` 三份规划文档与 `packages/foggy-mobile` 实际代码库的深度比对，并补充 2026-04-06 的 H5 Playwright 实测结果，给出可行性评估、完成度分析和验收结论。
+本报告基于对 `docs/version-tracker/1.0.2-APP/` 三份规划文档与 `packages/foggy-mobile` 实际代码库的深度比对，并补充 2026-04-06 初验、2026-04-07 重启服务后的 H5 复验、2026-04-07 后端修复后基于全新会话的 H5 Playwright 复验，以及同日再次独立全新会话复测结果，给出可行性评估、完成度分析和验收结论。
 
-**结论：计划可行，主体重构已基本完成，但当前版本尚未达到“验收通过”。** H5 主链路已经可以跑通，且统一任务接口、会话列表、分页历史加载、resume 基础能力均已落地；但实测发现 3 个阻断交付质量的问题：
+**结论：计划可行，主体重构已基本完成，H5 新会话主链路在最新复测中已通过，但 APP 版本级验收暂不能直接签收。** H5 主链路已经可以跑通，且统一任务接口、会话列表、分页历史加载、resume 基础能力均已落地。2026-04-07 的再次独立全新会话复测确认：
 
-1. 创建会话时 `model` 选择未真正生效，`modelConfigId` 生效但 `model` 被后端默认值覆盖。
-2. 续对成功后页面 URL 仍停留在旧 `taskId`，页面状态与地址存在漂移。
-3. 会话详情重进后存在消息重复渲染。
+1. 创建会话和会话续对时，`model` 选择已在全新会话中正确落库为 `sonnet`。
+2. 续对后的 URL 漂移在多轮 2026-04-07 复验中均未再复现。
+3. 全新会话重进详情页未再出现消息重复；`messages/latest` 结果与页面表现一致。
 
-因此，当前状态更准确地应定义为：**“代码改造基本完成，H5 验收已执行但未通过，还需修复阻断问题后复测。”**
+因此，当前状态更准确地应定义为：**“代码改造基本完成，H5 新会话核心链路已验通，但 APP 整体验收仍需补齐剩余场景和跨端证据后再签收。”**
 
 ---
 
@@ -66,7 +72,7 @@
 
 **总体完成率：约 85%**（按加权，测试尚未开始）
 
-补充说明：2026-04-06 已执行 H5 核心回归，但由于发现阻断问题，Milestone G 暂不计入“已完成”。
+补充说明：2026-04-06 已执行 H5 初验，2026-04-07 完成三次 H5 复测（重启服务后复验、后端修复后全新会话复验、再次独立全新会话复测）；当前剩余问题主要是验收覆盖面和证据闭环，而不再是明确的 H5 主链路阻断缺陷。
 
 ### 2.2 代码实探验证
 
@@ -147,6 +153,101 @@
 - 会话详情快照：`app102mobile-detail-finished.yaml`
 - 续对后快照：`app102mobile-resume.yaml`
 
+### 2.4 重启相关服务后的 H5 复验结果（2026-04-07）
+
+#### 复验前置动作
+
+- 重启 Claude Worker：`3031`
+- 重启 Launcher 后端：`8112`
+- 重启 foggy-mobile H5 Dev Server：`5175`
+
+#### ✅ 本轮复验通过项
+
+| 验收项 | 结果 | 说明 |
+|--------|------|------|
+| 登录并切换到 `local / http://localhost:8112` | ✅ 通过 | 重启后可重新鉴权 |
+| 创建会话与进入详情页 | ✅ 通过 | 新任务 `20260407-cb1b` 创建成功 |
+| resume 主链路与 URL 同步 | ✅ 通过 | 续对后页面地址为 `#/pages/worker/task-detail?taskId=20260407-d504&sessionId=f4d3c8cf-9edc-4430-96d2-629e4ddd486f`，未再出现旧 `taskId` 漂移 |
+
+#### ❌ 本轮复验未通过项
+
+| # | 问题 | 实测现象 | 影响 |
+|---|------|----------|------|
+| 1 | `model` 选择仍未真正生效 | 创建时显式选择 `Sonnet`，但任务 `20260407-cb1b` 落库仍为 `model=glm-4.7`；续对后的新任务 `20260407-d504` 也仍为 `glm-4.7` | “创建会话/续对时 model 生效”验收项仍失败 |
+| 2 | 会话详情重进后消息仍重复 | 重新进入 `taskId=20260407-d504` 的详情页后，页面全文本中 `MODEL_RECHECK` 和 `RESUME_RECHECK` 都出现 3 次（各含 1 次 prompt + 2 次 assistant reply），表明每轮 assistant 回复仍重复一次 | 历史消息可信度和详情页体验仍不合格 |
+
+#### 复验证据
+
+- 登录页快照：`app102mobile-recheck-0407-login.yaml`
+- 会话列表快照：`app102mobile-recheck-0407-tasks.yaml`
+- 首轮详情快照：`app102mobile-recheck-0407-detail1.yaml`
+- 续对完成快照：`app102mobile-recheck-0407-resume.yaml`
+- 重进详情快照：`app102mobile-recheck-0407-reopen.yaml`
+- 抓包日志：`.playwright-cli/network-2026-04-07T01-48-35-213Z.log`
+- 抓包日志：`.playwright-cli/network-2026-04-07T01-49-14-879Z.log`
+
+### 2.5 后端修复后的全新会话 H5 复验结果（2026-04-07）
+
+#### 复验前置条件
+
+- 后端 `8112` 端口健康检查通过
+- 按修复说明，使用一个全新的业务会话进行验证，避免历史会话中的重复消息脏数据干扰判断
+
+#### ✅ 本轮复验通过项
+
+| 验收项 | 结果 | 说明 |
+|--------|------|------|
+| 使用全新会话创建并进入详情页 | ✅ 通过 | 新任务 `20260407-c0d3` 创建成功，页面进入 `sessionId=5c477c71-f7a1-45e3-8d98-db9fbf7ec9da` |
+| resume 主链路与 URL 同步 | ✅ 通过 | 续对后页面地址为 `#/pages/worker/task-detail?taskId=20260407-64de&sessionId=5c477c71-f7a1-45e3-8d98-db9fbf7ec9da`，URL 与新任务一致 |
+| 全新会话重进详情页无消息重复 | ✅ 通过 | 重载后页面中文本仅出现 1 次 `FRESH_A` 回复和 1 次 `FRESH_B` 回复；`/messages/latest` 返回 8 条消息，与 2 轮对话应有记录完全一致，无重复 assistant 消息 |
+
+#### ❌ 本轮复验未通过项
+
+| # | 问题 | 实测现象 | 影响 |
+|---|------|----------|------|
+| 1 | `model` 选择仍未真正生效 | 创建时显式选择 `Sonnet`，新任务 `20260407-c0d3` 落库仍为 `model=glm-4.7`；续对后的新任务 `20260407-64de` 又变为 `model=glm-5` | “创建会话/续对时 model 生效”验收项仍失败，当前仍不能签收 |
+
+#### 复验证据
+
+- 首轮模型选择快照：`app102mobile-fresh-0407-model-selected.yaml`
+- 首轮详情快照：`app102mobile-fresh-0407-detail-a-complete.yaml`
+- 续对完成快照：`app102mobile-fresh-0407-resume-b-complete.yaml`
+- 重进详情快照：`app102mobile-fresh-0407-reopen.yaml`
+- 抓包日志：`.playwright-cli/network-2026-04-07T04-13-04-376Z.log`
+- 任务接口校验：`GET /api/v1/tasks/20260407-c0d3`、`GET /api/v1/tasks/20260407-64de`
+- 消息接口校验：`GET /api/v1/sessions/5c477c71-f7a1-45e3-8d98-db9fbf7ec9da/messages/latest?limit=50&offset=0`
+
+### 2.6 再次全新会话 H5 复测结果（2026-04-07）
+
+#### 复测方式
+
+- 使用新的浏览器会话重新登录 `local / http://localhost:8112`
+- 在 `LocalDev / test1` 下再次创建一个全新的业务会话，避免沿用上一轮任何业务数据
+
+#### ✅ 本轮复测通过项
+
+| 验收项 | 结果 | 说明 |
+|--------|------|------|
+| 创建会话时 `model` 选择生效 | ✅ 通过 | 创建任务 `20260407-d2a4` 时显式选择 `Sonnet`，页面显示 `sonnet`，后端接口也返回 `model=sonnet` |
+| 会话续对时 `model` 选择继续生效 | ✅ 通过 | 续对任务 `20260407-96c2` 仍返回 `model=sonnet`，未再被覆盖为 `glm-*` |
+| resume URL 同步 | ✅ 通过 | 续对后地址为 `#/pages/worker/task-detail?taskId=20260407-96c2&sessionId=42e53753-f1b7-409a-840e-ab70e1e92c5c` |
+| 重进详情页无消息重复 | ✅ 通过 | 重载后页面中 `FRESH_C`、`FRESH_D` 均只出现 1 次 assistant reply；`messages/latest` 共 8 条，与两轮对话应有记录完全一致 |
+
+#### ⚠️ 本轮复测结论边界
+
+- 本轮结论只覆盖“全新会话”的 H5 主链路
+- 历史会话中的重复消息属于既有脏数据，若发布范围要求覆盖存量会话体验，仍需决定是否做数据清理或发布说明
+- App-Plus、MP-Weixin、审批类场景、失败任务恢复类场景仍未在本轮复测中覆盖
+
+#### 复测证据
+
+- 首轮详情快照：`app102mobile-fresh3-0407-detail-c.yaml`
+- 首轮重载快照：`app102mobile-fresh3-0407-detail-c-reload.yaml`
+- 续对详情快照：`app102mobile-fresh3-0407-detail-d.yaml`
+- 重进详情快照：`app102mobile-fresh3-0407-reopen.yaml`
+- 任务接口校验：`GET /api/v1/tasks/20260407-d2a4`、`GET /api/v1/tasks/20260407-96c2`
+- 消息接口校验：`GET /api/v1/sessions/42e53753-f1b7-409a-840e-ab70e1e92c5c/messages/latest?limit=50&offset=0`
+
 ---
 
 ## 3. 剩余工作清单
@@ -158,10 +259,10 @@
 | 1 | 补最小 shared 类型来源说明（避免 types.ts 再次与 navigator-frontend 漂移） | Milestone A | P1 | 0.5d |
 | 2 | API 层测试覆盖 unified task 主调用 | Milestone G | P0 | 1-2d |
 | 3 | Composable 层测试（useTaskStream, useSession, useUnifiedSse） | Milestone G | P0 | 1-2d |
-| 4 | 修复 H5 验收发现的 3 个阻断问题（model 选择、resume URL、消息去重） | Milestone G | P0 | 1-2d |
+| 4 | 补齐 H5 Core Regression Cases 未覆盖项（审批、reconnect、resync、失败任务等） | Milestone G | P0 | 1d |
 | 5 | App-Plus 回归测试 | Milestone G | P1 | 1d |
 | 6 | MP-Weixin 回归测试 | Milestone G | P1 | 1d |
-| 7 | 修复后重新执行 H5 Core Regression Cases（补齐审批、reconnect/resync 等未覆盖项） | Milestone G | P0 | 1d |
+| 7 | 形成历史会话脏数据处理策略（清理 / 忽略 / 发布说明） | Milestone G | P1 | 0.5d |
 
 ### 3.2 可延期（P1 后续迭代）
 
@@ -239,27 +340,27 @@
 
 1.0.2-APP 升级方案设计合理、分阶段清晰、风险可控。**更重要的是，核心重构工作（P0 全部 + P1 大部分）已经落地到代码中**，且 H5 主链路已经可以跑通。
 
-但根据 2026-04-06 的 H5 Playwright 验收，当前状态应定义为“**基本完成但未验收通过**”。原因不是主架构方向有误，而是存在 3 个阻断体验和一致性的问题，需要修复后再复测。
+但根据 2026-04-06 初验，以及 2026-04-07 三轮 H5 Playwright 复测，当前状态更准确地应定义为“**核心主链路已通过，但版本级 APP 验收尚未收口**”。原因不是主架构方向有误，也不是当前还存在明确的 H5 主链路阻断，而是正式签收所需的剩余场景和跨端证据还不完整。
 
 退出标准重评估如下：
 
 - [x] 移动端主任务链路基于 `/api/v1/tasks`
 - [x] 移动端 Worker 主展示链路基于"会话列表"而不是"任务列表"
 - [x] 移动端类型定义与当前后端返回结构基本对齐
-- [ ] 创建会话和会话续对都支持 `modelConfigId + model`（`modelConfigId` 可用，但 `model` 选择当前未稳定生效）
-- [ ] 长历史加载、任务恢复、交互状态具备最小闭环（主链路可跑通，但仍有 resume URL 漂移和详情页消息重复问题）
+- [x] 创建会话和会话续对都支持 `modelConfigId + model`（最新全新会话复测中，`model=sonnet` 已正确落库）
+- [x] 长历史加载、任务恢复、交互状态具备最小闭环（主链路可跑通，`resume URL` 已通过；全新会话详情页重进不再重复消息）
 - [x] `packages/foggy-mobile` 可以继续在当前架构上迭代
 
 ### 5.2 下一步建议
 
 | 优先级 | 行动 | 预计工作量 |
 |--------|------|-----------|
-| **P0** | 修复 H5 阻断问题：`model` 选择生效、resume 后 URL 同步、详情页消息去重 | 1-2d |
-| **P0** | 修复后重新执行 H5 端核心回归测试（14 项 regression cases） | 1d |
+| **P0** | 重新执行 H5 端核心回归测试，补齐审批、reconnect、resync、失败任务等未覆盖场景 | 1d |
 | **P0** | 补充 API 层 + composable 层单元测试 | 2-3d |
 | **P1** | App-Plus 和 MP-Weixin 多端回归 | 2d |
+| **P1** | 明确历史会话脏数据处理策略，并决定是否需要清理或发布说明 | 0.5d |
 | **P1** | 补充 shared 类型来源说明文档 | 0.5d |
 | **P1** | Settings 页平台状态增强 | 1d |
 | **P2** | useSession.ts 通用聊天链路迁移到分页加载 | 0.5d |
 
-**总剩余工作量预估：约 6-8 个工作日**，其中 P0 重点已从“开始测试”转为“修复 H5 阻断问题并复测”。 
+**总剩余工作量预估：约 5-6 个工作日**，其中 P0 重点已从“修阻断 bug”切换为“补齐验收覆盖面和正式签收证据”。 

@@ -4,7 +4,7 @@ bug_source: user-report
 version: 1.0.1-SNAPSHOT
 ticket: BUG-014
 severity: critical
-status: ready-for-verification
+status: code-and-tests-verified
 reproduction_status: confirmed
 test_strategy: integration-test
 automation_decision: required
@@ -190,6 +190,25 @@ cmd /c "mvn -pl addons/codex-worker-agent -am -Dtest=CodexWorkerA2aAgentTest -Ds
 - `ClaudeWorkerA2aAgentTest` 通过，包含 `contextAlias_lookupMiss_thenSaveDuplicateAlias_bubblesUniqueConstraint`
 - `CodexWorkerA2aAgentTest` 通过，确认无 TTL 签名改动未破坏 Codex A2A 上下文复用链路
 - 总计 `57` 个测试通过，`0` failures，`0` errors
+
+### 代码复核（2026-04-07）
+
+| 检查项 | 结果 |
+|--------|------|
+| `ContextResolvingA2aAgent` 无 `CONTEXT_TTL_HOURS` 常量 | ✅ 已移除 |
+| context/alias lookup 不带 ttlHours 参数 | ✅ 无条件复用 |
+| `AgentContextStoreImpl` 无 TTL 过滤逻辑 | ✅ `last_accessed_at` 仅写不读 |
+| `AgentContextStore` SPI 接口签名无 ttlHours | ✅ 干净 |
+| `AgentConversationContextRepository` 无 time-based 查询 | ✅ 干净 |
+| `AgentContextStoreImplTest` 唯一索引冲突测试 | ✅ 通过 |
+| `ClaudeWorkerA2aAgentTest` alias 冲突冒泡测试 | ✅ 通过 |
+
+**重新执行测试记录（2026-04-07）：**
+
+```
+session-module: Tests run: 29, Failures: 0, Errors: 0 (AgentContextStoreImplTest: 17 tests)
+claude-worker-agent: Tests run: 33, Failures: 0, Errors: 0 (ClaudeWorkerA2aAgentTest: 25 tests)
+```
 
 ### Manual
 

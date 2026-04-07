@@ -1,6 +1,6 @@
 # 13 - 任务取消 MySQL 死锁修复
 
-- **状态**: 已修复
+- **状态**: 已修复 → Code & Tests Verified (2026-04-07)，待真实环境手验
 - **日期**: 2026-04-06
 - **关联**: #12-codex-completed-task-cancel-a2a-resolution-failure, #13-unified-task-cancel (1.0.0-SNAPSHOT)
 
@@ -78,6 +78,25 @@ Cancel 线程                                 Reactor 线程
 - [x] 编译通过（BUILD SUCCESS，14 模块）
 - [x] 单元测试全部通过
 - [ ] 手动验证：创建 Claude Code 任务 → 立即取消 → 不再 500
+
+### 代码复核（2026-04-07）
+
+| 检查项 | 结果 |
+|--------|------|
+| `ClaudeTaskEntity.abortRequested` Boolean 字段 | ✅ 存在，含详细 javadoc |
+| `ClaudeTaskRepository.updateAbortRequestedByTaskId()` 轻量 UPDATE | ✅ 存在，`@Modifying @Query` |
+| `ClaudeTaskService.doAbortWorkerTask()` 4 步流程 | ✅ 完整实现（标记→通知→清流→状态更新） |
+| `ClaudeTaskService.failTask()` abortRequested + terminal guard | ✅ 双重防护 |
+| `TaskController.cancelTask()` PessimisticLockingFailureException 兜底 | ✅ 存在于 session-module TaskController |
+| `ClaudeTaskServiceAbortGuardTest` 8 个测试 | ✅ 全部通过（0 failures） |
+| `TaskControllerTest` deadlock fallback 2 个测试 | ✅ 全部通过（0 failures） |
+
+**测试执行记录：**
+
+```
+session-module: Tests run: 29, Failures: 0, Errors: 0 (TaskControllerTest + AgentContextStoreImplTest)
+claude-worker-agent: Tests run: 33, Failures: 0, Errors: 0 (ClaudeTaskServiceAbortGuardTest + ClaudeWorkerA2aAgentTest)
+```
 
 ### 新增测试
 
