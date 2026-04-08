@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { AipMessageType } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
 import PermissionRequestCard from '../components/PermissionRequestCard.vue'
@@ -248,6 +249,21 @@ describe('UserQuestionCard', () => {
 
     expect(wrapper.text()).toContain('Other')
   })
+
+  it('activates Other and focuses input on a single click', async () => {
+    const wrapper = mount(UserQuestionCard, {
+      props: { message: makeQuestionMessage() },
+      attachTo: document.body,
+    })
+
+    await wrapper.find('.other-option').trigger('click')
+    await nextTick()
+
+    const otherInput = wrapper.find('.other-input')
+    expect(otherInput.isVisible()).toBe(true)
+    expect(document.activeElement).toBe(otherInput.element)
+  })
+
 })
 
 // ========== PlanReviewCard ==========

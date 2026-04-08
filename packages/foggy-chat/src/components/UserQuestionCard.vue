@@ -32,24 +32,30 @@
               v-for="(opt, oi) in q.options"
               :key="oi"
               :class="['option-item', { selected: selections[qi] === opt.label }]"
+              @click="selectSingle(qi, opt.label)"
             >
               <input
                 type="radio"
                 :name="'q-' + qi"
                 :checked="selections[qi] === opt.label"
                 @change="selectSingle(qi, opt.label)"
+                @click.stop
               />
               <span class="option-label">{{ opt.label }}</span>
               <span class="option-desc">{{ opt.description }}</span>
             </label>
           </template>
           <!-- Other option -->
-          <label :class="['option-item other-option', { selected: isOtherActive(qi) }]">
+          <label
+            :class="['option-item other-option', { selected: isOtherActive(qi) }]"
+            @click="handleOtherClick(qi, $event)"
+          >
             <input
               :type="q.multiSelect ? 'checkbox' : 'radio'"
               :name="'q-' + qi"
               :checked="isOtherActive(qi)"
               @change="activateOther(qi)"
+              @click.stop
             />
             <span class="option-label">Other</span>
             <input
@@ -59,6 +65,7 @@
               class="other-input"
               placeholder="输入自定义回答..."
               @focus="activateOther(qi)"
+              @click.stop
             />
           </label>
         </div>
@@ -79,7 +86,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, nextTick, reactive, ref } from 'vue'
 import type { ChatMessage } from '../types/chat'
 
 const props = defineProps<{
@@ -134,6 +141,14 @@ function activateOther(qi: number) {
   if (!q?.multiSelect) {
     selections[qi] = '__other__'
   }
+}
+
+function handleOtherClick(qi: number, event: MouseEvent) {
+  activateOther(qi)
+  const currentTarget = event.currentTarget as HTMLElement | null
+  nextTick(() => {
+    currentTarget?.querySelector<HTMLInputElement>('.other-input')?.focus()
+  })
 }
 
 function getAnswer(qi: number): string {
