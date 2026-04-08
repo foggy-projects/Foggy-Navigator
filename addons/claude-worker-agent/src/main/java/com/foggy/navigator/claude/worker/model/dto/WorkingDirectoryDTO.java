@@ -1,5 +1,6 @@
 package com.foggy.navigator.claude.worker.model.dto;
 
+import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
 import lombok.Builder;
 import lombok.Data;
 
@@ -35,6 +36,7 @@ public class WorkingDirectoryDTO {
     private String defaultBaseUrl;
     private String maskedDefaultAuthToken;
     private String defaultModelConfigId;
+    private List<DirectoryMilestoneDTO> milestones;
     private List<WorkingDirectoryDTO> children;
     private LocalDateTime lastSyncedAt;
     private LocalDateTime createdAt;

@@ -1055,6 +1055,15 @@
                 <span class="conv-latest-prompt" :title="item.conv.latestTask.prompt">{{ truncate(item.conv.latestTask.prompt, 30) }}</span>
               </div>
               <div class="conv-row-2">
+                <el-tag
+                  v-if="resolveConversationMilestone(item.conv)"
+                  :type="milestoneTagType(resolveConversationMilestone(item.conv)?.status)"
+                  size="small"
+                  class="conv-tag milestone-tag"
+                  :title="resolveConversationMilestone(item.conv)?.docPath || ''"
+                >
+                  {{ resolveConversationMilestone(item.conv)?.name }}
+                </el-tag>
                 <el-tag v-for="tag in (item.conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
                 <span v-if="item.conv.totalCost > 0" class="conv-cost">${{ item.conv.totalCost.toFixed(2) }}</span>
                 <span v-if="item.conv.latestTask.durationMs" class="conv-time">{{ Math.round((item.conv.latestTask.durationMs || 0) / 60000) }}min</span>
@@ -1151,8 +1160,177 @@
           </div>
         </div>
         <!-- Conversation list (shared template for directory / worker-level) -->
+        <div v-if="selectedDirectoryId && groupedActiveConversations.length > 0" class="conv-list grouped-conv-list">
+          <div v-for="group in groupedActiveConversations" :key="group.key" class="milestone-group">
+            <div class="milestone-group-header">
+              <div class="milestone-group-main">
+                <span class="milestone-group-title">{{ group.label }}</span>
+                <el-tag
+                  v-if="group.milestone"
+                  size="small"
+                  :type="milestoneTagType(group.milestone.status)"
+                  effect="plain"
+                >
+                  {{ milestoneStatusLabel(group.milestone.status) }}
+                </el-tag>
+                <span class="milestone-group-count">{{ group.conversations.length }} 个会话</span>
+              </div>
+              <code v-if="group.milestone?.docPath" class="milestone-group-doc">{{ group.milestone.docPath }}</code>
+            </div>
+            <div
+              v-for="conv in group.conversations"
+              :key="conv.sessionId"
+              :class="['conv-item', { 'conv-pinned': conv.config?.pinned, 'conv-selected': batchSelectMode && selectedConvIds.has(conv.sessionId), 'conv-pane-focused': conv.sessionId === focusedSessionId }]"
+              @click="batchSelectMode ? toggleConvSelection(conv.sessionId) : viewTask(conv.latestTask)"
+            >
+              <div class="conv-row-1">
+                <span
+                  v-if="paneSessionMap.has(conv.sessionId)"
+                  :class="['sidebar-pane-letter', `pane-letter-${paneSessionMap.get(conv.sessionId)!.label.toLowerCase()}`]"
+                >{{ paneSessionMap.get(conv.sessionId)!.label }}</span>
+                <el-checkbox
+                  v-if="batchSelectMode"
+                  :model-value="selectedConvIds.has(conv.sessionId)"
+                  @click.stop
+                  @change="toggleConvSelection(conv.sessionId)"
+                  class="conv-checkbox"
+                />
+                <span
+                  v-if="conv.config?.pinned"
+                  class="conv-pin-icon active"
+                  title="已置顶"
+                  @click.stop="handleTogglePin(conv)"
+                >&#128204;</span>
+                <span
+                  v-if="conv.config?.interactionState"
+                  :class="['conv-interaction-badge', conv.config.interactionState.toLowerCase()]"
+                  :title="interactionStateLabel(conv.config.interactionState)"
+                />
+                <span class="conv-prompt" :title="conv.config?.customTitle || conv.firstPrompt">{{
+                  truncate(conv.config?.customTitle || conv.firstPrompt, 36)
+                }}</span>
+                <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
+              </div>
+              <div v-if="conv.config?.customTitle" class="conv-row-subtitle">
+                <span class="conv-latest-prompt" :title="conv.latestTask.prompt">{{ truncate(conv.latestTask.prompt, 36) }}</span>
+              </div>
+              <div class="conv-row-2">
+                <el-tag
+                  v-if="resolveConversationMilestone(conv)"
+                  :type="milestoneTagType(resolveConversationMilestone(conv)?.status)"
+                  size="small"
+                  class="conv-tag milestone-tag"
+                  :title="resolveConversationMilestone(conv)?.docPath || ''"
+                >
+                  {{ resolveConversationMilestone(conv)?.name }}
+                </el-tag>
+                <el-tag v-for="tag in (conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
+                <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }}轮</span>
+                <span v-if="conv.latestTask.model" class="conv-model">{{ shortModel(conv.latestTask.model) }}</span>
+                <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(2) }}</span>
+                <span v-if="conv.config?.authBound" class="conv-auth-badge" :title="'Auth: ' + (conv.config.authMode || 'bound')">&#128273;</span>
+                <span class="conv-time">{{ formatTime(conv.latestTask.createdAt) }}</span>
+                <span class="conv-actions" @click.stop>
+                  <el-button
+                    v-if="conv.latestTask.status === 'RUNNING'"
+                    type="warning"
+                    size="small"
+                    text
+                    title="中止任务"
+                    @click="handleAbortTask(conv.latestTask.taskId)"
+                  >
+                    中止
+                  </el-button>
+                  <el-dropdown trigger="click" @click.stop>
+                    <span class="conv-more-trigger" @click.stop>&#8943;</span>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item @click="handleTogglePin(conv)">
+                          {{ conv.config?.pinned ? '取消置顶' : '置顶' }}
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="handleEditTitle(conv)">
+                          编辑标题
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="handleEditMilestone(conv)">
+                          设置里程碑
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="handleAuthConfig(conv)">
+                          Auth 配置
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="handleEditTags(conv)">
+                          标签
+                        </el-dropdown-item>
+                        <el-dropdown-item @click="handleShowDetail(conv)">
+                          详情
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conv.config?.interactionState !== 'ARCHIVED' && conv.config?.interactionState !== 'ON_HOLD'"
+                          @click="handleHoldConversation(conv)"
+                        >
+                          搁置
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conv.config?.interactionState === 'ON_HOLD'"
+                          @click="handleUnholdConversation(conv)"
+                        >
+                          取消搁置
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conv.config?.interactionState !== 'ARCHIVED'"
+                          @click="handleArchiveConversation(conv)"
+                        >
+                          归档
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conv.config?.interactionState === 'ARCHIVED'"
+                          @click="handleUnarchiveConversation(conv)"
+                        >
+                          取消归档
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="canRepairContext(conv)"
+                          @click="handleRepairContext(conv)"
+                        >
+                          修复上下文
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
+                          @click="showRewindDialog(conv.latestTask)"
+                        >
+                          回退
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="canScanCheckpoints(conv.latestTask)"
+                          :disabled="scanningTaskId === conv.latestTask.taskId"
+                          @click="handleScanCheckpoints(conv.latestTask)"
+                        >
+                          {{ scanningTaskId === conv.latestTask.taskId ? '扫描中...' : '扫描' }}
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conv.latestTask.status === 'FAILED'"
+                          :disabled="resyncingTaskId === conv.latestTask.taskId"
+                          @click="handleResyncFromList(conv)"
+                        >
+                          {{ resyncingTaskId === conv.latestTask.taskId ? '同步中...' : '重新同步' }}
+                        </el-dropdown-item>
+                        <el-dropdown-item
+                          v-if="conv.latestTask.status !== 'RUNNING'"
+                          divided
+                          class="delete-dropdown-item"
+                          @click="handleDeleteConversation(conv)"
+                        >
+                          删除
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
         <div
-          v-if="activeConversations.length > 0"
+          v-else-if="activeConversations.length > 0"
           class="conv-list"
         >
           <div
@@ -1193,6 +1371,15 @@
               <span class="conv-latest-prompt" :title="conv.latestTask.prompt">{{ truncate(conv.latestTask.prompt, 36) }}</span>
             </div>
             <div class="conv-row-2">
+              <el-tag
+                v-if="resolveConversationMilestone(conv)"
+                :type="milestoneTagType(resolveConversationMilestone(conv)?.status)"
+                size="small"
+                class="conv-tag milestone-tag"
+                :title="resolveConversationMilestone(conv)?.docPath || ''"
+              >
+                {{ resolveConversationMilestone(conv)?.name }}
+              </el-tag>
               <el-tag v-for="tag in (conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
               <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }}轮</span>
               <span v-if="conv.latestTask.model" class="conv-model">{{ shortModel(conv.latestTask.model) }}</span>
@@ -1220,6 +1407,9 @@
                       </el-dropdown-item>
                       <el-dropdown-item @click="handleEditTitle(conv)">
                         编辑标题
+                      </el-dropdown-item>
+                      <el-dropdown-item @click="handleEditMilestone(conv)">
+                        设置里程碑
                       </el-dropdown-item>
                       <el-dropdown-item @click="handleAuthConfig(conv)">
                         Auth 配置
@@ -1564,6 +1754,27 @@
             />
           </el-select>
         </el-form-item>
+        <el-divider content-position="left">里程碑</el-divider>
+        <div class="milestone-editor">
+          <div v-if="editDirForm.milestones.length === 0" class="form-tip" style="margin-bottom: 8px">
+            暂无里程碑。可按版本建立如 `v3.0.0`、`1.0.0-SNAPSHOT`。
+          </div>
+          <div v-for="(milestone, index) in editDirForm.milestones" :key="milestone.id || index" class="milestone-editor-row">
+            <el-input v-model="milestone.name" placeholder="名称" />
+            <el-select v-model="milestone.status" style="width: 110px">
+              <el-option label="规划中" value="PLANNED" />
+              <el-option label="进行中" value="ACTIVE" />
+              <el-option label="已完成" value="COMPLETED" />
+              <el-option label="已归档" value="ARCHIVED" />
+            </el-select>
+            <el-input v-model="milestone.docPath" placeholder="docs/version-tracker/1.0.0-SNAPSHOT" />
+            <el-button text type="danger" @click="removeDirectoryMilestone(index)">删除</el-button>
+          </div>
+          <el-button size="small" type="primary" plain @click="addDirectoryMilestone">+ 添加里程碑</el-button>
+          <div class="form-tip">
+            文档目录使用相对路径；会话只记录里程碑 ID，列表展示时按当前目录配置解析名称。
+          </div>
+        </div>
         <el-divider content-position="left">Auth 默认配置</el-divider>
         <el-form-item v-if="platformModels.length > 0" label="LLM 配置">
           <el-select
@@ -1711,6 +1922,28 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="showMilestoneDialog" title="设置里程碑" width="460px">
+      <el-form :model="milestoneForm" label-position="top">
+        <el-form-item label="所属里程碑">
+          <el-select v-model="milestoneForm.milestoneId" clearable placeholder="未设置" style="width: 100%">
+            <el-option
+              v-for="milestone in milestoneDialogOptions"
+              :key="milestone.id"
+              :label="`${milestone.name} (${milestoneStatusLabel(milestone.status)})`"
+              :value="milestone.id"
+            />
+          </el-select>
+          <div class="form-tip">
+            里程碑定义来自当前会话所属的工作目录；清空后该会话会归入“未设置里程碑”。
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showMilestoneDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSaveMilestone">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- Create Worktree Dialog -->
     <el-dialog v-model="showWorktreeDialog" title="创建 Git Worktree" width="440px">
       <el-form :model="worktreeForm" label-position="top">
@@ -1751,8 +1984,14 @@
           {{ detailTotalTokens.input }} in / {{ detailTotalTokens.output }} out
         </el-descriptions-item>
         <el-descriptions-item label="置顶">{{ detailConv.config?.pinned ? '是' : '否' }}</el-descriptions-item>
+        <el-descriptions-item label="里程碑">
+          {{ resolveConversationMilestone(detailConv)?.name || '未设置' }}
+        </el-descriptions-item>
         <el-descriptions-item label="Auth 模式">
           {{ detailConv.config?.authBound ? detailAuthModeLabel : '未绑定' }}
+        </el-descriptions-item>
+        <el-descriptions-item v-if="resolveConversationMilestone(detailConv)?.docPath" label="文档目录" :span="2">
+          <code>{{ resolveConversationMilestone(detailConv)?.docPath }}</code>
         </el-descriptions-item>
         <el-descriptions-item v-if="detailConv.config?.authBound" label="Auth Token" :span="2">
           <code>{{ detailConv.config.maskedAuthToken || '(无)' }}</code>
@@ -2144,7 +2383,7 @@ import { searchFiles } from '@/api/fileBrowser'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone } from '@/types'
 import type { AipMessageType } from '@foggy/chat'
 
 const MAX_PANES = 1
@@ -2400,6 +2639,12 @@ const showBatchAuthDialog = ref(false)
 const batchAuthForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', skipExisting: true, modelConfigId: '' })
 const batchAuthSessionIds = ref<string[]>([])
 
+// Milestone dialog state
+const showMilestoneDialog = ref(false)
+const milestoneDialogSessionId = ref('')
+const milestoneDialogOptions = ref<DirectoryMilestone[]>([])
+const milestoneForm = ref({ milestoneId: '' })
+
 // Session search dialog state
 const showSessionSearch = ref(false)
 
@@ -2613,6 +2858,7 @@ const editDirForm = ref({
   projectName: '',
   path: '',
   agentTeamsConfig: '',
+  milestones: [] as DirectoryMilestone[],
   projectTaskPrompt: '',
   parentProjectId: '' as string,
   defaultAuthMode: '' as string,
@@ -3298,6 +3544,13 @@ interface ConversationGroup {
   config?: ConversationConfig
 }
 
+interface MilestoneConversationGroup {
+  key: string
+  label: string
+  milestone?: DirectoryMilestone
+  conversations: ConversationGroup[]
+}
+
 /** 会话是否可以 resume（有 sessionId 即可，provider 内部状态由后端恢复） */
 function getTaskResumeRef(task: Pick<ClaudeTask, 'sessionId'>): string {
   return task.sessionId || ''
@@ -3369,6 +3622,63 @@ const activeConversations = computed(() => {
   // interactionState filtering is done by the backend API (multi-select via comma-separated param)
 
   return list
+})
+
+const directoryMilestoneMap = computed(() => {
+  const map = new Map<string, DirectoryMilestone[]>()
+  for (const dir of workerState.directories.value) {
+    if (dir.milestones?.length) map.set(dir.directoryId, dir.milestones)
+  }
+  return map
+})
+
+function milestonesForDirectory(directoryId?: string): DirectoryMilestone[] {
+  if (!directoryId) return []
+  return directoryMilestoneMap.value.get(directoryId) || []
+}
+
+const conversationMilestoneMap = computed(() => {
+  const cache = new Map<string, DirectoryMilestone>()
+  for (const conv of activeConversations.value) {
+    const milestoneId = conv.config?.milestoneId
+    if (!milestoneId) continue
+    const milestone = milestonesForDirectory(conv.latestTask.directoryId).find(m => m.id === milestoneId)
+    if (milestone) cache.set(conv.sessionId, milestone)
+  }
+  return cache
+})
+
+function resolveConversationMilestone(conv: ConversationGroup): DirectoryMilestone | undefined {
+  return conversationMilestoneMap.value.get(conv.sessionId)
+}
+
+const groupedActiveConversations = computed<MilestoneConversationGroup[]>(() => {
+  if (!selectedDirectoryId.value) return []
+  const milestoneOrder = new Map(
+    (selectedDirectory.value?.milestones || []).map((milestone, index) => [milestone.id, index]),
+  )
+  const grouped = new Map<string, MilestoneConversationGroup>()
+  for (const conv of activeConversations.value) {
+    const milestone = resolveConversationMilestone(conv)
+    const key = milestone?.id || '__none__'
+    const existing = grouped.get(key)
+    if (existing) {
+      existing.conversations.push(conv)
+    } else {
+      grouped.set(key, {
+        key,
+        label: milestone?.name || '未设置里程碑',
+        milestone,
+        conversations: [conv],
+      })
+    }
+  }
+  return Array.from(grouped.values()).sort((left, right) => {
+    if (left.key === '__none__') return 1
+    if (right.key === '__none__') return -1
+    return (milestoneOrder.get(left.key) ?? Number.MAX_SAFE_INTEGER)
+      - (milestoneOrder.get(right.key) ?? Number.MAX_SAFE_INTEGER)
+  })
 })
 
 // Active sessions: group activeTasks into ConversationGroups
@@ -4084,11 +4394,12 @@ async function handleEditDirectory() {
   if (!selectedDirectoryId.value) return
   saving.value = true
   try {
-    const form: Record<string, string | undefined> = {
+    const form: Parameters<typeof dirApi.updateDirectory>[1] = {
       projectName: editDirForm.value.projectName,
       path: editDirForm.value.path,
       agentTeamsConfig: editDirForm.value.agentTeamsConfig,
     }
+    form.milestones = editDirForm.value.milestones
     if (selectedDirectory.value?.directoryType === 'PROJECT') {
       form.projectTaskPrompt = editDirForm.value.projectTaskPrompt
     }
@@ -4354,6 +4665,29 @@ async function handleEditTitle(conv: ConversationGroup) {
   }
 }
 
+function handleEditMilestone(conv: ConversationGroup) {
+  milestoneDialogSessionId.value = conv.sessionId
+  milestoneDialogOptions.value = milestonesForDirectory(conv.latestTask.directoryId)
+  milestoneForm.value.milestoneId = conv.config?.milestoneId || ''
+  showMilestoneDialog.value = true
+}
+
+async function handleSaveMilestone() {
+  saving.value = true
+  try {
+    await workerState.setMilestone(
+      milestoneDialogSessionId.value,
+      milestoneForm.value.milestoneId || undefined,
+    )
+    showMilestoneDialog.value = false
+    ElMessage.success('里程碑已更新')
+  } catch {
+    ElMessage.error('更新里程碑失败')
+  } finally {
+    saving.value = false
+  }
+}
+
 function handleEditTags(conv: ConversationGroup) {
   tagDialogSessionId.value = conv.sessionId
   tagForm.value.tags = [...(conv.config?.tags || [])]
@@ -4386,6 +4720,45 @@ function tagColor(tag: string): '' | 'success' | 'warning' | 'danger' | 'info' {
     case '代码评审': return 'warning'
     default: return 'info'
   }
+}
+
+function milestoneStatusLabel(status?: string): string {
+  switch (status) {
+    case 'ACTIVE': return '进行中'
+    case 'COMPLETED': return '已完成'
+    case 'ARCHIVED': return '已归档'
+    case 'PLANNED':
+    default:
+      return '规划中'
+  }
+}
+
+function milestoneTagType(status?: string): '' | 'success' | 'warning' | 'info' {
+  switch (status) {
+    case 'ACTIVE': return 'warning'
+    case 'COMPLETED': return 'success'
+    case 'ARCHIVED': return 'info'
+    case 'PLANNED':
+    default:
+      return ''
+  }
+}
+
+function createEmptyMilestone(): DirectoryMilestone {
+  return {
+    id: '',
+    name: '',
+    status: 'PLANNED',
+    docPath: '',
+  }
+}
+
+function addDirectoryMilestone() {
+  editDirForm.value.milestones.push(createEmptyMilestone())
+}
+
+function removeDirectoryMilestone(index: number) {
+  editDirForm.value.milestones.splice(index, 1)
 }
 
 function handleAuthConfig(conv: ConversationGroup) {
@@ -5921,6 +6294,7 @@ watch(showEditDirectoryDialog, (val) => {
       projectName: selectedDirectory.value.projectName,
       path: selectedDirectory.value.path,
       agentTeamsConfig: selectedDirectory.value.agentTeamsConfig || '',
+      milestones: (selectedDirectory.value.milestones || []).map(milestone => ({ ...milestone })),
       projectTaskPrompt: selectedDirectory.value.projectTaskPrompt || '',
       parentProjectId: selectedDirectory.value.parentProjectId || '',
       defaultAuthMode: selectedDirectory.value.defaultAuthMode || '',
@@ -6723,6 +7097,20 @@ function handlePopOutTerminal() {
   white-space: nowrap;
 }
 
+.milestone-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.milestone-editor-row {
+  display: grid;
+  grid-template-columns: 1fr 110px 1.4fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
 .form-tip {
   font-size: 12px;
   color: #909399;
@@ -6915,6 +7303,51 @@ function handlePopOutTerminal() {
   font-size: 12px;
   color: #909399;
   min-width: 0;
+}
+
+.grouped-conv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.milestone-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.milestone-group-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 2px;
+}
+
+.milestone-group-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.milestone-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.milestone-group-count {
+  font-size: 11px;
+  color: #909399;
+}
+
+.milestone-group-doc {
+  font-size: 11px;
+  color: #909399;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .conv-rounds {
@@ -7470,6 +7903,10 @@ function handlePopOutTerminal() {
   line-height: 18px;
   padding: 0 4px;
   flex-shrink: 0;
+}
+
+.milestone-tag {
+  max-width: 140px;
 }
 
 .sidebar-pane-letter {

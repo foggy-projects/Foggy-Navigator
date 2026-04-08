@@ -239,6 +239,12 @@ export function useClaudeWorker() {
     return config
   }
 
+  async function setMilestone(sessionId: string, milestoneId?: string) {
+    const config = await api.updateConversationMilestone(sessionId, milestoneId)
+    conversationConfigs.value.set(config.sessionId, config)
+    return config
+  }
+
   async function bindAuth(sessionId: string, form: { authMode: string; authToken: string; baseUrl?: string }) {
     const config = await api.bindConversationAuth(sessionId, form)
     conversationConfigs.value.set(config.sessionId, config)
@@ -334,6 +340,7 @@ export function useClaudeWorker() {
     loadConversationConfigs,
     togglePin,
     setTitle,
+    setMilestone,
     bindAuth,
     updateAuth,
     batchBindAuth,

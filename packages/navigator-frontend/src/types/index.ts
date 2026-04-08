@@ -132,6 +132,14 @@ export interface ClaudeTask {
 }
 
 /** Worker 工作目录 */
+export interface DirectoryMilestone {
+  id: string
+  name: string
+  status: 'PLANNED' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED' | string
+  docPath?: string
+}
+
+/** Worker 工作目录 */
 export interface WorkingDirectory {
   directoryId: string
   workerId: string
@@ -156,6 +164,7 @@ export interface WorkingDirectory {
   defaultBaseUrl?: string
   maskedDefaultAuthToken?: string
   defaultModelConfigId?: string
+  milestones?: DirectoryMilestone[]
   lastSyncedAt?: string
   createdAt: string
   updatedAt: string
@@ -202,6 +211,7 @@ export interface ConversationConfig {
   maskedAuthToken?: string
   tags?: string[]
   interactionState?: 'PROCESSING' | 'AWAITING_REPLY' | 'ON_HOLD' | 'ARCHIVED'
+  milestoneId?: string
 }
 
 // ===== Resync 任务重新同步 =====
@@ -547,6 +557,7 @@ export interface SessionSearchResult {
   customTitle?: string
   tags?: string[]
   interactionState?: 'PROCESSING' | 'AWAITING_REPLY' | 'ON_HOLD' | 'ARCHIVED'
+  milestoneId?: string
   latestTaskId: string
   latestStatus: string
   model?: string
