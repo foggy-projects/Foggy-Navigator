@@ -1,12 +1,14 @@
 package com.foggy.navigator.claude.worker.service;
 
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
+import com.foggy.navigator.claude.worker.model.dto.MilestoneDeleteResultDTO;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.DirectoryMilestoneForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,6 +26,7 @@ import static org.mockito.Mockito.*;
 class WorkingDirectoryServiceTest {
 
     private WorkingDirectoryRepository repository;
+    private SessionEntityRepository sessionEntityRepository;
     private ClaudeWorkerService workerService;
     private CredentialEncryptor credentialEncryptor;
     private WorkingDirectoryService service;
@@ -35,6 +38,7 @@ class WorkingDirectoryServiceTest {
     @BeforeEach
     void setUp() {
         repository = mock(WorkingDirectoryRepository.class);
+        sessionEntityRepository = mock(SessionEntityRepository.class);
         workerService = mock(ClaudeWorkerService.class);
         credentialEncryptor = mock(CredentialEncryptor.class);
         when(credentialEncryptor.encrypt(anyString())).thenAnswer(inv -> "enc:" + inv.getArgument(0));
@@ -44,7 +48,7 @@ class WorkingDirectoryServiceTest {
         });
         var agentTeamsConfigRepository = mock(com.foggy.navigator.claude.worker.repository.AgentTeamsConfigRepository.class);
         var codingAgentRepository = mock(com.foggy.navigator.claude.worker.repository.CodingAgentRepository.class);
-        service = new WorkingDirectoryService(repository, agentTeamsConfigRepository, codingAgentRepository, workerService, credentialEncryptor);
+        service = new WorkingDirectoryService(repository, agentTeamsConfigRepository, codingAgentRepository, sessionEntityRepository, workerService, credentialEncryptor);
 
         // Default: worker belongs to user
         ClaudeWorkerEntity worker = createWorker();
@@ -476,5 +480,98 @@ class WorkingDirectoryServiceTest {
         ClaudeWorkerClient client = mock(ClaudeWorkerClient.class);
         when(workerService.createClient(any())).thenReturn(client);
         when(client.getGitInfo(anyString())).thenReturn(Mono.error(new RuntimeException("not available")));
+    }
+
+    // ========== Milestone CRUD ==========
+
+    @Nested
+    class MilestoneCrudTests {
+
+        @Test
+        void addMilestone_success() {
+            WorkingDirectoryEntity entity = createEntity("dir-1", "STANDARD");
+            when(repository.findByDirectoryIdAndUserId("dir-1", USER_ID)).thenReturn(Optional.of(entity));
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            DirectoryMilestoneForm form = new DirectoryMilestoneForm();
+            form.setName("v3.0");
+            form.setStatus("ACTIVE");
+            form.setDocPath("docs/v3");
+
+            var result = service.addMilestone(USER_ID, "dir-1", form);
+
+            assertNotNull(result.getId());
+            assertEquals("v3.0", result.getName());
+            assertEquals("ACTIVE", result.getStatus());
+            assertEquals("docs/v3", result.getDocPath());
+            assertNotNull(entity.getMilestonesJson());
+        }
+
+        @Test
+        void updateSingleMilestone_success() {
+            WorkingDirectoryEntity entity = createEntity("dir-1", "STANDARD");
+            entity.setMilestonesJson("[{\"id\":\"ms-1\",\"name\":\"old\",\"status\":\"PLANNED\",\"docPath\":null}]");
+            when(repository.findByDirectoryIdAndUserId("dir-1", USER_ID)).thenReturn(Optional.of(entity));
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            DirectoryMilestoneForm form = new DirectoryMilestoneForm();
+            form.setName("new-name");
+            form.setStatus("COMPLETED");
+
+            var result = service.updateSingleMilestone(USER_ID, "dir-1", "ms-1", form);
+
+            assertEquals("ms-1", result.getId());
+            assertEquals("new-name", result.getName());
+            assertEquals("COMPLETED", result.getStatus());
+        }
+
+        @Test
+        void deleteMilestone_noReferences_success() {
+            WorkingDirectoryEntity entity = createEntity("dir-1", "STANDARD");
+            entity.setMilestonesJson("[{\"id\":\"ms-1\",\"name\":\"v1\",\"status\":\"PLANNED\",\"docPath\":null}]");
+            when(repository.findByDirectoryIdAndUserId("dir-1", USER_ID)).thenReturn(Optional.of(entity));
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(sessionEntityRepository.countByMilestoneIdAndUserId("ms-1", USER_ID)).thenReturn(0L);
+
+            MilestoneDeleteResultDTO result = service.deleteMilestone(USER_ID, "dir-1", "ms-1", false);
+
+            assertTrue(result.isDeleted());
+            assertEquals(0, result.getSessionCount());
+            assertNull(entity.getMilestonesJson());
+        }
+
+        @Test
+        void deleteMilestone_withReferences_noForce_returnsCount() {
+            WorkingDirectoryEntity entity = createEntity("dir-1", "STANDARD");
+            entity.setMilestonesJson("[{\"id\":\"ms-1\",\"name\":\"v1\",\"status\":\"ACTIVE\",\"docPath\":null}]");
+            when(repository.findByDirectoryIdAndUserId("dir-1", USER_ID)).thenReturn(Optional.of(entity));
+            when(sessionEntityRepository.countByMilestoneIdAndUserId("ms-1", USER_ID)).thenReturn(3L);
+
+            MilestoneDeleteResultDTO result = service.deleteMilestone(USER_ID, "dir-1", "ms-1", false);
+
+            assertFalse(result.isDeleted());
+            assertEquals(3, result.getSessionCount());
+            verify(repository, never()).save(any());
+        }
+
+        @Test
+        void deleteMilestone_withReferences_force_clearsAndDeletes() {
+            WorkingDirectoryEntity entity = createEntity("dir-1", "STANDARD");
+            entity.setMilestonesJson("[{\"id\":\"ms-1\",\"name\":\"v1\",\"status\":\"ACTIVE\",\"docPath\":null},{\"id\":\"ms-2\",\"name\":\"v2\",\"status\":\"PLANNED\",\"docPath\":null}]");
+            when(repository.findByDirectoryIdAndUserId("dir-1", USER_ID)).thenReturn(Optional.of(entity));
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(sessionEntityRepository.countByMilestoneIdAndUserId("ms-1", USER_ID)).thenReturn(5L);
+            when(sessionEntityRepository.clearMilestoneIdByMilestoneIdAndUserId("ms-1", USER_ID)).thenReturn(5);
+
+            MilestoneDeleteResultDTO result = service.deleteMilestone(USER_ID, "dir-1", "ms-1", true);
+
+            assertTrue(result.isDeleted());
+            assertEquals(5, result.getSessionCount());
+            verify(sessionEntityRepository).clearMilestoneIdByMilestoneIdAndUserId("ms-1", USER_ID);
+            // ms-2 should still be in the JSON
+            assertNotNull(entity.getMilestonesJson());
+            assertTrue(entity.getMilestonesJson().contains("ms-2"));
+            assertFalse(entity.getMilestonesJson().contains("ms-1"));
+        }
     }
 }

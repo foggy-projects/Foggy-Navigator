@@ -3,6 +3,7 @@ package com.foggy.navigator.claude.worker.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
+import com.foggy.navigator.claude.worker.model.dto.MilestoneDeleteResultDTO;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
 import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
 import com.foggy.navigator.common.util.DirectoryAgentId;
@@ -13,6 +14,7 @@ import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.model.form.DirectoryMilestoneForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.repository.AgentTeamsConfigRepository;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import lombok.RequiredArgsConstructor;
@@ -49,6 +51,7 @@ public class WorkingDirectoryService {
     private final WorkingDirectoryRepository directoryRepository;
     private final AgentTeamsConfigRepository agentTeamsConfigRepository;
     private final CodingAgentRepository codingAgentRepository;
+    private final SessionEntityRepository sessionEntityRepository;
     private final ClaudeWorkerService workerService;
     private final CredentialEncryptor credentialEncryptor;
 
@@ -562,6 +565,89 @@ public class WorkingDirectoryService {
                 .status(status != null ? status : "PLANNED")
                 .docPath(blankToNull(form.getDocPath()))
                 .build();
+    }
+
+    // ========== Milestone CRUD ==========
+
+    public List<DirectoryMilestoneDTO> listMilestones(String userId, String directoryId) {
+        WorkingDirectoryEntity entity = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+        return parseMilestones(entity.getMilestonesJson());
+    }
+
+    @Transactional
+    public DirectoryMilestoneDTO addMilestone(String userId, String directoryId, DirectoryMilestoneForm form) {
+        WorkingDirectoryEntity entity = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+        List<DirectoryMilestoneDTO> milestones = new java.util.ArrayList<>(parseMilestones(entity.getMilestonesJson()));
+        DirectoryMilestoneDTO newMilestone = normalizeMilestone(form);
+        if (newMilestone.getName() == null) {
+            throw new IllegalArgumentException("Milestone name is required");
+        }
+        milestones.add(newMilestone);
+        entity.setMilestonesJson(serializeMilestones(milestones));
+        directoryRepository.save(entity);
+        return newMilestone;
+    }
+
+    @Transactional
+    public DirectoryMilestoneDTO updateSingleMilestone(String userId, String directoryId, String milestoneId, DirectoryMilestoneForm form) {
+        WorkingDirectoryEntity entity = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+        List<DirectoryMilestoneDTO> milestones = new java.util.ArrayList<>(parseMilestones(entity.getMilestonesJson()));
+        DirectoryMilestoneDTO target = milestones.stream()
+                .filter(m -> milestoneId.equals(m.getId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Milestone not found: " + milestoneId));
+        String name = blankToNull(form.getName());
+        if (name != null) target.setName(name);
+        String status = blankToNull(form.getStatus());
+        if (status != null) target.setStatus(status);
+        if (form.getDocPath() != null) target.setDocPath(blankToNull(form.getDocPath()));
+        entity.setMilestonesJson(serializeMilestones(milestones));
+        directoryRepository.save(entity);
+        return target;
+    }
+
+    @Transactional
+    public MilestoneDeleteResultDTO deleteMilestone(String userId, String directoryId, String milestoneId, boolean force) {
+        WorkingDirectoryEntity entity = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+        List<DirectoryMilestoneDTO> milestones = new java.util.ArrayList<>(parseMilestones(entity.getMilestonesJson()));
+        boolean existed = milestones.removeIf(m -> milestoneId.equals(m.getId()));
+        if (!existed) {
+            throw new IllegalArgumentException("Milestone not found: " + milestoneId);
+        }
+        long sessionCount = sessionEntityRepository.countByMilestoneIdAndUserId(milestoneId, userId);
+        if (sessionCount > 0 && !force) {
+            return MilestoneDeleteResultDTO.builder()
+                    .milestoneId(milestoneId)
+                    .sessionCount(sessionCount)
+                    .deleted(false)
+                    .build();
+        }
+        if (sessionCount > 0) {
+            sessionEntityRepository.clearMilestoneIdByMilestoneIdAndUserId(milestoneId, userId);
+        }
+        entity.setMilestonesJson(milestones.isEmpty() ? null : serializeMilestones(milestones));
+        directoryRepository.save(entity);
+        return MilestoneDeleteResultDTO.builder()
+                .milestoneId(milestoneId)
+                .sessionCount(sessionCount)
+                .deleted(true)
+                .build();
+    }
+
+    public long countSessionsByMilestone(String userId, String milestoneId) {
+        return sessionEntityRepository.countByMilestoneIdAndUserId(milestoneId, userId);
+    }
+
+    private String serializeMilestones(List<DirectoryMilestoneDTO> milestones) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(milestones);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid milestones format", e);
+        }
     }
 
     private String maskToken(WorkingDirectoryEntity entity) {

@@ -256,6 +256,7 @@
             </el-dropdown>
             <el-button size="small" @click="handleToggleTerminal">终端</el-button>
             <el-button size="small" @click="toggleFullscreen" title="全屏会话">⤢</el-button>
+            <el-button size="small" @click="openMilestoneManager">里程碑</el-button>
             <el-button size="small" @click="showEditDirectoryDialog = true">编辑</el-button>
             <el-button
               v-if="selectedDirectory.worktree"
@@ -1755,25 +1756,9 @@
           </el-select>
         </el-form-item>
         <el-divider content-position="left">里程碑</el-divider>
-        <div class="milestone-editor">
-          <div v-if="editDirForm.milestones.length === 0" class="form-tip" style="margin-bottom: 8px">
-            暂无里程碑。可按版本建立如 `v3.0.0`、`1.0.0-SNAPSHOT`。
-          </div>
-          <div v-for="(milestone, index) in editDirForm.milestones" :key="milestone.id || index" class="milestone-editor-row">
-            <el-input v-model="milestone.name" placeholder="名称" />
-            <el-select v-model="milestone.status" style="width: 110px">
-              <el-option label="规划中" value="PLANNED" />
-              <el-option label="进行中" value="ACTIVE" />
-              <el-option label="已完成" value="COMPLETED" />
-              <el-option label="已归档" value="ARCHIVED" />
-            </el-select>
-            <el-input v-model="milestone.docPath" placeholder="docs/version-tracker/1.0.0-SNAPSHOT" />
-            <el-button text type="danger" @click="removeDirectoryMilestone(index)">删除</el-button>
-          </div>
-          <el-button size="small" type="primary" plain @click="addDirectoryMilestone">+ 添加里程碑</el-button>
-          <div class="form-tip">
-            文档目录使用相对路径；会话只记录里程碑 ID，列表展示时按当前目录配置解析名称。
-          </div>
+        <div class="form-tip" style="margin-bottom: 12px">
+          里程碑已移至独立管理面板。
+          <el-button type="primary" text size="small" @click="showEditDirectoryDialog = false; openMilestoneManager()">管理里程碑</el-button>
         </div>
         <el-divider content-position="left">Auth 默认配置</el-divider>
         <el-form-item v-if="platformModels.length > 0" label="LLM 配置">
@@ -1941,6 +1926,58 @@
       <template #footer>
         <el-button @click="showMilestoneDialog = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="handleSaveMilestone">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Milestone Management Dialog -->
+    <el-dialog v-model="showMilestoneManageDialog" title="管理里程碑" width="600px">
+      <div class="milestone-manage-list">
+        <div v-if="milestoneManageList.length === 0" class="form-tip" style="margin-bottom: 8px">
+          暂无里程碑。可按版本建立如 v3.0.0、1.0.0-SNAPSHOT。
+        </div>
+        <div v-for="ms in milestoneManageList" :key="ms.id" class="milestone-manage-row">
+          <template v-if="milestoneEditingId === ms.id">
+            <el-input v-model="milestoneEditForm.name" placeholder="名称" size="small" />
+            <el-select v-model="milestoneEditForm.status" size="small" style="width: 110px">
+              <el-option label="规划中" value="PLANNED" />
+              <el-option label="进行中" value="ACTIVE" />
+              <el-option label="已完成" value="COMPLETED" />
+              <el-option label="已归档" value="ARCHIVED" />
+            </el-select>
+            <el-input v-model="milestoneEditForm.docPath" placeholder="docs/version-tracker/..." size="small" />
+            <el-button size="small" type="primary" :loading="saving" @click="handleSaveMilestoneEdit(ms.id)">保存</el-button>
+            <el-button size="small" @click="milestoneEditingId = ''">取消</el-button>
+          </template>
+          <template v-else>
+            <span class="ms-name">{{ ms.name }}</span>
+            <el-tag size="small" :type="milestoneTagType(ms.status)">{{ milestoneStatusLabel(ms.status) }}</el-tag>
+            <code v-if="ms.docPath" class="ms-doc">{{ ms.docPath }}</code>
+            <span class="ms-actions">
+              <el-button size="small" text @click="startEditMilestone(ms)">编辑</el-button>
+              <el-button size="small" text type="danger" :loading="milestoneDeleting === ms.id" @click="handleDeleteMilestoneManage(ms)">删除</el-button>
+            </span>
+          </template>
+        </div>
+      </div>
+      <div style="margin-top: 12px">
+        <template v-if="milestoneAddMode">
+          <div class="milestone-manage-row">
+            <el-input v-model="milestoneAddForm.name" placeholder="名称" size="small" />
+            <el-select v-model="milestoneAddForm.status" size="small" style="width: 110px">
+              <el-option label="规划中" value="PLANNED" />
+              <el-option label="进行中" value="ACTIVE" />
+              <el-option label="已完成" value="COMPLETED" />
+              <el-option label="已归档" value="ARCHIVED" />
+            </el-select>
+            <el-input v-model="milestoneAddForm.docPath" placeholder="docs/version-tracker/..." size="small" />
+            <el-button size="small" type="primary" :loading="saving" @click="handleAddMilestoneManage">保存</el-button>
+            <el-button size="small" @click="milestoneAddMode = false">取消</el-button>
+          </div>
+        </template>
+        <el-button v-else size="small" type="primary" plain @click="milestoneAddMode = true; milestoneAddForm = { name: '', status: 'PLANNED', docPath: '' }">+ 添加里程碑</el-button>
+      </div>
+      <template #footer>
+        <el-button @click="showMilestoneManageDialog = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -2639,11 +2676,20 @@ const showBatchAuthDialog = ref(false)
 const batchAuthForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', skipExisting: true, modelConfigId: '' })
 const batchAuthSessionIds = ref<string[]>([])
 
-// Milestone dialog state
+// Milestone dialog state (session-level)
 const showMilestoneDialog = ref(false)
 const milestoneDialogSessionId = ref('')
 const milestoneDialogOptions = ref<DirectoryMilestone[]>([])
 const milestoneForm = ref({ milestoneId: '' })
+
+// Milestone management dialog state (directory-level)
+const showMilestoneManageDialog = ref(false)
+const milestoneManageList = ref<DirectoryMilestone[]>([])
+const milestoneEditingId = ref('')
+const milestoneEditForm = ref({ name: '', status: '', docPath: '' })
+const milestoneAddMode = ref(false)
+const milestoneAddForm = ref({ name: '', status: 'PLANNED', docPath: '' })
+const milestoneDeleting = ref('')
 
 // Session search dialog state
 const showSessionSearch = ref(false)
@@ -2858,7 +2904,6 @@ const editDirForm = ref({
   projectName: '',
   path: '',
   agentTeamsConfig: '',
-  milestones: [] as DirectoryMilestone[],
   projectTaskPrompt: '',
   parentProjectId: '' as string,
   defaultAuthMode: '' as string,
@@ -4399,7 +4444,6 @@ async function handleEditDirectory() {
       path: editDirForm.value.path,
       agentTeamsConfig: editDirForm.value.agentTeamsConfig,
     }
-    form.milestones = editDirForm.value.milestones
     if (selectedDirectory.value?.directoryType === 'PROJECT') {
       form.projectTaskPrompt = editDirForm.value.projectTaskPrompt
     }
@@ -4744,21 +4788,91 @@ function milestoneTagType(status?: string): '' | 'success' | 'warning' | 'info' 
   }
 }
 
-function createEmptyMilestone(): DirectoryMilestone {
-  return {
-    id: '',
-    name: '',
-    status: 'PLANNED',
-    docPath: '',
+// ===== Milestone Management (independent panel) =====
+
+async function openMilestoneManager() {
+  if (!selectedDirectoryId.value) return
+  try {
+    milestoneManageList.value = await dirApi.listMilestones(selectedDirectoryId.value)
+  } catch {
+    milestoneManageList.value = selectedDirectory.value?.milestones ? [...selectedDirectory.value.milestones] : []
+  }
+  milestoneEditingId.value = ''
+  milestoneAddMode.value = false
+  showMilestoneManageDialog.value = true
+}
+
+function startEditMilestone(ms: DirectoryMilestone) {
+  milestoneEditingId.value = ms.id
+  milestoneEditForm.value = { name: ms.name, status: ms.status, docPath: ms.docPath || '' }
+}
+
+async function handleSaveMilestoneEdit(milestoneId: string) {
+  if (!selectedDirectoryId.value) return
+  saving.value = true
+  try {
+    await dirApi.updateMilestoneApi(selectedDirectoryId.value, milestoneId, milestoneEditForm.value)
+    milestoneEditingId.value = ''
+    await refreshMilestoneList()
+    ElMessage.success('里程碑已更新')
+  } catch {
+    ElMessage.error('更新失败')
+  } finally {
+    saving.value = false
   }
 }
 
-function addDirectoryMilestone() {
-  editDirForm.value.milestones.push(createEmptyMilestone())
+async function handleAddMilestoneManage() {
+  if (!selectedDirectoryId.value || !milestoneAddForm.value.name.trim()) return
+  saving.value = true
+  try {
+    await dirApi.addMilestoneApi(selectedDirectoryId.value, milestoneAddForm.value)
+    milestoneAddMode.value = false
+    await refreshMilestoneList()
+    ElMessage.success('里程碑已添加')
+  } catch {
+    ElMessage.error('添加失败')
+  } finally {
+    saving.value = false
+  }
 }
 
-function removeDirectoryMilestone(index: number) {
-  editDirForm.value.milestones.splice(index, 1)
+async function handleDeleteMilestoneManage(ms: DirectoryMilestone) {
+  if (!selectedDirectoryId.value) return
+  milestoneDeleting.value = ms.id
+  try {
+    const result = await dirApi.deleteMilestoneApi(selectedDirectoryId.value, ms.id, false)
+    if (!result.deleted && result.sessionCount > 0) {
+      try {
+        await ElMessageBox.confirm(
+          `该里程碑被 ${result.sessionCount} 个会话引用，删除后这些会话的里程碑设置将被清除。`,
+          '确认删除',
+          { confirmButtonText: '强制删除', cancelButtonText: '取消', type: 'warning' },
+        )
+        await dirApi.deleteMilestoneApi(selectedDirectoryId.value, ms.id, true)
+        await refreshMilestoneList()
+        ElMessage.success('里程碑已删除')
+      } catch (e) {
+        if (e !== 'cancel') ElMessage.error('删除失败')
+      }
+    } else {
+      await refreshMilestoneList()
+      ElMessage.success('里程碑已删除')
+    }
+  } catch {
+    ElMessage.error('删除失败')
+  } finally {
+    milestoneDeleting.value = ''
+  }
+}
+
+async function refreshMilestoneList() {
+  if (!selectedDirectoryId.value) return
+  const updated = await dirApi.listMilestones(selectedDirectoryId.value)
+  milestoneManageList.value = updated
+  // sync to directories state so computed caches update
+  const dir = workerState.directories.value.find(d => d.directoryId === selectedDirectoryId.value)
+  if (dir) dir.milestones = updated
 }
 
 function handleAuthConfig(conv: ConversationGroup) {
@@ -6294,7 +6408,6 @@ watch(showEditDirectoryDialog, (val) => {
       projectName: selectedDirectory.value.projectName,
       path: selectedDirectory.value.path,
       agentTeamsConfig: selectedDirectory.value.agentTeamsConfig || '',
-      milestones: (selectedDirectory.value.milestones || []).map(milestone => ({ ...milestone })),
       projectTaskPrompt: selectedDirectory.value.projectTaskPrompt || '',
       parentProjectId: selectedDirectory.value.parentProjectId || '',
       defaultAuthMode: selectedDirectory.value.defaultAuthMode || '',
@@ -7097,18 +7210,40 @@ function handlePopOutTerminal() {
   white-space: nowrap;
 }
 
-.milestone-editor {
+.milestone-manage-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 6px;
 }
 
-.milestone-editor-row {
+.milestone-manage-row {
   display: grid;
-  grid-template-columns: 1fr 110px 1.4fr auto;
+  grid-template-columns: 1fr 80px 1.2fr auto auto;
   gap: 8px;
   align-items: center;
+  padding: 4px 0;
+}
+
+.milestone-manage-row .ms-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.milestone-manage-row .ms-doc {
+  font-size: 11px;
+  color: #909399;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.milestone-manage-row .ms-actions {
+  display: flex;
+  gap: 4px;
+  white-space: nowrap;
 }
 
 .form-tip {
