@@ -154,7 +154,7 @@ export async function createDirectory(form: {
 
 export async function updateDirectory(
   directoryId: string,
-  form: Record<string, string | DirectoryMilestone[] | undefined>,
+  form: Record<string, string | undefined>,
 ): Promise<WorkingDirectory> {
   const rx = (await client.put(
     `/working-directories/${directoryId}`,
@@ -165,6 +165,66 @@ export async function updateDirectory(
 
 export async function deleteDirectory(directoryId: string): Promise<void> {
   await client.delete(`/working-directories/${directoryId}`)
+}
+
+// ===== Milestone CRUD API =====
+
+export async function listMilestones(directoryId: string): Promise<DirectoryMilestone[]> {
+  const rx = (await client.get(
+    `/working-directories/${directoryId}/milestones`,
+  )) as unknown as RX<DirectoryMilestone[]>
+  return rx.data
+}
+
+export async function addMilestoneApi(
+  directoryId: string,
+  form: Partial<DirectoryMilestone>,
+): Promise<DirectoryMilestone> {
+  const rx = (await client.post(
+    `/working-directories/${directoryId}/milestones`,
+    form,
+  )) as unknown as RX<DirectoryMilestone>
+  return rx.data
+}
+
+export async function updateMilestoneApi(
+  directoryId: string,
+  milestoneId: string,
+  form: Partial<DirectoryMilestone>,
+): Promise<DirectoryMilestone> {
+  const rx = (await client.put(
+    `/working-directories/${directoryId}/milestones/${milestoneId}`,
+    form,
+  )) as unknown as RX<DirectoryMilestone>
+  return rx.data
+}
+
+export interface MilestoneDeleteResult {
+  milestoneId: string
+  sessionCount: number
+  deleted: boolean
+}
+
+export async function getMilestoneSessionCount(
+  directoryId: string,
+  milestoneId: string,
+): Promise<{ sessionCount: number }> {
+  const rx = (await client.get(
+    `/working-directories/${directoryId}/milestones/${milestoneId}/session-count`,
+  )) as unknown as RX<{ sessionCount: number }>
+  return rx.data
+}
+
+export async function deleteMilestoneApi(
+  directoryId: string,
+  milestoneId: string,
+  force = false,
+): Promise<MilestoneDeleteResult> {
+  const rx = (await client.delete(
+    `/working-directories/${directoryId}/milestones/${milestoneId}`,
+    { params: { force } },
+  )) as unknown as RX<MilestoneDeleteResult>
+  return rx.data
 }
 
 export async function syncDirectoryGitInfo(directoryId: string): Promise<WorkingDirectory> {

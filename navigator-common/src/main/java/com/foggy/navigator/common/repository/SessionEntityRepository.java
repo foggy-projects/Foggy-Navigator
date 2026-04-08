@@ -2,6 +2,7 @@ package com.foggy.navigator.common.repository;
 
 import com.foggy.navigator.common.entity.SessionEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -58,4 +59,15 @@ public interface SessionEntityRepository extends JpaRepository<SessionEntity, St
            "AND s.userId = :userId")
     List<SessionEntity> findDeletedByWorkerIdAndUserId(@Param("workerId") String workerId,
                                                        @Param("userId") String userId);
+
+    @Query("SELECT COUNT(s) FROM SessionEntity s " +
+           "WHERE s.milestoneId = :milestoneId AND s.userId = :userId AND s.deletedAt IS NULL")
+    long countByMilestoneIdAndUserId(@Param("milestoneId") String milestoneId,
+                                     @Param("userId") String userId);
+
+    @Modifying
+    @Query("UPDATE SessionEntity s SET s.milestoneId = NULL " +
+           "WHERE s.milestoneId = :milestoneId AND s.userId = :userId AND s.deletedAt IS NULL")
+    int clearMilestoneIdByMilestoneIdAndUserId(@Param("milestoneId") String milestoneId,
+                                                @Param("userId") String userId);
 }
