@@ -121,12 +121,15 @@
 - `navigator-common/src/main/java/com/foggy/navigator/common/entity/WorkingDirectoryEntity.java`
 - `navigator-common/src/main/java/com/foggy/navigator/common/entity/SessionEntity.java`
 - `navigator-common/src/main/java/com/foggy/navigator/common/dto/DirectoryMilestoneDTO.java`
+- `navigator-common/src/main/java/com/foggy/navigator/common/repository/SessionEntityRepository.java` (里程碑引用计数 + 批量清除)
 - `session-module/src/main/java/com/foggy/navigator/session/service/SessionMetadataService.java`
 - `session-module/src/main/java/com/foggy/navigator/session/controller/SessionConfigController.java`
 - `session-module/src/main/java/com/foggy/navigator/session/dto/SessionConfigDTO.java`
 - `session-module/src/main/java/com/foggy/navigator/session/service/TaskDispatchFacade.java`
 - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/service/WorkingDirectoryService.java`
+- `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/MilestoneController.java` (独立 CRUD 端点)
 - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/model/dto/WorkingDirectoryDTO.java`
+- `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/model/dto/MilestoneDeleteResultDTO.java` (安全删除结果)
 - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/model/form/UpdateWorkingDirectoryForm.java`
 - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/model/form/DirectoryMilestoneForm.java`
 - `packages/navigator-frontend/src/types/index.ts`
@@ -136,7 +139,7 @@
 
 ## Acceptance Criteria
 
-1. 用户可以在工作目录编辑弹窗中维护多个里程碑，字段至少包含名称、状态、文档相对路径。
+1. ~~用户可以在工作目录编辑弹窗中维护多个里程碑~~ → 用户通过目录工具栏"里程碑"按钮打开独立管理弹窗进行维护，字段包含名称、状态、文档相对路径。
 2. 用户可以为单个会话设置或清空所属里程碑。
 3. 在选中某个工作目录时，历史会话列表会按里程碑分组展示。
 4. 未设置里程碑的会话会归入“未设置里程碑”分组。
@@ -160,8 +163,11 @@
 - 已完成目录层里程碑定义存储，采用 JSON 数组挂在工作目录实体上
 - 已完成会话 `milestoneId` 字段与更新接口
 - 已完成历史会话在目录上下文中的按里程碑分组展示
-- 已完成会话详情和会话下拉菜单中的“设置里程碑”入口
+- 已完成会话详情和会话下拉菜单中的”设置里程碑”入口
 - 已完成 worktree 对源目录里程碑定义的继承
+- 已将里程碑管理从目录编辑弹窗提取为独立管理面板（2026-04-08）
+- 已新增 `MilestoneController`，提供独立 CRUD + session-count + 安全删除端点
+- 已新增删除安全检查：检查会话引用数，有引用时需用户确认强制删除
 
 ### Testing Progress
 
@@ -169,25 +175,35 @@
 - `session-module` 定向测试已通过，覆盖：
   - 会话可绑定目录内已有里程碑
   - 会话不可绑定目录外里程碑
-- `claude-worker-agent` 定向测试已通过，覆盖：
+- `claude-worker-agent` 定向测试已通过（27 tests），覆盖：
   - 工作目录里程碑配置可正确序列化和回传
+  - worktree 继承里程碑定义
+  - 里程碑新增、更新
+  - 安全删除：无引用直接删除
+  - 安全删除：有引用 + 不强制 → 返回引用数不删
+  - 安全删除：有引用 + 强制 → 清除会话引用后删除
+- Playwright 全链路 UI 验证已通过（AC1-AC6）
 
 已执行：
 
 ```bash
 pnpm --dir packages/navigator-frontend type-check
-mvn -pl session-module,addons/claude-worker-agent -am test "-Dtest=SessionMetadataServiceTest,WorkingDirectoryServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+mvn -pl session-module,addons/claude-worker-agent -am test “-Dtest=SessionMetadataServiceTest,WorkingDirectoryServiceTest” “-Dsurefire.failIfNoSpecifiedTests=false”
 ```
 
 ### Experience Progress
 
-- 当前状态：待人工体验验证
-- 建议重点验证：
-  - [ ] 在单个工作目录下创建两个以上里程碑并保存
-  - [ ] 为多个历史会话分别设置不同里程碑
-  - [ ] 确认历史列表按里程碑分组且“未设置里程碑”分组正常
-  - [ ] 确认 worktree 新建后会带出源目录里程碑
-  - [ ] 确认详情弹窗中 `docPath` 展示符合预期
+- Playwright 验证已完成（2026-04-08），覆盖：
+  - [x] 在单个工作目录下创建两个以上里程碑并保存
+  - [x] 为多个历史会话分别设置不同里程碑
+  - [x] 确认历史列表按里程碑分组且”未设置里程碑”分组正常
+  - [x] 确认 worktree 新建后会带出源目录里程碑
+  - [x] 确认详情弹窗中 `docPath` 展示符合预期
+- 独立管理面板待人工体验验证：
+  - [ ] 目录工具栏”里程碑”按钮打开独立管理弹窗
+  - [ ] 行内编辑里程碑名称 / 状态 / docPath
+  - [ ] 删除无引用里程碑直接成功
+  - [ ] 删除有引用里程碑弹出警告并确认强制删除
 
 ## Remaining Follow-up
 
