@@ -1002,6 +1002,7 @@ public class TaskDispatchFacade {
         result.put("customTitle", view.session() != null ? view.session().getTitle() : null);
         result.put("tags", view.session() != null ? parseTags(view.session().getTagsJson()) : List.of());
         result.put("interactionState", resolveInteractionState(view));
+        result.put("milestoneId", view.session() != null ? view.session().getMilestoneId() : null);
         result.put("latestTaskId", view.latestTask().getTaskId());
         result.put("latestStatus", view.latestTask().getStatus());
         result.put("model", firstNonBlank(view.latestTask().getModel(),

@@ -1,12 +1,16 @@
 package com.foggy.navigator.claude.worker.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
+import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
 import com.foggy.navigator.common.util.DirectoryAgentId;
 import com.foggy.navigator.claude.worker.model.entity.AgentTeamsConfigEntity;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
+import com.foggy.navigator.claude.worker.model.form.DirectoryMilestoneForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
 import com.foggy.navigator.claude.worker.repository.AgentTeamsConfigRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -39,6 +43,8 @@ import java.util.HashMap;
 @Service
 @RequiredArgsConstructor
 public class WorkingDirectoryService {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final WorkingDirectoryRepository directoryRepository;
     private final AgentTeamsConfigRepository agentTeamsConfigRepository;
@@ -178,6 +184,9 @@ public class WorkingDirectoryService {
         }
         if (form.getPath() != null) {
             entity.setPath(form.getPath());
+        }
+        if (form.getMilestones() != null) {
+            entity.setMilestonesJson(writeMilestones(form.getMilestones()));
         }
         if (form.getAgentTeamsConfig() != null) {
             entity.setAgentTeamsConfig(form.getAgentTeamsConfig().isEmpty() ? null : form.getAgentTeamsConfig());
@@ -382,6 +391,7 @@ public class WorkingDirectoryService {
         entity.setDefaultAuthToken(source.getDefaultAuthToken());
         entity.setDefaultBaseUrl(source.getDefaultBaseUrl());
         entity.setDefaultModelConfigId(source.getDefaultModelConfigId());
+        entity.setMilestonesJson(source.getMilestonesJson());
 
         directoryRepository.save(entity);
         log.info("Worktree created: directoryId={}, branch={}, path={}",
@@ -505,9 +515,52 @@ public class WorkingDirectoryService {
                 .defaultBaseUrl(entity.getDefaultBaseUrl())
                 .maskedDefaultAuthToken(maskToken(entity))
                 .defaultModelConfigId(entity.getDefaultModelConfigId())
+                .milestones(parseMilestones(entity.getMilestonesJson()))
                 .lastSyncedAt(entity.getLastSyncedAt())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
+                .build();
+    }
+
+    private List<DirectoryMilestoneDTO> parseMilestones(String milestonesJson) {
+        if (milestonesJson == null || milestonesJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            return OBJECT_MAPPER.readValue(milestonesJson, new TypeReference<List<DirectoryMilestoneDTO>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse milestones JSON: {}", milestonesJson);
+            return List.of();
+        }
+    }
+
+    private String writeMilestones(List<DirectoryMilestoneForm> milestones) {
+        if (milestones == null) {
+            return null;
+        }
+        List<DirectoryMilestoneDTO> normalized = milestones.stream()
+                .map(this::normalizeMilestone)
+                .filter(milestone -> milestone.getName() != null)
+                .toList();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(normalized);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid milestones format", e);
+        }
+    }
+
+    private DirectoryMilestoneDTO normalizeMilestone(DirectoryMilestoneForm form) {
+        String name = blankToNull(form.getName());
+        String id = blankToNull(form.getId());
+        String status = blankToNull(form.getStatus());
+        return DirectoryMilestoneDTO.builder()
+                .id(id != null ? id : IdGenerator.shortId())
+                .name(name)
+                .status(status != null ? status : "PLANNED")
+                .docPath(blankToNull(form.getDocPath()))
                 .build();
     }
 
@@ -523,6 +576,10 @@ public class WorkingDirectoryService {
         } catch (Exception e) {
             return "***";
         }
+    }
+
+    private String blankToNull(String value) {
+        return value != null && !value.isBlank() ? value.trim() : null;
     }
 
     /**

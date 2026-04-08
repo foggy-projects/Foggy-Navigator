@@ -5,6 +5,7 @@ import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.model.form.CreateWorkingDirectoryForm;
+import com.foggy.navigator.claude.worker.model.form.DirectoryMilestoneForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkingDirectoryForm;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
@@ -250,6 +251,30 @@ class WorkingDirectoryServiceTest {
         }
 
         @Test
+        void updateMilestones_serializesAndReturnsMilestones() {
+            WorkingDirectoryEntity entity = createEntity("std-1", "STANDARD");
+            when(repository.findByDirectoryIdAndUserId("std-1", USER_ID)).thenReturn(Optional.of(entity));
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            DirectoryMilestoneForm milestone = new DirectoryMilestoneForm();
+            milestone.setName("v3.0.0");
+            milestone.setStatus("ACTIVE");
+            milestone.setDocPath("docs/v3.0.0");
+
+            UpdateWorkingDirectoryForm form = new UpdateWorkingDirectoryForm();
+            form.setMilestones(List.of(milestone));
+
+            WorkingDirectoryDTO result = service.updateDirectory(USER_ID, "std-1", form);
+
+            assertNotNull(entity.getMilestonesJson());
+            assertEquals(1, result.getMilestones().size());
+            assertEquals("v3.0.0", result.getMilestones().get(0).getName());
+            assertEquals("ACTIVE", result.getMilestones().get(0).getStatus());
+            assertEquals("docs/v3.0.0", result.getMilestones().get(0).getDocPath());
+            assertNotNull(result.getMilestones().get(0).getId());
+        }
+
+        @Test
         void updateParentProjectId_toNonProject_throws() {
             WorkingDirectoryEntity entity = createEntity("std-1", "STANDARD");
             WorkingDirectoryEntity notProject = createEntity("std-2", "STANDARD");
@@ -341,6 +366,31 @@ class WorkingDirectoryServiceTest {
             assertEquals(true, result.getWorktree());
             assertEquals("src-1", result.getSourceDirectoryId());
             assertEquals("hotfix", result.getGitBranch());
+        }
+
+        @Test
+        void createWorktree_inheritsMilestones() {
+            WorkingDirectoryEntity source = createEntity("src-1", "STANDARD");
+            source.setWorkerId(WORKER_ID);
+            source.setPath("/home/user/repo");
+            source.setMilestonesJson("[{\"id\":\"ms-1\",\"name\":\"v2.0\",\"status\":\"ACTIVE\",\"docPath\":\"docs/v2\"}]");
+            when(repository.findByDirectoryIdAndUserId("src-1", USER_ID)).thenReturn(Optional.of(source));
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            ClaudeWorkerClient client = mock(ClaudeWorkerClient.class);
+            when(workerService.createClient(any())).thenReturn(client);
+            when(client.createWorktree("/home/user/repo", "feature-x", null))
+                    .thenReturn(Mono.just(Map.of("path", "/home/user/repo-wt-feature-x", "branch", "feature-x")));
+            when(client.getGitInfo(anyString())).thenReturn(Mono.error(new RuntimeException("skip")));
+
+            WorkingDirectoryDTO result = service.createWorktree(USER_ID, TENANT_ID, "src-1", "feature-x");
+
+            assertNotNull(result.getMilestones());
+            assertEquals(1, result.getMilestones().size());
+            assertEquals("ms-1", result.getMilestones().get(0).getId());
+            assertEquals("v2.0", result.getMilestones().get(0).getName());
+            assertEquals("ACTIVE", result.getMilestones().get(0).getStatus());
+            assertEquals("docs/v2", result.getMilestones().get(0).getDocPath());
         }
 
         @Test

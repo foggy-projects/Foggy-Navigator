@@ -36,6 +36,11 @@ public class SessionConfigController {
         return RX.ok(sessionMetadataService.updateTitle(sessionId, UserContext.getCurrentUserId(), form.getTitle()));
     }
 
+    @PatchMapping("/{sessionId}/config/milestone")
+    public RX<SessionConfigDTO> updateMilestone(@PathVariable String sessionId, @RequestBody UpdateMilestoneForm form) {
+        return RX.ok(sessionMetadataService.updateMilestone(sessionId, UserContext.getCurrentUserId(), form.getMilestoneId()));
+    }
+
     @PostMapping("/{sessionId}/config/bind-auth")
     public RX<SessionConfigDTO> bindAuth(@PathVariable String sessionId, @RequestBody UpdateAuthForm form) {
         return RX.ok(sessionMetadataService.bindAuth(sessionId, UserContext.getCurrentUserId(),
@@ -105,6 +110,11 @@ public class SessionConfigController {
     @Data
     public static class UpdateTitleForm {
         private String title;
+    }
+
+    @Data
+    public static class UpdateMilestoneForm {
+        private String milestoneId;
     }
 
     @Data

@@ -21,3 +21,4 @@
 - [14-shared-ask-context-alias-ttl-unique-conflict.md](./14-shared-ask-context-alias-ttl-unique-conflict.md) - Code & Tests Verified / 待真实环境手验
 - [15-planning-overview.md](./15-planning-overview.md) - 版本规划总表
 - [16-file-browser-search-encoding-fix.md](./16-file-browser-search-encoding-fix.md) - Code & Tests Verified / 文件搜索转码修复
+- [17-session-milestone-grouping.md](./17-session-milestone-grouping.md) - Code & Tests Verified / 会话里程碑分组

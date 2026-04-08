@@ -2,8 +2,11 @@ package com.foggy.navigator.session.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.SessionEntity;
+import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
+import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import com.foggy.navigator.session.dto.SessionConfigDTO;
 import com.foggy.navigator.session.repository.SessionRepository;
@@ -30,6 +33,7 @@ public class SessionMetadataService {
     private final SessionRepository sessionRepository;
     private final CredentialEncryptor credentialEncryptor;
     private final LlmModelManager llmModelManager;
+    private final WorkingDirectoryRepository workingDirectoryRepository;
 
     @Transactional(readOnly = true)
     public List<SessionConfigDTO> listBySessionIds(String userId, List<String> sessionIds) {
@@ -59,6 +63,17 @@ public class SessionMetadataService {
     public SessionConfigDTO updateTitle(String sessionId, String userId, String title) {
         SessionEntity session = requireOwnedSession(sessionId, userId);
         session.setTitle(blankToNull(title));
+        return toDTO(sessionRepository.save(session));
+    }
+
+    @Transactional
+    public SessionConfigDTO updateMilestone(String sessionId, String userId, String milestoneId) {
+        SessionEntity session = requireOwnedSession(sessionId, userId);
+        String normalizedMilestoneId = blankToNull(milestoneId);
+        if (normalizedMilestoneId != null) {
+            validateMilestoneOwnership(session, userId, normalizedMilestoneId);
+        }
+        session.setMilestoneId(normalizedMilestoneId);
         return toDTO(sessionRepository.save(session));
     }
 
@@ -148,6 +163,21 @@ public class SessionMetadataService {
                 .orElseThrow(() -> new IllegalArgumentException("Session not found: " + sessionId));
     }
 
+    private void validateMilestoneOwnership(SessionEntity session, String userId, String milestoneId) {
+        String directoryId = blankToNull(session.getCurrentDirectoryId());
+        if (directoryId == null) {
+            throw new IllegalArgumentException("Session is not bound to a working directory");
+        }
+        WorkingDirectoryEntity directory = workingDirectoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Working directory not found: " + directoryId));
+        boolean exists = parseMilestones(directory.getMilestonesJson()).stream()
+                .map(DirectoryMilestoneDTO::getId)
+                .anyMatch(milestoneId::equals);
+        if (!exists) {
+            throw new IllegalArgumentException("Milestone not found in directory: " + milestoneId);
+        }
+    }
+
     private ResolvedAuth resolveAuthBinding(SessionEntity session, String authMode, String authToken,
                                             String baseUrl, String modelConfigId) {
         if (modelConfigId == null || modelConfigId.isBlank()) {
@@ -212,7 +242,20 @@ public class SessionMetadataService {
                 .maskedAuthToken(maskedAuthToken)
                 .tags(parseTags(session.getTagsJson()))
                 .interactionState(session.getInteractionState())
+                .milestoneId(session.getMilestoneId())
                 .build();
+    }
+
+    private List<DirectoryMilestoneDTO> parseMilestones(String milestonesJson) {
+        if (milestonesJson == null || milestonesJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            return OBJECT_MAPPER.readValue(milestonesJson, new TypeReference<List<DirectoryMilestoneDTO>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse milestones JSON: {}", milestonesJson);
+            return List.of();
+        }
     }
 
     private List<String> parseTags(String tagsJson) {

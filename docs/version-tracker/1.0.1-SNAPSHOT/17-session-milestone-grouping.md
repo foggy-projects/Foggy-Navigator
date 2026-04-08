@@ -200,9 +200,9 @@ mvn -pl session-module,addons/claude-worker-agent -am test "-Dtest=SessionMetada
 ## Acceptance Status
 
 - acceptance_status: signed-off
-- acceptance_decision: accepted-with-risks
+- acceptance_decision: accepted
 - signed_off_by: engineering-signoff
 - signed_off_at: 2026-04-08
 - acceptance_record: docs/version-tracker/1.0.1-SNAPSHOT/acceptance/17-session-milestone-grouping-acceptance.md
 - blocking_items: none
-- follow_up_required: yes
+- follow_up_required: no

@@ -64,6 +64,9 @@ public class SessionEntity {
     @Column(columnDefinition = "TEXT")
     private String tagsJson;
 
+    @Column(length = 64)
+    private String milestoneId;
+
     @Column(length = 32)
     private String authMode;
 

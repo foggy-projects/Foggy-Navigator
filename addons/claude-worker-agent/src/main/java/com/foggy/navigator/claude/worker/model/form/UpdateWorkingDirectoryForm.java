@@ -2,6 +2,8 @@ package com.foggy.navigator.claude.worker.model.form;
 
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * 更新工作目录表单
  */
@@ -22,4 +24,6 @@ public class UpdateWorkingDirectoryForm {
     private String defaultBaseUrl;
     /** 平台 LLM 配置 ID（选中后清空手动 auth 配置），"" 清除, null 不改 */
     private String defaultModelConfigId;
+    /** 里程碑列表，null 不改，[] 清空 */
+    private List<DirectoryMilestoneForm> milestones;
 }

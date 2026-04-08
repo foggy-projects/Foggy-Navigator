@@ -21,7 +21,7 @@ import {
   getWorkerSessionMessagesUnified,
   syncWorkerSessionsUnified,
 } from './unifiedTask'
-import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig, SessionSearchPage } from '@/types'
+import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig, SessionSearchPage, DirectoryMilestone } from '@/types'
 
 // ===== Worker API =====
 
@@ -154,7 +154,7 @@ export async function createDirectory(form: {
 
 export async function updateDirectory(
   directoryId: string,
-  form: Record<string, string | undefined>,
+  form: Record<string, string | DirectoryMilestone[] | undefined>,
 ): Promise<WorkingDirectory> {
   const rx = (await client.put(
     `/working-directories/${directoryId}`,
@@ -457,6 +457,16 @@ export async function updateConversationTitle(
 ): Promise<ConversationConfig> {
   const rx = (await client.patch(`/sessions/${sessionId}/config/title`, {
     title,
+  })) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
+export async function updateConversationMilestone(
+  sessionId: string,
+  milestoneId?: string,
+): Promise<ConversationConfig> {
+  const rx = (await client.patch(`/sessions/${sessionId}/config/milestone`, {
+    milestoneId,
   })) as unknown as RX<ConversationConfig>
   return rx.data
 }
