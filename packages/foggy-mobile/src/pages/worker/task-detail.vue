@@ -108,6 +108,7 @@ import InteractionBadge from '@/components/InteractionBadge.vue'
 import MessageList from '@/components/MessageList.vue'
 import ChatInput from '@/components/ChatInput.vue'
 import { formatDuration } from '@/utils/time'
+import { canResumeTask } from '@/utils/taskContinuation'
 
 const taskId = ref('')
 const sessionId = ref('')
@@ -152,8 +153,7 @@ const isFailed = computed(() => {
 const connectionBannerStatus = computed(() => taskStream.chatState.connectionStatus.value)
 
 const canResume = computed(() => {
-  const status = taskStream.task.value?.status
-  return (status === 'COMPLETED' || status === 'FAILED') && !!taskStream.task.value?.claudeSessionId
+  return canResumeTask(taskStream.task.value)
 })
 
 const interactionState = computed(() => conversationConfig.value?.interactionState)
@@ -238,7 +238,7 @@ async function handleAbort() {
 
 async function handleResume(prompt: string) {
   const task = taskStream.task.value
-  if (!task?.claudeSessionId) return
+  if (!canResumeTask(task)) return
 
   // Get cached model selection for this session
   const cached = getSessionModel(task.sessionId)
