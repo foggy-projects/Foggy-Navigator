@@ -25,6 +25,7 @@
       @reconnect="(taskId: string) => emit('reconnect', taskId)"
       @load-more="emit('loadMore')"
       @load-all="(limit?: number) => emit('loadAll', limit)"
+      @forward="(message) => emit('forward', message)"
       @link-click="(payload) => emit('link-click', payload)"
     >
       <template #empty>
@@ -81,6 +82,7 @@ const emit = defineEmits<{
   (e: 'reconnect', taskId: string): void
   (e: 'loadMore'): void
   (e: 'loadAll', limit?: number): void
+  (e: 'forward', message: ChatMessage): void
   (e: 'link-click', payload: { href: string; text: string }): void
 }>()
 

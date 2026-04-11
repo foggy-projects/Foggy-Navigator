@@ -99,6 +99,7 @@ export interface ClaudeWorker {
 export interface ClaudeTask {
   taskId: string
   sessionId: string
+  parentSessionId?: string
   workerId: string
   workerTaskId?: string
   prompt: string
@@ -551,6 +552,7 @@ export interface CrossProjectPhase {
 /** 会话搜索结果项 */
 export interface SessionSearchResult {
   sessionId: string
+  parentSessionId?: string
   workerId: string
   directoryId?: string
   firstPrompt: string

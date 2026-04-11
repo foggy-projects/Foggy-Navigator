@@ -20,6 +20,35 @@ export type DispatchTask = ClaudeTask & {
   contextId?: string
 }
 
+export type ForwardTargetMode = 'NEW_SESSION' | 'EXISTING_SESSION'
+
+export interface ForwardSessionForm {
+  sourceSessionId: string
+  sourceMessageId: string
+  targetMode?: ForwardTargetMode
+  targetSessionId?: string
+  workerId?: string
+  directoryId?: string
+  cwd?: string
+  prompt?: string
+  model?: string
+  modelConfigId?: string
+  permissionMode?: string
+  maxTurns?: number
+  agentTeamsConfigId?: string
+  agentTeamsJson?: string
+  milestoneId?: string
+}
+
+export interface ForwardSessionResult {
+  relationId: number
+  targetMode?: ForwardTargetMode
+  sourceSessionId: string
+  sourceMessageId: string
+  targetSessionId: string
+  task: DispatchTask
+}
+
 export type RewindTaskResult = {
   status: string
   checkpointId?: string
@@ -75,6 +104,13 @@ export async function createTaskUnified(form: {
   contextId?: string
 }): Promise<DispatchTask> {
   const rx = (await client.post('/tasks', normalizeTaskForm(form))) as unknown as RX<DispatchTask>
+  return rx.data
+}
+
+export async function forwardSessionUnified(
+  form: ForwardSessionForm,
+): Promise<ForwardSessionResult> {
+  const rx = (await client.post('/session-relations/forward', form)) as unknown as RX<ForwardSessionResult>
   return rx.data
 }
 

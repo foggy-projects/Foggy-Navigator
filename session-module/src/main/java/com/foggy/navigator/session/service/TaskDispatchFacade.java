@@ -994,6 +994,7 @@ public class TaskDispatchFacade {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("sessionId", firstNonBlank(view.latestTask().getSessionId(), view.sessionKey()));
+        result.put("parentSessionId", view.session() != null ? view.session().getParentSessionId() : null);
         result.put("workerId", firstNonBlank(view.latestTask().getWorkerId(),
                 view.session() != null ? view.session().getCurrentWorkerId() : null));
         result.put("directoryId", firstNonBlank(view.latestTask().getDirectoryId(),
@@ -1021,21 +1022,33 @@ public class TaskDispatchFacade {
             return List.of();
         }
         Map<String, String> directoryNames = loadDirectoryNames(entities);
+        Map<String, SessionEntity> sessionsById = loadSessions(entities.stream()
+                .map(SessionTaskEntity::getSessionId)
+                .filter(Objects::nonNull)
+                .toList());
         return entities.stream()
-                .map(entity -> toDispatchTaskDTO(entity, directoryNames))
+                .map(entity -> toDispatchTaskDTO(entity, directoryNames, sessionsById))
                 .toList();
     }
 
     private DispatchTaskDTO toDispatchTaskDTO(SessionTaskEntity entity) {
-        return toDispatchTaskDTO(entity, loadDirectoryNames(List.of(entity)));
+        return toDispatchTaskDTO(
+                entity,
+                loadDirectoryNames(List.of(entity)),
+                loadSessions(List.of(entity.getSessionId()))
+        );
     }
 
-    private DispatchTaskDTO toDispatchTaskDTO(SessionTaskEntity entity, Map<String, String> directoryNames) {
+    private DispatchTaskDTO toDispatchTaskDTO(SessionTaskEntity entity,
+                                              Map<String, String> directoryNames,
+                                              Map<String, SessionEntity> sessionsById) {
         Map<String, Object> state = parseJsonObject(entity.getTaskStateJson());
+        SessionEntity session = sessionsById.get(entity.getSessionId());
         DispatchTaskDTO.DispatchTaskDTOBuilder builder = DispatchTaskDTO.builder()
                 .taskId(entity.getTaskId())
                 .workerTaskId(entity.getProviderTaskId())
                 .sessionId(entity.getSessionId())
+                .parentSessionId(session != null ? session.getParentSessionId() : null)
                 .workerId(entity.getWorkerId())
                 .userId(entity.getUserId())
                 .agentId(entity.getAgentId())

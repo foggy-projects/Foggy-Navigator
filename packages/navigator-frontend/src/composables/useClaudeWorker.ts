@@ -10,6 +10,8 @@ import {
   resumeTaskUnified,
   deleteTaskUnified,
   listTasksPagedUnified,
+  forwardSessionUnified,
+  type ForwardTargetMode,
 } from '@/api/unifiedTask'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory, ConversationConfig } from '@/types'
 
@@ -136,6 +138,28 @@ export function useClaudeWorker() {
     const task = await resumeTaskUnified(form) as unknown as ClaudeTask
     tasks.value.unshift(task)
     return task
+  }
+
+  async function forwardSession(form: {
+    sourceSessionId: string
+    sourceMessageId: string
+    targetMode?: ForwardTargetMode
+    targetSessionId?: string
+    workerId?: string
+    directoryId?: string
+    cwd?: string
+    prompt?: string
+    model?: string
+    modelConfigId?: string
+    permissionMode?: string
+    maxTurns?: number
+    agentTeamsConfigId?: string
+    agentTeamsJson?: string
+    milestoneId?: string
+  }) {
+    const result = await forwardSessionUnified(form)
+    tasks.value.unshift(result.task as unknown as ClaudeTask)
+    return result
   }
 
   async function respondToPermission(taskId: string, form: { permissionId: string; decision: string; denyMessage?: string; scope?: string; answers?: Record<string, string>; planAction?: string }) {
@@ -322,6 +346,7 @@ export function useClaudeWorker() {
     refreshWorkerStatus,
     syncSkills,
     createTask,
+    forwardSession,
     resumeTask,
     respondToPermission,
     abortTask,

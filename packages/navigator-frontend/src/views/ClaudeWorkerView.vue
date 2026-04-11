@@ -472,6 +472,7 @@
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
           @reconnect="handlePaneReconnect"
+          @forward="handlePaneForward"
           @link-click="handleLinkClick"
           @focus="focusedPaneId = $event"
         >
@@ -830,6 +831,7 @@
           @plan-respond="handlePlanRespond"
           @rewind="handlePaneRewind"
           @reconnect="handlePaneReconnect"
+          @forward="handlePaneForward"
           @link-click="handleLinkClick"
           @focus="focusedPaneId = $event"
         >
@@ -1210,6 +1212,42 @@
                 <span class="conv-prompt" :title="conv.config?.customTitle || conv.firstPrompt">{{
                   truncate(conv.config?.customTitle || conv.firstPrompt, 36)
                 }}</span>
+                <el-tag
+                  v-if="parentConversation(conv)"
+                  size="small"
+                  type="info"
+                  effect="plain"
+                  class="conv-rel-tag"
+                  @click.stop="viewTask(parentConversation(conv)!.latestTask)"
+                >
+                  上游
+                </el-tag>
+                <el-popover
+                  v-if="childConversations(conv).length > 0"
+                  placement="bottom"
+                  trigger="click"
+                  width="320"
+                >
+                  <template #reference>
+                    <el-tag size="small" type="success" effect="plain" class="conv-rel-tag" @click.stop>
+                      子会话 {{ childConversations(conv).length }}
+                    </el-tag>
+                  </template>
+                  <div class="child-session-popover">
+                    <div class="child-session-title">转发出的子会话</div>
+                    <div
+                      v-for="child in childConversations(conv)"
+                      :key="child.sessionId"
+                      class="child-session-item"
+                      @click="viewTask(child.latestTask)"
+                    >
+                      <span class="child-session-name" :title="child.config?.customTitle || child.firstPrompt">
+                        {{ truncate(child.config?.customTitle || child.firstPrompt, 28) }}
+                      </span>
+                      <span class="child-session-time">{{ formatTime(child.latestTask.createdAt) }}</span>
+                    </div>
+                  </div>
+                </el-popover>
                 <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
               </div>
               <div v-if="conv.config?.customTitle" class="conv-row-subtitle">
@@ -1366,6 +1404,42 @@
               <span class="conv-prompt" :title="conv.config?.customTitle || conv.firstPrompt">{{
                 truncate(conv.config?.customTitle || conv.firstPrompt, 36)
               }}</span>
+              <el-tag
+                v-if="parentConversation(conv)"
+                size="small"
+                type="info"
+                effect="plain"
+                class="conv-rel-tag"
+                @click.stop="viewTask(parentConversation(conv)!.latestTask)"
+              >
+                上游
+              </el-tag>
+              <el-popover
+                v-if="childConversations(conv).length > 0"
+                placement="bottom"
+                trigger="click"
+                width="320"
+              >
+                <template #reference>
+                  <el-tag size="small" type="success" effect="plain" class="conv-rel-tag" @click.stop>
+                    子会话 {{ childConversations(conv).length }}
+                  </el-tag>
+                </template>
+                <div class="child-session-popover">
+                  <div class="child-session-title">转发出的子会话</div>
+                  <div
+                    v-for="child in childConversations(conv)"
+                    :key="child.sessionId"
+                    class="child-session-item"
+                    @click="viewTask(child.latestTask)"
+                  >
+                    <span class="child-session-name" :title="child.config?.customTitle || child.firstPrompt">
+                      {{ truncate(child.config?.customTitle || child.firstPrompt, 28) }}
+                    </span>
+                    <span class="child-session-time">{{ formatTime(child.latestTask.createdAt) }}</span>
+                  </div>
+                </div>
+              </el-popover>
               <span :class="['conv-status-dot', conv.latestTask.status.toLowerCase()]" :title="conv.latestTask.status" />
             </div>
             <div v-if="conv.config?.customTitle" class="conv-row-subtitle">
@@ -1929,6 +2003,184 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="showForwardDialog" :title="forwardDialogTitle" width="640px">
+      <el-form :model="forwardForm" label-position="top">
+        <el-form-item label="源回复">
+          <div class="forward-source-preview">{{ forwardSourcePreview || '暂无内容' }}</div>
+        </el-form-item>
+        <el-form-item label="转发方式">
+          <el-radio-group v-model="forwardForm.targetMode">
+            <el-radio-button label="NEW_SESSION" value="NEW_SESSION">创建新会话</el-radio-button>
+            <el-radio-button
+              label="EXISTING_SESSION"
+              value="EXISTING_SESSION"
+              :disabled="forwardExistingTargets.length === 0"
+            >
+              转发到已有会话
+            </el-radio-button>
+          </el-radio-group>
+          <div v-if="forwardExistingTargets.length === 0" class="form-tip">
+            仅支持转发到之前由当前会话转发创建过的子会话。
+          </div>
+        </el-form-item>
+        <el-form-item label="转发内容">
+          <el-input
+            v-model="forwardForm.prompt"
+            type="textarea"
+            :rows="8"
+            :placeholder="forwardForm.targetMode === 'EXISTING_SESSION'
+              ? '可直接转发当前回复，也可以先修改后再追加到已有会话'
+              : '可直接转发当前回复，也可以先修改后再创建新会话'"
+          />
+        </el-form-item>
+        <template v-if="forwardForm.targetMode === 'NEW_SESSION'">
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="Worker">
+                <el-select v-model="forwardForm.workerId" style="width: 100%" placeholder="选择 Worker">
+                  <el-option
+                    v-for="worker in workerState.workers.value"
+                    :key="worker.workerId"
+                    :label="worker.name"
+                    :value="worker.workerId"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="工作目录">
+                <el-select v-model="forwardForm.directoryId" clearable style="width: 100%" placeholder="选择工作目录">
+                  <el-option
+                    v-for="dir in forwardDirectories"
+                    :key="dir.directoryId"
+                    :label="dir.projectName + (dir.gitBranch ? ' (' + dir.gitBranch + ')' : '')"
+                    :value="dir.directoryId"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-form-item label="工作路径">
+            <el-input v-model="forwardForm.cwd" placeholder="未选择目录时可手动输入路径" />
+          </el-form-item>
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="LLM 配置">
+                <el-select v-model="forwardForm.modelConfigId" clearable style="width: 100%" placeholder="使用目录默认配置">
+                  <el-option
+                    v-for="modelConfig in forwardPlatformModels"
+                    :key="modelConfig.id"
+                    :label="modelConfig.name"
+                    :value="modelConfig.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="模型">
+                <el-select v-model="forwardForm.model" style="width: 100%" placeholder="选择模型">
+                  <el-option
+                    v-for="modelOption in forwardModelOptions"
+                    :key="modelOption.value"
+                    :label="modelOption.label"
+                    :value="modelOption.value"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="权限模式">
+                <el-select v-model="forwardForm.permissionMode" style="width: 100%">
+                  <el-option label="默认" value="default" />
+                  <el-option label="接受编辑" value="acceptEdits" />
+                  <el-option label="放行权限" value="bypassPermissions" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="里程碑">
+                <el-select
+                  v-model="forwardForm.milestoneId"
+                  clearable
+                  style="width: 100%"
+                  placeholder="不带里程碑"
+                  :disabled="forwardMilestoneOptions.length === 0"
+                >
+                  <el-option
+                    v-for="milestone in forwardMilestoneOptions"
+                    :key="milestone.id"
+                    :label="`${milestone.name} (${milestoneStatusLabel(milestone.status)})`"
+                    :value="milestone.id"
+                  />
+                </el-select>
+                <div class="form-tip">
+                  同目录默认继承原会话里程碑；切换到其他目录后可重新指定。
+                </div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </template>
+        <template v-else>
+          <el-form-item label="目标会话">
+            <el-select v-model="forwardForm.targetSessionId" style="width: 100%" placeholder="选择已转发子会话">
+              <el-option
+                v-for="conv in forwardExistingTargets"
+                :key="conv.sessionId"
+                :label="forwardConversationOptionLabel(conv)"
+                :value="conv.sessionId"
+              />
+            </el-select>
+          </el-form-item>
+          <div v-if="forwardSelectedExistingConversation" class="forward-target-summary">
+            <div class="forward-target-row">
+              <span class="forward-target-label">会话</span>
+              <span class="forward-target-value">{{ forwardSelectedExistingConversation.firstPrompt || '-' }}</span>
+            </div>
+            <div class="forward-target-row">
+              <span class="forward-target-label">Worker</span>
+              <span class="forward-target-value">{{ forwardExistingWorkerName }}</span>
+            </div>
+            <div class="forward-target-row">
+              <span class="forward-target-label">目录</span>
+              <span class="forward-target-value">{{ forwardExistingDirectoryName }}</span>
+            </div>
+            <div class="forward-target-row">
+              <span class="forward-target-label">Provider</span>
+              <span class="forward-target-value">{{ forwardExistingProviderLabel }}</span>
+            </div>
+            <div class="forward-target-row">
+              <span class="forward-target-label">LLM 配置</span>
+              <span class="forward-target-value">{{ forwardExistingModelConfigLabel }}</span>
+            </div>
+            <div class="forward-target-row">
+              <span class="forward-target-label">模型</span>
+              <span class="forward-target-value">{{ forwardExistingModelLabel }}</span>
+            </div>
+            <div class="forward-target-row">
+              <span class="forward-target-label">里程碑</span>
+              <span class="forward-target-value">{{ forwardExistingMilestoneLabel }}</span>
+            </div>
+          </div>
+          <div v-else class="form-tip">
+            请选择已有子会话，目录、Provider、模型配置会沿用目标会话当前上下文。
+          </div>
+        </template>
+      </el-form>
+      <template #footer>
+        <el-button @click="showForwardDialog = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="forwardSubmitting"
+          :disabled="forwardSubmitDisabled"
+          @click="handleSubmitForward"
+        >
+          {{ forwardSubmitButtonText }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- Milestone Management Dialog -->
     <el-dialog v-model="showMilestoneManageDialog" title="管理里程碑" width="600px">
       <div class="milestone-manage-list">
@@ -2414,6 +2666,7 @@ import {
   searchSessionsUnified,
   listTasksByDirectoryUnified,
   listTasksByDirectoryPagedUnified,
+  type ForwardTargetMode,
 } from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
 import { searchFiles } from '@/api/fileBrowser'
@@ -2421,7 +2674,7 @@ import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone } from '@/types'
-import type { AipMessageType } from '@foggy/chat'
+import type { AipMessageType, ChatMessage } from '@foggy/chat'
 
 const MAX_PANES = 1
 
@@ -2693,6 +2946,40 @@ const milestoneDeleting = ref('')
 
 // Session search dialog state
 const showSessionSearch = ref(false)
+
+type ForwardSourceContext = {
+  sourceSessionId: string
+  sourceMessageId: string
+  sourceContent: string
+  sourceWorkerId?: string
+  sourceDirectoryId?: string
+  sourceMilestoneId?: string
+  sourceTask: ClaudeTask
+}
+
+function defaultForwardForm() {
+  return {
+    sourceSessionId: '',
+    sourceMessageId: '',
+    targetMode: 'NEW_SESSION' as ForwardTargetMode,
+    targetSessionId: '',
+    workerId: '',
+    directoryId: '',
+    cwd: '',
+    prompt: '',
+    model: '',
+    modelConfigId: '',
+    permissionMode: 'bypassPermissions',
+    milestoneId: '',
+  }
+}
+
+const showForwardDialog = ref(false)
+const forwardSubmitting = ref(false)
+const forwardPlatformModels = ref<LlmModelConfig[]>([])
+const forwardSource = ref<ForwardSourceContext | null>(null)
+const forwardForm = ref(defaultForwardForm())
+let loadForwardModelConfigSeq = 0
 
 // Batch selection state
 const batchSelectMode = ref(false)
@@ -3156,11 +3443,160 @@ async function loadPlatformModelConfig() {
   }
 }
 
+function resetForwardDialog() {
+  forwardSource.value = null
+  forwardPlatformModels.value = []
+  forwardForm.value = defaultForwardForm()
+}
+
+async function loadForwardModelConfigs(workerId: string, preferredId?: string) {
+  const seq = ++loadForwardModelConfigSeq
+  if (!workerId) {
+    forwardPlatformModels.value = []
+    forwardForm.value.modelConfigId = ''
+    return
+  }
+  try {
+    const models = await listModelConfigs(workerId)
+    if (seq !== loadForwardModelConfigSeq) return
+    forwardPlatformModels.value = models.filter(isSelectablePlatformModel)
+    const sourceConfigId = forwardSource.value?.sourceTask.modelConfigId
+    const directoryDefaultId = forwardSelectedDirectory.value?.defaultModelConfigId
+    const nextConfigId = [
+      preferredId,
+      directoryDefaultId,
+      sourceConfigId,
+      forwardPlatformModels.value[0]?.id,
+    ].find((configId) => !!configId && forwardPlatformModels.value.some((model) => model.id === configId)) || ''
+    forwardForm.value.modelConfigId = nextConfigId
+  } catch {
+    if (seq !== loadForwardModelConfigSeq) return
+    forwardPlatformModels.value = []
+    forwardForm.value.modelConfigId = ''
+  }
+}
+
+watch(() => showForwardDialog.value, (visible) => {
+  if (!visible && !forwardSubmitting.value) {
+    resetForwardDialog()
+  }
+})
+
+watch(() => forwardForm.value.targetMode, (mode) => {
+  if (mode === 'EXISTING_SESSION') {
+    if (!forwardExistingTargets.value.some((conv) => conv.sessionId === forwardForm.value.targetSessionId)) {
+      forwardForm.value.targetSessionId = forwardExistingTargets.value[0]?.sessionId || ''
+    }
+    return
+  }
+  forwardForm.value.targetSessionId = ''
+})
+
+watch(forwardExistingTargets, (targets) => {
+  if (forwardForm.value.targetMode !== 'EXISTING_SESSION') {
+    return
+  }
+  if (!targets.some((conv) => conv.sessionId === forwardForm.value.targetSessionId)) {
+    forwardForm.value.targetSessionId = targets[0]?.sessionId || ''
+  }
+})
+
+watch(() => forwardForm.value.targetSessionId, async (sessionId) => {
+  if (forwardForm.value.targetMode !== 'EXISTING_SESSION') {
+    return
+  }
+  const target = forwardExistingTargets.value.find((conv) => conv.sessionId === sessionId)
+  if (!target?.latestTask.workerId) {
+    forwardPlatformModels.value = []
+    return
+  }
+  try {
+    await workerState.loadDirectories(target.latestTask.workerId)
+  } catch {
+    // best-effort
+  }
+  await loadForwardModelConfigs(target.latestTask.workerId, target.latestTask.modelConfigId || undefined)
+})
+
+watch(() => forwardForm.value.workerId, async (workerId) => {
+  if (forwardForm.value.targetMode !== 'NEW_SESSION') {
+    return
+  }
+  if (!workerId) {
+    forwardPlatformModels.value = []
+    forwardForm.value.directoryId = ''
+    forwardForm.value.modelConfigId = ''
+    return
+  }
+  try {
+    await workerState.loadDirectories(workerId)
+  } catch {
+    // best-effort
+  }
+  const selectedDir = workerState.directories.value.find((dir) => dir.directoryId === forwardForm.value.directoryId)
+  if (selectedDir && selectedDir.workerId !== workerId) {
+    forwardForm.value.directoryId = ''
+  }
+  await loadForwardModelConfigs(workerId, forwardForm.value.modelConfigId || undefined)
+})
+
+watch(() => forwardForm.value.directoryId, (directoryId) => {
+  if (forwardForm.value.targetMode !== 'NEW_SESSION') {
+    return
+  }
+  const dir = workerState.directories.value.find((item) => item.directoryId === directoryId)
+  if (!dir) {
+    forwardForm.value.milestoneId = ''
+    return
+  }
+  if (forwardForm.value.workerId !== dir.workerId) {
+    forwardForm.value.workerId = dir.workerId
+  }
+  forwardForm.value.cwd = dir.path
+  if (dir.defaultModelConfigId && forwardPlatformModels.value.some((model) => model.id === dir.defaultModelConfigId)) {
+    forwardForm.value.modelConfigId = dir.defaultModelConfigId
+  }
+  const source = forwardSource.value
+  const milestoneIds = new Set((dir.milestones || []).map((milestone) => milestone.id))
+  if (source?.sourceDirectoryId === directoryId && source.sourceMilestoneId && milestoneIds.has(source.sourceMilestoneId)) {
+    forwardForm.value.milestoneId = source.sourceMilestoneId
+    return
+  }
+  if (!forwardForm.value.milestoneId || !milestoneIds.has(forwardForm.value.milestoneId)) {
+    forwardForm.value.milestoneId = ''
+  }
+})
+
+watch(forwardModelOptions, (options) => {
+  if (forwardForm.value.targetMode !== 'NEW_SESSION') {
+    return
+  }
+  if (options.length === 0) {
+    forwardForm.value.model = ''
+    return
+  }
+  if (!options.some((option) => option.value === forwardForm.value.model)) {
+    forwardForm.value.model = options[0]!.value
+  }
+})
+
 // --- Agent management functions ---
 function dirNameById(dirId?: string): string {
   if (!dirId) return '-'
   const dir = workerState.directories.value.find(d => d.directoryId === dirId)
   return dir?.projectName || dirId.substring(0, 8)
+}
+
+function providerTypeLabel(providerType?: string): string {
+  if (providerType === 'claude-worker') return 'Claude Worker'
+  if (providerType === 'codex-worker') return 'Codex Worker'
+  return providerType || '-'
+}
+
+function forwardConversationOptionLabel(conv: ConversationGroup): string {
+  const milestone = resolveConversationMilestone(conv)
+  const milestoneText = milestone ? ` · ${milestone.name}` : ''
+  return `${conv.firstPrompt || '未命名会话'} · ${formatTime(conv.latestTask.createdAt)}${milestoneText}`
 }
 
 function dirBranchById(dirId?: string): string | undefined {
@@ -3580,6 +4016,7 @@ const workerTasks = computed(() =>
 // Per-conversation grouping for history panel
 interface ConversationGroup {
   sessionId: string
+  parentSessionId?: string
   claudeSessionId: string
   codexThreadId: string
   latestTask: ClaudeTask
@@ -3619,6 +4056,7 @@ function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] 
   return Array.from(groups.values())
     .map((tasks) => ({
       sessionId: tasks[0]!.sessionId,
+      parentSessionId: tasks[0]!.parentSessionId,
       claudeSessionId: tasks.find((t) => t.claudeSessionId)?.claudeSessionId || '',
       codexThreadId: tasks.find((t) => t.codexThreadId)?.codexThreadId || '',
       latestTask: tasks[0]!,
@@ -3648,6 +4086,50 @@ const directoryConversations = computed(() => groupTasksToConversations(director
 const allConversations = computed(() =>
   selectedDirectoryId.value ? directoryConversations.value : workerConversations.value,
 )
+const forwardConversationPool = computed(() => {
+  const taskMap = new Map<string, ClaudeTask>()
+  for (const task of workerState.tasks.value) {
+    taskMap.set(task.taskId, task)
+  }
+  for (const task of directoryTasks.value) {
+    taskMap.set(task.taskId, task)
+  }
+  return groupTasksToConversations([...taskMap.values()])
+})
+const conversationBySessionId = computed(() => {
+  const map = new Map<string, ConversationGroup>()
+  for (const conv of allConversations.value) {
+    map.set(conv.sessionId, conv)
+  }
+  return map
+})
+const childConversationMap = computed(() => {
+  const map = new Map<string, ConversationGroup[]>()
+  for (const conv of allConversations.value) {
+    if (!conv.parentSessionId) continue
+    const existing = map.get(conv.parentSessionId)
+    if (existing) {
+      existing.push(conv)
+    } else {
+      map.set(conv.parentSessionId, [conv])
+    }
+  }
+  for (const children of map.values()) {
+    children.sort((a, b) =>
+      new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime(),
+    )
+  }
+  return map
+})
+
+function childConversations(conv: ConversationGroup): ConversationGroup[] {
+  return childConversationMap.value.get(conv.sessionId) || []
+}
+
+function parentConversation(conv: ConversationGroup): ConversationGroup | undefined {
+  return conv.parentSessionId ? conversationBySessionId.value.get(conv.parentSessionId) : undefined
+}
+
 const activeConversations = computed(() => {
   let list = allConversations.value
 
@@ -3681,6 +4163,78 @@ function milestonesForDirectory(directoryId?: string): DirectoryMilestone[] {
   if (!directoryId) return []
   return directoryMilestoneMap.value.get(directoryId) || []
 }
+
+const forwardSourcePreview = computed(() => forwardSource.value?.sourceContent?.trim() || '')
+const forwardDialogTitle = computed(() =>
+  forwardForm.value.targetMode === 'EXISTING_SESSION' ? '转发到已有会话' : '转发为新会话',
+)
+const forwardExistingTargets = computed(() => {
+  const sourceSessionId = forwardSource.value?.sourceSessionId
+  if (!sourceSessionId) return []
+  return forwardConversationPool.value
+    .filter((conv) => conv.parentSessionId === sourceSessionId)
+    .sort((a, b) => new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime())
+})
+const forwardSelectedExistingConversation = computed(() =>
+  forwardExistingTargets.value.find((conv) => conv.sessionId === forwardForm.value.targetSessionId) || null,
+)
+const forwardDirectories = computed(() => {
+  if (!forwardForm.value.workerId) return []
+  return workerState.directories.value.filter((dir) => dir.workerId === forwardForm.value.workerId)
+})
+const forwardSelectedDirectory = computed(() =>
+  workerState.directories.value.find((dir) => dir.directoryId === forwardForm.value.directoryId),
+)
+const forwardMilestoneOptions = computed(() => forwardSelectedDirectory.value?.milestones || [])
+const forwardSelectedModelConfig = computed(() =>
+  forwardPlatformModels.value.find((model) => model.id === forwardForm.value.modelConfigId) || null,
+)
+const forwardModelOptions = computed(() => {
+  const backend = forwardSelectedModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
+  const backendModels = ALL_MODELS.filter((model) => model.backend === backend)
+  const allowed = forwardSelectedModelConfig.value?.availableModels
+  if (!allowed || allowed.length === 0) return backendModels
+  return backendModels.filter((model) => allowed.includes(model.value))
+})
+const forwardExistingWorkerName = computed(() => {
+  const workerId = forwardSelectedExistingConversation.value?.latestTask.workerId
+  if (!workerId) return '-'
+  return workerState.workers.value.find((worker) => worker.workerId === workerId)?.name || workerId
+})
+const forwardExistingDirectoryName = computed(() => {
+  const directoryId = forwardSelectedExistingConversation.value?.latestTask.directoryId
+  return directoryId ? dirNameById(directoryId) : '-'
+})
+const forwardExistingProviderLabel = computed(() => {
+  const providerType = forwardSelectedExistingConversation.value?.latestTask.providerType
+  return providerType ? providerTypeLabel(providerType) : '-'
+})
+const forwardExistingModelConfigLabel = computed(() => {
+  const task = forwardSelectedExistingConversation.value?.latestTask
+  if (!task?.modelConfigId) return '-'
+  const modelConfig = forwardPlatformModels.value.find((item) => item.id === task.modelConfigId)
+  return modelConfig ? `${modelConfig.name} (${task.modelConfigId})` : task.modelConfigId
+})
+const forwardExistingModelLabel = computed(() => {
+  const model = forwardSelectedExistingConversation.value?.latestTask.model
+  return model ? shortModel(model) : '-'
+})
+const forwardExistingMilestoneLabel = computed(() => {
+  const conv = forwardSelectedExistingConversation.value
+  if (!conv) return '-'
+  const milestone = resolveConversationMilestone(conv)
+  return milestone ? `${milestone.name} (${milestoneStatusLabel(milestone.status)})` : '未设置'
+})
+const forwardSubmitButtonText = computed(() =>
+  forwardForm.value.targetMode === 'EXISTING_SESSION' ? '转发追加' : '转发创建',
+)
+const forwardSubmitDisabled = computed(() => {
+  if (!forwardForm.value.prompt.trim()) return true
+  if (forwardForm.value.targetMode === 'EXISTING_SESSION') {
+    return !forwardForm.value.targetSessionId
+  }
+  return !forwardForm.value.workerId
+})
 
 const conversationMilestoneMap = computed(() => {
   const cache = new Map<string, DirectoryMilestone>()
@@ -4150,7 +4704,9 @@ function handleSearchSelect(result: SessionSearchResult) {
   } as ClaudeTask
   navigateToActiveSession({
     sessionId: result.sessionId,
+    parentSessionId: result.parentSessionId,
     claudeSessionId: '',
+    codexThreadId: '',
     latestTask: minimalTask,
     tasks: [minimalTask],
     totalCost: result.totalCost || 0,
@@ -5106,6 +5662,60 @@ async function handlePlanRespond(paneId: string, permissionId: string, decision:
   }
 }
 
+async function handlePaneForward(paneId: string, message: ChatMessage | { id: string; content: string }) {
+  const pane = panes.value.find((item) => item.paneId === paneId)
+  const task = pane?.task.value
+  if (!task?.sessionId || !message?.id) {
+    ElMessage.warning('当前消息暂不支持转发')
+    return
+  }
+  const sourceContent = message.content?.trim()
+  if (!sourceContent) {
+    ElMessage.warning('回复内容为空，无法转发')
+    return
+  }
+
+  const sourceMilestoneId = workerState.conversationConfigs.value.get(task.sessionId)?.milestoneId || ''
+  const initialWorkerId = task.workerId || selectedWorkerId.value || ''
+  const initialDirectoryId = task.directoryId || ''
+  forwardSource.value = {
+    sourceSessionId: task.sessionId,
+    sourceMessageId: message.id,
+    sourceContent,
+    sourceWorkerId: task.workerId,
+    sourceDirectoryId: task.directoryId,
+    sourceMilestoneId,
+    sourceTask: task,
+  }
+  forwardForm.value = {
+    sourceSessionId: task.sessionId,
+    sourceMessageId: message.id,
+    targetMode: 'NEW_SESSION',
+    targetSessionId: '',
+    workerId: initialWorkerId,
+    directoryId: initialDirectoryId,
+    cwd: task.cwd || '',
+    prompt: sourceContent,
+    model: task.model || taskForm.value.model || '',
+    modelConfigId: task.modelConfigId || platformModelConfigId.value || '',
+    permissionMode: taskForm.value.permissionMode || 'bypassPermissions',
+    milestoneId: initialDirectoryId ? sourceMilestoneId : '',
+  }
+
+  if (initialWorkerId) {
+    try {
+      await workerState.loadDirectories(initialWorkerId)
+    } catch {
+      // best-effort
+    }
+    await loadForwardModelConfigs(initialWorkerId, forwardForm.value.modelConfigId || undefined)
+  } else {
+    forwardPlatformModels.value = []
+  }
+
+  showForwardDialog.value = true
+}
+
 // In-pane rewind state
 const paneRewindVisible = ref(false)
 const paneRewindPaneId = ref('')
@@ -5449,6 +6059,82 @@ async function handleCreateTask() {
     ElMessage.error('创建任务失败: ' + ((e as Error).message || '未知错误'))
   } finally {
     creatingTask.value = false
+  }
+}
+
+async function handleSubmitForward() {
+  if (!forwardSource.value) {
+    ElMessage.warning('缺少源会话信息')
+    return
+  }
+  const prompt = forwardForm.value.prompt.trim()
+  if (!prompt) {
+    ElMessage.warning('请输入转发内容')
+    return
+  }
+  if (forwardForm.value.targetMode === 'NEW_SESSION' && !forwardForm.value.workerId) {
+    ElMessage.warning('请选择目标 Worker')
+    return
+  }
+  if (forwardForm.value.targetMode === 'EXISTING_SESSION' && !forwardForm.value.targetSessionId) {
+    ElMessage.warning('请选择目标会话')
+    return
+  }
+
+  forwardSubmitting.value = true
+  try {
+    const sourceSessionId = forwardSource.value.sourceSessionId
+    const targetMode = forwardForm.value.targetMode
+    const result = await workerState.forwardSession({
+      sourceSessionId,
+      sourceMessageId: forwardSource.value.sourceMessageId,
+      targetMode,
+      targetSessionId: targetMode === 'EXISTING_SESSION'
+        ? forwardForm.value.targetSessionId
+        : undefined,
+      workerId: targetMode === 'NEW_SESSION' ? forwardForm.value.workerId : undefined,
+      directoryId: targetMode === 'NEW_SESSION' ? (forwardForm.value.directoryId || undefined) : undefined,
+      cwd: targetMode === 'NEW_SESSION' ? (forwardForm.value.cwd.trim() || undefined) : undefined,
+      prompt,
+      model: targetMode === 'NEW_SESSION' ? (forwardForm.value.model || undefined) : undefined,
+      modelConfigId: targetMode === 'NEW_SESSION' ? (forwardForm.value.modelConfigId || undefined) : undefined,
+      permissionMode: targetMode === 'NEW_SESSION' ? (forwardForm.value.permissionMode || undefined) : undefined,
+      milestoneId: targetMode === 'NEW_SESSION' && forwardForm.value.directoryId
+        ? (forwardForm.value.milestoneId || undefined)
+        : undefined,
+    })
+
+    const newTask = result.task as unknown as ClaudeTask
+    if (targetMode === 'NEW_SESSION' && forwardForm.value.model) {
+      saveSessionModel(newTask.sessionId, forwardForm.value.model)
+    }
+
+    if (newTask.directoryId) {
+      selectDirectory(newTask.workerId, newTask.directoryId)
+    } else if (newTask.workerId) {
+      selectWorker(newTask.workerId)
+    }
+    await nextTick()
+
+    while (panes.value.length >= MAX_PANES) {
+      closePane(panes.value[0]!.paneId)
+    }
+
+    const pane = createPane(newTask)
+    focusedPaneId.value = pane.paneId
+    showForwardDialog.value = false
+    resetForwardDialog()
+    await Promise.all([
+      reloadWorkerTasks(),
+      newTask.directoryId && selectedDirectoryId.value === newTask.directoryId ? loadDirectoryTasks() : Promise.resolve(),
+      workerState.loadConversationConfigs([sourceSessionId, newTask.sessionId]),
+      pane.connect(newTask.sessionId),
+    ])
+    ElMessage.success(targetMode === 'EXISTING_SESSION' ? '已转发到已有会话' : '已转发为新会话')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '转发失败')
+  } finally {
+    forwardSubmitting.value = false
   }
 }
 
@@ -8038,6 +8724,93 @@ function handlePopOutTerminal() {
   line-height: 18px;
   padding: 0 4px;
   flex-shrink: 0;
+}
+
+.conv-rel-tag {
+  cursor: pointer;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.child-session-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.child-session-title {
+  font-size: 12px;
+  color: #606266;
+  font-weight: 600;
+}
+
+.child-session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.child-session-item:hover {
+  background: #f5f7fa;
+}
+
+.child-session-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #303133;
+}
+
+.child-session-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #909399;
+}
+
+.forward-source-preview {
+  max-height: 160px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f5f7fa;
+  color: #606266;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.forward-target-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.forward-target-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.forward-target-label {
+  width: 72px;
+  flex-shrink: 0;
+  color: #909399;
+}
+
+.forward-target-value {
+  color: #303133;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .milestone-tag {
