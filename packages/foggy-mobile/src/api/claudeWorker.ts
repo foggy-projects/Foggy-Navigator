@@ -5,7 +5,7 @@
  * Session config functions are in conversationConfig.ts (/api/v1/sessions/{id}/config).
  */
 import client from './client'
-import type { RX, ClaudeWorker, WorkingDirectory } from './types'
+import type { RX, ClaudeWorker, DirectoryMilestone, WorkingDirectory } from './types'
 
 // ===== Worker API =====
 
@@ -28,5 +28,12 @@ export async function listDirectoriesByWorker(workerId: string): Promise<Working
 
 export async function syncDirectoryGitInfo(directoryId: string): Promise<WorkingDirectory> {
   const rx = (await client.post(`/working-directories/${directoryId}/sync`)) as unknown as RX<WorkingDirectory>
+  return rx.data
+}
+
+export async function listMilestones(directoryId: string): Promise<DirectoryMilestone[]> {
+  const rx = (await client.get(
+    `/working-directories/${directoryId}/milestones`,
+  )) as unknown as RX<DirectoryMilestone[]>
   return rx.data
 }

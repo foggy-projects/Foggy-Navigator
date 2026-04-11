@@ -75,14 +75,45 @@
         <text class="loading-text">加载中...</text>
       </view>
       <template v-else-if="displayGroups.length > 0">
-        <SessionCard
-          v-for="group in displayGroups"
-          :key="group.sessionId"
-          :group="group"
-          :model-configs="platformModels"
-          @tap="openSession(group)"
-          @longpress="showSessionActions(group)"
-        />
+        <template v-if="useMilestoneGrouping">
+          <view
+            v-for="section in groupedDisplayGroups"
+            :key="section.key"
+            class="milestone-group"
+          >
+            <view class="milestone-group-header">
+              <view class="milestone-group-main">
+                <text class="milestone-group-title">{{ section.label }}</text>
+                <text
+                  v-if="section.milestone"
+                  class="milestone-group-status"
+                >{{ milestoneStatusLabel(section.milestone.status) }}</text>
+                <text class="milestone-group-count">{{ section.conversations.length }} 个会话</text>
+              </view>
+              <text v-if="section.milestone?.docPath" class="milestone-group-doc">{{ section.milestone.docPath }}</text>
+            </view>
+            <SessionCard
+              v-for="group in section.conversations"
+              :key="group.sessionId"
+              :group="group"
+              :milestone="section.milestone"
+              :model-configs="platformModels"
+              @tap="openSession(group)"
+              @longpress="showSessionActions(group)"
+            />
+          </view>
+        </template>
+        <template v-else>
+          <SessionCard
+            v-for="group in displayGroups"
+            :key="group.sessionId"
+            :group="group"
+            :milestone="resolveMilestone(group)"
+            :model-configs="platformModels"
+            @tap="openSession(group)"
+            @longpress="showSessionActions(group)"
+          />
+        </template>
         <view v-if="hasMore" class="load-more">
           <text class="load-more-text" @tap="loadMore">加载更多</text>
         </view>
@@ -101,10 +132,12 @@
 import { ref, computed, watch } from 'vue'
 import { onLoad, onShow, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app'
 import { createTaskUnified, listTasksByDirPagedUnified, deleteTaskUnified } from '@/api/unifiedTask'
-import { listConversationConfigs, updateConversationPin, archiveConversation, holdConversation, unholdConversation, unarchiveConversation } from '@/api/conversationConfig'
+import { listConversationConfigs, updateConversationMilestone, updateConversationPin, archiveConversation, holdConversation, unholdConversation, unarchiveConversation } from '@/api/conversationConfig'
+import { listMilestones } from '@/api/claudeWorker'
 import { listModelConfigs, listAgentModelOverrides } from '@/api/platform'
-import type { DispatchTask, ConversationGroup, ConversationConfig, LlmModelConfig } from '@/api/types'
+import type { DispatchTask, ConversationGroup, ConversationConfig, DirectoryMilestone, LlmModelConfig } from '@/api/types'
 import { buildConversationGroups, getGroupInteractionState } from '@/composables/useConversationGroup'
+import { buildMilestoneSections, resolveConversationMilestone } from '@/composables/useMilestoneGroups'
 import { useInputMemory } from '@/composables/useInputMemory'
 import SessionCard from '@/components/SessionCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -122,7 +155,8 @@ const conversationConfigs = ref<Map<string, ConversationConfig>>(new Map())
 const groups = ref<ConversationGroup[]>([])
 const page = ref(0)
 const totalSessions = ref(0)
-const PAGE_SIZE = 20
+const milestoneOptions = ref<DirectoryMilestone[]>([])
+const PAGE_SIZE = 40
 
 // Platform models
 const platformModels = ref<LlmModelConfig[]>([])
@@ -200,6 +234,7 @@ const { saveDraft, loadDraft, clearDraft, addToHistory, recentItems } = useInput
 
 const historyItems = computed(() => recentItems(10))
 const hasMore = computed(() => (page.value + 1) * PAGE_SIZE < totalSessions.value)
+const useMilestoneGrouping = computed(() => milestoneOptions.value.length > 0)
 
 // Combined filter: server-side state + client-side source + client-side active
 const displayGroups = computed(() => {
@@ -223,6 +258,7 @@ const displayGroups = computed(() => {
 
   return list
 })
+const groupedDisplayGroups = computed(() => buildMilestoneSections(displayGroups.value, milestoneOptions.value))
 
 function currentStateParam(): string | undefined {
   // ACTIVE and ALL: fetch all from server, filter client-side
@@ -252,12 +288,14 @@ onLoad((options) => {
   const draft = loadDraft()
   if (draft) promptInput.value = draft
   loadSessions()
+  loadMilestones()
   loadPlatformModels()
 })
 
 onShow(() => {
   if (directoryId.value) {
     loadSessions()
+    loadMilestones()
   }
 })
 
@@ -290,6 +328,19 @@ async function loadPlatformModels() {
     }
   } catch {
     // best-effort
+  }
+}
+
+async function loadMilestones() {
+  if (!directoryId.value) {
+    milestoneOptions.value = []
+    return
+  }
+  try {
+    milestoneOptions.value = await listMilestones(directoryId.value)
+  } catch (e) {
+    milestoneOptions.value = []
+    console.error('Failed to load milestones:', e)
   }
 }
 
@@ -354,6 +405,10 @@ function rebuildGroups() {
   groups.value = buildConversationGroups(tasks.value, conversationConfigs.value)
 }
 
+function resolveMilestone(group: ConversationGroup): DirectoryMilestone | undefined {
+  return resolveConversationMilestone(group, milestoneOptions.value)
+}
+
 async function handleCreateTask() {
   if (!promptInput.value.trim() || !workerId.value) return
   creating.value = true
@@ -408,6 +463,13 @@ function showSessionActions(group: ConversationGroup) {
       },
     },
   ]
+
+  actions.push({
+    label: '设置里程碑',
+    handler: async () => {
+      await showMilestonePicker(group)
+    },
+  })
 
   if (isArchived) {
     actions.push({
@@ -484,6 +546,60 @@ function showSessionActions(group: ConversationGroup) {
       actions[res.tapIndex].handler()
     },
   })
+}
+
+async function showMilestonePicker(group: ConversationGroup) {
+  if (milestoneOptions.value.length === 0) {
+    await loadMilestones()
+  }
+  const options = milestoneOptions.value
+  if (options.length === 0) {
+    uni.showToast({ title: '当前目录暂无里程碑', icon: 'none' })
+    return
+  }
+
+  const currentMilestoneId = group.config?.milestoneId
+  const itemList = [
+    currentMilestoneId ? '[当前] 未设置里程碑' : '未设置里程碑',
+    ...options.map(milestone => formatMilestoneActionLabel(milestone, currentMilestoneId)),
+  ]
+
+  uni.showActionSheet({
+    itemList,
+    success: async (res) => {
+      const nextMilestoneId = res.tapIndex === 0 ? undefined : options[res.tapIndex - 1]?.id
+      const normalizedCurrent = currentMilestoneId || undefined
+      if (nextMilestoneId === normalizedCurrent) return
+      try {
+        const cfg = await updateConversationMilestone(group.sessionId, nextMilestoneId)
+        conversationConfigs.value.set(group.sessionId, cfg)
+        rebuildGroups()
+        uni.showToast({ title: '里程碑已更新', icon: 'success' })
+      } catch {
+        uni.showToast({ title: '更新失败', icon: 'error' })
+      }
+    },
+  })
+}
+
+function formatMilestoneActionLabel(milestone: DirectoryMilestone, currentMilestoneId?: string): string {
+  const currentPrefix = milestone.id === currentMilestoneId ? '[当前] ' : ''
+  return `${currentPrefix}${milestone.name}（${milestoneStatusLabel(milestone.status)}）`
+}
+
+function milestoneStatusLabel(status?: string): string {
+  switch (status) {
+    case 'ACTIVE':
+      return '进行中'
+    case 'COMPLETED':
+      return '已完成'
+    case 'ARCHIVED':
+      return '已归档'
+    case 'PLANNED':
+      return '规划中'
+    default:
+      return status || '未知状态'
+  }
 }
 
 function showHistory() {
@@ -684,6 +800,45 @@ function showPermissionPicker() {
 /* 会话列表 */
 .task-list {
   padding: 20rpx 24rpx;
+}
+.milestone-group {
+  margin-bottom: 20rpx;
+}
+.milestone-group:last-child {
+  margin-bottom: 0;
+}
+.milestone-group-header {
+  padding: 0 4rpx 12rpx;
+}
+.milestone-group-main {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.milestone-group-title {
+  font-size: 28rpx;
+  color: #303133;
+  font-weight: 600;
+  margin-right: 12rpx;
+}
+.milestone-group-status {
+  font-size: 22rpx;
+  color: #a05a07;
+  background-color: #fff1d6;
+  padding: 4rpx 12rpx;
+  border-radius: 999rpx;
+  margin-right: 10rpx;
+}
+.milestone-group-count {
+  font-size: 22rpx;
+  color: #909399;
+}
+.milestone-group-doc {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #8c8c8c;
 }
 .loading-wrap {
   padding: 48rpx;
