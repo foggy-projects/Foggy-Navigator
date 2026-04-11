@@ -283,6 +283,7 @@ import {
 import type { FileEntry, DiffFileEntry, GitLogEntry, CommitFileEntry } from '@/api/fileBrowser'
 import FileSearchDialog from '@/components/file-browser/FileSearchDialog.vue'
 import { useTouchDetect } from '@/composables/useTouchDetect'
+import { parseFileReference } from '@/utils/fileReference'
 
 const { isTouchDevice } = useTouchDetect()
 
@@ -290,11 +291,21 @@ const { isTouchDevice } = useTouchDetect()
 const route = useRoute()
 const directoryId = computed(() => (route.query.directoryId as string) || '')
 const workerId = computed(() => (route.query.workerId as string) || '')
-const deepLinkFilePath = computed(() => {
+const deepLinkReference = computed(() => {
   const raw = (route.query.filePath as string) || ''
-  try { return decodeURIComponent(raw) } catch { return raw }
+  const decoded = (() => {
+    try { return decodeURIComponent(raw) } catch { return raw }
+  })()
+  return parseFileReference(decoded)
 })
-const deepLinkLine = computed(() => parseInt(route.query.line as string) || 0)
+const deepLinkFilePath = computed(() => deepLinkReference.value.path)
+const deepLinkLine = computed(() => {
+  const explicitLine = Number.parseInt(route.query.line as string, 10)
+  if (Number.isFinite(explicitLine) && explicitLine > 0) {
+    return explicitLine
+  }
+  return deepLinkReference.value.line
+})
 
 // ---- Monaco lazy import ---------------------------------------------------
 let monaco: typeof import('monaco-editor') | null = null
@@ -497,7 +508,7 @@ function getSubPath(fullPath: string): string {
 /**
  * Deeplink 定位 — 按相对路径逐级展开目录树并打开目标文件
  */
-async function navigateToFile(relativePath: string) {
+async function navigateToFile(relativePath: string, lineNumber = 0) {
   if (!relativePath) return
 
   const segments = relativePath.split('/')
@@ -551,6 +562,25 @@ async function navigateToFile(relativePath: string) {
   // 选中并打开文件
   selectedTreePath.value = fileNode.fullPath
   await loadFile(fileNode.fullPath)
+  await nextTick()
+  revealEditorLine(lineNumber)
+}
+
+function revealEditorLine(lineNumber: number) {
+  if (!editorInstance || lineNumber <= 0) return
+
+  const model = editorInstance.getModel()
+  if (!model) return
+
+  const safeLine = Math.min(Math.max(lineNumber, 1), model.getLineCount())
+  editorInstance.revealLineInCenter(safeLine)
+  editorInstance.setSelection({
+    startLineNumber: safeLine,
+    startColumn: 1,
+    endLineNumber: safeLine,
+    endColumn: 1000,
+  })
+  editorInstance.focus()
 }
 
 // ---- Context menu ---------------------------------------------------------
@@ -870,15 +900,7 @@ async function handleSearchSelectContent(file: string, lineNumber: number) {
   if (rootDir) {
     await loadFile(rootDir + '/' + file)
     await nextTick()
-    if (editorInstance) {
-      editorInstance.revealLineInCenter(lineNumber)
-      editorInstance.setSelection({
-        startLineNumber: lineNumber,
-        startColumn: 1,
-        endLineNumber: lineNumber,
-        endColumn: 1000,
-      })
-    }
+    revealEditorLine(lineNumber)
   }
 }
 
@@ -1371,7 +1393,7 @@ onMounted(async () => {
     loadIgnoredPatterns()
     // Deeplink 定位：如果 URL 携带 filePath 参数，自动展开并打开目标文件
     if (deepLinkFilePath.value) {
-      await navigateToFile(deepLinkFilePath.value)
+      await navigateToFile(deepLinkFilePath.value, deepLinkLine.value)
     }
   }
 })
@@ -1408,7 +1430,7 @@ onBeforeUnmount(() => {
   }
 })
 
-watch(() => route.query.directoryId, () => {
+watch(() => route.query.directoryId, async () => {
   if (directoryId.value) {
     treeData.value = []
     diffFiles.value = []
@@ -1435,15 +1457,18 @@ watch(() => route.query.directoryId, () => {
     if (editorInstance) {
       editorInstance.setModel(null)
     }
-    loadDirectory()
+    await loadDirectory()
     loadIgnoredPatterns()
+    if (deepLinkFilePath.value) {
+      await navigateToFile(deepLinkFilePath.value, deepLinkLine.value)
+    }
   }
 })
 
 // 同标签内 filePath 变化时，自动导航到新文件
-watch(deepLinkFilePath, (newPath) => {
+watch([deepLinkFilePath, deepLinkLine], async ([newPath, newLine]) => {
   if (newPath && directoryId.value) {
-    navigateToFile(newPath)
+    await navigateToFile(newPath, newLine)
   }
 })
 </script>
