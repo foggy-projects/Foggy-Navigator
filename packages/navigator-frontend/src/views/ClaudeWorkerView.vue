@@ -3476,6 +3476,90 @@ async function loadForwardModelConfigs(workerId: string, preferredId?: string) {
   }
 }
 
+// ── Forward computed (must be before watchers that reference them) ──
+const forwardSourcePreview = computed(() => forwardSource.value?.sourceContent?.trim() || '')
+const forwardDialogTitle = computed(() =>
+  forwardForm.value.targetMode === 'EXISTING_SESSION' ? '转发到已有会话' : '转发为新会话',
+)
+const forwardConversationPool = computed(() => {
+  const taskMap = new Map<string, ClaudeTask>()
+  for (const task of workerState.tasks.value) {
+    taskMap.set(task.taskId, task)
+  }
+  for (const task of directoryTasks.value) {
+    taskMap.set(task.taskId, task)
+  }
+  return groupTasksToConversations([...taskMap.values()])
+})
+const forwardExistingTargets = computed(() => {
+  const sourceSessionId = forwardSource.value?.sourceSessionId
+  if (!sourceSessionId) return []
+  return forwardConversationPool.value
+    .filter((conv) => conv.parentSessionId === sourceSessionId)
+    .sort((a, b) => new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime())
+})
+
+const forwardSelectedExistingConversation = computed(() =>
+  forwardExistingTargets.value.find((conv) => conv.sessionId === forwardForm.value.targetSessionId) || null,
+)
+const forwardDirectories = computed(() => {
+  if (!forwardForm.value.workerId) return []
+  return workerState.directories.value.filter((dir) => dir.workerId === forwardForm.value.workerId)
+})
+const forwardSelectedDirectory = computed(() =>
+  workerState.directories.value.find((dir) => dir.directoryId === forwardForm.value.directoryId),
+)
+const forwardMilestoneOptions = computed(() => forwardSelectedDirectory.value?.milestones || [])
+const forwardSelectedModelConfig = computed(() =>
+  forwardPlatformModels.value.find((model) => model.id === forwardForm.value.modelConfigId) || null,
+)
+const forwardModelOptions = computed(() => {
+  const backend = forwardSelectedModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
+  const backendModels = ALL_MODELS.filter((model) => model.backend === backend)
+  const allowed = forwardSelectedModelConfig.value?.availableModels
+  if (!allowed || allowed.length === 0) return backendModels
+  return backendModels.filter((model) => allowed.includes(model.value))
+})
+const forwardExistingWorkerName = computed(() => {
+  const workerId = forwardSelectedExistingConversation.value?.latestTask.workerId
+  if (!workerId) return '-'
+  return workerState.workers.value.find((worker) => worker.workerId === workerId)?.name || workerId
+})
+const forwardExistingDirectoryName = computed(() => {
+  const directoryId = forwardSelectedExistingConversation.value?.latestTask.directoryId
+  return directoryId ? dirNameById(directoryId) : '-'
+})
+const forwardExistingProviderLabel = computed(() => {
+  const providerType = forwardSelectedExistingConversation.value?.latestTask.providerType
+  return providerType ? providerTypeLabel(providerType) : '-'
+})
+const forwardExistingModelConfigLabel = computed(() => {
+  const task = forwardSelectedExistingConversation.value?.latestTask
+  if (!task?.modelConfigId) return '-'
+  const modelConfig = forwardPlatformModels.value.find((item) => item.id === task.modelConfigId)
+  return modelConfig ? `${modelConfig.name} (${task.modelConfigId})` : task.modelConfigId
+})
+const forwardExistingModelLabel = computed(() => {
+  const model = forwardSelectedExistingConversation.value?.latestTask.model
+  return model ? shortModel(model) : '-'
+})
+const forwardExistingMilestoneLabel = computed(() => {
+  const conv = forwardSelectedExistingConversation.value
+  if (!conv) return '-'
+  const milestone = resolveConversationMilestone(conv)
+  return milestone ? `${milestone.name} (${milestoneStatusLabel(milestone.status)})` : '未设置'
+})
+const forwardSubmitButtonText = computed(() =>
+  forwardForm.value.targetMode === 'EXISTING_SESSION' ? '转发追加' : '转发创建',
+)
+const forwardSubmitDisabled = computed(() => {
+  if (!forwardForm.value.prompt.trim()) return true
+  if (forwardForm.value.targetMode === 'EXISTING_SESSION') {
+    return !forwardForm.value.targetSessionId
+  }
+  return !forwardForm.value.workerId
+})
+
 watch(() => showForwardDialog.value, (visible) => {
   if (!visible && !forwardSubmitting.value) {
     resetForwardDialog()
@@ -4086,16 +4170,6 @@ const directoryConversations = computed(() => groupTasksToConversations(director
 const allConversations = computed(() =>
   selectedDirectoryId.value ? directoryConversations.value : workerConversations.value,
 )
-const forwardConversationPool = computed(() => {
-  const taskMap = new Map<string, ClaudeTask>()
-  for (const task of workerState.tasks.value) {
-    taskMap.set(task.taskId, task)
-  }
-  for (const task of directoryTasks.value) {
-    taskMap.set(task.taskId, task)
-  }
-  return groupTasksToConversations([...taskMap.values()])
-})
 const conversationBySessionId = computed(() => {
   const map = new Map<string, ConversationGroup>()
   for (const conv of allConversations.value) {
@@ -4163,78 +4237,6 @@ function milestonesForDirectory(directoryId?: string): DirectoryMilestone[] {
   if (!directoryId) return []
   return directoryMilestoneMap.value.get(directoryId) || []
 }
-
-const forwardSourcePreview = computed(() => forwardSource.value?.sourceContent?.trim() || '')
-const forwardDialogTitle = computed(() =>
-  forwardForm.value.targetMode === 'EXISTING_SESSION' ? '转发到已有会话' : '转发为新会话',
-)
-const forwardExistingTargets = computed(() => {
-  const sourceSessionId = forwardSource.value?.sourceSessionId
-  if (!sourceSessionId) return []
-  return forwardConversationPool.value
-    .filter((conv) => conv.parentSessionId === sourceSessionId)
-    .sort((a, b) => new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime())
-})
-const forwardSelectedExistingConversation = computed(() =>
-  forwardExistingTargets.value.find((conv) => conv.sessionId === forwardForm.value.targetSessionId) || null,
-)
-const forwardDirectories = computed(() => {
-  if (!forwardForm.value.workerId) return []
-  return workerState.directories.value.filter((dir) => dir.workerId === forwardForm.value.workerId)
-})
-const forwardSelectedDirectory = computed(() =>
-  workerState.directories.value.find((dir) => dir.directoryId === forwardForm.value.directoryId),
-)
-const forwardMilestoneOptions = computed(() => forwardSelectedDirectory.value?.milestones || [])
-const forwardSelectedModelConfig = computed(() =>
-  forwardPlatformModels.value.find((model) => model.id === forwardForm.value.modelConfigId) || null,
-)
-const forwardModelOptions = computed(() => {
-  const backend = forwardSelectedModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
-  const backendModels = ALL_MODELS.filter((model) => model.backend === backend)
-  const allowed = forwardSelectedModelConfig.value?.availableModels
-  if (!allowed || allowed.length === 0) return backendModels
-  return backendModels.filter((model) => allowed.includes(model.value))
-})
-const forwardExistingWorkerName = computed(() => {
-  const workerId = forwardSelectedExistingConversation.value?.latestTask.workerId
-  if (!workerId) return '-'
-  return workerState.workers.value.find((worker) => worker.workerId === workerId)?.name || workerId
-})
-const forwardExistingDirectoryName = computed(() => {
-  const directoryId = forwardSelectedExistingConversation.value?.latestTask.directoryId
-  return directoryId ? dirNameById(directoryId) : '-'
-})
-const forwardExistingProviderLabel = computed(() => {
-  const providerType = forwardSelectedExistingConversation.value?.latestTask.providerType
-  return providerType ? providerTypeLabel(providerType) : '-'
-})
-const forwardExistingModelConfigLabel = computed(() => {
-  const task = forwardSelectedExistingConversation.value?.latestTask
-  if (!task?.modelConfigId) return '-'
-  const modelConfig = forwardPlatformModels.value.find((item) => item.id === task.modelConfigId)
-  return modelConfig ? `${modelConfig.name} (${task.modelConfigId})` : task.modelConfigId
-})
-const forwardExistingModelLabel = computed(() => {
-  const model = forwardSelectedExistingConversation.value?.latestTask.model
-  return model ? shortModel(model) : '-'
-})
-const forwardExistingMilestoneLabel = computed(() => {
-  const conv = forwardSelectedExistingConversation.value
-  if (!conv) return '-'
-  const milestone = resolveConversationMilestone(conv)
-  return milestone ? `${milestone.name} (${milestoneStatusLabel(milestone.status)})` : '未设置'
-})
-const forwardSubmitButtonText = computed(() =>
-  forwardForm.value.targetMode === 'EXISTING_SESSION' ? '转发追加' : '转发创建',
-)
-const forwardSubmitDisabled = computed(() => {
-  if (!forwardForm.value.prompt.trim()) return true
-  if (forwardForm.value.targetMode === 'EXISTING_SESSION') {
-    return !forwardForm.value.targetSessionId
-  }
-  return !forwardForm.value.workerId
-})
 
 const conversationMilestoneMap = computed(() => {
   const cache = new Map<string, DirectoryMilestone>()
