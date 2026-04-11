@@ -1014,154 +1014,6 @@
         </div>
       </div>
       <div class="history-content">
-        <!-- Global attention section: active tasks + awaiting reply -->
-        <div v-if="globalAttentionConvs.length > 0" class="active-sessions-section">
-          <div class="active-header" @click="toggleAttentionCollapsed">
-            <span class="active-title">
-              <span class="expand-icon">{{ prefs.attentionCollapsed ? '▶' : '▼' }}</span>
-              &#9679; 需要关注 ({{ globalAttentionConvs.length }})
-            </span>
-            <el-button size="small" text @click.stop="() => { workerState.loadActiveTasks(); workerState.loadAwaitingReplyTasks() }">&#8635;</el-button>
-          </div>
-          <template v-if="!prefs.attentionCollapsed">
-          <template v-for="item in attentionDisplayList" :key="item.type === 'conv' ? item.conv.sessionId : `wh-${item.workerId}`">
-            <!-- Worker group header -->
-            <div v-if="item.type === 'worker-header'" class="attention-worker-header">
-              <span class="attention-worker-name">{{ item.workerName }}</span>
-              <span class="attention-worker-count">({{ item.count }})</span>
-            </div>
-            <!-- Conversation item -->
-            <div
-              v-else
-              :class="['active-conv-item', { 'conv-pane-focused': item.conv.sessionId === focusedSessionId, 'active-conv-pinned': item.conv.config?.pinned }]"
-              @click="navigateToActiveSession(item.conv)"
-            >
-              <div class="conv-row-1">
-                <span
-                  v-if="item.conv.config?.pinned"
-                  class="conv-pin-icon active"
-                  title="已置顶"
-                  @click.stop="handleTogglePin(item.conv)"
-                >&#128204;</span>
-                <span
-                  v-if="paneSessionMap.has(item.conv.sessionId)"
-                  :class="['sidebar-pane-letter', `pane-letter-${paneSessionMap.get(item.conv.sessionId)!.label.toLowerCase()}`]"
-                >{{ paneSessionMap.get(item.conv.sessionId)!.label }}</span>
-                <el-tag v-if="item.conv.latestTask.directoryName" size="small" type="info" effect="plain" class="active-dir-tag">{{ item.conv.latestTask.directoryName }}</el-tag>
-                <span :class="['conv-interaction-badge', (item.conv.config?.interactionState || 'processing').toLowerCase()]" />
-                <span class="active-status-label">{{ attentionStatusLabel(item.conv) }}</span>
-              </div>
-              <div class="conv-row-1" style="margin-top: 2px;">
-                <span class="conv-prompt" :title="item.conv.config?.customTitle || item.conv.firstPrompt">{{ truncate(item.conv.config?.customTitle || item.conv.firstPrompt, 30) }}</span>
-              </div>
-              <div v-if="item.conv.config?.customTitle" class="conv-row-subtitle">
-                <span class="conv-latest-prompt" :title="item.conv.latestTask.prompt">{{ truncate(item.conv.latestTask.prompt, 30) }}</span>
-              </div>
-              <div class="conv-row-2">
-                <el-tag
-                  v-if="resolveConversationMilestone(item.conv)"
-                  :type="milestoneTagType(resolveConversationMilestone(item.conv)?.status)"
-                  size="small"
-                  class="conv-tag milestone-tag"
-                  :title="resolveConversationMilestone(item.conv)?.docPath || ''"
-                >
-                  {{ resolveConversationMilestone(item.conv)?.name }}
-                </el-tag>
-                <el-tag v-for="tag in (item.conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
-                <span v-if="item.conv.totalCost > 0" class="conv-cost">${{ item.conv.totalCost.toFixed(2) }}</span>
-                <span v-if="item.conv.latestTask.durationMs" class="conv-time">{{ Math.round((item.conv.latestTask.durationMs || 0) / 60000) }}min</span>
-                <span class="conv-time">{{ formatTime(item.conv.latestTask.createdAt) }}</span>
-                <!-- Action buttons -->
-                <span class="conv-actions" @click.stop>
-                  <el-button
-                    v-if="canResumeConversation(item.conv)"
-                    type="primary"
-                    size="small"
-                    text
-                    :disabled="isSessionBusy(item.conv)"
-                    title="继续对话"
-                    @click="handleResumeFromHistory(item.conv.latestTask)"
-                  >
-                    继续
-                  </el-button>
-                  <el-button
-                    v-if="['RUNNING', 'AWAITING_PERMISSION'].includes(item.conv.latestTask.status)"
-                    type="warning"
-                    size="small"
-                    text
-                    title="中止任务"
-                    @click="handleAbortTask(item.conv.latestTask.taskId)"
-                  >
-                    中止
-                  </el-button>
-                  <el-dropdown trigger="click" @click.stop>
-                    <span class="conv-more-trigger" @click.stop>&#8943;</span>
-                    <template #dropdown>
-                      <el-dropdown-menu>
-                        <el-dropdown-item @click="handleTogglePin(item.conv)">
-                          {{ item.conv.config?.pinned ? '取消置顶' : '置顶' }}
-                        </el-dropdown-item>
-                        <el-dropdown-item @click="handleEditTitle(item.conv)">
-                          编辑标题
-                        </el-dropdown-item>
-                        <el-dropdown-item @click="handleEditTags(item.conv)">
-                          标签
-                        </el-dropdown-item>
-                        <el-dropdown-item @click="handleShowDetail(item.conv)">
-                          详情
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="canRepairContext(item.conv)"
-                          @click="handleRepairContext(item.conv)"
-                        >
-                          修复上下文
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.config?.interactionState !== 'ARCHIVED' && item.conv.config?.interactionState !== 'ON_HOLD'"
-                          @click="handleHoldConversation(item.conv)"
-                        >
-                          搁置
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.config?.interactionState === 'ON_HOLD'"
-                          @click="handleUnholdConversation(item.conv)"
-                        >
-                          取消搁置
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.config?.interactionState !== 'ARCHIVED'"
-                          @click="handleArchiveConversation(item.conv)"
-                        >
-                          归档
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.config?.interactionState === 'ARCHIVED'"
-                          @click="handleUnarchiveConversation(item.conv)"
-                        >
-                          取消归档
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.latestTask.status !== 'RUNNING'"
-                          divided
-                          class="delete-dropdown-item"
-                          @click="handleDeleteConversation(item.conv)"
-                        >
-                          删除
-                        </el-dropdown-item>
-                      </el-dropdown-menu>
-                    </template>
-                  </el-dropdown>
-                </span>
-              </div>
-            </div>
-          </template>
-          </template>
-          <div class="active-divider">
-            <span class="active-divider-line" />
-            <span class="active-divider-text">历史会话</span>
-            <span class="active-divider-line" />
-          </div>
-        </div>
         <!-- Conversation list (shared template for directory / worker-level) -->
         <div v-if="selectedDirectoryId && groupedActiveConversations.length > 0" class="conv-list grouped-conv-list">
           <div v-for="group in groupedActiveConversations" :key="group.key" class="milestone-group">
@@ -4048,99 +3900,6 @@ const groupedActiveConversations = computed<MilestoneConversationGroup[]>(() => 
 // Active sessions: group activeTasks into ConversationGroups
 const activeSessionConvs = computed(() => groupTasksToConversations(workerState.activeTasks.value))
 
-// AWAITING_REPLY conversations: global (not filtered by worker), from backend API
-const awaitingReplyConvs = computed(() => {
-  const activeSessionIds = new Set(activeSessionConvs.value.map(c => c.sessionId))
-  // Use the new awaitingReplyTasks from backend API (global, not worker-filtered)
-  const awaitingConvs = groupTasksToConversations(workerState.awaitingReplyTasks.value)
-  // Exclude sessions that are already in activeSessionConvs to avoid duplicates
-  return awaitingConvs.filter(conv => !activeSessionIds.has(conv.sessionId))
-})
-
-// Combined "needs attention" section: pinned + active tasks + awaiting reply (excluding ON_HOLD)
-const globalAttentionConvs = computed(() => {
-  const activeAndAwaiting = [...activeSessionConvs.value, ...awaitingReplyConvs.value]
-    .filter(conv => {
-      // Exclude ON_HOLD sessions from attention (even if they have active tasks)
-      const state = workerState.conversationConfigs.value.get(conv.sessionId)?.interactionState
-      return state !== 'ON_HOLD'
-    })
-  const existingIds = new Set(activeAndAwaiting.map(c => c.sessionId))
-  // Add pinned conversations from history that are not already in active/awaiting
-  const pinnedFromHistory = allConversations.value.filter(
-    c => c.config?.pinned && !existingIds.has(c.sessionId) && c.config?.interactionState !== 'ON_HOLD',
-  )
-  // Pinned first (sorted by pinnedAt desc), then active+awaiting
-  return [...pinnedFromHistory, ...activeAndAwaiting]
-})
-
-// --- Attention list: pinned flat + grouped by worker ---
-
-type AttentionDisplayItem =
-  | { type: 'conv'; conv: ConversationGroup }
-  | { type: 'worker-header'; workerId: string; workerName: string; count: number }
-
-/** Pinned conversations in the attention list (flat, no grouping) */
-const attentionPinnedConvs = computed<ConversationGroup[]>(() => {
-  return globalAttentionConvs.value.filter(c => c.config?.pinned)
-})
-
-/** Non-pinned conversations grouped by workerId, sorted by most recent activity */
-const attentionWorkerGroups = computed(() => {
-  const nonPinned = globalAttentionConvs.value.filter(c => !c.config?.pinned)
-
-  const groupMap = new Map<string, ConversationGroup[]>()
-  for (const conv of nonPinned) {
-    const wid = conv.latestTask.workerId || '__unknown__'
-    const existing = groupMap.get(wid)
-    if (existing) {
-      existing.push(conv)
-    } else {
-      groupMap.set(wid, [conv])
-    }
-  }
-
-  const groups: { workerId: string; workerName: string; conversations: ConversationGroup[]; latestActivity: number }[] = []
-  for (const [wid, convs] of groupMap) {
-    const worker = workerState.workers.value.find(w => w.workerId === wid)
-    const latestActivity = Math.max(...convs.map(c => new Date(c.latestTask.createdAt).getTime()))
-    groups.push({
-      workerId: wid,
-      workerName: worker?.name || '未知',
-      conversations: convs,
-      latestActivity,
-    })
-  }
-
-  groups.sort((a, b) => b.latestActivity - a.latestActivity)
-  return groups
-})
-
-/** Flattened display list: pinned items + (worker-header + conversations)... */
-const attentionDisplayList = computed<AttentionDisplayItem[]>(() => {
-  const items: AttentionDisplayItem[] = []
-
-  // Pinned items first (no group header)
-  for (const conv of attentionPinnedConvs.value) {
-    items.push({ type: 'conv', conv })
-  }
-
-  // Worker groups with headers
-  for (const wg of attentionWorkerGroups.value) {
-    items.push({
-      type: 'worker-header',
-      workerId: wg.workerId,
-      workerName: wg.workerName,
-      count: wg.conversations.length,
-    })
-    for (const conv of wg.conversations) {
-      items.push({ type: 'conv', conv })
-    }
-  }
-
-  return items
-})
-
 // Set of provider session refs that currently have a RUNNING task (for concurrency protection)
 const runningConversationRefs = computed(() => {
   const refs = new Set<string>()
@@ -4204,10 +3963,6 @@ function toggleProjectExpand(projectId: string) {
   } else {
     expandedProjectIds.add(projectId)
   }
-}
-
-function toggleAttentionCollapsed() {
-  prefs.attentionCollapsed = !prefs.attentionCollapsed
 }
 
 // Active tasks polling (fallback) + SSE-driven refresh
@@ -6618,7 +6373,7 @@ async function handleUnarchiveConversation(conv: ConversationGroup) {
 async function handleHoldConversation(conv: ConversationGroup) {
   try {
     await ElMessageBox.confirm(
-      '确认搁置该会话？搁置后不再出现在"需要关注"区域，可通过"已搁置"筛选查看。',
+      '确认搁置该会话？搁置后不再出现在默认筛选中，可通过"已搁置"筛选查看。',
       '搁置会话',
       { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
     )
@@ -6634,7 +6389,7 @@ async function handlePaneHold(sessionId?: string) {
   if (!sessionId) return
   try {
     await ElMessageBox.confirm(
-      '确认搁置该会话？搁置后不再出现在"需要关注"区域，可通过"已搁置"筛选查看。',
+      '确认搁置该会话？搁置后不再出现在默认筛选中，可通过"已搁置"筛选查看。',
       '搁置会话',
       { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
     )
@@ -6682,18 +6437,7 @@ function interactionStateLabel(state: string): string {
   }
 }
 
-function attentionStatusLabel(conv: ConversationGroup): string {
-  // Task-level status takes priority (more specific than interactionState)
-  const status = conv.latestTask.status
-  if (status === 'RUNNING') return '运行中'
-  if (status === 'AWAITING_PERMISSION') return '等待授权'
-  // Terminal task statuses always mean 待回复, regardless of DB interactionState
-  if (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED') return '待回复'
-  // Fallback to interactionState for non-running tasks
-  const state = conv.config?.interactionState
-  if (state === 'AWAITING_REPLY') return '待回复'
-  return interactionStateLabel(state || 'PROCESSING')
-}
+
 
 async function handleResumeFromHistory(task: ClaudeTask) {
   const workerId = task.workerId || selectedWorkerId.value
@@ -8311,101 +8055,6 @@ function handlePopOutTerminal() {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 8px;
-}
-
-/* Active sessions section */
-.active-sessions-section {
-  margin-bottom: 4px;
-}
-
-.active-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.active-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #409eff;
-}
-
-.active-conv-item {
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.15s;
-  border-left: 3px solid #409eff;
-  margin: 2px 0;
-  background: #f0f7ff;
-}
-
-.active-conv-item:hover {
-  background: #e1eeff;
-}
-
-.active-conv-pinned {
-  background: #fdf6ec;
-  border-left: 3px solid #e6a23c;
-}
-
-.active-conv-pinned:hover {
-  background: #faecd8;
-}
-
-.attention-worker-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px 2px;
-  margin-top: 6px;
-}
-
-.attention-worker-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: #606266;
-}
-
-.attention-worker-count {
-  font-size: 11px;
-  color: #909399;
-}
-
-.active-dir-tag {
-  font-size: 11px;
-  padding: 0 4px;
-  height: 18px;
-  line-height: 18px;
-  margin-right: 4px;
-}
-
-.active-status-label {
-  font-size: 12px;
-  color: #409eff;
-  font-weight: 500;
-}
-
-.active-divider {
-  display: flex;
-  align-items: center;
-  margin: 8px 0 4px;
-  gap: 8px;
-}
-
-.active-divider-line {
-  flex: 1;
-  height: 1px;
-  background: #e4e7ed;
-}
-
-.active-divider-text {
-  font-size: 11px;
-  color: #909399;
-  white-space: nowrap;
 }
 
 /* Conversation tags */

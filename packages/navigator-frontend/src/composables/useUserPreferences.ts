@@ -4,8 +4,6 @@ const STORAGE_KEY = 'nav-ui-prefs'
 
 /** All UI preference fields. Add new preferences here as the application grows. */
 export interface UserPreferences {
-  /** Whether the "需要关注" section is collapsed */
-  attentionCollapsed: boolean
   /** Whether the left Workers sidebar is collapsed */
   leftPanelCollapsed: boolean
   /** Whether the right history panel is collapsed */
@@ -13,7 +11,6 @@ export interface UserPreferences {
 }
 
 const DEFAULTS: UserPreferences = {
-  attentionCollapsed: false,
   leftPanelCollapsed: false,
   rightPanelCollapsed: false,
 }
