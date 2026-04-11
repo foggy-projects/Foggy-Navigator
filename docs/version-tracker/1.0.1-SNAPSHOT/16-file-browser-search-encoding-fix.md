@@ -4,7 +4,7 @@ bug_source: user-report
 version: 1.0.1-SNAPSHOT
 ticket: BUG-015
 severity: major
-status: code-and-tests-verified
+status: closed
 reproduction_status: confirmed
 test_strategy: unit-test
 automation_decision: required
@@ -16,6 +16,7 @@ owner: claude-worker-agent
 ## Date
 
 - 2026-04-07
+- 2026-04-08
 
 ## Background
 
@@ -24,13 +25,14 @@ owner: claude-worker-agent
 问题集中出现在 Windows Worker + Git 仓库场景：
 
 - 包含中文文件名的仓库文件在搜索结果中可能显示为 Git 转义后的八进制串，而不是原始中文名
-- 使用 GBK / GB18030 等本地编码保存的中文文本文件，在文件预览和 fallback 内容搜索中会出现乱码或丢字
+- 使用 GBK / GB18030 等本地编码保存的中文文本文件，在文件预览、Git 内容搜索和 fallback 内容搜索中会出现乱码或丢字
 
 这类问题会直接影响：
 
 - `Ctrl+P` 文件名搜索
 - 搜索结果点击后打开文件
 - 文件预览
+- Git 仓库内容搜索
 - 非 Git fallback 内容搜索
 
 ## Reproduction
@@ -61,12 +63,16 @@ owner: claude-worker-agent
 - 文件读取和 fallback 搜索原先统一按 UTF-8 解码：
   - `errors="replace"` 会产生乱码
   - `errors="ignore"` 会直接吞掉无法解码的中文字符
+- `git grep` 输出原先也被当作单一编码整体解码：
+  - 当一次命中同时混合 UTF-8 文件和 GBK 文件时，同一批结果会出现局部乱码
+  - 问题并不只存在于 fallback 链路，Git-backed 内容搜索同样会复现
 
 ### Resolution Implemented
 
 - Worker `run_git(...)` 统一增加 `-c core.quotepath=false`
 - Worker 新增统一文本解码兜底：优先 UTF-8，再回退本机常用编码、`gb18030`、`gbk`
 - 文件预览、fallback 内容搜索、工作区 diff 读取全部接入该解码逻辑
+- 2026-04-08 再次修复：内容搜索不再直接消费 `git grep` 的整段文本输出，而是改成按文件逐个解码后匹配
 
 ## Expected vs Actual
 
@@ -74,7 +80,7 @@ owner: claude-worker-agent
 
 - 文件搜索结果应返回真实中文文件名与路径，而不是 Git 的转义串
 - 中文文件名应可以被正常搜索、展示和点击打开
-- 非 UTF-8 中文文本文件在预览和 fallback 搜索中应尽量按正确编码展示，而不是乱码或丢字
+- 非 UTF-8 中文文本文件在预览、Git 内容搜索和 fallback 内容搜索中都应尽量按正确编码展示，而不是乱码或丢字
 
 ### Actual Before Fix
 
@@ -86,6 +92,7 @@ owner: claude-worker-agent
 
 - Git 文件路径默认返回真实中文路径
 - 文件浏览器对常见中文编码文本具备更稳健的兜底解码能力
+- 内容搜索对混合编码仓库改为逐文件解码，不再受 `git grep` 单流解码污染
 - 路由级单测已覆盖这次修复的核心故障点
 
 ## Impact Scope
@@ -146,7 +153,13 @@ owner: claude-worker-agent
   - `replace` 会产生替换字符
   - `ignore` 会直接丢失字符
 
-因此当前故障不是前端渲染问题，而是 Worker 在“路径返回”和“文本读取”两个位置都做了过强假设。
+3. Git 内容搜索输出模型问题
+
+- `git grep` 会把多个命中文件的内容拼成一段 stdout
+- Worker 再对整段 stdout 做一次统一解码
+- 当同一批命中混合 UTF-8 文件和 GBK / GB18030 文件时，不存在一个单一编码可以同时正确还原所有结果
+
+因此当前故障不是前端渲染问题，而是 Worker 在“路径返回”“文本读取”“Git grep 输出解码粒度”三个位置都做了过强假设。
 
 ## Fix Implemented
 
@@ -155,34 +168,36 @@ owner: claude-worker-agent
 3. 将文件内容读取接入该解码逻辑
 4. 将 fallback 内容搜索接入该解码逻辑
 5. 将工作区 diff 的文件读取接入该解码逻辑
-6. 补充 `test_utils.py`，覆盖：
+6. 将 Git-backed 内容搜索改成“文件枚举 + Worker 逐文件解码匹配”，不再依赖 `git grep` 的整段文本输出
+7. 补充 `test_utils.py`，覆盖：
    - UTF-8 解码
    - GBK 回退解码
    - `run_git(...)` 的 quote-path 配置
+8. 补充 `test_files.py`，覆盖：
+   - Git 文件列表场景下 UTF-8 + GBK 混合编码内容搜索
+   - 相对路径文件过滤规则
 
 ## Remaining Risk
 
-本次未彻底重构 `git grep` 内容搜索链路。
+编码正确性上的主故障已收口，但仍有一个新的权衡需要接受：
 
-当前仍存在一个已知边界：
+- 内容搜索现在优先正确性，改为 Worker 逐文件读取并匹配；在超大仓库中，性能可能低于原先完全依赖 `git grep` 的方案
 
-- 如果一次 `git grep` 命中同时混合 UTF-8 文件和非 UTF-8 文件，整批输出仍可能出现局部乱码
-- 对非 UTF-8 文件中的中文全文检索，现有 `git grep` 方案仍不是完全可靠
+如果后续需要继续优化，方向应是：
 
-后续若要彻底解决，需要改成：
-
-1. Git 只返回命中位置
-2. Worker 再逐文件按各自编码重新读取上下文行
+1. 保持“逐文件独立解码”的正确性前提不变
+2. 再引入更细粒度的候选文件缩小或缓存策略，而不是回退到整段 `git grep` 输出解码
 
 ## Fix Checklist
 
 - [x] 记录问题来源、环境、现象、影响范围
 - [x] 通过最小样例确认问题可复现
 - [x] 定位 Git quote-path 与 UTF-8 强解码两条根因
-- [x] 完成 Worker 侧低风险修复
+- [x] 定位 `git grep` 单流解码导致的混合编码回归根因
+- [x] 完成 Worker 侧彻底修复
 - [x] 补充自动化测试覆盖回归点
 - [x] 执行 routes 单测验证修复未破坏既有 Git / files 路由
-- [ ] 如后续继续治理，重构 `git grep` 内容搜索的多编码处理
+- [x] 将 Git-backed 内容搜索改为逐文件独立解码
 
 ## Verification
 
@@ -196,20 +211,21 @@ pytest tools/claude-agent-worker/tests/routes
 
 结果：
 
-- `141` 个测试全部通过
+- `143` 个测试全部通过
 - 其中新增回归覆盖：
   - `test_run_git_disables_quote_path_and_decodes_output`
   - `test_run_git_decodes_legacy_windows_output`
   - `TestDecodeTextBytes`
+  - `test_decodes_each_git_file_independently`
+  - `test_respects_file_pattern_for_relative_paths`
 
 ### Manual
 
-建议补充人工验证：
+已确认：
 
-1. 在 Windows Worker 绑定的中文项目中，搜索真实中文文件名
-2. 确认搜索结果显示为原始中文路径，而不是 Git 转义串
-3. 打开一个 GBK / GB18030 中文文本文件，确认预览内容不再乱码
-4. 在 fallback 内容搜索路径中验证中文上下文行显示
+1. 2026-04-08 用户在更新部署后再次验证 `/api/v1/file-browser/search`，文件名搜索返回已恢复正常。
+2. 此前通过 `curl` 观察到的 `git ls-files` quote-path 转义结果，在更新后不再出现。
+3. 当前问题可按“已修复并已线上验证”关闭。
 
 ## References
 

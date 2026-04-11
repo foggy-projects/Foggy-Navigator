@@ -89,6 +89,26 @@ describe('resolveChatLinkTarget', () => {
     })
   })
 
+  it('extracts trailing line numbers from absolute workspace paths', async () => {
+    const searchFiles = vi.fn()
+
+    const result = await resolveChatLinkTarget({
+      href: 'D:/foggy-projects/Foggy-Navigator-wt-qd-win11-dev/docs/version-tracker/v3.0.0/P0-Step6-平台端页面联调-承接任务.md:77',
+      text: '',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      kind: 'open',
+      url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=docs%2Fversion-tracker%2Fv3.0.0%2FP0-Step6-%E5%B9%B3%E5%8F%B0%E7%AB%AF%E9%A1%B5%E9%9D%A2%E8%81%94%E8%B0%83-%E6%89%BF%E6%8E%A5%E4%BB%BB%E5%8A%A1.md&line=77`,
+    })
+  })
+
   it('normalizes leading-slash absolute workspace paths without falling back to search', async () => {
     const searchFiles = vi.fn()
 
@@ -126,6 +146,28 @@ describe('resolveChatLinkTarget', () => {
     expect(result).toEqual({
       kind: 'open',
       url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=docs%2Fversion-tracker%2F1.0.0-SNAPSHOT%2F12-acceptance-signoff.md`,
+    })
+  })
+
+  it('extracts trailing line numbers before searching relative workspace links', async () => {
+    const searchFiles = vi.fn().mockResolvedValue(
+      makeSearchResponse(['docs/version-tracker/v3.0.0/P0-Step6-平台端页面联调-承接任务.md']),
+    )
+
+    const result = await resolveChatLinkTarget({
+      href: './docs/version-tracker/v3.0.0/P0-Step6-平台端页面联调-承接任务.md:77',
+      text: 'Step6-承接任务',
+      origin,
+      directoryId,
+      workerId,
+      directoryRoot,
+      searchFiles,
+    })
+
+    expect(searchFiles).toHaveBeenCalledWith(directoryId, 'P0-Step6-平台端页面联调-承接任务.md', 80)
+    expect(result).toEqual({
+      kind: 'open',
+      url: `${origin}/#/files?directoryId=${directoryId}&workerId=${workerId}&filePath=docs%2Fversion-tracker%2Fv3.0.0%2FP0-Step6-%E5%B9%B3%E5%8F%B0%E7%AB%AF%E9%A1%B5%E9%9D%A2%E8%81%94%E8%B0%83-%E6%89%BF%E6%8E%A5%E4%BB%BB%E5%8A%A1.md&line=77`,
     })
   })
 

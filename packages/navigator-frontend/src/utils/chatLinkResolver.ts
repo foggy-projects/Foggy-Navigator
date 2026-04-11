@@ -1,4 +1,5 @@
 import type { FileSearchResponse, FileSearchResult } from '@/api/fileBrowser'
+import { parseFileReference } from '@/utils/fileReference'
 
 const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/
 const URL_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/
@@ -42,11 +43,13 @@ export async function resolveChatLinkTarget(options: ResolveChatLinkOptions): Pr
       : { kind: 'warn', message: '未识别到可打开的链接' }
   }
 
-  if (isLocalFilePath(rawCandidate)) {
-    return resolveAbsoluteWorkspacePath(rawCandidate, options)
+  const fileReference = parseFileReference(rawCandidate)
+
+  if (isLocalFilePath(fileReference.path)) {
+    return resolveAbsoluteWorkspacePath(fileReference, options)
   }
 
-  const searchTarget = normalizeRelativeSearchTarget(rawCandidate)
+  const searchTarget = normalizeRelativeSearchTarget(fileReference.path)
   if (!searchTarget) {
     return { kind: 'warn', message: '未识别到工作区内文件路径' }
   }
@@ -62,7 +65,13 @@ export async function resolveChatLinkTarget(options: ResolveChatLinkOptions): Pr
   if (match.kind === 'match') {
     return {
       kind: 'open',
-      url: buildFileBrowserUrl(options.origin, options.directoryId, options.workerId, match.relativePath),
+      url: buildFileBrowserUrl(
+        options.origin,
+        options.directoryId,
+        options.workerId,
+        match.relativePath,
+        fileReference.line,
+      ),
     }
   }
 
@@ -92,10 +101,10 @@ export function isLocalFilePath(path: string): boolean {
 }
 
 function resolveAbsoluteWorkspacePath(
-  rawPath: string,
+  fileReference: ReturnType<typeof parseFileReference>,
   options: Pick<ResolveChatLinkOptions, 'origin' | 'directoryId' | 'workerId' | 'directoryRoot'>,
 ): ChatLinkResolution {
-  const normalizedHref = normalizeComparablePath(rawPath)
+  const normalizedHref = normalizeComparablePath(fileReference.path)
   const normalizedRoot = normalizeComparablePath(options.directoryRoot)
 
   if (normalizedHref === normalizedRoot) {
@@ -110,7 +119,7 @@ function resolveAbsoluteWorkspacePath(
     return { kind: 'warn', message: '该链接不在当前工作目录下，无法自动定位' }
   }
 
-  const relativePath = rawPath
+  const relativePath = fileReference.path
     .replace(/\\/g, '/')
     .replace(/\/+$/, '')
     .slice(normalizedRoot.length)
@@ -125,7 +134,13 @@ function resolveAbsoluteWorkspacePath(
 
   return {
     kind: 'open',
-    url: buildFileBrowserUrl(options.origin, options.directoryId, options.workerId, relativePath),
+    url: buildFileBrowserUrl(
+      options.origin,
+      options.directoryId,
+      options.workerId,
+      relativePath,
+      fileReference.line,
+    ),
   }
 }
 
@@ -234,10 +249,12 @@ function buildFileBrowserUrl(
   directoryId: string,
   workerId?: string | null,
   relativePath?: string,
+  line?: number,
 ): string {
   const params = new URLSearchParams({ directoryId })
   if (workerId) params.set('workerId', workerId)
   if (relativePath) params.set('filePath', relativePath.replace(/\\/g, '/'))
+  if (line && line > 0) params.set('line', String(line))
   return `${origin}/#/files?${params.toString()}`
 }
 

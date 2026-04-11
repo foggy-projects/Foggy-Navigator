@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 from fastapi import HTTPException
 
+import agent_worker.routes.files as files_routes
 from agent_worker.routes.files import (
     _build_pathspec_excludes,
     _detect_language,
@@ -330,3 +332,69 @@ class TestParseGitGrepOutput:
         output = "a.py:1:first\n--\na.py:10:second"
         result = _parse_git_grep_output("query", output, max_results=50, context_lines=0)
         assert result.total_matches == 2
+
+
+# ---------------------------------------------------------------------------
+# search_content
+# ---------------------------------------------------------------------------
+
+class TestSearchContentEncodingRegression:
+    """Regression coverage for mixed-encoding content search."""
+
+    @pytest.mark.asyncio
+    async def test_decodes_each_git_file_independently(self, tmp_path, monkeypatch):
+        utf8_file = tmp_path / "utf8-file.txt"
+        gbk_file = tmp_path / "gbk文件.txt"
+        utf8_file.write_text("全球有哪些国家在“猛推”HPV疫苗？\n第二行\n", encoding="utf-8")
+        gbk_file.write_bytes("全球有哪些国家在“猛推”HPV疫苗？\n第二行\n".encode("gbk"))
+
+        async def fake_run_git(cwd: str, *args: str) -> tuple[int, str]:
+            assert Path(cwd) == tmp_path
+            assert args[:4] == ("ls-files", "--cached", "--others", "--exclude-standard")
+            return 0, "gbk文件.txt\nutf8-file.txt"
+
+        monkeypatch.setattr(files_routes, "validate_path", lambda path: path)
+        monkeypatch.setattr(files_routes, "run_git", fake_run_git)
+
+        result = await files_routes.search_content(
+            path=str(tmp_path),
+            query="HPV",
+            max_results=10,
+            context_lines=1,
+            case_sensitive=False,
+            file_pattern=None,
+        )
+
+        assert result.total_matches == 2
+        assert result.total_files == 2
+        assert [match.file for match in result.matches] == ["gbk文件.txt", "utf8-file.txt"]
+        assert result.matches[0].line_content == "全球有哪些国家在“猛推”HPV疫苗？"
+        assert result.matches[0].context_after == ["第二行"]
+        assert result.matches[1].line_content == "全球有哪些国家在“猛推”HPV疫苗？"
+
+    @pytest.mark.asyncio
+    async def test_respects_file_pattern_for_relative_paths(self, tmp_path, monkeypatch):
+        java_file = tmp_path / "src" / "Main.java"
+        py_file = tmp_path / "scripts" / "task.py"
+        java_file.parent.mkdir()
+        py_file.parent.mkdir()
+        java_file.write_text("String value = \"HPV\";\n", encoding="utf-8")
+        py_file.write_text("HPV = 'value'\n", encoding="utf-8")
+
+        async def fake_run_git(_cwd: str, *_args: str) -> tuple[int, str]:
+            return 0, "src/Main.java\nscripts/task.py"
+
+        monkeypatch.setattr(files_routes, "validate_path", lambda path: path)
+        monkeypatch.setattr(files_routes, "run_git", fake_run_git)
+
+        result = await files_routes.search_content(
+            path=str(tmp_path),
+            query="HPV",
+            max_results=10,
+            context_lines=0,
+            case_sensitive=False,
+            file_pattern="src/*.java",
+        )
+
+        assert result.total_matches == 1
+        assert result.matches[0].file == "src/Main.java"

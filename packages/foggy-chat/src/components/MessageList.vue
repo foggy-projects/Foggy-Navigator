@@ -77,7 +77,9 @@
               v-if="isBubble(item.msg)"
               :message="item.msg"
               :rewindable="isRewindable(item.msg)"
+              :forwardable="isForwardable(item.msg)"
               @rewind="handleRewind(item.msg)"
+              @forward="emit('forward', item.msg)"
               @link-click="(payload) => emit('link-click', payload)"
             />
             <ToolCallBlock
@@ -210,6 +212,7 @@ const emit = defineEmits<{
   (e: 'reconnect', taskId: string): void
   (e: 'loadMore'): void
   (e: 'loadAll', limit?: number): void
+  (e: 'forward', message: ChatMessage): void
   (e: 'link-click', payload: { href: string; text: string }): void
 }>()
 
@@ -224,6 +227,13 @@ const userScrolledUp = ref(false)
 
 function isBubble(msg: ChatMessage) {
   return msg.type === AipMessageType.TEXT_COMPLETE || msg.type === AipMessageType.TEXT_CHUNK
+}
+
+function isForwardable(msg: ChatMessage) {
+  return msg.sender === 'assistant'
+    && msg.type === AipMessageType.TEXT_COMPLETE
+    && !!msg.id
+    && !!msg.content?.trim()
 }
 
 function isToolCall(msg: ChatMessage) {

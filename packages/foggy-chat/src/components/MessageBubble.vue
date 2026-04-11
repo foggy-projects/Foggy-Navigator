@@ -28,6 +28,12 @@
         {{ copied ? '&#10003; 已复制' : '&#128203; 复制' }}
       </span>
       <span
+        v-if="forwardable"
+        class="action-btn"
+        title="转发为新会话"
+        @click.stop="emit('forward')"
+      >&#10150; 转发</span>
+      <span
         v-if="rewindable"
         class="action-btn"
         title="回退到此"
@@ -47,10 +53,12 @@ import { renderMarkdown } from '../utils/markdownRenderer'
 const props = defineProps<{
   message: ChatMessage
   rewindable?: boolean
+  forwardable?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'rewind'): void
+  (e: 'forward'): void
   (e: 'link-click', payload: { href: string; text: string }): void
 }>()
 

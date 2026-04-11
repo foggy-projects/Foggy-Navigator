@@ -18,6 +18,7 @@ public class DispatchTaskDTO {
     private String taskId;
     private String workerTaskId;
     private String sessionId;
+    private String parentSessionId;
     private String workerId;
     private String userId;
     private String agentId;

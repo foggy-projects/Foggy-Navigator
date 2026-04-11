@@ -341,6 +341,99 @@ def _skip_dirs_from_patterns(patterns: list[str]) -> set[str]:
     return dirs
 
 
+def _walk_searchable_files(base_dir: str, excludes: list[str]) -> list[str]:
+    """Enumerate searchable files via ``os.walk`` while applying exclude rules."""
+    all_files: list[str] = []
+    skip_dirs = _skip_dirs_from_patterns(excludes)
+    for root, dirs, files in os.walk(base_dir):
+        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
+        for fname in files:
+            if _should_skip_file(fname, excludes):
+                continue
+            try:
+                rel = os.path.relpath(os.path.join(root, fname), base_dir).replace("\\", "/")
+            except ValueError:
+                # On Windows, reserved device names (nul, con, prn, aux …)
+                # resolve to a different mount (\\.\nul) causing relpath to
+                # raise ValueError.  Skip these entries silently.
+                continue
+            all_files.append(rel)
+            if len(all_files) >= 10000:
+                return all_files
+    return all_files
+
+
+async def _collect_searchable_files(base_dir: str, excludes: list[str]) -> list[str]:
+    """Enumerate searchable files, preferring git-backed discovery when available."""
+    git_args = ["ls-files", "--cached", "--others", "--exclude-standard", "--"]
+    git_args.extend(_build_pathspec_excludes(excludes))
+    rc, output = await run_git(base_dir, *git_args)
+    if rc == 0:
+        return [line for line in output.splitlines() if line]
+    return _walk_searchable_files(base_dir, excludes)
+
+
+def _matches_file_pattern(rel_path: str, file_pattern: str | None) -> bool:
+    """Match a file against either basename or relative-path glob filters."""
+    if not file_pattern:
+        return True
+    filename = os.path.basename(rel_path)
+    return fnmatch.fnmatch(filename, file_pattern) or fnmatch.fnmatch(rel_path, file_pattern)
+
+
+def _search_content_in_files(
+    base_dir: str, relative_paths: list[str], query: str, max_results: int, context_lines: int,
+    case_sensitive: bool, file_pattern: str | None = None,
+) -> ContentSearchResponse:
+    """Search file contents using per-file decoding to avoid mixed-encoding corruption."""
+    matches: list[ContentMatch] = []
+    files_seen: set[str] = set()
+    q = query if case_sensitive else query.lower()
+
+    for rel_path in relative_paths:
+        if not _matches_file_pattern(rel_path, file_pattern):
+            continue
+        abs_path = os.path.join(base_dir, rel_path.replace("/", os.sep))
+        try:
+            with open(abs_path, "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            continue
+
+        if _is_binary(raw):
+            continue
+
+        text = decode_text_bytes(raw)
+        lines = text.splitlines(keepends=True)
+        for i, line in enumerate(lines):
+            cmp_line = line if case_sensitive else line.lower()
+            if q in cmp_line:
+                files_seen.add(rel_path)
+                before = [l.rstrip("\n\r") for l in lines[max(0, i - context_lines):i]]
+                after = [l.rstrip("\n\r") for l in lines[i + 1:i + 1 + context_lines]]
+                matches.append(ContentMatch(
+                    file=rel_path,
+                    line_number=i + 1,
+                    line_content=line.rstrip("\n\r"),
+                    context_before=before,
+                    context_after=after,
+                ))
+                if len(matches) >= max_results:
+                    return ContentSearchResponse(
+                        query=query,
+                        matches=matches,
+                        total_matches=len(matches),
+                        total_files=len(files_seen),
+                    )
+
+    return ContentSearchResponse(
+        query=query,
+        matches=matches,
+        total_matches=len(matches),
+        total_files=len(files_seen),
+    )
+
+
 @router.get("/files/search", response_model=FileSearchResponse)
 async def search_files(
     path: str = Query(..., description="Absolute path to a git repo (or directory)"),
@@ -367,31 +460,7 @@ async def search_files(
     # ------------------------------------------------------------------
     # Collect file paths (git ls-files or os.walk fallback)
     # ------------------------------------------------------------------
-    git_args = ["ls-files", "--cached", "--others", "--exclude-standard", "--"]
-    git_args.extend(_build_pathspec_excludes(excludes))
-    rc, output = await run_git(resolved, *git_args)
-    if rc == 0 and output:
-        all_files = output.splitlines()
-    else:
-        # Fallback: os.walk (limited to 10k files to avoid hanging)
-        all_files = []
-        for root, dirs, files in os.walk(resolved):
-            dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
-            for fname in files:
-                if _should_skip_file(fname, excludes):
-                    continue
-                try:
-                    rel = os.path.relpath(os.path.join(root, fname), resolved).replace("\\", "/")
-                except ValueError:
-                    # On Windows, reserved device names (nul, con, prn, aux …)
-                    # resolve to a different mount (\\.\nul) causing relpath to
-                    # raise ValueError.  Skip these entries silently.
-                    continue
-                all_files.append(rel)
-                if len(all_files) >= 10000:
-                    break
-            if len(all_files) >= 10000:
-                break
+    all_files = await _collect_searchable_files(resolved, excludes)
 
     # ------------------------------------------------------------------
     # Collect directory paths via os.walk (git does not track dirs)
@@ -472,7 +541,7 @@ async def search_content(
     case_sensitive: bool = Query(False),
     file_pattern: str | None = Query(None, description="Glob pattern to filter files, e.g. '*.java'"),
 ) -> ContentSearchResponse:
-    """Full-text search in file contents. Uses ``git grep`` in git repos, falls back to Python."""
+    """Full-text search in file contents using per-file decoding."""
     resolved = validate_path(path)
 
     if not os.path.isdir(resolved):
@@ -484,28 +553,9 @@ async def search_content(
     # Normalize file_pattern
     fp = file_pattern.strip() if file_pattern and file_pattern.strip() else None
 
-    # Try git grep
     excludes = _get_exclude_patterns(resolved)
-    git_args = ["grep", "-n", "--no-color", "-F", f"-C{context_lines}"]
-    if not case_sensitive:
-        git_args.append("-i")
-    git_args.append("--")
-    git_args.append(query)
-    if fp:
-        git_args.append(fp)
-    git_args.extend(_build_pathspec_excludes(excludes))
-
-    rc, output = await run_git(resolved, *git_args)
-
-    if rc not in (0, 1):
-        # rc==1 means no matches in git grep, which is fine
-        # Non-git repo or other error — fallback
-        return _fallback_content_search(resolved, query, max_results, context_lines, case_sensitive, fp)
-
-    if rc == 1 or not output:
-        return ContentSearchResponse(query=query, matches=[], total_matches=0, total_files=0)
-
-    return _parse_git_grep_output(query, output, max_results, context_lines)
+    searchable_files = await _collect_searchable_files(resolved, excludes)
+    return _search_content_in_files(resolved, searchable_files, query, max_results, context_lines, case_sensitive, fp)
 
 
 def _parse_git_grep_output(
@@ -602,55 +652,10 @@ def _fallback_content_search(
     file_pattern: str | None = None,
 ) -> ContentSearchResponse:
     """Pure-Python fallback for non-git repos."""
-    matches: list[ContentMatch] = []
-    files_seen: set[str] = set()
-    q = query if case_sensitive else query.lower()
     excludes = _get_exclude_patterns(base_dir)
-    skip_dirs = _skip_dirs_from_patterns(excludes)
-
-    for root, dirs, files in os.walk(base_dir):
-        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
-        for fname in files:
-            if _should_skip_file(fname, excludes):
-                continue
-            if file_pattern and not fnmatch.fnmatch(fname, file_pattern):
-                continue
-            abs_path = os.path.join(root, fname)
-            try:
-                rel_path = os.path.relpath(abs_path, base_dir).replace("\\", "/")
-            except ValueError:
-                # Windows reserved device names (nul, con, …) → skip
-                continue
-
-            try:
-                with open(abs_path, "rb") as fh:
-                    text = decode_text_bytes(fh.read())
-                    lines = text.splitlines(keepends=True)
-            except OSError:
-                continue
-
-            for i, line in enumerate(lines):
-                cmp_line = line if case_sensitive else line.lower()
-                if q in cmp_line:
-                    files_seen.add(rel_path)
-                    before = [l.rstrip("\n\r") for l in lines[max(0, i - context_lines):i]]
-                    after = [l.rstrip("\n\r") for l in lines[i + 1:i + 1 + context_lines]]
-                    matches.append(ContentMatch(
-                        file=rel_path,
-                        line_number=i + 1,
-                        line_content=line.rstrip("\n\r"),
-                        context_before=before,
-                        context_after=after,
-                    ))
-                    if len(matches) >= max_results:
-                        return ContentSearchResponse(
-                            query=query, matches=matches,
-                            total_matches=len(matches), total_files=len(files_seen),
-                        )
-
-    return ContentSearchResponse(
-        query=query, matches=matches,
-        total_matches=len(matches), total_files=len(files_seen),
+    searchable_files = _walk_searchable_files(base_dir, excludes)
+    return _search_content_in_files(
+        base_dir, searchable_files, query, max_results, context_lines, case_sensitive, file_pattern,
     )
 
 
