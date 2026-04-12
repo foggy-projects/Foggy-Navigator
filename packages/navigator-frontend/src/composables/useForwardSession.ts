@@ -3,6 +3,7 @@ import { listModelConfigs } from '@/api/platform'
 import type { ForwardTargetMode } from '@/api/unifiedTask'
 import type { ClaudeTask, LlmModelConfig, DirectoryMilestone } from '@/types'
 import type { useClaudeWorker } from './useClaudeWorker'
+import { useAttachments, toImagesJson } from './useAttachments'
 
 // ── Types ──
 
@@ -76,12 +77,24 @@ export function useForwardSession(deps: ForwardSessionDeps) {
   const forwardForm = ref(defaultForwardForm())
   let loadForwardModelConfigSeq = 0
 
+  // --- Attachments (images + files) ---
+  const {
+    attachments: forwardAttachments,
+    addFiles: forwardAddFiles,
+    removeAttachment: forwardRemoveAttachment,
+    clearAttachments: forwardClearAttachments,
+    handlePaste: forwardHandlePaste,
+    handleDrop: forwardHandleDrop,
+    handleDragOver: forwardHandleDragOver,
+  } = useAttachments()
+
   // --- Functions ---
 
   function resetForwardDialog() {
     forwardSource.value = null
     forwardPlatformModels.value = []
     forwardForm.value = defaultForwardForm()
+    forwardClearAttachments()
   }
 
   async function loadForwardModelConfigs(workerId: string, preferredId?: string) {
@@ -186,6 +199,7 @@ export function useForwardSession(deps: ForwardSessionDeps) {
     try {
       const sourceSessionId = forwardSource.value.sourceSessionId
       const targetMode = forwardForm.value.targetMode
+      const imagesJson = toImagesJson(forwardAttachments.value)
       const result = await workerState.forwardSession({
         sourceSessionId,
         sourceMessageId: forwardSource.value.sourceMessageId,
@@ -203,6 +217,7 @@ export function useForwardSession(deps: ForwardSessionDeps) {
         milestoneId: targetMode === 'NEW_SESSION' && forwardForm.value.directoryId
           ? (forwardForm.value.milestoneId || undefined)
           : undefined,
+        images: imagesJson,
       })
 
       showForwardDialog.value = false
@@ -456,5 +471,13 @@ export function useForwardSession(deps: ForwardSessionDeps) {
     submitForward,
     resetForwardDialog,
     forwardConversationOptionLabel,
+    // Attachments
+    forwardAttachments,
+    forwardAddFiles,
+    forwardRemoveAttachment,
+    forwardClearAttachments,
+    forwardHandlePaste,
+    forwardHandleDrop,
+    forwardHandleDragOver,
   }
 }

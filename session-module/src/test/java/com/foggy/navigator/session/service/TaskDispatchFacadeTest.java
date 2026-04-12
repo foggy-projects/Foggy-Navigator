@@ -525,6 +525,33 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void listActiveTasks_allowsNullDirectoryId() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(facade, "workingDirectoryRepository", workingDirectoryRepository);
+
+        SessionTaskEntity task = sessionTask(
+                "task-claude-1", "session-claude-1", "claude-worker", "worker-1", null,
+                "RUNNING", LocalDateTime.of(2026, 3, 24, 21, 0), "{\"claudeSessionId\":\"claude-session-1\"}"
+        );
+
+        when(sessionTaskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
+                "user-1", List.of("RUNNING", "AWAITING_PERMISSION")))
+                .thenReturn(List.of(task));
+        when(sessionRepository.findAllById(List.of("session-claude-1")))
+                .thenReturn(List.of(
+                        sessionEntity("session-claude-1", "user-1", "PROCESSING",
+                                LocalDateTime.of(2026, 3, 24, 21, 5))
+                ));
+
+        List<DispatchTaskDTO> tasks = facade.listActiveTasks("user-1");
+
+        assertEquals(1, tasks.size());
+        assertNull(tasks.get(0).getDirectoryId());
+        assertNull(tasks.get(0).getDirectoryName());
+        assertEquals("claude-session-1", tasks.get(0).getClaudeSessionId());
+    }
+
+    @Test
     void searchSessions_prefersUnifiedSessionStoreWhenAvailable() {
         ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
 

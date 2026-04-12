@@ -566,7 +566,11 @@ public class WorkerStreamRelay {
                             .put("elapsedSeconds", data.getOrDefault("elapsed_seconds", 0))
                             .put("timeoutSeconds", data.getOrDefault("timeout_seconds", 600)));
                 } else {
-                    publishBuilt(mb.sessionStart("Task started")
+                    String normalizedSubtype = (subtype == null || subtype.isBlank()) ? "system" : subtype;
+                    String content = (event.getContent() == null || event.getContent().isBlank())
+                            ? "Worker status updated"
+                            : event.getContent();
+                    publishBuilt(mb.stateSync(content, normalizedSubtype)
                             .put("claudeSessionId", nullSafe(event.getSessionId())));
                 }
             }

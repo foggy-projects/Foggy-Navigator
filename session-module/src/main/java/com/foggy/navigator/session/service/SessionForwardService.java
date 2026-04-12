@@ -111,6 +111,7 @@ public class SessionForwardService {
                 .maxTurns(request.getMaxTurns())
                 .agentTeamsConfigId(request.getAgentTeamsConfigId())
                 .agentTeamsJson(request.getAgentTeamsJson())
+                .images(parseImagesList(request.getImages()))
                 .build();
 
         AgentResolveContext context = buildContext(userId, tenantId, targetSessionId);
@@ -168,6 +169,7 @@ public class SessionForwardService {
                 .prompt(prompt)
                 .model(firstNonBlank(latestTask.getModel(), targetSession.getLatestModel()))
                 .modelConfigId(blankToNull(latestTask.getModelConfigId()))
+                .images(parseImagesList(request.getImages()))
                 .build();
 
         AgentResolveContext context = buildContext(userId, tenantId, targetSession.getId());
@@ -423,5 +425,18 @@ public class SessionForwardService {
 
     private boolean isBlank(String value) {
         return blankToNull(value) == null;
+    }
+
+    /**
+     * Parse images string from forward request into List&lt;String&gt; for TaskDispatchRequest.
+     * The frontend sends a single JSON string (e.g. '[{"name":...,"data":...,"mime_type":...}]').
+     * Wrap it as a single-element list, matching the normalizeTaskForm convention.
+     */
+    private List<String> parseImagesList(String images) {
+        String normalized = blankToNull(images);
+        if (normalized == null) {
+            return null;
+        }
+        return List.of(normalized);
     }
 }

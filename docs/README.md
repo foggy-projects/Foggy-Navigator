@@ -11,6 +11,8 @@
 | [功能架构说明](./02-modules/functional-architecture.md) | 当前一级功能域与功能总图 | 已新增 |
 | [文档状态清单](./documentation-status.md) | 区分当前有效、部分有效与历史参考文档 | 已新增 |
 | [术语表](./terminology-glossary.md) | 统一 Worker、会话、任务、A2A、Coding Agent 等术语 | 已新增 |
+| [PC Workers 操作与体验检查清单](./test-cases/pc-workers-experience-checklist.md) | 桌面端 Workers 页面操作手册、体验清单与 Playwright 执行基线 | 已新增 |
+| [PC Workers Playwright 报告（2026-04-11）](./test-reports/pc-workers-playwright-report-2026-04-11.md) | 按 PC Workers 清单执行的首轮真实浏览器验证报告 | 已新增 |
 | [Agent 框架需求](./agent-framework-requirements.md) | 公共 Agent 框架接口与实现要求 | 已完成 |
 | [Agent 框架指南](./agent-framework-guide.md) | 框架使用指南 | 已完成 |
 | [导师 Agent 设计](./tutor-agent-design.md) | Tutor Agent 详细设计 | 已完成 |

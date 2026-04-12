@@ -149,6 +149,20 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     updatedAt: '2026-02-16T00:01:00Z',
   }
 
+  const mockRunningTask: ClaudeTask = {
+    taskId: 'task-running-1',
+    sessionId: 'session-running-1',
+    workerId: 'worker-1',
+    directoryId: 'dir-1',
+    prompt: 'build feature',
+    cwd: '/test/path',
+    status: 'RUNNING',
+    claudeSessionId: 'claude-session-running',
+    source: 'PLATFORM',
+    createdAt: '2026-02-16T00:02:00Z',
+    updatedAt: '2026-02-16T00:02:00Z',
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -283,6 +297,78 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       // Verify: directoryTasks should include resumed task
       expect(vm.directoryTasks).toHaveLength(2)
       expect(vm.directoryTasks[0].taskId).toBe('task-2')
+    })
+  })
+
+  describe('History sync regression', () => {
+    it('should insert a newly created directory session into history immediately', async () => {
+      const mockNewTask: ClaudeTask = {
+        taskId: 'task-new-1',
+        sessionId: 'session-new-1',
+        workerId: 'worker-1',
+        directoryId: 'dir-1',
+        prompt: 'new task',
+        cwd: '/test/path',
+        status: 'RUNNING',
+        claudeSessionId: 'claude-session-new',
+        createdAt: '2026-02-16T00:03:00Z',
+        updatedAt: '2026-02-16T00:03:00Z',
+      }
+      vi.mocked(unifiedTaskApi.createTaskUnified).mockResolvedValue(mockNewTask as any)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectDirectory('worker-1', 'dir-1')
+      await flushPromises()
+
+      vm.taskForm.prompt = 'new task'
+      await vm.handleCreateTask()
+      await flushPromises()
+
+      expect(vm.directoryTasks[0].taskId).toBe('task-new-1')
+      expect(vm.directoryTasks[0].status).toBe('RUNNING')
+    })
+
+    it('should keep history badge/state aligned with live task status for directory sessions', async () => {
+      vi.mocked(unifiedTaskApi.listTasksByDirectoryPagedUnified).mockResolvedValue({
+        content: [mockRunningTask],
+        totalSessions: 1,
+        page: 0,
+        size: 20,
+      } as any)
+      vi.mocked(claudeWorkerApi.listConversationConfigs).mockResolvedValue([
+        {
+          sessionId: 'session-running-1',
+          pinned: false,
+          authBound: false,
+          interactionState: 'AWAITING_REPLY',
+        },
+      ] as any)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectDirectory('worker-1', 'dir-1')
+      await flushPromises()
+
+      expect(vm.activeConversations).toHaveLength(1)
+      expect(vm.conversationInteractionState(vm.activeConversations[0])).toBe('PROCESSING')
+
+      window.dispatchEvent(new CustomEvent('task-update', {
+        detail: {
+          type: 'task_completion',
+          taskId: 'task-running-1',
+          sessionId: 'session-running-1',
+          status: 'COMPLETED',
+        },
+      }))
+      await flushPromises()
+
+      expect(vm.directoryTasks[0].status).toBe('COMPLETED')
+      expect(vm.conversationInteractionState(vm.activeConversations[0])).toBe('AWAITING_REPLY')
     })
   })
 })

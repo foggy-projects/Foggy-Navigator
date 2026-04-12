@@ -156,6 +156,7 @@ export function useClaudeWorker() {
     agentTeamsConfigId?: string
     agentTeamsJson?: string
     milestoneId?: string
+    images?: string
   }) {
     const result = await forwardSessionUnified(form)
     tasks.value.unshift(result.task as unknown as ClaudeTask)
@@ -325,6 +326,13 @@ export function useClaudeWorker() {
     const config = conversationConfigs.value.get(sessionId)
     if (config) {
       config.interactionState = interactionState as ConversationConfig['interactionState']
+    } else {
+      conversationConfigs.value.set(sessionId, {
+        sessionId,
+        pinned: false,
+        authBound: false,
+        interactionState: interactionState as ConversationConfig['interactionState'],
+      })
     }
   }
 

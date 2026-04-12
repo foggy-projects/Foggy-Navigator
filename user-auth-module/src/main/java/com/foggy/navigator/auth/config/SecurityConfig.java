@@ -76,6 +76,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/git-credentials", "/api/v1/git-credentials/**").permitAll()
                         .requestMatchers("/api/v1/git", "/api/v1/git/**").permitAll()
                         .requestMatchers("/api/v1/sessions", "/api/v1/sessions/**").permitAll()
+                        .requestMatchers("/api/v1/session-relations", "/api/v1/session-relations/**").permitAll()
                         .requestMatchers("/api/v1/config", "/api/v1/config/**").permitAll()
                         .requestMatchers("/api/v1/claude-workers", "/api/v1/claude-workers/**").permitAll()
                         .requestMatchers("/api/v1/codex-workers", "/api/v1/codex-workers/**").permitAll()

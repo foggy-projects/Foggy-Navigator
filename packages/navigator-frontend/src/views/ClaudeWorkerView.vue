@@ -219,12 +219,8 @@
               {{ selectedDirectory.gitStatus }}
             </el-tag>
             <code class="dir-path-inline">{{ selectedDirectory.path }}</code>
-            <el-tag
-              v-if="selectedDirectory.defaultAuthMode"
-              :type="selectedDirectory.defaultAuthConfigured ? 'success' : 'info'"
-              size="small"
-            >
-              {{ authModeLabel(selectedDirectory.defaultAuthMode) }}
+            <el-tag v-if="effectiveDirectoryAuthTag" :type="effectiveDirectoryAuthTag.type" size="small">
+              {{ effectiveDirectoryAuthTag.label }}
             </el-tag>
             <el-tag v-else size="small" type="warning">Auth 未配置</el-tag>
           </div>
@@ -276,7 +272,7 @@
             v-for="s in favoriteScripts"
             :key="s.path"
             size="small"
-            :type="s.pinned ? '' : 'info'"
+            :type="s.pinned ? 'success' : 'info'"
             class="fav-script-tag"
             @click="handleRunFavScript(s)"
             @contextmenu.prevent="handleFavScriptCtx($event, s)"
@@ -604,7 +600,7 @@
               <el-table-column label="模型" width="100">
                 <template #default="{ row }">
                   <el-tooltip v-if="row.model" :content="row.model" placement="top">
-                    <el-tag size="small" type="" :disable-transitions="true">{{ formatModelShort(row.model) }}</el-tag>
+                    <el-tag size="small" type="info" :disable-transitions="true">{{ formatModelShort(row.model) }}</el-tag>
                   </el-tooltip>
                   <span v-else>-</span>
                 </template>
@@ -1057,9 +1053,9 @@
                   @click.stop="handleTogglePin(conv)"
                 >&#128204;</span>
                 <span
-                  v-if="conv.config?.interactionState"
-                  :class="['conv-interaction-badge', conv.config.interactionState.toLowerCase()]"
-                  :title="interactionStateLabel(conv.config.interactionState)"
+                  v-if="conversationInteractionState(conv)"
+                  :class="['conv-interaction-badge', conversationInteractionState(conv)!.toLowerCase()]"
+                  :title="interactionStateLabel(conversationInteractionState(conv)!)"
                 />
                 <span class="conv-prompt" :title="conv.config?.customTitle || conv.firstPrompt">{{
                   truncate(conv.config?.customTitle || conv.firstPrompt, 36)
@@ -1155,25 +1151,25 @@
                           详情
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.config?.interactionState !== 'ARCHIVED' && conv.config?.interactionState !== 'ON_HOLD'"
+                          v-if="conversationInteractionState(conv) !== 'ARCHIVED' && conversationInteractionState(conv) !== 'ON_HOLD'"
                           @click="handleHoldConversation(conv)"
                         >
                           搁置
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.config?.interactionState === 'ON_HOLD'"
+                          v-if="conversationInteractionState(conv) === 'ON_HOLD'"
                           @click="handleUnholdConversation(conv)"
                         >
                           取消搁置
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.config?.interactionState !== 'ARCHIVED'"
+                          v-if="conversationInteractionState(conv) !== 'ARCHIVED'"
                           @click="handleArchiveConversation(conv)"
                         >
                           归档
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.config?.interactionState === 'ARCHIVED'"
+                          v-if="conversationInteractionState(conv) === 'ARCHIVED'"
                           @click="handleUnarchiveConversation(conv)"
                         >
                           取消归档
@@ -1248,11 +1244,11 @@
                 title="已置顶"
                 @click.stop="handleTogglePin(conv)"
               >&#128204;</span>
-              <span
-                v-if="conv.config?.interactionState"
-                :class="['conv-interaction-badge', conv.config.interactionState.toLowerCase()]"
-                :title="interactionStateLabel(conv.config.interactionState)"
-              />
+               <span
+                 v-if="conversationInteractionState(conv)"
+                 :class="['conv-interaction-badge', conversationInteractionState(conv)!.toLowerCase()]"
+                 :title="interactionStateLabel(conversationInteractionState(conv)!)"
+               />
               <span class="conv-prompt" :title="conv.config?.customTitle || conv.firstPrompt">{{
                 truncate(conv.config?.customTitle || conv.firstPrompt, 36)
               }}</span>
@@ -1348,25 +1344,25 @@
                         详情
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.config?.interactionState !== 'ARCHIVED' && conv.config?.interactionState !== 'ON_HOLD'"
+                        v-if="conversationInteractionState(conv) !== 'ARCHIVED' && conversationInteractionState(conv) !== 'ON_HOLD'"
                         @click="handleHoldConversation(conv)"
                       >
                         搁置
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.config?.interactionState === 'ON_HOLD'"
+                        v-if="conversationInteractionState(conv) === 'ON_HOLD'"
                         @click="handleUnholdConversation(conv)"
                       >
                         取消搁置
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.config?.interactionState !== 'ARCHIVED'"
+                        v-if="conversationInteractionState(conv) !== 'ARCHIVED'"
                         @click="handleArchiveConversation(conv)"
                       >
                         归档
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.config?.interactionState === 'ARCHIVED'"
+                        v-if="conversationInteractionState(conv) === 'ARCHIVED'"
                         @click="handleUnarchiveConversation(conv)"
                       >
                         取消归档
@@ -1417,7 +1413,7 @@
         <el-pagination
           v-if="selectedDirectoryId ? dirTaskTotal > dirTaskSize : workerState.taskTotal.value > workerState.taskSize.value"
           class="task-pagination"
-          small
+          size="small"
           layout="prev, pager, next"
           :total="selectedDirectoryId ? dirTaskTotal : workerState.taskTotal.value"
           :page-size="selectedDirectoryId ? dirTaskSize : workerState.taskSize.value"
@@ -1855,7 +1851,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showForwardDialog" :title="forwardDialogTitle" width="640px">
+    <el-dialog v-model="showForwardDialog" :title="forwardDialogTitle" width="640px" @paste="forwardHandlePaste" @drop="forwardHandleDrop" @dragover="forwardHandleDragOver">
       <el-form :model="forwardForm" label-position="top">
         <el-form-item label="源回复">
           <div class="forward-source-preview">{{ forwardSourcePreview || '暂无内容' }}</div>
@@ -1876,14 +1872,31 @@
           </div>
         </el-form-item>
         <el-form-item label="转发内容">
-          <el-input
+          <SlashCommandInput
             v-model="forwardForm.prompt"
-            type="textarea"
-            :rows="8"
+            :rows="4"
+            auto-grow
+            :max-rows="12"
             :placeholder="forwardForm.targetMode === 'EXISTING_SESSION'
-              ? '可直接转发当前回复，也可以先修改后再追加到已有会话'
-              : '可直接转发当前回复，也可以先修改后再创建新会话'"
+              ? '可直接转发当前回复，也可以先修改后再追加到已有会话 (./ 搜索文件, / 唤起技能, 可粘贴截图或拖拽文件)'
+              : '可直接转发当前回复，也可以先修改后再创建新会话 (./ 搜索文件, / 唤起技能, 可粘贴截图或拖拽文件)'"
+            :skills="directorySkills"
+            :agents="allAgentItems"
+            :directory-id="forwardForm.directoryId ?? selectedDirectoryId ?? undefined"
+            @submit="handleSubmitForward"
           />
+          <div v-if="forwardAttachments.length > 0" class="image-preview-strip" style="margin-top: 8px">
+            <div v-for="(att, idx) in forwardAttachments" :key="idx" class="image-preview-item" :class="{ 'file-item': !att.isImage }">
+              <template v-if="att.isImage">
+                <img :src="att.previewUrl" :alt="att.name" :title="att.name" />
+              </template>
+              <div v-else class="file-preview" :title="att.name">
+                <span class="file-icon">{{ fileIcon(att.mimeType) }}</span>
+                <span class="file-name">{{ att.name }}</span>
+              </div>
+              <span class="image-remove" @click="forwardRemoveAttachment(idx)">&times;</span>
+            </div>
+          </div>
         </el-form-item>
         <template v-if="forwardForm.targetMode === 'NEW_SESSION'">
           <el-row :gutter="12">
@@ -2509,6 +2522,7 @@ import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
 import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
 import { useForwardSession, type ConversationGroup as ForwardConversationGroup } from '@/composables/useForwardSession'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
+import { useAttachments, compressImage, fileIcon, toImagesJson, type Attachment } from '@/composables/useAttachments'
 import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
 import {
@@ -2864,6 +2878,104 @@ function reloadFilteredTasks() {
   }
 }
 
+function deriveInteractionStateFromTaskStatus(
+  status?: ClaudeTask['status'],
+): ConversationConfig['interactionState'] | undefined {
+  if (status === 'PENDING' || status === 'RUNNING') return 'PROCESSING'
+  if (status === 'AWAITING_PERMISSION') return 'AWAITING_REPLY'
+  if (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED') return 'AWAITING_REPLY'
+  return undefined
+}
+
+function resolveConversationInteractionState(
+  conv: Pick<ConversationGroup, 'latestTask' | 'config'>,
+): ConversationConfig['interactionState'] | undefined {
+  return deriveInteractionStateFromTaskStatus(conv.latestTask.status) ?? conv.config?.interactionState
+}
+
+function matchesCurrentInteractionFilter(
+  state: ConversationConfig['interactionState'] | undefined,
+): boolean {
+  if (!state) return true
+  if (ALL_STATES.every((value) => interactionStateFilters.value.has(value))) return true
+  return interactionStateFilters.value.has(state)
+}
+
+function upsertTaskAtTop(taskList: ClaudeTask[], task: ClaudeTask): ClaudeTask[] {
+  return [task, ...taskList.filter((existing) => existing.taskId !== task.taskId)]
+}
+
+function patchTaskList(
+  taskList: ClaudeTask[],
+  taskId: string,
+  updates: Partial<ClaudeTask>,
+): ClaudeTask[] {
+  let changed = false
+  const next = taskList.map((task) => {
+    if (task.taskId !== taskId) return task
+    changed = true
+    return { ...task, ...updates }
+  })
+  return changed ? next : taskList
+}
+
+function syncTaskAcrossVisibleLists(task: ClaudeTask) {
+  const interactionState = deriveInteractionStateFromTaskStatus(task.status)
+  if (interactionState) {
+    workerState.updateInteractionStateFromSSE(task.sessionId, interactionState)
+  }
+
+  if (['PENDING', 'RUNNING', 'AWAITING_PERMISSION'].includes(task.status)) {
+    workerState.activeTasks.value = upsertTaskAtTop(workerState.activeTasks.value, task)
+  }
+
+  if (selectedDirectoryId.value === task.directoryId && matchesCurrentInteractionFilter(interactionState)) {
+    const sessionExists = directoryTasks.value.some((existing) => existing.sessionId === task.sessionId)
+    directoryTasks.value = upsertTaskAtTop(directoryTasks.value, task)
+    if (!sessionExists) {
+      dirTaskTotal.value += 1
+    }
+  }
+}
+
+function syncTaskStatusAcrossUi(
+  taskId: string,
+  updates: Partial<ClaudeTask>,
+  options?: {
+    removeFromActive?: boolean
+    interactionState?: ConversationConfig['interactionState']
+  },
+) {
+  workerState.tasks.value = patchTaskList(workerState.tasks.value, taskId, updates)
+  directoryTasks.value = patchTaskList(directoryTasks.value, taskId, updates)
+
+  if (options?.removeFromActive) {
+    workerState.activeTasks.value = workerState.activeTasks.value.filter((task) => task.taskId !== taskId)
+  } else {
+    workerState.activeTasks.value = patchTaskList(workerState.activeTasks.value, taskId, updates)
+  }
+
+  for (const pane of getAllPanes()) {
+    if (pane.task.value?.taskId === taskId) {
+      pane.task.value = {
+        ...pane.task.value,
+        ...updates,
+      }
+    }
+  }
+
+  if (options?.interactionState) {
+    const sessionId = (updates.sessionId as string | undefined)
+      ?? workerState.tasks.value.find((task) => task.taskId === taskId)?.sessionId
+      ?? directoryTasks.value.find((task) => task.taskId === taskId)?.sessionId
+      ?? workerState.activeTasks.value.find((task) => task.taskId === taskId)?.sessionId
+
+    if (sessionId) {
+      workerState.updateInteractionStateFromSSE(sessionId, options.interactionState)
+    }
+  }
+}
+
 // When state filter changes, reload from page 0 with new filter
 watch(interactionStateFilters, () => {
   reloadFilteredTasks()
@@ -3054,6 +3166,8 @@ const {
   forwardExistingModelConfigLabel, forwardExistingModelLabel, forwardExistingMilestoneLabel,
   forwardSubmitButtonText, forwardSubmitDisabled,
   openForwardDialog, submitForward, resetForwardDialog, forwardConversationOptionLabel,
+  forwardAttachments, forwardRemoveAttachment,
+  forwardHandlePaste, forwardHandleDrop, forwardHandleDragOver,
 } = forwardState
 
 const creatingTask = ref(false)
@@ -3470,16 +3584,17 @@ function handleTaskHistoryNext() {
   if (text != null) taskForm.value.prompt = text
 }
 
-// --- Attachment state (images + files) ---
-interface Attachment {
-  name: string
-  base64: string
-  mimeType: string
-  previewUrl: string
-  size: number  // original file size in bytes
-  isImage: boolean
-}
-const attachments = ref<Attachment[]>([])
+// --- Attachment state (images + files) — delegated to useAttachments composable ---
+const {
+  attachments,
+  addFiles,
+  removeAttachment,
+  clearAttachments,
+  handlePaste,
+  handleDrop,
+  handleDragOver,
+  handleFileSelect,
+} = useAttachments()
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 // --- Session fullscreen + iPad tools ---
@@ -3534,159 +3649,7 @@ function insertDotSlash(comp: InstanceType<typeof SlashCommandInput> | null) {
     textarea.setSelectionRange(newCursor, newCursor)
   })
 }
-const MAX_ATTACHMENTS = 10
-const MAX_IMAGE_SIZE = 50 * 1024 * 1024  // 50MB per image before compression (iPad screenshots can be 10-30MB)
-const MAX_FILE_SIZE = 20 * 1024 * 1024   // 20MB per non-image file (no compression)
-
-async function compressImage(file: File): Promise<Attachment> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    const objectUrl = URL.createObjectURL(file)
-    img.onload = () => {
-      const MAX_DIM = 1920
-      let { width, height } = img
-      if (width > MAX_DIM || height > MAX_DIM) {
-        const ratio = Math.min(MAX_DIM / width, MAX_DIM / height)
-        width = Math.round(width * ratio)
-        height = Math.round(height * ratio)
-      }
-      const canvas = document.createElement('canvas')
-      canvas.width = width
-      canvas.height = height
-      const ctx = canvas.getContext('2d')!
-      ctx.drawImage(img, 0, 0, width, height)
-      canvas.toBlob(
-        (blob) => {
-          URL.revokeObjectURL(objectUrl)
-          if (!blob) { reject(new Error('Compression failed')); return }
-          const reader = new FileReader()
-          reader.onload = () => {
-            const base64 = (reader.result as string).split(',')[1]!
-            resolve({
-              name: file.name.replace(/\.\w+$/, '.webp'),
-              base64,
-              mimeType: 'image/webp',
-              previewUrl: URL.createObjectURL(blob),
-              size: file.size,
-              isImage: true,
-            })
-          }
-          reader.onerror = reject
-          reader.readAsDataURL(blob)
-        },
-        'image/webp',
-        0.85,
-      )
-    }
-    img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('Image load failed')) }
-    img.src = objectUrl
-  })
-}
-
-async function readFileAsBase64(file: File): Promise<Attachment> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(',')[1]!
-      resolve({
-        name: file.name,
-        base64,
-        mimeType: file.type || 'application/octet-stream',
-        previewUrl: '',
-        size: file.size,
-        isImage: false,
-      })
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-function fileIcon(mimeType: string): string {
-  if (mimeType.includes('pdf')) return '📑'
-  if (mimeType.includes('zip') || mimeType.includes('tar') || mimeType.includes('gzip') || mimeType.includes('compressed')) return '📦'
-  if (mimeType.includes('sheet') || mimeType.includes('csv')) return '📊'
-  return '📄'
-}
-
-async function addFiles(files: FileList | File[]) {
-  for (const file of Array.from(files)) {
-    if (attachments.value.length >= MAX_ATTACHMENTS) {
-      ElMessage.warning(`最多附加 ${MAX_ATTACHMENTS} 个文件`)
-      break
-    }
-    const isImage = file.type.startsWith('image/')
-    const maxSize = isImage ? MAX_IMAGE_SIZE : MAX_FILE_SIZE
-    if (file.size > maxSize) {
-      ElMessage.warning(`"${file.name}" 超过 ${isImage ? '50MB' : '20MB'}，已跳过`)
-      continue
-    }
-    try {
-      const attachment = isImage ? await compressImage(file) : await readFileAsBase64(file)
-      attachments.value.push(attachment)
-    } catch {
-      ElMessage.warning(`"${file.name}" 处理失败`)
-    }
-  }
-}
-
-function removeAttachment(index: number) {
-  const removed = attachments.value.splice(index, 1)
-  removed.forEach((img) => URL.revokeObjectURL(img.previewUrl))
-}
-
-function handlePaste(e: ClipboardEvent) {
-  const items = e.clipboardData?.items
-  if (!items) return
-  const pastedFiles: File[] = []
-  for (const item of Array.from(items)) {
-    if (item.kind === 'file') {
-      const file = item.getAsFile()
-      if (file) {
-        if (file.type.startsWith('image/')) {
-          // Generate a meaningful name for clipboard images (usually screenshots)
-          const ext = file.type.split('/')[1] || 'png'
-          pastedFiles.push(new File([file], `screenshot-${Date.now()}.${ext}`, { type: file.type }))
-        } else {
-          pastedFiles.push(file)
-        }
-      }
-    }
-  }
-  if (pastedFiles.length > 0) {
-    e.preventDefault()
-    addFiles(pastedFiles)
-  }
-}
-
-function handleDrop(e: DragEvent) {
-  e.preventDefault()
-  const files = e.dataTransfer?.files
-  if (files && files.length > 0) {
-    addFiles(files)
-  }
-}
-
-function handleDragOver(e: DragEvent) {
-  e.preventDefault()
-}
-
-function handleFileSelect(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (input.files && input.files.length > 0) {
-    addFiles(input.files)
-    input.value = '' // reset so same file can be selected again
-  }
-}
-
-function clearAttachments(preserveUrls?: Set<string>) {
-  attachments.value.forEach((img) => {
-    if (img.previewUrl && (!preserveUrls || !preserveUrls.has(img.previewUrl))) {
-      URL.revokeObjectURL(img.previewUrl)
-    }
-  })
-  attachments.value = []
-}
+// compressImage, fileIcon, toImagesJson — imported from useAttachments
 
 const selectedWorkerEntity = computed(() => {
   return workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value)
@@ -3695,6 +3658,23 @@ const selectedWorkerEntity = computed(() => {
 const selectedDirectory = computed(() =>
   workerState.directories.value.find((d) => d.directoryId === selectedDirectoryId.value),
 )
+
+const effectiveDirectoryAuthTag = computed(() => {
+  if (platformModelConfig.value) {
+    return {
+      label: `API: ${platformModelConfig.value.name}`,
+      type: 'success' as const,
+    }
+  }
+  const dir = selectedDirectory.value
+  if (dir?.defaultAuthMode) {
+    return {
+      label: authModeLabel(dir.defaultAuthMode),
+      type: (dir.defaultAuthConfigured ? 'success' : 'info') as const,
+    }
+  }
+  return null
+})
 
 const parsedAgentTeams = computed(() => {
   if (selectedAgentTeamsConfigId.value) {
@@ -3972,39 +3952,44 @@ function handleTaskUpdateEvent(event: Event) {
   const detail = (event as CustomEvent).detail
   if (['task_status_change', 'task_completion'].includes(detail?.type) && detail?.taskId) {
     const newStatus = detail.status as string
+    const interactionState = detail.sessionId
+      ? (detail.interactionState as ConversationConfig['interactionState'] | undefined)
+      : deriveInteractionStateFromTaskStatus(newStatus as ClaudeTask['status'])
     // Sync interactionState from SSE
-    if (detail.sessionId && detail.interactionState) {
-      workerState.updateInteractionStateFromSSE(detail.sessionId, detail.interactionState)
+    if (detail.sessionId && interactionState) {
+      workerState.updateInteractionStateFromSSE(detail.sessionId, interactionState)
     }
     if (['RUNNING', 'AWAITING_PERMISSION'].includes(newStatus)) {
       // Active state — update in-place or refresh list
       const existing = workerState.activeTasks.value.find(t => t.taskId === detail.taskId)
       if (existing) {
-        existing.status = newStatus as any
+        syncTaskStatusAcrossUi(detail.taskId, {
+          status: newStatus as ClaudeTask['status'],
+          updatedAt: detail.updatedAt || existing.updatedAt,
+          ...(detail.errorMessage ? { errorMessage: detail.errorMessage as string } : {}),
+          ...(detail.sessionId ? { sessionId: detail.sessionId as string } : {}),
+        }, {
+          interactionState,
+        })
       } else {
         workerState.loadActiveTasks()
         workerState.loadAwaitingReplyTasks()
       }
-      // Also sync to history task list — prevents status mismatch between
-      // attention section (from activeTasks) and history list (from tasks)
-      const inTasks = workerState.tasks.value.find(t => t.taskId === detail.taskId)
-      if (inTasks) {
-        inTasks.status = newStatus as any
-      }
     } else {
       // Terminal state — remove from active list + update task list
-      workerState.activeTasks.value = workerState.activeTasks.value.filter(
-        t => t.taskId !== detail.taskId
-      )
-      const inTasks = workerState.tasks.value.find(t => t.taskId === detail.taskId)
-      if (inTasks) {
-        inTasks.status = newStatus as any
-        if (detail.errorMessage) {
-          inTasks.errorMessage = detail.errorMessage
-        } else if (newStatus === 'FAILED' && detail.summary) {
-          inTasks.errorMessage = String(detail.summary)
-        }
-      }
+      syncTaskStatusAcrossUi(detail.taskId, {
+        status: newStatus as ClaudeTask['status'],
+        updatedAt: detail.updatedAt,
+        ...(detail.errorMessage
+          ? { errorMessage: detail.errorMessage as string }
+          : (newStatus === 'FAILED' && detail.summary)
+            ? { errorMessage: String(detail.summary) }
+            : {}),
+        ...(detail.sessionId ? { sessionId: detail.sessionId as string } : {}),
+      }, {
+        removeFromActive: true,
+        interactionState,
+      })
       workerState.loadAwaitingReplyTasks()
     }
   } else {
@@ -4827,16 +4812,16 @@ async function handleSaveTags() {
   }
 }
 
-function tagColor(tag: string): '' | 'success' | 'warning' | 'danger' | 'info' {
+function tagColor(tag: string): 'success' | 'warning' | 'danger' | 'info' {
   switch (tag) {
-    case '主任务': return ''
+    case '主任务': return 'success'
     case '临时': return 'info'
     case 'bugfix': return 'danger'
     case 'feature': return 'success'
     case '规划': return 'warning'
     case '开发': return 'success'
     case '测试': return 'danger'
-    case '用户体验': return ''
+    case '用户体验': return 'info'
     case '代码评审': return 'warning'
     default: return 'info'
   }
@@ -4853,14 +4838,14 @@ function milestoneStatusLabel(status?: string): string {
   }
 }
 
-function milestoneTagType(status?: string): '' | 'success' | 'warning' | 'info' {
+function milestoneTagType(status?: string): 'success' | 'warning' | 'info' {
   switch (status) {
     case 'ACTIVE': return 'warning'
     case 'COMPLETED': return 'success'
     case 'ARCHIVED': return 'info'
     case 'PLANNED':
     default:
-      return ''
+      return 'info'
   }
 }
 
@@ -5518,17 +5503,13 @@ async function handleCreateTask() {
       form.modelConfigId = platformModelConfigId.value
     }
     // Attach files/images as JSON string
-    if (attachments.value.length > 0) {
-      form.images = JSON.stringify(
-        attachments.value.map((img) => ({
-          name: img.name,
-          data: img.base64,
-          mime_type: img.mimeType,
-        })),
-      )
+    const imagesJson = toImagesJson(attachments.value)
+    if (imagesJson) {
+      form.images = imagesJson
     }
 
     const task = await workerState.createTask(form)
+    syncTaskAcrossVisibleLists(task)
     // 记录 session → 用户选择的短模型名，供后续 restoreSessionModelSelection 恢复
     saveSessionModel(task.sessionId, taskForm.value.model)
     taskMemory.addToHistory(prompt)
@@ -5920,14 +5901,9 @@ async function handlePaneSend(paneId: string, content: string) {
       resumeForm.modelConfigId = platformModelConfigId.value
     }
     // Attach files/images as JSON string
-    if (attachments.value.length > 0) {
-      resumeForm.images = JSON.stringify(
-        attachments.value.map((img) => ({
-          name: img.name,
-          data: img.base64,
-          mime_type: img.mimeType,
-        })),
-      )
+    const resumeImagesJson = toImagesJson(attachments.value)
+    if (resumeImagesJson) {
+      resumeForm.images = resumeImagesJson
     }
     const newTask = await workerState.resumeTask(resumeForm)
     if (!newTask?.sessionId) {
@@ -6425,6 +6401,10 @@ function paneInteractionState(paneState: TaskPaneState): string | undefined {
   // (defends against backend race where reconnect overwrites interactionState after completion)
   if (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED') return 'AWAITING_REPLY'
   return getInteractionState(paneState.task.value?.sessionId)
+}
+
+function conversationInteractionState(conv: ConversationGroup): string | undefined {
+  return resolveConversationInteractionState(conv)
 }
 
 function interactionStateLabel(state: string): string {

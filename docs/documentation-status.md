@@ -22,6 +22,7 @@
 | [功能架构说明](./02-modules/functional-architecture.md) | 当前有效 | 当前功能地图与功能域边界 |
 | [术语表](./terminology-glossary.md) | 当前有效 | 统一 Worker、会话、任务、A2A、Coding Agent 等术语 |
 | [工作区与 Worker 中心](./02-modules/worker-workspace-center.md) | 当前有效 | Worker、目录、文件、Git 相关功能说明 |
+| [PC Workers 操作与体验检查清单](./test-cases/pc-workers-experience-checklist.md) | 当前有效 | 桌面端 Workers 页面操作路径、验收清单与 Playwright 执行口径 |
 | [会话协作中心](./02-modules/session-collaboration.md) | 当前有效 | 会话、消息、委派、分享能力说明 |
 | [任务治理中心](./02-modules/task-governance.md) | 当前有效 | 统一任务分发与治理说明 |
 | [跨项目编排](./02-modules/cross-project-orchestration.md) | 当前有效 | 多项目任务编排说明 |

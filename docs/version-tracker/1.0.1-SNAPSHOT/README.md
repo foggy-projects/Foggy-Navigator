@@ -22,3 +22,4 @@
 - [15-planning-overview.md](./15-planning-overview.md) - 版本规划总表
 - [16-file-browser-search-encoding-fix.md](./16-file-browser-search-encoding-fix.md) - Code & Tests Verified / 文件搜索转码修复
 - [17-session-milestone-grouping.md](./17-session-milestone-grouping.md) - Accepted / 会话里程碑分组 + 独立管理面板 + 安全删除
+- [18-workers-history-session-refresh-and-status-sync-bug.md](./18-workers-history-session-refresh-and-status-sync-bug.md) - Open / Workers 历史会话不即时刷新 + 状态不同步
