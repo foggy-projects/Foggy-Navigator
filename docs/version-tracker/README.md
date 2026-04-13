@@ -12,6 +12,7 @@
 
 - [1.0.0-SNAPSHOT](./1.0.0-SNAPSHOT/)
 - [1.0.1-SNAPSHOT](./1.0.1-SNAPSHOT/)
+- [1.1.0-SNAPSHOT](./1.1.0-SNAPSHOT/)
 - [1.0.2-APP](./1.0.2-APP/)
 
 ## 说明
