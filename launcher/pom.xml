@@ -65,6 +65,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- LangGraph Biz Worker - 业务 Agent 工作器模块 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>langgraph-biz-worker</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Echo Agent - 模拟 Agent（验证框架扩展性） -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>
