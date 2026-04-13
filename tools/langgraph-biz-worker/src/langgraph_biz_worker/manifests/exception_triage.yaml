@@ -1,0 +1,36 @@
+id: exception_triage
+name: 异常分诊
+description: 分析异常并给出处置建议（Mock 版本）
+input_schema:
+  type: object
+  properties:
+    order_id:
+      type: string
+output_schema:
+  type: object
+  required:
+    - classification
+    - recommended_action
+    - confidence
+  properties:
+    classification:
+      type: string
+      enum: [vehicle_delay, weather, system_error, other]
+    recommended_action:
+      type: string
+      enum: [manual_dispatch, auto_retry, escalate, ignore]
+    confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+allowed_tools:
+  - mock_get_order
+  - mock_get_vehicle_status
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - evidence_refs
+business_rules:
+  require_evidence: true
+  min_evidence_count: 1
+subgraph: exception_triage

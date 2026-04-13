@@ -1,0 +1,27 @@
+id: order_evidence_collect
+name: 订单取证
+description: 收集订单相关证据（Mock 版本）
+input_schema:
+  type: object
+  properties:
+    order_id:
+      type: string
+output_schema:
+  type: object
+  required:
+    - order_details
+    - vehicle_details
+  properties:
+    order_details:
+      type: object
+    vehicle_details:
+      type: object
+allowed_tools:
+  - mock_get_order
+  - mock_get_vehicle_status
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - evidence_refs
+business_rules: {}
+subgraph: order_evidence_collect

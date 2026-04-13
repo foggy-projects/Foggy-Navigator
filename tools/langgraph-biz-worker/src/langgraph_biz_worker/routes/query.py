@@ -38,6 +38,8 @@ async def _event_generator(
             "context": request.context,
             "events": [],
             "started_at": time.time(),
+            "active_frame_id": None,
+            "skill_results": [],
         }
 
         result = root_graph.invoke(initial_state)

@@ -1,0 +1,31 @@
+id: rule_check
+name: 规则核验
+description: 核验处置建议是否符合业务规则（Mock 版本）
+input_schema:
+  type: object
+  properties:
+    order_id:
+      type: string
+    classification:
+      type: string
+    recommended_action:
+      type: string
+output_schema:
+  type: object
+  required:
+    - rule_passed
+    - checked_rules
+  properties:
+    rule_passed:
+      type: boolean
+    checked_rules:
+      type: array
+    violations:
+      type: array
+allowed_tools:
+  - mock_search_incidents
+promote_to_parent:
+  - result_summary
+  - structured_output
+business_rules: {}
+subgraph: rule_check

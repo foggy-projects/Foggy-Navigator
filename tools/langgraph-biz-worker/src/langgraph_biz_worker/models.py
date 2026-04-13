@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -60,6 +61,121 @@ class QueryEvent(BaseModel):
 
     # Result metadata (populated on type="result")
     duration_ms: int | None = None
+
+    # Structured output (populated on type="result")
+    structured_output: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Frame status enum
+# ---------------------------------------------------------------------------
+
+
+class FrameStatus(str, Enum):
+    """Skill Frame lifecycle states."""
+
+    CREATED = "CREATED"
+    RUNNING = "RUNNING"
+    WAITING_CHILD = "WAITING_CHILD"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+# Terminal states — once entered, no further transitions allowed.
+TERMINAL_STATES = frozenset({FrameStatus.COMPLETED, FrameStatus.FAILED, FrameStatus.CANCELLED})
+
+# Legal state transitions matrix.
+VALID_TRANSITIONS: dict[FrameStatus, frozenset[FrameStatus]] = {
+    FrameStatus.CREATED: frozenset({FrameStatus.RUNNING}),
+    FrameStatus.RUNNING: frozenset({
+        FrameStatus.WAITING_CHILD,
+        FrameStatus.AWAITING_APPROVAL,
+        FrameStatus.COMPLETED,
+        FrameStatus.FAILED,
+        FrameStatus.CANCELLED,
+    }),
+    FrameStatus.WAITING_CHILD: frozenset({
+        FrameStatus.RUNNING,
+        FrameStatus.FAILED,
+        FrameStatus.CANCELLED,
+    }),
+    FrameStatus.AWAITING_APPROVAL: frozenset({
+        FrameStatus.RUNNING,
+        FrameStatus.FAILED,
+        FrameStatus.CANCELLED,
+    }),
+    FrameStatus.COMPLETED: frozenset(),
+    FrameStatus.FAILED: frozenset(),
+    FrameStatus.CANCELLED: frozenset(),
+}
+
+
+# ---------------------------------------------------------------------------
+# Skill Frame state
+# ---------------------------------------------------------------------------
+
+
+class SkillFrameState(BaseModel):
+    """Private execution state for a single Skill invocation."""
+
+    frame_id: str
+    task_id: str
+    skill_id: str
+    parent_frame_id: str | None = None
+    status: FrameStatus = FrameStatus.CREATED
+
+    input: dict[str, Any] = Field(default_factory=dict)
+    private_messages: list[dict[str, Any]] = Field(default_factory=list)
+    private_working_state: dict[str, Any] = Field(default_factory=dict)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    child_frame_ids: list[str] = Field(default_factory=list)
+
+    output: dict[str, Any] | None = None
+    result_summary: str | None = None
+    artifact_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    approval_request: dict[str, Any] | None = None
+
+    started_at: str = ""
+    ended_at: str = ""
+
+    # Retry tracking for submit_result rejections
+    submit_attempts: int = 0
+    max_submit_attempts: int = 3
+
+
+# ---------------------------------------------------------------------------
+# Skill Manifest
+# ---------------------------------------------------------------------------
+
+
+class SkillManifest(BaseModel):
+    """Structured definition of a Skill loaded from YAML manifest."""
+
+    id: str
+    name: str
+    description: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    allowed_tools: list[str] = Field(default_factory=list)
+    approval_tools: list[str] = Field(default_factory=list)
+    promote_to_parent: list[str] = Field(default_factory=list)
+    business_rules: dict[str, Any] = Field(default_factory=dict)
+    subgraph: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Validation result
+# ---------------------------------------------------------------------------
+
+
+class ValidationResult(BaseModel):
+    """Result of output contract validation."""
+
+    ok: bool
+    errors: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
