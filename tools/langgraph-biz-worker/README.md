@@ -67,10 +67,10 @@ PYTHONPATH=src .venv/Scripts/python -m pytest tests/ -v
 # 3. 启动服务
 powershell -ExecutionPolicy Bypass -File start.ps1
 # 或直接启动：
-PYTHONPATH=src .venv/Scripts/python -m uvicorn langgraph_biz_worker.main:app --port 3032
+PYTHONPATH=src .venv/Scripts/python -m uvicorn langgraph_biz_worker.main:app --port 3061
 
 # 4. 验证
-curl http://localhost:3032/health
+curl http://localhost:3061/health
 ```
 
 ## 配置
@@ -79,7 +79,7 @@ curl http://localhost:3032/health
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `BIZ_WORKER_PORT` | 3032 | 服务端口 |
+| `BIZ_WORKER_PORT` | 3061 | 服务端口 |
 | `BIZ_WORKER_HOST` | 0.0.0.0 | 监听地址 |
 | `BIZ_WORKER_WORKER_TOKEN` | （空） | Bearer Token，空=开发模式免认证 |
 | `BIZ_WORKER_WORKER_NAME` | （空） | Worker 显示名称 |

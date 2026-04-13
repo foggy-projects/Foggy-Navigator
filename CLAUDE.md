@@ -51,7 +51,7 @@ tools/
 | `start-frontend.ps1` | 前端开发服务器 | 5174 |
 | `tools/claude-agent-worker/start.ps1` | Claude Worker | 3031 |
 | `tools/claude-agent-worker/stop.ps1` | 停止 Claude Worker | - |
-| `tools/langgraph-biz-worker/start.ps1` | LangGraph Biz Worker | 3032 |
+| `tools/langgraph-biz-worker/start.ps1` | LangGraph Biz Worker | 3061 |
 | `tools/langgraph-biz-worker/stop.ps1` | 停止 LangGraph Biz Worker | - |
 
 ### 后端启动

@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     ``BIZ_WORKER_`` or from a ``.env`` file in the project root.
     """
 
-    port: int = 3032
+    port: int = 3061
     host: str = "0.0.0.0"
     worker_token: str = ""
     worker_name: str = ""

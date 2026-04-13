@@ -2,7 +2,7 @@
 # Usage: powershell -ExecutionPolicy Bypass -File stop.ps1
 
 $WorkerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Port = 3032
+$Port = 3061
 
 # Load port from .env if present
 $EnvFile = Join-Path $WorkerDir ".env"

@@ -10,7 +10,7 @@ class TestSettingsDefaults:
     def test_default_port(self):
         from langgraph_biz_worker.config import Settings
         s = Settings(_env_file=None)
-        assert s.port == 3032
+        assert s.port == 3061
 
     def test_default_host(self):
         from langgraph_biz_worker.config import Settings
