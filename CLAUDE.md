@@ -18,6 +18,7 @@ Foggy-Navigator/
 ├── tutor-agent/                # 导师 Agent（引导用户、分派任务）
 ├── addons/coding-agent/        # 编程 Agent（OpenHands 集成）
 ├── addons/claude-worker-agent/ # Claude Code 工人 Agent（远程编程）
+├── addons/langgraph-biz-worker/# LangGraph 业务型 Worker Agent（Java 侧，待开发）
 └── launcher/                   # Spring Boot 启动器
 ```
 
@@ -34,6 +35,7 @@ packages/
 ```
 tools/
 ├── claude-agent-worker/    # Claude Worker Python 服务
+├── langgraph-biz-worker/   # LangGraph 业务型 Worker Python 服务（Skill Runtime + Frame 生命周期）
 └── mock-llm-service/       # Mock Anthropic 端点（L3 集成测试用）
 ```
 
@@ -49,6 +51,8 @@ tools/
 | `start-frontend.ps1` | 前端开发服务器 | 5174 |
 | `tools/claude-agent-worker/start.ps1` | Claude Worker | 3031 |
 | `tools/claude-agent-worker/stop.ps1` | 停止 Claude Worker | - |
+| `tools/langgraph-biz-worker/start.ps1` | LangGraph Biz Worker | 3032 |
+| `tools/langgraph-biz-worker/stop.ps1` | 停止 LangGraph Biz Worker | - |
 
 ### 后端启动
 
