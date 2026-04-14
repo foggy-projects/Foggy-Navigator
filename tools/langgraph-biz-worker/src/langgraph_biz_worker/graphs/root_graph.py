@@ -17,6 +17,7 @@ from ..config import settings
 from ..models import FrameStatus, QueryEvent
 from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.frame_store import FrameStore
+from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model
 from ..runtime.skill_registry import SkillRegistry
 from ..runtime.skill_runtime import SkillRuntime
 from .skills.exception_triage import (
@@ -42,6 +43,10 @@ _data_root = settings.data_root or str(Path(__file__).resolve().parent.parent.pa
 _journal = FileFrameJournal(_data_root)
 
 _runtime = SkillRuntime(frame_store=_frame_store, skill_registry=_skill_registry, journal=_journal)
+
+# LLM-based Skill Router (None if llm_provider is empty → rule-based fallback)
+_chat_model = create_chat_model(settings)
+_llm_router: LlmSkillRouter | None = LlmSkillRouter(_chat_model) if _chat_model else None
 
 
 def get_runtime() -> SkillRuntime:
@@ -94,12 +99,26 @@ def route_skill(state: RootState) -> dict:
         ),
     ]
 
-    # Phase 3: route to exception_triage if context has order_id,
-    # otherwise fall back to simple response
+    # Three-level routing priority:
+    # 1. Explicit skill in context
+    # 2. LLM routing (if enabled)
+    # 3. Rule-based fallback (backward compat)
     skill_id = None
-    if context.get("order_id") or "exception_triage" in (context.get("skill") or ""):
-        manifest = _skill_registry.get_manifest("exception_triage")
-        if manifest:
+
+    # Priority 1: explicit skill in context
+    explicit = context.get("skill")
+    if explicit and _skill_registry.get_manifest(explicit):
+        skill_id = explicit
+
+    # Priority 2: LLM routing
+    if not skill_id and _llm_router:
+        llm_choice = _llm_router.route(state["prompt"], context, _skill_registry.list_skills())
+        if llm_choice and _skill_registry.get_manifest(llm_choice):
+            skill_id = llm_choice
+
+    # Priority 3: rule-based fallback
+    if not skill_id:
+        if context.get("order_id"):
             skill_id = "exception_triage"
 
     if skill_id:
