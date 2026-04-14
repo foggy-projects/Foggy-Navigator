@@ -408,6 +408,19 @@ class SkillRuntime:
     def get_frames_by_task(self, task_id: str) -> list[SkillFrameState]:
         return self.store.get_by_task(task_id)
 
+    def set_evidence_refs(self, frame_id: str, evidence_refs: list[str]) -> None:
+        """Set evidence references on a frame and persist."""
+        frame = self._get_frame(frame_id)
+        frame.evidence_refs = evidence_refs
+        self._save(frame)
+
+    def restore_frame(self, frame: SkillFrameState) -> None:
+        """Restore a frame into in-memory store (e.g. after Worker restart).
+
+        Only writes to memory — the file journal already has this frame.
+        """
+        self.store.save(frame)
+
     # -- Internal helpers ----------------------------------------------------
 
     def _get_frame(self, frame_id: str) -> SkillFrameState:

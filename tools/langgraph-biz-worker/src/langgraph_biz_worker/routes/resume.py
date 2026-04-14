@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 
 from ..auth import verify_token
 from ..runtime.file_frame_journal import FileFrameJournal
-from ..runtime.frame_store import FrameStore
 from ..runtime.skill_runtime import FrameNotFound, IllegalStateTransition, SkillRuntime
 
 logger = logging.getLogger(__name__)
@@ -79,7 +78,7 @@ async def resume(request: ResumeRequest) -> ResumeResponse:
 
     # 2. Restore frame into in-memory store (if not already there)
     if _runtime.get_frame(frame.frame_id) is None:
-        _runtime.store.save(frame)
+        _runtime.restore_frame(frame)
         logger.info(
             "Restored frame=%s from file journal for task=%s",
             frame.frame_id, request.task_id,

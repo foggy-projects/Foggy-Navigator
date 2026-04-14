@@ -12,7 +12,7 @@ from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from ..models import QueryEvent
+from ..models import FrameStatus, QueryEvent
 from ..runtime.frame_store import FrameStore
 from ..runtime.skill_registry import SkillRegistry
 from ..runtime.skill_runtime import SkillRuntime
@@ -179,7 +179,7 @@ def close_skill_frame(state: RootState) -> dict:
     events: list[QueryEvent] = []
     skill_results: list[dict[str, Any]] = []
 
-    if frame and frame.status.value == "COMPLETED":
+    if frame and frame.status == FrameStatus.COMPLETED:
         promoted = _runtime.close_frame(frame_id)
         skill_results.append(promoted)
 
