@@ -18,6 +18,12 @@ logger = logging.getLogger("langgraph_biz_worker")
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown hooks."""
     logger.info("LangGraph Biz Worker v%s starting", __version__)
+
+    # Wire up resume route with the shared runtime and journal (Doc 31 §16.5)
+    from .graphs.root_graph import get_journal, get_runtime
+    resume.configure(get_runtime(), get_journal())
+    logger.info("Resume endpoint configured with shared runtime and journal")
+
     yield
     logger.info("LangGraph Biz Worker shutting down")
 

@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     worker_name: str = ""
     max_concurrent_tasks: int = 5
 
+    # Data root for file-based persistence (frames, accounts, etc.)
+    # Defaults to <project-root>/data
+    data_root: str = ""
+
     # Navigator platform URL (for future callback integration)
     navigator_api_base: str = "http://localhost:8112"
 

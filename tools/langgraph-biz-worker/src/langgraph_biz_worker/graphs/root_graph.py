@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import operator
 import time
+from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from ..config import settings
 from ..models import FrameStatus, QueryEvent
+from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.frame_store import FrameStore
 from ..runtime.skill_registry import SkillRegistry
 from ..runtime.skill_runtime import SkillRuntime
@@ -32,12 +35,23 @@ from .skills.exception_triage import (
 _frame_store = FrameStore()
 _skill_registry = SkillRegistry()
 _skill_registry.load()
-_runtime = SkillRuntime(frame_store=_frame_store, skill_registry=_skill_registry)
+
+# File journal for Frame persistence (Doc 31 §16.3)
+# Uses data_root from config, falls back to <project>/data
+_data_root = settings.data_root or str(Path(__file__).resolve().parent.parent.parent.parent / "data")
+_journal = FileFrameJournal(_data_root)
+
+_runtime = SkillRuntime(frame_store=_frame_store, skill_registry=_skill_registry, journal=_journal)
 
 
 def get_runtime() -> SkillRuntime:
     """Expose the shared runtime for testing and external access."""
     return _runtime
+
+
+def get_journal() -> FileFrameJournal:
+    """Expose the shared journal for resume route configuration."""
+    return _journal
 
 
 # ---------------------------------------------------------------------------
