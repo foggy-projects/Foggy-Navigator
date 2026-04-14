@@ -74,4 +74,23 @@ public class LanggraphWorkerClient {
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {});
     }
+
+    /**
+     * Resume a suspended task on the Python Worker.
+     * Only taskId is passed — frameId is Worker's internal concern (Doc 31 §16.5).
+     */
+    public Mono<Map<String, Object>> resumeTask(String taskId, String approvalResult, String comment) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("taskId", taskId);
+        body.put("approvalResult", approvalResult);
+        if (comment != null) body.put("comment", comment);
+
+        return webClient.post()
+                .uri("/api/v1/resume")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnError(e -> log.warn("Resume failed for task {}: {}", taskId, e.getMessage()));
+    }
 }

@@ -9,9 +9,9 @@ from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 
 
 class TestManifestLoadErrors:
-    def test_nonexistent_directory_logs_warning(self, caplog):
+    def test_nonexistent_directory_logs_warning(self, tmp_path, caplog):
         """Loading from a missing directory should warn, not crash."""
-        reg = SkillRegistry(manifests_dir=Path("/nonexistent/path/manifests"))
+        reg = SkillRegistry(skills_root=tmp_path / "no_skills", manifests_dir=Path("/nonexistent/path/manifests"))
         reg.load()
         assert reg.list_skills() == []
 
@@ -20,7 +20,7 @@ class TestManifestLoadErrors:
         bad_file = tmp_path / "bad.yaml"
         bad_file.write_text("::invalid yaml [[", encoding="utf-8")
 
-        reg = SkillRegistry(manifests_dir=tmp_path)
+        reg = SkillRegistry(skills_root=tmp_path / "no_skills", manifests_dir=tmp_path)
         reg.load()
         assert reg.list_skills() == []
 
@@ -29,7 +29,7 @@ class TestManifestLoadErrors:
         bad_file = tmp_path / "no_id.yaml"
         bad_file.write_text("name: No ID Skill\ndescription: missing id", encoding="utf-8")
 
-        reg = SkillRegistry(manifests_dir=tmp_path)
+        reg = SkillRegistry(skills_root=tmp_path / "no_skills", manifests_dir=tmp_path)
         reg.load()
         assert reg.list_skills() == []
 
@@ -38,7 +38,7 @@ class TestManifestLoadErrors:
         good_file = tmp_path / "test.yaml"
         good_file.write_text("id: test_skill\nname: Test", encoding="utf-8")
 
-        reg = SkillRegistry(manifests_dir=tmp_path)
+        reg = SkillRegistry(skills_root=tmp_path / "no_skills", manifests_dir=tmp_path)
         reg.load()
         assert len(reg.list_skills()) == 1
         reg.load()
@@ -46,7 +46,7 @@ class TestManifestLoadErrors:
 
     def test_empty_directory(self, tmp_path):
         """Empty manifests directory should result in no skills."""
-        reg = SkillRegistry(manifests_dir=tmp_path)
+        reg = SkillRegistry(skills_root=tmp_path / "no_skills", manifests_dir=tmp_path)
         reg.load()
         assert reg.list_skills() == []
 
@@ -55,6 +55,6 @@ class TestManifestLoadErrors:
         txt_file = tmp_path / "readme.txt"
         txt_file.write_text("not a manifest", encoding="utf-8")
 
-        reg = SkillRegistry(manifests_dir=tmp_path)
+        reg = SkillRegistry(skills_root=tmp_path / "no_skills", manifests_dir=tmp_path)
         reg.load()
         assert reg.list_skills() == []

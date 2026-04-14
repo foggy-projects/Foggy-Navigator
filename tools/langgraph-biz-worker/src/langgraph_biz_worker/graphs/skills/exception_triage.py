@@ -28,11 +28,11 @@ class TriageState(TypedDict):
 
 
 # ---------------------------------------------------------------------------
-# Helper: invoke a child skill, close its frame, write result to parent
+# Helper: invoke a child skill using Runtime composite API (Doc 31a §4.1)
 # ---------------------------------------------------------------------------
 
 
-def _invoke_child(
+def _run_child(
     runtime: SkillRuntime,
     task_id: str,
     parent_frame_id: str,
@@ -40,15 +40,9 @@ def _invoke_child(
     child_input: dict[str, Any],
     child_executor,
 ) -> tuple[list[QueryEvent], dict[str, Any]]:
-    """Generic helper to invoke, execute, close a child skill and return
-    (events, promoted_result)."""
-    runtime.mark_waiting_child(parent_frame_id)
-
-    child_frame_id = runtime.invoke_skill(
-        task_id=task_id,
-        skill_id=child_skill_id,
-        skill_input=child_input,
-        parent_frame_id=parent_frame_id,
+    """Invoke, execute, complete a child skill using SkillRuntime standard API."""
+    child_frame_id = runtime.invoke_child_skill(
+        parent_frame_id, child_skill_id, child_input,
     )
 
     events = [
@@ -61,7 +55,7 @@ def _invoke_child(
         ),
     ]
 
-    # Execute child
+    # Execute child logic
     child_state = {
         "task_id": task_id,
         "frame_id": child_frame_id,
@@ -72,11 +66,11 @@ def _invoke_child(
     child_result = child_executor(child_state)
     events.extend(child_result.get("events", []))
 
-    # Close child frame
+    # Complete child and resume parent (single call)
     child_frame = runtime.get_frame(child_frame_id)
     promoted = {}
     if child_frame and child_frame.status.value == "COMPLETED":
-        promoted = runtime.close_frame(child_frame_id)
+        promoted = runtime.complete_child_and_resume_parent(child_frame_id)
         events.append(QueryEvent(
             type="skill_frame_close",
             task_id=task_id,
@@ -84,10 +78,6 @@ def _invoke_child(
             skill_id=child_skill_id,
             content=f"Closed child frame: {child_skill_id}",
         ))
-
-    # Write to parent
-    runtime.write_child_result_to_parent(parent_frame_id, child_frame_id, promoted)
-    runtime.resume_from_child(parent_frame_id)
 
     return events, promoted
 
@@ -99,7 +89,7 @@ def _invoke_child(
 
 def invoke_evidence_child(state: TriageState) -> dict:
     """Invoke order_evidence_collect as a child Skill."""
-    events, promoted = _invoke_child(
+    events, promoted = _run_child(
         runtime=state["runtime"],
         task_id=state["task_id"],
         parent_frame_id=state["frame_id"],
@@ -154,7 +144,7 @@ def invoke_rule_check_child(state: TriageState) -> dict:
         "recommended_action": analysis["recommended_action"],
     }
 
-    events, promoted = _invoke_child(
+    events, promoted = _run_child(
         runtime=state["runtime"],
         task_id=state["task_id"],
         parent_frame_id=state["frame_id"],

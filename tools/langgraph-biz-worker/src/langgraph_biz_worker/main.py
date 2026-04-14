@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
-from .routes import health, query
+from .routes import health, query, resume
 
 logger = logging.getLogger("langgraph_biz_worker")
 
@@ -40,6 +40,7 @@ app.add_middleware(
 # Register routes
 app.include_router(health.router)
 app.include_router(query.router)
+app.include_router(resume.router)
 
 
 def main() -> None:

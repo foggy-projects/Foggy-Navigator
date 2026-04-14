@@ -136,6 +136,28 @@ public class LanggraphStreamRelay {
                     taskService.completeTask(taskId, content, structuredOutput, durationMs);
                 }
 
+                case "skill_approval_request" -> {
+                    String approvalType = node.path("approval_type").asText("");
+                    String approvalSummary = node.path("content").asText("");
+                    String approvalPayload = node.has("payload") && !node.get("payload").isNull()
+                            ? node.get("payload").toString() : null;
+
+                    // Persist audit record (Doc 31 §16.4: Java side manages audit)
+                    // Resolve userId from task entity for the approval record
+                    taskService.getTaskById(taskId).ifPresent(task ->
+                            taskService.createApprovalRecord(
+                                    taskId, sessionId, task.getUserId(),
+                                    approvalType, approvalSummary, approvalPayload));
+
+                    publishMessage(sessionId, MessageType.STATE_SYNC,
+                            Map.of("content", approvalSummary,
+                                    "subtype", "skill_approval_request",
+                                    "taskId", taskId,
+                                    "approvalType", approvalType,
+                                    "skillFrameId", node.path("skill_frame_id").asText(""),
+                                    "skillId", node.path("skill_id").asText("")));
+                }
+
                 case "error" -> {
                     String error = node.path("error").asText(node.path("content").asText("Unknown error"));
                     publishMessage(sessionId, MessageType.ERROR,

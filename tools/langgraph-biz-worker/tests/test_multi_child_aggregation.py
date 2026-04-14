@@ -39,6 +39,8 @@ async def test_frame_sequence_correct(client):
     assert sequence == [
         ("skill_frame_open", "exception_triage"),
         ("skill_frame_open", "order_evidence_collect"),
+        ("skill_frame_open", "address_verify"),
+        ("skill_frame_close", "address_verify"),
         ("skill_frame_close", "order_evidence_collect"),
         ("skill_frame_open", "rule_check"),
         ("skill_frame_close", "rule_check"),

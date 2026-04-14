@@ -5,8 +5,12 @@ import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
+import com.foggy.navigator.langgraph.worker.model.entity.LanggraphApprovalEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
+import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
+import com.foggy.navigator.langgraph.worker.model.form.ApproveTaskForm;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
+import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +35,8 @@ public class LanggraphTaskService implements TaskQueryProvider {
     public static final String PROVIDER_TYPE = "langgraph-biz-worker";
 
     private final LanggraphTaskRepository taskRepository;
+    private final LanggraphApprovalRepository approvalRepository;
+    private final LanggraphWorkerService workerService;
     private final SessionManager sessionManager;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -169,6 +175,55 @@ public class LanggraphTaskService implements TaskQueryProvider {
             taskRepository.save(entity);
             log.warn("Task failed: taskId={}, error={}", taskId, errorMessage);
         });
+    }
+
+    // ── Approval lifecycle (Doc 31 §16.4: Java side manages audit) ─────
+
+    /**
+     * Record an approval request received from Worker SSE event.
+     */
+    @Transactional
+    public LanggraphApprovalEntity createApprovalRecord(
+            String taskId, String sessionId, String userId,
+            String approvalType, String summary, String payload) {
+        LanggraphApprovalEntity entity = new LanggraphApprovalEntity();
+        entity.setTaskId(taskId);
+        entity.setSessionId(sessionId);
+        entity.setUserId(userId);
+        entity.setApprovalType(approvalType);
+        entity.setSummary(summary);
+        entity.setPayload(payload);
+        entity.setStatus("PENDING");
+        approvalRepository.save(entity);
+        log.info("Created approval record: taskId={}, type={}", taskId, approvalType);
+        return entity;
+    }
+
+    /**
+     * Approve/reject a pending approval and call Worker resume.
+     */
+    @Transactional
+    public void approveTask(String taskId, ApproveTaskForm form) {
+        LanggraphApprovalEntity approval = approvalRepository.findByTaskIdAndStatus(taskId, "PENDING")
+                .orElseThrow(() -> new IllegalArgumentException("No pending approval for task: " + taskId));
+
+        approval.setApprovalResult(form.getApprovalResult());
+        approval.setComment(form.getComment());
+        approval.setReviewedBy(form.getReviewedBy());
+        approval.setStatus("approved".equalsIgnoreCase(form.getApprovalResult()) ? "APPROVED" : "REJECTED");
+        approval.setReviewedAt(java.time.LocalDateTime.now());
+        approvalRepository.save(approval);
+
+        // Call Worker resume API (Doc 31 §16.5: only pass taskId)
+        LanggraphTaskEntity task = taskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        LanggraphWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
+        var client = workerService.createClient(worker);
+
+        client.resumeTask(taskId, form.getApprovalResult(), form.getComment())
+                .doOnSuccess(resp -> log.info("Worker resume success: taskId={}", taskId))
+                .doOnError(e -> log.error("Worker resume failed: taskId={}", taskId, e))
+                .subscribe();
     }
 
     public LanggraphTaskDTO getTask(String userId, String taskId) {

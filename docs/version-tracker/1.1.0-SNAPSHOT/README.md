@@ -18,5 +18,6 @@
 ## 条目列表
 
 - [31-langgraph-biz-worker-skill-runtime-design.md](./31-langgraph-biz-worker-skill-runtime-design.md) - 架构设计 / LangGraph Biz Worker + Skill Runtime
+  - 已补充：Skill 定义归属、账号私有目录、Agent Skills 开放标准、`SKILL.md` 资源组织与 Worker 管理边界
 - [32-langgraph-biz-worker-tms-sequence-and-api-contract.md](./32-langgraph-biz-worker-tms-sequence-and-api-contract.md) - 时序图与 Java/Python API 契约
 - [33-langgraph-biz-worker-implementation-plan.md](./33-langgraph-biz-worker-implementation-plan.md) - 实现计划 / 模块拆分、阶段交付、测试基线

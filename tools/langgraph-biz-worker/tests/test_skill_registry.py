@@ -7,10 +7,10 @@ from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 
 
 @pytest.fixture
-def registry() -> SkillRegistry:
-    """Registry pointed at the real manifests/ directory."""
+def registry(tmp_path) -> SkillRegistry:
+    """Registry pointed at the real manifests/ directory (legacy mode only)."""
     manifests_dir = Path(__file__).resolve().parent.parent / "src" / "langgraph_biz_worker" / "manifests"
-    reg = SkillRegistry(manifests_dir=manifests_dir)
+    reg = SkillRegistry(skills_root=tmp_path / "no_skills", manifests_dir=manifests_dir)
     reg.load()
     return reg
 

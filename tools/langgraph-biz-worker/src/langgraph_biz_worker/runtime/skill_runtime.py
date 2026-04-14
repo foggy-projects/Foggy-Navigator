@@ -20,6 +20,7 @@ from ..models import (
     VALID_TRANSITIONS,
     ValidationResult,
 )
+from .file_frame_journal import FileFrameJournal
 from .frame_store import FrameStore
 from .output_contract import validate_output_contract
 from .skill_registry import SkillRegistry
@@ -43,6 +44,21 @@ class SubmitResultRejected(Exception):
         super().__init__(f"Submit rejected: {errors}")
 
 
+class MaxNestingDepthExceeded(Exception):
+    """Raised when child Skill invocation exceeds the maximum nesting depth."""
+
+    def __init__(self, depth: int, max_depth: int) -> None:
+        self.depth = depth
+        self.max_depth = max_depth
+        super().__init__(
+            f"Nesting depth {depth} exceeds maximum {max_depth}"
+        )
+
+
+# Default maximum nesting depth for Skill calls.
+DEFAULT_MAX_NESTING_DEPTH = 5
+
+
 class SkillRuntime:
     """Core runtime managing Frame lifecycle for all Skills.
 
@@ -54,9 +70,13 @@ class SkillRuntime:
         self,
         frame_store: FrameStore | None = None,
         skill_registry: SkillRegistry | None = None,
+        journal: FileFrameJournal | None = None,
+        max_nesting_depth: int = DEFAULT_MAX_NESTING_DEPTH,
     ) -> None:
         self.store = frame_store or FrameStore()
         self.registry = skill_registry or SkillRegistry()
+        self._journal = journal
+        self._max_nesting_depth = max_nesting_depth
 
     # -- Frame creation ------------------------------------------------------
 
@@ -86,7 +106,7 @@ class SkillRuntime:
 
         # CREATED → RUNNING
         self._transition(frame, FrameStatus.RUNNING)
-        self.store.save(frame)
+        self._save(frame)
 
         # If there is a parent, register this child
         if parent_frame_id:
@@ -107,13 +127,48 @@ class SkillRuntime:
         """RUNNING → WAITING_CHILD."""
         frame = self._get_frame(frame_id)
         self._transition(frame, FrameStatus.WAITING_CHILD)
-        self.store.save(frame)
+        self._save(frame)
 
     def resume_from_child(self, frame_id: str) -> None:
         """WAITING_CHILD → RUNNING."""
         frame = self._get_frame(frame_id)
         self._transition(frame, FrameStatus.RUNNING)
-        self.store.save(frame)
+        self._save(frame)
+
+    def mark_awaiting_approval(
+        self,
+        frame_id: str,
+        approval_request: dict[str, Any],
+    ) -> None:
+        """RUNNING → AWAITING_APPROVAL.
+
+        The ``approval_request`` payload is persisted on the Frame and
+        emitted as an SSE event so Java side can capture and store the
+        audit record (Doc 31 §16.4).
+        """
+        frame = self._get_frame(frame_id)
+        self._transition(frame, FrameStatus.AWAITING_APPROVAL)
+        frame.approval_request = approval_request
+        self._save(frame)
+        logger.info("Frame %s awaiting approval: %s", frame_id, approval_request.get("approval_type", ""))
+
+    def resume_from_approval(
+        self,
+        frame_id: str,
+        approval_result: str,
+        comment: str = "",
+    ) -> None:
+        """AWAITING_APPROVAL → RUNNING after external approval.
+
+        Called when Java side sends ``POST /api/v1/resume``.
+        """
+        frame = self._get_frame(frame_id)
+        self._transition(frame, FrameStatus.RUNNING)
+        frame.private_working_state["approval_result"] = approval_result
+        frame.private_working_state["approval_comment"] = comment
+        frame.approval_request = None  # clear the pending request
+        self._save(frame)
+        logger.info("Frame %s resumed from approval: %s", frame_id, approval_result)
 
     def fail_frame(self, frame_id: str, reason: str = "") -> None:
         """Transition to FAILED from any non-terminal state."""
@@ -121,7 +176,7 @@ class SkillRuntime:
         self._transition(frame, FrameStatus.FAILED)
         frame.ended_at = datetime.now(timezone.utc).isoformat()
         frame.private_working_state["fail_reason"] = reason
-        self.store.save(frame)
+        self._save(frame)
         logger.warning("Frame %s failed: %s", frame_id, reason)
 
     def cancel_frame(self, frame_id: str) -> None:
@@ -129,7 +184,7 @@ class SkillRuntime:
         frame = self._get_frame(frame_id)
         self._transition(frame, FrameStatus.CANCELLED)
         frame.ended_at = datetime.now(timezone.utc).isoformat()
-        self.store.save(frame)
+        self._save(frame)
         logger.info("Frame %s cancelled", frame_id)
 
     # -- Completion protocol -------------------------------------------------
@@ -176,7 +231,7 @@ class SkillRuntime:
         if result.ok:
             self._transition(frame, FrameStatus.COMPLETED)
             frame.ended_at = datetime.now(timezone.utc).isoformat()
-            self.store.save(frame)
+            self._save(frame)
             logger.info("Frame %s completed", frame_id)
             return result
         else:
@@ -187,7 +242,7 @@ class SkillRuntime:
                 frame.private_working_state["fail_reason"] = (
                     f"Max submit attempts ({frame.max_submit_attempts}) exceeded"
                 )
-                self.store.save(frame)
+                self._save(frame)
                 logger.warning(
                     "Frame %s failed after %d submit attempts",
                     frame_id, frame.submit_attempts,
@@ -196,7 +251,7 @@ class SkillRuntime:
                 # Remain RUNNING, clear candidate output
                 frame.output = None
                 frame.result_summary = None
-                self.store.save(frame)
+                self._save(frame)
 
             return result
 
@@ -242,7 +297,7 @@ class SkillRuntime:
         frame.private_messages.clear()
         frame.private_working_state.clear()
         frame.tool_calls.clear()
-        self.store.save(frame)
+        self._save(frame)
 
         logger.info("Frame %s closed, promoted keys: %s", frame_id, list(promoted.keys()))
         return promoted
@@ -259,7 +314,91 @@ class SkillRuntime:
         parent = self._get_frame(parent_frame_id)
         child_results = parent.private_working_state.setdefault("child_results", {})
         child_results[child_frame_id] = child_promoted
-        self.store.save(parent)
+        self._save(parent)
+
+    # -- Composite child Skill operations (Doc 31a §4.1) ---------------------
+
+    def invoke_child_skill(
+        self,
+        parent_frame_id: str,
+        child_skill_id: str,
+        child_input: dict[str, Any] | None = None,
+    ) -> str:
+        """Standard child Skill invocation with depth check.
+
+        1. Check nesting depth limit
+        2. mark_waiting_child(parent)
+        3. invoke_skill(child, parent_frame_id=parent)
+        4. Return child_frame_id
+        """
+        depth = self.get_nesting_depth(parent_frame_id)
+        if depth >= self._max_nesting_depth:
+            raise MaxNestingDepthExceeded(depth, self._max_nesting_depth)
+
+        parent = self._get_frame(parent_frame_id)
+        self.mark_waiting_child(parent_frame_id)
+
+        child_frame_id = self.invoke_skill(
+            task_id=parent.task_id,
+            skill_id=child_skill_id,
+            skill_input=child_input,
+            parent_frame_id=parent_frame_id,
+        )
+
+        logger.info(
+            "Child skill invoked: parent=%s child=%s skill=%s depth=%d",
+            parent_frame_id, child_frame_id, child_skill_id, depth + 1,
+        )
+        return child_frame_id
+
+    def complete_child_and_resume_parent(
+        self,
+        child_frame_id: str,
+    ) -> dict[str, Any]:
+        """Standard child completion: close child, write to parent, resume parent.
+
+        1. close_frame(child) → promoted result
+        2. write_child_result_to_parent(parent, child, promoted)
+        3. resume_from_child(parent)
+        4. Return promoted result
+        """
+        child = self._get_frame(child_frame_id)
+        parent_frame_id = child.parent_frame_id
+        if not parent_frame_id:
+            raise ValueError(
+                f"Frame {child_frame_id} has no parent — "
+                "use close_frame() directly for root-level frames"
+            )
+
+        promoted = self.close_frame(child_frame_id)
+        self.write_child_result_to_parent(parent_frame_id, child_frame_id, promoted)
+        self.resume_from_child(parent_frame_id)
+
+        return promoted
+
+    # -- Call stack & nesting depth ------------------------------------------
+
+    def get_call_stack(self, frame_id: str) -> list[SkillFrameState]:
+        """Walk parent_frame_id chain upward, return stack (current at index 0, root last)."""
+        stack: list[SkillFrameState] = []
+        current = self.store.get(frame_id)
+        visited: set[str] = set()  # guard against cycles
+        while current and current.frame_id not in visited:
+            stack.append(current)
+            visited.add(current.frame_id)
+            if current.parent_frame_id:
+                current = self.store.get(current.parent_frame_id)
+            else:
+                break
+        return stack
+
+    def get_nesting_depth(self, frame_id: str) -> int:
+        """Return nesting depth of a frame (root frame = 0)."""
+        return len(self.get_call_stack(frame_id)) - 1
+
+    @property
+    def max_nesting_depth(self) -> int:
+        return self._max_nesting_depth
 
     # -- Queries -------------------------------------------------------------
 
@@ -276,6 +415,12 @@ class SkillRuntime:
         if frame is None:
             raise FrameNotFound(f"Frame not found: {frame_id}")
         return frame
+
+    def _save(self, frame: SkillFrameState) -> None:
+        """Save frame to in-memory store and optionally persist to file journal."""
+        self.store.save(frame)
+        if self._journal:
+            self._journal.save(frame)
 
     def _transition(self, frame: SkillFrameState, target: FrameStatus) -> None:
         """Validate and apply a state transition."""

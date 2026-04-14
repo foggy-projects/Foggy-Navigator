@@ -6,6 +6,12 @@
 - intended_for: root-controller + worker-runtime + reviewer
 - purpose: 定义基于 LangGraph 的业务型 Worker、Skill Runtime、Frame 生命周期、完成协议、上下文隔离与嵌套 Skill 编排方案
 
+## 文档分区
+
+- **§1-§5**：设计目标与架构约束（必须遵守）
+- **§6-§15**：已实现设计的存档记录（实现参考，允许在不违反 §4 核心原则的前提下调整）
+- **§16-§17**：落地策略与执行方案（当前活跃）
+
 ## 1. 背景
 
 当前系统已经接入 `claude-worker`、`codex-worker` 两类编程型 Worker，它们适合代码任务，但不适合作为 TMS 等业务系统的默认执行后端。
@@ -137,44 +143,227 @@ Skill 执行完成时，模型必须调用专门的结果提交工具：
   -> close frame
 ```
 
-## 6. Skill 定义模型
+## 6. Skill 定义与资源维护模型
 
-Skill 建议使用结构化 Manifest，而不是纯文本 `SKILL.md` 作为生产协议。
+### 6.1 归属原则
 
-建议字段：
+Skill 的定义与资源由 Worker 维护，不由上游在每次任务请求中内联传入。
 
-```yaml
-id: tms_exception_triage
-name: TMS异常分诊
-description: 分析订单异常并给出处置建议
-input_schema: TmsExceptionInput
-output_schema: TmsExceptionOutput
-allowed_tools:
-  - get_order
-  - get_vehicle_status
-  - search_incidents
-approval_tools:
-  - create_manual_ticket
-prompt_ref: skill://tms/exception_triage/prompt
-assets:
-  - skill://tms/exception_triage/playbook.md
-subgraph: tms_exception_triage_graph
-promote_to_parent:
-  - result.summary
-  - result.structured_output
-  - result.evidence_refs
-  - result.approval_request
-business_rules:
-  require_evidence: true
-  min_evidence_count: 1
+职责边界：
+
+1. `LLM` 负责判断是否使用 Skill，以及使用哪个 Skill
+2. 上游系统可以传入 `skillName` 或候选 Skill 名称，但仅作为提示信息
+3. `langgraph-biz-worker` 负责 Skill 的注册、存储、扫描、加载、版本与权限控制
+4. 运行时只按 `skillId/skillName` 引用 Skill，不传递完整 Skill 正文
+
+这样可以保证：
+
+1. Skill 内容可审计、可回放
+2. Skill 资源路径稳定可解析
+3. 权限与工具白名单由 Worker 统一收口
+4. 同一个 Skill 在不同任务中的行为可复现
+
+### 6.2 目录模型
+
+每个业务账号在 Worker 所在服务器上拥有独立目录，作为该账号的私有运行根目录。
+
+建议目录结构：
+
+```text
+<worker-root>/
+  skills/
+    public/
+      <skill-name>/
+        SKILL.md
+        scripts/
+        references/
+        assets/
+    builtin/
+      <skill-name>/
+        SKILL.md
+        scripts/
+        references/
+        assets/
+
+  accounts/
+    <account-id>/
+      conversations/
+      skills/
+        <skill-name>/
+          SKILL.md
+          scripts/
+          references/
+          assets/
+      data/
+      cache/
+      logs/
 ```
 
 说明：
 
-1. `description` 仅用于路由与候选匹配
-2. `prompt_ref/assets` 按需加载，不允许长期驻留父上下文
-3. `promote_to_parent` 决定哪些字段允许上浮
-4. `business_rules` 用于补足仅做 Schema 校验的不充分问题
+1. `accounts/<account-id>/` 本身就是账号私有根目录，不再额外引入 `private/`
+2. 账号私有 Skill 统一放在 `accounts/<account-id>/skills/`
+3. 平台公共 Skill 放在 `skills/public/`
+4. Worker 运行时内建 Skill 放在 `skills/builtin/`
+5. `conversations/` 与 `skills/` 共处同一账号根目录，便于会话、审计、技能版本关联追踪
+
+首版查找优先级：
+
+1. `account skills`
+2. `public`
+3. `builtin`
+
+若后续引入项目级 Skill，再扩展为：
+
+1. `workspace`
+2. `account skills`
+3. `public`
+4. `builtin`
+
+### 6.3 Skill 格式规范
+
+Skill 的磁盘格式采用业界开放标准 `Agent Skills`，以 `SKILL.md` 作为入口文件，不再自定义平行的 Manifest 生产协议。
+
+标准来源：
+
+1. `agentskills.io` 开放规范
+2. OpenAI Skills 说明
+3. LangChain Deep Agents Skills 说明
+
+标准目录最小结构：
+
+```text
+<skill-name>/
+  SKILL.md
+```
+
+推荐结构：
+
+```text
+<skill-name>/
+  SKILL.md
+  scripts/
+  references/
+  assets/
+```
+
+其中：
+
+1. `SKILL.md` 为标准入口文件，采用 YAML frontmatter + Markdown body
+2. `scripts/` 存放可复用脚本或执行辅助文件
+3. `references/` 存放规则说明、操作手册、案例参考
+4. `assets/` 存放模板、示例、静态资源
+
+### 6.4 `SKILL.md` 约定
+
+标准 frontmatter 至少包括：
+
+1. `name`
+2. `description`
+
+推荐支持的标准字段：
+
+1. `license`
+2. `compatibility`
+3. `metadata`
+4. `allowed-tools`
+
+其中：
+
+1. 标准字段用于兼容开放 Skill 生态
+2. 业务 Worker 的专属附加信息统一放入 `metadata`
+3. `allowed-tools` 可以作为 Skill 自声明权限，但最终生效权限仍由 Worker 侧策略二次收口
+
+示例：
+
+```md
+---
+name: tms-exception-triage
+description: Analyze TMS exception orders and return structured handling advice.
+license: Proprietary
+compatibility: Designed for langgraph-biz-worker
+metadata:
+  owner: platform
+  version: "1.0.0"
+  domain: tms
+  visibility: account
+  output-schema: tms_exception_triage_v1
+  approval-mode: required-on-manual-dispatch
+allowed-tools: get_order get_vehicle_status search_incidents submit_skill_result request_skill_approval
+---
+
+# TMS Exception Triage
+
+## When to use
+Use this skill when the task is about exception diagnosis for a TMS order.
+
+## Instructions
+1. Read order details first.
+2. Collect vehicle and incident evidence if needed.
+3. Do not guess without evidence.
+4. When finished, call `submit_skill_result`.
+5. If manual dispatch is required, call `request_skill_approval`.
+
+## References
+Read `references/playbook.md` when classification is unclear.
+```
+
+### 6.5 Worker 内部解析规则
+
+虽然 Skill 磁盘格式采用开放标准，但 Worker 运行时仍需统一解析为内部注册表对象。
+
+内部解析时应抽取：
+
+1. `skill_name`
+2. `description`
+3. `source_scope`（account/public/builtin）
+4. `source_path`
+5. `metadata`
+6. `allowed_tools`
+7. `declared_resources`
+
+约束：
+
+1. `SKILL.md` 是唯一入口文件
+2. 所有资源路径默认相对当前 Skill 目录解析
+3. Skill 不允许默认越目录读取未声明资源
+4. Worker 可以缓存 Skill 索引，但正文和资源按需加载
+
+### 6.6 权限与工具白名单
+
+`allowed-tools` 不能直接视为最终权限。
+
+Worker 侧应额外叠加：
+
+1. 平台级工具白名单
+2. 账号级工具授权
+3. 当前 Skill 声明的 `allowed-tools`
+
+最终生效工具集合：
+
+```text
+effective_tools =
+  platform_policy
+  ∩ account_policy
+  ∩ skill_allowed_tools
+```
+
+### 6.7 Skill 管理方式
+
+上游系统不直接在 query 请求中传递 Skill 正文，而是通过 Worker 暴露的 Skill 管理 API 维护 Skill。
+
+首版建议支持：
+
+1. 创建账号私有 Skill
+2. 更新 `SKILL.md`
+3. 上传/删除 `scripts/`、`references/`、`assets/`
+4. 查询当前账号可见的 Skills
+
+因此：
+
+1. Skill 的内容归 Worker 管理
+2. Skill 的使用时机由 LLM 决定
+3. 上游只负责维护和可见性管理，不直接持有运行时 Skill 内容
 
 ## 7. Frame 模型
 
@@ -405,10 +594,12 @@ complete_frame(frame_id, candidate_output)
 
 ### 11.3 持久化层负责
 
-1. 保存 Frame 状态
-2. 保存结果产物
-3. 保存审批记录
-4. 保存调试/审计痕迹
+> 注：首版中，审批记录与审计由 Java 侧 JPA 负责（见 §16.4），Worker 侧持久化层仅负责 Frame 状态文件。
+
+1. 保存 Frame 状态 — Worker 侧（JSON 文件）
+2. 保存结果产物 — Worker 侧（JSON 文件）
+3. 保存审批记录 — Java 侧（JPA）
+4. 保存调试/审计痕迹 — Java 侧（JPA）
 
 ## 12. Skill 嵌套与调用栈
 
@@ -557,7 +748,84 @@ Frame 关闭后：
 - **Python 侧**：负责 Root Graph / Skill Subgraph 执行、Frame 生命周期、Skill Registry、Output Contract 校验、Mock 业务工具
 - 每个阶段的交付项必须按 Java / Python 侧分别标注归属
 
-### 16.3 先做的
+### 16.3 持久化策略
+
+Worker 侧使用 JSON 文件落盘 Frame 状态，**不引入数据库**。
+
+目录结构：
+
+```text
+<worker-root>/
+  accounts/
+    <account-id>/
+      frames/
+        <task-id>/
+          <frame-id>.json
+```
+
+写入时机：Frame 状态变更时覆写（创建、运行中、完成、失败、等待审批）。
+
+关键约束：
+
+1. **Worker 重启后不做自动恢复**：内存清空，什么都不做，启动即就绪
+2. 恢复由外部触发：用户在前端点"继续" → Java 侧调 Worker `/api/v1/resume`，Worker 从文件读回 Frame 状态继续执行；或 Java 侧自动检测未完成任务主动调 resume
+3. 终态 Frame 文件保留可配置天数后清理，或不清理（Java 侧有审计记录即可）
+
+后续数据库预留：
+
+- 首版不做选择，文件方案足够
+- 如后期需要（如 Frame 执行历史需复杂查询），再决定 Worker 直连 DB 还是文件同步到 Java 侧
+
+### 16.4 审批职责分工
+
+**原则：Worker 管杀不管埋。**
+
+| 职责 | Python Worker | Java 侧 |
+|------|--------------|---------|
+| Frame 执行 | ✅ 创建/运行/完成/失败 | — |
+| Frame 状态恢复 | ✅ 从文件恢复（被动） | ✅ 发起 resume 调用 |
+| 审批请求触发 | ✅ 发出 `approval_request` SSE 事件 | 接收并持久化 |
+| 审批记录 & 审计 | — | ✅ JPA 实体存储 |
+| 审批结果回传 | 接收 resume 指令继续执行 | ✅ 调用 Worker resume API |
+| Frame 历史查询 | — | ✅ 通过 Task/审批记录查 |
+
+审批流：
+
+```text
+Python Worker                          Java 侧
+    |                                     |
+    |-- SSE event: skill_approval_request -->|
+    |                                     |-- 持久化审批记录 (JPA)
+    |                                     |-- 推送前端 (SSE/WS)
+    |                                     |
+    |                                     |<-- 用户点击审批
+    |                                     |-- 更新审批记录
+    |<-- POST /api/v1/resume -------------|
+    |                                     |
+    |-- 从文件恢复 Frame                    |
+    |-- 继续执行 Skill Subgraph            |
+    |-- SSE event: result --------------->|
+    |                                     |-- 更新任务状态
+```
+
+Worker 不存审批记录，只做三件事：发事件、挂起 Frame（写文件）、收到 resume 后继续跑。
+
+### 16.5 Resume API 契约
+
+Java 侧调用 Worker resume 接口时，**只传 `taskId`，不传 `frameId`**。
+
+```text
+POST /api/v1/resume
+{
+  "taskId": "task_xxx",
+  "approvalResult": "approved",
+  "comment": "..."
+}
+```
+
+Frame 是 Worker 内部概念，Java 侧不感知。Worker 内部根据 `taskId` 找到处于 `AWAITING_APPROVAL` 状态的 Frame 并恢复执行。
+
+### 16.6 先做的
 
 1. `providerType = langgraph-biz-worker`
 2. `SkillManifest`
@@ -568,7 +836,7 @@ Frame 关闭后：
 7. 单层 Skill 调用
 8. 单个示例 Skill（使用 Mock 工具）
 
-### 16.4 第二阶段
+### 16.7 第二阶段
 
 1. 子 Skill 调用栈
 2. 审批恢复
@@ -577,7 +845,107 @@ Frame 关闭后：
 5. 前端 Skill 配置台
 6. 真实业务系统工具适配
 
-## 17. 结论
+### 16.8 完成定义
+
+每个阶段的交付必须满足：
+
+1. 相关单元测试 / 集成测试 **运行通过**（不仅仅是编写）
+2. 测试结果记录到 progress
+3. 经过后置评审链路：quality-gate → test-coverage-audit → acceptance
+
+## 17. 当前实现状态与初始执行方案
+
+### 17.1 已完成
+
+Phase 1-5 已在 Java 侧和 Python 侧落地：
+
+| 组件 | 归属 | 状态 |
+|------|------|------|
+| `LanggraphWorkerAgentProvider` + `InnerA2aAgent` | Java | ✅ |
+| `LanggraphTaskService`（TaskQueryProvider SPI） | Java | ✅ |
+| `LanggraphStreamRelay`（SSE 中继） | Java | ✅ |
+| `LanggraphWorkerClient`（HTTP 客户端） | Java | ✅ |
+| `LanggraphTaskController` + `LanggraphWorkerController` | Java | ✅ |
+| Entity / Repository / DTO / Form | Java | ✅ |
+| FastAPI 应用 + `/health` + `/api/v1/query` | Python | ✅ |
+| Frame 状态机（7 状态 + 转换校验） | Python | ✅ |
+| `SkillRuntime`（invoke_skill / submit_result / mark_waiting_child / resume_from_child） | Python | ✅ |
+| `SkillRegistry` + `OutputContract` 三层校验 | Python | ✅ |
+| Root Graph + 3 个 Skill Subgraph（含嵌套子 Skill） | Python | ✅ |
+| Mock 业务工具 | Python | ✅ |
+| 38 个测试文件 | Python | ✅（需确认运行结果） |
+
+### 17.2 待补齐缺口
+
+| # | 缺口 | 归属 | 优先级 | 状态 |
+|---|------|------|--------|------|
+| G1 | Skill 目录结构与设计稿不一致 | Python | 中 | ✅ 已完成（skills/builtin/ + SKILL.md） |
+| G2 | Skill 磁盘格式未对齐 | Python | 中 | ✅ 已完成（YAML frontmatter + Markdown body） |
+| G3 | Frame 文件持久化 | Python | 高 | ✅ 已完成（FileFrameJournal） |
+| G4 | Java 侧审批/恢复 API | Java | 中 | ✅ 已完成（POST /{taskId}/approve） |
+| G5 | SecurityConfig 新端点权限 | Java | 中 | ✅ 无需改动（通配符已覆盖） |
+| G6 | SSE 审批事件 `skill_approval_request` | Java | 中 | ✅ 已完成（StreamRelay 处理） |
+| G7 | Java 侧编译验证 | Java | 中 | ✅ 已完成（mvn compile 全量通过） |
+| G8 | Python 测试运行结果 | Python | 低 | ✅ 140 passed, 0 failed |
+
+### 17.3 初始执行方案
+
+#### Phase 6A：核心缺口（优先）
+
+| # | 任务 | 归属 | 完成定义 |
+|---|------|------|---------|
+| 1 | Frame 文件持久化：状态变更时写 JSON 文件 | Python | 新增持久化写入/读取测试通过 |
+| 2 | 运行现有测试并记录结果 | Python | 全部通过，结果记录到 progress |
+
+#### Phase 6B：审批恢复链路 + 架构卫生（并行双轨）
+
+**轨道 A — 审批链路（阻塞后续集成）：**
+
+| # | 任务 | 归属 | 完成定义 |
+|---|------|------|---------|
+| 3 | Java 审批/恢复 API：`POST /api/v1/langgraph/tasks/{taskId}/approve`、`POST .../resume` | Java | 单元测试通过 + SecurityConfig 已更新 |
+| 4 | Python resume 端点：`POST /api/v1/resume`（只接收 taskId），从文件恢复 Frame 继续执行 | Python | 审批 → 恢复 → 完成 全流程测试通过 |
+| 5 | SSE Relay 支持 `skill_approval_request` 事件类型 | Java | 集成测试验证事件到达前端 |
+
+**轨道 B — 架构卫生（不阻塞功能，可独立推进）：**
+
+| # | 任务 | 归属 | 完成定义 |
+|---|------|------|---------|
+| 6 | 对齐 Skill 目录结构：`manifests/` → `skills/builtin/`，`SkillRegistry` 按 `builtin` → `public` 优先级加载 | Python | 现有测试全部通过 + 新增目录结构测试 |
+| 7 | Skill 磁盘格式对齐：YAML manifest → `SKILL.md`（YAML frontmatter + Markdown body） | Python | SkillRegistry 能解析 SKILL.md，现有测试适配通过 |
+
+#### Phase 6C：质量收口
+
+| # | 任务 | 归属 | 完成定义 |
+|---|------|------|---------|
+| 8 | Java 侧集成测试：`LanggraphWorkerAgentProvider` + `LanggraphTaskService`（Mock Python Worker） | Java | 测试运行通过 |
+| 9 | 端到端冒烟测试：Java + Python 联调，通过 `/api/v1/agents/{id}/ask` 完成一次完整 Skill 执行 | 联合 | 手动或脚本验证，结果记录 |
+| 10 | 文档回写：更新 progress、补充 experience | 文档 | quality-gate 可通过 |
+
+#### 执行顺序
+
+```text
+Phase 6A (1→2，串行)
+  ↓
+Phase 6B 双轨并行:
+  轨道 A: 3+4 并行 → 5
+  轨道 B: 6→7（独立推进，不阻塞轨道 A）
+  ↓
+Phase 6C (8+9 并行 → 10)
+  ↓
+quality-gate → test-coverage-audit → acceptance
+```
+
+#### 暂不做
+
+- 账号级 Skill 隔离（`accounts/<id>/skills/`）
+- 前端 Skill 配置台
+- 真实业务系统工具适配
+- 多 Frame 并发调度优化
+- Skill 版本回滚
+- Worker 重启自动恢复
+
+## 18. 结论
 
 本方案的核心不是“删除 Skill 上下文”，而是：
 
