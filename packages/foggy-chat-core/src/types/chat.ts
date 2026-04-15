@@ -15,6 +15,8 @@ export interface ChatMessage {
   raw?: unknown
   permissionId?: string
   permissionStatus?: 'pending' | 'approved' | 'denied'
+  /** Present when this is a Skill approval request from langgraph-biz-worker */
+  approvalStatus?: 'pending' | 'approved' | 'rejected'
   /** Present when this is an AskUserQuestion interaction */
   questions?: UserQuestionItem[]
   /** Present when this is an ExitPlanMode plan review */

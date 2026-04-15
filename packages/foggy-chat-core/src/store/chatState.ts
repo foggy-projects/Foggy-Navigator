@@ -31,6 +31,7 @@ export interface ChatState {
   setConnectionStatus: (status: ConnectionStatus) => void
   clearMessages: () => void
   resolvePermission: (permissionId: string, status: 'approved' | 'denied') => void
+  resolveSkillApproval: (taskId: string, decision: 'approved' | 'rejected') => void
 }
 
 function formatArguments(args: unknown): string {
@@ -234,6 +235,19 @@ export function createChatState(): ChatState {
           // Internal sync events — consume silently, do not render
           break
         }
+        if (subtype === 'skill_approval_request') {
+          // Skill approval request from langgraph-biz-worker (Doc 31 §16.4)
+          messages.value.push({
+            id: aip.messageId,
+            type: aip.type,
+            sender: 'system',
+            content: (raw.content as string) || 'Skill requires approval',
+            approvalStatus: 'pending',
+            raw,
+            timestamp: aip.timestamp,
+          })
+          break
+        }
         if (subtype === 'waiting') {
           // "Waiting for response" hint — replace previous waiting msg to avoid stacking
           const existingIdx = messages.value.findIndex(
@@ -391,6 +405,17 @@ export function createChatState(): ChatState {
     }
   }
 
+  function resolveSkillApproval(taskId: string, decision: 'approved' | 'rejected') {
+    const msg = messages.value.find(
+      (m) =>
+        m.approvalStatus === 'pending' &&
+        (m.raw as Record<string, unknown>)?.taskId === taskId,
+    )
+    if (msg) {
+      msg.approvalStatus = decision
+    }
+  }
+
   function clearMessages() {
     messages.value = []
     isThinking.value = false
@@ -408,5 +433,6 @@ export function createChatState(): ChatState {
     setConnectionStatus,
     clearMessages,
     resolvePermission,
+    resolveSkillApproval,
   }
 }
