@@ -2429,7 +2429,14 @@
           </el-select>
         </el-form-item>
         <el-form-item label="默认模型">
-          <el-input v-model="agentForm.defaultModel" placeholder="如 opus[1m], sonnet, codex-mini（留空则从LLM配置推断）" />
+          <el-select
+            v-model="agentForm.defaultModel"
+            style="width: 100%"
+            :disabled="agentModelOptions.length === 0"
+            :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置或目录默认配置'"
+          >
+            <el-option v-for="opt in agentModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2466,7 +2473,14 @@
           </el-select>
         </el-form-item>
         <el-form-item label="默认模型">
-          <el-input v-model="agentForm.defaultModel" placeholder="如 opus[1m], sonnet, codex-mini（留空则从LLM配置推断）" />
+          <el-select
+            v-model="agentForm.defaultModel"
+            style="width: 100%"
+            :disabled="agentModelOptions.length === 0"
+            :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置或目录默认配置'"
+          >
+            <el-option v-for="opt in agentModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
+          </el-select>
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -2625,6 +2639,7 @@ import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
+import { ALL_MODEL_OPTIONS, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone } from '@/types'
 import type { AipMessageType, ChatMessage } from '@foggy/chat'
 
@@ -3221,22 +3236,7 @@ const editDirForm = ref({
   defaultModelConfigId: '' as string,
 })
 
-const ALL_MODELS: { value: string; label: string; backend: string }[] = [
-  // Claude models
-  { value: 'opus[1m]', label: 'Opus (1M)', backend: 'CLAUDE_CODE' },
-  { value: 'opus', label: 'Opus', backend: 'CLAUDE_CODE' },
-  { value: 'sonnet[1m]', label: 'Sonnet (1M)', backend: 'CLAUDE_CODE' },
-  { value: 'sonnet', label: 'Sonnet', backend: 'CLAUDE_CODE' },
-  { value: 'haiku', label: 'Haiku', backend: 'CLAUDE_CODE' },
-  // Codex models
-  { value: 'gpt-5.4:low', label: '5.4 Low', backend: 'OPENAI_CODEX' },
-  { value: 'gpt-5.4', label: '5.4 Medium', backend: 'OPENAI_CODEX' },
-  { value: 'gpt-5.4:high', label: '5.4 High', backend: 'OPENAI_CODEX' },
-  { value: 'gpt-5.4:extra-high', label: '5.4 Extra High', backend: 'OPENAI_CODEX' },
-  { value: 'gpt-5.4-mini', label: '5.4 Mini', backend: 'OPENAI_CODEX' },
-  { value: 'gpt-5.3-codex', label: '5.3 Codex', backend: 'OPENAI_CODEX' },
-  { value: 'gpt-5.3-codex-spark', label: 'Spark', backend: 'OPENAI_CODEX' },
-]
+const ALL_MODELS = ALL_MODEL_OPTIONS
 
 // ── Forward Session composable ──
 const forwardState = useForwardSession({
@@ -3382,19 +3382,35 @@ function restoreWorkerLlmSelection(workerId: string | null): boolean {
   return false
 }
 
-// --- 根据平台模型配置过滤可用模型 ---
-function isSelectablePlatformModel(model: LlmModelConfig): boolean {
-  return model.hasApiKey || model.workerBackend === 'OPENAI_CODEX'
-}
-
-
 const claudeModelOptions = computed(() => {
-  const backend = platformModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
-  const backendModels = ALL_MODELS.filter(m => m.backend === backend)
-  const allowed = platformModelConfig.value?.availableModels
-  if (!allowed || allowed.length === 0) return backendModels
-  return backendModels.filter(opt => allowed.includes(opt.value))
+  return resolveModelOptions(platformModelConfig.value)
 })
+
+const agentPlatformModelConfig = computed(() =>
+  platformModels.value.find((m) => m.id === agentForm.value.defaultModelConfigId) || null,
+)
+
+const agentDirectoryModelConfig = computed(() => {
+  const directoryId = agentForm.value.defaultDirectoryId
+  if (!directoryId) return null
+  const directory = workerState.directories.value.find((dir) => dir.directoryId === directoryId)
+  if (!directory?.defaultModelConfigId) return null
+  return platformModels.value.find((m) => m.id === directory.defaultModelConfigId) || null
+})
+
+const agentEffectiveModelConfig = computed(() => agentPlatformModelConfig.value || agentDirectoryModelConfig.value)
+const agentModelOptions = computed(() => resolveModelOptions(agentEffectiveModelConfig.value))
+
+function syncAgentDefaultModel() {
+  const opts = agentModelOptions.value
+  if (opts.length === 0) {
+    agentForm.value.defaultModel = ''
+    return
+  }
+  if (!opts.some((opt) => opt.value === agentForm.value.defaultModel)) {
+    agentForm.value.defaultModel = opts[0]!.value
+  }
+}
 
 // 当可用模型列表变化时，若当前选中的模型不在列表中则自动回退到第一个
 watch(claudeModelOptions, (opts) => {
@@ -3511,6 +3527,7 @@ function dirBranchById(dirId?: string): string | undefined {
 
 function openAgentRegisterDialog() {
   agentForm.value = { name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '', defaultModelConfigId: '', defaultModel: '' }
+  syncAgentDefaultModel()
   showAgentRegisterDialog.value = true
 }
 
@@ -3525,6 +3542,7 @@ function openAgentEditDialog(agent: CodingAgent) {
     defaultModelConfigId: agent.defaultModelConfigId || '',
     defaultModel: agent.defaultModel || '',
   }
+  syncAgentDefaultModel()
   showAgentEditDialog.value = true
 }
 
@@ -6695,6 +6713,14 @@ watch(showEditDirectoryDialog, (val) => {
     loadAgentTeamsConfigs()
   }
 })
+
+watch(
+  () => [agentForm.value.defaultModelConfigId, agentForm.value.defaultDirectoryId, platformModels.value.length, showAgentRegisterDialog.value, showAgentEditDialog.value],
+  () => {
+    if (!showAgentRegisterDialog.value && !showAgentEditDialog.value) return
+    syncAgentDefaultModel()
+  },
+)
 
 function statusTagType(status: string) {
   if (status === 'ONLINE') return 'success'
