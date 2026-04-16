@@ -5,10 +5,12 @@ import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
@@ -57,6 +59,8 @@ class CodexTaskServiceTest {
     @Mock
     private SessionEntityRepository sessionEntityRepository;
     @Mock
+    private CodexCodingAgentRepository codingAgentRepository;
+    @Mock
     private CodexStreamRelay streamRelay;
 
     private CodexTaskService service;
@@ -68,6 +72,7 @@ class CodexTaskServiceTest {
         ReflectionTestUtils.setField(service, "sessionManager", sessionManager);
         ReflectionTestUtils.setField(service, "sessionTaskRepository", sessionTaskRepository);
         ReflectionTestUtils.setField(service, "sessionEntityRepository", sessionEntityRepository);
+        ReflectionTestUtils.setField(service, "codingAgentRepository", codingAgentRepository);
         ReflectionTestUtils.setField(service, "streamRelay", streamRelay);
 
         lenient().when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
@@ -294,6 +299,42 @@ class CodexTaskServiceTest {
                         && "codex-worker".equals(entity.getProviderType())
                         && entity.getAgentId() == null
                         && !"dir-1".equals(entity.getAgentId())
+        ));
+    }
+
+    @Test
+    void createTask_usesAgentDefaultModelConfigAndDefaultModelWhenRequestOmitsBoth() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+        when(sessionManager.createSession(any())).thenReturn("session-agent-default");
+
+        CodingAgentEntity agent = new CodingAgentEntity();
+        agent.setAgentId("agent-codex-1");
+        agent.setDefaultModelConfigId("cfg-codex");
+        agent.setDefaultModel("gpt-5.4");
+        when(codingAgentRepository.findByAgentId("agent-codex-1")).thenReturn(Optional.of(agent));
+
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setWorkerBackend("OPENAI_CODEX");
+        config.setBaseUrl("https://api.openai.com/v1");
+        when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(config));
+        when(llmModelManager.getDecryptedApiKey("cfg-codex")).thenReturn("sk-codex");
+
+        service.createTaskDirect(Map.of(
+                "workerId", "worker-1",
+                "prompt", "hello",
+                "agentId", "agent-codex-1"
+        ), "user-1", "tenant-1");
+
+        assertEquals("gpt-5.4", savedTask[0].getModel());
+        verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
+                "gpt-5.4".equals(event.getModel())
+                        && "sk-codex".equals(event.getApiKey())
+                        && "https://api.openai.com/v1".equals(event.getProviderConfigString("baseUrl"))
         ));
     }
 

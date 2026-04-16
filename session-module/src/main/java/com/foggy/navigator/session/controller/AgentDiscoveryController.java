@@ -5,10 +5,11 @@ import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.a2a.*;
 import com.foggy.navigator.common.entity.AgentConsultationEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
-import com.foggy.navigator.session.registry.DefaultA2aAgentRegistry;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
 import com.foggy.navigator.session.repository.SessionRepository;
+import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.common.util.IdGenerator;
@@ -29,7 +30,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class AgentDiscoveryController {
 
-    private final DefaultA2aAgentRegistry registry;
+    private final UnifiedAgentResolver agentResolver;
     private final AgentConsultationRepository consultationRepository;
     private final SessionRepository sessionRepository;
     private final ObjectMapper objectMapper;
@@ -37,17 +38,16 @@ public class AgentDiscoveryController {
     @GetMapping
     public RX<List<A2aAgentCard>> listAgents(
             @RequestParam(required = false) String type) {
-        String userId = UserContext.getCurrentUserId();
+        AgentResolveContext context = buildContext();
         List<A2aAgentCard> cards = (type != null)
-                ? registry.listByProviderType(type, userId)
-                : registry.listAgents(userId);
+                ? agentResolver.listByProviderType(type, context)
+                : agentResolver.listAgents(context);
         return RX.ok(cards);
     }
 
     @GetMapping("/{agentId}/card")
     public RX<A2aAgentCard> getAgentCard(@PathVariable String agentId) {
-        String userId = UserContext.getCurrentUserId();
-        return registry.resolveAgent(agentId, userId)
+        return agentResolver.resolveAgent(agentId, buildContext())
                 .map(a -> RX.ok(a.getAgentCard()))
                 .orElse(RX.failA("Agent not found: " + agentId));
     }
@@ -70,7 +70,12 @@ public class AgentDiscoveryController {
         if (question == null || question.isBlank()) {
             return RX.failA("question is required");
         }
-        A2aAgent agent = registry.resolveAgent(agentId, userId)
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId(userId)
+                .requestSource("UI")
+                .modelConfigId(body.get("modelConfigId"))
+                .build();
+        A2aAgent agent = agentResolver.resolveAgent(agentId, context)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
 
         // contextId: 客户端传入则透传，否则平台生成
@@ -121,8 +126,7 @@ public class AgentDiscoveryController {
     public RX<A2aTask> getTaskStatus(
             @PathVariable String agentId,
             @PathVariable String taskId) {
-        String userId = UserContext.getCurrentUserId();
-        A2aAgent agent = registry.resolveAgent(agentId, userId)
+        A2aAgent agent = agentResolver.resolveAgent(agentId, buildContext())
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
         A2aTask task = agent.getTask(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
@@ -136,8 +140,7 @@ public class AgentDiscoveryController {
     public RX<String> cancelTask(
             @PathVariable String agentId,
             @PathVariable String taskId) {
-        String userId = UserContext.getCurrentUserId();
-        A2aAgent agent = registry.resolveAgent(agentId, userId)
+        A2aAgent agent = agentResolver.resolveAgent(agentId, buildContext())
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
         agent.cancelTask(taskId);
         return RX.ok("Task cancel requested");
@@ -211,5 +214,12 @@ public class AgentDiscoveryController {
         } catch (Exception e) {
             log.warn("Failed to update participating agents: {}", e.getMessage());
         }
+    }
+
+    private AgentResolveContext buildContext() {
+        return AgentResolveContext.builder()
+                .userId(UserContext.getCurrentUserId())
+                .requestSource("UI")
+                .build();
     }
 }

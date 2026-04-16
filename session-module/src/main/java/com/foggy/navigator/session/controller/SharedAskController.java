@@ -9,10 +9,11 @@ import com.foggy.navigator.common.dto.a2a.A2aTaskState;
 import com.foggy.navigator.common.entity.AgentConsultationEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
 import com.foggy.navigator.common.form.SharedAskForm;
-import com.foggy.navigator.session.registry.DefaultA2aAgentRegistry;
+import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.AgentConsultationRepository;
 import com.foggy.navigator.session.service.SharingKeyService;
 import com.foggy.navigator.spi.agent.A2aAgent;
+import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggyframework.core.ex.RX;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,7 +38,7 @@ import java.util.UUID;
 public class SharedAskController {
 
     private final SharingKeyService sharingKeyService;
-    private final DefaultA2aAgentRegistry registry;
+    private final UnifiedAgentResolver agentResolver;
     private final AgentConsultationRepository consultationRepository;
 
     @PostMapping("/ask")
@@ -58,8 +59,9 @@ public class SharedAskController {
             return RX.failA(e.getMessage());
         }
 
-        A2aAgent agent = registry.resolveAgent(
-                keyEntity.getAgentId(), keyEntity.getOwnerUserId())
+        AgentResolveContext context = buildSharedContext(keyEntity);
+        A2aAgent agent = agentResolver.resolveAgent(
+                keyEntity.getAgentId(), context)
                 .orElse(null);
         if (agent == null) {
             return RX.failA("Shared agent not available");
@@ -99,6 +101,13 @@ public class SharedAskController {
 
         recordSharedConsultation(keyEntity, card.getName(), question, task, durationMs, task.getContextId());
         return RX.ok(task);
+    }
+
+    private AgentResolveContext buildSharedContext(SharingKeyEntity keyEntity) {
+        return AgentResolveContext.builder()
+                .userId(keyEntity.getOwnerUserId())
+                .requestSource("SHARED_API")
+                .build();
     }
 
     private void recordSharedConsultation(SharingKeyEntity keyEntity, String agentName,
