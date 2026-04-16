@@ -13,7 +13,8 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "session_messages", indexes = {
     @Index(name = "idx_msg_session_id", columnList = "sessionId"),
-    @Index(name = "idx_msg_created_at", columnList = "createdAt")
+    @Index(name = "idx_msg_created_at", columnList = "createdAt"),
+    @Index(name = "idx_msg_task_id", columnList = "taskId")
 })
 public class SessionMessageEntity {
 
@@ -23,6 +24,10 @@ public class SessionMessageEntity {
 
     @Column(length = 64, nullable = false)
     private String sessionId;
+
+    /** 关联的平台任务 ID（可空，历史数据可能无此字段） */
+    @Column(length = 64)
+    private String taskId;
 
     @Column(length = 32, nullable = false)
     private String role;

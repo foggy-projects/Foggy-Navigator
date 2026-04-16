@@ -264,6 +264,8 @@ class WorkingDirectoryServiceTest {
             milestone.setName("v3.0.0");
             milestone.setStatus("ACTIVE");
             milestone.setDocPath("docs/v3.0.0");
+            milestone.setStartAt("2026-04-15T09:00:00");
+            milestone.setEndAt("2026-04-20T18:00:00");
 
             UpdateWorkingDirectoryForm form = new UpdateWorkingDirectoryForm();
             form.setMilestones(List.of(milestone));
@@ -275,6 +277,8 @@ class WorkingDirectoryServiceTest {
             assertEquals("v3.0.0", result.getMilestones().get(0).getName());
             assertEquals("ACTIVE", result.getMilestones().get(0).getStatus());
             assertEquals("docs/v3.0.0", result.getMilestones().get(0).getDocPath());
+            assertEquals("2026-04-15T09:00", result.getMilestones().get(0).getStartAt());
+            assertEquals("2026-04-20T18:00", result.getMilestones().get(0).getEndAt());
             assertNotNull(result.getMilestones().get(0).getId());
         }
 
@@ -497,6 +501,8 @@ class WorkingDirectoryServiceTest {
             form.setName("v3.0");
             form.setStatus("ACTIVE");
             form.setDocPath("docs/v3");
+            form.setStartAt("2026-04-15T10:30:00");
+            form.setEndAt("2026-04-16T18:00:00");
 
             var result = service.addMilestone(USER_ID, "dir-1", form);
 
@@ -504,25 +510,86 @@ class WorkingDirectoryServiceTest {
             assertEquals("v3.0", result.getName());
             assertEquals("ACTIVE", result.getStatus());
             assertEquals("docs/v3", result.getDocPath());
+            assertEquals("2026-04-15T10:30", result.getStartAt());
+            assertEquals("2026-04-16T18:00", result.getEndAt());
             assertNotNull(entity.getMilestonesJson());
         }
 
         @Test
         void updateSingleMilestone_success() {
             WorkingDirectoryEntity entity = createEntity("dir-1", "STANDARD");
-            entity.setMilestonesJson("[{\"id\":\"ms-1\",\"name\":\"old\",\"status\":\"PLANNED\",\"docPath\":null}]");
+            entity.setMilestonesJson("[{\"id\":\"ms-1\",\"name\":\"old\",\"status\":\"PLANNED\",\"docPath\":null,\"startAt\":\"2026-04-12T09:00:00\",\"endAt\":null}]");
             when(repository.findByDirectoryIdAndUserId("dir-1", USER_ID)).thenReturn(Optional.of(entity));
             when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
             DirectoryMilestoneForm form = new DirectoryMilestoneForm();
             form.setName("new-name");
             form.setStatus("COMPLETED");
+            form.setEndAt("2026-04-15T17:00:00");
 
             var result = service.updateSingleMilestone(USER_ID, "dir-1", "ms-1", form);
 
             assertEquals("ms-1", result.getId());
             assertEquals("new-name", result.getName());
             assertEquals("COMPLETED", result.getStatus());
+            assertEquals("2026-04-12T09:00:00", result.getStartAt());
+            assertEquals("2026-04-15T17:00", result.getEndAt());
+        }
+
+        @Test
+        void listMilestones_defaultSortsByStartAtDescThenNameDesc() {
+            WorkingDirectoryEntity entity = createEntity("dir-1", "STANDARD");
+            entity.setMilestonesJson("""
+                [
+                  {"id":"ms-1","name":"1.0.0","status":"PLANNED","docPath":null,"startAt":"2026-04-10T09:00:00","endAt":null},
+                  {"id":"ms-2","name":"1.0.1","status":"PLANNED","docPath":null,"startAt":"2026-04-14T09:00:00","endAt":null},
+                  {"id":"ms-3","name":"1.0.2","status":"PLANNED","docPath":null,"startAt":null,"endAt":null},
+                  {"id":"ms-4","name":"1.0.3","status":"PLANNED","docPath":null,"startAt":null,"endAt":null}
+                ]
+                """);
+            when(repository.findByDirectoryIdAndUserId("dir-1", USER_ID)).thenReturn(Optional.of(entity));
+
+            var result = service.listMilestones(USER_ID, "dir-1");
+
+            assertEquals(List.of("ms-2", "ms-1", "ms-4", "ms-3"), result.stream().map(m -> m.getId()).toList());
+        }
+
+        @Test
+        void listMilestonesPaged_supportsPaginationAndRequestedSort() {
+            WorkingDirectoryEntity entity = createEntity("dir-1", "STANDARD");
+            entity.setMilestonesJson("""
+                [
+                  {"id":"ms-1","name":"1.0.0","status":"ACTIVE","docPath":null,"startAt":"2026-04-10T09:00:00","endAt":"2026-04-11T18:00:00"},
+                  {"id":"ms-2","name":"1.0.1","status":"PLANNED","docPath":null,"startAt":"2026-04-14T09:00:00","endAt":"2026-04-16T18:00:00"},
+                  {"id":"ms-3","name":"1.0.3","status":"COMPLETED","docPath":null,"startAt":null,"endAt":null},
+                  {"id":"ms-4","name":"1.0.2","status":"ARCHIVED","docPath":null,"startAt":null,"endAt":null}
+                ]
+                """);
+            when(repository.findByDirectoryIdAndUserId("dir-1", USER_ID)).thenReturn(Optional.of(entity));
+
+            var result = service.listMilestonesPaged(USER_ID, "dir-1", 1, 2, "name", "asc");
+
+            assertEquals(4, result.getTotal());
+            assertEquals(1, result.getPage());
+            assertEquals(2, result.getSize());
+            assertEquals("name", result.getSortBy());
+            assertEquals("asc", result.getSortDir());
+            assertEquals(List.of("ms-4", "ms-3"), result.getContent().stream().map(m -> m.getId()).toList());
+        }
+
+        @Test
+        void addMilestone_invalidRange_throws() {
+            WorkingDirectoryEntity entity = createEntity("dir-1", "STANDARD");
+            when(repository.findByDirectoryIdAndUserId("dir-1", USER_ID)).thenReturn(Optional.of(entity));
+
+            DirectoryMilestoneForm form = new DirectoryMilestoneForm();
+            form.setName("v3.0");
+            form.setStartAt("2026-04-16T10:00:00");
+            form.setEndAt("2026-04-15T10:00:00");
+
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> service.addMilestone(USER_ID, "dir-1", form));
+            assertTrue(ex.getMessage().contains("endAt"));
         }
 
         @Test

@@ -14,4 +14,6 @@ public class DirectoryMilestoneDTO {
     private String name;
     private String status;
     private String docPath;
+    private String startAt;
+    private String endAt;
 }

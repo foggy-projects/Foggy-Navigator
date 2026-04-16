@@ -1,5 +1,7 @@
 package com.foggy.navigator.claude.worker.controller.openapi;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.claude.worker.adapter.ClaudeWorkerAgentProvider;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.*;
@@ -11,8 +13,12 @@ import com.foggy.navigator.claude.worker.service.*;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.a2a.*;
+import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.entity.SessionMessageEntity;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.session.service.OpenApiSessionQueryService;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
@@ -49,6 +55,8 @@ public class OpenApiController {
     private final ClaudeWorkerAgentProvider agentProvider;
     private final ClaudeTaskService taskService;
     private final TaskStateReconciler reconciler;
+    private final OpenApiSessionQueryService sessionQueryService;
+    private final ObjectMapper objectMapper;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -403,8 +411,9 @@ public class OpenApiController {
             @RequestBody OpenApiQueryForm form) {
         String tenantId = UserContext.getCurrentTenantId();
 
-        if (form.getQuestion() == null || form.getQuestion().isBlank()) {
-            return RX.failB("question is required");
+        String messageContent = form.resolveMessage();
+        if (messageContent == null || messageContent.isBlank()) {
+            return RX.failB("message is required");
         }
 
         AgentResolveContext ctx = AgentResolveContext.builder()
@@ -415,9 +424,13 @@ public class OpenApiController {
         // 构建 A2aMessage
         String contextId = (form.getContextId() != null && !form.getContextId().isBlank())
                 ? form.getContextId() : IdGenerator.shortId();
-        A2aMessage message = A2aMessage.user(List.of(A2aPart.text(form.getQuestion())));
+        A2aMessage message = A2aMessage.user(List.of(A2aPart.text(messageContent)));
         message.setContextId(contextId);
         Map<String, Object> metadata = new java.util.HashMap<>();
+        // 合并用户传入的扩展元数据
+        if (form.getMetadata() != null && !form.getMetadata().isEmpty()) {
+            metadata.putAll(form.getMetadata());
+        }
         if (form.getMaxTurns() != null) {
             metadata.put("maxTurns", form.getMaxTurns());
         }
@@ -464,7 +477,7 @@ public class OpenApiController {
      */
     @PostMapping("/agents/{agentId}/tasks/{taskId}/cancel")
     @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
-    public RX<String> cancelTask(
+    public RX<OpenApiTaskDTO> cancelTask(
             @PathVariable String agentId,
             @PathVariable String taskId) {
         String tenantId = UserContext.getCurrentTenantId();
@@ -473,7 +486,15 @@ public class OpenApiController {
         A2aAgent agent = agentProvider.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
         agent.cancelTask(taskId);
-        return RX.ok("Task cancel requested");
+
+        // 重新查询任务状态返回
+        A2aTask task = agent.getTask(taskId)
+                .orElse(null);
+        if (task != null) {
+            return RX.ok(toOpenApiTaskDTO(task, agentId));
+        }
+        return RX.ok(OpenApiTaskDTO.builder()
+                .taskId(taskId).status("CANCELLED").build());
     }
 
     /**
@@ -501,6 +522,133 @@ public class OpenApiController {
                         .build())
                 .toList();
         return RX.ok(result);
+    }
+
+    // ===== 6b. Agent 任务增量消息（上游接入首版） =====
+
+    /**
+     * 轮询任务执行中的新增消息
+     * <p>
+     * 首次不传 cursor，后续传 nextCursor 拉取增量。
+     * 只返回该 taskId 对应的消息，按时间升序。
+     */
+    @GetMapping("/agents/{agentId}/tasks/{taskId}/messages")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<OpenTaskMessagesResponse> getTaskMessages(
+            @PathVariable String agentId,
+            @PathVariable String taskId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "50") int limit) {
+        String tenantId = UserContext.getCurrentTenantId();
+        resolveOpenApiAgent(agentId, tenantId);
+
+        // 验证 task 存在并获取 contextId
+        SessionTaskEntity taskEntity = sessionQueryService.findTask(taskId)
+                .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
+
+        // 获取 contextId（从 task 的 sessionId 反查 context）
+        String contextId = resolveContextIdFromSession(taskEntity.getSessionId());
+
+        int safeLimit = Math.min(Math.max(limit, 1), 200);
+        List<SessionMessageEntity> messages = sessionQueryService.getTaskMessages(taskId, cursor, safeLimit);
+
+        boolean hasMore = messages.size() > safeLimit;
+        List<SessionMessageEntity> page = hasMore ? messages.subList(0, safeLimit) : messages;
+
+        String nextCursor = page.isEmpty() ? cursor : page.get(page.size() - 1).getId();
+
+        List<OpenSessionMessageDTO> dtos = page.stream()
+                .map(m -> toOpenSessionMessageDTO(m, contextId))
+                .toList();
+
+        return RX.ok(OpenTaskMessagesResponse.builder()
+                .taskId(taskId)
+                .contextId(contextId)
+                .messages(dtos)
+                .nextCursor(nextCursor)
+                .hasMore(hasMore)
+                .build());
+    }
+
+    // ===== 6c. Agent 会话列表与消息（上游接入首版） =====
+
+    /**
+     * 获取会话上下文列表
+     */
+    @GetMapping("/agents/{agentId}/sessions")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<OpenSessionListResponse> listAgentSessions(
+            @PathVariable String agentId,
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(required = false) String cursor) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        resolveOpenApiAgent(agentId, tenantId);
+
+        int safeLimit = Math.min(Math.max(limit, 1), 100);
+        List<AgentConversationContextEntity> contexts = sessionQueryService.listSessions(
+                userId, agentId, safeLimit);
+
+        boolean hasMore = contexts.size() > safeLimit;
+        List<AgentConversationContextEntity> page = hasMore ? contexts.subList(0, safeLimit) : contexts;
+
+        // 批量预取 latestTaskId，消除 N+1
+        List<String> sessionIds = page.stream()
+                .map(AgentConversationContextEntity::getNavigatorSessionId)
+                .filter(s -> s != null && !s.isBlank())
+                .toList();
+        Map<String, String> latestTaskMap = sessionQueryService.batchFindLatestTaskIds(sessionIds);
+
+        List<OpenSessionSummaryDTO> dtos = page.stream()
+                .map(ctx -> toSessionSummary(ctx, agentId, latestTaskMap))
+                .toList();
+
+        String nextCursor = page.isEmpty() ? null : page.get(page.size() - 1).getContextId();
+
+        return RX.ok(OpenSessionListResponse.builder()
+                .sessions(dtos)
+                .nextCursor(nextCursor)
+                .hasMore(hasMore)
+                .build());
+    }
+
+    /**
+     * 获取指定会话上下文下的消息列表
+     */
+    @GetMapping("/agents/{agentId}/sessions/{contextId}/messages")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<OpenSessionMessagesResponse> getSessionMessages(
+            @PathVariable String agentId,
+            @PathVariable String contextId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "50") int limit) {
+        String userId = UserContext.getCurrentUserId();
+        String tenantId = UserContext.getCurrentTenantId();
+        resolveOpenApiAgent(agentId, tenantId);
+
+        // 解析 contextId → sessionId
+        String sessionId = sessionQueryService.resolveSessionId(contextId, userId)
+                .orElseThrow(() -> RX.throwB("Context not found: " + contextId));
+
+        int safeLimit = Math.min(Math.max(limit, 1), 200);
+        List<SessionMessageEntity> messages = sessionQueryService.getSessionMessages(
+                sessionId, cursor, safeLimit);
+
+        boolean hasMore = messages.size() > safeLimit;
+        List<SessionMessageEntity> page = hasMore ? messages.subList(0, safeLimit) : messages;
+
+        String nextCursor = page.isEmpty() ? cursor : page.get(page.size() - 1).getId();
+
+        List<OpenSessionMessageDTO> dtos = page.stream()
+                .map(m -> toOpenSessionMessageDTO(m, contextId))
+                .toList();
+
+        return RX.ok(OpenSessionMessagesResponse.builder()
+                .contextId(contextId)
+                .messages(dtos)
+                .nextCursor(nextCursor)
+                .hasMore(hasMore)
+                .build());
     }
 
     // ===== 7. Worker 进程管理 =====
@@ -562,6 +710,15 @@ public class OpenApiController {
     // ===== 内部工具方法 =====
 
     /**
+     * 验证 Agent 存在并返回（Open API 上下文）
+     */
+    private A2aAgent resolveOpenApiAgent(String agentId, String tenantId) {
+        return agentProvider.resolveAgent(agentId, AgentResolveContext.builder()
+                        .tenantId(tenantId).requestSource("OPEN_API").build())
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+    }
+
+    /**
      * 租户级 Worker 校验：Worker 必须属于当前租户
      */
     private ClaudeWorkerEntity resolveWorkerByTenant(String workerId) {
@@ -597,17 +754,34 @@ public class OpenApiController {
 
     /**
      * 内部任务状态 → Open API 状态映射
+     * <p>
+     * 对外状态枚举：SUBMITTED | RUNNING | AWAITING_INPUT | COMPLETED | FAILED | CANCELLED
      */
     private String mapTaskStatus(String internalStatus) {
         if (internalStatus == null) return "UNKNOWN";
         return switch (internalStatus) {
             case "PENDING" -> "SUBMITTED";
-            case "RUNNING" -> "WORKING";
+            case "RUNNING" -> "RUNNING";
             case "COMPLETED" -> "COMPLETED";
             case "FAILED" -> "FAILED";
-            case "ABORTED" -> "CANCELED";
-            case "AWAITING_PERMISSION" -> "INPUT_REQUIRED";
+            case "ABORTED" -> "CANCELLED";
+            case "AWAITING_PERMISSION" -> "AWAITING_INPUT";
             default -> internalStatus;
+        };
+    }
+
+    /**
+     * A2aTaskState → Open API 外部状态
+     */
+    private String mapA2aState(A2aTaskState state) {
+        if (state == null) return "UNKNOWN";
+        return switch (state) {
+            case SUBMITTED -> "SUBMITTED";
+            case WORKING -> "RUNNING";
+            case INPUT_REQUIRED -> "AWAITING_INPUT";
+            case COMPLETED -> "COMPLETED";
+            case FAILED -> "FAILED";
+            case CANCELED -> "CANCELLED";
         };
     }
 
@@ -621,7 +795,7 @@ public class OpenApiController {
                 .contextId(task.getContextId());
 
         if (task.getStatus() != null) {
-            builder.status(task.getStatus().getState().name());
+            builder.status(mapA2aState(task.getStatus().getState()));
             if (task.getStatus().getState() == A2aTaskState.FAILED) {
                 builder.errorMessage(task.getStatus().getDescription());
             }
@@ -656,5 +830,97 @@ public class OpenApiController {
         }
 
         return builder.build();
+    }
+
+    // ── 上游接入首版辅助方法 ──
+
+    /**
+     * SessionMessageEntity → OpenSessionMessageDTO
+     */
+    private OpenSessionMessageDTO toOpenSessionMessageDTO(SessionMessageEntity entity, String contextId) {
+        Map<String, Object> metadata = null;
+        if (entity.getMetadata() != null && !entity.getMetadata().isBlank()) {
+            try {
+                metadata = objectMapper.readValue(entity.getMetadata(),
+                        new TypeReference<Map<String, Object>>() {});
+            } catch (Exception e) {
+                log.debug("Failed to parse message metadata: {}", e.getMessage());
+            }
+        }
+
+        // 推断消息类型
+        String type = inferMessageType(entity.getRole(), metadata);
+
+        // 过滤内部字段，避免泄露（不直接 mutate Jackson 反序列化的 Map）
+        if (metadata != null) {
+            metadata = new java.util.LinkedHashMap<>(metadata);
+            metadata.remove("taskId");  // taskId 已在顶层字段返回
+        }
+
+        return OpenSessionMessageDTO.builder()
+                .messageId(entity.getId())
+                .contextId(contextId)
+                .taskId(entity.getTaskId())
+                .role(entity.getRole() != null ? entity.getRole().toLowerCase() : null)
+                .type(type)
+                .content(entity.getContent())
+                .metadata(metadata)
+                .createdAt(entity.getCreatedAt())
+                .build();
+    }
+
+    /**
+     * 根据 role 和 metadata 推断对外消息类型
+     */
+    private String inferMessageType(String role, Map<String, Object> metadata) {
+        if ("USER".equalsIgnoreCase(role)) return "USER";
+        if ("SYSTEM".equalsIgnoreCase(role)) return "STATE";
+
+        // assistant/tool 消息，从 metadata.type 推断
+        if (metadata != null) {
+            Object rawType = metadata.get("type");
+            if (rawType instanceof String typeStr) {
+                return switch (typeStr) {
+                    case "TEXT_COMPLETE" -> "TEXT";
+                    case "TOOL_CALL_START" -> "TOOL_CALL";
+                    case "TOOL_CALL_RESULT", "TOOL_CALL_ERROR" -> "TOOL_RESULT";
+                    case "STATE_SYNC" -> "STATE";
+                    case "ERROR" -> "ERROR";
+                    default -> "TEXT";
+                };
+            }
+        }
+        return "TEXT";
+    }
+
+    /**
+     * AgentConversationContextEntity → OpenSessionSummaryDTO
+     *
+     * @param latestTaskMap 预取的 sessionId → latestTaskId 映射（消除 N+1）
+     */
+    private OpenSessionSummaryDTO toSessionSummary(AgentConversationContextEntity ctx,
+                                                    String agentId,
+                                                    Map<String, String> latestTaskMap) {
+        String latestTaskId = ctx.getNavigatorSessionId() != null
+                ? latestTaskMap.get(ctx.getNavigatorSessionId())
+                : null;
+
+        return OpenSessionSummaryDTO.builder()
+                .contextId(ctx.getContextId())
+                .agentId(agentId)
+                .title(ctx.getContextAlias())
+                .status("ACTIVE")
+                .latestTaskId(latestTaskId)
+                .createdAt(ctx.getCreatedAt())
+                .updatedAt(ctx.getLastAccessedAt())
+                .build();
+    }
+
+    /**
+     * 从 sessionId 反查 contextId（通过 navigatorSessionId 映射）
+     */
+    private String resolveContextIdFromSession(String sessionId) {
+        if (sessionId == null) return null;
+        return sessionQueryService.resolveContextId(sessionId).orElse(null);
     }
 }

@@ -1,4 +1,5 @@
 import type { ConversationGroup, DirectoryMilestone } from '@/api/types'
+import { compareMilestonesDefault, sortMilestones } from '@/utils/milestone'
 
 export interface MilestoneConversationSection {
   key: string
@@ -20,9 +21,7 @@ export function buildMilestoneSections(
   groups: ConversationGroup[],
   milestones: DirectoryMilestone[],
 ): MilestoneConversationSection[] {
-  const milestoneOrder = new Map(
-    milestones.map((milestone, index) => [milestone.id, index]),
-  )
+  const sortedMilestones = sortMilestones(milestones)
   const sections = new Map<string, MilestoneConversationSection>()
 
   for (const group of groups) {
@@ -45,7 +44,10 @@ export function buildMilestoneSections(
   return Array.from(sections.values()).sort((left, right) => {
     if (left.key === '__none__') return 1
     if (right.key === '__none__') return -1
-    return (milestoneOrder.get(left.key) ?? Number.MAX_SAFE_INTEGER)
-      - (milestoneOrder.get(right.key) ?? Number.MAX_SAFE_INTEGER)
+    if (left.milestone && right.milestone) {
+      return compareMilestonesDefault(left.milestone, right.milestone)
+    }
+    return sortedMilestones.findIndex(milestone => milestone.id === left.key)
+      - sortedMilestones.findIndex(milestone => milestone.id === right.key)
   })
 }

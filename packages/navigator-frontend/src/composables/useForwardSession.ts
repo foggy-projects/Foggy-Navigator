@@ -4,6 +4,7 @@ import type { ForwardTargetMode } from '@/api/unifiedTask'
 import type { ClaudeTask, LlmModelConfig, DirectoryMilestone } from '@/types'
 import type { useClaudeWorker } from './useClaudeWorker'
 import { useAttachments, toImagesJson } from './useAttachments'
+import { sortMilestones } from '@/utils/milestone'
 
 // ── Types ──
 
@@ -281,7 +282,7 @@ export function useForwardSession(deps: ForwardSessionDeps) {
   const forwardSelectedDirectory = computed(() =>
     workerState.directories.value.find((dir) => dir.directoryId === forwardForm.value.directoryId),
   )
-  const forwardMilestoneOptions = computed(() => forwardSelectedDirectory.value?.milestones || [])
+  const forwardMilestoneOptions = computed(() => sortMilestones(forwardSelectedDirectory.value?.milestones))
   const forwardSelectedModelConfig = computed(() =>
     forwardPlatformModels.value.find((model) => model.id === forwardForm.value.modelConfigId) || null,
   )

@@ -193,6 +193,12 @@ packages/foggy-mobile/uniCloud-aliyun/
 /vt100-*.png
 /app102*.yaml
 /app102*.yml
+/.tmp-*.log
+/.tmp-*.err.log
+/.tmp-*.json
 
 # Temporary reproduction directories
 .tmp-*/
+
+# Temporary test artifact staging
+/temp/test-artifacts/

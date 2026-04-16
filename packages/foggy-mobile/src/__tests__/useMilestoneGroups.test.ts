@@ -36,8 +36,9 @@ function makeGroup(
 
 describe('useMilestoneGroups', () => {
   const milestones: DirectoryMilestone[] = [
-    { id: 'ms-1', name: 'v1.0.0', status: 'ACTIVE', docPath: 'docs/v1.0.0' },
+    { id: 'ms-1', name: 'v1.0.0', status: 'ACTIVE', docPath: 'docs/v1.0.0', startAt: '2026-04-10T10:00:00' },
     { id: 'ms-2', name: 'v1.1.0', status: 'PLANNED' },
+    { id: 'ms-3', name: 'v1.2.0', status: 'PLANNED', startAt: '2026-04-14T08:00:00' },
   ]
 
   it('resolves conversation milestone from config.milestoneId', () => {
@@ -51,16 +52,33 @@ describe('useMilestoneGroups', () => {
       makeGroup('session-none'),
       makeGroup('session-2', 'ms-2'),
       makeGroup('session-1', 'ms-1'),
+      makeGroup('session-3', 'ms-3'),
     ]
 
     const sections = buildMilestoneSections(groups, milestones)
 
     expect(sections.map(section => section.label)).toEqual([
+      'v1.2.0',
       'v1.0.0',
       'v1.1.0',
       '未设置里程碑',
     ])
-    expect(sections[0]?.conversations.map(group => group.sessionId)).toEqual(['session-1'])
-    expect(sections[2]?.conversations.map(group => group.sessionId)).toEqual(['session-none'])
+    expect(sections[0]?.conversations.map(group => group.sessionId)).toEqual(['session-3'])
+    expect(sections[3]?.conversations.map(group => group.sessionId)).toEqual(['session-none'])
+  })
+
+  it('falls back to name desc when startAt is missing', () => {
+    const groups = [
+      makeGroup('session-2', 'ms-2'),
+      makeGroup('session-4', 'ms-4'),
+    ]
+    const noDateMilestones: DirectoryMilestone[] = [
+      { id: 'ms-2', name: '1.0.0', status: 'PLANNED' },
+      { id: 'ms-4', name: '2.0.0', status: 'PLANNED' },
+    ]
+
+    const sections = buildMilestoneSections(groups, noDateMilestones)
+
+    expect(sections.map(section => section.label)).toEqual(['2.0.0', '1.0.0'])
   })
 })

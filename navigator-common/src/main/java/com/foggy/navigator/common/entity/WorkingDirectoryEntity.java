@@ -94,7 +94,7 @@ public class WorkingDirectoryEntity {
     @Column(columnDefinition = "TEXT")
     private String customEnvVars;
 
-    /** 里程碑配置 JSON 数组 [{id,name,status,docPath}] */
+    /** 里程碑配置 JSON 数组 [{id,name,status,docPath,startAt,endAt}] */
     @Column(columnDefinition = "TEXT")
     private String milestonesJson;
 

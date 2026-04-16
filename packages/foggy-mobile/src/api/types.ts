@@ -113,6 +113,8 @@ export interface DirectoryMilestone {
   name: string
   status: 'PLANNED' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED' | string
   docPath?: string
+  startAt?: string
+  endAt?: string
 }
 
 /** Rewind 操作结果 */

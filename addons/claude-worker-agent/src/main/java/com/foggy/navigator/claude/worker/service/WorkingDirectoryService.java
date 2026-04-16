@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.MilestoneDeleteResultDTO;
+import com.foggy.navigator.claude.worker.model.dto.MilestonePageDTO;
 import com.foggy.navigator.claude.worker.model.dto.WorkingDirectoryDTO;
 import com.foggy.navigator.common.dto.DirectoryMilestoneDTO;
 import com.foggy.navigator.common.util.DirectoryAgentId;
@@ -31,6 +32,8 @@ import java.util.Optional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
@@ -47,6 +50,16 @@ import java.util.HashMap;
 public class WorkingDirectoryService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Comparator<DirectoryMilestoneDTO> DEFAULT_MILESTONE_COMPARATOR =
+            Comparator.comparing(
+                            (DirectoryMilestoneDTO milestone) -> parseMilestoneTimeOrNull(milestone.getStartAt()),
+                            Comparator.nullsLast(Comparator.reverseOrder()))
+                    .thenComparing(
+                            DirectoryMilestoneDTO::getName,
+                            Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER.reversed()))
+                    .thenComparing(
+                            DirectoryMilestoneDTO::getId,
+                            Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER));
 
     private final WorkingDirectoryRepository directoryRepository;
     private final AgentTeamsConfigRepository agentTeamsConfigRepository;
@@ -530,7 +543,7 @@ public class WorkingDirectoryService {
             return List.of();
         }
         try {
-            return OBJECT_MAPPER.readValue(milestonesJson, new TypeReference<List<DirectoryMilestoneDTO>>() {});
+            return sortMilestones(OBJECT_MAPPER.readValue(milestonesJson, new TypeReference<List<DirectoryMilestoneDTO>>() {}));
         } catch (Exception e) {
             log.warn("Failed to parse milestones JSON: {}", milestonesJson);
             return List.of();
@@ -541,10 +554,10 @@ public class WorkingDirectoryService {
         if (milestones == null) {
             return null;
         }
-        List<DirectoryMilestoneDTO> normalized = milestones.stream()
+        List<DirectoryMilestoneDTO> normalized = sortMilestones(milestones.stream()
                 .map(this::normalizeMilestone)
                 .filter(milestone -> milestone.getName() != null)
-                .toList();
+                .toList());
         if (normalized.isEmpty()) {
             return null;
         }
@@ -559,11 +572,16 @@ public class WorkingDirectoryService {
         String name = blankToNull(form.getName());
         String id = blankToNull(form.getId());
         String status = blankToNull(form.getStatus());
+        String startAt = normalizeMilestoneTime(form.getStartAt(), "startAt");
+        String endAt = normalizeMilestoneTime(form.getEndAt(), "endAt");
+        validateMilestoneRange(startAt, endAt);
         return DirectoryMilestoneDTO.builder()
                 .id(id != null ? id : IdGenerator.shortId())
                 .name(name)
                 .status(status != null ? status : "PLANNED")
                 .docPath(blankToNull(form.getDocPath()))
+                .startAt(startAt)
+                .endAt(endAt)
                 .build();
     }
 
@@ -573,6 +591,35 @@ public class WorkingDirectoryService {
         WorkingDirectoryEntity entity = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
         return parseMilestones(entity.getMilestonesJson());
+    }
+
+    public MilestonePageDTO listMilestonesPaged(
+            String userId,
+            String directoryId,
+            int page,
+            int size,
+            String sortBy,
+            String sortDir) {
+        WorkingDirectoryEntity entity = directoryRepository.findByDirectoryIdAndUserId(directoryId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Directory not found: " + directoryId));
+        int safePage = Math.max(page, 0);
+        int safeSize = Math.min(Math.max(size, 1), 100);
+        String normalizedSortBy = normalizeMilestoneSortBy(sortBy);
+        String normalizedSortDir = normalizeMilestoneSortDir(sortDir);
+        List<DirectoryMilestoneDTO> sorted = sortMilestones(
+                parseMilestones(entity.getMilestonesJson()),
+                normalizedSortBy,
+                normalizedSortDir);
+        int fromIndex = Math.min(safePage * safeSize, sorted.size());
+        int toIndex = Math.min(fromIndex + safeSize, sorted.size());
+        return MilestonePageDTO.builder()
+                .content(sorted.subList(fromIndex, toIndex))
+                .total(sorted.size())
+                .page(safePage)
+                .size(safeSize)
+                .sortBy(normalizedSortBy)
+                .sortDir(normalizedSortDir)
+                .build();
     }
 
     @Transactional
@@ -585,7 +632,7 @@ public class WorkingDirectoryService {
             throw new IllegalArgumentException("Milestone name is required");
         }
         milestones.add(newMilestone);
-        entity.setMilestonesJson(serializeMilestones(milestones));
+        entity.setMilestonesJson(serializeMilestones(sortMilestones(milestones)));
         directoryRepository.save(entity);
         return newMilestone;
     }
@@ -604,7 +651,10 @@ public class WorkingDirectoryService {
         String status = blankToNull(form.getStatus());
         if (status != null) target.setStatus(status);
         if (form.getDocPath() != null) target.setDocPath(blankToNull(form.getDocPath()));
-        entity.setMilestonesJson(serializeMilestones(milestones));
+        if (form.getStartAt() != null) target.setStartAt(normalizeMilestoneTime(form.getStartAt(), "startAt"));
+        if (form.getEndAt() != null) target.setEndAt(normalizeMilestoneTime(form.getEndAt(), "endAt"));
+        validateMilestoneRange(target.getStartAt(), target.getEndAt());
+        entity.setMilestonesJson(serializeMilestones(sortMilestones(milestones)));
         directoryRepository.save(entity);
         return target;
     }
@@ -629,7 +679,7 @@ public class WorkingDirectoryService {
         if (sessionCount > 0) {
             sessionEntityRepository.clearMilestoneIdByMilestoneIdAndUserId(milestoneId, userId);
         }
-        entity.setMilestonesJson(milestones.isEmpty() ? null : serializeMilestones(milestones));
+        entity.setMilestonesJson(milestones.isEmpty() ? null : serializeMilestones(sortMilestones(milestones)));
         directoryRepository.save(entity);
         return MilestoneDeleteResultDTO.builder()
                 .milestoneId(milestoneId)
@@ -647,6 +697,94 @@ public class WorkingDirectoryService {
             return OBJECT_MAPPER.writeValueAsString(milestones);
         } catch (Exception e) {
             throw new IllegalArgumentException("Invalid milestones format", e);
+        }
+    }
+
+    private List<DirectoryMilestoneDTO> sortMilestones(List<DirectoryMilestoneDTO> milestones) {
+        return sortMilestones(milestones, "startAt", "desc");
+    }
+
+    private List<DirectoryMilestoneDTO> sortMilestones(List<DirectoryMilestoneDTO> milestones, String sortBy, String sortDir) {
+        Comparator<DirectoryMilestoneDTO> comparator = milestoneComparator(sortBy);
+        if ("asc".equalsIgnoreCase(sortDir)) {
+            comparator = comparator.reversed();
+        }
+        return milestones.stream().sorted(comparator).toList();
+    }
+
+    private Comparator<DirectoryMilestoneDTO> milestoneComparator(String sortBy) {
+        return switch (normalizeMilestoneSortBy(sortBy)) {
+            case "name" -> Comparator
+                    .comparing(DirectoryMilestoneDTO::getName, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER.reversed()))
+                    .thenComparing(DEFAULT_MILESTONE_COMPARATOR);
+            case "status" -> Comparator
+                    .comparing(DirectoryMilestoneDTO::getStatus, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER.reversed()))
+                    .thenComparing(DEFAULT_MILESTONE_COMPARATOR);
+            case "endAt" -> Comparator
+                    .comparing(WorkingDirectoryService::parseMilestoneEndForSort, Comparator.nullsLast(Comparator.reverseOrder()))
+                    .thenComparing(DEFAULT_MILESTONE_COMPARATOR);
+            case "startAt" -> DEFAULT_MILESTONE_COMPARATOR;
+            default -> throw new IllegalArgumentException("Unsupported milestone sortBy: " + sortBy);
+        };
+    }
+
+    private String normalizeMilestoneSortBy(String sortBy) {
+        String value = blankToNull(sortBy);
+        if (value == null) {
+            return "startAt";
+        }
+        return switch (value) {
+            case "startAt", "endAt", "name", "status" -> value;
+            default -> throw new IllegalArgumentException("Unsupported milestone sortBy: " + sortBy);
+        };
+    }
+
+    private String normalizeMilestoneSortDir(String sortDir) {
+        String value = blankToNull(sortDir);
+        if (value == null) {
+            return "desc";
+        }
+        if ("asc".equalsIgnoreCase(value)) {
+            return "asc";
+        }
+        if ("desc".equalsIgnoreCase(value)) {
+            return "desc";
+        }
+        throw new IllegalArgumentException("Unsupported milestone sortDir: " + sortDir);
+    }
+
+    private String normalizeMilestoneTime(String value, String fieldName) {
+        String normalized = blankToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(normalized).toString();
+        } catch (DateTimeParseException ex) {
+            throw new IllegalArgumentException("Invalid milestone " + fieldName + ": " + value, ex);
+        }
+    }
+
+    private void validateMilestoneRange(String startAt, String endAt) {
+        LocalDateTime start = parseMilestoneTimeOrNull(startAt);
+        LocalDateTime end = parseMilestoneTimeOrNull(endAt);
+        if (start != null && end != null && end.isBefore(start)) {
+            throw new IllegalArgumentException("Milestone endAt must be greater than or equal to startAt");
+        }
+    }
+
+    private static LocalDateTime parseMilestoneEndForSort(DirectoryMilestoneDTO milestone) {
+        return milestone == null ? null : parseMilestoneTimeOrNull(milestone.getEndAt());
+    }
+
+    private static LocalDateTime parseMilestoneTimeOrNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(value);
+        } catch (DateTimeParseException ex) {
+            return null;
         }
     }
 

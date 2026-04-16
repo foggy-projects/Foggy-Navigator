@@ -181,6 +181,45 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_a2aRouteIncludesParentSessionIdFromCreatedSession() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-child-1")
+                .agentId("agent-1")
+                .workerId("worker-1")
+                .prompt("forwarded task")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .sessionId("session-child-1")
+                .requestSource("UI")
+                .build();
+
+        SessionEntity childSession = new SessionEntity();
+        childSession.setId("session-child-1");
+        childSession.setUserId("user-1");
+        childSession.setParentSessionId("session-parent-1");
+
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agentResolver.getProviderType(eq("agent-1"), any())).thenReturn(Optional.of("claude-worker"));
+        when(agent.getAgentCard()).thenReturn(A2aAgentCard.builder().id("agent-1").build());
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-forward-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .metadata(Map.of(
+                        "sessionId", "session-child-1",
+                        "workerId", "worker-1"
+                ))
+                .build());
+        when(sessionRepository.findById("session-child-1")).thenReturn(Optional.of(childSession));
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("session-child-1", result.getSessionId());
+        assertEquals("session-parent-1", result.getParentSessionId());
+    }
+
+    @Test
     void createTask_usesModelConfigIdForDirectRoute() {
         LlmModelConfigDTO codexConfig = new LlmModelConfigDTO();
         codexConfig.setWorkerBackend("OPENAI_CODEX");

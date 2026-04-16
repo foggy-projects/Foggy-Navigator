@@ -18,6 +18,8 @@ import java.util.Map;
 public class Message {
     private String id;
     private String sessionId;
+    /** 关联的平台任务 ID（可空） */
+    private String taskId;
     private MessageRole role;
     private String content;
     private Map<String, Object> metadata;

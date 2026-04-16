@@ -1,6 +1,7 @@
 package com.foggy.navigator.claude.worker.controller;
 
 import com.foggy.navigator.claude.worker.model.dto.MilestoneDeleteResultDTO;
+import com.foggy.navigator.claude.worker.model.dto.MilestonePageDTO;
 import com.foggy.navigator.claude.worker.model.form.DirectoryMilestoneForm;
 import com.foggy.navigator.claude.worker.service.WorkingDirectoryService;
 import com.foggy.navigator.common.annotation.RequireAuth;
@@ -28,6 +29,17 @@ public class MilestoneController {
     public RX<List<DirectoryMilestoneDTO>> list(@PathVariable String directoryId) {
         String userId = UserContext.getCurrentUserId();
         return RX.ok(directoryService.listMilestones(userId, directoryId));
+    }
+
+    @GetMapping("/paged")
+    public RX<MilestonePageDTO> listPaged(
+            @PathVariable String directoryId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "startAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir) {
+        String userId = UserContext.getCurrentUserId();
+        return RX.ok(directoryService.listMilestonesPaged(userId, directoryId, page, size, sortBy, sortDir));
     }
 
     @PostMapping

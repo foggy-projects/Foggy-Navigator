@@ -690,6 +690,16 @@ public class TaskDispatchFacade {
             }
         }
 
+        // 从 Session 补充 parentSessionId（转发创建新会话时需要）
+        DispatchTaskDTO preResult = builder.build();
+        if (preResult.getSessionId() != null && preResult.getParentSessionId() == null) {
+            sessionRepository.findById(preResult.getSessionId()).ifPresent(session -> {
+                if (session.getParentSessionId() != null) {
+                    builder.parentSessionId(session.getParentSessionId());
+                }
+            });
+        }
+
         return builder.build();
     }
 
