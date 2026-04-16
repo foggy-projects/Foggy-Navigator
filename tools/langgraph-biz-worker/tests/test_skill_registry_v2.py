@@ -61,7 +61,8 @@ class TestSkillMdLoading:
 
         assert registry.get_manifest("pub_skill") is not None
 
-    def test_builtin_overrides_public(self, tmp_path):
+    def test_public_overrides_builtin(self, tmp_path):
+        """Public skills (from GitLab) take priority over builtin (shipped with Worker)."""
         public_md = MINIMAL_SKILL_MD.replace("A test skill", "Public version")
         builtin_md = MINIMAL_SKILL_MD.replace("A test skill", "Builtin version")
 
@@ -73,7 +74,7 @@ class TestSkillMdLoading:
 
         m = registry.get_manifest("test_skill")
         assert m is not None
-        assert m.description == "Builtin version"
+        assert m.description == "Public version"
 
     def test_builtin_overrides_legacy(self, tmp_path):
         """SKILL.md in builtin/ should override legacy YAML manifest."""

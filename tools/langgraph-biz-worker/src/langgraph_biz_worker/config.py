@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     llm_model: str = ""             # e.g. claude-sonnet-4-20250514, gpt-4o
     llm_temperature: float = 0.0
 
+    # Public Skill sync from GitLab (leave skill_git_repo empty to disable)
+    skill_git_repo: str = ""            # GitLab repo URL, e.g. https://gitlab.example.com/foggy/foggy-skills.git
+    skill_git_branch: str = "main"
+    skill_git_token: str = ""           # GitLab access token for private repos
+    skill_sync_on_startup: bool = True  # auto-pull on Worker startup
+    skill_webhook_secret: str = ""      # GitLab webhook secret token for push event verification
+
     # Navigator platform URL (for future callback integration)
     navigator_api_base: str = "http://localhost:8112"
 

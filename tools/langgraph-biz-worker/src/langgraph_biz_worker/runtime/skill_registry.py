@@ -108,20 +108,36 @@ class SkillRegistry:
         self._skills_root = skills_root or _DEFAULT_SKILLS_ROOT
         self._legacy_dir = manifests_dir or _LEGACY_MANIFESTS_DIR
 
-    def load(self) -> None:
-        """Load skills from all sources.  Priority: builtin > public > legacy."""
+    def load(self, account_id: str | None = None) -> None:
+        """Load skills from all sources.
+
+        Priority (later overwrites earlier): legacy < builtin < public < account.
+        If ``account_id`` is provided, also loads account-private skills.
+        """
         self._manifests.clear()
 
         # 1. Load legacy YAML manifests (lowest priority)
         self._load_legacy_yaml()
 
-        # 2. Load SKILL.md from skills/public/ (overwrites legacy)
+        # 2. Load SKILL.md from skills/builtin/
+        builtin_dir = self._skills_root / "builtin"
+        self._load_skill_md_dir(builtin_dir, "builtin")
+
+        # 3. Load SKILL.md from skills/public/ (overwrites builtin)
         public_dir = self._skills_root / "public"
         self._load_skill_md_dir(public_dir, "public")
 
-        # 3. Load SKILL.md from skills/builtin/ (highest priority)
-        builtin_dir = self._skills_root / "builtin"
-        self._load_skill_md_dir(builtin_dir, "builtin")
+        # 4. Load account-private skills (highest priority, Doc 34 §6)
+        if account_id:
+            self.load_account_skills(account_id)
+
+    def load_account_skills(self, account_id: str) -> None:
+        """Load skills from an account's private directory (overwrites all lower layers)."""
+        # Account skills live under <data_root>/accounts/<account_id>/skills/
+        # _skills_root is typically <worker-root>/skills, data_root is sibling
+        data_root = self._skills_root.parent / "data"
+        account_dir = data_root / "accounts" / account_id / "skills"
+        self._load_skill_md_dir(account_dir, f"account:{account_id}")
 
     def _load_skill_md_dir(self, base_dir: Path, scope: str) -> None:
         """Scan ``<base_dir>/<skill-name>/SKILL.md`` entries."""
