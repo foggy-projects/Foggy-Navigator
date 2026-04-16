@@ -68,6 +68,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
 
         // 通过 CodexTaskService.createTask() 创建任务并发布 WorkerTaskStartEvent
         CreateCodexTaskForm form = new CreateCodexTaskForm();
+        form.setAgentId(entity.getAgentId());
         form.setWorkerId(entity.getWorkerId());
         form.setPrompt(prompt);
         form.setCwd(effectiveCwd);
