@@ -651,7 +651,9 @@ public class TaskDispatchFacade {
                     .workerTaskId(strVal(meta, "workerTaskId"))
                     .directoryId(strVal(meta, "directoryId"))
                     .claudeSessionId(strVal(meta, "claudeSessionId"))
-                    .codexThreadId(strVal(meta, "codexThreadId"));
+                    .codexThreadId(strVal(meta, "codexThreadId"))
+                    .model(strVal(meta, "model"))
+                    .modelConfigId(strVal(meta, "modelConfigId"));
         }
 
         // 从 metadata 提取 source / fileCheckpointingEnabled（Provider 可能已设置）
@@ -669,8 +671,13 @@ public class TaskDispatchFacade {
             // 通过 Facade 创建的任务均来自平台
             if (dto.getSource() == null) builder.source("PLATFORM");
             builder.prompt(request.getPrompt())
-                    .cwd(request.getCwd())
-                    .model(request.getModel());
+                    .cwd(request.getCwd());
+            if (dto.getModel() == null) {
+                builder.model(request.getModel());
+            }
+            if (dto.getModelConfigId() == null) {
+                builder.modelConfigId(request.getModelConfigId());
+            }
         }
 
         // 从 artifacts 提取 resultText

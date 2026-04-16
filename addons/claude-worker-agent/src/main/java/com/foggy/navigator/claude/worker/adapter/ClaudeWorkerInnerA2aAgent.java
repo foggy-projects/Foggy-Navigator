@@ -95,8 +95,11 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
         Map<String, Object> taskMeta = new LinkedHashMap<>();
         taskMeta.put("sessionId", task.getSessionId());
         taskMeta.put("workerId", task.getWorkerId());
+        taskMeta.put("workerTaskId", task.getWorkerTaskId());
         taskMeta.put("directoryId", task.getDirectoryId());
         taskMeta.put("claudeSessionId", task.getClaudeSessionId());
+        taskMeta.put("model", task.getModel());
+        taskMeta.put("modelConfigId", task.getModelConfigId());
 
         return A2aTask.builder()
                 .id(task.getTaskId())

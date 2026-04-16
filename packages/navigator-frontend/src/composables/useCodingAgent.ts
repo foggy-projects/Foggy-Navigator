@@ -23,6 +23,8 @@ export function useCodingAgent() {
     defaultDirectoryId: string
     skills?: string
     defaultBranch?: string
+    defaultModelConfigId?: string
+    defaultModel?: string
   }) {
     const agent = await agentApi.registerAgent(form)
     agents.value.unshift(agent)
@@ -36,6 +38,8 @@ export function useCodingAgent() {
     defaultBranch?: string
     defaultDirectoryId?: string
     projectSummary?: string
+    defaultModelConfigId?: string
+    defaultModel?: string
   }) {
     const updated = await agentApi.updateAgent(agentId, form)
     const idx = agents.value.findIndex(a => a.agentId === agentId)

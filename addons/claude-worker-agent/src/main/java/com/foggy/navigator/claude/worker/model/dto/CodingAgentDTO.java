@@ -24,6 +24,7 @@ public class CodingAgentDTO {
     private String projectSummary;
     private String defaultModelConfigId;
     private String defaultModelConfigName;
+    private String defaultModel;
 
     /** 默认目录信息 */
     private DirectorySummary defaultDirectory;

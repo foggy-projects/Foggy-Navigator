@@ -220,6 +220,45 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_a2aRoutePrefersMetadataForImmediateResponse() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-1")
+                .agentId("agent-1")
+                .workerId("worker-1")
+                .prompt("forwarded task")
+                .model("legacy-model")
+                .modelConfigId("cfg-legacy")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .sessionId("session-1")
+                .requestSource("UI")
+                .build();
+
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agentResolver.getProviderType(eq("agent-1"), any())).thenReturn(Optional.of("claude-worker"));
+        when(agent.getAgentCard()).thenReturn(A2aAgentCard.builder().id("agent-1").build());
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-forward-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .metadata(Map.of(
+                        "sessionId", "session-1",
+                        "workerId", "worker-1",
+                        "workerTaskId", "worker-task-1",
+                        "model", "glm4.7",
+                        "modelConfigId", "cfg-new"
+                ))
+                .build());
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("glm4.7", result.getModel());
+        assertEquals("cfg-new", result.getModelConfigId());
+        assertEquals("worker-task-1", result.getWorkerTaskId());
+    }
+
+    @Test
     void createTask_usesModelConfigIdForDirectRoute() {
         LlmModelConfigDTO codexConfig = new LlmModelConfigDTO();
         codexConfig.setWorkerBackend("OPENAI_CODEX");
