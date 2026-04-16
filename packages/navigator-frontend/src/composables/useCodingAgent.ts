@@ -23,7 +23,7 @@ export function useCodingAgent() {
     defaultDirectoryId: string
     skills?: string
     defaultBranch?: string
-    defaultModelConfigId?: string
+    defaultModelConfigId: string
     defaultModel?: string
   }) {
     const agent = await agentApi.registerAgent(form)

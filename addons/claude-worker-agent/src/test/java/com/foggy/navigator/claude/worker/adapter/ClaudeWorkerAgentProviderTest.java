@@ -2,11 +2,13 @@ package com.foggy.navigator.claude.worker.adapter;
 
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -29,12 +31,14 @@ class ClaudeWorkerAgentProviderTest {
     private ClaudeTaskService taskService;
     @Mock
     private WorkingDirectoryRepository directoryRepository;
+    @Mock
+    private LlmModelManager llmModelManager;
 
     private ClaudeWorkerAgentProvider provider;
 
     @BeforeEach
     void setUp() {
-        provider = new ClaudeWorkerAgentProvider(agentRepository, taskService, directoryRepository, null);
+        provider = new ClaudeWorkerAgentProvider(agentRepository, taskService, directoryRepository, llmModelManager, null);
     }
 
     private CodingAgentEntity claudeAgent(String agentId, String userId) {
@@ -155,6 +159,23 @@ class ClaudeWorkerAgentProviderTest {
             codex.setAgentType("LOCAL_CODEX_WORKER");
             codex.setName("codex-agent");
             when(agentRepository.findByTenantIdOrderByCreatedAtDesc("t1")).thenReturn(List.of(claude, codex));
+
+            List<A2aAgentCard> cards = provider.listAgentCardsByTenant("t1");
+
+            assertEquals(1, cards.size());
+            assertEquals("agent-1", cards.get(0).getId());
+        }
+
+        @Test
+        void listAgentCardsByTenant_prefersModelConfigProviderInference() {
+            CodingAgentEntity dynamicClaude = claudeAgent("agent-1", "user-1");
+            dynamicClaude.setAgentType("LOCAL_CODEX_WORKER");
+            dynamicClaude.setDefaultModelConfigId("cfg-claude");
+            LlmModelConfigDTO config = new LlmModelConfigDTO();
+            config.setId("cfg-claude");
+            config.setWorkerBackend("CLAUDE_CODE");
+            when(agentRepository.findByTenantIdOrderByCreatedAtDesc("t1")).thenReturn(List.of(dynamicClaude));
+            when(llmModelManager.getModelConfig("cfg-claude")).thenReturn(Optional.of(config));
 
             List<A2aAgentCard> cards = provider.listAgentCardsByTenant("t1");
 

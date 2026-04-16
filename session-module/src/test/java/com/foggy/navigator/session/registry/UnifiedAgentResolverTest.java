@@ -1,9 +1,11 @@
 package com.foggy.navigator.session.registry;
 
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -26,12 +28,14 @@ class UnifiedAgentResolverTest {
     private A2aAgentProvider provider1;
     @Mock
     private A2aAgentProvider provider2;
+    @Mock
+    private LlmModelManager llmModelManager;
 
     private UnifiedAgentResolver resolver;
 
     @BeforeEach
     void setUp() {
-        resolver = new UnifiedAgentResolver(List.of(provider1, provider2));
+        resolver = new UnifiedAgentResolver(List.of(provider1, provider2), llmModelManager);
     }
 
     // ---- listAgents ----
@@ -51,7 +55,7 @@ class UnifiedAgentResolverTest {
 
     @Test
     void listAgents_emptyProviders_returnsEmpty() {
-        UnifiedAgentResolver emptyResolver = new UnifiedAgentResolver(List.of());
+        UnifiedAgentResolver emptyResolver = new UnifiedAgentResolver(List.of(), llmModelManager);
 
         List<A2aAgentCard> result = emptyResolver.listAgents(ctx("user-1"));
 
@@ -124,6 +128,29 @@ class UnifiedAgentResolverTest {
 
         assertTrue(result.isPresent());
         assertSame(agent, result.get());
+    }
+
+    @Test
+    void resolveAgent_prefersProviderFromModelConfig() {
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .modelConfigId("cfg-1")
+                .build();
+        A2aAgent agent = mock(A2aAgent.class);
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setId("cfg-1");
+        config.setWorkerBackend("OPENAI_CODEX");
+
+        when(llmModelManager.getModelConfig("cfg-1")).thenReturn(Optional.of(config));
+        when(provider1.getProviderType()).thenReturn("claude-worker");
+        when(provider2.getProviderType()).thenReturn("codex-worker");
+        when(provider2.resolveAgent("a2", context)).thenReturn(Optional.of(agent));
+
+        Optional<A2aAgent> result = resolver.resolveAgent("a2", context);
+
+        assertTrue(result.isPresent());
+        assertSame(agent, result.get());
+        verify(provider1, never()).resolveAgent(eq("a2"), any(AgentResolveContext.class));
     }
 
     // ---- getProviderType ----

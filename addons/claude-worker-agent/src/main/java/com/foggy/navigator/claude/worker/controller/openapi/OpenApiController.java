@@ -2,11 +2,11 @@ package com.foggy.navigator.claude.worker.controller.openapi;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.foggy.navigator.claude.worker.adapter.ClaudeWorkerAgentProvider;
 import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.*;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.*;
+import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.*;
@@ -18,7 +18,9 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.util.IdGenerator;
+import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.service.OpenApiSessionQueryService;
+import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
@@ -50,10 +52,11 @@ public class OpenApiController {
     private final WorkingDirectoryService directoryService;
     private final ClaudeWorkerFacade claudeWorkerFacade;
     private final ClaudeWorkerRepository workerRepository;
+    private final CodingAgentRepository codingAgentRepository;
     private final WorkingDirectoryRepository directoryRepository;
     private final WorkerHealthChecker healthChecker;
-    private final ClaudeWorkerAgentProvider agentProvider;
-    private final ClaudeTaskService taskService;
+    private final UnifiedAgentResolver agentResolver;
+    private final TaskDispatchFacade taskDispatchFacade;
     private final TaskStateReconciler reconciler;
     private final OpenApiSessionQueryService sessionQueryService;
     private final ObjectMapper objectMapper;
@@ -379,8 +382,10 @@ public class OpenApiController {
     public RX<List<A2aAgentCard>> listAgents() {
         String tenantId = UserContext.getCurrentTenantId();
         AgentResolveContext ctx = AgentResolveContext.builder()
-                .tenantId(tenantId).requestSource("OPEN_API").build();
-        return RX.ok(agentProvider.listAgentCards(ctx));
+                .tenantId(tenantId)
+                .requestSource("OPEN_API")
+                .build();
+        return RX.ok(agentResolver.listAgents(ctx));
     }
 
     /**
@@ -392,7 +397,7 @@ public class OpenApiController {
         String tenantId = UserContext.getCurrentTenantId();
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId).requestSource("OPEN_API").build();
-        A2aAgent agent = agentProvider.resolveAgent(agentId, ctx)
+        A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
         return RX.ok(agent.getAgentCard());
     }
@@ -417,8 +422,11 @@ public class OpenApiController {
         }
 
         AgentResolveContext ctx = AgentResolveContext.builder()
-                .tenantId(tenantId).requestSource("OPEN_API").build();
-        A2aAgent agent = agentProvider.resolveAgent(agentId, ctx)
+                .tenantId(tenantId)
+                .modelConfigId(form.getMetadata() != null ? (String) form.getMetadata().get("modelConfigId") : null)
+                .requestSource("OPEN_API")
+                .build();
+        A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
 
         // 构建 A2aMessage
@@ -464,7 +472,7 @@ public class OpenApiController {
         String tenantId = UserContext.getCurrentTenantId();
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId).requestSource("OPEN_API").build();
-        A2aAgent agent = agentProvider.resolveAgent(agentId, ctx)
+        A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
 
         A2aTask task = agent.getTask(taskId)
@@ -483,7 +491,7 @@ public class OpenApiController {
         String tenantId = UserContext.getCurrentTenantId();
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId).requestSource("OPEN_API").build();
-        A2aAgent agent = agentProvider.resolveAgent(agentId, ctx)
+        A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
         agent.cancelTask(taskId);
 
@@ -508,11 +516,12 @@ public class OpenApiController {
         String tenantId = UserContext.getCurrentTenantId();
 
         // 获取 Agent 实体以读取 userId
-        CodingAgentEntity agentEntity = agentProvider.getAgentEntityByTenant(agentId, tenantId)
+        CodingAgentEntity agentEntity = codingAgentRepository.findByAgentId(agentId)
+                .filter(entity -> tenantId.equals(entity.getTenantId()))
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
 
-        List<TaskDTO> activeTasks = taskService.listActiveTasks(agentEntity.getUserId());
-        List<OpenApiTaskDTO> result = activeTasks.stream()
+        List<OpenApiTaskDTO> result = taskDispatchFacade.listActiveTasks(agentEntity.getUserId()).stream()
+                .filter(dto -> agentId.equals(dto.getAgentId()))
                 .map(dto -> OpenApiTaskDTO.builder()
                         .taskId(dto.getTaskId())
                         .agentId(agentId)
@@ -713,7 +722,7 @@ public class OpenApiController {
      * 验证 Agent 存在并返回（Open API 上下文）
      */
     private A2aAgent resolveOpenApiAgent(String agentId, String tenantId) {
-        return agentProvider.resolveAgent(agentId, AgentResolveContext.builder()
+        return agentResolver.resolveAgent(agentId, AgentResolveContext.builder()
                         .tenantId(tenantId).requestSource("OPEN_API").build())
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
     }

@@ -41,6 +41,7 @@ public class TaskController {
                 .userId(userId)
                 .tenantId(tenantId)
                 .sessionId(request.getSessionId())
+                .modelConfigId(request.getModelConfigId())
                 .requestSource("UI")
                 .build();
 
@@ -200,6 +201,7 @@ public class TaskController {
                 .userId(userId)
                 .tenantId(tenantId)
                 .sessionId(request.getSessionId())
+                .modelConfigId(request.getModelConfigId())
                 .requestSource("UI")
                 .build();
 
