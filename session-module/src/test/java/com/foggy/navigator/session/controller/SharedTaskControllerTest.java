@@ -7,7 +7,7 @@ import com.foggy.navigator.common.dto.DispatchTaskDTO;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
-import com.foggy.navigator.session.registry.DefaultA2aAgentRegistry;
+import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.service.SharingKeyService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
@@ -33,7 +33,7 @@ class SharedTaskControllerTest {
     @Mock
     private SharingKeyService sharingKeyService;
     @Mock
-    private DefaultA2aAgentRegistry registry;
+    private UnifiedAgentResolver agentResolver;
     @Mock
     private TaskDispatchFacade taskDispatchFacade;
     @Mock
@@ -46,7 +46,7 @@ class SharedTaskControllerTest {
     @Test
     void getTask_returnsA2aTaskWhenSharingKeyMatchesTaskAgent() {
         SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, registry, taskDispatchFacade, sessionRepository, sessionManager);
+                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         DispatchTaskDTO dispatchTask = DispatchTaskDTO.builder()
                 .taskId("task-1")
@@ -56,7 +56,7 @@ class SharedTaskControllerTest {
 
         when(sharingKeyService.validateForKeyOnly("shk-1")).thenReturn(keyEntity);
         when(taskDispatchFacade.getTask(eq("task-1"), any())).thenReturn(Optional.of(dispatchTask));
-        when(registry.resolveAgent("agent-1", "owner-1")).thenReturn(Optional.of(agent));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
         when(agent.getTask("task-1")).thenReturn(Optional.of(a2aTask));
 
         RX<A2aTask> result = controller.getTask("shk-1", "task-1");
@@ -68,7 +68,7 @@ class SharedTaskControllerTest {
     @Test
     void getTask_returnsFailWhenTaskAgentDoesNotMatchSharingKey() {
         SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, registry, taskDispatchFacade, sessionRepository, sessionManager);
+                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         DispatchTaskDTO dispatchTask = DispatchTaskDTO.builder()
                 .taskId("task-1")
@@ -81,13 +81,13 @@ class SharedTaskControllerTest {
         RX<A2aTask> result = controller.getTask("shk-1", "task-1");
 
         assertNull(result.getData());
-        verify(registry, never()).resolveAgent(anyString(), anyString());
+        verify(agentResolver, never()).resolveAgent(anyString(), any());
     }
 
     @Test
     void cancelTask_usesFacadeWhenTaskIsAuthorized() {
         SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, registry, taskDispatchFacade, sessionRepository, sessionManager);
+                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         DispatchTaskDTO dispatchTask = DispatchTaskDTO.builder()
                 .taskId("task-1")
@@ -106,7 +106,7 @@ class SharedTaskControllerTest {
     @Test
     void getSessionMessages_returnsConversationWhenSessionBelongsToSharedAgent() {
         SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, registry, taskDispatchFacade, sessionRepository, sessionManager);
+                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         SessionEntity session = new SessionEntity();
         session.setId("session-1");
@@ -134,7 +134,7 @@ class SharedTaskControllerTest {
     @Test
     void getSessionMessages_returnsFailWhenSessionAgentDoesNotMatchSharingKey() {
         SharedTaskController controller = new SharedTaskController(
-                sharingKeyService, registry, taskDispatchFacade, sessionRepository, sessionManager);
+                sharingKeyService, agentResolver, taskDispatchFacade, sessionRepository, sessionManager);
         SharingKeyEntity keyEntity = buildSharingKey("agent-1", "owner-1");
         SessionEntity session = new SessionEntity();
         session.setId("session-1");

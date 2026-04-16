@@ -18,6 +18,9 @@ router.post('/api/v1/query', async (req: Request, res: Response) => {
     return
   }
   const body = validation.value
+  console.log(
+    `[query] received request: cwd=${body.cwd ?? ''} session_id=${body.session_id ?? ''} model=${body.model ?? ''} has_api_key=${Boolean(body.api_key)} base_url=${body.base_url ?? ''} env_var_keys=${body.env_vars ? Object.keys(body.env_vars).join(',') : ''} images=${body.images?.length ?? 0}`
+  )
 
   // Validate working directory
   const cwd = body.cwd

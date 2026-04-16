@@ -1,11 +1,10 @@
 package com.foggy.navigator.session.service;
 
 import com.foggy.navigator.common.dto.SharingKeyDTO;
-import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
 import com.foggy.navigator.common.form.SharingKeyCreateForm;
 import com.foggy.navigator.common.form.SharingKeyUpdateForm;
-import com.foggy.navigator.session.registry.DefaultA2aAgentRegistry;
+import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SharingKeyRepository;
 import com.foggy.navigator.session.util.SharingKeyGenerator;
 import com.foggy.navigator.spi.agent.A2aAgent;
@@ -34,7 +33,7 @@ class SharingKeyServiceTest {
 
     @Mock private SharingKeyRepository repository;
     @Mock private SharingKeyGenerator keyGenerator;
-    @Mock private DefaultA2aAgentRegistry agentRegistry;
+    @Mock private UnifiedAgentResolver agentResolver;
 
     @InjectMocks private SharingKeyService service;
 
@@ -47,7 +46,7 @@ class SharingKeyServiceTest {
         form.setLabel("Test Key");
 
         A2aAgent agent = mock(A2aAgent.class);
-        when(agentRegistry.resolveAgent("agent-1", "u1")).thenReturn(Optional.of(agent));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
         when(keyGenerator.generate()).thenReturn("shk-random123");
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(keyGenerator.mask(anyString())).thenReturn("shk-***m123");
@@ -87,7 +86,7 @@ class SharingKeyServiceTest {
         SharingKeyCreateForm form = new SharingKeyCreateForm();
         form.setAgentId("agent-not-mine");
 
-        when(agentRegistry.resolveAgent("agent-not-mine", "u1")).thenReturn(Optional.empty());
+        when(agentResolver.resolveAgent(eq("agent-not-mine"), any())).thenReturn(Optional.empty());
 
         assertThrows(IllegalArgumentException.class, () -> service.create("u1", form));
     }
@@ -100,7 +99,7 @@ class SharingKeyServiceTest {
         form.setMaxDailyCalls(100);
 
         A2aAgent agent = mock(A2aAgent.class);
-        when(agentRegistry.resolveAgent("agent-1", "u1")).thenReturn(Optional.of(agent));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
         when(keyGenerator.generate()).thenReturn("shk-abc");
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(keyGenerator.mask(anyString())).thenReturn("shk-***c");

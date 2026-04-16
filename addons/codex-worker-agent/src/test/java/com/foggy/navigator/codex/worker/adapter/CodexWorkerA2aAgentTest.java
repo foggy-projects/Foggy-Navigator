@@ -100,6 +100,7 @@ class CodexWorkerA2aAgentTest {
 
         ArgumentCaptor<CreateCodexTaskForm> captor = ArgumentCaptor.forClass(CreateCodexTaskForm.class);
         verify(taskService).createTask(eq("user-1"), eq("tenant-1"), captor.capture());
+        assertEquals("agent-1", captor.getValue().getAgentId());
         assertEquals("dir-requested", captor.getValue().getDirectoryId());
         assertEquals("D:\\requested", captor.getValue().getCwd());
         assertEquals("model-config-1", captor.getValue().getModelConfigId());

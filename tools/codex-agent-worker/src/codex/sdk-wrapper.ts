@@ -487,6 +487,9 @@ export async function runQuery(
     if (effectiveBaseUrl) {
       codexOptions.baseUrl = effectiveBaseUrl
     }
+    console.log(
+      `[codex] start task=${taskId} raw_model=${rawModel} effective_model=${effectiveModel} reasoning=${reasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} base_url=${effectiveBaseUrl ?? ''} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''}`
+    )
 
     // Codex CLI 配置项默认值 + envVars 覆盖
     const codexConfigDefaults: Record<string, number> = {

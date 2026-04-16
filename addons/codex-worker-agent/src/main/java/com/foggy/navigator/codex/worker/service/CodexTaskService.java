@@ -8,15 +8,18 @@ import com.foggy.navigator.codex.worker.model.dto.CodexTaskDTO;
 import com.foggy.navigator.codex.worker.model.entity.CodexTaskEntity;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.codex.worker.model.form.CreateCodexTaskForm;
+import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.repository.CodexTaskRepository;
 import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.common.util.IdGenerator;
@@ -73,6 +76,10 @@ public class CodexTaskService implements TaskQueryProvider {
     @Autowired(required = false)
     @Nullable
     private SessionEntityRepository sessionEntityRepository;
+
+    @Autowired(required = false)
+    @Nullable
+    private CodexCodingAgentRepository codingAgentRepository;
 
     @Autowired
     @Lazy
@@ -170,6 +177,11 @@ public class CodexTaskService implements TaskQueryProvider {
 
         String sessionId = resolveSessionId(userId, tenantId, form.getPrompt(), existingSessionId, effectiveAgentId);
 
+        String effectiveModelConfigId = resolveEffectiveModelConfigId(form.getModelConfigId(), effectiveAgentId);
+        String modelConfigSource = resolveModelConfigSource(form.getModelConfigId(), effectiveAgentId);
+        ModelResolution effectiveModelResolution = resolveEffectiveModel(
+                form.getModel(), effectiveAgentId, effectiveModelConfigId);
+
         CodexTaskEntity entity = new CodexTaskEntity();
         entity.setTaskId(taskId);
         entity.setSessionId(sessionId);
@@ -180,7 +192,7 @@ public class CodexTaskService implements TaskQueryProvider {
         entity.setResolvedAgentId(effectiveAgentId);
         entity.setPrompt(form.getPrompt());
         entity.setCwd(cwd);
-        entity.setModel(form.getModel());
+        entity.setModel(effectiveModelResolution.model());
         entity.setStatus("RUNNING");
         entity.setSource("PLATFORM");
         entity.setCodexThreadId(form.getCodexThreadId());
@@ -189,7 +201,19 @@ public class CodexTaskService implements TaskQueryProvider {
         log.info("Created Codex task: taskId={}, workerId={}, sessionId={}", taskId, form.getWorkerId(), sessionId);
 
         // 解析 auth + envVars（apiKey + baseUrl + 环境变量，无配置时 Worker 使用本地凭证）
-        CodexAuthResult auth = resolveCodexAuth(form.getModelConfigId());
+        CodexAuthResult auth = resolveCodexAuth(effectiveModelConfigId);
+        log.info(
+                "Resolved Codex task auth: taskId={}, agentId={}, modelConfigId={}, modelConfigSource={}, model={}, modelSource={}, hasApiKey={}, baseUrl={}, envVarKeys={}",
+                taskId,
+                effectiveAgentId,
+                effectiveModelConfigId,
+                modelConfigSource,
+                entity.getModel(),
+                effectiveModelResolution.source(),
+                auth.apiKey != null && !auth.apiKey.isBlank(),
+                auth.baseUrl,
+                auth.envVars != null ? auth.envVars.keySet() : List.of()
+        );
 
         // 发布统一事件触发 CodexStreamRelay（通过 providerType 条件过滤）
         Map<String, Object> providerConfig = new LinkedHashMap<>();
@@ -203,7 +227,7 @@ public class CodexTaskService implements TaskQueryProvider {
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
                 .prompt(form.getPrompt()).cwd(cwd)
-                .model(form.getModel()).maxTurns(form.getMaxTurns())
+                .model(entity.getModel()).maxTurns(form.getMaxTurns())
                 .apiKey(auth.apiKey).providerType(AGENT_ID)
                 .providerConfig(providerConfig)
                 .build());
@@ -1045,6 +1069,59 @@ public class CodexTaskService implements TaskQueryProvider {
             log.warn("Failed to resolve Codex auth from modelConfigId={}: {}", modelConfigId, e.getMessage());
             return CodexAuthResult.EMPTY;
         }
+    }
+
+    private String resolveEffectiveModelConfigId(String explicitModelConfigId, @Nullable String agentId) {
+        if (explicitModelConfigId != null && !explicitModelConfigId.isBlank()) {
+            return explicitModelConfigId;
+        }
+        if (agentId == null || agentId.isBlank() || codingAgentRepository == null) {
+            return null;
+        }
+        CodingAgentEntity agentEntity = codingAgentRepository.findByAgentId(agentId).orElse(null);
+        if (agentEntity == null) {
+            return null;
+        }
+        String defaultModelConfigId = agentEntity.getDefaultModelConfigId();
+        return (defaultModelConfigId == null || defaultModelConfigId.isBlank()) ? null : defaultModelConfigId;
+    }
+
+    private String resolveModelConfigSource(String explicitModelConfigId, @Nullable String agentId) {
+        if (explicitModelConfigId != null && !explicitModelConfigId.isBlank()) {
+            return "request";
+        }
+        if (agentId == null || agentId.isBlank() || codingAgentRepository == null) {
+            return "none";
+        }
+        CodingAgentEntity agentEntity = codingAgentRepository.findByAgentId(agentId).orElse(null);
+        if (agentEntity == null) {
+            return "none";
+        }
+        String defaultModelConfigId = agentEntity.getDefaultModelConfigId();
+        return (defaultModelConfigId == null || defaultModelConfigId.isBlank()) ? "none" : "agent-default";
+    }
+
+    private ModelResolution resolveEffectiveModel(String explicitModel, @Nullable String agentId, @Nullable String modelConfigId) {
+        if (explicitModel != null && !explicitModel.isBlank()) {
+            return new ModelResolution(explicitModel, "request");
+        }
+        if (agentId != null && !agentId.isBlank() && codingAgentRepository != null) {
+            CodingAgentEntity agentEntity = codingAgentRepository.findByAgentId(agentId).orElse(null);
+            if (agentEntity != null && agentEntity.getDefaultModel() != null && !agentEntity.getDefaultModel().isBlank()) {
+                return new ModelResolution(agentEntity.getDefaultModel(), "agent-default");
+            }
+        }
+        if (modelConfigId == null || modelConfigId.isBlank() || llmModelManager == null) {
+            return new ModelResolution(null, "none");
+        }
+        String model = llmModelManager.getModelConfig(modelConfigId)
+                .map(LlmModelConfigDTO::getModelName)
+                .filter(configModel -> !configModel.isBlank())
+                .orElse(null);
+        return new ModelResolution(model, model != null ? "model-config" : "none");
+    }
+
+    private record ModelResolution(@Nullable String model, String source) {
     }
 
     private CodexTaskDTO toDTO(CodexTaskEntity entity) {

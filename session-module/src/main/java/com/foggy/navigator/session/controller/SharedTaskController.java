@@ -7,7 +7,7 @@ import com.foggy.navigator.common.dto.a2a.A2aArtifact;
 import com.foggy.navigator.common.dto.a2a.A2aTask;
 import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
-import com.foggy.navigator.session.registry.DefaultA2aAgentRegistry;
+import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggy.navigator.session.service.SharingKeyService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
@@ -36,7 +36,7 @@ import java.util.Optional;
 public class SharedTaskController {
 
     private final SharingKeyService sharingKeyService;
-    private final DefaultA2aAgentRegistry registry;
+    private final UnifiedAgentResolver agentResolver;
     private final TaskDispatchFacade taskDispatchFacade;
     private final SessionRepository sessionRepository;
     private final SessionManager sessionManager;
@@ -78,10 +78,7 @@ public class SharedTaskController {
                 return RX.failA("Task not found: " + taskId);
             }
 
-            AgentResolveContext context = AgentResolveContext.builder()
-                    .userId(keyEntity.getOwnerUserId())
-                    .requestSource("SHARED_API")
-                    .build();
+            AgentResolveContext context = buildSharedContext(keyEntity);
             taskDispatchFacade.cancelTask(taskId, taskOpt.get().getAgentId(), context);
             return RX.ok("Task cancelled");
         } catch (IllegalArgumentException e) {
@@ -165,16 +162,20 @@ public class SharedTaskController {
     }
 
     private Optional<DispatchTaskDTO> findAuthorizedTask(String taskId, SharingKeyEntity keyEntity) {
-        AgentResolveContext context = AgentResolveContext.builder()
-                .userId(keyEntity.getOwnerUserId())
-                .requestSource("SHARED_API")
-                .build();
+        AgentResolveContext context = buildSharedContext(keyEntity);
         return taskDispatchFacade.getTask(taskId, context)
                 .filter(task -> keyEntity.getAgentId().equals(task.getAgentId()));
     }
 
     private A2aAgent resolveSharedAgent(SharingKeyEntity keyEntity) {
-        return registry.resolveAgent(keyEntity.getAgentId(), keyEntity.getOwnerUserId())
+        return agentResolver.resolveAgent(keyEntity.getAgentId(), buildSharedContext(keyEntity))
                 .orElse(null);
+    }
+
+    private AgentResolveContext buildSharedContext(SharingKeyEntity keyEntity) {
+        return AgentResolveContext.builder()
+                .userId(keyEntity.getOwnerUserId())
+                .requestSource("SHARED_API")
+                .build();
     }
 }

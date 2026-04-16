@@ -37,6 +37,19 @@ public class UnifiedAgentResolver {
     }
 
     /**
+     * 按 providerType + 上下文列出 Agent 卡片。
+     */
+    public List<A2aAgentCard> listByProviderType(String providerType, AgentResolveContext context) {
+        if (providerType == null || providerType.isBlank()) {
+            return listAgents(context);
+        }
+        return providers.stream()
+                .filter(p -> providerType.equals(p.getProviderType()))
+                .flatMap(p -> p.listAgentCards(context).stream())
+                .toList();
+    }
+
+    /**
      * 按上下文解析 Agent 实例
      */
     public Optional<A2aAgent> resolveAgent(String agentId, AgentResolveContext context) {
