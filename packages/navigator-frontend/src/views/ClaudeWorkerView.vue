@@ -2428,6 +2428,9 @@
             <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
           </el-select>
         </el-form-item>
+        <el-form-item label="默认模型">
+          <el-input v-model="agentForm.defaultModel" placeholder="如 opus[1m], sonnet, codex-mini（留空则从LLM配置推断）" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAgentRegisterDialog = false">取消</el-button>
@@ -2461,6 +2464,9 @@
           <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="使用目录默认配置" clearable>
             <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="默认模型">
+          <el-input v-model="agentForm.defaultModel" placeholder="如 opus[1m], sonnet, codex-mini（留空则从LLM配置推断）" />
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -2635,7 +2641,7 @@ const showAgentBindingDialog = ref(false)
 const editingAgent = ref<CodingAgent | null>(null)
 const bindingAgent = ref<CodingAgent | null>(null)
 const bindingDirectories = ref<DirectorySummary[]>([])
-const agentForm = ref({ name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '', defaultModelConfigId: '' })
+const agentForm = ref({ name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '', defaultModelConfigId: '', defaultModel: '' })
 const generatingSummary = ref(false)
 const bindDirectoryId = ref('')
 
@@ -3504,7 +3510,7 @@ function dirBranchById(dirId?: string): string | undefined {
 }
 
 function openAgentRegisterDialog() {
-  agentForm.value = { name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '', defaultModelConfigId: '' }
+  agentForm.value = { name: '', description: '', defaultDirectoryId: '', defaultBranch: '', projectSummary: '', defaultModelConfigId: '', defaultModel: '' }
   showAgentRegisterDialog.value = true
 }
 
@@ -3517,6 +3523,7 @@ function openAgentEditDialog(agent: CodingAgent) {
     defaultBranch: agent.defaultBranch || '',
     projectSummary: agent.projectSummary || '',
     defaultModelConfigId: agent.defaultModelConfigId || '',
+    defaultModel: agent.defaultModel || '',
   }
   showAgentEditDialog.value = true
 }
@@ -3532,6 +3539,7 @@ async function handleRegisterAgent() {
       defaultDirectoryId: agentForm.value.defaultDirectoryId,
       defaultBranch: agentForm.value.defaultBranch || undefined,
       defaultModelConfigId: agentForm.value.defaultModelConfigId || undefined,
+      defaultModel: agentForm.value.defaultModel || undefined,
     })
     showAgentRegisterDialog.value = false
     ElMessage.success('Agent 注册成功')
@@ -3553,6 +3561,7 @@ async function handleUpdateAgent() {
       defaultDirectoryId: agentForm.value.defaultDirectoryId || undefined,
       projectSummary: agentForm.value.projectSummary || undefined,
       defaultModelConfigId: agentForm.value.defaultModelConfigId ?? undefined,
+      defaultModel: agentForm.value.defaultModel || undefined,
     })
     showAgentEditDialog.value = false
     ElMessage.success('Agent 更新成功')
