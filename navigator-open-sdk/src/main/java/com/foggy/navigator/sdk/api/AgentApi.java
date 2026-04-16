@@ -3,12 +3,12 @@ package com.foggy.navigator.sdk.api;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.foggy.navigator.sdk.exception.NavigatorApiException;
 import com.foggy.navigator.sdk.internal.HttpHelper;
-import com.foggy.navigator.sdk.model.AgentCard;
-import com.foggy.navigator.sdk.model.AgentTask;
+import com.foggy.navigator.sdk.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -83,7 +83,8 @@ public class AgentApi {
     public AgentTask ask(String agentId, String question, String contextId, Integer maxTurns,
                          String systemPrompt, String firstMsg) {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("question", question);
+        body.put("message", question);    // 合同字段
+        body.put("question", question);   // 兼容字段
         if (contextId != null) body.put("contextId", contextId);
         if (maxTurns != null) body.put("maxTurns", maxTurns);
         if (systemPrompt != null) body.put("systemPrompt", systemPrompt);
@@ -175,5 +176,110 @@ public class AgentApi {
                                 String contextId, Duration timeout) {
         AgentTask submitted = ask(agentId, question, contextId, null);
         return pollUntilDone(agentId, submitted.getTaskId(), timeout);
+    }
+
+    // ===== 会话上下文列表 =====
+
+    /**
+     * 获取会话上下文列表
+     */
+    public SessionListPage listSessions(String agentId) {
+        return listSessions(agentId, 20, null);
+    }
+
+    /**
+     * 获取会话上下文列表（分页）
+     */
+    public SessionListPage listSessions(String agentId, int limit, String cursor) {
+        StringBuilder path = new StringBuilder("/api/v1/open/agents/" + agentId + "/sessions?limit=" + limit);
+        if (cursor != null) path.append("&cursor=").append(cursor);
+        return http.get(path.toString(), new TypeReference<>() {});
+    }
+
+    // ===== 会话消息 =====
+
+    /**
+     * 获取指定会话上下文的消息列表
+     */
+    public SessionMessagesPage getSessionMessages(String agentId, String contextId) {
+        return getSessionMessages(agentId, contextId, 50, null);
+    }
+
+    /**
+     * 获取指定会话上下文的消息列表（分页）
+     */
+    public SessionMessagesPage getSessionMessages(String agentId, String contextId,
+                                                   int limit, String cursor) {
+        StringBuilder path = new StringBuilder(
+                "/api/v1/open/agents/" + agentId + "/sessions/" + contextId + "/messages?limit=" + limit);
+        if (cursor != null) path.append("&cursor=").append(cursor);
+        return http.get(path.toString(), new TypeReference<>() {});
+    }
+
+    // ===== 任务增量消息 =====
+
+    /**
+     * 轮询任务执行中的新增消息
+     */
+    public TaskMessagesPage getTaskMessages(String agentId, String taskId) {
+        return getTaskMessages(agentId, taskId, 50, null);
+    }
+
+    /**
+     * 轮询任务执行中的新增消息（分页）
+     */
+    public TaskMessagesPage getTaskMessages(String agentId, String taskId,
+                                             int limit, String cursor) {
+        StringBuilder path = new StringBuilder(
+                "/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/messages?limit=" + limit);
+        if (cursor != null) path.append("&cursor=").append(cursor);
+        return http.get(path.toString(), new TypeReference<>() {});
+    }
+
+    /**
+     * 轮询任务消息直到任务完成（便捷方法）
+     * <p>
+     * 持续轮询新增消息，直到任务进入终态。返回收集到的所有消息。
+     *
+     * @param agentId      Agent ID
+     * @param taskId       任务 ID
+     * @param timeout      最大等待时间
+     * @param pollInterval 轮询间隔
+     * @return 任务执行过程中的所有消息
+     */
+    public List<SessionMessage> pollTaskMessages(String agentId, String taskId,
+                                                  Duration timeout, Duration pollInterval) {
+        long deadline = System.currentTimeMillis() + timeout.toMillis();
+        long intervalMs = pollInterval.toMillis();
+        String cursor = null;
+        List<SessionMessage> allMessages = new ArrayList<>();
+
+        while (System.currentTimeMillis() < deadline) {
+            // 拉取新增消息
+            TaskMessagesPage page = getTaskMessages(agentId, taskId, 50, cursor);
+            if (page.getMessages() != null && !page.getMessages().isEmpty()) {
+                allMessages.addAll(page.getMessages());
+                cursor = page.getNextCursor();
+            }
+
+            // 检查任务是否终态
+            AgentTask task = getTask(agentId, taskId);
+            if (task.isTerminal()) {
+                // 终态后最后拉一次遗漏消息
+                TaskMessagesPage lastPage = getTaskMessages(agentId, taskId, 50, cursor);
+                if (lastPage.getMessages() != null && !lastPage.getMessages().isEmpty()) {
+                    allMessages.addAll(lastPage.getMessages());
+                }
+                break;
+            }
+
+            try {
+                Thread.sleep(intervalMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new NavigatorApiException("Polling interrupted", e);
+            }
+        }
+        return allMessages;
     }
 }

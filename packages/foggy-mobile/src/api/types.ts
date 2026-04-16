@@ -107,6 +107,16 @@ export interface DispatchTask {
  */
 export type ClaudeTask = DispatchTask
 
+/** 工作目录里程碑 */
+export interface DirectoryMilestone {
+  id: string
+  name: string
+  status: 'PLANNED' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED' | string
+  docPath?: string
+  startAt?: string
+  endAt?: string
+}
+
 /** Rewind 操作结果 */
 export interface RewindTaskResult {
   status: string
@@ -142,6 +152,7 @@ export interface WorkingDirectory {
   defaultBaseUrl?: string
   maskedDefaultAuthToken?: string
   defaultModelConfigId?: string
+  milestones?: DirectoryMilestone[]
   lastSyncedAt?: string
   createdAt: string
   updatedAt: string
@@ -200,6 +211,7 @@ export interface ConversationConfig {
   maskedAuthToken?: string
   tags?: string[]
   interactionState?: 'PROCESSING' | 'AWAITING_REPLY' | 'ON_HOLD' | 'ARCHIVED'
+  milestoneId?: string
 }
 
 /** 会话搜索结果项 */
@@ -211,6 +223,7 @@ export interface SessionSearchResult {
   customTitle?: string
   tags?: string[]
   interactionState?: 'PROCESSING' | 'AWAITING_REPLY' | 'ON_HOLD' | 'ARCHIVED'
+  milestoneId?: string
   latestTaskId: string
   latestStatus: string
   model?: string

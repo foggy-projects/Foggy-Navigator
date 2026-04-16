@@ -96,6 +96,7 @@ public class JpaSessionManager implements SessionManager {
         SessionMessageEntity entity = new SessionMessageEntity();
         entity.setId(messageId);
         entity.setSessionId(sessionId);
+        entity.setTaskId(message.getTaskId());
         entity.setRole(message.getRole().name());
         entity.setContent(message.getContent());
         entity.setMetadata(serializeMetadata(message.getMetadata()));

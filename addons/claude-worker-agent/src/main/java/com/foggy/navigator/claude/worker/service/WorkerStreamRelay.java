@@ -566,7 +566,11 @@ public class WorkerStreamRelay {
                             .put("elapsedSeconds", data.getOrDefault("elapsed_seconds", 0))
                             .put("timeoutSeconds", data.getOrDefault("timeout_seconds", 600)));
                 } else {
-                    publishBuilt(mb.sessionStart("Task started")
+                    String normalizedSubtype = (subtype == null || subtype.isBlank()) ? "system" : subtype;
+                    String content = (event.getContent() == null || event.getContent().isBlank())
+                            ? "Worker status updated"
+                            : event.getContent();
+                    publishBuilt(mb.stateSync(content, normalizedSubtype)
                             .put("claudeSessionId", nullSafe(event.getSessionId())));
                 }
             }
@@ -779,6 +783,10 @@ public class WorkerStreamRelay {
 
     private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
         AgentMessage message = AgentMessage.of(sessionId, AGENT_ID, type, payload);
+        // 从 payload 中提取 taskId 并设置到消息对象级别，用于持久化
+        if (payload != null && payload.containsKey("taskId")) {
+            message.setTaskId((String) payload.get("taskId"));
+        }
         log.debug("Publishing message: sessionId={}, type={}, payload={}", sessionId, type, payload);
         eventPublisher.publishEvent(message);
     }

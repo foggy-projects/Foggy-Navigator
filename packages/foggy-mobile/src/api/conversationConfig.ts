@@ -1,7 +1,7 @@
 /**
  * Conversation Config API (/api/v1/sessions/{id}/config/*)
  *
- * Session-level configuration: pin, title, archive, hold.
+ * Session-level configuration: pin, title, milestone, archive, hold.
  * Aligned with PC frontend session config endpoints.
  *
  * Note: Auth binding (bindConversationAuth / updateConversationAuth) is
@@ -45,6 +45,19 @@ export async function updateConversationTitle(
 ): Promise<ConversationConfig> {
   const rx = (await client.patch(`/sessions/${sessionId}/config/title`, {
     title,
+  })) as unknown as RX<ConversationConfig>
+  return rx.data
+}
+
+/**
+ * Update milestone for a conversation.
+ */
+export async function updateConversationMilestone(
+  sessionId: string,
+  milestoneId?: string,
+): Promise<ConversationConfig> {
+  const rx = (await client.patch(`/sessions/${sessionId}/config/milestone`, {
+    milestoneId,
   })) as unknown as RX<ConversationConfig>
   return rx.data
 }

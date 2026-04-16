@@ -86,11 +86,15 @@ public class SessionEventListener {
                 ? MessageRole.TOOL
                 : MessageRole.ASSISTANT;
 
-        return Message.builder()
+        Message.MessageBuilder builder = Message.builder()
+                .id(msg.getMessageId())
                 .sessionId(msg.getSessionId())
                 .role(role)
                 .content(content)
-                .metadata(metadata)
-                .build();
+                .metadata(metadata);
+        if (msg.getTaskId() != null) {
+            builder.taskId(msg.getTaskId());
+        }
+        return builder.build();
     }
 }

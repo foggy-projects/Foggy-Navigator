@@ -219,12 +219,8 @@
               {{ selectedDirectory.gitStatus }}
             </el-tag>
             <code class="dir-path-inline">{{ selectedDirectory.path }}</code>
-            <el-tag
-              v-if="selectedDirectory.defaultAuthMode"
-              :type="selectedDirectory.defaultAuthConfigured ? 'success' : 'info'"
-              size="small"
-            >
-              {{ authModeLabel(selectedDirectory.defaultAuthMode) }}
+            <el-tag v-if="effectiveDirectoryAuthTag" :type="effectiveDirectoryAuthTag.type" size="small">
+              {{ effectiveDirectoryAuthTag.label }}
             </el-tag>
             <el-tag v-else size="small" type="warning">Auth 未配置</el-tag>
           </div>
@@ -276,7 +272,7 @@
             v-for="s in favoriteScripts"
             :key="s.path"
             size="small"
-            :type="s.pinned ? '' : 'info'"
+            :type="s.pinned ? 'success' : 'info'"
             class="fav-script-tag"
             @click="handleRunFavScript(s)"
             @contextmenu.prevent="handleFavScriptCtx($event, s)"
@@ -470,6 +466,7 @@
           @permission-respond="handlePermissionRespond"
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
+          @skill-approval-respond="handleSkillApprovalRespond"
           @rewind="handlePaneRewind"
           @reconnect="handlePaneReconnect"
           @forward="handlePaneForward"
@@ -604,7 +601,7 @@
               <el-table-column label="模型" width="100">
                 <template #default="{ row }">
                   <el-tooltip v-if="row.model" :content="row.model" placement="top">
-                    <el-tag size="small" type="" :disable-transitions="true">{{ formatModelShort(row.model) }}</el-tag>
+                    <el-tag size="small" type="info" :disable-transitions="true">{{ formatModelShort(row.model) }}</el-tag>
                   </el-tooltip>
                   <span v-else>-</span>
                 </template>
@@ -829,6 +826,7 @@
           @permission-respond="handlePermissionRespond"
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
+          @skill-approval-respond="handleSkillApprovalRespond"
           @rewind="handlePaneRewind"
           @reconnect="handlePaneReconnect"
           @forward="handlePaneForward"
@@ -1014,154 +1012,6 @@
         </div>
       </div>
       <div class="history-content">
-        <!-- Global attention section: active tasks + awaiting reply -->
-        <div v-if="globalAttentionConvs.length > 0" class="active-sessions-section">
-          <div class="active-header" @click="toggleAttentionCollapsed">
-            <span class="active-title">
-              <span class="expand-icon">{{ prefs.attentionCollapsed ? '▶' : '▼' }}</span>
-              &#9679; 需要关注 ({{ globalAttentionConvs.length }})
-            </span>
-            <el-button size="small" text @click.stop="() => { workerState.loadActiveTasks(); workerState.loadAwaitingReplyTasks() }">&#8635;</el-button>
-          </div>
-          <template v-if="!prefs.attentionCollapsed">
-          <template v-for="item in attentionDisplayList" :key="item.type === 'conv' ? item.conv.sessionId : `wh-${item.workerId}`">
-            <!-- Worker group header -->
-            <div v-if="item.type === 'worker-header'" class="attention-worker-header">
-              <span class="attention-worker-name">{{ item.workerName }}</span>
-              <span class="attention-worker-count">({{ item.count }})</span>
-            </div>
-            <!-- Conversation item -->
-            <div
-              v-else
-              :class="['active-conv-item', { 'conv-pane-focused': item.conv.sessionId === focusedSessionId, 'active-conv-pinned': item.conv.config?.pinned }]"
-              @click="navigateToActiveSession(item.conv)"
-            >
-              <div class="conv-row-1">
-                <span
-                  v-if="item.conv.config?.pinned"
-                  class="conv-pin-icon active"
-                  title="已置顶"
-                  @click.stop="handleTogglePin(item.conv)"
-                >&#128204;</span>
-                <span
-                  v-if="paneSessionMap.has(item.conv.sessionId)"
-                  :class="['sidebar-pane-letter', `pane-letter-${paneSessionMap.get(item.conv.sessionId)!.label.toLowerCase()}`]"
-                >{{ paneSessionMap.get(item.conv.sessionId)!.label }}</span>
-                <el-tag v-if="item.conv.latestTask.directoryName" size="small" type="info" effect="plain" class="active-dir-tag">{{ item.conv.latestTask.directoryName }}</el-tag>
-                <span :class="['conv-interaction-badge', (item.conv.config?.interactionState || 'processing').toLowerCase()]" />
-                <span class="active-status-label">{{ attentionStatusLabel(item.conv) }}</span>
-              </div>
-              <div class="conv-row-1" style="margin-top: 2px;">
-                <span class="conv-prompt" :title="item.conv.config?.customTitle || item.conv.firstPrompt">{{ truncate(item.conv.config?.customTitle || item.conv.firstPrompt, 30) }}</span>
-              </div>
-              <div v-if="item.conv.config?.customTitle" class="conv-row-subtitle">
-                <span class="conv-latest-prompt" :title="item.conv.latestTask.prompt">{{ truncate(item.conv.latestTask.prompt, 30) }}</span>
-              </div>
-              <div class="conv-row-2">
-                <el-tag
-                  v-if="resolveConversationMilestone(item.conv)"
-                  :type="milestoneTagType(resolveConversationMilestone(item.conv)?.status)"
-                  size="small"
-                  class="conv-tag milestone-tag"
-                  :title="resolveConversationMilestone(item.conv)?.docPath || ''"
-                >
-                  {{ resolveConversationMilestone(item.conv)?.name }}
-                </el-tag>
-                <el-tag v-for="tag in (item.conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
-                <span v-if="item.conv.totalCost > 0" class="conv-cost">${{ item.conv.totalCost.toFixed(2) }}</span>
-                <span v-if="item.conv.latestTask.durationMs" class="conv-time">{{ Math.round((item.conv.latestTask.durationMs || 0) / 60000) }}min</span>
-                <span class="conv-time">{{ formatTime(item.conv.latestTask.createdAt) }}</span>
-                <!-- Action buttons -->
-                <span class="conv-actions" @click.stop>
-                  <el-button
-                    v-if="canResumeConversation(item.conv)"
-                    type="primary"
-                    size="small"
-                    text
-                    :disabled="isSessionBusy(item.conv)"
-                    title="继续对话"
-                    @click="handleResumeFromHistory(item.conv.latestTask)"
-                  >
-                    继续
-                  </el-button>
-                  <el-button
-                    v-if="['RUNNING', 'AWAITING_PERMISSION'].includes(item.conv.latestTask.status)"
-                    type="warning"
-                    size="small"
-                    text
-                    title="中止任务"
-                    @click="handleAbortTask(item.conv.latestTask.taskId)"
-                  >
-                    中止
-                  </el-button>
-                  <el-dropdown trigger="click" @click.stop>
-                    <span class="conv-more-trigger" @click.stop>&#8943;</span>
-                    <template #dropdown>
-                      <el-dropdown-menu>
-                        <el-dropdown-item @click="handleTogglePin(item.conv)">
-                          {{ item.conv.config?.pinned ? '取消置顶' : '置顶' }}
-                        </el-dropdown-item>
-                        <el-dropdown-item @click="handleEditTitle(item.conv)">
-                          编辑标题
-                        </el-dropdown-item>
-                        <el-dropdown-item @click="handleEditTags(item.conv)">
-                          标签
-                        </el-dropdown-item>
-                        <el-dropdown-item @click="handleShowDetail(item.conv)">
-                          详情
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="canRepairContext(item.conv)"
-                          @click="handleRepairContext(item.conv)"
-                        >
-                          修复上下文
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.config?.interactionState !== 'ARCHIVED' && item.conv.config?.interactionState !== 'ON_HOLD'"
-                          @click="handleHoldConversation(item.conv)"
-                        >
-                          搁置
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.config?.interactionState === 'ON_HOLD'"
-                          @click="handleUnholdConversation(item.conv)"
-                        >
-                          取消搁置
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.config?.interactionState !== 'ARCHIVED'"
-                          @click="handleArchiveConversation(item.conv)"
-                        >
-                          归档
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.config?.interactionState === 'ARCHIVED'"
-                          @click="handleUnarchiveConversation(item.conv)"
-                        >
-                          取消归档
-                        </el-dropdown-item>
-                        <el-dropdown-item
-                          v-if="item.conv.latestTask.status !== 'RUNNING'"
-                          divided
-                          class="delete-dropdown-item"
-                          @click="handleDeleteConversation(item.conv)"
-                        >
-                          删除
-                        </el-dropdown-item>
-                      </el-dropdown-menu>
-                    </template>
-                  </el-dropdown>
-                </span>
-              </div>
-            </div>
-          </template>
-          </template>
-          <div class="active-divider">
-            <span class="active-divider-line" />
-            <span class="active-divider-text">历史会话</span>
-            <span class="active-divider-line" />
-          </div>
-        </div>
         <!-- Conversation list (shared template for directory / worker-level) -->
         <div v-if="selectedDirectoryId && groupedActiveConversations.length > 0" class="conv-list grouped-conv-list">
           <div v-for="group in groupedActiveConversations" :key="group.key" class="milestone-group">
@@ -1205,9 +1055,9 @@
                   @click.stop="handleTogglePin(conv)"
                 >&#128204;</span>
                 <span
-                  v-if="conv.config?.interactionState"
-                  :class="['conv-interaction-badge', conv.config.interactionState.toLowerCase()]"
-                  :title="interactionStateLabel(conv.config.interactionState)"
+                  v-if="conversationInteractionState(conv)"
+                  :class="['conv-interaction-badge', conversationInteractionState(conv)!.toLowerCase()]"
+                  :title="interactionStateLabel(conversationInteractionState(conv)!)"
                 />
                 <span class="conv-prompt" :title="conv.config?.customTitle || conv.firstPrompt">{{
                   truncate(conv.config?.customTitle || conv.firstPrompt, 36)
@@ -1303,25 +1153,25 @@
                           详情
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.config?.interactionState !== 'ARCHIVED' && conv.config?.interactionState !== 'ON_HOLD'"
+                          v-if="conversationInteractionState(conv) !== 'ARCHIVED' && conversationInteractionState(conv) !== 'ON_HOLD'"
                           @click="handleHoldConversation(conv)"
                         >
                           搁置
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.config?.interactionState === 'ON_HOLD'"
+                          v-if="conversationInteractionState(conv) === 'ON_HOLD'"
                           @click="handleUnholdConversation(conv)"
                         >
                           取消搁置
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.config?.interactionState !== 'ARCHIVED'"
+                          v-if="conversationInteractionState(conv) !== 'ARCHIVED'"
                           @click="handleArchiveConversation(conv)"
                         >
                           归档
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.config?.interactionState === 'ARCHIVED'"
+                          v-if="conversationInteractionState(conv) === 'ARCHIVED'"
                           @click="handleUnarchiveConversation(conv)"
                         >
                           取消归档
@@ -1396,11 +1246,11 @@
                 title="已置顶"
                 @click.stop="handleTogglePin(conv)"
               >&#128204;</span>
-              <span
-                v-if="conv.config?.interactionState"
-                :class="['conv-interaction-badge', conv.config.interactionState.toLowerCase()]"
-                :title="interactionStateLabel(conv.config.interactionState)"
-              />
+               <span
+                 v-if="conversationInteractionState(conv)"
+                 :class="['conv-interaction-badge', conversationInteractionState(conv)!.toLowerCase()]"
+                 :title="interactionStateLabel(conversationInteractionState(conv)!)"
+               />
               <span class="conv-prompt" :title="conv.config?.customTitle || conv.firstPrompt">{{
                 truncate(conv.config?.customTitle || conv.firstPrompt, 36)
               }}</span>
@@ -1496,25 +1346,25 @@
                         详情
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.config?.interactionState !== 'ARCHIVED' && conv.config?.interactionState !== 'ON_HOLD'"
+                        v-if="conversationInteractionState(conv) !== 'ARCHIVED' && conversationInteractionState(conv) !== 'ON_HOLD'"
                         @click="handleHoldConversation(conv)"
                       >
                         搁置
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.config?.interactionState === 'ON_HOLD'"
+                        v-if="conversationInteractionState(conv) === 'ON_HOLD'"
                         @click="handleUnholdConversation(conv)"
                       >
                         取消搁置
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.config?.interactionState !== 'ARCHIVED'"
+                        v-if="conversationInteractionState(conv) !== 'ARCHIVED'"
                         @click="handleArchiveConversation(conv)"
                       >
                         归档
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.config?.interactionState === 'ARCHIVED'"
+                        v-if="conversationInteractionState(conv) === 'ARCHIVED'"
                         @click="handleUnarchiveConversation(conv)"
                       >
                         取消归档
@@ -1565,7 +1415,7 @@
         <el-pagination
           v-if="selectedDirectoryId ? dirTaskTotal > dirTaskSize : workerState.taskTotal.value > workerState.taskSize.value"
           class="task-pagination"
-          small
+          size="small"
           layout="prev, pager, next"
           :total="selectedDirectoryId ? dirTaskTotal : workerState.taskTotal.value"
           :page-size="selectedDirectoryId ? dirTaskSize : workerState.taskSize.value"
@@ -2003,7 +1853,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showForwardDialog" :title="forwardDialogTitle" width="640px">
+    <el-dialog v-model="showForwardDialog" :title="forwardDialogTitle" width="640px" @paste="forwardHandlePaste" @drop="forwardHandleDrop" @dragover="forwardHandleDragOver">
       <el-form :model="forwardForm" label-position="top">
         <el-form-item label="源回复">
           <div class="forward-source-preview">{{ forwardSourcePreview || '暂无内容' }}</div>
@@ -2024,14 +1874,31 @@
           </div>
         </el-form-item>
         <el-form-item label="转发内容">
-          <el-input
+          <SlashCommandInput
             v-model="forwardForm.prompt"
-            type="textarea"
-            :rows="8"
+            :rows="4"
+            auto-grow
+            :max-rows="12"
             :placeholder="forwardForm.targetMode === 'EXISTING_SESSION'
-              ? '可直接转发当前回复，也可以先修改后再追加到已有会话'
-              : '可直接转发当前回复，也可以先修改后再创建新会话'"
+              ? '可直接转发当前回复，也可以先修改后再追加到已有会话 (./ 搜索文件, / 唤起技能, 可粘贴截图或拖拽文件)'
+              : '可直接转发当前回复，也可以先修改后再创建新会话 (./ 搜索文件, / 唤起技能, 可粘贴截图或拖拽文件)'"
+            :skills="directorySkills"
+            :agents="allAgentItems"
+            :directory-id="forwardForm.directoryId ?? selectedDirectoryId ?? undefined"
+            @submit="handleSubmitForward"
           />
+          <div v-if="forwardAttachments.length > 0" class="image-preview-strip" style="margin-top: 8px">
+            <div v-for="(att, idx) in forwardAttachments" :key="idx" class="image-preview-item" :class="{ 'file-item': !att.isImage }">
+              <template v-if="att.isImage">
+                <img :src="att.previewUrl" :alt="att.name" :title="att.name" />
+              </template>
+              <div v-else class="file-preview" :title="att.name">
+                <span class="file-icon">{{ fileIcon(att.mimeType) }}</span>
+                <span class="file-name">{{ att.name }}</span>
+              </div>
+              <span class="image-remove" @click="forwardRemoveAttachment(idx)">&times;</span>
+            </div>
+          </div>
         </el-form-item>
         <template v-if="forwardForm.targetMode === 'NEW_SESSION'">
           <el-row :gutter="12">
@@ -2182,10 +2049,45 @@
     </el-dialog>
 
     <!-- Milestone Management Dialog -->
-    <el-dialog v-model="showMilestoneManageDialog" title="管理里程碑" width="600px">
+    <el-dialog v-model="showMilestoneManageDialog" title="管理里程碑" width="860px">
       <div class="milestone-manage-list">
-        <div v-if="milestoneManageList.length === 0" class="form-tip" style="margin-bottom: 8px">
+        <div class="milestone-manage-toolbar">
+          <div class="milestone-manage-sort">
+            <span class="milestone-manage-sort-label">排序</span>
+            <el-select v-model="milestoneManageSortBy" size="small" style="width: 150px" @change="handleMilestoneManageSortChange">
+              <el-option label="开始时间" value="startAt" />
+              <el-option label="结束时间" value="endAt" />
+              <el-option label="名称" value="name" />
+              <el-option label="状态" value="status" />
+            </el-select>
+            <el-select v-model="milestoneManageSortDir" size="small" style="width: 110px" @change="handleMilestoneManageSortChange">
+              <el-option label="倒序" value="desc" />
+              <el-option label="正序" value="asc" />
+            </el-select>
+          </div>
+          <el-button
+            v-if="!milestoneAddMode"
+            size="small"
+            type="primary"
+            plain
+            @click="openMilestoneAddForm"
+          >
+            + 添加里程碑
+          </el-button>
+        </div>
+        <div v-if="milestoneManageLoading" class="form-tip" style="margin-bottom: 8px">
+          正在加载里程碑...
+        </div>
+        <div v-else-if="milestoneManageList.length === 0" class="form-tip" style="margin-bottom: 8px">
           暂无里程碑。可按版本建立如 v3.0.0、1.0.0-SNAPSHOT。
+        </div>
+        <div class="milestone-manage-head">
+          <span>名称</span>
+          <span>状态</span>
+          <span>开始时间</span>
+          <span>结束时间</span>
+          <span>文档路径</span>
+          <span>操作</span>
         </div>
         <div v-for="ms in milestoneManageList" :key="ms.id" class="milestone-manage-row">
           <template v-if="milestoneEditingId === ms.id">
@@ -2196,6 +2098,20 @@
               <el-option label="已完成" value="COMPLETED" />
               <el-option label="已归档" value="ARCHIVED" />
             </el-select>
+            <el-date-picker
+              v-model="milestoneEditForm.startAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              placeholder="开始时间"
+              size="small"
+            />
+            <el-date-picker
+              v-model="milestoneEditForm.endAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              placeholder="结束时间"
+              size="small"
+            />
             <el-input v-model="milestoneEditForm.docPath" placeholder="docs/version-tracker/..." size="small" />
             <el-button size="small" type="primary" :loading="saving" @click="handleSaveMilestoneEdit(ms.id)">保存</el-button>
             <el-button size="small" @click="milestoneEditingId = ''">取消</el-button>
@@ -2203,7 +2119,10 @@
           <template v-else>
             <span class="ms-name">{{ ms.name }}</span>
             <el-tag size="small" :type="milestoneTagType(ms.status)">{{ milestoneStatusLabel(ms.status) }}</el-tag>
+            <span class="ms-time">{{ formatMilestoneDateTime(ms.startAt) }}</span>
+            <span class="ms-time">{{ formatMilestoneDateTime(ms.endAt) }}</span>
             <code v-if="ms.docPath" class="ms-doc">{{ ms.docPath }}</code>
+            <span v-else class="ms-doc ms-doc-empty">-</span>
             <span class="ms-actions">
               <el-button size="small" text @click="startEditMilestone(ms)">编辑</el-button>
               <el-button size="small" text type="danger" :loading="milestoneDeleting === ms.id" @click="handleDeleteMilestoneManage(ms)">删除</el-button>
@@ -2221,12 +2140,37 @@
               <el-option label="已完成" value="COMPLETED" />
               <el-option label="已归档" value="ARCHIVED" />
             </el-select>
+            <el-date-picker
+              v-model="milestoneAddForm.startAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              placeholder="开始时间"
+              size="small"
+            />
+            <el-date-picker
+              v-model="milestoneAddForm.endAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              placeholder="结束时间"
+              size="small"
+            />
             <el-input v-model="milestoneAddForm.docPath" placeholder="docs/version-tracker/..." size="small" />
             <el-button size="small" type="primary" :loading="saving" @click="handleAddMilestoneManage">保存</el-button>
             <el-button size="small" @click="milestoneAddMode = false">取消</el-button>
           </div>
         </template>
-        <el-button v-else size="small" type="primary" plain @click="milestoneAddMode = true; milestoneAddForm = { name: '', status: 'PLANNED', docPath: '' }">+ 添加里程碑</el-button>
+      </div>
+      <div class="milestone-manage-pagination">
+        <el-pagination
+          background
+          layout="total, prev, pager, next, sizes"
+          :current-page="milestoneManagePage + 1"
+          :page-size="milestoneManageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="milestoneManageTotal"
+          @current-change="handleMilestoneManagePageChange"
+          @size-change="handleMilestoneManageSizeChange"
+        />
       </div>
       <template #footer>
         <el-button @click="showMilestoneManageDialog = false">关闭</el-button>
@@ -2655,7 +2599,9 @@ import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import SessionSearchDialog from '@/components/worker/SessionSearchDialog.vue'
 import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
 import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
+import { useForwardSession, type ConversationGroup as ForwardConversationGroup } from '@/composables/useForwardSession'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
+import { useAttachments, compressImage, fileIcon, toImagesJson, type Attachment } from '@/composables/useAttachments'
 import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
 import {
@@ -2666,13 +2612,13 @@ import {
   searchSessionsUnified,
   listTasksByDirectoryUnified,
   listTasksByDirectoryPagedUnified,
-  type ForwardTargetMode,
 } from '@/api/unifiedTask'
 import * as sshApi from '@/api/ssh'
 import { searchFiles } from '@/api/fileBrowser'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
+import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone } from '@/types'
 import type { AipMessageType, ChatMessage } from '@foggy/chat'
 
@@ -2938,48 +2884,20 @@ const milestoneForm = ref({ milestoneId: '' })
 // Milestone management dialog state (directory-level)
 const showMilestoneManageDialog = ref(false)
 const milestoneManageList = ref<DirectoryMilestone[]>([])
+const milestoneManageLoading = ref(false)
+const milestoneManagePage = ref(0)
+const milestoneManageSize = ref(20)
+const milestoneManageTotal = ref(0)
+const milestoneManageSortBy = ref<MilestoneSortBy>('startAt')
+const milestoneManageSortDir = ref<MilestoneSortDir>('desc')
 const milestoneEditingId = ref('')
-const milestoneEditForm = ref({ name: '', status: '', docPath: '' })
+const milestoneEditForm = ref({ name: '', status: '', docPath: '', startAt: '', endAt: '' })
 const milestoneAddMode = ref(false)
-const milestoneAddForm = ref({ name: '', status: 'PLANNED', docPath: '' })
+const milestoneAddForm = ref({ name: '', status: 'PLANNED', docPath: '', startAt: '', endAt: '' })
 const milestoneDeleting = ref('')
 
 // Session search dialog state
 const showSessionSearch = ref(false)
-
-type ForwardSourceContext = {
-  sourceSessionId: string
-  sourceMessageId: string
-  sourceContent: string
-  sourceWorkerId?: string
-  sourceDirectoryId?: string
-  sourceMilestoneId?: string
-  sourceTask: ClaudeTask
-}
-
-function defaultForwardForm() {
-  return {
-    sourceSessionId: '',
-    sourceMessageId: '',
-    targetMode: 'NEW_SESSION' as ForwardTargetMode,
-    targetSessionId: '',
-    workerId: '',
-    directoryId: '',
-    cwd: '',
-    prompt: '',
-    model: '',
-    modelConfigId: '',
-    permissionMode: 'bypassPermissions',
-    milestoneId: '',
-  }
-}
-
-const showForwardDialog = ref(false)
-const forwardSubmitting = ref(false)
-const forwardPlatformModels = ref<LlmModelConfig[]>([])
-const forwardSource = ref<ForwardSourceContext | null>(null)
-const forwardForm = ref(defaultForwardForm())
-let loadForwardModelConfigSeq = 0
 
 // Batch selection state
 const batchSelectMode = ref(false)
@@ -3043,6 +2961,104 @@ function reloadFilteredTasks() {
     loadDirectoryTasks()
   } else {
     workerState.loadTasksPage(0, undefined, currentStateParam())
+  }
+}
+
+function deriveInteractionStateFromTaskStatus(
+  status?: ClaudeTask['status'],
+): ConversationConfig['interactionState'] | undefined {
+  if (status === 'PENDING' || status === 'RUNNING') return 'PROCESSING'
+  if (status === 'AWAITING_PERMISSION') return 'AWAITING_REPLY'
+  if (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED') return 'AWAITING_REPLY'
+  return undefined
+}
+
+function resolveConversationInteractionState(
+  conv: Pick<ConversationGroup, 'latestTask' | 'config'>,
+): ConversationConfig['interactionState'] | undefined {
+  return deriveInteractionStateFromTaskStatus(conv.latestTask.status) ?? conv.config?.interactionState
+}
+
+function matchesCurrentInteractionFilter(
+  state: ConversationConfig['interactionState'] | undefined,
+): boolean {
+  if (!state) return true
+  if (ALL_STATES.every((value) => interactionStateFilters.value.has(value))) return true
+  return interactionStateFilters.value.has(state)
+}
+
+function upsertTaskAtTop(taskList: ClaudeTask[], task: ClaudeTask): ClaudeTask[] {
+  return [task, ...taskList.filter((existing) => existing.taskId !== task.taskId)]
+}
+
+function patchTaskList(
+  taskList: ClaudeTask[],
+  taskId: string,
+  updates: Partial<ClaudeTask>,
+): ClaudeTask[] {
+  let changed = false
+  const next = taskList.map((task) => {
+    if (task.taskId !== taskId) return task
+    changed = true
+    return { ...task, ...updates }
+  })
+  return changed ? next : taskList
+}
+
+function syncTaskAcrossVisibleLists(task: ClaudeTask) {
+  const interactionState = deriveInteractionStateFromTaskStatus(task.status)
+  if (interactionState) {
+    workerState.updateInteractionStateFromSSE(task.sessionId, interactionState)
+  }
+
+  if (['PENDING', 'RUNNING', 'AWAITING_PERMISSION'].includes(task.status)) {
+    workerState.activeTasks.value = upsertTaskAtTop(workerState.activeTasks.value, task)
+  }
+
+  if (selectedDirectoryId.value === task.directoryId && matchesCurrentInteractionFilter(interactionState)) {
+    const sessionExists = directoryTasks.value.some((existing) => existing.sessionId === task.sessionId)
+    directoryTasks.value = upsertTaskAtTop(directoryTasks.value, task)
+    if (!sessionExists) {
+      dirTaskTotal.value += 1
+    }
+  }
+}
+
+function syncTaskStatusAcrossUi(
+  taskId: string,
+  updates: Partial<ClaudeTask>,
+  options?: {
+    removeFromActive?: boolean
+    interactionState?: ConversationConfig['interactionState']
+  },
+) {
+  workerState.tasks.value = patchTaskList(workerState.tasks.value, taskId, updates)
+  directoryTasks.value = patchTaskList(directoryTasks.value, taskId, updates)
+
+  if (options?.removeFromActive) {
+    workerState.activeTasks.value = workerState.activeTasks.value.filter((task) => task.taskId !== taskId)
+  } else {
+    workerState.activeTasks.value = patchTaskList(workerState.activeTasks.value, taskId, updates)
+  }
+
+  for (const pane of getAllPanes()) {
+    if (pane.task.value?.taskId === taskId) {
+      pane.task.value = {
+        ...pane.task.value,
+        ...updates,
+      }
+    }
+  }
+
+  if (options?.interactionState) {
+    const sessionId = (updates.sessionId as string | undefined)
+      ?? workerState.tasks.value.find((task) => task.taskId === taskId)?.sessionId
+      ?? directoryTasks.value.find((task) => task.taskId === taskId)?.sessionId
+      ?? workerState.activeTasks.value.find((task) => task.taskId === taskId)?.sessionId
+
+    if (sessionId) {
+      workerState.updateInteractionStateFromSSE(sessionId, options.interactionState)
+    }
   }
 }
 
@@ -3215,6 +3231,30 @@ const ALL_MODELS: { value: string; label: string; backend: string }[] = [
   { value: 'gpt-5.3-codex', label: '5.3 Codex', backend: 'OPENAI_CODEX' },
   { value: 'gpt-5.3-codex-spark', label: 'Spark', backend: 'OPENAI_CODEX' },
 ]
+
+// ── Forward Session composable ──
+const forwardState = useForwardSession({
+  workerState,
+  directoryTasks,
+  groupTasksToConversations,
+  resolveConversationMilestone,
+  shortModel,
+  milestoneStatusLabel,
+  formatTime,
+  ALL_MODELS,
+})
+const {
+  showForwardDialog, forwardSubmitting, forwardForm, forwardSource, forwardPlatformModels,
+  forwardSourcePreview, forwardDialogTitle, forwardConversationPool, forwardExistingTargets,
+  forwardSelectedExistingConversation, forwardDirectories, forwardSelectedDirectory,
+  forwardMilestoneOptions, forwardSelectedModelConfig, forwardModelOptions,
+  forwardExistingWorkerName, forwardExistingDirectoryName, forwardExistingProviderLabel,
+  forwardExistingModelConfigLabel, forwardExistingModelLabel, forwardExistingMilestoneLabel,
+  forwardSubmitButtonText, forwardSubmitDisabled,
+  openForwardDialog, submitForward, resetForwardDialog, forwardConversationOptionLabel,
+  forwardAttachments, forwardRemoveAttachment,
+  forwardHandlePaste, forwardHandleDrop, forwardHandleDragOver,
+} = forwardState
 
 const creatingTask = ref(false)
 const taskForm = ref({
@@ -3443,227 +3483,6 @@ async function loadPlatformModelConfig() {
   }
 }
 
-function resetForwardDialog() {
-  forwardSource.value = null
-  forwardPlatformModels.value = []
-  forwardForm.value = defaultForwardForm()
-}
-
-async function loadForwardModelConfigs(workerId: string, preferredId?: string) {
-  const seq = ++loadForwardModelConfigSeq
-  if (!workerId) {
-    forwardPlatformModels.value = []
-    forwardForm.value.modelConfigId = ''
-    return
-  }
-  try {
-    const models = await listModelConfigs(workerId)
-    if (seq !== loadForwardModelConfigSeq) return
-    forwardPlatformModels.value = models.filter(isSelectablePlatformModel)
-    const sourceConfigId = forwardSource.value?.sourceTask.modelConfigId
-    const directoryDefaultId = forwardSelectedDirectory.value?.defaultModelConfigId
-    const nextConfigId = [
-      preferredId,
-      directoryDefaultId,
-      sourceConfigId,
-      forwardPlatformModels.value[0]?.id,
-    ].find((configId) => !!configId && forwardPlatformModels.value.some((model) => model.id === configId)) || ''
-    forwardForm.value.modelConfigId = nextConfigId
-  } catch {
-    if (seq !== loadForwardModelConfigSeq) return
-    forwardPlatformModels.value = []
-    forwardForm.value.modelConfigId = ''
-  }
-}
-
-// ── Forward computed (must be before watchers that reference them) ──
-const forwardSourcePreview = computed(() => forwardSource.value?.sourceContent?.trim() || '')
-const forwardDialogTitle = computed(() =>
-  forwardForm.value.targetMode === 'EXISTING_SESSION' ? '转发到已有会话' : '转发为新会话',
-)
-const forwardConversationPool = computed(() => {
-  const taskMap = new Map<string, ClaudeTask>()
-  for (const task of workerState.tasks.value) {
-    taskMap.set(task.taskId, task)
-  }
-  for (const task of directoryTasks.value) {
-    taskMap.set(task.taskId, task)
-  }
-  return groupTasksToConversations([...taskMap.values()])
-})
-const forwardExistingTargets = computed(() => {
-  const sourceSessionId = forwardSource.value?.sourceSessionId
-  if (!sourceSessionId) return []
-  return forwardConversationPool.value
-    .filter((conv) => conv.parentSessionId === sourceSessionId)
-    .sort((a, b) => new Date(b.latestTask.createdAt).getTime() - new Date(a.latestTask.createdAt).getTime())
-})
-
-const forwardSelectedExistingConversation = computed(() =>
-  forwardExistingTargets.value.find((conv) => conv.sessionId === forwardForm.value.targetSessionId) || null,
-)
-const forwardDirectories = computed(() => {
-  if (!forwardForm.value.workerId) return []
-  return workerState.directories.value.filter((dir) => dir.workerId === forwardForm.value.workerId)
-})
-const forwardSelectedDirectory = computed(() =>
-  workerState.directories.value.find((dir) => dir.directoryId === forwardForm.value.directoryId),
-)
-const forwardMilestoneOptions = computed(() => forwardSelectedDirectory.value?.milestones || [])
-const forwardSelectedModelConfig = computed(() =>
-  forwardPlatformModels.value.find((model) => model.id === forwardForm.value.modelConfigId) || null,
-)
-const forwardModelOptions = computed(() => {
-  const backend = forwardSelectedModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
-  const backendModels = ALL_MODELS.filter((model) => model.backend === backend)
-  const allowed = forwardSelectedModelConfig.value?.availableModels
-  if (!allowed || allowed.length === 0) return backendModels
-  return backendModels.filter((model) => allowed.includes(model.value))
-})
-const forwardExistingWorkerName = computed(() => {
-  const workerId = forwardSelectedExistingConversation.value?.latestTask.workerId
-  if (!workerId) return '-'
-  return workerState.workers.value.find((worker) => worker.workerId === workerId)?.name || workerId
-})
-const forwardExistingDirectoryName = computed(() => {
-  const directoryId = forwardSelectedExistingConversation.value?.latestTask.directoryId
-  return directoryId ? dirNameById(directoryId) : '-'
-})
-const forwardExistingProviderLabel = computed(() => {
-  const providerType = forwardSelectedExistingConversation.value?.latestTask.providerType
-  return providerType ? providerTypeLabel(providerType) : '-'
-})
-const forwardExistingModelConfigLabel = computed(() => {
-  const task = forwardSelectedExistingConversation.value?.latestTask
-  if (!task?.modelConfigId) return '-'
-  const modelConfig = forwardPlatformModels.value.find((item) => item.id === task.modelConfigId)
-  return modelConfig ? `${modelConfig.name} (${task.modelConfigId})` : task.modelConfigId
-})
-const forwardExistingModelLabel = computed(() => {
-  const model = forwardSelectedExistingConversation.value?.latestTask.model
-  return model ? shortModel(model) : '-'
-})
-const forwardExistingMilestoneLabel = computed(() => {
-  const conv = forwardSelectedExistingConversation.value
-  if (!conv) return '-'
-  const milestone = resolveConversationMilestone(conv)
-  return milestone ? `${milestone.name} (${milestoneStatusLabel(milestone.status)})` : '未设置'
-})
-const forwardSubmitButtonText = computed(() =>
-  forwardForm.value.targetMode === 'EXISTING_SESSION' ? '转发追加' : '转发创建',
-)
-const forwardSubmitDisabled = computed(() => {
-  if (!forwardForm.value.prompt.trim()) return true
-  if (forwardForm.value.targetMode === 'EXISTING_SESSION') {
-    return !forwardForm.value.targetSessionId
-  }
-  return !forwardForm.value.workerId
-})
-
-watch(() => showForwardDialog.value, (visible) => {
-  if (!visible && !forwardSubmitting.value) {
-    resetForwardDialog()
-  }
-})
-
-watch(() => forwardForm.value.targetMode, (mode) => {
-  if (mode === 'EXISTING_SESSION') {
-    if (!forwardExistingTargets.value.some((conv) => conv.sessionId === forwardForm.value.targetSessionId)) {
-      forwardForm.value.targetSessionId = forwardExistingTargets.value[0]?.sessionId || ''
-    }
-    return
-  }
-  forwardForm.value.targetSessionId = ''
-})
-
-watch(forwardExistingTargets, (targets) => {
-  if (forwardForm.value.targetMode !== 'EXISTING_SESSION') {
-    return
-  }
-  if (!targets.some((conv) => conv.sessionId === forwardForm.value.targetSessionId)) {
-    forwardForm.value.targetSessionId = targets[0]?.sessionId || ''
-  }
-})
-
-watch(() => forwardForm.value.targetSessionId, async (sessionId) => {
-  if (forwardForm.value.targetMode !== 'EXISTING_SESSION') {
-    return
-  }
-  const target = forwardExistingTargets.value.find((conv) => conv.sessionId === sessionId)
-  if (!target?.latestTask.workerId) {
-    forwardPlatformModels.value = []
-    return
-  }
-  try {
-    await workerState.loadDirectories(target.latestTask.workerId)
-  } catch {
-    // best-effort
-  }
-  await loadForwardModelConfigs(target.latestTask.workerId, target.latestTask.modelConfigId || undefined)
-})
-
-watch(() => forwardForm.value.workerId, async (workerId) => {
-  if (forwardForm.value.targetMode !== 'NEW_SESSION') {
-    return
-  }
-  if (!workerId) {
-    forwardPlatformModels.value = []
-    forwardForm.value.directoryId = ''
-    forwardForm.value.modelConfigId = ''
-    return
-  }
-  try {
-    await workerState.loadDirectories(workerId)
-  } catch {
-    // best-effort
-  }
-  const selectedDir = workerState.directories.value.find((dir) => dir.directoryId === forwardForm.value.directoryId)
-  if (selectedDir && selectedDir.workerId !== workerId) {
-    forwardForm.value.directoryId = ''
-  }
-  await loadForwardModelConfigs(workerId, forwardForm.value.modelConfigId || undefined)
-})
-
-watch(() => forwardForm.value.directoryId, (directoryId) => {
-  if (forwardForm.value.targetMode !== 'NEW_SESSION') {
-    return
-  }
-  const dir = workerState.directories.value.find((item) => item.directoryId === directoryId)
-  if (!dir) {
-    forwardForm.value.milestoneId = ''
-    return
-  }
-  if (forwardForm.value.workerId !== dir.workerId) {
-    forwardForm.value.workerId = dir.workerId
-  }
-  forwardForm.value.cwd = dir.path
-  if (dir.defaultModelConfigId && forwardPlatformModels.value.some((model) => model.id === dir.defaultModelConfigId)) {
-    forwardForm.value.modelConfigId = dir.defaultModelConfigId
-  }
-  const source = forwardSource.value
-  const milestoneIds = new Set((dir.milestones || []).map((milestone) => milestone.id))
-  if (source?.sourceDirectoryId === directoryId && source.sourceMilestoneId && milestoneIds.has(source.sourceMilestoneId)) {
-    forwardForm.value.milestoneId = source.sourceMilestoneId
-    return
-  }
-  if (!forwardForm.value.milestoneId || !milestoneIds.has(forwardForm.value.milestoneId)) {
-    forwardForm.value.milestoneId = ''
-  }
-})
-
-watch(forwardModelOptions, (options) => {
-  if (forwardForm.value.targetMode !== 'NEW_SESSION') {
-    return
-  }
-  if (options.length === 0) {
-    forwardForm.value.model = ''
-    return
-  }
-  if (!options.some((option) => option.value === forwardForm.value.model)) {
-    forwardForm.value.model = options[0]!.value
-  }
-})
-
 // --- Agent management functions ---
 function dirNameById(dirId?: string): string {
   if (!dirId) return '-'
@@ -3677,11 +3496,7 @@ function providerTypeLabel(providerType?: string): string {
   return providerType || '-'
 }
 
-function forwardConversationOptionLabel(conv: ConversationGroup): string {
-  const milestone = resolveConversationMilestone(conv)
-  const milestoneText = milestone ? ` · ${milestone.name}` : ''
-  return `${conv.firstPrompt || '未命名会话'} · ${formatTime(conv.latestTask.createdAt)}${milestoneText}`
-}
+
 
 function dirBranchById(dirId?: string): string | undefined {
   if (!dirId) return undefined
@@ -3855,16 +3670,17 @@ function handleTaskHistoryNext() {
   if (text != null) taskForm.value.prompt = text
 }
 
-// --- Attachment state (images + files) ---
-interface Attachment {
-  name: string
-  base64: string
-  mimeType: string
-  previewUrl: string
-  size: number  // original file size in bytes
-  isImage: boolean
-}
-const attachments = ref<Attachment[]>([])
+// --- Attachment state (images + files) — delegated to useAttachments composable ---
+const {
+  attachments,
+  addFiles,
+  removeAttachment,
+  clearAttachments,
+  handlePaste,
+  handleDrop,
+  handleDragOver,
+  handleFileSelect,
+} = useAttachments()
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 // --- Session fullscreen + iPad tools ---
@@ -3919,159 +3735,7 @@ function insertDotSlash(comp: InstanceType<typeof SlashCommandInput> | null) {
     textarea.setSelectionRange(newCursor, newCursor)
   })
 }
-const MAX_ATTACHMENTS = 10
-const MAX_IMAGE_SIZE = 50 * 1024 * 1024  // 50MB per image before compression (iPad screenshots can be 10-30MB)
-const MAX_FILE_SIZE = 20 * 1024 * 1024   // 20MB per non-image file (no compression)
-
-async function compressImage(file: File): Promise<Attachment> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    const objectUrl = URL.createObjectURL(file)
-    img.onload = () => {
-      const MAX_DIM = 1920
-      let { width, height } = img
-      if (width > MAX_DIM || height > MAX_DIM) {
-        const ratio = Math.min(MAX_DIM / width, MAX_DIM / height)
-        width = Math.round(width * ratio)
-        height = Math.round(height * ratio)
-      }
-      const canvas = document.createElement('canvas')
-      canvas.width = width
-      canvas.height = height
-      const ctx = canvas.getContext('2d')!
-      ctx.drawImage(img, 0, 0, width, height)
-      canvas.toBlob(
-        (blob) => {
-          URL.revokeObjectURL(objectUrl)
-          if (!blob) { reject(new Error('Compression failed')); return }
-          const reader = new FileReader()
-          reader.onload = () => {
-            const base64 = (reader.result as string).split(',')[1]!
-            resolve({
-              name: file.name.replace(/\.\w+$/, '.webp'),
-              base64,
-              mimeType: 'image/webp',
-              previewUrl: URL.createObjectURL(blob),
-              size: file.size,
-              isImage: true,
-            })
-          }
-          reader.onerror = reject
-          reader.readAsDataURL(blob)
-        },
-        'image/webp',
-        0.85,
-      )
-    }
-    img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('Image load failed')) }
-    img.src = objectUrl
-  })
-}
-
-async function readFileAsBase64(file: File): Promise<Attachment> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(',')[1]!
-      resolve({
-        name: file.name,
-        base64,
-        mimeType: file.type || 'application/octet-stream',
-        previewUrl: '',
-        size: file.size,
-        isImage: false,
-      })
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-function fileIcon(mimeType: string): string {
-  if (mimeType.includes('pdf')) return '📑'
-  if (mimeType.includes('zip') || mimeType.includes('tar') || mimeType.includes('gzip') || mimeType.includes('compressed')) return '📦'
-  if (mimeType.includes('sheet') || mimeType.includes('csv')) return '📊'
-  return '📄'
-}
-
-async function addFiles(files: FileList | File[]) {
-  for (const file of Array.from(files)) {
-    if (attachments.value.length >= MAX_ATTACHMENTS) {
-      ElMessage.warning(`最多附加 ${MAX_ATTACHMENTS} 个文件`)
-      break
-    }
-    const isImage = file.type.startsWith('image/')
-    const maxSize = isImage ? MAX_IMAGE_SIZE : MAX_FILE_SIZE
-    if (file.size > maxSize) {
-      ElMessage.warning(`"${file.name}" 超过 ${isImage ? '50MB' : '20MB'}，已跳过`)
-      continue
-    }
-    try {
-      const attachment = isImage ? await compressImage(file) : await readFileAsBase64(file)
-      attachments.value.push(attachment)
-    } catch {
-      ElMessage.warning(`"${file.name}" 处理失败`)
-    }
-  }
-}
-
-function removeAttachment(index: number) {
-  const removed = attachments.value.splice(index, 1)
-  removed.forEach((img) => URL.revokeObjectURL(img.previewUrl))
-}
-
-function handlePaste(e: ClipboardEvent) {
-  const items = e.clipboardData?.items
-  if (!items) return
-  const pastedFiles: File[] = []
-  for (const item of Array.from(items)) {
-    if (item.kind === 'file') {
-      const file = item.getAsFile()
-      if (file) {
-        if (file.type.startsWith('image/')) {
-          // Generate a meaningful name for clipboard images (usually screenshots)
-          const ext = file.type.split('/')[1] || 'png'
-          pastedFiles.push(new File([file], `screenshot-${Date.now()}.${ext}`, { type: file.type }))
-        } else {
-          pastedFiles.push(file)
-        }
-      }
-    }
-  }
-  if (pastedFiles.length > 0) {
-    e.preventDefault()
-    addFiles(pastedFiles)
-  }
-}
-
-function handleDrop(e: DragEvent) {
-  e.preventDefault()
-  const files = e.dataTransfer?.files
-  if (files && files.length > 0) {
-    addFiles(files)
-  }
-}
-
-function handleDragOver(e: DragEvent) {
-  e.preventDefault()
-}
-
-function handleFileSelect(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (input.files && input.files.length > 0) {
-    addFiles(input.files)
-    input.value = '' // reset so same file can be selected again
-  }
-}
-
-function clearAttachments(preserveUrls?: Set<string>) {
-  attachments.value.forEach((img) => {
-    if (img.previewUrl && (!preserveUrls || !preserveUrls.has(img.previewUrl))) {
-      URL.revokeObjectURL(img.previewUrl)
-    }
-  })
-  attachments.value = []
-}
+// compressImage, fileIcon, toImagesJson — imported from useAttachments
 
 const selectedWorkerEntity = computed(() => {
   return workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value)
@@ -4080,6 +3744,23 @@ const selectedWorkerEntity = computed(() => {
 const selectedDirectory = computed(() =>
   workerState.directories.value.find((d) => d.directoryId === selectedDirectoryId.value),
 )
+
+const effectiveDirectoryAuthTag = computed(() => {
+  if (platformModelConfig.value) {
+    return {
+      label: `API: ${platformModelConfig.value.name}`,
+      type: 'success' as const,
+    }
+  }
+  const dir = selectedDirectory.value
+  if (dir?.defaultAuthMode) {
+    return {
+      label: authModeLabel(dir.defaultAuthMode),
+      type: (dir.defaultAuthConfigured ? 'success' : 'info') as const,
+    }
+  }
+  return null
+})
 
 const parsedAgentTeams = computed(() => {
   if (selectedAgentTeamsConfigId.value) {
@@ -4235,7 +3916,7 @@ const directoryMilestoneMap = computed(() => {
 
 function milestonesForDirectory(directoryId?: string): DirectoryMilestone[] {
   if (!directoryId) return []
-  return directoryMilestoneMap.value.get(directoryId) || []
+  return sortMilestones(directoryMilestoneMap.value.get(directoryId))
 }
 
 const conversationMilestoneMap = computed(() => {
@@ -4255,9 +3936,6 @@ function resolveConversationMilestone(conv: ConversationGroup): DirectoryMilesto
 
 const groupedActiveConversations = computed<MilestoneConversationGroup[]>(() => {
   if (!selectedDirectoryId.value) return []
-  const milestoneOrder = new Map(
-    (selectedDirectory.value?.milestones || []).map((milestone, index) => [milestone.id, index]),
-  )
   const grouped = new Map<string, MilestoneConversationGroup>()
   for (const conv of activeConversations.value) {
     const milestone = resolveConversationMilestone(conv)
@@ -4277,106 +3955,15 @@ const groupedActiveConversations = computed<MilestoneConversationGroup[]>(() => 
   return Array.from(grouped.values()).sort((left, right) => {
     if (left.key === '__none__') return 1
     if (right.key === '__none__') return -1
-    return (milestoneOrder.get(left.key) ?? Number.MAX_SAFE_INTEGER)
-      - (milestoneOrder.get(right.key) ?? Number.MAX_SAFE_INTEGER)
+    if (left.milestone && right.milestone) {
+      return compareMilestonesDefault(left.milestone, right.milestone)
+    }
+    return 0
   })
 })
 
 // Active sessions: group activeTasks into ConversationGroups
 const activeSessionConvs = computed(() => groupTasksToConversations(workerState.activeTasks.value))
-
-// AWAITING_REPLY conversations: global (not filtered by worker), from backend API
-const awaitingReplyConvs = computed(() => {
-  const activeSessionIds = new Set(activeSessionConvs.value.map(c => c.sessionId))
-  // Use the new awaitingReplyTasks from backend API (global, not worker-filtered)
-  const awaitingConvs = groupTasksToConversations(workerState.awaitingReplyTasks.value)
-  // Exclude sessions that are already in activeSessionConvs to avoid duplicates
-  return awaitingConvs.filter(conv => !activeSessionIds.has(conv.sessionId))
-})
-
-// Combined "needs attention" section: pinned + active tasks + awaiting reply (excluding ON_HOLD)
-const globalAttentionConvs = computed(() => {
-  const activeAndAwaiting = [...activeSessionConvs.value, ...awaitingReplyConvs.value]
-    .filter(conv => {
-      // Exclude ON_HOLD sessions from attention (even if they have active tasks)
-      const state = workerState.conversationConfigs.value.get(conv.sessionId)?.interactionState
-      return state !== 'ON_HOLD'
-    })
-  const existingIds = new Set(activeAndAwaiting.map(c => c.sessionId))
-  // Add pinned conversations from history that are not already in active/awaiting
-  const pinnedFromHistory = allConversations.value.filter(
-    c => c.config?.pinned && !existingIds.has(c.sessionId) && c.config?.interactionState !== 'ON_HOLD',
-  )
-  // Pinned first (sorted by pinnedAt desc), then active+awaiting
-  return [...pinnedFromHistory, ...activeAndAwaiting]
-})
-
-// --- Attention list: pinned flat + grouped by worker ---
-
-type AttentionDisplayItem =
-  | { type: 'conv'; conv: ConversationGroup }
-  | { type: 'worker-header'; workerId: string; workerName: string; count: number }
-
-/** Pinned conversations in the attention list (flat, no grouping) */
-const attentionPinnedConvs = computed<ConversationGroup[]>(() => {
-  return globalAttentionConvs.value.filter(c => c.config?.pinned)
-})
-
-/** Non-pinned conversations grouped by workerId, sorted by most recent activity */
-const attentionWorkerGroups = computed(() => {
-  const nonPinned = globalAttentionConvs.value.filter(c => !c.config?.pinned)
-
-  const groupMap = new Map<string, ConversationGroup[]>()
-  for (const conv of nonPinned) {
-    const wid = conv.latestTask.workerId || '__unknown__'
-    const existing = groupMap.get(wid)
-    if (existing) {
-      existing.push(conv)
-    } else {
-      groupMap.set(wid, [conv])
-    }
-  }
-
-  const groups: { workerId: string; workerName: string; conversations: ConversationGroup[]; latestActivity: number }[] = []
-  for (const [wid, convs] of groupMap) {
-    const worker = workerState.workers.value.find(w => w.workerId === wid)
-    const latestActivity = Math.max(...convs.map(c => new Date(c.latestTask.createdAt).getTime()))
-    groups.push({
-      workerId: wid,
-      workerName: worker?.name || '未知',
-      conversations: convs,
-      latestActivity,
-    })
-  }
-
-  groups.sort((a, b) => b.latestActivity - a.latestActivity)
-  return groups
-})
-
-/** Flattened display list: pinned items + (worker-header + conversations)... */
-const attentionDisplayList = computed<AttentionDisplayItem[]>(() => {
-  const items: AttentionDisplayItem[] = []
-
-  // Pinned items first (no group header)
-  for (const conv of attentionPinnedConvs.value) {
-    items.push({ type: 'conv', conv })
-  }
-
-  // Worker groups with headers
-  for (const wg of attentionWorkerGroups.value) {
-    items.push({
-      type: 'worker-header',
-      workerId: wg.workerId,
-      workerName: wg.workerName,
-      count: wg.conversations.length,
-    })
-    for (const conv of wg.conversations) {
-      items.push({ type: 'conv', conv })
-    }
-  }
-
-  return items
-})
 
 // Set of provider session refs that currently have a RUNNING task (for concurrency protection)
 const runningConversationRefs = computed(() => {
@@ -4443,10 +4030,6 @@ function toggleProjectExpand(projectId: string) {
   }
 }
 
-function toggleAttentionCollapsed() {
-  prefs.attentionCollapsed = !prefs.attentionCollapsed
-}
-
 // Active tasks polling (fallback) + SSE-driven refresh
 let activeTasksInterval: ReturnType<typeof setInterval> | null = null
 
@@ -4454,39 +4037,44 @@ function handleTaskUpdateEvent(event: Event) {
   const detail = (event as CustomEvent).detail
   if (['task_status_change', 'task_completion'].includes(detail?.type) && detail?.taskId) {
     const newStatus = detail.status as string
+    const interactionState = detail.sessionId
+      ? (detail.interactionState as ConversationConfig['interactionState'] | undefined)
+      : deriveInteractionStateFromTaskStatus(newStatus as ClaudeTask['status'])
     // Sync interactionState from SSE
-    if (detail.sessionId && detail.interactionState) {
-      workerState.updateInteractionStateFromSSE(detail.sessionId, detail.interactionState)
+    if (detail.sessionId && interactionState) {
+      workerState.updateInteractionStateFromSSE(detail.sessionId, interactionState)
     }
     if (['RUNNING', 'AWAITING_PERMISSION'].includes(newStatus)) {
       // Active state — update in-place or refresh list
       const existing = workerState.activeTasks.value.find(t => t.taskId === detail.taskId)
       if (existing) {
-        existing.status = newStatus as any
+        syncTaskStatusAcrossUi(detail.taskId, {
+          status: newStatus as ClaudeTask['status'],
+          updatedAt: detail.updatedAt || existing.updatedAt,
+          ...(detail.errorMessage ? { errorMessage: detail.errorMessage as string } : {}),
+          ...(detail.sessionId ? { sessionId: detail.sessionId as string } : {}),
+        }, {
+          interactionState,
+        })
       } else {
         workerState.loadActiveTasks()
         workerState.loadAwaitingReplyTasks()
       }
-      // Also sync to history task list — prevents status mismatch between
-      // attention section (from activeTasks) and history list (from tasks)
-      const inTasks = workerState.tasks.value.find(t => t.taskId === detail.taskId)
-      if (inTasks) {
-        inTasks.status = newStatus as any
-      }
     } else {
       // Terminal state — remove from active list + update task list
-      workerState.activeTasks.value = workerState.activeTasks.value.filter(
-        t => t.taskId !== detail.taskId
-      )
-      const inTasks = workerState.tasks.value.find(t => t.taskId === detail.taskId)
-      if (inTasks) {
-        inTasks.status = newStatus as any
-        if (detail.errorMessage) {
-          inTasks.errorMessage = detail.errorMessage
-        } else if (newStatus === 'FAILED' && detail.summary) {
-          inTasks.errorMessage = String(detail.summary)
-        }
-      }
+      syncTaskStatusAcrossUi(detail.taskId, {
+        status: newStatus as ClaudeTask['status'],
+        updatedAt: detail.updatedAt,
+        ...(detail.errorMessage
+          ? { errorMessage: detail.errorMessage as string }
+          : (newStatus === 'FAILED' && detail.summary)
+            ? { errorMessage: String(detail.summary) }
+            : {}),
+        ...(detail.sessionId ? { sessionId: detail.sessionId as string } : {}),
+      }, {
+        removeFromActive: true,
+        interactionState,
+      })
       workerState.loadAwaitingReplyTasks()
     }
   } else {
@@ -5309,16 +4897,16 @@ async function handleSaveTags() {
   }
 }
 
-function tagColor(tag: string): '' | 'success' | 'warning' | 'danger' | 'info' {
+function tagColor(tag: string): 'success' | 'warning' | 'danger' | 'info' {
   switch (tag) {
-    case '主任务': return ''
+    case '主任务': return 'success'
     case '临时': return 'info'
     case 'bugfix': return 'danger'
     case 'feature': return 'success'
     case '规划': return 'warning'
     case '开发': return 'success'
     case '测试': return 'danger'
-    case '用户体验': return ''
+    case '用户体验': return 'info'
     case '代码评审': return 'warning'
     default: return 'info'
   }
@@ -5335,34 +4923,64 @@ function milestoneStatusLabel(status?: string): string {
   }
 }
 
-function milestoneTagType(status?: string): '' | 'success' | 'warning' | 'info' {
+function milestoneTagType(status?: string): 'success' | 'warning' | 'info' {
   switch (status) {
     case 'ACTIVE': return 'warning'
     case 'COMPLETED': return 'success'
     case 'ARCHIVED': return 'info'
     case 'PLANNED':
     default:
-      return ''
+      return 'info'
   }
+}
+
+function emptyMilestoneForm(status = 'PLANNED') {
+  return { name: '', status, docPath: '', startAt: '', endAt: '' }
+}
+
+function formatMilestoneDateTime(value?: string): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hour}:${minute}`
 }
 
 // ===== Milestone Management (independent panel) =====
 
 async function openMilestoneManager() {
   if (!selectedDirectoryId.value) return
-  try {
-    milestoneManageList.value = await dirApi.listMilestones(selectedDirectoryId.value)
-  } catch {
-    milestoneManageList.value = selectedDirectory.value?.milestones ? [...selectedDirectory.value.milestones] : []
-  }
+  milestoneManagePage.value = 0
+  milestoneManageSize.value = 20
+  milestoneManageSortBy.value = 'startAt'
+  milestoneManageSortDir.value = 'desc'
   milestoneEditingId.value = ''
   milestoneAddMode.value = false
+  milestoneAddForm.value = emptyMilestoneForm()
+  await refreshMilestoneList()
   showMilestoneManageDialog.value = true
+}
+
+function openMilestoneAddForm() {
+  milestoneAddMode.value = true
+  milestoneAddForm.value = emptyMilestoneForm()
 }
 
 function startEditMilestone(ms: DirectoryMilestone) {
   milestoneEditingId.value = ms.id
-  milestoneEditForm.value = { name: ms.name, status: ms.status, docPath: ms.docPath || '' }
+  milestoneEditForm.value = {
+    name: ms.name,
+    status: ms.status,
+    docPath: ms.docPath || '',
+    startAt: ms.startAt || '',
+    endAt: ms.endAt || '',
+  }
 }
 
 async function handleSaveMilestoneEdit(milestoneId: string) {
@@ -5386,6 +5004,7 @@ async function handleAddMilestoneManage() {
   try {
     await dirApi.addMilestoneApi(selectedDirectoryId.value, milestoneAddForm.value)
     milestoneAddMode.value = false
+    milestoneAddForm.value = emptyMilestoneForm()
     await refreshMilestoneList()
     ElMessage.success('里程碑已添加')
   } catch {
@@ -5426,11 +5045,47 @@ async function handleDeleteMilestoneManage(ms: DirectoryMilestone) {
 
 async function refreshMilestoneList() {
   if (!selectedDirectoryId.value) return
-  const updated = await dirApi.listMilestones(selectedDirectoryId.value)
-  milestoneManageList.value = updated
-  // sync to directories state so computed caches update
-  const dir = workerState.directories.value.find(d => d.directoryId === selectedDirectoryId.value)
-  if (dir) dir.milestones = updated
+  milestoneManageLoading.value = true
+  try {
+    const [paged, updated] = await Promise.all([
+      dirApi.listMilestonesPaged(selectedDirectoryId.value, {
+        page: milestoneManagePage.value,
+        size: milestoneManageSize.value,
+        sortBy: milestoneManageSortBy.value,
+        sortDir: milestoneManageSortDir.value,
+      }),
+      dirApi.listMilestones(selectedDirectoryId.value),
+    ])
+    milestoneManageList.value = paged.content
+    milestoneManageTotal.value = paged.total
+    milestoneManagePage.value = paged.page
+    milestoneManageSize.value = paged.size
+    milestoneManageSortBy.value = (paged.sortBy as MilestoneSortBy) || 'startAt'
+    milestoneManageSortDir.value = (paged.sortDir as MilestoneSortDir) || 'desc'
+    const dir = workerState.directories.value.find(d => d.directoryId === selectedDirectoryId.value)
+    if (dir) dir.milestones = updated
+  } catch {
+    milestoneManageList.value = sortMilestones(selectedDirectory.value?.milestones)
+    milestoneManageTotal.value = milestoneManageList.value.length
+  } finally {
+    milestoneManageLoading.value = false
+  }
+}
+
+async function handleMilestoneManageSortChange() {
+  milestoneManagePage.value = 0
+  await refreshMilestoneList()
+}
+
+async function handleMilestoneManagePageChange(page: number) {
+  milestoneManagePage.value = Math.max(page - 1, 0)
+  await refreshMilestoneList()
+}
+
+async function handleMilestoneManageSizeChange(size: number) {
+  milestoneManageSize.value = size
+  milestoneManagePage.value = 0
+  await refreshMilestoneList()
 }
 
 function handleAuthConfig(conv: ConversationGroup) {
@@ -5629,6 +5284,20 @@ async function handlePermissionRespond(paneId: string, permissionId: string, dec
   }
 }
 
+async function handleSkillApprovalRespond(paneId: string, taskId: string, decision: string, comment: string) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  if (!pane?.task.value) return
+
+  try {
+    const { approveTask } = await import('@/api/langgraphWorker')
+    await approveTask(taskId, { approvalResult: decision, comment })
+    pane.chatState.resolveSkillApproval(taskId, decision === 'approved' ? 'approved' : 'rejected')
+    syncSidebarAfterRespond(pane, decision === 'approved' ? 'allow' : 'deny')
+  } catch {
+    ElMessage.error('Skill approval response failed')
+  }
+}
+
 async function handleQuestionRespond(paneId: string, permissionId: string, answers: Record<string, string>) {
   const pane = panes.value.find((p) => p.paneId === paneId)
   if (!pane?.task.value) return
@@ -5676,46 +5345,15 @@ async function handlePaneForward(paneId: string, message: ChatMessage | { id: st
     ElMessage.warning('回复内容为空，无法转发')
     return
   }
-
-  const sourceMilestoneId = workerState.conversationConfigs.value.get(task.sessionId)?.milestoneId || ''
-  const initialWorkerId = task.workerId || selectedWorkerId.value || ''
-  const initialDirectoryId = task.directoryId || ''
-  forwardSource.value = {
-    sourceSessionId: task.sessionId,
-    sourceMessageId: message.id,
+  await openForwardDialog({
+    task,
+    messageId: message.id,
     sourceContent,
-    sourceWorkerId: task.workerId,
-    sourceDirectoryId: task.directoryId,
-    sourceMilestoneId,
-    sourceTask: task,
-  }
-  forwardForm.value = {
-    sourceSessionId: task.sessionId,
-    sourceMessageId: message.id,
-    targetMode: 'NEW_SESSION',
-    targetSessionId: '',
-    workerId: initialWorkerId,
-    directoryId: initialDirectoryId,
-    cwd: task.cwd || '',
-    prompt: sourceContent,
-    model: task.model || taskForm.value.model || '',
-    modelConfigId: task.modelConfigId || platformModelConfigId.value || '',
-    permissionMode: taskForm.value.permissionMode || 'bypassPermissions',
-    milestoneId: initialDirectoryId ? sourceMilestoneId : '',
-  }
-
-  if (initialWorkerId) {
-    try {
-      await workerState.loadDirectories(initialWorkerId)
-    } catch {
-      // best-effort
-    }
-    await loadForwardModelConfigs(initialWorkerId, forwardForm.value.modelConfigId || undefined)
-  } else {
-    forwardPlatformModels.value = []
-  }
-
-  showForwardDialog.value = true
+    selectedWorkerId: selectedWorkerId.value || '',
+    defaultModel: taskForm.value.model || '',
+    defaultModelConfigId: platformModelConfigId.value || '',
+    defaultPermissionMode: taskForm.value.permissionMode || 'bypassPermissions',
+  })
 }
 
 // In-pane rewind state
@@ -6031,17 +5669,13 @@ async function handleCreateTask() {
       form.modelConfigId = platformModelConfigId.value
     }
     // Attach files/images as JSON string
-    if (attachments.value.length > 0) {
-      form.images = JSON.stringify(
-        attachments.value.map((img) => ({
-          name: img.name,
-          data: img.base64,
-          mime_type: img.mimeType,
-        })),
-      )
+    const imagesJson = toImagesJson(attachments.value)
+    if (imagesJson) {
+      form.images = imagesJson
     }
 
     const task = await workerState.createTask(form)
+    syncTaskAcrossVisibleLists(task)
     // 记录 session → 用户选择的短模型名，供后续 restoreSessionModelSelection 恢复
     saveSessionModel(task.sessionId, taskForm.value.model)
     taskMemory.addToHistory(prompt)
@@ -6065,47 +5699,8 @@ async function handleCreateTask() {
 }
 
 async function handleSubmitForward() {
-  if (!forwardSource.value) {
-    ElMessage.warning('缺少源会话信息')
-    return
-  }
-  const prompt = forwardForm.value.prompt.trim()
-  if (!prompt) {
-    ElMessage.warning('请输入转发内容')
-    return
-  }
-  if (forwardForm.value.targetMode === 'NEW_SESSION' && !forwardForm.value.workerId) {
-    ElMessage.warning('请选择目标 Worker')
-    return
-  }
-  if (forwardForm.value.targetMode === 'EXISTING_SESSION' && !forwardForm.value.targetSessionId) {
-    ElMessage.warning('请选择目标会话')
-    return
-  }
-
-  forwardSubmitting.value = true
   try {
-    const sourceSessionId = forwardSource.value.sourceSessionId
-    const targetMode = forwardForm.value.targetMode
-    const result = await workerState.forwardSession({
-      sourceSessionId,
-      sourceMessageId: forwardSource.value.sourceMessageId,
-      targetMode,
-      targetSessionId: targetMode === 'EXISTING_SESSION'
-        ? forwardForm.value.targetSessionId
-        : undefined,
-      workerId: targetMode === 'NEW_SESSION' ? forwardForm.value.workerId : undefined,
-      directoryId: targetMode === 'NEW_SESSION' ? (forwardForm.value.directoryId || undefined) : undefined,
-      cwd: targetMode === 'NEW_SESSION' ? (forwardForm.value.cwd.trim() || undefined) : undefined,
-      prompt,
-      model: targetMode === 'NEW_SESSION' ? (forwardForm.value.model || undefined) : undefined,
-      modelConfigId: targetMode === 'NEW_SESSION' ? (forwardForm.value.modelConfigId || undefined) : undefined,
-      permissionMode: targetMode === 'NEW_SESSION' ? (forwardForm.value.permissionMode || undefined) : undefined,
-      milestoneId: targetMode === 'NEW_SESSION' && forwardForm.value.directoryId
-        ? (forwardForm.value.milestoneId || undefined)
-        : undefined,
-    })
-
+    const { result, sourceSessionId, targetMode } = await submitForward()
     const newTask = result.task as unknown as ClaudeTask
     if (targetMode === 'NEW_SESSION' && forwardForm.value.model) {
       saveSessionModel(newTask.sessionId, forwardForm.value.model)
@@ -6124,8 +5719,6 @@ async function handleSubmitForward() {
 
     const pane = createPane(newTask)
     focusedPaneId.value = pane.paneId
-    showForwardDialog.value = false
-    resetForwardDialog()
     await Promise.all([
       reloadWorkerTasks(),
       newTask.directoryId && selectedDirectoryId.value === newTask.directoryId ? loadDirectoryTasks() : Promise.resolve(),
@@ -6135,8 +5728,6 @@ async function handleSubmitForward() {
     ElMessage.success(targetMode === 'EXISTING_SESSION' ? '已转发到已有会话' : '已转发为新会话')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '转发失败')
-  } finally {
-    forwardSubmitting.value = false
   }
 }
 
@@ -6476,14 +6067,9 @@ async function handlePaneSend(paneId: string, content: string) {
       resumeForm.modelConfigId = platformModelConfigId.value
     }
     // Attach files/images as JSON string
-    if (attachments.value.length > 0) {
-      resumeForm.images = JSON.stringify(
-        attachments.value.map((img) => ({
-          name: img.name,
-          data: img.base64,
-          mime_type: img.mimeType,
-        })),
-      )
+    const resumeImagesJson = toImagesJson(attachments.value)
+    if (resumeImagesJson) {
+      resumeForm.images = resumeImagesJson
     }
     const newTask = await workerState.resumeTask(resumeForm)
     if (!newTask?.sessionId) {
@@ -6929,7 +6515,7 @@ async function handleUnarchiveConversation(conv: ConversationGroup) {
 async function handleHoldConversation(conv: ConversationGroup) {
   try {
     await ElMessageBox.confirm(
-      '确认搁置该会话？搁置后不再出现在"需要关注"区域，可通过"已搁置"筛选查看。',
+      '确认搁置该会话？搁置后不再出现在默认筛选中，可通过"已搁置"筛选查看。',
       '搁置会话',
       { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
     )
@@ -6945,7 +6531,7 @@ async function handlePaneHold(sessionId?: string) {
   if (!sessionId) return
   try {
     await ElMessageBox.confirm(
-      '确认搁置该会话？搁置后不再出现在"需要关注"区域，可通过"已搁置"筛选查看。',
+      '确认搁置该会话？搁置后不再出现在默认筛选中，可通过"已搁置"筛选查看。',
       '搁置会话',
       { type: 'info', confirmButtonText: '确认搁置', cancelButtonText: '取消' },
     )
@@ -6983,6 +6569,10 @@ function paneInteractionState(paneState: TaskPaneState): string | undefined {
   return getInteractionState(paneState.task.value?.sessionId)
 }
 
+function conversationInteractionState(conv: ConversationGroup): string | undefined {
+  return resolveConversationInteractionState(conv)
+}
+
 function interactionStateLabel(state: string): string {
   switch (state) {
     case 'PROCESSING': return '处理中'
@@ -6993,18 +6583,7 @@ function interactionStateLabel(state: string): string {
   }
 }
 
-function attentionStatusLabel(conv: ConversationGroup): string {
-  // Task-level status takes priority (more specific than interactionState)
-  const status = conv.latestTask.status
-  if (status === 'RUNNING') return '运行中'
-  if (status === 'AWAITING_PERMISSION') return '等待授权'
-  // Terminal task statuses always mean 待回复, regardless of DB interactionState
-  if (status === 'COMPLETED' || status === 'FAILED' || status === 'ABORTED') return '待回复'
-  // Fallback to interactionState for non-running tasks
-  const state = conv.config?.interactionState
-  if (state === 'AWAITING_REPLY') return '待回复'
-  return interactionStateLabel(state || 'PROCESSING')
-}
+
 
 async function handleResumeFromHistory(task: ClaudeTask) {
   const workerId = task.workerId || selectedWorkerId.value
@@ -7904,12 +7483,43 @@ function handlePopOutTerminal() {
   gap: 6px;
 }
 
-.milestone-manage-row {
+.milestone-manage-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.milestone-manage-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.milestone-manage-sort-label {
+  font-size: 12px;
+  color: #606266;
+}
+
+.milestone-manage-head {
   display: grid;
-  grid-template-columns: 1fr 80px 1.2fr auto auto;
+  grid-template-columns: minmax(120px, 1fr) 88px 150px 150px minmax(180px, 1.2fr) 120px;
   gap: 8px;
   align-items: center;
-  padding: 4px 0;
+  padding: 0 0 4px;
+  font-size: 12px;
+  color: #909399;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.milestone-manage-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 88px 150px 150px minmax(180px, 1.2fr) 120px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #f5f7fa;
 }
 
 .milestone-manage-row .ms-name {
@@ -7920,6 +7530,11 @@ function handlePopOutTerminal() {
   white-space: nowrap;
 }
 
+.milestone-manage-row .ms-time {
+  font-size: 12px;
+  color: #606266;
+}
+
 .milestone-manage-row .ms-doc {
   font-size: 11px;
   color: #909399;
@@ -7928,10 +7543,21 @@ function handlePopOutTerminal() {
   white-space: nowrap;
 }
 
+.milestone-manage-row .ms-doc-empty {
+  font-family: inherit;
+}
+
 .milestone-manage-row .ms-actions {
   display: flex;
   gap: 4px;
   white-space: nowrap;
+  justify-content: flex-end;
+}
+
+.milestone-manage-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 .form-tip {
@@ -8622,101 +8248,6 @@ function handlePopOutTerminal() {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 8px;
-}
-
-/* Active sessions section */
-.active-sessions-section {
-  margin-bottom: 4px;
-}
-
-.active-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.active-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #409eff;
-}
-
-.active-conv-item {
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.15s;
-  border-left: 3px solid #409eff;
-  margin: 2px 0;
-  background: #f0f7ff;
-}
-
-.active-conv-item:hover {
-  background: #e1eeff;
-}
-
-.active-conv-pinned {
-  background: #fdf6ec;
-  border-left: 3px solid #e6a23c;
-}
-
-.active-conv-pinned:hover {
-  background: #faecd8;
-}
-
-.attention-worker-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px 2px;
-  margin-top: 6px;
-}
-
-.attention-worker-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: #606266;
-}
-
-.attention-worker-count {
-  font-size: 11px;
-  color: #909399;
-}
-
-.active-dir-tag {
-  font-size: 11px;
-  padding: 0 4px;
-  height: 18px;
-  line-height: 18px;
-  margin-right: 4px;
-}
-
-.active-status-label {
-  font-size: 12px;
-  color: #409eff;
-  font-weight: 500;
-}
-
-.active-divider {
-  display: flex;
-  align-items: center;
-  margin: 8px 0 4px;
-  gap: 8px;
-}
-
-.active-divider-line {
-  flex: 1;
-  height: 1px;
-  background: #e4e7ed;
-}
-
-.active-divider-text {
-  font-size: 11px;
-  color: #909399;
-  white-space: nowrap;
 }
 
 /* Conversation tags */

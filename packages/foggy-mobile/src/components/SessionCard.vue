@@ -10,6 +10,10 @@
       </view>
     </view>
     <text class="session-title">{{ displayTitle }}</text>
+    <view v-if="milestone" class="session-tags">
+      <text class="session-milestone">{{ milestone.name }}</text>
+      <text class="session-milestone-status">{{ milestoneStatusLabel(milestone.status) }}</text>
+    </view>
     <view class="session-footer">
       <text class="session-time">{{ shortDateTime(group.updatedAt) }}</text>
       <text v-if="group.totalCost > 0" class="session-cost">${{ group.totalCost.toFixed(4) }}</text>
@@ -20,13 +24,14 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ConversationGroup, LlmModelConfig } from '@/api/types'
+import type { ConversationGroup, DirectoryMilestone, LlmModelConfig } from '@/api/types'
 import InteractionBadge from './InteractionBadge.vue'
 import { shortDateTime } from '@/utils/time'
 import { getGroupTitle, getGroupInteractionState } from '@/composables/useConversationGroup'
 
 const props = defineProps<{
   group: ConversationGroup
+  milestone?: DirectoryMilestone
   modelConfigs?: LlmModelConfig[]
 }>()
 
@@ -45,6 +50,21 @@ const modelConfigName = computed(() => {
   const cfg = props.modelConfigs.find(m => m.id === configId)
   return cfg?.name ?? ''
 })
+
+function milestoneStatusLabel(status?: string): string {
+  switch (status) {
+    case 'ACTIVE':
+      return '进行中'
+    case 'COMPLETED':
+      return '已完成'
+    case 'ARCHIVED':
+      return '已归档'
+    case 'PLANNED':
+      return '规划中'
+    default:
+      return status || ''
+  }
+}
 </script>
 
 <style scoped>
@@ -92,6 +112,28 @@ const modelConfigName = computed(() => {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+.session-tags {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 14rpx;
+}
+.session-milestone,
+.session-milestone-status {
+  font-size: 22rpx;
+  padding: 4rpx 12rpx;
+  border-radius: 999rpx;
+  margin-right: 10rpx;
+}
+.session-milestone {
+  color: #8a4b08;
+  background-color: #fff1d6;
+}
+.session-milestone-status {
+  color: #8c8c8c;
+  background-color: #f5f5f5;
 }
 .session-footer {
   display: flex;

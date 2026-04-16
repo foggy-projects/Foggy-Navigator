@@ -18,6 +18,7 @@ Foggy-Navigator/
 ├── tutor-agent/                # 导师 Agent（引导用户、分派任务）
 ├── addons/coding-agent/        # 编程 Agent（OpenHands 集成）
 ├── addons/claude-worker-agent/ # Claude Code 工人 Agent（远程编程）
+├── addons/langgraph-biz-worker/# LangGraph 业务型 Worker Agent（Java 侧，待开发）
 └── launcher/                   # Spring Boot 启动器
 ```
 
@@ -34,6 +35,7 @@ packages/
 ```
 tools/
 ├── claude-agent-worker/    # Claude Worker Python 服务
+├── langgraph-biz-worker/   # LangGraph 业务型 Worker Python 服务（Skill Runtime + Frame 生命周期）
 └── mock-llm-service/       # Mock Anthropic 端点（L3 集成测试用）
 ```
 
@@ -49,6 +51,8 @@ tools/
 | `start-frontend.ps1` | 前端开发服务器 | 5174 |
 | `tools/claude-agent-worker/start.ps1` | Claude Worker | 3031 |
 | `tools/claude-agent-worker/stop.ps1` | 停止 Claude Worker | - |
+| `tools/langgraph-biz-worker/start.ps1` | LangGraph Biz Worker | 3061 |
+| `tools/langgraph-biz-worker/stop.ps1` | 停止 LangGraph Biz Worker | - |
 
 ### 后端启动
 
@@ -125,3 +129,4 @@ Claude Worker Agent 是系统核心模块之一。所有 Agent（无论底层实
    - 如果不一致，执行：`Remove-Item -Recurse -Force packages/navigator-frontend/node_modules/.vite`，然后刷新页面
    - 若仍不一致，重启 Vite dev server（`stop-frontend.ps1` → `start-frontend.ps1`）
 10. **会话 modelConfigId 绑定原则**：一个会话使用 `modelConfigId` 创建后（创建新会话必须指定 modelConfigId），该值永远固定，除非用户主动修改。会话内可以切换 `model`（如 opus → sonnet），但不能自动切换 `modelConfigId`（即 API 凭证/订阅不变）。
+11. **测试产物落点规范**：根目录禁止新增临时测试产物（如 `*.yaml`、`*.yml`、`*.png`、`.tmp-*.log`、`.tmp-*.json`）。临时调试/回归产物统一写入 `temp/test-artifacts/<任务或日期>/`，该目录仅用于本地暂存并保持 git ignore；需要长期保留的验收证据，写入对应版本目录下的 `docs/version-tracker/<version>/evidence/`。编写 Playwright、脚本或临时验证命令时，必须显式指定输出目录，避免再次把大量测试文件落到仓库根目录。

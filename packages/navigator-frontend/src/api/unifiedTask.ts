@@ -38,6 +38,7 @@ export interface ForwardSessionForm {
   agentTeamsConfigId?: string
   agentTeamsJson?: string
   milestoneId?: string
+  images?: string
 }
 
 export interface ForwardSessionResult {

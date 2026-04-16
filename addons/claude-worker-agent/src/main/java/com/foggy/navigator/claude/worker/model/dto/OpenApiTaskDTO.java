@@ -8,6 +8,8 @@ import java.time.LocalDateTime;
 
 /**
  * Open API 任务 DTO — 面向第三方的简化版任务状态
+ * <p>
+ * 状态枚举：SUBMITTED | RUNNING | AWAITING_INPUT | COMPLETED | FAILED | CANCELLED
  */
 @Data
 @Builder
@@ -19,7 +21,7 @@ public class OpenApiTaskDTO {
     /** Agent ID */
     private String agentId;
 
-    /** 任务状态：SUBMITTED | WORKING | COMPLETED | FAILED | CANCELED */
+    /** 任务状态 */
     private String status;
 
     /** 多轮会话标识 */
@@ -39,4 +41,7 @@ public class OpenApiTaskDTO {
 
     /** 任务创建时间 */
     private LocalDateTime createdAt;
+
+    /** 任务最后更新时间 */
+    private LocalDateTime updatedAt;
 }

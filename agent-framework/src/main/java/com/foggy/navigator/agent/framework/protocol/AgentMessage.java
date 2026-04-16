@@ -18,6 +18,8 @@ public class AgentMessage {
     private String messageId;
     private String sessionId;
     private String agentId;
+    /** 关联的平台任务 ID（可空） */
+    private String taskId;
     private long timestamp;
     @Builder.Default
     private String version = "1.0";

@@ -21,4 +21,5 @@ public class SessionForwardCreateRequest {
     private String agentTeamsConfigId;
     private String agentTeamsJson;
     private String milestoneId;
+    private String images;
 }

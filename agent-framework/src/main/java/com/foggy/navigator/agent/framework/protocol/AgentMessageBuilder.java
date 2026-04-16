@@ -23,6 +23,7 @@ public class AgentMessageBuilder {
 
     private final String sessionId;
     private final String agentId;
+    private String taskIdField;
     private MessageType type;
     private final Map<String, Object> payload = new LinkedHashMap<>();
 
@@ -38,6 +39,7 @@ public class AgentMessageBuilder {
     // ── 通用字段 ──
 
     public AgentMessageBuilder taskId(String taskId) {
+        this.taskIdField = taskId;
         payload.put("taskId", taskId);
         return this;
     }
@@ -170,13 +172,17 @@ public class AgentMessageBuilder {
         if (type == null) {
             throw new IllegalStateException("MessageType must be set before build()");
         }
-        return AgentMessage.of(sessionId, agentId, type, payload);
+        AgentMessage msg = AgentMessage.of(sessionId, agentId, type, payload);
+        msg.setTaskId(taskIdField);
+        return msg;
     }
 
     /**
      * 直接使用指定 type 构建（用于 Relay 已确定 type 的场景）
      */
     public AgentMessage build(MessageType overrideType) {
-        return AgentMessage.of(sessionId, agentId, overrideType, payload);
+        AgentMessage msg = AgentMessage.of(sessionId, agentId, overrideType, payload);
+        msg.setTaskId(taskIdField);
+        return msg;
     }
 }

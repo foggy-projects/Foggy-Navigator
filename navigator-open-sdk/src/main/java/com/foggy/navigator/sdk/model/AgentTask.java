@@ -40,7 +40,8 @@ public class AgentTask {
 
     /** 任务是否已终态 */
     public boolean isTerminal() {
-        return "COMPLETED".equals(status) || "FAILED".equals(status) || "CANCELED".equals(status);
+        return "COMPLETED".equals(status) || "FAILED".equals(status)
+                || "CANCELLED".equals(status) || "CANCELED".equals(status);
     }
 
     @Override

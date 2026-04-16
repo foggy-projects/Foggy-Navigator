@@ -690,6 +690,16 @@ public class TaskDispatchFacade {
             }
         }
 
+        // 从 Session 补充 parentSessionId（转发创建新会话时需要）
+        DispatchTaskDTO preResult = builder.build();
+        if (preResult.getSessionId() != null && preResult.getParentSessionId() == null) {
+            sessionRepository.findById(preResult.getSessionId()).ifPresent(session -> {
+                if (session.getParentSessionId() != null) {
+                    builder.parentSessionId(session.getParentSessionId());
+                }
+            });
+        }
+
         return builder.build();
     }
 
@@ -1044,6 +1054,7 @@ public class TaskDispatchFacade {
                                               Map<String, SessionEntity> sessionsById) {
         Map<String, Object> state = parseJsonObject(entity.getTaskStateJson());
         SessionEntity session = sessionsById.get(entity.getSessionId());
+        String directoryId = entity.getDirectoryId();
         DispatchTaskDTO.DispatchTaskDTOBuilder builder = DispatchTaskDTO.builder()
                 .taskId(entity.getTaskId())
                 .workerTaskId(entity.getProviderTaskId())
@@ -1055,7 +1066,7 @@ public class TaskDispatchFacade {
                 .providerType(entity.getProviderType())
                 .prompt(entity.getPrompt())
                 .cwd(entity.getCwd())
-                .directoryId(entity.getDirectoryId())
+                .directoryId(directoryId)
                 .status(entity.getStatus())
                 .model(entity.getModel())
                 .costUsd(entity.getCostUsd())
@@ -1069,7 +1080,7 @@ public class TaskDispatchFacade {
                 .source(entity.getSource())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
-                .directoryName(directoryNames.get(entity.getDirectoryId()))
+                .directoryName(directoryId == null ? null : directoryNames.get(directoryId))
                 .claudeSessionId(asString(state.get("claudeSessionId")))
                 .codexThreadId(asString(state.get("codexThreadId")))
                 .contextId(asString(state.get("contextId")))

@@ -181,6 +181,45 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_a2aRouteIncludesParentSessionIdFromCreatedSession() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .sessionId("session-child-1")
+                .agentId("agent-1")
+                .workerId("worker-1")
+                .prompt("forwarded task")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .sessionId("session-child-1")
+                .requestSource("UI")
+                .build();
+
+        SessionEntity childSession = new SessionEntity();
+        childSession.setId("session-child-1");
+        childSession.setUserId("user-1");
+        childSession.setParentSessionId("session-parent-1");
+
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agentResolver.getProviderType(eq("agent-1"), any())).thenReturn(Optional.of("claude-worker"));
+        when(agent.getAgentCard()).thenReturn(A2aAgentCard.builder().id("agent-1").build());
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-forward-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .metadata(Map.of(
+                        "sessionId", "session-child-1",
+                        "workerId", "worker-1"
+                ))
+                .build());
+        when(sessionRepository.findById("session-child-1")).thenReturn(Optional.of(childSession));
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("session-child-1", result.getSessionId());
+        assertEquals("session-parent-1", result.getParentSessionId());
+    }
+
+    @Test
     void createTask_usesModelConfigIdForDirectRoute() {
         LlmModelConfigDTO codexConfig = new LlmModelConfigDTO();
         codexConfig.setWorkerBackend("OPENAI_CODEX");
@@ -522,6 +561,33 @@ class TaskDispatchFacadeTest {
         assertEquals("claude-session-1", second.getClaudeSessionId());
         assertEquals("Claude Project", second.getDirectoryName());
         verify(taskQueryProvider, never()).listTasksPaged(anyString(), anyInt(), anyInt(), any());
+    }
+
+    @Test
+    void listActiveTasks_allowsNullDirectoryId() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+        ReflectionTestUtils.setField(facade, "workingDirectoryRepository", workingDirectoryRepository);
+
+        SessionTaskEntity task = sessionTask(
+                "task-claude-1", "session-claude-1", "claude-worker", "worker-1", null,
+                "RUNNING", LocalDateTime.of(2026, 3, 24, 21, 0), "{\"claudeSessionId\":\"claude-session-1\"}"
+        );
+
+        when(sessionTaskRepository.findByUserIdAndStatusInOrderByCreatedAtDesc(
+                "user-1", List.of("RUNNING", "AWAITING_PERMISSION")))
+                .thenReturn(List.of(task));
+        when(sessionRepository.findAllById(List.of("session-claude-1")))
+                .thenReturn(List.of(
+                        sessionEntity("session-claude-1", "user-1", "PROCESSING",
+                                LocalDateTime.of(2026, 3, 24, 21, 5))
+                ));
+
+        List<DispatchTaskDTO> tasks = facade.listActiveTasks("user-1");
+
+        assertEquals(1, tasks.size());
+        assertNull(tasks.get(0).getDirectoryId());
+        assertNull(tasks.get(0).getDirectoryName());
+        assertEquals("claude-session-1", tasks.get(0).getClaudeSessionId());
     }
 
     @Test

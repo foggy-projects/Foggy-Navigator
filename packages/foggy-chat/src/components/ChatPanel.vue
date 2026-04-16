@@ -21,6 +21,7 @@
       @permission-respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
       @question-respond="(pid, answers) => emit('questionRespond', pid, answers)"
       @plan-respond="(pid, decision, denyMsg, planAction) => emit('planRespond', pid, decision, denyMsg, planAction)"
+      @skill-approval-respond="(taskId, decision, comment) => emit('skillApprovalRespond', taskId, decision, comment)"
       @rewind="(turnIndex) => emit('rewind', turnIndex)"
       @reconnect="(taskId: string) => emit('reconnect', taskId)"
       @load-more="emit('loadMore')"
@@ -78,6 +79,7 @@ const emit = defineEmits<{
   (e: 'permissionRespond', permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
+  (e: 'skillApprovalRespond', taskId: string, decision: string, comment: string): void
   (e: 'rewind', turnIndex: number): void
   (e: 'reconnect', taskId: string): void
   (e: 'loadMore'): void

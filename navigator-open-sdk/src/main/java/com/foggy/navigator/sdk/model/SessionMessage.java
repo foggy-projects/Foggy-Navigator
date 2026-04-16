@@ -1,0 +1,42 @@
+package com.foggy.navigator.sdk.model;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import java.util.Map;
+
+/**
+ * 会话消息
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
+public class SessionMessage {
+    private String messageId;
+    private String contextId;
+    private String taskId;
+    private String role;
+    private String type;
+    private String content;
+    private Map<String, Object> metadata;
+    private String createdAt;
+
+    public String getMessageId() { return messageId; }
+    public void setMessageId(String messageId) { this.messageId = messageId; }
+    public String getContextId() { return contextId; }
+    public void setContextId(String contextId) { this.contextId = contextId; }
+    public String getTaskId() { return taskId; }
+    public void setTaskId(String taskId) { this.taskId = taskId; }
+    public String getRole() { return role; }
+    public void setRole(String role) { this.role = role; }
+    public String getType() { return type; }
+    public void setType(String type) { this.type = type; }
+    public String getContent() { return content; }
+    public void setContent(String content) { this.content = content; }
+    public Map<String, Object> getMetadata() { return metadata; }
+    public void setMetadata(Map<String, Object> metadata) { this.metadata = metadata; }
+    public String getCreatedAt() { return createdAt; }
+    public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
+
+    @Override
+    public String toString() {
+        return "SessionMessage{messageId='" + messageId + "', role='" + role +
+                "', type='" + type + "', taskId='" + taskId + "'}";
+    }
+}

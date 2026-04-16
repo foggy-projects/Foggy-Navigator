@@ -8,4 +8,6 @@ public class DirectoryMilestoneForm {
     private String name;
     private String status;
     private String docPath;
+    private String startAt;
+    private String endAt;
 }

@@ -54,6 +54,7 @@
         @permission-respond="handlePermissionRespond"
         @question-respond="handleQuestionRespond"
         @plan-respond="(pid: string, decision: string, denyMsg?: string, planAction?: string) => handlePlanRespond(pid, decision, denyMsg, planAction)"
+        @skill-approval-respond="handleSkillApprovalRespond"
         @rewind="handleRewind"
         @reconnect="handleReconnect"
         @load-more="paneState.loadMoreHistory()"
@@ -138,6 +139,7 @@ const emit = defineEmits<{
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
+  (e: 'skillApprovalRespond', paneId: string, taskId: string, decision: string, comment: string): void
   (e: 'rewind', paneId: string, turnIndex: number): void
   (e: 'reconnect', paneId: string, taskId: string): void
   (e: 'forward', paneId: string, message: { id: string; content: string }): void
@@ -235,6 +237,10 @@ function handleSend(content?: string) {
 
 function handlePermissionRespond(permissionId: string, decision: string, scope: string) {
   emit('permissionRespond', props.paneState.paneId, permissionId, decision, scope)
+}
+
+function handleSkillApprovalRespond(taskId: string, decision: string, comment: string) {
+  emit('skillApprovalRespond', props.paneState.paneId, taskId, decision, comment)
 }
 
 function handleQuestionRespond(permissionId: string, answers: Record<string, string>) {

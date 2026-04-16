@@ -116,6 +116,11 @@
               :message="item.msg"
               @respond="(pid, decision, scope) => emit('permissionRespond', pid, decision, scope)"
             />
+            <SkillApprovalCard
+              v-else-if="isSkillApprovalRequest(item.msg)"
+              :message="item.msg"
+              @skill-approval-respond="(taskId, decision, comment) => emit('skillApprovalRespond', taskId, decision, comment)"
+            />
             <MessageBubble
               v-else-if="item.msg.type === AipMessageType.SESSION_START"
               :message="item.msg"
@@ -166,6 +171,7 @@ import ThinkingIndicator from './ThinkingIndicator.vue'
 import ErrorBlock from './ErrorBlock.vue'
 import TaskCompletionCard from './TaskCompletionCard.vue'
 import PermissionRequestCard from './PermissionRequestCard.vue'
+import SkillApprovalCard from './SkillApprovalCard.vue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import PlanReviewCard from './PlanReviewCard.vue'
 
@@ -213,8 +219,15 @@ const emit = defineEmits<{
   (e: 'loadMore'): void
   (e: 'loadAll', limit?: number): void
   (e: 'forward', message: ChatMessage): void
+  (e: 'skillApprovalRespond', taskId: string, decision: string, comment: string): void
   (e: 'link-click', payload: { href: string; text: string }): void
 }>()
+
+function isSkillApprovalRequest(msg: ChatMessage): boolean {
+  if (msg.type !== AipMessageType.STATE_SYNC) return false
+  const raw = msg.raw as Record<string, unknown> | undefined
+  return raw?.subtype === 'skill_approval_request'
+}
 
 function handleLoadAllCommand(command: number) {
   emit('loadAll', command)

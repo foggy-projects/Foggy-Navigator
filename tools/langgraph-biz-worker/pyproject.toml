@@ -1,0 +1,32 @@
+[project]
+name = "langgraph-biz-worker"
+dynamic = ["version"]
+description = "LangGraph Business Worker for Foggy Navigator - Controlled business execution backend with Skill Runtime"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic-settings>=2.0.0",
+    "sse-starlette>=2.0.0",
+    "langgraph>=0.4.0",
+    "langchain-core>=0.3.0",
+    "langchain-anthropic>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx", "pytest-asyncio"]
+
+[build-system]
+requires = ["hatchling>=1.8.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/langgraph_biz_worker/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langgraph_biz_worker"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -21,7 +21,7 @@ import {
   getWorkerSessionMessagesUnified,
   syncWorkerSessionsUnified,
 } from './unifiedTask'
-import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig, SessionSearchPage, DirectoryMilestone } from '@/types'
+import type { RX, ClaudeWorker, ClaudeTask, WorkingDirectory, SkillInfo, WorkerSession, ConversationConfig, CliProcessListResponse, KillProcessResponse, AgentTeamsConfig, SessionSearchPage, DirectoryMilestone, MilestonePageResult } from '@/types'
 
 // ===== Worker API =====
 
@@ -173,6 +173,22 @@ export async function listMilestones(directoryId: string): Promise<DirectoryMile
   const rx = (await client.get(
     `/working-directories/${directoryId}/milestones`,
   )) as unknown as RX<DirectoryMilestone[]>
+  return rx.data
+}
+
+export async function listMilestonesPaged(
+  directoryId: string,
+  params: {
+    page: number
+    size: number
+    sortBy?: 'startAt' | 'endAt' | 'name' | 'status'
+    sortDir?: 'asc' | 'desc'
+  },
+): Promise<MilestonePageResult> {
+  const rx = (await client.get(
+    `/working-directories/${directoryId}/milestones/paged`,
+    { params },
+  )) as unknown as RX<MilestonePageResult>
   return rx.data
 }
 

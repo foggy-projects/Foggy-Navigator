@@ -138,6 +138,17 @@ export interface DirectoryMilestone {
   name: string
   status: 'PLANNED' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED' | string
   docPath?: string
+  startAt?: string
+  endAt?: string
+}
+
+export interface MilestonePageResult {
+  content: DirectoryMilestone[]
+  total: number
+  page: number
+  size: number
+  sortBy: 'startAt' | 'endAt' | 'name' | 'status' | string
+  sortDir: 'asc' | 'desc' | string
 }
 
 /** Worker 工作目录 */
