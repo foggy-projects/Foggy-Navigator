@@ -114,7 +114,7 @@ public class SessionForwardService {
                 .images(parseImagesList(request.getImages()))
                 .build();
 
-        AgentResolveContext context = buildContext(userId, tenantId, targetSessionId);
+        AgentResolveContext context = buildContext(userId, tenantId, targetSessionId, request.getModelConfigId());
         DispatchTaskDTO task = taskDispatchFacade.createTask(dispatchRequest, context);
 
         SessionRelationEntity relation = saveRelation(
@@ -172,7 +172,7 @@ public class SessionForwardService {
                 .images(parseImagesList(request.getImages()))
                 .build();
 
-        AgentResolveContext context = buildContext(userId, tenantId, targetSession.getId());
+        AgentResolveContext context = buildContext(userId, tenantId, targetSession.getId(), latestTask.getModelConfigId());
         DispatchTaskDTO task = taskDispatchFacade.resumeTask(dispatchRequest, context);
 
         SessionRelationEntity relation = saveRelation(
@@ -213,11 +213,12 @@ public class SessionForwardService {
         return prompt;
     }
 
-    private AgentResolveContext buildContext(String userId, String tenantId, String sessionId) {
+    private AgentResolveContext buildContext(String userId, String tenantId, String sessionId, String modelConfigId) {
         return AgentResolveContext.builder()
                 .userId(userId)
                 .tenantId(tenantId)
                 .sessionId(sessionId)
+                .modelConfigId(blankToNull(modelConfigId))
                 .requestSource("UI_FORWARD")
                 .build();
     }

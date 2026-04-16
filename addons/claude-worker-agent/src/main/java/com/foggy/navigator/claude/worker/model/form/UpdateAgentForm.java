@@ -13,7 +13,7 @@ public class UpdateAgentForm {
     private String defaultBranch;
     private String defaultDirectoryId;
     private String projectSummary;
-    /** 默认 LLM 模型配置 ID（空串=清除） */
+    /** 默认 LLM 模型配置 ID（传值时必须非空） */
     private String defaultModelConfigId;
     /** 默认模型名（空串=清除） */
     private String defaultModel;

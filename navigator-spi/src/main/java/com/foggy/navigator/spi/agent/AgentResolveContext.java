@@ -17,6 +17,9 @@ public class AgentResolveContext {
     /** 平台会话 ID（可空） */
     private String sessionId;
 
+    /** 显式指定的模型配置 ID（可空，用于协助推断执行 Provider） */
+    private String modelConfigId;
+
     /** 请求来源：UI / OPEN_API / A2A / SYSTEM */
     private String requestSource;
 
@@ -26,6 +29,7 @@ public class AgentResolveContext {
         this.userId = builder.userId;
         this.tenantId = builder.tenantId;
         this.sessionId = builder.sessionId;
+        this.modelConfigId = builder.modelConfigId;
         this.requestSource = builder.requestSource;
     }
 
@@ -38,6 +42,9 @@ public class AgentResolveContext {
     public String getSessionId() { return sessionId; }
     public void setSessionId(String sessionId) { this.sessionId = sessionId; }
 
+    public String getModelConfigId() { return modelConfigId; }
+    public void setModelConfigId(String modelConfigId) { this.modelConfigId = modelConfigId; }
+
     public String getRequestSource() { return requestSource; }
     public void setRequestSource(String requestSource) { this.requestSource = requestSource; }
 
@@ -47,11 +54,13 @@ public class AgentResolveContext {
         private String userId;
         private String tenantId;
         private String sessionId;
+        private String modelConfigId;
         private String requestSource;
 
         public Builder userId(String userId) { this.userId = userId; return this; }
         public Builder tenantId(String tenantId) { this.tenantId = tenantId; return this; }
         public Builder sessionId(String sessionId) { this.sessionId = sessionId; return this; }
+        public Builder modelConfigId(String modelConfigId) { this.modelConfigId = modelConfigId; return this; }
         public Builder requestSource(String requestSource) { this.requestSource = requestSource; return this; }
 
         public AgentResolveContext build() { return new AgentResolveContext(this); }

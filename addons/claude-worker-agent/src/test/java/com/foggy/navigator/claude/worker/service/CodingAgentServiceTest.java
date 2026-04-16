@@ -7,10 +7,12 @@ import com.foggy.navigator.claude.worker.repository.AgentDirectoryBindingReposit
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.common.entity.AgentDirectoryBindingEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -30,6 +32,7 @@ class CodingAgentServiceTest {
     private ClaudeWorkerService workerService;
     private WorkingDirectoryRepository directoryRepository;
     private ClaudeWorkerFacade claudeWorkerFacade;
+    private LlmModelManager llmModelManager;
     private CodingAgentService service;
 
     private static final String USER_ID = "user-1";
@@ -45,7 +48,7 @@ class CodingAgentServiceTest {
         workerService = mock(ClaudeWorkerService.class);
         directoryRepository = mock(WorkingDirectoryRepository.class);
         claudeWorkerFacade = mock(ClaudeWorkerFacade.class);
-        var llmModelManager = mock(com.foggy.navigator.spi.config.LlmModelManager.class);
+        llmModelManager = mock(LlmModelManager.class);
         service = new CodingAgentService(agentRepository, bindingRepository, workerService, directoryRepository, claudeWorkerFacade, llmModelManager);
 
         // Default: worker belongs to user
@@ -64,6 +67,14 @@ class CodingAgentServiceTest {
             return e;
         });
         when(bindingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(llmModelManager.getModelConfig(anyString())).thenAnswer(inv -> {
+            LlmModelConfigDTO config = new LlmModelConfigDTO();
+            config.setId(inv.getArgument(0));
+            config.setName("cfg");
+            config.setWorkerBackend("CLAUDE_CODE");
+            config.setAvailableModels(List.of("sonnet", "opus"));
+            return Optional.of(config);
+        });
     }
 
     // ========== Register ==========
@@ -82,6 +93,7 @@ class CodingAgentServiceTest {
             form.setWorkerId(WORKER_ID);
             form.setDefaultDirectoryId(DIR_ID);
             form.setDefaultBranch("dev");
+            form.setDefaultModelConfigId("llm-config-1");
 
             CodingAgentDTO result = service.registerAgent(USER_ID, TENANT_ID, form);
 
@@ -107,6 +119,7 @@ class CodingAgentServiceTest {
             form.setName("test-agent");
             form.setWorkerId(WORKER_ID);
             form.setDefaultDirectoryId(DIR_ID);
+            form.setDefaultModelConfigId("llm-config-1");
 
             service.registerAgent(USER_ID, TENANT_ID, form);
 
@@ -149,6 +162,7 @@ class CodingAgentServiceTest {
             form.setName("test-agent");
             form.setWorkerId("other-worker");
             form.setDefaultDirectoryId(DIR_ID);
+            form.setDefaultModelConfigId("llm-config-1");
 
             assertThrows(IllegalArgumentException.class,
                     () -> service.registerAgent(USER_ID, TENANT_ID, form));
@@ -173,20 +187,15 @@ class CodingAgentServiceTest {
         }
 
         @Test
-        void registerAgent_withoutDefaultModelConfigId_isNull() {
-            when(bindingRepository.findByAgentId(anyString())).thenReturn(List.of());
-            when(directoryRepository.findByDirectoryId(DIR_ID)).thenReturn(Optional.of(createDirectory(DIR_ID)));
-
+        void registerAgent_withoutDefaultModelConfigId_throws() {
             RegisterAgentForm form = new RegisterAgentForm();
             form.setName("no-model-agent");
             form.setWorkerId(WORKER_ID);
             form.setDefaultDirectoryId(DIR_ID);
 
-            service.registerAgent(USER_ID, TENANT_ID, form);
-
-            ArgumentCaptor<CodingAgentEntity> captor = ArgumentCaptor.forClass(CodingAgentEntity.class);
-            verify(agentRepository).save(captor.capture());
-            assertNull(captor.getValue().getDefaultModelConfigId());
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> service.registerAgent(USER_ID, TENANT_ID, form));
+            assertTrue(ex.getMessage().contains("defaultModelConfigId"));
         }
 
         @Test
@@ -198,9 +207,24 @@ class CodingAgentServiceTest {
             form.setName("test-agent");
             form.setWorkerId(WORKER_ID);
             form.setDefaultDirectoryId("missing");
+            form.setDefaultModelConfigId("llm-config-1");
 
             assertThrows(IllegalArgumentException.class,
                     () -> service.registerAgent(USER_ID, TENANT_ID, form));
+        }
+
+        @Test
+        void registerAgent_invalidDefaultModel_throws() {
+            RegisterAgentForm form = new RegisterAgentForm();
+            form.setName("bad-model-agent");
+            form.setWorkerId(WORKER_ID);
+            form.setDefaultDirectoryId(DIR_ID);
+            form.setDefaultModelConfigId("llm-config-1");
+            form.setDefaultModel("gpt-5.4:high");
+
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> service.registerAgent(USER_ID, TENANT_ID, form));
+            assertTrue(ex.getMessage().contains("not allowed"));
         }
     }
 
@@ -248,7 +272,7 @@ class CodingAgentServiceTest {
         }
 
         @Test
-        void updateAgent_clearDefaultModelConfigId() {
+        void updateAgent_clearDefaultModelConfigId_throws() {
             CodingAgentEntity existing = createAgentEntity(AGENT_ID);
             existing.setDefaultModelConfigId("old-config");
             when(agentRepository.findByAgentIdAndUserId(AGENT_ID, USER_ID))
@@ -256,13 +280,11 @@ class CodingAgentServiceTest {
             when(bindingRepository.findByAgentId(AGENT_ID)).thenReturn(List.of());
 
             UpdateAgentForm form = new UpdateAgentForm();
-            form.setDefaultModelConfigId(""); // Empty = clear
+            form.setDefaultModelConfigId("");
 
-            service.updateAgent(USER_ID, AGENT_ID, form);
-
-            ArgumentCaptor<CodingAgentEntity> captor = ArgumentCaptor.forClass(CodingAgentEntity.class);
-            verify(agentRepository).save(captor.capture());
-            assertNull(captor.getValue().getDefaultModelConfigId(), "空字符串应清除 defaultModelConfigId");
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> service.updateAgent(USER_ID, AGENT_ID, form));
+            assertTrue(ex.getMessage().contains("defaultModelConfigId"));
         }
 
         @Test
@@ -424,6 +446,7 @@ class CodingAgentServiceTest {
         entity.setWorkerId(WORKER_ID);
         entity.setDefaultDirectoryId(DIR_ID);
         entity.setDefaultBranch("dev");
+        entity.setDefaultModelConfigId("llm-config-1");
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         return entity;
