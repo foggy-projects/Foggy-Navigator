@@ -466,6 +466,7 @@
           @permission-respond="handlePermissionRespond"
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
+          @skill-approval-respond="handleSkillApprovalRespond"
           @rewind="handlePaneRewind"
           @reconnect="handlePaneReconnect"
           @forward="handlePaneForward"
@@ -825,6 +826,7 @@
           @permission-respond="handlePermissionRespond"
           @question-respond="handleQuestionRespond"
           @plan-respond="handlePlanRespond"
+          @skill-approval-respond="handleSkillApprovalRespond"
           @rewind="handlePaneRewind"
           @reconnect="handlePaneReconnect"
           @forward="handlePaneForward"
@@ -2047,10 +2049,45 @@
     </el-dialog>
 
     <!-- Milestone Management Dialog -->
-    <el-dialog v-model="showMilestoneManageDialog" title="管理里程碑" width="600px">
+    <el-dialog v-model="showMilestoneManageDialog" title="管理里程碑" width="860px">
       <div class="milestone-manage-list">
-        <div v-if="milestoneManageList.length === 0" class="form-tip" style="margin-bottom: 8px">
+        <div class="milestone-manage-toolbar">
+          <div class="milestone-manage-sort">
+            <span class="milestone-manage-sort-label">排序</span>
+            <el-select v-model="milestoneManageSortBy" size="small" style="width: 150px" @change="handleMilestoneManageSortChange">
+              <el-option label="开始时间" value="startAt" />
+              <el-option label="结束时间" value="endAt" />
+              <el-option label="名称" value="name" />
+              <el-option label="状态" value="status" />
+            </el-select>
+            <el-select v-model="milestoneManageSortDir" size="small" style="width: 110px" @change="handleMilestoneManageSortChange">
+              <el-option label="倒序" value="desc" />
+              <el-option label="正序" value="asc" />
+            </el-select>
+          </div>
+          <el-button
+            v-if="!milestoneAddMode"
+            size="small"
+            type="primary"
+            plain
+            @click="openMilestoneAddForm"
+          >
+            + 添加里程碑
+          </el-button>
+        </div>
+        <div v-if="milestoneManageLoading" class="form-tip" style="margin-bottom: 8px">
+          正在加载里程碑...
+        </div>
+        <div v-else-if="milestoneManageList.length === 0" class="form-tip" style="margin-bottom: 8px">
           暂无里程碑。可按版本建立如 v3.0.0、1.0.0-SNAPSHOT。
+        </div>
+        <div class="milestone-manage-head">
+          <span>名称</span>
+          <span>状态</span>
+          <span>开始时间</span>
+          <span>结束时间</span>
+          <span>文档路径</span>
+          <span>操作</span>
         </div>
         <div v-for="ms in milestoneManageList" :key="ms.id" class="milestone-manage-row">
           <template v-if="milestoneEditingId === ms.id">
@@ -2061,6 +2098,20 @@
               <el-option label="已完成" value="COMPLETED" />
               <el-option label="已归档" value="ARCHIVED" />
             </el-select>
+            <el-date-picker
+              v-model="milestoneEditForm.startAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              placeholder="开始时间"
+              size="small"
+            />
+            <el-date-picker
+              v-model="milestoneEditForm.endAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              placeholder="结束时间"
+              size="small"
+            />
             <el-input v-model="milestoneEditForm.docPath" placeholder="docs/version-tracker/..." size="small" />
             <el-button size="small" type="primary" :loading="saving" @click="handleSaveMilestoneEdit(ms.id)">保存</el-button>
             <el-button size="small" @click="milestoneEditingId = ''">取消</el-button>
@@ -2068,7 +2119,10 @@
           <template v-else>
             <span class="ms-name">{{ ms.name }}</span>
             <el-tag size="small" :type="milestoneTagType(ms.status)">{{ milestoneStatusLabel(ms.status) }}</el-tag>
+            <span class="ms-time">{{ formatMilestoneDateTime(ms.startAt) }}</span>
+            <span class="ms-time">{{ formatMilestoneDateTime(ms.endAt) }}</span>
             <code v-if="ms.docPath" class="ms-doc">{{ ms.docPath }}</code>
+            <span v-else class="ms-doc ms-doc-empty">-</span>
             <span class="ms-actions">
               <el-button size="small" text @click="startEditMilestone(ms)">编辑</el-button>
               <el-button size="small" text type="danger" :loading="milestoneDeleting === ms.id" @click="handleDeleteMilestoneManage(ms)">删除</el-button>
@@ -2086,12 +2140,37 @@
               <el-option label="已完成" value="COMPLETED" />
               <el-option label="已归档" value="ARCHIVED" />
             </el-select>
+            <el-date-picker
+              v-model="milestoneAddForm.startAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              placeholder="开始时间"
+              size="small"
+            />
+            <el-date-picker
+              v-model="milestoneAddForm.endAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              placeholder="结束时间"
+              size="small"
+            />
             <el-input v-model="milestoneAddForm.docPath" placeholder="docs/version-tracker/..." size="small" />
             <el-button size="small" type="primary" :loading="saving" @click="handleAddMilestoneManage">保存</el-button>
             <el-button size="small" @click="milestoneAddMode = false">取消</el-button>
           </div>
         </template>
-        <el-button v-else size="small" type="primary" plain @click="milestoneAddMode = true; milestoneAddForm = { name: '', status: 'PLANNED', docPath: '' }">+ 添加里程碑</el-button>
+      </div>
+      <div class="milestone-manage-pagination">
+        <el-pagination
+          background
+          layout="total, prev, pager, next, sizes"
+          :current-page="milestoneManagePage + 1"
+          :page-size="milestoneManageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="milestoneManageTotal"
+          @current-change="handleMilestoneManagePageChange"
+          @size-change="handleMilestoneManageSizeChange"
+        />
       </div>
       <template #footer>
         <el-button @click="showMilestoneManageDialog = false">关闭</el-button>
@@ -2539,6 +2618,7 @@ import { searchFiles } from '@/api/fileBrowser'
 import { listAgentModelOverrides, listModelConfigs } from '@/api/platform'
 import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
+import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone } from '@/types'
 import type { AipMessageType, ChatMessage } from '@foggy/chat'
 
@@ -2804,10 +2884,16 @@ const milestoneForm = ref({ milestoneId: '' })
 // Milestone management dialog state (directory-level)
 const showMilestoneManageDialog = ref(false)
 const milestoneManageList = ref<DirectoryMilestone[]>([])
+const milestoneManageLoading = ref(false)
+const milestoneManagePage = ref(0)
+const milestoneManageSize = ref(20)
+const milestoneManageTotal = ref(0)
+const milestoneManageSortBy = ref<MilestoneSortBy>('startAt')
+const milestoneManageSortDir = ref<MilestoneSortDir>('desc')
 const milestoneEditingId = ref('')
-const milestoneEditForm = ref({ name: '', status: '', docPath: '' })
+const milestoneEditForm = ref({ name: '', status: '', docPath: '', startAt: '', endAt: '' })
 const milestoneAddMode = ref(false)
-const milestoneAddForm = ref({ name: '', status: 'PLANNED', docPath: '' })
+const milestoneAddForm = ref({ name: '', status: 'PLANNED', docPath: '', startAt: '', endAt: '' })
 const milestoneDeleting = ref('')
 
 // Session search dialog state
@@ -3830,7 +3916,7 @@ const directoryMilestoneMap = computed(() => {
 
 function milestonesForDirectory(directoryId?: string): DirectoryMilestone[] {
   if (!directoryId) return []
-  return directoryMilestoneMap.value.get(directoryId) || []
+  return sortMilestones(directoryMilestoneMap.value.get(directoryId))
 }
 
 const conversationMilestoneMap = computed(() => {
@@ -3850,9 +3936,6 @@ function resolveConversationMilestone(conv: ConversationGroup): DirectoryMilesto
 
 const groupedActiveConversations = computed<MilestoneConversationGroup[]>(() => {
   if (!selectedDirectoryId.value) return []
-  const milestoneOrder = new Map(
-    (selectedDirectory.value?.milestones || []).map((milestone, index) => [milestone.id, index]),
-  )
   const grouped = new Map<string, MilestoneConversationGroup>()
   for (const conv of activeConversations.value) {
     const milestone = resolveConversationMilestone(conv)
@@ -3872,8 +3955,10 @@ const groupedActiveConversations = computed<MilestoneConversationGroup[]>(() => 
   return Array.from(grouped.values()).sort((left, right) => {
     if (left.key === '__none__') return 1
     if (right.key === '__none__') return -1
-    return (milestoneOrder.get(left.key) ?? Number.MAX_SAFE_INTEGER)
-      - (milestoneOrder.get(right.key) ?? Number.MAX_SAFE_INTEGER)
+    if (left.milestone && right.milestone) {
+      return compareMilestonesDefault(left.milestone, right.milestone)
+    }
+    return 0
   })
 })
 
@@ -4849,23 +4934,53 @@ function milestoneTagType(status?: string): 'success' | 'warning' | 'info' {
   }
 }
 
+function emptyMilestoneForm(status = 'PLANNED') {
+  return { name: '', status, docPath: '', startAt: '', endAt: '' }
+}
+
+function formatMilestoneDateTime(value?: string): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hour}:${minute}`
+}
+
 // ===== Milestone Management (independent panel) =====
 
 async function openMilestoneManager() {
   if (!selectedDirectoryId.value) return
-  try {
-    milestoneManageList.value = await dirApi.listMilestones(selectedDirectoryId.value)
-  } catch {
-    milestoneManageList.value = selectedDirectory.value?.milestones ? [...selectedDirectory.value.milestones] : []
-  }
+  milestoneManagePage.value = 0
+  milestoneManageSize.value = 20
+  milestoneManageSortBy.value = 'startAt'
+  milestoneManageSortDir.value = 'desc'
   milestoneEditingId.value = ''
   milestoneAddMode.value = false
+  milestoneAddForm.value = emptyMilestoneForm()
+  await refreshMilestoneList()
   showMilestoneManageDialog.value = true
+}
+
+function openMilestoneAddForm() {
+  milestoneAddMode.value = true
+  milestoneAddForm.value = emptyMilestoneForm()
 }
 
 function startEditMilestone(ms: DirectoryMilestone) {
   milestoneEditingId.value = ms.id
-  milestoneEditForm.value = { name: ms.name, status: ms.status, docPath: ms.docPath || '' }
+  milestoneEditForm.value = {
+    name: ms.name,
+    status: ms.status,
+    docPath: ms.docPath || '',
+    startAt: ms.startAt || '',
+    endAt: ms.endAt || '',
+  }
 }
 
 async function handleSaveMilestoneEdit(milestoneId: string) {
@@ -4889,6 +5004,7 @@ async function handleAddMilestoneManage() {
   try {
     await dirApi.addMilestoneApi(selectedDirectoryId.value, milestoneAddForm.value)
     milestoneAddMode.value = false
+    milestoneAddForm.value = emptyMilestoneForm()
     await refreshMilestoneList()
     ElMessage.success('里程碑已添加')
   } catch {
@@ -4929,11 +5045,47 @@ async function handleDeleteMilestoneManage(ms: DirectoryMilestone) {
 
 async function refreshMilestoneList() {
   if (!selectedDirectoryId.value) return
-  const updated = await dirApi.listMilestones(selectedDirectoryId.value)
-  milestoneManageList.value = updated
-  // sync to directories state so computed caches update
-  const dir = workerState.directories.value.find(d => d.directoryId === selectedDirectoryId.value)
-  if (dir) dir.milestones = updated
+  milestoneManageLoading.value = true
+  try {
+    const [paged, updated] = await Promise.all([
+      dirApi.listMilestonesPaged(selectedDirectoryId.value, {
+        page: milestoneManagePage.value,
+        size: milestoneManageSize.value,
+        sortBy: milestoneManageSortBy.value,
+        sortDir: milestoneManageSortDir.value,
+      }),
+      dirApi.listMilestones(selectedDirectoryId.value),
+    ])
+    milestoneManageList.value = paged.content
+    milestoneManageTotal.value = paged.total
+    milestoneManagePage.value = paged.page
+    milestoneManageSize.value = paged.size
+    milestoneManageSortBy.value = (paged.sortBy as MilestoneSortBy) || 'startAt'
+    milestoneManageSortDir.value = (paged.sortDir as MilestoneSortDir) || 'desc'
+    const dir = workerState.directories.value.find(d => d.directoryId === selectedDirectoryId.value)
+    if (dir) dir.milestones = updated
+  } catch {
+    milestoneManageList.value = sortMilestones(selectedDirectory.value?.milestones)
+    milestoneManageTotal.value = milestoneManageList.value.length
+  } finally {
+    milestoneManageLoading.value = false
+  }
+}
+
+async function handleMilestoneManageSortChange() {
+  milestoneManagePage.value = 0
+  await refreshMilestoneList()
+}
+
+async function handleMilestoneManagePageChange(page: number) {
+  milestoneManagePage.value = Math.max(page - 1, 0)
+  await refreshMilestoneList()
+}
+
+async function handleMilestoneManageSizeChange(size: number) {
+  milestoneManageSize.value = size
+  milestoneManagePage.value = 0
+  await refreshMilestoneList()
 }
 
 function handleAuthConfig(conv: ConversationGroup) {
@@ -5129,6 +5281,20 @@ async function handlePermissionRespond(paneId: string, permissionId: string, dec
     syncSidebarAfterRespond(pane, decision)
   } catch {
     ElMessage.error('Permission response failed')
+  }
+}
+
+async function handleSkillApprovalRespond(paneId: string, taskId: string, decision: string, comment: string) {
+  const pane = panes.value.find((p) => p.paneId === paneId)
+  if (!pane?.task.value) return
+
+  try {
+    const { approveTask } = await import('@/api/langgraphWorker')
+    await approveTask(taskId, { approvalResult: decision, comment })
+    pane.chatState.resolveSkillApproval(taskId, decision === 'approved' ? 'approved' : 'rejected')
+    syncSidebarAfterRespond(pane, decision === 'approved' ? 'allow' : 'deny')
+  } catch {
+    ElMessage.error('Skill approval response failed')
   }
 }
 
@@ -7317,12 +7483,43 @@ function handlePopOutTerminal() {
   gap: 6px;
 }
 
-.milestone-manage-row {
+.milestone-manage-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.milestone-manage-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.milestone-manage-sort-label {
+  font-size: 12px;
+  color: #606266;
+}
+
+.milestone-manage-head {
   display: grid;
-  grid-template-columns: 1fr 80px 1.2fr auto auto;
+  grid-template-columns: minmax(120px, 1fr) 88px 150px 150px minmax(180px, 1.2fr) 120px;
   gap: 8px;
   align-items: center;
-  padding: 4px 0;
+  padding: 0 0 4px;
+  font-size: 12px;
+  color: #909399;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.milestone-manage-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 88px 150px 150px minmax(180px, 1.2fr) 120px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #f5f7fa;
 }
 
 .milestone-manage-row .ms-name {
@@ -7333,6 +7530,11 @@ function handlePopOutTerminal() {
   white-space: nowrap;
 }
 
+.milestone-manage-row .ms-time {
+  font-size: 12px;
+  color: #606266;
+}
+
 .milestone-manage-row .ms-doc {
   font-size: 11px;
   color: #909399;
@@ -7341,10 +7543,21 @@ function handlePopOutTerminal() {
   white-space: nowrap;
 }
 
+.milestone-manage-row .ms-doc-empty {
+  font-family: inherit;
+}
+
 .milestone-manage-row .ms-actions {
   display: flex;
   gap: 4px;
   white-space: nowrap;
+  justify-content: flex-end;
+}
+
+.milestone-manage-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 .form-tip {

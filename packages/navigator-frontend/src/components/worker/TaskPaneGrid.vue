@@ -16,6 +16,7 @@
       @permission-respond="(paneId, pid, decision, scope) => emit('permissionRespond', paneId, pid, decision, scope)"
       @question-respond="(paneId, pid, answers) => emit('questionRespond', paneId, pid, answers)"
       @plan-respond="(paneId, pid, decision, denyMsg, planAction) => emit('planRespond', paneId, pid, decision, denyMsg, planAction)"
+      @skill-approval-respond="(paneId, taskId, decision, comment) => emit('skillApprovalRespond', paneId, taskId, decision, comment)"
       @rewind="(paneId, turnIndex) => emit('rewind', paneId, turnIndex)"
       @reconnect="(paneId, taskId) => emit('reconnect', paneId, taskId)"
       @forward="(paneId, message) => emit('forward', paneId, message)"
@@ -51,6 +52,7 @@ const emit = defineEmits<{
   (e: 'permissionRespond', paneId: string, permissionId: string, decision: string, scope: string): void
   (e: 'questionRespond', paneId: string, permissionId: string, answers: Record<string, string>): void
   (e: 'planRespond', paneId: string, permissionId: string, decision: string, denyMessage?: string, planAction?: string): void
+  (e: 'skillApprovalRespond', paneId: string, taskId: string, decision: string, comment: string): void
   (e: 'rewind', paneId: string, turnIndex: number): void
   (e: 'reconnect', paneId: string, taskId: string): void
   (e: 'forward', paneId: string, message: { id: string; content: string }): void
