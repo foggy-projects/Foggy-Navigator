@@ -2,6 +2,7 @@ package com.foggy.navigator.codex.worker.adapter;
 
 import com.foggy.navigator.codex.worker.repository.CodexCodingAgentRepository;
 import com.foggy.navigator.codex.worker.service.CodexTaskService;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
@@ -10,10 +11,11 @@ import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
+import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import com.foggy.navigator.spi.worker.WorkerManagementFacade;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
@@ -29,6 +31,7 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
 
     private final CodexCodingAgentRepository agentRepository;
     private final CodexTaskService taskService;
+    private final LlmModelManager llmModelManager;
     @Nullable
     private final AgentContextStore contextStore;
     /** 用于获取目录路径（目录由 Claude Worker 管理） */
@@ -43,7 +46,7 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
     @Override
     public List<A2aAgentCard> listAgentCards(String userId) {
         return agentRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-                .filter(e -> "LOCAL_CODEX_WORKER".equals(e.getAgentType()))
+                .filter(this::isManagedAgent)
                 .map(this::toAgentCard)
                 .toList();
     }
@@ -52,6 +55,22 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
     public Optional<A2aAgent> resolveAgent(String agentId, String userId) {
         return resolveManagedEntity(agentId, userId)
                 .map(entity -> toA2aAgent(entity, userId));
+    }
+
+    @Override
+    public List<A2aAgentCard> listAgentCards(AgentResolveContext context) {
+        if (context.getTenantId() != null && "OPEN_API".equals(context.getRequestSource())) {
+            return listAgentCardsByTenant(context.getTenantId());
+        }
+        return listAgentCards(context.getUserId());
+    }
+
+    @Override
+    public Optional<A2aAgent> resolveAgent(String agentId, AgentResolveContext context) {
+        if (context.getTenantId() != null && "OPEN_API".equals(context.getRequestSource())) {
+            return resolveAgentByTenant(agentId, context.getTenantId());
+        }
+        return resolveAgent(agentId, context.getUserId());
     }
 
     private A2aAgent toA2aAgent(CodingAgentEntity entity, String userId) {
@@ -81,8 +100,47 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
                 .filter(this::isManagedAgent);
     }
 
+    public List<A2aAgentCard> listAgentCardsByTenant(String tenantId) {
+        return agentRepository.findByTenantIdOrderByCreatedAtDesc(tenantId).stream()
+                .filter(this::isManagedAgent)
+                .map(this::toAgentCard)
+                .toList();
+    }
+
+    public Optional<A2aAgent> resolveAgentByTenant(String agentId, String tenantId) {
+        return agentRepository.findByAgentId(agentId)
+                .filter(entity -> tenantId.equals(entity.getTenantId()))
+                .filter(this::isManagedAgent)
+                .map(entity -> toA2aAgent(entity, entity.getUserId()));
+    }
+
     private boolean isManagedAgent(CodingAgentEntity entity) {
+        String providerType = resolveProviderType(entity.getDefaultModelConfigId());
+        if (providerType != null) {
+            return "codex-worker".equals(providerType);
+        }
         return "LOCAL_CODEX_WORKER".equals(entity.getAgentType());
+    }
+
+    private String resolveProviderType(String modelConfigId) {
+        if (modelConfigId == null || modelConfigId.isBlank()) {
+            return null;
+        }
+        return llmModelManager.getModelConfig(modelConfigId)
+                .map(LlmModelConfigDTO::getWorkerBackend)
+                .map(this::mapWorkerBackendToProviderType)
+                .orElse(null);
+    }
+
+    private String mapWorkerBackendToProviderType(String workerBackend) {
+        if (workerBackend == null || workerBackend.isBlank()) {
+            return null;
+        }
+        return switch (workerBackend) {
+            case "OPENAI_CODEX" -> "codex-worker";
+            case "CLAUDE_CODE" -> "claude-worker";
+            default -> null;
+        };
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {

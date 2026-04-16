@@ -2423,8 +2423,8 @@
         <el-form-item label="默认分支">
           <el-input v-model="agentForm.defaultBranch" placeholder="留空则由任务决定" />
         </el-form-item>
-        <el-form-item v-if="platformModels.length > 0" label="默认 LLM 配置">
-          <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="使用目录默认配置" clearable>
+        <el-form-item v-if="platformModels.length > 0" label="默认 LLM 配置" required>
+          <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="选择 LLM 配置">
             <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
           </el-select>
         </el-form-item>
@@ -2433,7 +2433,7 @@
             v-model="agentForm.defaultModel"
             style="width: 100%"
             :disabled="agentModelOptions.length === 0"
-            :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置或目录默认配置'"
+            :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置'"
           >
             <el-option v-for="opt in agentModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
           </el-select>
@@ -2467,8 +2467,8 @@
         <el-form-item label="默认分支">
           <el-input v-model="agentForm.defaultBranch" placeholder="留空则由任务决定" />
         </el-form-item>
-        <el-form-item v-if="platformModels.length > 0" label="默认 LLM 配置">
-          <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="使用目录默认配置" clearable>
+        <el-form-item v-if="platformModels.length > 0" label="默认 LLM 配置" required>
+          <el-select v-model="agentForm.defaultModelConfigId" style="width: 100%" placeholder="选择 LLM 配置">
             <el-option v-for="m in platformModels" :key="m.id" :value="m.id" :label="m.name" />
           </el-select>
         </el-form-item>
@@ -2477,7 +2477,7 @@
             v-model="agentForm.defaultModel"
             style="width: 100%"
             :disabled="agentModelOptions.length === 0"
-            :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置或目录默认配置'"
+            :placeholder="agentModelOptions.length > 0 ? '选择默认模型' : '先选择 LLM 配置'"
           >
             <el-option v-for="opt in agentModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
           </el-select>
@@ -3296,16 +3296,16 @@ function providerTypeFromWorkerBackend(workerBackend?: string | null): string | 
   return undefined
 }
 
-function providerTypeFromAgentType(agentType?: string | null): string | undefined {
-  if (agentType === 'LOCAL_CODEX_WORKER') return 'codex-worker'
-  if (agentType === 'LOCAL_CLAUDE_WORKER') return 'claude-worker'
-  return undefined
-}
+const selectedAgent = computed(() => {
+  if (!selectedAgentId.value) return undefined
+  return agentState.agents.value.find(a => a.agentId === selectedAgentId.value)
+})
 
 const selectedAgentProviderType = computed(() => {
-  if (!selectedAgentId.value) return undefined
-  const agent = agentState.agents.value.find(a => a.agentId === selectedAgentId.value)
-  return providerTypeFromAgentType(agent?.agentType)
+  const configId = selectedAgent.value?.defaultModelConfigId
+  if (!configId) return undefined
+  const config = platformModels.value.find(m => m.id === configId)
+  return providerTypeFromWorkerBackend(config?.workerBackend)
 })
 
 // --- Per-worker LLM 选择缓存：切换 Worker 时记住每个 Worker 的 API 凭证 + 模型选择 ---
@@ -3390,16 +3390,7 @@ const agentPlatformModelConfig = computed(() =>
   platformModels.value.find((m) => m.id === agentForm.value.defaultModelConfigId) || null,
 )
 
-const agentDirectoryModelConfig = computed(() => {
-  const directoryId = agentForm.value.defaultDirectoryId
-  if (!directoryId) return null
-  const directory = workerState.directories.value.find((dir) => dir.directoryId === directoryId)
-  if (!directory?.defaultModelConfigId) return null
-  return platformModels.value.find((m) => m.id === directory.defaultModelConfigId) || null
-})
-
-const agentEffectiveModelConfig = computed(() => agentPlatformModelConfig.value || agentDirectoryModelConfig.value)
-const agentModelOptions = computed(() => resolveModelOptions(agentEffectiveModelConfig.value))
+const agentModelOptions = computed(() => resolveModelOptions(agentPlatformModelConfig.value))
 
 function syncAgentDefaultModel() {
   const opts = agentModelOptions.value
@@ -3547,7 +3538,7 @@ function openAgentEditDialog(agent: CodingAgent) {
 }
 
 async function handleRegisterAgent() {
-  if (!agentForm.value.name || !agentForm.value.defaultDirectoryId || !selectedWorkerId.value) return
+  if (!agentForm.value.name || !agentForm.value.defaultDirectoryId || !agentForm.value.defaultModelConfigId || !selectedWorkerId.value) return
   saving.value = true
   try {
     await agentState.registerAgent({
@@ -3556,7 +3547,7 @@ async function handleRegisterAgent() {
       workerId: selectedWorkerId.value,
       defaultDirectoryId: agentForm.value.defaultDirectoryId,
       defaultBranch: agentForm.value.defaultBranch || undefined,
-      defaultModelConfigId: agentForm.value.defaultModelConfigId || undefined,
+      defaultModelConfigId: agentForm.value.defaultModelConfigId,
       defaultModel: agentForm.value.defaultModel || undefined,
     })
     showAgentRegisterDialog.value = false
@@ -3569,7 +3560,7 @@ async function handleRegisterAgent() {
 }
 
 async function handleUpdateAgent() {
-  if (!editingAgent.value) return
+  if (!editingAgent.value || !agentForm.value.defaultModelConfigId) return
   saving.value = true
   try {
     await agentState.updateAgent(editingAgent.value.agentId, {
@@ -3578,7 +3569,7 @@ async function handleUpdateAgent() {
       defaultBranch: agentForm.value.defaultBranch || undefined,
       defaultDirectoryId: agentForm.value.defaultDirectoryId || undefined,
       projectSummary: agentForm.value.projectSummary || undefined,
-      defaultModelConfigId: agentForm.value.defaultModelConfigId ?? undefined,
+      defaultModelConfigId: agentForm.value.defaultModelConfigId,
       defaultModel: agentForm.value.defaultModel || undefined,
     })
     showAgentEditDialog.value = false
@@ -5632,7 +5623,7 @@ async function handleCreateTask() {
       workerId: selectedWorkerId.value,
       prompt,
     }
-    // provider 不一致时不要带 agentId，避免 A2A 路由与 modelConfigId 指向不同后端。
+    // provider 不一致时不要带 agentId，避免本次任务显式模型配置把请求路由到另一执行后端。
     const modelProviderType = providerTypeFromWorkerBackend(platformModelConfig.value?.workerBackend)
     if (selectedAgentId.value && (!modelProviderType || modelProviderType === selectedAgentProviderType.value)) {
       form.agentId = selectedAgentId.value

@@ -80,6 +80,9 @@ public class CodingAgentService {
             }
         }
 
+        String normalizedDefaultModelConfigId = requireDefaultModelConfigId(form.getDefaultModelConfigId());
+        validateDefaultModelSelection(normalizedDefaultModelConfigId, form.getDefaultModel(), form.getWorkerId());
+
         CodingAgentEntity entity = new CodingAgentEntity();
         entity.setAgentId(UUID.randomUUID().toString().substring(0, 12));
         entity.setUserId(userId);
@@ -91,8 +94,8 @@ public class CodingAgentService {
         entity.setDefaultDirectoryId(form.getDefaultDirectoryId());
         entity.setSkills(form.getSkills());
         entity.setDefaultBranch(form.getDefaultBranch());
-        entity.setDefaultModelConfigId(form.getDefaultModelConfigId());
-        entity.setDefaultModel(form.getDefaultModel());
+        entity.setDefaultModelConfigId(normalizedDefaultModelConfigId);
+        entity.setDefaultModel(blankToNull(form.getDefaultModel()));
         agentRepository.save(entity);
 
         // 自动绑定 defaultDirectory
@@ -140,15 +143,13 @@ public class CodingAgentService {
             }
         }
         if (form.getDefaultModelConfigId() != null) {
-            if (form.getDefaultModelConfigId().isEmpty()) {
-                entity.setDefaultModelConfigId(null);
-            } else {
-                entity.setDefaultModelConfigId(form.getDefaultModelConfigId());
-            }
+            entity.setDefaultModelConfigId(requireDefaultModelConfigId(form.getDefaultModelConfigId()));
         }
         if (form.getDefaultModel() != null) {
             entity.setDefaultModel(form.getDefaultModel().isEmpty() ? null : form.getDefaultModel());
         }
+
+        validateDefaultModelSelection(entity.getDefaultModelConfigId(), entity.getDefaultModel(), entity.getWorkerId());
 
         agentRepository.save(entity);
         log.info("Agent updated: agentId={}", agentId);
@@ -337,5 +338,39 @@ public class CodingAgentService {
                 .path(dir.getPath())
                 .gitBranch(dir.getGitBranch())
                 .build();
+    }
+
+    private String requireDefaultModelConfigId(String modelConfigId) {
+        String normalized = blankToNull(modelConfigId);
+        if (normalized == null) {
+            throw new IllegalArgumentException("defaultModelConfigId is required");
+        }
+        return normalized;
+    }
+
+    private void validateDefaultModelSelection(String modelConfigId, String defaultModel, String workerId) {
+        if (workerId == null || workerId.isBlank()) {
+            throw new IllegalArgumentException("workerId is required");
+        }
+        llmModelManager.validateModelAccessForWorker(modelConfigId, workerId);
+        LlmModelConfigDTO config = llmModelManager.getModelConfig(modelConfigId)
+                .orElseThrow(() -> new IllegalArgumentException("Model config not found: " + modelConfigId));
+
+        String normalizedModel = blankToNull(defaultModel);
+        if (normalizedModel == null) {
+            return;
+        }
+        List<String> availableModels = config.getAvailableModels();
+        if (availableModels != null && !availableModels.isEmpty() && !availableModels.contains(normalizedModel)) {
+            throw new IllegalArgumentException("defaultModel " + normalizedModel + " is not allowed by modelConfigId " + modelConfigId);
+        }
+    }
+
+    private String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

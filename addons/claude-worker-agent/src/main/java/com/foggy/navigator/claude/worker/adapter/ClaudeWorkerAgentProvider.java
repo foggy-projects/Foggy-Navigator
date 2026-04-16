@@ -4,6 +4,7 @@ import com.foggy.navigator.common.entity.WorkingDirectoryEntity;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.claude.worker.service.ClaudeTaskService;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.util.AgentCardBuilder;
@@ -14,6 +15,7 @@ import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
@@ -32,6 +34,7 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
     private final CodingAgentRepository agentRepository;
     private final ClaudeTaskService taskService;
     private final WorkingDirectoryRepository directoryRepository;
+    private final LlmModelManager llmModelManager;
     @Nullable
     private final AgentContextStore contextStore;
 
@@ -43,7 +46,7 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
     @Override
     public List<A2aAgentCard> listAgentCards(String userId) {
         return agentRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-                .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
+                .filter(this::isManagedAgent)
                 .map(this::toAgentCard)
                 .toList();
     }
@@ -84,7 +87,7 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
      */
     public List<A2aAgentCard> listAgentCardsByTenant(String tenantId) {
         return agentRepository.findByTenantIdOrderByCreatedAtDesc(tenantId).stream()
-                .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
+                .filter(this::isManagedAgent)
                 .map(this::toAgentCard)
                 .toList();
     }
@@ -98,13 +101,13 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
     public Optional<CodingAgentEntity> getAgentEntityByTenant(String agentId, String tenantId) {
         return agentRepository.findByAgentId(agentId)
                 .filter(e -> tenantId.equals(e.getTenantId()))
-                .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()));
+                .filter(this::isManagedAgent);
     }
 
     public Optional<A2aAgent> resolveAgentByTenant(String agentId, String tenantId) {
         return agentRepository.findByAgentId(agentId)
                 .filter(e -> tenantId.equals(e.getTenantId()))
-                .filter(e -> "LOCAL_CLAUDE_WORKER".equals(e.getAgentType()))
+                .filter(this::isManagedAgent)
                 .map(this::toA2aAgent);
     }
 
@@ -121,7 +124,32 @@ public class ClaudeWorkerAgentProvider implements A2aAgentProvider {
     }
 
     private boolean isManagedAgent(CodingAgentEntity entity) {
+        String providerType = resolveProviderType(entity.getDefaultModelConfigId());
+        if (providerType != null) {
+            return "claude-worker".equals(providerType);
+        }
         return "LOCAL_CLAUDE_WORKER".equals(entity.getAgentType());
+    }
+
+    private String resolveProviderType(String modelConfigId) {
+        if (modelConfigId == null || modelConfigId.isBlank()) {
+            return null;
+        }
+        return llmModelManager.getModelConfig(modelConfigId)
+                .map(LlmModelConfigDTO::getWorkerBackend)
+                .map(this::mapWorkerBackendToProviderType)
+                .orElse(null);
+    }
+
+    private String mapWorkerBackendToProviderType(String workerBackend) {
+        if (workerBackend == null || workerBackend.isBlank()) {
+            return null;
+        }
+        return switch (workerBackend) {
+            case "OPENAI_CODEX" -> "codex-worker";
+            case "CLAUDE_CODE" -> "claude-worker";
+            default -> null;
+        };
     }
 
     private A2aAgent toA2aAgent(CodingAgentEntity entity) {
