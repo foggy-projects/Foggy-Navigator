@@ -16,4 +16,6 @@ public class RegisterAgentForm {
     private String defaultBranch;
     /** 默认 LLM 模型配置 ID */
     private String defaultModelConfigId;
+    /** 默认模型名（如 "opus[1m]", "sonnet"） */
+    private String defaultModel;
 }

@@ -15,4 +15,6 @@ public class UpdateAgentForm {
     private String projectSummary;
     /** 默认 LLM 模型配置 ID（空串=清除） */
     private String defaultModelConfigId;
+    /** 默认模型名（空串=清除） */
+    private String defaultModel;
 }

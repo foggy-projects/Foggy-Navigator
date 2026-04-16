@@ -204,12 +204,6 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
         persistTask(entity);
 
-        log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}, model={}, agentTeams={}",
-                taskId, sessionId, form.getWorkerId(), userId, form.getModel(),
-                agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
-        publishStatusChange(entity, null);
-        updateSessionInteractionState(sessionId, "PROCESSING");
-
         // 4.5. 锁定 Agent Teams 配置到会话
         if (resolvedConfigId != null) {
             lockAgentTeamsConfigToSession(sessionId, form.getWorkerId(), userId, resolvedConfigId);
@@ -227,14 +221,28 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, effectiveModelConfigId);
         Map<String, String> extraEnvVars = resolveEnvVars(effectiveModelConfigId, directoryId, userId);
 
-        // 5.5. 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
+        // 5.5. 解析有效模型名：显式指定 > Agent.defaultModel > ModelConfig.modelName
+        String effectiveModel = resolveEffectiveModel(form.getModel(), logicalAgentId, effectiveModelConfigId);
+        if (effectiveModel != null && !effectiveModel.isBlank()
+                && (entity.getModel() == null || entity.getModel().isBlank())) {
+            entity.setModel(effectiveModel);
+            taskRepository.save(entity);
+        }
+
+        log.info("Task created: taskId={}, sessionId={}, workerId={}, userId={}, model={}, agentTeams={}",
+                taskId, sessionId, form.getWorkerId(), userId, effectiveModel,
+                agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
+        publishStatusChange(entity, null);
+        updateSessionInteractionState(sessionId, "PROCESSING");
+
+        // 5.6. 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
 
         // 6. 发布任务启动事件 → WorkerStreamRelay 监听
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
                 .userId(userId).prompt(form.getPrompt()).cwd(cwd)
-                .model(form.getModel()).maxTurns(form.getMaxTurns())
+                .model(effectiveModel).maxTurns(form.getMaxTurns())
                 .apiKey(authParams[0]).providerType(AGENT_ID)
                 .providerConfig(Map.of(
                         "claudeSessionId", form.getClaudeSessionId() != null ? form.getClaudeSessionId() : "",
@@ -365,12 +373,6 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
         persistTask(entity);
 
-        log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}, model={}, agentTeams={}",
-                taskId, form.getClaudeSessionId(), directoryId, form.getModel(),
-                agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
-        publishStatusChange(entity, null);
-        updateSessionInteractionState(sessionId, "PROCESSING");
-
         // 锁定 Agent Teams 配置到会话（仅首次，已锁定则跳过）
         if (resolvedConfigId != null && existingAgentTeamsConfigId == null) {
             lockAgentTeamsConfigToSession(sessionId, form.getWorkerId(), userId, resolvedConfigId);
@@ -386,13 +388,27 @@ public class ClaudeTaskService implements TaskQueryProvider {
         String[] authParams = resolveAuth(sessionId, form.getWorkerId(), userId, directoryId, modelConfigId);
         Map<String, String> extraEnvVars = resolveEnvVars(modelConfigId, directoryId, userId);
 
+        // 解析有效模型名（resume 时与 create 一致的优先级）
+        String effectiveModel = resolveEffectiveModel(form.getModel(), logicalAgentId, modelConfigId);
+        if (effectiveModel != null && !effectiveModel.isBlank()
+                && (entity.getModel() == null || entity.getModel().isBlank())) {
+            entity.setModel(effectiveModel);
+            taskRepository.save(entity);
+        }
+
+        log.info("Task resumed: taskId={}, claudeSessionId={}, directoryId={}, model={}, agentTeams={}",
+                taskId, form.getClaudeSessionId(), directoryId, effectiveModel,
+                agentTeamsJson != null ? "enabled(" + agentTeamsJson.length() + " chars)" : "disabled");
+        publishStatusChange(entity, null);
+        updateSessionInteractionState(sessionId, "PROCESSING");
+
         // 生成内部服务 Token（用于 CLI 子进程回调 Navigator API）
         String navigatorApiKey = userAuthService.generateServiceToken(userId);
 
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId).sessionId(sessionId).workerId(form.getWorkerId())
                 .userId(userId).prompt(form.getPrompt()).cwd(cwd)
-                .model(form.getModel()).maxTurns(form.getMaxTurns())
+                .model(effectiveModel).maxTurns(form.getMaxTurns())
                 .apiKey(authParams[0]).providerType(AGENT_ID)
                 .providerConfig(Map.of(
                         "claudeSessionId", form.getClaudeSessionId() != null ? form.getClaudeSessionId() : "",
@@ -1413,6 +1429,45 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
 
         return null; // 继续由 resolveAuth 内的 directory 优先级处理
+    }
+
+    /**
+     * 解析有效模型名（传递给 Python Worker 的 model 参数）。
+     * 优先级：
+     * 1. 请求中显式传入 model（用户在 UI 手动选择）
+     * 2. CodingAgentEntity.defaultModel（Agent 创建者设置）
+     * 3. LlmModelConfigEntity.modelName（从已解析的 modelConfigId 中提取）
+     * 4. null → Python Worker 使用自身默认值
+     */
+    private String resolveEffectiveModel(String explicitModel, String agentId, String effectiveModelConfigId) {
+        // 优先级 1：调用方显式指定
+        if (explicitModel != null && !explicitModel.isBlank()) {
+            return explicitModel;
+        }
+
+        // 优先级 2：Agent.defaultModel
+        if (agentId != null && !agentId.isBlank()) {
+            CodingAgentEntity agentEntity = codingAgentRepository.findByAgentId(agentId).orElse(null);
+            if (agentEntity != null && agentEntity.getDefaultModel() != null
+                    && !agentEntity.getDefaultModel().isBlank()) {
+                log.info("Model resolved from Agent.defaultModel: agentId={}, model={}",
+                        agentId, agentEntity.getDefaultModel());
+                return agentEntity.getDefaultModel();
+            }
+        }
+
+        // 优先级 3：从 modelConfigId 对应的 LlmModelConfigEntity 中提取 modelName
+        if (effectiveModelConfigId != null && !effectiveModelConfigId.isBlank()) {
+            Optional<LlmModelConfigDTO> config = llmModelManager.getModelConfig(effectiveModelConfigId);
+            if (config.isPresent() && config.get().getModelName() != null
+                    && !config.get().getModelName().isBlank()) {
+                log.info("Model resolved from ModelConfig.modelName: configId={}, model={}",
+                        effectiveModelConfigId, config.get().getModelName());
+                return config.get().getModelName();
+            }
+        }
+
+        return null; // Python Worker 使用自身默认值
     }
 
     /**

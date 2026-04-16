@@ -92,6 +92,7 @@ public class CodingAgentService {
         entity.setSkills(form.getSkills());
         entity.setDefaultBranch(form.getDefaultBranch());
         entity.setDefaultModelConfigId(form.getDefaultModelConfigId());
+        entity.setDefaultModel(form.getDefaultModel());
         agentRepository.save(entity);
 
         // 自动绑定 defaultDirectory
@@ -144,6 +145,9 @@ public class CodingAgentService {
             } else {
                 entity.setDefaultModelConfigId(form.getDefaultModelConfigId());
             }
+        }
+        if (form.getDefaultModel() != null) {
+            entity.setDefaultModel(form.getDefaultModel().isEmpty() ? null : form.getDefaultModel());
         }
 
         agentRepository.save(entity);
@@ -318,6 +322,7 @@ public class CodingAgentService {
                 .projectSummary(entity.getProjectSummary())
                 .defaultModelConfigId(entity.getDefaultModelConfigId())
                 .defaultModelConfigName(modelConfigName)
+                .defaultModel(entity.getDefaultModel())
                 .defaultDirectory(defaultDir)
                 .authorizedDirectories(authorizedDirs)
                 .createdAt(entity.getCreatedAt())

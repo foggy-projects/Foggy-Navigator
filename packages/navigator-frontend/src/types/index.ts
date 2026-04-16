@@ -457,6 +457,7 @@ export interface CodingAgent {
   projectSummary?: string
   defaultModelConfigId?: string
   defaultModelConfigName?: string
+  defaultModel?: string
   defaultDirectory?: DirectorySummary
   authorizedDirectories?: DirectorySummary[]
   createdAt: string

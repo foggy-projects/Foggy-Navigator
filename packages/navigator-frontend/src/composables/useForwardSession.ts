@@ -5,6 +5,7 @@ import type { ClaudeTask, LlmModelConfig, DirectoryMilestone } from '@/types'
 import type { useClaudeWorker } from './useClaudeWorker'
 import { useAttachments, toImagesJson } from './useAttachments'
 import { sortMilestones } from '@/utils/milestone'
+import { isSelectablePlatformModel, resolveModelOptions, type SelectableModelOption } from '@/utils/llmModelOptions'
 
 // ── Types ──
 
@@ -39,13 +40,7 @@ export interface ForwardSessionDeps {
   shortModel: (model: string) => string
   milestoneStatusLabel: (status: string) => string
   formatTime: (dateStr: string) => string
-  ALL_MODELS: { value: string; label: string; backend: string }[]
-}
-
-// ── Helpers ──
-
-function isSelectablePlatformModel(model: LlmModelConfig): boolean {
-  return model.hasApiKey || model.workerBackend === 'OPENAI_CODEX'
+  ALL_MODELS: SelectableModelOption[]
 }
 
 function defaultForwardForm() {
@@ -286,13 +281,7 @@ export function useForwardSession(deps: ForwardSessionDeps) {
   const forwardSelectedModelConfig = computed(() =>
     forwardPlatformModels.value.find((model) => model.id === forwardForm.value.modelConfigId) || null,
   )
-  const forwardModelOptions = computed(() => {
-    const backend = forwardSelectedModelConfig.value?.workerBackend ?? 'CLAUDE_CODE'
-    const backendModels = ALL_MODELS.filter((model) => model.backend === backend)
-    const allowed = forwardSelectedModelConfig.value?.availableModels
-    if (!allowed || allowed.length === 0) return backendModels
-    return backendModels.filter((model) => allowed.includes(model.value))
-  })
+  const forwardModelOptions = computed(() => resolveModelOptions(forwardSelectedModelConfig.value))
   const forwardExistingWorkerName = computed(() => {
     const workerId = forwardSelectedExistingConversation.value?.latestTask.workerId
     if (!workerId) return '-'
