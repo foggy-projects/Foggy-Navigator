@@ -94,6 +94,17 @@ public class CodexStreamRelay {
             String baseUrl = blankToNull(event.getProviderConfigString("baseUrl"));
             @SuppressWarnings("unchecked")
             Map<String, String> extraEnvVars = event.getProviderConfigValue("extraEnvVars");
+            log.info(
+                    "Dispatching Codex worker query: taskId={}, workerId={}, model={}, hasApiKey={}, baseUrl={}, envVarKeys={}, hasImages={}, resumeThread={}",
+                    taskId,
+                    workerId,
+                    event.getModel(),
+                    event.getApiKey() != null && !event.getApiKey().isBlank(),
+                    baseUrl,
+                    extraEnvVars != null ? extraEnvVars.keySet() : List.of(),
+                    images != null && !images.isBlank(),
+                    codexThreadId != null && !codexThreadId.isBlank()
+            );
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedCodexThreadId = new AtomicReference<>(codexThreadId);
 
