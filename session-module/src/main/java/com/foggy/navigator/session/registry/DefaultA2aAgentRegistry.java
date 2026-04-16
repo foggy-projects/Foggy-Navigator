@@ -12,6 +12,7 @@ import java.util.Optional;
 /**
  * 统一 Agent 注册中心 — 聚合所有 A2aAgentProvider 实例，提供统一发现和解析
  */
+@Deprecated(since = "1.1.0", forRemoval = false)
 @Component
 public class DefaultA2aAgentRegistry {
 

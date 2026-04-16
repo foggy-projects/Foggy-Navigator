@@ -4,9 +4,10 @@ import com.foggy.navigator.common.dto.SharingKeyDTO;
 import com.foggy.navigator.common.entity.SharingKeyEntity;
 import com.foggy.navigator.common.form.SharingKeyCreateForm;
 import com.foggy.navigator.common.form.SharingKeyUpdateForm;
-import com.foggy.navigator.session.registry.DefaultA2aAgentRegistry;
+import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.repository.SharingKeyRepository;
 import com.foggy.navigator.session.util.SharingKeyGenerator;
+import com.foggy.navigator.spi.agent.AgentResolveContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -29,16 +30,16 @@ public class SharingKeyService {
 
     private final SharingKeyRepository repository;
     private final SharingKeyGenerator keyGenerator;
-    private final DefaultA2aAgentRegistry agentRegistry;
+    private final UnifiedAgentResolver agentResolver;
     private final String externalUrl;
 
     public SharingKeyService(SharingKeyRepository repository,
                              SharingKeyGenerator keyGenerator,
-                             DefaultA2aAgentRegistry agentRegistry,
+                             UnifiedAgentResolver agentResolver,
                              @Value("${navigator.api.external-url:http://localhost:${server.port:8112}}") String externalUrl) {
         this.repository = repository;
         this.keyGenerator = keyGenerator;
-        this.agentRegistry = agentRegistry;
+        this.agentResolver = agentResolver;
         this.externalUrl = normalizeUrl(externalUrl);
     }
 
@@ -57,7 +58,7 @@ public class SharingKeyService {
         }
 
         // 校验 Agent 归属于当前用户
-        agentRegistry.resolveAgent(form.getAgentId(), ownerUserId)
+        agentResolver.resolveAgent(form.getAgentId(), buildOwnerContext(ownerUserId))
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Agent not found or not owned by you: " + form.getAgentId()));
 
@@ -263,12 +264,19 @@ public class SharingKeyService {
 
         // agentName 冗余展示：尝试从 registry 获取
         try {
-            agentRegistry.resolveAgent(entity.getAgentId(), entity.getOwnerUserId())
+            agentResolver.resolveAgent(entity.getAgentId(), buildOwnerContext(entity.getOwnerUserId()))
                     .ifPresent(agent -> dto.setAgentName(agent.getAgentCard().getName()));
         } catch (Exception e) {
             // ignore
         }
 
         return dto;
+    }
+
+    private AgentResolveContext buildOwnerContext(String ownerUserId) {
+        return AgentResolveContext.builder()
+                .userId(ownerUserId)
+                .requestSource("SHARING_KEY")
+                .build();
     }
 }
