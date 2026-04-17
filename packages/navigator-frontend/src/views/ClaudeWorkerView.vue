@@ -1068,7 +1068,7 @@
                   type="info"
                   effect="plain"
                   class="conv-rel-tag"
-                  @click.stop="viewTask(parentConversation(conv)!.latestTask)"
+                  @click.stop="viewRelatedTask(parentConversation(conv)!.latestTask)"
                 >
                   上游
                 </el-tag>
@@ -1089,7 +1089,7 @@
                       v-for="child in childConversations(conv)"
                       :key="child.sessionId"
                       class="child-session-item"
-                      @click="viewTask(child.latestTask)"
+                      @click="viewRelatedTask(child.latestTask)"
                     >
                       <span class="child-session-name" :title="child.config?.customTitle || child.firstPrompt">
                         {{ truncate(child.config?.customTitle || child.firstPrompt, 28) }}
@@ -1260,7 +1260,7 @@
                 type="info"
                 effect="plain"
                 class="conv-rel-tag"
-                @click.stop="viewTask(parentConversation(conv)!.latestTask)"
+                @click.stop="viewRelatedTask(parentConversation(conv)!.latestTask)"
               >
                 上游
               </el-tag>
@@ -1281,7 +1281,7 @@
                     v-for="child in childConversations(conv)"
                     :key="child.sessionId"
                     class="child-session-item"
-                    @click="viewTask(child.latestTask)"
+                    @click="viewRelatedTask(child.latestTask)"
                   >
                     <span class="child-session-name" :title="child.config?.customTitle || child.firstPrompt">
                       {{ truncate(child.config?.customTitle || child.firstPrompt, 28) }}
@@ -3869,16 +3869,33 @@ const directoryConversations = computed(() => groupTasksToConversations(director
 const allConversations = computed(() =>
   selectedDirectoryId.value ? directoryConversations.value : workerConversations.value,
 )
+/**
+ * 关系映射专用会话池：合并 Worker 级 + 当前目录级会话，按 sessionId 去重。
+ * 列表渲染仍使用 allConversations（按目录过滤），这里只为父子关系解析服务，
+ * 避免跨目录转发时父子会话分别落在不同目录而看不到关联标签。
+ */
+const relationConversationPool = computed(() => {
+  const map = new Map<string, ConversationGroup>()
+  for (const conv of workerConversations.value) {
+    map.set(conv.sessionId, conv)
+  }
+  for (const conv of directoryConversations.value) {
+    if (!map.has(conv.sessionId)) {
+      map.set(conv.sessionId, conv)
+    }
+  }
+  return Array.from(map.values())
+})
 const conversationBySessionId = computed(() => {
   const map = new Map<string, ConversationGroup>()
-  for (const conv of allConversations.value) {
+  for (const conv of relationConversationPool.value) {
     map.set(conv.sessionId, conv)
   }
   return map
 })
 const childConversationMap = computed(() => {
   const map = new Map<string, ConversationGroup[]>()
-  for (const conv of allConversations.value) {
+  for (const conv of relationConversationPool.value) {
     if (!conv.parentSessionId) continue
     const existing = map.get(conv.parentSessionId)
     if (existing) {
@@ -6119,6 +6136,28 @@ function handlePageChange(page: number) {
 function handleDirPageChange(page: number) {
   dirTaskPage.value = page - 1
   loadDirectoryTasks()
+}
+
+/**
+ * 打开跨目录/跨 Worker 的关联会话：如果目标 task 不在当前目录/Worker 上下文中，
+ * 先切换到它所在的目录，再打开 pane；这样历史列表也会同步到目标会话所在目录。
+ * 用于"上游" / "子会话" 等关联标签的点击处理。
+ */
+async function viewRelatedTask(task: ClaudeTask) {
+  const targetDirectoryId = task.directoryId || ''
+  const targetWorkerId = task.workerId || ''
+  const needSwitchDirectory = targetDirectoryId && targetDirectoryId !== selectedDirectoryId.value
+  const needSwitchWorker = targetWorkerId && targetWorkerId !== selectedWorkerId.value
+  if (needSwitchDirectory || needSwitchWorker) {
+    if (targetWorkerId && targetDirectoryId) {
+      selectDirectory(targetWorkerId, targetDirectoryId)
+      await nextTick()
+    } else if (targetWorkerId && !targetDirectoryId) {
+      selectWorker(targetWorkerId)
+      await nextTick()
+    }
+  }
+  await viewTask(task)
 }
 
 async function viewTask(task: ClaudeTask) {
