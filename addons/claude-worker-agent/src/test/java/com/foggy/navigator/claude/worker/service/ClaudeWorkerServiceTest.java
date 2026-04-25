@@ -8,6 +8,7 @@ import com.foggy.navigator.claude.worker.model.form.RegisterWorkerForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkerForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.common.model.GeminiConfig;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -205,6 +206,58 @@ class ClaudeWorkerServiceTest {
         service.updateWorker("u1", "w1", form);
 
         assertNull(entity.getCodexConfig());
+    }
+
+    @Test
+    void updateWorker_codexConfigWithoutAuthToken_preservesExistingToken() {
+        ClaudeWorkerEntity entity = buildEntity();
+        entity.setCodexConfig(CodexConfig.builder()
+                .baseUrl("http://old-codex")
+                .authToken("enc-old-codex")
+                .model("old-model")
+                .build());
+        when(workerRepository.findByWorkerIdAndUserId("w1", "u1")).thenReturn(Optional.of(entity));
+        when(workerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        UpdateWorkerForm form = new UpdateWorkerForm();
+        form.setCodexConfig(CodexConfig.builder()
+                .baseUrl("http://new-codex///")
+                .model("new-model")
+                .build());
+
+        service.updateWorker("u1", "w1", form);
+
+        assertNotNull(entity.getCodexConfig());
+        assertEquals("http://new-codex", entity.getCodexConfig().getBaseUrl());
+        assertEquals("enc-old-codex", entity.getCodexConfig().getAuthToken());
+        assertEquals("new-model", entity.getCodexConfig().getModel());
+        verify(credentialEncryptor, never()).encrypt(anyString());
+    }
+
+    @Test
+    void updateWorker_geminiConfigWithoutAuthToken_preservesExistingToken() {
+        ClaudeWorkerEntity entity = buildEntity();
+        entity.setGeminiConfig(GeminiConfig.builder()
+                .baseUrl("http://old-gemini")
+                .authToken("enc-old-gemini")
+                .model("old-model")
+                .build());
+        when(workerRepository.findByWorkerIdAndUserId("w1", "u1")).thenReturn(Optional.of(entity));
+        when(workerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        UpdateWorkerForm form = new UpdateWorkerForm();
+        form.setGeminiConfig(GeminiConfig.builder()
+                .baseUrl("http://new-gemini///")
+                .model("new-model")
+                .build());
+
+        service.updateWorker("u1", "w1", form);
+
+        assertNotNull(entity.getGeminiConfig());
+        assertEquals("http://new-gemini", entity.getGeminiConfig().getBaseUrl());
+        assertEquals("enc-old-gemini", entity.getGeminiConfig().getAuthToken());
+        assertEquals("new-model", entity.getGeminiConfig().getModel());
+        verify(credentialEncryptor, never()).encrypt(anyString());
     }
 
     @Test
