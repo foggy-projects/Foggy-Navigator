@@ -1491,6 +1491,16 @@
         <el-form-item label="Codex 默认模型">
           <el-input v-model="addForm.codexModel" placeholder="如：codex-mini-latest" />
         </el-form-item>
+        <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+        <el-form-item label="Gemini 地址">
+          <el-input v-model="addForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
+        </el-form-item>
+        <el-form-item label="Gemini 认证令牌">
+          <el-input v-model="addForm.geminiAuthToken" type="password" show-password placeholder="Gemini Worker 令牌" />
+        </el-form-item>
+        <el-form-item label="Gemini 默认模型">
+          <el-input v-model="addForm.geminiModel" placeholder="如：gemini-flash" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAddDialog = false">取消</el-button>
@@ -1569,6 +1579,21 @@
         </el-form-item>
         <el-form-item label="Codex 默认模型">
           <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
+        </el-form-item>
+        <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+        <el-form-item label="Gemini 地址">
+          <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
+        </el-form-item>
+        <el-form-item label="Gemini 认证令牌">
+          <el-input
+            v-model="editForm.geminiAuthToken"
+            type="password"
+            show-password
+            :placeholder="selectedWorkerEntity?.geminiAuthTokenConfigured ? '已保存，留空不改' : 'Gemini Worker 令牌'"
+          />
+        </el-form-item>
+        <el-form-item label="Gemini 默认模型">
+          <el-input v-model="editForm.geminiModel" placeholder="如：gemini-flash" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -3214,6 +3239,9 @@ const addForm = ref({
   codexBaseUrl: '',
   codexAuthToken: '',
   codexModel: '',
+  geminiBaseUrl: '',
+  geminiAuthToken: '',
+  geminiModel: '',
 })
 
 const editForm = ref({
@@ -3231,6 +3259,9 @@ const editForm = ref({
   codexBaseUrl: '',
   codexAuthToken: '',
   codexModel: '',
+  geminiBaseUrl: '',
+  geminiAuthToken: '',
+  geminiModel: '',
 })
 
 const addDirForm = ref({
@@ -4495,7 +4526,25 @@ function handleAddCommand(command: string) {
   }
 }
 
-const defaultAddForm = () => ({ name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION', sshUsername: '', sshPort: 22 as number, sshPassword: '', codeServerPublicUrl: '', codeServerInternalUrl: '', codeServerPassword: '', codeServerFolderPrefix: '', codexBaseUrl: '', codexAuthToken: '', codexModel: '' })
+const defaultAddForm = () => ({
+  name: '',
+  baseUrl: '',
+  authToken: '',
+  authMode: 'SUBSCRIPTION',
+  sshUsername: '',
+  sshPort: 22 as number,
+  sshPassword: '',
+  codeServerPublicUrl: '',
+  codeServerInternalUrl: '',
+  codeServerPassword: '',
+  codeServerFolderPrefix: '',
+  codexBaseUrl: '',
+  codexAuthToken: '',
+  codexModel: '',
+  geminiBaseUrl: '',
+  geminiAuthToken: '',
+  geminiModel: '',
+})
 
 async function handleAdd() {
   if (!addForm.value.name || !addForm.value.baseUrl || !addForm.value.authToken) {
@@ -4504,10 +4553,19 @@ async function handleAdd() {
   }
   saving.value = true
   try {
-    const { codexBaseUrl, codexAuthToken, codexModel, ...baseForm } = addForm.value
+    const {
+      codexBaseUrl,
+      codexAuthToken,
+      codexModel,
+      geminiBaseUrl,
+      geminiAuthToken,
+      geminiModel,
+      ...baseForm
+    } = addForm.value
     await workerState.registerWorker({
       ...baseForm,
       ...(codexBaseUrl ? { codexConfig: { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined } } : {}),
+      ...(geminiBaseUrl ? { geminiConfig: { baseUrl: geminiBaseUrl, authToken: geminiAuthToken || undefined, model: geminiModel || undefined } } : {}),
     })
     showAddDialog.value = false
     addForm.value = defaultAddForm()
@@ -4549,6 +4607,13 @@ async function handleEdit() {
       form.codexConfig = { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined }
     } else if (selectedWorkerEntity.value?.codexBaseUrl) {
       form.codexConfig = { baseUrl: '' }
+    }
+    // geminiConfig：有值 → 发送完整对象；原来有值现在清空 → 发送 {baseUrl:''} 清除
+    const { geminiBaseUrl, geminiAuthToken, geminiModel } = editForm.value
+    if (geminiBaseUrl) {
+      form.geminiConfig = { baseUrl: geminiBaseUrl, authToken: geminiAuthToken || undefined, model: geminiModel || undefined }
+    } else if (selectedWorkerEntity.value?.geminiBaseUrl) {
+      form.geminiConfig = { baseUrl: '' }
     }
     await workerState.updateWorker(selectedWorkerId.value, form)
     showEditDialog.value = false
@@ -6751,6 +6816,9 @@ watch(showEditDialog, (val) => {
       codexBaseUrl: selectedWorkerEntity.value.codexBaseUrl || '',
       codexAuthToken: '',
       codexModel: selectedWorkerEntity.value.codexModel || '',
+      geminiBaseUrl: selectedWorkerEntity.value.geminiBaseUrl || '',
+      geminiAuthToken: '',
+      geminiModel: selectedWorkerEntity.value.geminiModel || '',
     }
   }
 })
