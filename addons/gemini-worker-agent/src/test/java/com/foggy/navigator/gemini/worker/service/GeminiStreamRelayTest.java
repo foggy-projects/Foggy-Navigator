@@ -15,12 +15,14 @@ import org.springframework.http.codec.ServerSentEvent;
 
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
@@ -62,9 +64,18 @@ class GeminiStreamRelayTest {
         invokeRelayWorkerEvent("session-1", "local-task-1", event, "gemini-session-1");
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(eventPublisher).publishEvent(captor.capture());
+        verify(eventPublisher, times(2)).publishEvent(captor.capture());
 
-        AgentMessage message = assertInstanceOf(AgentMessage.class, captor.getValue());
+        List<Object> publishedEvents = captor.getAllValues();
+        AgentMessage resultMessage = assertInstanceOf(AgentMessage.class, publishedEvents.get(0));
+        assertEquals(MessageType.TEXT_COMPLETE, resultMessage.getType());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resultPayload = (Map<String, Object>) resultMessage.getPayload();
+        assertEquals("SESSION_ONE", resultPayload.get("content"));
+        assertEquals(null, resultPayload.get("isResult"));
+
+        AgentMessage message = assertInstanceOf(AgentMessage.class, publishedEvents.get(1));
         assertEquals(MessageType.SESSION_END, message.getType());
 
         @SuppressWarnings("unchecked")
@@ -118,6 +129,26 @@ class GeminiStreamRelayTest {
     }
 
     @Test
+    void relayWorkerEventPublishesAssistantTextAsStreamChunk() throws Exception {
+        WorkerEvent event = new WorkerEvent();
+        event.setType("assistant_text");
+        event.setContent("partial text");
+
+        invokeRelayWorkerEvent("session-3", "local-task-3", event, "gemini-session-3");
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+
+        AgentMessage message = assertInstanceOf(AgentMessage.class, captor.getValue());
+        assertEquals(MessageType.TEXT_CHUNK, message.getType());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals("partial text", payload.get("content"));
+        assertEquals("gemini-session-3", payload.get("geminiSessionId"));
+    }
+
+    @Test
     void handleSseEventUpdatesDetectedSessionIdFromEventDataAndRecordsProgress() throws Exception {
         WorkerEvent event = new WorkerEvent();
         event.setType("assistant_text");
@@ -148,7 +179,7 @@ class GeminiStreamRelayTest {
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(eventPublisher).publishEvent(captor.capture());
         AgentMessage message = assertInstanceOf(AgentMessage.class, captor.getValue());
-        assertEquals(MessageType.TEXT_COMPLETE, message.getType());
+        assertEquals(MessageType.TEXT_CHUNK, message.getType());
 
         @SuppressWarnings("unchecked")
         Map<String, Object> payload = (Map<String, Object>) message.getPayload();

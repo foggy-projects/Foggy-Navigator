@@ -170,7 +170,7 @@ public class GeminiStreamRelay {
                 if ("sync_checkpoint".equals(event.getSubtype())) {
                     return;
                 }
-                publishBuilt(mb.textComplete(event.getContent() != null ? event.getContent() : ""));
+                publishBuilt(mb.textChunk(event.getContent() != null ? event.getContent() : ""));
             }
             case "tool_use" -> publishBuilt(mb.toolCallStart(event.getToolUseId(), event.getTool(), event.getInput()));
             case "tool_result" -> {
@@ -179,11 +179,19 @@ public class GeminiStreamRelay {
             }
             case "result" -> {
                 String resultText = firstNonBlank(event.getContent(), event.getResult());
-                mb.result(resultText)
+                publishBuilt(AgentMessageBuilder.create(sessionId, GeminiTaskService.AGENT_ID)
+                        .taskId(taskId)
+                        .put("geminiSessionId", geminiSessionId)
+                        .textComplete(resultText));
+
+                AgentMessageBuilder resultBuilder = AgentMessageBuilder.create(sessionId, GeminiTaskService.AGENT_ID)
+                        .taskId(taskId)
+                        .put("geminiSessionId", geminiSessionId)
+                        .result(resultText)
                         .metrics(event.getCostUsd(), event.getDurationMs(),
                                 event.getInputTokens(), event.getOutputTokens(),
                                 event.getNumTurns(), event.getModel());
-                publishEvent(mb.build(MessageType.SESSION_END));
+                publishEvent(resultBuilder.build(MessageType.SESSION_END));
                 taskService.completeTask(
                         taskId,
                         event.getTaskId(),
