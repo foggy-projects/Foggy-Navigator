@@ -138,19 +138,20 @@ public class ClaudeWorkerService {
             entity.setCodeServerFolderPrefix(form.getCodeServerFolderPrefix().isEmpty() ? null : form.getCodeServerFolderPrefix());
         }
 
-        // Codex 配置: null=不修改，baseUrl 为空=清除整个配置
+        // Codex 配置: null=不修改，baseUrl 为空=清除整个配置，authToken 留空=保留旧令牌
         if (form.getCodexConfig() != null) {
             if (form.getCodexConfig().getBaseUrl() == null || form.getCodexConfig().getBaseUrl().isBlank()) {
                 entity.setCodexConfig(null);
             } else {
-                entity.setCodexConfig(encryptCodexConfig(form.getCodexConfig()));
+                entity.setCodexConfig(mergeCodexConfig(entity.getCodexConfig(), form.getCodexConfig()));
             }
         }
+        // Gemini 配置: null=不修改，baseUrl 为空=清除整个配置，authToken 留空=保留旧令牌
         if (form.getGeminiConfig() != null) {
             if (form.getGeminiConfig().getBaseUrl() == null || form.getGeminiConfig().getBaseUrl().isBlank()) {
                 entity.setGeminiConfig(null);
             } else {
-                entity.setGeminiConfig(encryptGeminiConfig(form.getGeminiConfig()));
+                entity.setGeminiConfig(mergeGeminiConfig(entity.getGeminiConfig(), form.getGeminiConfig()));
             }
         }
 
@@ -289,9 +290,21 @@ public class ClaudeWorkerService {
      */
     private CodexConfig encryptCodexConfig(CodexConfig input) {
         return CodexConfig.builder()
-                .baseUrl(input.getBaseUrl() != null ? input.getBaseUrl().replaceAll("/+$", "") : null)
+                .baseUrl(normalizeBaseUrl(input.getBaseUrl()))
                 .authToken(input.getAuthToken() != null && !input.getAuthToken().isBlank()
                         ? encrypt(input.getAuthToken()) : null)
+                .model(input.getModel())
+                .build();
+    }
+
+    private CodexConfig mergeCodexConfig(CodexConfig stored, CodexConfig input) {
+        String authToken = stored != null ? stored.getAuthToken() : null;
+        if (input.getAuthToken() != null && !input.getAuthToken().isBlank()) {
+            authToken = encrypt(input.getAuthToken());
+        }
+        return CodexConfig.builder()
+                .baseUrl(normalizeBaseUrl(input.getBaseUrl()))
+                .authToken(authToken)
                 .model(input.getModel())
                 .build();
     }
@@ -301,11 +314,27 @@ public class ClaudeWorkerService {
      */
     private GeminiConfig encryptGeminiConfig(GeminiConfig input) {
         return GeminiConfig.builder()
-                .baseUrl(input.getBaseUrl() != null ? input.getBaseUrl().replaceAll("/+$", "") : null)
+                .baseUrl(normalizeBaseUrl(input.getBaseUrl()))
                 .authToken(input.getAuthToken() != null && !input.getAuthToken().isBlank()
                         ? encrypt(input.getAuthToken()) : null)
                 .model(input.getModel())
                 .build();
+    }
+
+    private GeminiConfig mergeGeminiConfig(GeminiConfig stored, GeminiConfig input) {
+        String authToken = stored != null ? stored.getAuthToken() : null;
+        if (input.getAuthToken() != null && !input.getAuthToken().isBlank()) {
+            authToken = encrypt(input.getAuthToken());
+        }
+        return GeminiConfig.builder()
+                .baseUrl(normalizeBaseUrl(input.getBaseUrl()))
+                .authToken(authToken)
+                .model(input.getModel())
+                .build();
+    }
+
+    private String normalizeBaseUrl(String baseUrl) {
+        return baseUrl != null ? baseUrl.replaceAll("/+$", "") : null;
     }
 
     private WorkerDTO toDTO(ClaudeWorkerEntity entity) {
