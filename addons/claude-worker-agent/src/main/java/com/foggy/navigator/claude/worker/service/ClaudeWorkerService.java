@@ -9,6 +9,7 @@ import com.foggy.navigator.claude.worker.model.form.RegisterWorkerForm;
 import com.foggy.navigator.claude.worker.model.form.UpdateWorkerForm;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.common.model.GeminiConfig;
 import com.foggy.navigator.common.security.CredentialEncryptor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -72,6 +73,9 @@ public class ClaudeWorkerService {
         // Codex 配置
         if (form.getCodexConfig() != null) {
             entity.setCodexConfig(encryptCodexConfig(form.getCodexConfig()));
+        }
+        if (form.getGeminiConfig() != null) {
+            entity.setGeminiConfig(encryptGeminiConfig(form.getGeminiConfig()));
         }
 
         workerRepository.save(entity);
@@ -140,6 +144,13 @@ public class ClaudeWorkerService {
                 entity.setCodexConfig(null);
             } else {
                 entity.setCodexConfig(encryptCodexConfig(form.getCodexConfig()));
+            }
+        }
+        if (form.getGeminiConfig() != null) {
+            if (form.getGeminiConfig().getBaseUrl() == null || form.getGeminiConfig().getBaseUrl().isBlank()) {
+                entity.setGeminiConfig(null);
+            } else {
+                entity.setGeminiConfig(encryptGeminiConfig(form.getGeminiConfig()));
             }
         }
 
@@ -225,6 +236,20 @@ public class ClaudeWorkerService {
     }
 
     /**
+     * 获取解密后的 Gemini 配置
+     */
+    public GeminiConfig getDecryptedGeminiConfig(ClaudeWorkerEntity entity) {
+        GeminiConfig stored = entity.getGeminiConfig();
+        if (stored == null) return null;
+        return GeminiConfig.builder()
+                .baseUrl(stored.getBaseUrl())
+                .authToken(stored.getAuthToken() != null && !stored.getAuthToken().isBlank()
+                        ? decrypt(stored.getAuthToken()) : null)
+                .model(stored.getModel())
+                .build();
+    }
+
+    /**
      * 创建 Worker 客户端
      */
     public ClaudeWorkerClient createClient(ClaudeWorkerEntity entity) {
@@ -271,8 +296,21 @@ public class ClaudeWorkerService {
                 .build();
     }
 
+    /**
+     * 加密 Gemini 配置中的 authToken
+     */
+    private GeminiConfig encryptGeminiConfig(GeminiConfig input) {
+        return GeminiConfig.builder()
+                .baseUrl(input.getBaseUrl() != null ? input.getBaseUrl().replaceAll("/+$", "") : null)
+                .authToken(input.getAuthToken() != null && !input.getAuthToken().isBlank()
+                        ? encrypt(input.getAuthToken()) : null)
+                .model(input.getModel())
+                .build();
+    }
+
     private WorkerDTO toDTO(ClaudeWorkerEntity entity) {
         CodexConfig cc = entity.getCodexConfig();
+        GeminiConfig gc = entity.getGeminiConfig();
         return WorkerDTO.builder()
                 .workerId(entity.getWorkerId())
                 .name(entity.getName())
@@ -293,6 +331,9 @@ public class ClaudeWorkerService {
                 .codexBaseUrl(cc != null ? cc.getBaseUrl() : null)
                 .codexModel(cc != null ? cc.getModel() : null)
                 .codexAuthTokenConfigured(cc != null && cc.getAuthToken() != null && !cc.getAuthToken().isBlank())
+                .geminiBaseUrl(gc != null ? gc.getBaseUrl() : null)
+                .geminiModel(gc != null ? gc.getModel() : null)
+                .geminiAuthTokenConfigured(gc != null && gc.getAuthToken() != null && !gc.getAuthToken().isBlank())
                 .build();
     }
 }

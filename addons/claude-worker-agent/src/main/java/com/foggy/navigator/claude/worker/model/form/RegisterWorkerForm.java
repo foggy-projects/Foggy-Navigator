@@ -1,6 +1,7 @@
 package com.foggy.navigator.claude.worker.model.form;
 
 import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.common.model.GeminiConfig;
 import lombok.Data;
 
 /**
@@ -21,4 +22,6 @@ public class RegisterWorkerForm {
     private String codeServerFolderPrefix;
     /** Codex 配置（可选，含 baseUrl/authToken/model） */
     private CodexConfig codexConfig;
+    /** Gemini 配置（可选，含 baseUrl/authToken/model） */
+    private GeminiConfig geminiConfig;
 }

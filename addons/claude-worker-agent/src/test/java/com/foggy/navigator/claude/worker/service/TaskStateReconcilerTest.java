@@ -136,7 +136,7 @@ class TaskStateReconcilerTest {
     }
 
     @Test
-    void reconcileAll_activeTask_cliDead_workerClosed_seqAligned_waits() {
+    void reconcileAll_activeTask_cliDead_workerClosed_seqAligned_completesStaleTask() {
         ClaudeWorkerEntity worker = buildWorker("w1");
         when(workerRepository.findAll()).thenReturn(List.of(worker));
         when(workerService.createClient(worker)).thenReturn(workerClient);
@@ -157,8 +157,8 @@ class TaskStateReconcilerTest {
 
         reconciler.reconcileAll();
 
-        // Should NOT mark as completed — just wait
-        verify(taskService, never()).reconcilerCompleteTask(anyString(), anyString());
+        verify(taskService).reconcilerCompleteTask("task-1",
+                "Worker stream closed and all events were acknowledged by Java");
     }
 
     @Test

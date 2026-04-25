@@ -227,6 +227,28 @@ describe('createChatState', () => {
       expect(state.messages.value[0].content).toBe('Task stream reconnected')
     })
 
+    it('deduplicates repeated reconnected hints for the same task', () => {
+      state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {
+        content: 'Task stream reconnected',
+        subtype: 'reconnected',
+        taskId: 'task-1',
+      }))
+      state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {
+        content: 'Task stream reconnected',
+        subtype: 'reconnected',
+        taskId: 'task-1',
+      }))
+      state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {
+        content: 'Task stream reconnected',
+        subtype: 'reconnected',
+        taskId: 'task-2',
+      }))
+
+      expect(state.messages.value).toHaveLength(2)
+      expect(state.messages.value[0].raw).toMatchObject({ subtype: 'reconnected', taskId: 'task-1' })
+      expect(state.messages.value[1].raw).toMatchObject({ subtype: 'reconnected', taskId: 'task-2' })
+    })
+
     it('skips STATE_SYNC with no status and no content', () => {
       state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {}))
 

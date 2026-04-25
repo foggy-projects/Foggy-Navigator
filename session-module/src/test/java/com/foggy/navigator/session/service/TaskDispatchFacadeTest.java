@@ -181,6 +181,51 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_usesDirectProviderRouteWhenModelConfigTargetsGemini() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-gemini-1")
+                .directoryId("dir-gemini-1")
+                .prompt("hi gemini")
+                .model("gemini-flash")
+                .modelConfigId("cfg-gemini")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("GEMINI_CLI");
+
+        DispatchTaskDTO directTask = DispatchTaskDTO.builder()
+                .taskId("task-gemini-1")
+                .providerType("gemini-worker")
+                .workerId("worker-gemini-1")
+                .directoryId("dir-gemini-1")
+                .model("gemini-flash")
+                .build();
+
+        when(llmModelManager.getModelConfig("cfg-gemini")).thenReturn(Optional.of(modelConfig));
+        when(taskQueryProvider.getProviderType()).thenReturn("gemini-worker");
+        when(taskQueryProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1")))
+                .thenReturn(directTask);
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("task-gemini-1", result.getTaskId());
+        assertEquals("gemini-worker", result.getProviderType());
+        verify(taskQueryProvider).createTaskDirect(
+                argThat(params -> "worker-gemini-1".equals(params.get("workerId"))
+                        && "dir-gemini-1".equals(params.get("directoryId"))
+                        && "gemini-flash".equals(params.get("model"))
+                        && "cfg-gemini".equals(params.get("modelConfigId"))),
+                eq("user-1"),
+                eq("tenant-1"));
+        verifyNoInteractions(agentResolver, bindingService, agent);
+    }
+
+    @Test
     void createTask_a2aRouteIncludesParentSessionIdFromCreatedSession() {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .sessionId("session-child-1")
@@ -439,6 +484,44 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void resumeTask_routesGeminiSessionResumeToProvider() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-gemini-1")
+                .sessionId("session-gemini-1")
+                .prompt("continue gemini")
+                .providerType("gemini-worker")
+                .model("gemini-flash")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .sessionId("session-gemini-1")
+                .requestSource("UI")
+                .build();
+
+        DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
+                .taskId("task-gemini-2")
+                .sessionId("session-gemini-1")
+                .geminiSessionId("gemini-session-1")
+                .providerType("gemini-worker")
+                .build();
+
+        when(taskQueryProvider.getProviderType()).thenReturn("gemini-worker");
+        when(taskQueryProvider.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(resumedTask);
+
+        DispatchTaskDTO result = facade.resumeTask(request, context);
+
+        assertEquals("task-gemini-2", result.getTaskId());
+        assertEquals("gemini-session-1", result.getGeminiSessionId());
+        verify(taskQueryProvider).resumeTask(eq("user-1"), eq("tenant-1"),
+                argThat(params -> "session-gemini-1".equals(params.get("sessionId"))
+                        && "continue gemini".equals(params.get("prompt"))
+                        && "worker-gemini-1".equals(params.get("workerId"))
+                        && "gemini-flash".equals(params.get("model"))));
+        verifyNoInteractions(agentResolver);
+    }
+
+    @Test
     void resumeTask_prefersSessionBoundProviderTypeOverLookupFallback() {
         TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
         TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
@@ -485,6 +568,57 @@ class TaskDispatchFacadeTest {
                         && "continue".equals(params.get("prompt"))));
         verifyNoInteractions(agentResolver);
         verify(claudeProvider, never()).resumeTask(anyString(), anyString(), any());
+    }
+
+    @Test
+    void resumeTask_prefersSessionBoundGeminiProviderTypeOverLegacyModelConfigLookup() {
+        TaskQueryProvider geminiProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider codexProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(geminiProvider, codexProvider), llmModelManager);
+
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-gemini-1")
+                .sessionId("session-gemini-legacy")
+                .prompt("continue gemini")
+                .modelConfigId("cfg-codex")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .sessionId("session-gemini-legacy")
+                .requestSource("UI")
+                .build();
+
+        SessionEntity session = new SessionEntity();
+        session.setId("session-gemini-legacy");
+        session.setUserId("user-1");
+        session.setProviderType("gemini-worker");
+        when(sessionRepository.findById("session-gemini-legacy")).thenReturn(Optional.of(session));
+
+        LlmModelConfigDTO codexConfig = new LlmModelConfigDTO();
+        codexConfig.setWorkerBackend("OPENAI_CODEX");
+        when(llmModelManager.getModelConfig("cfg-codex")).thenReturn(Optional.of(codexConfig));
+
+        DispatchTaskDTO resumedTask = DispatchTaskDTO.builder()
+                .taskId("task-gemini-bound")
+                .providerType("gemini-worker")
+                .sessionId("session-gemini-legacy")
+                .geminiSessionId("gemini-session-bound")
+                .build();
+
+        when(geminiProvider.getProviderType()).thenReturn("gemini-worker");
+        when(geminiProvider.resumeTask(eq("user-1"), eq("tenant-1"), any())).thenReturn(resumedTask);
+
+        DispatchTaskDTO result = facade.resumeTask(request, context);
+
+        assertEquals("task-gemini-bound", result.getTaskId());
+        assertEquals("gemini-worker", result.getProviderType());
+        verify(geminiProvider).resumeTask(eq("user-1"), eq("tenant-1"),
+                argThat(params -> "session-gemini-legacy".equals(params.get("sessionId"))
+                        && !params.containsKey("modelConfigId")));
+        verify(codexProvider, never()).resumeTask(anyString(), anyString(), any());
+        verifyNoInteractions(agentResolver);
     }
 
     @Test

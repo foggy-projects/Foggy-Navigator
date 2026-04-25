@@ -220,13 +220,22 @@ export function createChatState(): ChatState {
           break
         }
         if (subtype === 'reconnected') {
+          const taskId = raw.taskId as string | undefined
+          const alreadyRendered = messages.value.some((m) => {
+            if (m.type !== AipMessageType.STATE_SYNC) return false
+            const msgRaw = m.raw as Record<string, unknown> | undefined
+            if (msgRaw?.subtype !== 'reconnected') return false
+            if (!taskId) return true
+            return msgRaw.taskId === taskId
+          })
+          if (alreadyRendered) break
           // Stream reconnected hint — lightweight divider (same as compression hint)
           messages.value.push({
             id: aip.messageId,
             type: aip.type,
             sender: 'system',
             content: (raw.content as string) || 'Task stream reconnected',
-            raw: { subtype },
+            raw: taskId ? { subtype, taskId } : { subtype },
             timestamp: aip.timestamp,
           })
           break

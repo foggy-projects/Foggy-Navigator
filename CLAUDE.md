@@ -35,6 +35,7 @@ packages/
 ```
 tools/
 ├── claude-agent-worker/    # Claude Worker Python 服务
+├── gemini-agent-worker/    # Gemini Worker TypeScript 服务
 ├── langgraph-biz-worker/   # LangGraph 业务型 Worker Python 服务（Skill Runtime + Frame 生命周期）
 └── mock-llm-service/       # Mock Anthropic 端点（L3 集成测试用）
 ```
@@ -51,6 +52,8 @@ tools/
 | `start-frontend.ps1` | 前端开发服务器 | 5174 |
 | `tools/claude-agent-worker/start.ps1` | Claude Worker | 3031 |
 | `tools/claude-agent-worker/stop.ps1` | 停止 Claude Worker | - |
+| `tools/gemini-agent-worker/start.ps1` | Gemini Worker | 3071 |
+| `tools/gemini-agent-worker/stop.ps1` | 停止 Gemini Worker | - |
 | `tools/langgraph-biz-worker/start.ps1` | LangGraph Biz Worker | 3061 |
 | `tools/langgraph-biz-worker/stop.ps1` | 停止 LangGraph Biz Worker | - |
 

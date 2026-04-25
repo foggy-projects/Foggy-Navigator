@@ -65,6 +65,12 @@
             <version>${project.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>gemini-worker-agent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- LangGraph Biz Worker - 业务 Agent 工作器模块 -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>

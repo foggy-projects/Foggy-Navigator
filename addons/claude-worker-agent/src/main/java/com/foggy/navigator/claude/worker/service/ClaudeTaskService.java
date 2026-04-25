@@ -1331,6 +1331,13 @@ public class ClaudeTaskService implements TaskQueryProvider {
             // 校验 Worker 是否有权使用该模型
             llmModelManager.validateModelAccessForWorker(modelConfigId, workerId);
             LlmModelConfigDTO modelConfig = llmModelManager.getModelConfig(modelConfigId).orElse(null);
+            if (isClaudeSubscriptionConfig(modelConfig)) {
+                log.info("Auth resolved from platform model config as Claude subscription: {}", modelConfig.getName());
+                bindAuthToSession(
+                        sessionId, workerId, userId, "SUBSCRIPTION", null, null,
+                        modelConfigId);
+                return new String[]{null, null, null};
+            }
             if (modelConfig != null && Boolean.TRUE.equals(modelConfig.getHasApiKey())) {
                 String decryptedApiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
                 log.info("Auth resolved from platform model config: {}", modelConfig.getName());
@@ -1356,6 +1363,13 @@ public class ClaudeTaskService implements TaskQueryProvider {
                     // 校验 Worker 是否有权使用该模型（模型 scope 可能在绑定后变更）
                     llmModelManager.validateModelAccessForWorker(dir.getDefaultModelConfigId(), workerId);
                     LlmModelConfigDTO dirModelConfig = llmModelManager.getModelConfig(dir.getDefaultModelConfigId()).orElse(null);
+                    if (isClaudeSubscriptionConfig(dirModelConfig)) {
+                        log.info("Auth resolved from directory platform model config as Claude subscription: {}", dirModelConfig.getName());
+                        bindAuthToSession(
+                                sessionId, workerId, userId, "SUBSCRIPTION", null, null,
+                                dir.getDefaultModelConfigId());
+                        return new String[]{null, null, null};
+                    }
                     if (dirModelConfig != null && Boolean.TRUE.equals(dirModelConfig.getHasApiKey())) {
                         String decryptedApiKey = llmModelManager.getDecryptedApiKey(dir.getDefaultModelConfigId());
                         log.info("Auth resolved from directory platform model config: {}", dirModelConfig.getName());
@@ -1386,6 +1400,13 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
 
         return new String[]{null, null, null};
+    }
+
+    private boolean isClaudeSubscriptionConfig(LlmModelConfigDTO modelConfig) {
+        return modelConfig != null
+                && "CLAUDE_CODE".equals(modelConfig.getWorkerBackend())
+                && (modelConfig.getBaseUrl() == null || modelConfig.getBaseUrl().isBlank())
+                && !Boolean.TRUE.equals(modelConfig.getHasApiKey());
     }
 
     /**

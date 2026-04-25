@@ -40,6 +40,7 @@
         <module>addons/claude-worker-agent</module>
         <module>addons/langgraph-biz-worker</module>
         <module>addons/codex-worker-agent</module>
+        <module>addons/gemini-worker-agent</module>
         <module>addons/echo-agent</module>
         <module>addons/task-assistant</module>
         <module>monitoring-module</module>

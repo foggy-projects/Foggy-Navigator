@@ -227,12 +227,15 @@ public class TaskStateReconciler {
                             streamRelay.reconnectTask(taskId, task.getSessionId(), workerId);
                             recoveredFromWorker = true;
                         } else if (closed && workerLatestSeq > 0 && workerLatestSeq == javaLatestSeq) {
-                            // Worker 已 closed 且 seq 一致 → Java 已有全部事件，可能是 completion 处理延迟
-                            // 再给一次宽限（不累加 miss），让 Java 侧处理完成事件
-                            log.info("Reconciler: task={} CLI exited, Worker closed, seq aligned (seq={}), "
-                                            + "waiting for Java-side completion processing",
+                            // Worker 已 closed 且 seq 一致 → Java 已收齐全部事件。
+                            // 如果 DB 仍是活跃态，说明 completion/error 事件没有成功收口，直接终结任务，
+                            // 避免下一轮继续等待或重复触发 reconnect 提示。
+                            log.info("Reconciler: task={} CLI exited, Worker closed, seq aligned (seq={}) - "
+                                            + "marking COMPLETED to close stale active state",
                                     taskId, workerLatestSeq);
                             cliDeadMissCount.remove(taskId);
+                            taskService.reconcilerCompleteTask(taskId,
+                                    "Worker stream closed and all events were acknowledged by Java");
                             recoveredFromWorker = true;
                         }
                     }

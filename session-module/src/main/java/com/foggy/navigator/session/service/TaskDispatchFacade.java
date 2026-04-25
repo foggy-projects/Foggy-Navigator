@@ -652,6 +652,7 @@ public class TaskDispatchFacade {
                     .directoryId(strVal(meta, "directoryId"))
                     .claudeSessionId(strVal(meta, "claudeSessionId"))
                     .codexThreadId(strVal(meta, "codexThreadId"))
+                    .geminiSessionId(strVal(meta, "geminiSessionId"))
                     .model(strVal(meta, "model"))
                     .modelConfigId(strVal(meta, "modelConfigId"));
         }
@@ -1090,6 +1091,7 @@ public class TaskDispatchFacade {
                 .directoryName(directoryId == null ? null : directoryNames.get(directoryId))
                 .claudeSessionId(asString(state.get("claudeSessionId")))
                 .codexThreadId(asString(state.get("codexThreadId")))
+                .geminiSessionId(asString(state.get("geminiSessionId")))
                 .contextId(asString(state.get("contextId")))
                 .modelConfigId(entity.getModelConfigId())
                 .fileCheckpointingEnabled(asBoolean(state.get("fileCheckpointingEnabled")));
@@ -1380,7 +1382,7 @@ public class TaskDispatchFacade {
         putIfNotBlank(params, "permissionMode", request.getPermissionMode());
         putIfNotBlank(params, "agentTeamsConfigId", request.getAgentTeamsConfigId());
         putIfNotBlank(params, "agentTeamsJson", request.getAgentTeamsJson());
-        // claudeSessionId / codexThreadId 不再透传 — Provider 从 SessionEntity.providerStateJson 恢复
+        // claudeSessionId / codexThreadId / geminiSessionId 不再透传 — Provider 从 SessionEntity.providerStateJson 恢复
         if (request.getMaxTurns() != null) {
             params.put("maxTurns", request.getMaxTurns());
         }
@@ -1401,6 +1403,7 @@ public class TaskDispatchFacade {
         return switch (workerBackend) {
             case "OPENAI_CODEX" -> "codex-worker";
             case "CLAUDE_CODE" -> "claude-worker";
+            case "GEMINI_CLI" -> "gemini-worker";
             default -> null;
         };
     }

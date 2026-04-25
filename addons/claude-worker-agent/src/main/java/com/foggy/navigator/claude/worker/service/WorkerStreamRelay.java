@@ -86,6 +86,8 @@ public class WorkerStreamRelay {
     /** 每个任务的重连互斥锁，防止 doOnComplete/doOnError/Reconciler 并发触发多次重连 */
     private final ConcurrentHashMap<String, AtomicBoolean> reconnecting = new ConcurrentHashMap<>();
 
+    private static final java.util.Set<String> TERMINAL_STATES = java.util.Set.of("COMPLETED", "FAILED", "ABORTED");
+
     @Async("sessionEventExecutor")
     @EventListener(condition = "#event.providerType == 'claude-worker'")
     public void onTaskStart(WorkerTaskStartEvent event) {
@@ -199,6 +201,11 @@ public class WorkerStreamRelay {
                 log.warn("reconnectTask: task {} not found in repository", taskId);
                 return;
             }
+            if (!isRecoverableTaskStatus(entity.getStatus())) {
+                log.info("reconnectTask: task {} is not recoverable (status={}), skipping",
+                        taskId, entity.getStatus());
+                return;
+            }
 
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedClaudeSessionId = new AtomicReference<>(entity.getClaudeSessionId());
@@ -211,6 +218,10 @@ public class WorkerStreamRelay {
             int persistedAckSeq = entity.getLastAckedSeq() != null ? entity.getLastAckedSeq() : 0;
             int ackSeq = Math.max(memoryAckSeq, persistedAckSeq);
             String subscribeTaskId = resolveWorkerTaskLookupId(entity);
+            if (isClosedAndAligned(client, subscribeTaskId, ackSeq, taskId, "reconnectTask")) {
+                lastAckedSeq.remove(taskId);
+                return;
+            }
             log.info("reconnectTask ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
             Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(subscribeTaskId, ackSeq);
 
@@ -361,7 +372,7 @@ public class WorkerStreamRelay {
                     var taskOpt = taskRepository.findByTaskId(taskId);
                     if (taskOpt.isPresent()) {
                         String status = taskOpt.get().getStatus();
-                        if ("COMPLETED".equals(status) || "FAILED".equals(status) || "ABORTED".equals(status)) {
+                        if (TERMINAL_STATES.contains(status)) {
                             log.info("Task {} already in terminal state ({}), skipping reconnect", taskId, status);
                             lastAckedSeq.remove(taskId);
                             return;
@@ -436,7 +447,7 @@ public class WorkerStreamRelay {
             var taskOpt = taskRepository.findByTaskId(taskId);
             if (taskOpt.isEmpty()) return false;
             String status = taskOpt.get().getStatus();
-            if (!"RUNNING".equals(status) && !"AWAITING_PERMISSION".equals(status)) {
+            if (!isRecoverableTaskStatus(status)) {
                 return false;
             }
 
@@ -452,7 +463,7 @@ public class WorkerStreamRelay {
             var freshTaskOpt = taskRepository.findByTaskId(taskId);
             if (freshTaskOpt.isPresent()) {
                 String freshStatus = freshTaskOpt.get().getStatus();
-                if (!"RUNNING".equals(freshStatus) && !"AWAITING_PERMISSION".equals(freshStatus)) {
+                if (!isRecoverableTaskStatus(freshStatus)) {
                     log.info("Task {} status changed to {} during reconnect backoff, aborting reconnect", taskId, freshStatus);
                     return false;
                 }
@@ -472,6 +483,10 @@ public class WorkerStreamRelay {
             int persistedAckSeq = entity != null && entity.getLastAckedSeq() != null ? entity.getLastAckedSeq() : 0;
             int ackSeq = Math.max(memoryAckSeq, persistedAckSeq);
             String subscribeTaskId = resolveWorkerTaskLookupId(entity != null ? entity : taskOpt.get());
+            if (isClosedAndAligned(client, subscribeTaskId, ackSeq, taskId, "attemptReconnect")) {
+                lastAckedSeq.remove(taskId);
+                return false;
+            }
             log.info("attemptReconnect ack_seq={} for task {} (tracker={})", ackSeq, taskId, seqTracker);
             Flux<ServerSentEvent<String>> sseFlux = client.subscribeToTask(subscribeTaskId, ackSeq);
 
@@ -500,6 +515,30 @@ public class WorkerStreamRelay {
         } finally {
             guard.set(false);
         }
+    }
+
+    private boolean isRecoverableTaskStatus(String status) {
+        return "RUNNING".equals(status) || "AWAITING_PERMISSION".equals(status);
+    }
+
+    private boolean isClosedAndAligned(ClaudeWorkerClient client, String workerTaskId, int ackSeq,
+                                       String taskId, String source) {
+        try {
+            Map<String, Object> status = client.getTaskStatus(workerTaskId)
+                    .block(java.time.Duration.ofSeconds(5));
+            if (status == null) return false;
+            boolean closed = Boolean.TRUE.equals(status.get("closed"));
+            int latestSeq = ((Number) status.getOrDefault("latest_seq", 0)).intValue();
+            if (closed && latestSeq <= ackSeq) {
+                log.info("{}: task {} Worker stream already closed and aligned (latestSeq={}, ackSeq={}), "
+                        + "skipping SSE reconnect", source, taskId, latestSeq, ackSeq);
+                return true;
+            }
+        } catch (Exception e) {
+            log.debug("{}: cannot check Worker status before reconnect for task {}: {}",
+                    source, taskId, e.getMessage());
+        }
+        return false;
     }
 
     /**

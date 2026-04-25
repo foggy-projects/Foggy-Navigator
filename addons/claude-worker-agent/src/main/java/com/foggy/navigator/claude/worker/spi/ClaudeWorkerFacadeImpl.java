@@ -15,6 +15,7 @@ import com.foggy.navigator.claude.worker.service.ClaudeWorkerService;
 import com.foggy.navigator.claude.worker.service.WorkerStreamRelay;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.common.model.GeminiConfig;
 import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.common.dto.UserDTO;
 import com.foggy.navigator.spi.auth.UserAuthService;
@@ -205,6 +206,12 @@ public class ClaudeWorkerFacadeImpl implements ClaudeWorkerFacade {
 
         result.put("taskId", taskId);
         return result;
+    }
+
+    @Override
+    public GeminiConfig getGeminiConfig(String workerId) {
+        ClaudeWorkerEntity entity = workerService.getWorkerEntity(workerId);
+        return workerService.getDecryptedGeminiConfig(entity);
     }
 
     @Override

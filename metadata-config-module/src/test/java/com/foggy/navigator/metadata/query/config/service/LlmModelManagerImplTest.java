@@ -86,4 +86,65 @@ class LlmModelManagerImplTest {
 
         assertFalse(Boolean.TRUE.equals(dto.getHasApiKey()));
     }
+
+    @Test
+    void updateModelConfig_clearsStoredApiKeyForClaudeSubscriptionMode() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-2");
+        entity.setTenantId("tenant-1");
+        entity.setCategory(LlmModelCategory.CODING);
+        entity.setWorkerBackend("CLAUDE_CODE");
+        entity.setBaseUrl(null);
+        entity.setApiKey("encrypted-old-key");
+        entity.setModelName("opus");
+
+        LlmModelConfigForm form = new LlmModelConfigForm();
+        form.setWorkerBackend("CLAUDE_CODE");
+        form.setBaseUrl("");
+        form.setModelName("opus");
+
+        when(llmModelRepo.findById("cfg-2")).thenReturn(Optional.of(entity));
+
+        service.updateModelConfig("cfg-2", form);
+
+        assertNull(entity.getApiKey());
+        verify(llmModelRepo).save(entity);
+        verifyNoInteractions(credentialEncryptor);
+    }
+
+    @Test
+    void getModelConfig_hidesStaleApiKeyForClaudeSubscriptionMode() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-2");
+        entity.setTenantId("tenant-1");
+        entity.setName("claude-subscription");
+        entity.setCategory(LlmModelCategory.CODING);
+        entity.setWorkerBackend("CLAUDE_CODE");
+        entity.setBaseUrl(null);
+        entity.setApiKey("encrypted-old-key");
+        entity.setModelName("opus");
+        entity.setIsDefault(false);
+
+        when(llmModelRepo.findById("cfg-2")).thenReturn(Optional.of(entity));
+
+        LlmModelConfigDTO dto = service.getModelConfig("cfg-2").orElseThrow();
+
+        assertFalse(Boolean.TRUE.equals(dto.getHasApiKey()));
+    }
+
+    @Test
+    void getDecryptedApiKey_returnsNullForClaudeSubscriptionMode() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-3");
+        entity.setTenantId("tenant-1");
+        entity.setWorkerBackend("CLAUDE_CODE");
+        entity.setBaseUrl(null);
+        entity.setApiKey("encrypted-old-key");
+        entity.setModelName("sonnet");
+
+        when(llmModelRepo.findById("cfg-3")).thenReturn(Optional.of(entity));
+
+        assertNull(service.getDecryptedApiKey("cfg-3"));
+        verifyNoInteractions(credentialEncryptor);
+    }
 }
