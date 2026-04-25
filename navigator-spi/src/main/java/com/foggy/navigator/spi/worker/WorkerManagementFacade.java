@@ -1,6 +1,7 @@
 package com.foggy.navigator.spi.worker;
 
 import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.common.model.GeminiConfig;
 
 import java.util.List;
 import java.util.Map;
@@ -66,6 +67,13 @@ public interface WorkerManagementFacade {
      * 获取 Worker 的 Codex 配置（authToken 已解密）
      */
     default CodexConfig getCodexConfig(String workerId) {
+        return null;
+    }
+
+    /**
+     * 获取 Worker 的 Gemini 配置（authToken 已解密）
+     */
+    default GeminiConfig getGeminiConfig(String workerId) {
         return null;
     }
 

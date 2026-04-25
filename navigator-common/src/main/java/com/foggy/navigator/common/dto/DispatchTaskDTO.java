@@ -47,6 +47,8 @@ public class DispatchTaskDTO {
     private String claudeSessionId;
     /** Codex: 线程 ID */
     private String codexThreadId;
+    /** Gemini: 会话 ID */
+    private String geminiSessionId;
     /** Claude: 检查点 JSON */
     private String checkpoints;
     /** Claude: 文件检查点开关 */

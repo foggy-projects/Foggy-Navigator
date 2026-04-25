@@ -67,7 +67,7 @@ export interface RoutePayload {
 
 // ===== Worker 后端类型 =====
 
-export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX'
+export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX' | 'GEMINI_CLI'
 
 // ===== Claude Worker 类型 =====
 
@@ -93,6 +93,10 @@ export interface ClaudeWorker {
   codexBaseUrl?: string
   codexModel?: string
   codexAuthTokenConfigured?: boolean
+  /** Gemini Worker 配置 */
+  geminiBaseUrl?: string
+  geminiModel?: string
+  geminiAuthTokenConfigured?: boolean
 }
 
 /** Claude 任务 */
@@ -108,6 +112,7 @@ export interface ClaudeTask {
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED' | 'AWAITING_PERMISSION'
   claudeSessionId?: string
   codexThreadId?: string
+  geminiSessionId?: string
   providerType?: string
   costUsd?: number
   inputTokens?: number
@@ -481,9 +486,10 @@ export interface CliProcessInfo {
   memory_mb: number
   started_at: string
   is_orphan: boolean
-  process_type?: 'claude' | 'codex'
+  process_type?: 'claude' | 'codex' | 'gemini'
   claude_session_id?: string
   codex_thread_id?: string
+  gemini_session_id?: string
   foggy_task_id?: string
   foggy_session_id?: string
   /** LLM model used by this process (e.g. claude-sonnet-4-20250514) */

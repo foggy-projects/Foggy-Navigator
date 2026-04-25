@@ -33,4 +33,10 @@ public class WorkerDTO {
     private String codexModel;
     /** Codex 认证令牌是否已配置 */
     private boolean codexAuthTokenConfigured;
+    /** Gemini 配置 URL */
+    private String geminiBaseUrl;
+    /** Gemini 默认模型 */
+    private String geminiModel;
+    /** Gemini 认证令牌是否已配置 */
+    private boolean geminiAuthTokenConfigured;
 }

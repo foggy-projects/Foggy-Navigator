@@ -81,6 +81,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/claude-workers", "/api/v1/claude-workers/**").permitAll()
                         .requestMatchers("/api/v1/codex-workers", "/api/v1/codex-workers/**").permitAll()
                         .requestMatchers("/api/v1/langgraph-workers", "/api/v1/langgraph-workers/**").permitAll()
+                        .requestMatchers("/api/v1/gemini-workers", "/api/v1/gemini-workers/**").permitAll()
                         .requestMatchers("/api/v1/claude-tasks", "/api/v1/claude-tasks/**").permitAll()
                         .requestMatchers("/api/v1/codex-tasks", "/api/v1/codex-tasks/**").permitAll()
                         .requestMatchers("/api/v1/langgraph-tasks", "/api/v1/langgraph-tasks/**").permitAll()

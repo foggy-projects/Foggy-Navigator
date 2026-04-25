@@ -559,8 +559,8 @@
             >
               <el-table-column label="类型" width="90">
                 <template #default="{ row }">
-                  <el-tag size="small" :type="row.process_type === 'codex' ? 'success' : 'info'">
-                    {{ row.process_type === 'codex' ? 'Codex' : 'Claude' }}
+                  <el-tag size="small" :type="processTypeTagType(row.process_type)">
+                    {{ processTypeLabel(row.process_type) }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -594,6 +594,13 @@
                   >
                     <el-tag size="small" type="success">{{ row.codex_thread_id.slice(0, 8) }}</el-tag>
                   </el-tooltip>
+                  <el-tooltip
+                    v-else-if="row.gemini_session_id"
+                    :content="row.gemini_session_id"
+                    placement="top"
+                  >
+                    <el-tag size="small" type="warning">{{ row.gemini_session_id.slice(0, 8) }}</el-tag>
+                  </el-tooltip>
                   <el-tag v-else-if="!row.is_orphan" size="small" type="info">新会话</el-tag>
                   <span v-else>-</span>
                 </template>
@@ -621,7 +628,7 @@
               </el-table-column>
               <el-table-column label="操作" width="200" align="center">
                 <template #default="{ row }">
-                  <template v-if="row.process_type !== 'codex' && row.foggy_task_id">
+                  <template v-if="row.process_type !== 'codex' && row.process_type !== 'gemini' && row.foggy_task_id">
                     <el-button text size="small" @click="handleResyncTask(row.foggy_task_id)">重新同步</el-button>
                     <el-divider direction="vertical" style="margin: 0 4px;" />
                   </template>
@@ -1068,7 +1075,7 @@
                   type="info"
                   effect="plain"
                   class="conv-rel-tag"
-                  @click.stop="viewTask(parentConversation(conv)!.latestTask)"
+                  @click.stop="viewRelatedTask(parentConversation(conv)!.latestTask)"
                 >
                   上游
                 </el-tag>
@@ -1089,7 +1096,7 @@
                       v-for="child in childConversations(conv)"
                       :key="child.sessionId"
                       class="child-session-item"
-                      @click="viewTask(child.latestTask)"
+                      @click="viewRelatedTask(child.latestTask)"
                     >
                       <span class="child-session-name" :title="child.config?.customTitle || child.firstPrompt">
                         {{ truncate(child.config?.customTitle || child.firstPrompt, 28) }}
@@ -1260,7 +1267,7 @@
                 type="info"
                 effect="plain"
                 class="conv-rel-tag"
-                @click.stop="viewTask(parentConversation(conv)!.latestTask)"
+                @click.stop="viewRelatedTask(parentConversation(conv)!.latestTask)"
               >
                 上游
               </el-tag>
@@ -1281,7 +1288,7 @@
                     v-for="child in childConversations(conv)"
                     :key="child.sessionId"
                     class="child-session-item"
-                    @click="viewTask(child.latestTask)"
+                    @click="viewRelatedTask(child.latestTask)"
                   >
                     <span class="child-session-name" :title="child.config?.customTitle || child.firstPrompt">
                       {{ truncate(child.config?.customTitle || child.firstPrompt, 28) }}
@@ -2700,7 +2707,7 @@ async function loadCliProcesses() {
     const workerId = selectedWorkerId.value
     const worker = selectedWorkerEntity.value
     const requests: Array<{
-      type: 'claude' | 'codex'
+      type: 'claude' | 'codex' | 'gemini'
       promise: Promise<CliProcessListResponse>
     }> = [
       {
@@ -2716,11 +2723,18 @@ async function loadCliProcesses() {
       })
     }
 
+    if (worker?.geminiBaseUrl?.trim()) {
+      requests.push({
+        type: 'gemini',
+        promise: dirApi.listGeminiCliProcesses(workerId, { suppressErrorMessage: true }),
+      })
+    }
+
     const results = await Promise.allSettled(requests.map(request => request.promise))
 
     const merged: CliProcessInfo[] = []
     let activeTaskCount = 0
-    const failedTypes: Array<'claude' | 'codex'> = []
+    const failedTypes: Array<'claude' | 'codex' | 'gemini'> = []
 
     results.forEach((result, index) => {
       const request = requests[index]
@@ -2742,7 +2756,7 @@ async function loadCliProcesses() {
     cliProcessActiveTaskCount.value = activeTaskCount
 
     if (merged.length === 0 && failedTypes.length === requests.length) {
-      const labels = failedTypes.map(type => (type === 'codex' ? 'Codex' : 'Claude')).join(' / ')
+      const labels = failedTypes.map(type => processTypeLabel(type)).join(' / ')
       ElMessage.error(`获取 ${labels} CLI 进程失败`)
     }
   } catch {
@@ -2756,7 +2770,7 @@ async function loadCliProcesses() {
 async function handleKillProcess(processInfo: CliProcessInfo, force = false) {
   if (!selectedWorkerId.value) return
   const action = force ? '强制终止' : '终止'
-  const typeLabel = processInfo.process_type === 'codex' ? 'Codex CLI' : 'Claude CLI'
+  const typeLabel = `${processTypeLabel(processInfo.process_type)} CLI`
   try {
     await ElMessageBox.confirm(
       `确定要${action}${typeLabel} 进程 PID ${processInfo.pid} 吗？`,
@@ -2769,7 +2783,9 @@ async function handleKillProcess(processInfo: CliProcessInfo, force = false) {
   try {
     const result = processInfo.process_type === 'codex'
       ? await dirApi.killCodexCliProcess(selectedWorkerId.value, processInfo.pid, force)
-      : await dirApi.killCliProcess(selectedWorkerId.value, processInfo.pid, force)
+      : processInfo.process_type === 'gemini'
+        ? await dirApi.killGeminiCliProcess(selectedWorkerId.value, processInfo.pid, force)
+        : await dirApi.killCliProcess(selectedWorkerId.value, processInfo.pid, force)
     if (result.status === 'killed') {
       ElMessage.success(`进程 ${processInfo.pid} 已${action}`)
     } else {
@@ -3293,7 +3309,20 @@ const platformModelConfig = computed(() =>
 function providerTypeFromWorkerBackend(workerBackend?: string | null): string | undefined {
   if (workerBackend === 'OPENAI_CODEX') return 'codex-worker'
   if (workerBackend === 'CLAUDE_CODE') return 'claude-worker'
+  if (workerBackend === 'GEMINI_CLI') return 'gemini-worker'
   return undefined
+}
+
+function processTypeLabel(type?: 'claude' | 'codex' | 'gemini'): string {
+  if (type === 'codex') return 'Codex'
+  if (type === 'gemini') return 'Gemini'
+  return 'Claude'
+}
+
+function processTypeTagType(type?: 'claude' | 'codex' | 'gemini'): 'success' | 'warning' | 'info' {
+  if (type === 'codex') return 'success'
+  if (type === 'gemini') return 'warning'
+  return 'info'
 }
 
 const selectedAgent = computed(() => {
@@ -3869,16 +3898,33 @@ const directoryConversations = computed(() => groupTasksToConversations(director
 const allConversations = computed(() =>
   selectedDirectoryId.value ? directoryConversations.value : workerConversations.value,
 )
+/**
+ * 关系映射专用会话池：合并 Worker 级 + 当前目录级会话，按 sessionId 去重。
+ * 列表渲染仍使用 allConversations（按目录过滤），这里只为父子关系解析服务，
+ * 避免跨目录转发时父子会话分别落在不同目录而看不到关联标签。
+ */
+const relationConversationPool = computed(() => {
+  const map = new Map<string, ConversationGroup>()
+  for (const conv of workerConversations.value) {
+    map.set(conv.sessionId, conv)
+  }
+  for (const conv of directoryConversations.value) {
+    if (!map.has(conv.sessionId)) {
+      map.set(conv.sessionId, conv)
+    }
+  }
+  return Array.from(map.values())
+})
 const conversationBySessionId = computed(() => {
   const map = new Map<string, ConversationGroup>()
-  for (const conv of allConversations.value) {
+  for (const conv of relationConversationPool.value) {
     map.set(conv.sessionId, conv)
   }
   return map
 })
 const childConversationMap = computed(() => {
   const map = new Map<string, ConversationGroup[]>()
-  for (const conv of allConversations.value) {
+  for (const conv of relationConversationPool.value) {
     if (!conv.parentSessionId) continue
     const existing = map.get(conv.parentSessionId)
     if (existing) {
@@ -6119,6 +6165,28 @@ function handlePageChange(page: number) {
 function handleDirPageChange(page: number) {
   dirTaskPage.value = page - 1
   loadDirectoryTasks()
+}
+
+/**
+ * 打开跨目录/跨 Worker 的关联会话：如果目标 task 不在当前目录/Worker 上下文中，
+ * 先切换到它所在的目录，再打开 pane；这样历史列表也会同步到目标会话所在目录。
+ * 用于"上游" / "子会话" 等关联标签的点击处理。
+ */
+async function viewRelatedTask(task: ClaudeTask) {
+  const targetDirectoryId = task.directoryId || ''
+  const targetWorkerId = task.workerId || ''
+  const needSwitchDirectory = targetDirectoryId && targetDirectoryId !== selectedDirectoryId.value
+  const needSwitchWorker = targetWorkerId && targetWorkerId !== selectedWorkerId.value
+  if (needSwitchDirectory || needSwitchWorker) {
+    if (targetWorkerId && targetDirectoryId) {
+      selectDirectory(targetWorkerId, targetDirectoryId)
+      await nextTick()
+    } else if (targetWorkerId && !targetDirectoryId) {
+      selectWorker(targetWorkerId)
+      await nextTick()
+    }
+  }
+  await viewTask(task)
 }
 
 async function viewTask(task: ClaudeTask) {

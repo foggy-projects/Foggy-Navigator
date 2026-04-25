@@ -1,8 +1,10 @@
 package com.foggy.navigator.claude.worker.model.entity;
 
 import com.foggy.navigator.claude.worker.model.converter.CodexConfigConverter;
+import com.foggy.navigator.claude.worker.model.converter.GeminiConfigConverter;
 import com.foggy.navigator.common.entity.BaseWorkerEntity;
 import com.foggy.navigator.common.model.CodexConfig;
+import com.foggy.navigator.common.model.GeminiConfig;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -51,4 +53,9 @@ public class ClaudeWorkerEntity extends BaseWorkerEntity {
     @Convert(converter = CodexConfigConverter.class)
     @Column(columnDefinition = "TEXT")
     private CodexConfig codexConfig;
+
+    /** Gemini Worker 配置（JSON 存储：baseUrl, authToken, model） */
+    @Convert(converter = GeminiConfigConverter.class)
+    @Column(columnDefinition = "TEXT")
+    private GeminiConfig geminiConfig;
 }

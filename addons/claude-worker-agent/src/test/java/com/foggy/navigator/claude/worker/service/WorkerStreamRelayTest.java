@@ -23,10 +23,14 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static reactor.core.publisher.Mono.just;
 
 class WorkerStreamRelayTest {
 
@@ -69,6 +73,7 @@ class WorkerStreamRelayTest {
         entity.setSessionId("session-1");
         entity.setWorkerTaskId("worker-task-9");
         entity.setClaudeSessionId("claude-session-1");
+        entity.setStatus("RUNNING");
         entity.setLastAckedSeq(7);
 
         ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
@@ -77,12 +82,37 @@ class WorkerStreamRelayTest {
         when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
         when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
         when(workerService.createClient(worker)).thenReturn(client);
+        when(client.getTaskStatus("worker-task-9")).thenReturn(just(Map.of("latest_seq", 9, "closed", false)));
         when(client.subscribeToTask("worker-task-9", 7)).thenReturn(Flux.never());
         when(taskService.resolveWorkerTaskLookupId(entity)).thenReturn("worker-task-9");
 
         relay.reconnectTask("local-task-1", "session-1", "worker-1");
 
         verify(client).subscribeToTask("worker-task-9", 7);
+    }
+
+    @Test
+    void reconnectTaskSkipsWhenWorkerStreamAlreadyClosedAndAligned() {
+        ClaudeTaskEntity entity = new ClaudeTaskEntity();
+        entity.setTaskId("local-task-1");
+        entity.setWorkerId("worker-1");
+        entity.setSessionId("session-1");
+        entity.setWorkerTaskId("worker-task-9");
+        entity.setStatus("RUNNING");
+        entity.setLastAckedSeq(7);
+
+        ClaudeWorkerEntity worker = new ClaudeWorkerEntity();
+        worker.setWorkerId("worker-1");
+
+        when(taskRepository.findByTaskId("local-task-1")).thenReturn(Optional.of(entity));
+        when(workerService.getWorkerEntity("worker-1")).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(client);
+        when(taskService.resolveWorkerTaskLookupId(entity)).thenReturn("worker-task-9");
+        when(client.getTaskStatus("worker-task-9")).thenReturn(just(Map.of("latest_seq", 7, "closed", true)));
+
+        relay.reconnectTask("local-task-1", "session-1", "worker-1");
+
+        verify(client, never()).subscribeToTask(anyString(), anyInt());
     }
 
     @Test

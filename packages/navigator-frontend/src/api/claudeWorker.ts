@@ -48,6 +48,7 @@ export async function registerWorker(form: {
   codeServerPassword?: string
   codeServerFolderPrefix?: string
   codexConfig?: { baseUrl?: string; authToken?: string; model?: string }
+  geminiConfig?: { baseUrl?: string; authToken?: string; model?: string }
 }): Promise<ClaudeWorker> {
   const rx = (await client.post('/claude-workers', form)) as unknown as RX<ClaudeWorker>
   return rx.data
@@ -55,7 +56,7 @@ export async function registerWorker(form: {
 
 export async function updateWorker(
   workerId: string,
-  form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string; codeServerPublicUrl?: string; codeServerInternalUrl?: string; codeServerPassword?: string; codeServerFolderPrefix?: string; codexConfig?: { baseUrl?: string; authToken?: string; model?: string } },
+  form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string; codeServerPublicUrl?: string; codeServerInternalUrl?: string; codeServerPassword?: string; codeServerFolderPrefix?: string; codexConfig?: { baseUrl?: string; authToken?: string; model?: string }; geminiConfig?: { baseUrl?: string; authToken?: string; model?: string } },
 ): Promise<ClaudeWorker> {
   const rx = (await client.put(`/claude-workers/${workerId}`, form)) as unknown as RX<ClaudeWorker>
   return rx.data
@@ -105,6 +106,17 @@ export async function listCodexCliProcesses(
   return rx.data
 }
 
+export async function listGeminiCliProcesses(
+  workerId: string,
+  options?: { suppressErrorMessage?: boolean },
+): Promise<CliProcessListResponse> {
+  const rx = (await client.get(
+    `/gemini-workers/${workerId}/processes`,
+    { suppressErrorMessage: options?.suppressErrorMessage } as any,
+  )) as unknown as RX<CliProcessListResponse>
+  return rx.data
+}
+
 export async function killCliProcess(
   workerId: string,
   pid: number,
@@ -124,6 +136,18 @@ export async function killCodexCliProcess(
 ): Promise<KillProcessResponse> {
   const rx = (await client.post(
     `/codex-workers/${workerId}/processes/${pid}/kill`,
+    { force },
+  )) as unknown as RX<KillProcessResponse>
+  return rx.data
+}
+
+export async function killGeminiCliProcess(
+  workerId: string,
+  pid: number,
+  force = false,
+): Promise<KillProcessResponse> {
+  const rx = (await client.post(
+    `/gemini-workers/${workerId}/processes/${pid}/kill`,
     { force },
   )) as unknown as RX<KillProcessResponse>
   return rx.data

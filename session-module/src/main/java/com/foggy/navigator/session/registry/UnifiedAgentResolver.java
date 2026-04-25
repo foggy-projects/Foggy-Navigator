@@ -107,6 +107,7 @@ public class UnifiedAgentResolver {
         return switch (workerBackend) {
             case "OPENAI_CODEX" -> "codex-worker";
             case "CLAUDE_CODE" -> "claude-worker";
+            case "GEMINI_CLI" -> "gemini-worker";
             default -> null;
         };
     }

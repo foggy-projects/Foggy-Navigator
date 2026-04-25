@@ -17,6 +17,32 @@ export interface AppConfig {
   allowedCwds: string[]
   maxConcurrentTasks: number
   logLevel: 'debug' | 'info' | 'warn' | 'error'
+  /**
+   * Worker 兜底默认模型（请求未显式指定 model 时使用）。
+   *
+   * 1.0.4 起：默认值为 alias `codex-latest`（与 Claude/Gemini 的 alias-first 风格一致）。
+   * 升级模型版本时，仅修改 modelAliases 配置即可；前端、后端 Java 侧不需要任何改动。
+   *
+   * 可通过环境变量 CODEX_DEFAULT_MODEL 覆盖。可填 alias（如 `codex-latest`）或真实模型名（如 `gpt-5.5:high`）。
+   */
+  defaultModel: string
+  /**
+   * Codex 稳定 alias 到真实模型的映射。
+   *
+   * Worker 在执行任务前会先把请求中的 model 字符串经过 alias 解析：
+   *   - 如果整串命中 alias，直接替换为真实模型（含 reasoning 后缀）
+   *   - 如果是 `alias:reasoning` 格式，且对应 alias 不含冒号，则把 reasoning 拼到结果上
+   *   - 否则直接透传（按真实模型名处理，向后兼容）
+   *
+   * 默认映射（可通过 CODEX_MODEL_ALIASES 环境变量覆盖）：
+   *   codex-latest → gpt-5.5
+   *   codex-fast   → gpt-5.5:low
+   *   codex-deep   → gpt-5.5:high
+   *   codex-mini   → gpt-5.4-mini   (待 5.5-mini 发布后再升级，仅改 Worker 配置)
+   *
+   * 环境变量格式：JSON 对象，如 {"codex-latest":"gpt-5.5","codex-fast":"gpt-5.5:low"}
+   */
+  modelAliases: Record<string, string>
 }
 
 function requireNonEmptyString(value: string, field: string, maxLength: number): string {
@@ -110,6 +136,90 @@ function parseMaxConcurrentTasks(rawValue: string | undefined): number {
   return parsed
 }
 
+/**
+ * 解析 CODEX_DEFAULT_MODEL，保持 runtime 行为稳定：
+ * - 空值：回落到 alias `codex-latest`（1.0.4 新默认；旧版本曾用 'gpt-5.4-mini' 真实模型）
+ * - 非空值：做基本合法性校验，不做白名单限制（保持与请求层一致的"自由模型串"语义）
+ *
+ * 默认 alias 在 Worker 内部经 resolveModelAlias 解析为真实模型；不会原封不动透传给 Codex SDK。
+ */
+function parseDefaultModel(rawValue: string | undefined): string {
+  const fallback = 'codex-latest'
+  const value = (rawValue || '').trim()
+  if (!value) return fallback
+  if (/\s/.test(value)) {
+    throw new Error('CODEX_DEFAULT_MODEL must not contain whitespace')
+  }
+  if (value.length > 128) {
+    throw new Error('CODEX_DEFAULT_MODEL is too long')
+  }
+  return value
+}
+
+const DEFAULT_CODEX_MODEL_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  'codex-latest': 'gpt-5.5',
+  'codex-fast': 'gpt-5.5:low',
+  'codex-deep': 'gpt-5.5:high',
+  'codex-mini': 'gpt-5.4-mini',
+})
+
+/**
+ * 解析 CODEX_MODEL_ALIASES。
+ *
+ * - 未配置：返回 DEFAULT_CODEX_MODEL_ALIASES 浅拷贝
+ * - JSON 格式 `{"codex-latest":"gpt-5.5","codex-fast":"gpt-5.5:low"}`：覆盖/扩展默认映射
+ * - 其它形式抛错（避免静默吞掉配置错误）
+ *
+ * 校验项：
+ * - alias key 不允许包含冒号（避免和 reasoning 后缀语法冲突）
+ * - alias value 不允许为空、不允许含空白
+ * - 长度限制：单条不超过 128 字符
+ */
+function parseModelAliases(rawValue: string | undefined): Record<string, string> {
+  const merged: Record<string, string> = { ...DEFAULT_CODEX_MODEL_ALIASES }
+  const value = (rawValue || '').trim()
+  if (!value) return merged
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch (err) {
+    throw new Error(`CODEX_MODEL_ALIASES must be valid JSON object: ${(err as Error).message}`)
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('CODEX_MODEL_ALIASES must be a JSON object (key=alias, value=real model)')
+  }
+
+  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+    const aliasKey = k.trim()
+    if (!aliasKey) {
+      throw new Error('CODEX_MODEL_ALIASES alias key must not be empty')
+    }
+    if (aliasKey.includes(':')) {
+      throw new Error(`CODEX_MODEL_ALIASES alias key must not contain ":": ${aliasKey}`)
+    }
+    if (aliasKey.length > 64) {
+      throw new Error(`CODEX_MODEL_ALIASES alias key is too long: ${aliasKey}`)
+    }
+    if (typeof v !== 'string') {
+      throw new Error(`CODEX_MODEL_ALIASES alias value must be string: ${aliasKey}`)
+    }
+    const aliasVal = v.trim()
+    if (!aliasVal) {
+      throw new Error(`CODEX_MODEL_ALIASES alias value must not be empty: ${aliasKey}`)
+    }
+    if (/\s/.test(aliasVal)) {
+      throw new Error(`CODEX_MODEL_ALIASES alias value must not contain whitespace: ${aliasKey}`)
+    }
+    if (aliasVal.length > 128) {
+      throw new Error(`CODEX_MODEL_ALIASES alias value is too long: ${aliasKey}`)
+    }
+    merged[aliasKey] = aliasVal
+  }
+  return merged
+}
+
 export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const openaiApiKey = parseApiKey(getOptionalEnvFromEnv(env, 'OPENAI_API_KEY'))
 
@@ -123,6 +233,8 @@ export function createConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     allowedCwds: parseAllowedCwds(env.CODEX_ALLOWED_CWDS),
     maxConcurrentTasks: parseMaxConcurrentTasks(env.CODEX_MAX_CONCURRENT_TASKS),
     logLevel: parseLogLevel(env.CODEX_LOG_LEVEL),
+    defaultModel: parseDefaultModel(env.CODEX_DEFAULT_MODEL),
+    modelAliases: parseModelAliases(env.CODEX_MODEL_ALIASES),
   }
 }
 

@@ -349,6 +349,76 @@ class ClaudeTaskServiceAuthTest {
         ));
     }
 
+    @Test
+    void createTask_withExplicitClaudeSubscriptionModel_bindsSubscriptionInsteadOfFallingBack() {
+        String modelConfigId = "claude-subscription-model";
+        LlmModelConfigDTO modelConfig = createModelConfig(modelConfigId, "Claude Subscription", null);
+        modelConfig.setWorkerBackend("CLAUDE_CODE");
+        modelConfig.setHasApiKey(false);
+        when(llmModelManager.getModelConfig(modelConfigId)).thenReturn(Optional.of(modelConfig));
+
+        String directoryId = "dir-claude-sub";
+        WorkingDirectoryEntity dir = createWorkingDirectory(directoryId, "/test/path");
+        dir.setDefaultAuthMode("API_KEY");
+        dir.setDefaultAuthToken("encrypted-dir-key");
+        when(workingDirectoryRepository.findByDirectoryIdAndUserId(directoryId, USER_ID))
+                .thenReturn(Optional.of(dir));
+
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Use subscription");
+        form.setDirectoryId(directoryId);
+        form.setModelConfigId(modelConfigId);
+
+        service.createTask(USER_ID, TENANT_ID, form);
+
+        verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
+                SESSION_ID.equals(entity.getId())
+                        && "SUBSCRIPTION".equals(entity.getAuthMode())
+                        && entity.getAuthTokenCiphertext() == null
+                        && entity.getAuthBaseUrl() == null
+                        && modelConfigId.equals(entity.getAuthModelConfigId())
+                        && entity.getAuthBoundAt() != null
+        ));
+        verify(directoryService, never()).getDecryptedDefaultAuth(any());
+        verify(llmModelManager, never()).getDecryptedApiKey(modelConfigId);
+    }
+
+    @Test
+    void createTask_withDirectoryClaudeSubscriptionModel_bindsSubscription() {
+        String modelConfigId = "claude-dir-subscription-model";
+        LlmModelConfigDTO modelConfig = createModelConfig(modelConfigId, "Claude Dir Subscription", null);
+        modelConfig.setWorkerBackend("CLAUDE_CODE");
+        modelConfig.setHasApiKey(false);
+        when(llmModelManager.getModelConfig(modelConfigId)).thenReturn(Optional.of(modelConfig));
+
+        String directoryId = "dir-claude-default-sub";
+        WorkingDirectoryEntity dir = createWorkingDirectory(directoryId, "/test/path");
+        dir.setDefaultModelConfigId(modelConfigId);
+        dir.setDefaultAuthMode("API_KEY");
+        dir.setDefaultAuthToken("encrypted-dir-key");
+        when(workingDirectoryRepository.findByDirectoryIdAndUserId(directoryId, USER_ID))
+                .thenReturn(Optional.of(dir));
+
+        CreateTaskForm form = new CreateTaskForm();
+        form.setWorkerId(WORKER_ID);
+        form.setPrompt("Use directory subscription");
+        form.setDirectoryId(directoryId);
+
+        service.createTask(USER_ID, TENANT_ID, form);
+
+        verify(sessionEntityRepository, atLeastOnce()).save(argThat((SessionEntity entity) ->
+                SESSION_ID.equals(entity.getId())
+                        && "SUBSCRIPTION".equals(entity.getAuthMode())
+                        && entity.getAuthTokenCiphertext() == null
+                        && entity.getAuthBaseUrl() == null
+                        && modelConfigId.equals(entity.getAuthModelConfigId())
+                        && entity.getAuthBoundAt() != null
+        ));
+        verify(directoryService, never()).getDecryptedDefaultAuth(any());
+        verify(llmModelManager, never()).getDecryptedApiKey(modelConfigId);
+    }
+
     private LlmModelConfigDTO createModelConfig(String id, String modelName, String baseUrl) {
         LlmModelConfigDTO dto = new LlmModelConfigDTO();
         dto.setId(id);
@@ -359,6 +429,7 @@ class ClaudeTaskServiceAuthTest {
         dto.setModelName(modelName);
         dto.setHasApiKey(true);
         dto.setIsDefault(false);
+        dto.setWorkerBackend("OPENAI_CODEX");
         dto.setCreatedAt(LocalDateTime.now());
         dto.setUpdatedAt(LocalDateTime.now());
         return dto;

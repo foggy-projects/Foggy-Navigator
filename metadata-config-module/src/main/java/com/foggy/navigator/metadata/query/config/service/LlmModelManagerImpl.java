@@ -251,7 +251,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
     public String getDecryptedApiKey(String modelConfigId) {
         LlmModelConfigEntity entity = llmModelRepo.findById(modelConfigId)
                 .orElseThrow(() -> RX.throwB("LLM model config not found: " + modelConfigId));
-        if (isCodexSubscriptionConfig(entity.getWorkerBackend(), entity.getBaseUrl())
+        if (isSubscriptionConfig(entity.getWorkerBackend(), entity.getBaseUrl())
                 || entity.getApiKey() == null || entity.getApiKey().isBlank()) {
             return null;
         }
@@ -432,7 +432,7 @@ public class LlmModelManagerImpl implements LlmModelManager {
         dto.setIsDefault(entity.getIsDefault());
         dto.setHasApiKey(entity.getApiKey() != null
                 && !entity.getApiKey().isEmpty()
-                && !isCodexSubscriptionConfig(entity.getWorkerBackend(), entity.getBaseUrl()));
+                && !isSubscriptionConfig(entity.getWorkerBackend(), entity.getBaseUrl()));
         dto.setSortOrder(entity.getSortOrder() != null ? entity.getSortOrder() : 0);
         ModelAccessScope scope = entity.getScope() != null ? entity.getScope() : ModelAccessScope.GLOBAL;
         dto.setScope(scope);
@@ -454,14 +454,26 @@ public class LlmModelManagerImpl implements LlmModelManager {
     }
 
     private void normalizeWorkerAuth(LlmModelConfigEntity entity) {
-        if (isCodexSubscriptionConfig(entity.getWorkerBackend(), entity.getBaseUrl())) {
-            // Codex subscription mode relies on ~/.codex/auth.json and should not inject a platform API key.
+        if (isSubscriptionConfig(entity.getWorkerBackend(), entity.getBaseUrl())) {
+            // Subscription mode relies on the worker host's local login state and should not inject a platform API key.
             entity.setApiKey(null);
         }
     }
 
-    private boolean isCodexSubscriptionConfig(String workerBackend, String baseUrl) {
-        return "OPENAI_CODEX".equals(workerBackend) && (baseUrl == null || baseUrl.isBlank());
+    private boolean isSubscriptionConfig(String workerBackend, String baseUrl) {
+        if (workerBackend == null || workerBackend.isBlank()) {
+            return false;
+        }
+        if (!isSubscriptionBackend(workerBackend)) {
+            return false;
+        }
+        return baseUrl == null || baseUrl.isBlank();
+    }
+
+    private boolean isSubscriptionBackend(String workerBackend) {
+        return "OPENAI_CODEX".equals(workerBackend)
+                || "CLAUDE_CODE".equals(workerBackend)
+                || "GEMINI_CLI".equals(workerBackend);
     }
 
     private String serializeEnvVars(Map<String, String> envVars) {
