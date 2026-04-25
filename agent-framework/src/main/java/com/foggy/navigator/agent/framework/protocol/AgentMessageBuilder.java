@@ -66,6 +66,12 @@ public class AgentMessageBuilder {
 
     // ── TEXT_COMPLETE ──
 
+    public AgentMessageBuilder textChunk(String content) {
+        this.type = MessageType.TEXT_CHUNK;
+        payload.put("content", content);
+        return this;
+    }
+
     public AgentMessageBuilder textComplete(String content) {
         this.type = MessageType.TEXT_COMPLETE;
         payload.put("content", content);
@@ -172,7 +178,7 @@ public class AgentMessageBuilder {
         if (type == null) {
             throw new IllegalStateException("MessageType must be set before build()");
         }
-        AgentMessage msg = AgentMessage.of(sessionId, agentId, type, payload);
+        AgentMessage msg = AgentMessage.of(sessionId, agentId, type, new LinkedHashMap<>(payload));
         msg.setTaskId(taskIdField);
         return msg;
     }
@@ -181,7 +187,7 @@ public class AgentMessageBuilder {
      * 直接使用指定 type 构建（用于 Relay 已确定 type 的场景）
      */
     public AgentMessage build(MessageType overrideType) {
-        AgentMessage msg = AgentMessage.of(sessionId, agentId, overrideType, payload);
+        AgentMessage msg = AgentMessage.of(sessionId, agentId, overrideType, new LinkedHashMap<>(payload));
         msg.setTaskId(taskIdField);
         return msg;
     }
