@@ -73,7 +73,7 @@ class GeminiStreamRelayTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> resultPayload = (Map<String, Object>) resultMessage.getPayload();
         assertEquals("SESSION_ONE", resultPayload.get("content"));
-        assertEquals(Boolean.TRUE, resultPayload.get("isResult"));
+        assertEquals(null, resultPayload.get("isResult"));
 
         AgentMessage message = assertInstanceOf(AgentMessage.class, publishedEvents.get(1));
         assertEquals(MessageType.SESSION_END, message.getType());

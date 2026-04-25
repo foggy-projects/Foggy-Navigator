@@ -179,6 +179,11 @@ public class GeminiStreamRelay {
             }
             case "result" -> {
                 String resultText = firstNonBlank(event.getContent(), event.getResult());
+                publishBuilt(AgentMessageBuilder.create(sessionId, GeminiTaskService.AGENT_ID)
+                        .taskId(taskId)
+                        .put("geminiSessionId", geminiSessionId)
+                        .textComplete(resultText));
+
                 AgentMessageBuilder resultBuilder = AgentMessageBuilder.create(sessionId, GeminiTaskService.AGENT_ID)
                         .taskId(taskId)
                         .put("geminiSessionId", geminiSessionId)
@@ -186,7 +191,6 @@ public class GeminiStreamRelay {
                         .metrics(event.getCostUsd(), event.getDurationMs(),
                                 event.getInputTokens(), event.getOutputTokens(),
                                 event.getNumTurns(), event.getModel());
-                publishBuilt(resultBuilder);
                 publishEvent(resultBuilder.build(MessageType.SESSION_END));
                 taskService.completeTask(
                         taskId,
