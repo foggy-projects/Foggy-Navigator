@@ -51,10 +51,10 @@ function Get-PortListeners {
 }
 
 function Get-ProcessSummary {
-    param([int]$Pid)
+    param([int]$ProcessId)
 
     try {
-        return Get-CimInstance Win32_Process -Filter "ProcessId = $Pid" -ErrorAction Stop
+        return Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
     } catch {
         return $null
     }
@@ -66,8 +66,13 @@ function Test-WorkerHealth {
         [int]$TargetPort
     )
 
+    $probeHost = $TargetHost
+    if ($probeHost -eq "0.0.0.0" -or $probeHost -eq "::") {
+        $probeHost = "127.0.0.1"
+    }
+
     try {
-        $response = Invoke-WebRequest -UseBasicParsing "http://$TargetHost`:$TargetPort/health" -TimeoutSec 3
+        $response = Invoke-WebRequest -UseBasicParsing "http://$probeHost`:$TargetPort/health" -TimeoutSec 3
         return $response.StatusCode -eq 200
     } catch {
         return $false
@@ -116,7 +121,7 @@ Write-Host "Allowed CWDs: $($env:GEMINI_ALLOWED_CWDS)" -ForegroundColor Cyan
 $listeners = Get-PortListeners -TargetPort $Port
 if ($listeners.Count -gt 0) {
     $summaries = foreach ($listener in $listeners) {
-        $process = Get-ProcessSummary -Pid $listener.Pid
+        $process = Get-ProcessSummary -ProcessId $listener.Pid
         if ($process) {
             [pscustomobject]@{
                 Pid = $listener.Pid
@@ -132,34 +137,14 @@ if ($listeners.Count -gt 0) {
         }
     }
 
-    $geminiOwned = $true
     foreach ($summary in $summaries) {
-        $commandLine = ""
-        if ($null -ne $summary.CommandLine) {
-            $commandLine = [string]$summary.CommandLine
+        Write-Host "Port $Port is occupied. Stopping process PID=$($summary.Pid) Name=$($summary.Name)..." -ForegroundColor Yellow
+        if ($summary.CommandLine) {
+            Write-Host ("CommandLine: {0}" -f $summary.CommandLine) -ForegroundColor DarkYellow
         }
-        if ($commandLine -notmatch "gemini-agent-worker" -and $commandLine -notmatch "tsx\s+src/index\.ts") {
-            $geminiOwned = $false
-        }
+        taskkill /F /PID $summary.Pid 2>$null | Out-Null
     }
-
-    if ($geminiOwned) {
-        foreach ($summary in $summaries) {
-            Write-Host "Stopping existing Gemini worker on port $Port (PID: $($summary.Pid))..." -ForegroundColor Yellow
-            taskkill /F /PID $summary.Pid 2>$null | Out-Null
-        }
-        Start-Sleep -Milliseconds 800
-    } else {
-        Write-Host "Port $Port is already occupied by a non-Gemini process." -ForegroundColor Red
-        foreach ($summary in $summaries) {
-            Write-Host ("PID={0} Name={1}" -f $summary.Pid, $summary.Name) -ForegroundColor Red
-            if ($summary.CommandLine) {
-                Write-Host ("CommandLine: {0}" -f $summary.CommandLine) -ForegroundColor DarkRed
-            }
-        }
-        Write-Host "Gemini worker keeps the user-requested default port 3071. Resolve the conflict first, then rerun start.ps1." -ForegroundColor Yellow
-        exit 1
-    }
+    Start-Sleep -Milliseconds 800
 }
 
 if (-not (Test-Path $LogDir)) {
