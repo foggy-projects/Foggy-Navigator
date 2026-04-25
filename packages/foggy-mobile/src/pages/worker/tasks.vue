@@ -167,7 +167,16 @@ const selectedModelName = computed(() => {
 })
 
 // All known model options (value = what backend accepts, label = UI display)
-// Kept in sync with PC's ClaudeWorkerView.vue ALL_MODELS
+//
+// 源头真相（SSOT）：packages/navigator-frontend/src/utils/llmModelOptions.ts 中的
+// ALL_MODEL_OPTIONS。由于 foggy-mobile 是独立的 uni-app 工程，未直接引用 navigator-frontend
+// 的源码目录，所以在本文件保留一份"薄壁镜像"，但字段结构、value 集合必须与 PC SSOT 对齐。
+//
+// 1.0.4 alias-only 重构（见 docs/version-tracker/1.0.4-SNAPSHOT/04-codex-worker-gpt55-upgrade-and-model-alias-plan.md）：
+// - Codex 切到 alias-only：前端只展示稳定 alias（codex-latest/fast/deep/mini）
+// - Worker 在执行前把 alias 解析为真实模型（如 codex-latest → gpt-5.5）
+// - 模型版本升级时仅改 Worker 配置（CODEX_MODEL_ALIASES），前端 / Java 后端无需任何改动
+// - Claude / Gemini 命名风格相同：opus/sonnet/haiku、gemini-pro/flash/flash-lite
 const ALL_MODELS: { value: string; label: string; backend: string }[] = [
   // Claude models
   { value: 'opus[1m]', label: 'Opus (1M)', backend: 'CLAUDE_CODE' },
@@ -175,21 +184,33 @@ const ALL_MODELS: { value: string; label: string; backend: string }[] = [
   { value: 'sonnet[1m]', label: 'Sonnet (1M)', backend: 'CLAUDE_CODE' },
   { value: 'sonnet', label: 'Sonnet', backend: 'CLAUDE_CODE' },
   { value: 'haiku', label: 'Haiku', backend: 'CLAUDE_CODE' },
-  // Codex models
-  { value: 'gpt-5.4:low', label: '5.4 Low', backend: 'OPENAI_CODEX' },
-  { value: 'gpt-5.4', label: '5.4 Medium', backend: 'OPENAI_CODEX' },
-  { value: 'gpt-5.4:high', label: '5.4 High', backend: 'OPENAI_CODEX' },
-  { value: 'gpt-5.4-mini', label: '5.4 Mini', backend: 'OPENAI_CODEX' },
+  // Codex aliases (Worker 解析为真实模型；详见 Worker DEFAULT_CODEX_MODEL_ALIASES)
+  { value: 'codex-latest', label: 'Codex Latest', backend: 'OPENAI_CODEX' },
+  { value: 'codex-fast', label: 'Codex Fast', backend: 'OPENAI_CODEX' },
+  { value: 'codex-deep', label: 'Codex Deep', backend: 'OPENAI_CODEX' },
+  { value: 'codex-mini', label: 'Codex Mini', backend: 'OPENAI_CODEX' },
+  // Gemini aliases（保持与 PC SSOT 对齐）
+  { value: 'gemini-pro', label: 'Gemini Pro (Alias)', backend: 'GEMINI_CLI' },
+  { value: 'gemini-flash', label: 'Gemini Flash (Alias)', backend: 'GEMINI_CLI' },
+  { value: 'gemini-flash-lite', label: 'Gemini Flash Lite (Alias)', backend: 'GEMINI_CLI' },
 ]
 
 // Dynamic model options based on selected platform model config
+//
+// 1.0.4 alias-only 兼容兜底（与 navigator-frontend resolveModelOptions 保持一致）：
+// - OPENAI_CODEX backend 旧 availableModels 含真实模型（gpt-5.4 等）但无 alias 命中时，
+//   退化为"不限制"，让用户在新 UI 里看到全部 alias，重新勾选保存即可完成迁移
 const modelOptions = computed(() => {
   const cfg = platformModels.value.find(m => m.id === selectedModelConfigId.value)
   const backend = cfg?.workerBackend ?? 'CLAUDE_CODE'
   const backendModels = ALL_MODELS.filter(m => m.backend === backend)
   const allowed = cfg?.availableModels
   if (!allowed || allowed.length === 0) return backendModels
-  return backendModels.filter(opt => allowed.includes(opt.value))
+  const filtered = backendModels.filter(opt => allowed.includes(opt.value))
+  if (backend === 'OPENAI_CODEX' && filtered.length === 0) {
+    return backendModels
+  }
+  return filtered
 })
 
 const TURNS_OPTIONS = [10, 25, 50, 200, 999]

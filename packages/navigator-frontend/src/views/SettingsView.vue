@@ -92,6 +92,7 @@
           <el-table-column label="后端" width="100" align="center">
             <template #default="{ row }">
               <el-tag v-if="row.workerBackend === 'OPENAI_CODEX'" type="success" size="small">Codex</el-tag>
+              <el-tag v-else-if="row.workerBackend === 'GEMINI_CLI'" type="warning" size="small">Gemini</el-tag>
               <el-tag v-else-if="row.workerBackend === 'CLAUDE_CODE'" size="small">Claude</el-tag>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
@@ -562,8 +563,8 @@ codex-worker status</pre>
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="API Base URL" :required="llmForm.workerBackend !== 'OPENAI_CODEX'">
-          <el-input v-model="llmForm.baseUrl" :placeholder="llmForm.workerBackend === 'OPENAI_CODEX' ? '留空使用默认 OpenAI 端点（订阅模式无需填写）' : '如：https://dashscope.aliyuncs.com/compatible-mode/v1'" />
+        <el-form-item label="API Base URL" :required="!supportsSubscriptionBackend(llmForm.workerBackend)">
+          <el-input v-model="llmForm.baseUrl" :placeholder="baseUrlPlaceholder(llmForm.workerBackend)" />
         </el-form-item>
         <el-row :gutter="12">
           <el-col :span="12">
@@ -573,58 +574,81 @@ codex-worker status</pre>
                 v-model="llmForm.modelName"
                 filterable
                 allow-create
+                reserve-keyword
                 default-first-option
                 placeholder="选择或输入模型名称"
               >
-                <el-option value="opus[1m]" label="Opus 4.6 (1M context)" />
-                <el-option value="opus" label="Opus 4.6" />
-                <el-option value="sonnet[1m]" label="Sonnet 4.6 (1M context)" />
-                <el-option value="sonnet" label="Sonnet 4.6" />
-                <el-option value="haiku" label="Haiku" />
+                <el-option
+                  v-for="opt in claudeBackendOptions"
+                  :key="opt.value"
+                  :value="opt.value"
+                  :label="opt.description || opt.label"
+                />
               </el-select>
               <el-select
                 v-else-if="llmForm.workerBackend === 'OPENAI_CODEX'"
                 v-model="llmForm.modelName"
                 filterable
                 allow-create
+                reserve-keyword
                 default-first-option
-                placeholder="选择或输入模型名称"
+                placeholder="选择或输入 Codex 模型别名"
               >
-                <el-option-group label="GPT-5.4（旗舰）">
-                  <el-option value="gpt-5.4:low" label="GPT-5.4 · Low — 快速轻量" />
-                  <el-option value="gpt-5.4" label="GPT-5.4 · Medium — 均衡（默认）" />
-                  <el-option value="gpt-5.4:high" label="GPT-5.4 · High — 深度推理" />
-                  <el-option value="gpt-5.4:extra-high" label="GPT-5.4 · Extra High — 最深推理" />
-                </el-option-group>
-                <el-option-group label="GPT-5.4 Mini（快速）">
-                  <el-option value="gpt-5.4-mini" label="GPT-5.4 Mini — 快速高效" />
-                </el-option-group>
-                <el-option-group label="GPT-5.3 Codex">
-                  <el-option value="gpt-5.3-codex" label="GPT-5.3 Codex — 业界领先" />
-                  <el-option value="gpt-5.3-codex-spark" label="GPT-5.3 Codex Spark — 实时迭代" />
-                </el-option-group>
+                <el-option
+                  v-for="opt in codexBackendOptions"
+                  :key="opt.value"
+                  :value="opt.value"
+                  :label="opt.description || opt.label"
+                />
+              </el-select>
+              <el-select
+                v-else-if="llmForm.workerBackend === 'GEMINI_CLI'"
+                v-model="llmForm.modelName"
+                filterable
+                allow-create
+                reserve-keyword
+                default-first-option
+                placeholder="选择或输入 Gemini 模型别名"
+              >
+                <el-option
+                  v-for="opt in geminiBackendOptions"
+                  :key="opt.value"
+                  :value="opt.value"
+                  :label="opt.description || opt.label"
+                />
               </el-select>
               <el-input v-else v-model="llmForm.modelName" placeholder="如：qwen-max" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="API Key" :required="llmForm.workerBackend !== 'OPENAI_CODEX' && llmDialogMode === 'add'">
-              <el-input v-model="llmForm.apiKey" type="password" show-password :placeholder="llmDialogMode === 'edit' ? '留空保持不变' : (llmForm.workerBackend === 'OPENAI_CODEX' ? '留空使用订阅模式' : 'API Key')" />
+            <el-form-item label="API Key" :required="!supportsSubscriptionBackend(llmForm.workerBackend) && llmDialogMode === 'add'">
+              <el-input v-model="llmForm.apiKey" type="password" show-password :placeholder="apiKeyPlaceholder(llmForm.workerBackend, llmDialogMode)" />
             </el-form-item>
           </el-col>
         </el-row>
+        <el-form-item v-if="llmForm.workerBackend === 'CLAUDE_CODE'" label="">
+          <div class="form-hint" style="color: #909399; font-size: 12px">
+            Claude Code 支持两种认证模式：填写 API Key 使用 API 模式，留空 URL 和 API Key 则使用订阅模式（依赖 Worker 本机 `claude login`）
+          </div>
+        </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'OPENAI_CODEX'" label="">
           <div class="form-hint" style="color: #909399; font-size: 12px">
             Codex 支持两种认证模式：填写 API Key 使用 API 模式，留空则使用订阅模式（~/.codex/auth.json）
           </div>
         </el-form-item>
+        <el-form-item v-if="llmForm.workerBackend === 'GEMINI_CLI'" label="">
+          <div class="form-hint" style="color: #909399; font-size: 12px">
+            Gemini CLI 支持两种认证模式：填写 API Key 使用 Gemini API，留空则使用订阅或本机登录模式（依赖 Worker 本机 gemini login）
+          </div>
+        </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'CLAUDE_CODE'" label="可用模型">
           <el-checkbox-group v-model="llmForm.availableModels">
-            <el-checkbox value="opus[1m]" label="Opus (1M)" />
-            <el-checkbox value="opus" label="Opus" />
-            <el-checkbox value="sonnet[1m]" label="Sonnet (1M)" />
-            <el-checkbox value="sonnet" label="Sonnet" />
-            <el-checkbox value="haiku" label="Haiku" />
+            <el-checkbox
+              v-for="opt in claudeBackendOptions"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
           </el-checkbox-group>
           <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
             勾选此 API Key 支持的模型，Workers 页面仅显示已勾选项；不勾选则不限制
@@ -632,16 +656,28 @@ codex-worker status</pre>
         </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'OPENAI_CODEX'" label="可用模型">
           <el-checkbox-group v-model="llmForm.availableModels">
-            <el-checkbox value="gpt-5.4:low" label="5.4 Low" />
-            <el-checkbox value="gpt-5.4" label="5.4 Medium" />
-            <el-checkbox value="gpt-5.4:high" label="5.4 High" />
-            <el-checkbox value="gpt-5.4:extra-high" label="5.4 Extra High" />
-            <el-checkbox value="gpt-5.4-mini" label="5.4 Mini" />
-            <el-checkbox value="gpt-5.3-codex" label="5.3 Codex" />
-            <el-checkbox value="gpt-5.3-codex-spark" label="Spark" />
+            <el-checkbox
+              v-for="opt in codexBackendOptions"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
           </el-checkbox-group>
           <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
             勾选可用的 Codex 模型，Workers 页面仅显示已勾选项；不勾选则不限制
+          </div>
+        </el-form-item>
+        <el-form-item v-if="llmForm.workerBackend === 'GEMINI_CLI'" label="可用模型">
+          <el-checkbox-group v-model="llmForm.availableModels">
+            <el-checkbox
+              v-for="opt in geminiBackendOptions"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
+          </el-checkbox-group>
+          <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
+            勾选可用的 Gemini 模型别名，Workers 页面仅显示已勾选项；不勾选则不限制
           </div>
         </el-form-item>
         <el-form-item>
@@ -651,6 +687,7 @@ codex-worker status</pre>
           <el-radio-group v-model="llmForm.workerBackend">
             <el-radio-button value="CLAUDE_CODE">Claude Code</el-radio-button>
             <el-radio-button value="OPENAI_CODEX">OpenAI Codex</el-radio-button>
+            <el-radio-button value="GEMINI_CLI">Gemini CLI</el-radio-button>
           </el-radio-group>
           <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
             指定此编程模型由哪个 Worker 后端执行
@@ -687,6 +724,18 @@ codex-worker status</pre>
                     <el-descriptions-item label="tool_output_token_limit">
                       单个工具输出的 token 上限。超长输出会被截断。<br/>
                       <el-tag size="small" type="info">建议值：50000</el-tag>
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </template>
+                <template v-else-if="llmForm.workerBackend === 'GEMINI_CLI'">
+                  <el-descriptions :column="1" size="small" border>
+                    <el-descriptions-item label="GEMINI_MODEL_ALIASES">
+                      自定义模型别名映射，格式如 <code>gemini-pro=gemini-3.1-pro-preview,flash=gemini-3-flash-preview</code>。<br/>
+                      <el-tag size="small" type="info">用于把稳定别名映射到真实版本</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="GEMINI_DEFAULT_MODEL">
+                      Worker 默认模型别名或真实模型名。平台未显式下发时会使用它。<br/>
+                      <el-tag size="small" type="info">建议值：gemini-flash</el-tag>
                     </el-descriptions-item>
                   </el-descriptions>
                 </template>
@@ -773,6 +822,26 @@ codex-worker status</pre>
             <el-option label="API Key 模式" value="API_KEY" />
             <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
           </el-select>
+        </el-form-item>
+        <el-divider content-position="left">Codex Worker（可选）</el-divider>
+        <el-form-item label="Codex Base URL">
+          <el-input v-model="workerForm.codexBaseUrl" placeholder="如：http://192.168.1.100:3051" />
+        </el-form-item>
+        <el-form-item label="Codex Token">
+          <el-input v-model="workerForm.codexAuthToken" type="password" show-password :placeholder="workerDialogMode === 'edit' ? '留空保持不变' : 'Codex Worker 令牌'" />
+        </el-form-item>
+        <el-form-item label="Codex 默认模型">
+          <el-input v-model="workerForm.codexModel" placeholder="如：codex-latest（alias）或 gpt-5.5（真实模型）" />
+        </el-form-item>
+        <el-divider content-position="left">Gemini Worker（可选）</el-divider>
+        <el-form-item label="Gemini Base URL">
+          <el-input v-model="workerForm.geminiBaseUrl" placeholder="如：http://192.168.1.100:3071" />
+        </el-form-item>
+        <el-form-item label="Gemini Token">
+          <el-input v-model="workerForm.geminiAuthToken" type="password" show-password :placeholder="workerDialogMode === 'edit' ? '留空保持不变' : 'Gemini Worker 令牌'" />
+        </el-form-item>
+        <el-form-item label="Gemini 默认模型">
+          <el-input v-model="workerForm.geminiModel" placeholder="如：gemini-flash" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -897,7 +966,15 @@ import {
   testNotification as apiTestNotification,
 } from '@/api/notification'
 import type { TaskAssistantConfig } from '@/api/notification'
-import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, ModelAccessScope, UserMemory, UserMemoryCategory, ApiCredential, AuthType } from '@/types'
+import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, ModelAccessScope, UserMemory, UserMemoryCategory, ApiCredential, AuthType, WorkerBackend } from '@/types'
+import { getModelOptionsByBackend } from '@/utils/llmModelOptions'
+
+// 统一 Claude / Codex / Gemini 模型候选（见 utils/llmModelOptions.ts）。
+// 1.0.4 起：Codex 切到 alias-only 模式，三个 backend 都使用扁平 alias 列表，
+// 与 Claude / Gemini 命名风格保持一致；模型版本升级时仅改 Worker 配置，前端零变动。
+const claudeBackendOptions = getModelOptionsByBackend('CLAUDE_CODE' as WorkerBackend)
+const codexBackendOptions = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
+const geminiBackendOptions = getModelOptionsByBackend('GEMINI_CLI' as WorkerBackend)
 
 const activeTab = ref('git')
 const showHelpDrawer = ref(false)
@@ -1063,20 +1140,20 @@ function editLlmModel(row: LlmModelConfig) {
 }
 
 async function saveLlm() {
-  const isCodex = llmForm.value.workerBackend === 'OPENAI_CODEX'
+  const supportsSubscription = supportsSubscriptionBackend(llmForm.value.workerBackend)
   if (!llmForm.value.name || !llmForm.value.modelName) {
     ElMessage.warning('请填写必填项')
     return
   }
-  if (!isCodex && !llmForm.value.baseUrl) {
+  if (!supportsSubscription && !llmForm.value.baseUrl) {
     ElMessage.warning('请填写 API Base URL')
     return
   }
-  if (!isCodex && !llmForm.value.apiKey && llmDialogMode.value === 'add') {
+  if (!supportsSubscription && !llmForm.value.apiKey && llmDialogMode.value === 'add') {
     ElMessage.warning('请填写 API Key')
     return
   }
-  // Codex: apiKey 和 baseUrl 可选（留空 = 订阅模式）
+  // Claude Code / Codex: apiKey 和 baseUrl 可选（留空 = 订阅模式）
   if (llmForm.value.scope === 'RESTRICTED' && (!llmForm.value.allowedWorkerIds || llmForm.value.allowedWorkerIds.length === 0)) {
     ElMessage.warning('限定模式下请至少选择一个 Worker')
     return
@@ -1098,7 +1175,7 @@ async function saveLlm() {
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : undefined,
         envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
         workerBackend: llmForm.value.category === 'CODING' ? llmForm.value.workerBackend : undefined,
-        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX')
+        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX' || llmForm.value.workerBackend === 'GEMINI_CLI')
           && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
           : undefined,
@@ -1117,7 +1194,7 @@ async function saveLlm() {
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : [],
         envVars: envVarsMap,
         workerBackend: llmForm.value.category === 'CODING' ? (llmForm.value.workerBackend || null) : null,
-        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX')
+        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX' || llmForm.value.workerBackend === 'GEMINI_CLI')
           && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
           : null,
@@ -1155,6 +1232,33 @@ async function handleTestLlm() {
   } finally {
     testingLlm.value = false
   }
+}
+
+function supportsSubscriptionBackend(workerBackend?: import('@/types').WorkerBackend) {
+  return workerBackend === 'OPENAI_CODEX' || workerBackend === 'CLAUDE_CODE' || workerBackend === 'GEMINI_CLI'
+}
+
+function baseUrlPlaceholder(workerBackend?: import('@/types').WorkerBackend) {
+  if (workerBackend === 'OPENAI_CODEX') {
+    return '留空使用默认 OpenAI 端点（订阅模式无需填写）'
+  }
+  if (workerBackend === 'GEMINI_CLI') {
+    return '留空表示使用 Gemini CLI 登录态或订阅模式（依赖 Worker 本机 gemini login）'
+  }
+  if (workerBackend === 'CLAUDE_CODE') {
+    return '留空表示使用 Claude Code 订阅模式（依赖 Worker 本机 claude login）'
+  }
+  return '如：https://dashscope.aliyuncs.com/compatible-mode/v1'
+}
+
+function apiKeyPlaceholder(workerBackend?: import('@/types').WorkerBackend, mode: 'add' | 'edit' = 'add') {
+  if (mode === 'edit') {
+    return '留空保持不变'
+  }
+  if (supportsSubscriptionBackend(workerBackend)) {
+    return '留空使用订阅模式'
+  }
+  return 'API Key'
 }
 
 async function handleTestSaved(row: LlmModelConfig & { _testing?: boolean }) {
@@ -1240,7 +1344,18 @@ function resolveModelName(modelConfigId: string): string {
 const showWorkerAddDialog = ref(false)
 const workerDialogMode = ref<'add' | 'edit'>('add')
 const editingWorkerId = ref('')
-const workerForm = ref({ name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION' })
+const workerForm = ref({
+  name: '',
+  baseUrl: '',
+  authToken: '',
+  authMode: 'SUBSCRIPTION',
+  codexBaseUrl: '',
+  codexAuthToken: '',
+  codexModel: '',
+  geminiBaseUrl: '',
+  geminiAuthToken: '',
+  geminiModel: '',
+})
 
 function editWorker(row: ClaudeWorker) {
   workerDialogMode.value = 'edit'
@@ -1250,8 +1365,45 @@ function editWorker(row: ClaudeWorker) {
     baseUrl: row.baseUrl,
     authToken: '',
     authMode: row.authMode || 'SUBSCRIPTION',
+    codexBaseUrl: row.codexBaseUrl || '',
+    codexAuthToken: '',
+    codexModel: row.codexModel || '',
+    geminiBaseUrl: row.geminiBaseUrl || '',
+    geminiAuthToken: '',
+    geminiModel: row.geminiModel || '',
   }
   showWorkerAddDialog.value = true
+}
+
+function buildWorkerConfig(baseUrl: string, authToken: string, model: string) {
+  const normalizedBaseUrl = baseUrl.trim()
+  if (!normalizedBaseUrl) {
+    return undefined
+  }
+  return {
+    baseUrl: normalizedBaseUrl,
+    authToken: authToken.trim() || undefined,
+    model: model.trim() || undefined,
+  }
+}
+
+function buildWorkerPayload() {
+  return {
+    name: workerForm.value.name,
+    baseUrl: workerForm.value.baseUrl,
+    authToken: workerForm.value.authToken,
+    authMode: workerForm.value.authMode,
+    codexConfig: buildWorkerConfig(
+      workerForm.value.codexBaseUrl,
+      workerForm.value.codexAuthToken,
+      workerForm.value.codexModel,
+    ),
+    geminiConfig: buildWorkerConfig(
+      workerForm.value.geminiBaseUrl,
+      workerForm.value.geminiAuthToken,
+      workerForm.value.geminiModel,
+    ),
+  }
 }
 
 async function saveWorkerForm() {
@@ -1267,15 +1419,25 @@ async function saveWorkerForm() {
         saving.value = false
         return
       }
-      await apiRegisterWorker(workerForm.value)
+      await apiRegisterWorker(buildWorkerPayload())
     } else {
-      const form: Record<string, string> = { name: workerForm.value.name, baseUrl: workerForm.value.baseUrl }
+      const form = buildWorkerPayload()
       if (workerForm.value.authToken) form.authToken = workerForm.value.authToken
-      if (workerForm.value.authMode) form.authMode = workerForm.value.authMode
       await apiUpdateWorker(editingWorkerId.value, form)
     }
     showWorkerAddDialog.value = false
-    workerForm.value = { name: '', baseUrl: '', authToken: '', authMode: 'SUBSCRIPTION' }
+    workerForm.value = {
+      name: '',
+      baseUrl: '',
+      authToken: '',
+      authMode: 'SUBSCRIPTION',
+      codexBaseUrl: '',
+      codexAuthToken: '',
+      codexModel: '',
+      geminiBaseUrl: '',
+      geminiAuthToken: '',
+      geminiModel: '',
+    }
     ElMessage.success('保存成功')
     await loadWorkers()
   } catch (e: any) {

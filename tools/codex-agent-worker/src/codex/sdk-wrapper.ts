@@ -48,6 +48,58 @@ export function parseModelString(rawModel: string): { model: string; reasoningLe
   return { model }
 }
 
+/**
+ * 把请求中的 model 字符串经过 alias 解析为真实模型字符串。
+ *
+ * 设计目标：让前端和 Java 后端只感知稳定 alias（如 codex-latest），Worker 在执行前把
+ * alias 映射到真实模型（如 gpt-5.5）。模型版本升级时只改 Worker 配置即可。
+ *
+ * 解析规则（按优先级）：
+ *   1. 整串命中 alias：直接返回 alias 对应的真实模型（含 reasoning 后缀，原样保留）
+ *   2. `<alias>:<reasoning>` 格式且 alias 命中、且 alias value 不含冒号：
+ *      把请求的 reasoning 拼到 alias value 上
+ *   3. `<alias>:<reasoning>` 格式且 alias value 已含冒号：
+ *      使用 alias 自身的 reasoning（避免双重冒号导致 Codex SDK 困惑）
+ *   4. 都不命中：原样返回（保持向后兼容，请求方仍可直接传真实模型名）
+ *
+ * 示例（默认映射 codex-latest=gpt-5.5, codex-fast=gpt-5.5:low）：
+ *   resolveModelAlias('codex-latest', m) → { resolved: 'gpt-5.5', wasAlias: true }
+ *   resolveModelAlias('codex-fast', m)   → { resolved: 'gpt-5.5:low', wasAlias: true }
+ *   resolveModelAlias('codex-latest:high', m) → { resolved: 'gpt-5.5:high', wasAlias: true }
+ *   resolveModelAlias('codex-fast:high', m)   → { resolved: 'gpt-5.5:low', wasAlias: true } // alias 自带 reasoning，忽略请求的
+ *   resolveModelAlias('gpt-5.5', m)      → { resolved: 'gpt-5.5', wasAlias: false }
+ *   resolveModelAlias('gpt-5.5:high', m) → { resolved: 'gpt-5.5:high', wasAlias: false }
+ */
+export function resolveModelAlias(
+  rawModel: string,
+  aliases: Record<string, string>
+): { resolved: string; wasAlias: boolean } {
+  if (!rawModel) {
+    return { resolved: rawModel, wasAlias: false }
+  }
+  // Case 1: 整串命中
+  if (Object.prototype.hasOwnProperty.call(aliases, rawModel)) {
+    return { resolved: aliases[rawModel]!, wasAlias: true }
+  }
+  // Case 2/3: alias:reasoning 格式
+  const colonIdx = rawModel.indexOf(':')
+  if (colonIdx > 0) {
+    const aliasPart = rawModel.substring(0, colonIdx)
+    const reasoningPart = rawModel.substring(colonIdx + 1)
+    if (Object.prototype.hasOwnProperty.call(aliases, aliasPart)) {
+      const aliasResolved = aliases[aliasPart]!
+      // alias 自身已含 reasoning，请求附带的 reasoning 被忽略
+      if (aliasResolved.includes(':')) {
+        return { resolved: aliasResolved, wasAlias: true }
+      }
+      // alias 不含 reasoning，把请求的 reasoning 拼到尾部
+      return { resolved: `${aliasResolved}:${reasoningPart}`, wasAlias: true }
+    }
+  }
+  // Case 4: 直接透传（向后兼容真实模型名）
+  return { resolved: rawModel, wasAlias: false }
+}
+
 export function shouldAbortBeforeTurnStart(completedTurns: number, maxTurns: number | undefined): boolean {
   return maxTurns !== undefined && completedTurns >= maxTurns
 }
@@ -436,14 +488,21 @@ export async function runQuery(
   taskBroadcasts.set(taskId, broadcast)
 
   const abortController = new AbortController()
-  const rawModel = model || 'gpt-5.4-mini'
+  // 1.0.4 起：alias-first
+  // - 默认值（config.defaultModel）默认是 alias `codex-latest`
+  // - 不论请求方传 alias（codex-latest）还是真实模型（gpt-5.5），都先经过 resolveModelAlias 转换
+  // - 真实模型直接透传（保持向后兼容）
+  const requestedModel = model || config.defaultModel
+  const aliasResult = resolveModelAlias(requestedModel, config.modelAliases)
+  const rawModel = aliasResult.resolved
 
+  // entry.model 保留请求方提供的原始字符串（alias 或真实模型），便于上游列表 / 监控展示稳定值
   const entry: TaskEntry = {
     taskId,
     status: 'running',
     abortController,
     threadId,
-    model: rawModel,
+    model: requestedModel,
     startedAt: Date.now(),
   }
   taskRegistry.set(taskId, entry)
@@ -461,7 +520,7 @@ export async function runQuery(
     ? maxTurns
     : undefined
 
-  entry.model = rawModel
+  // entry.model 仍保留请求方原始字符串；rawModel 是 alias 解析后的真实模型（含 reasoning 后缀）
   const { model: effectiveModel, reasoningLevel } = parseModelString(rawModel)
   let resolvedModel = effectiveModel
 
@@ -488,7 +547,7 @@ export async function runQuery(
       codexOptions.baseUrl = effectiveBaseUrl
     }
     console.log(
-      `[codex] start task=${taskId} raw_model=${rawModel} effective_model=${effectiveModel} reasoning=${reasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} base_url=${effectiveBaseUrl ?? ''} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''}`
+      `[codex] start task=${taskId} requested_model=${requestedModel} alias_hit=${aliasResult.wasAlias} resolved_model=${rawModel} effective_model=${effectiveModel} reasoning=${reasoningLevel ?? ''} has_request_api_key=${Boolean(apiKey)} has_effective_api_key=${Boolean(effectiveApiKey)} base_url=${effectiveBaseUrl ?? ''} env_var_keys=${envVars ? Object.keys(envVars).join(',') : ''} thread_id=${threadId ?? ''}`
     )
 
     // Codex CLI 配置项默认值 + envVars 覆盖

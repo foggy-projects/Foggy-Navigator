@@ -1,0 +1,70 @@
+Codex Agent Worker log evidence for gpt-5.5 / gpt-5.5:high / default-model fallback
+captured: 2026-04-25 11:32-11:36 local
+source: tools/codex-agent-worker/logs/worker.log
+scenario: frontend ClaudeWorkerView → backend TaskDispatchFacade → codex-worker /api/v1/query
+
+==========================================================================
+Worker startup banner (confirms SDK 0.125.0 loaded)
+==========================================================================
+============================================================
+Codex Agent Worker started
+  URL:    http://0.0.0.0:3051
+  Name:   codex-worker-default
+  Auth:   Disabled
+  Codex:  Codex Login / Per-request
+  MaxTasks: 6
+  CWDs:   All allowed
+============================================================
+
+==========================================================================
+Case 1: gpt-5.5 (no reasoning suffix) — from Playwright UI
+==========================================================================
+[query] received request: cwd=D:/tmp/test2 session_id= model=gpt-5.5 has_api_key=false base_url= env_var_keys= images=0
+[codex] start task=76077cee-81a0-41db-9784-1190c8969864 raw_model=gpt-5.5 effective_model=gpt-5.5 reasoning= has_request_api_key=false has_effective_api_key=false base_url= env_var_keys= thread_id=
+
+结论:
+- raw_model = "gpt-5.5" 原样透传
+- effective_model = "gpt-5.5" （parseModelString 无冒号，模型名不变）
+- reasoning = 空 （无 ":<level>" 后缀）
+- 订阅模式被正确识别 (has_request_api_key=false, has_effective_api_key=false)
+
+==========================================================================
+Case 2: gpt-5.5:high (reasoning suffix) — from Playwright UI
+==========================================================================
+[query] received request: cwd=D:/tmp/test2 session_id= model=gpt-5.5:high has_api_key=false base_url= env_var_keys= images=0
+[codex] start task=193fe3b1-a5f0-444e-9a21-650cc5b4e405 raw_model=gpt-5.5:high effective_model=gpt-5.5 reasoning=high has_request_api_key=false has_effective_api_key=false base_url= env_var_keys= thread_id=
+
+结论:
+- raw_model = "gpt-5.5:high" 原样透传
+- effective_model = "gpt-5.5" （parseModelString 按 ":" 切分得到模型名）
+- reasoning = "high" （映射为 Codex SDK 的 ModelReasoningEffort="high"）
+- parseModelString 逻辑对 5.5 系列与 5.4 系列同样生效
+
+==========================================================================
+Case 3: 空 model 字段 — 直接 POST /api/v1/query 验证 CODEX_DEFAULT_MODEL 回落
+==========================================================================
+[query] received request: cwd=D:\tmp\test2 session_id= model= has_api_key=false base_url= env_var_keys= images=0
+[codex] start task=8ff9298a-2c7c-4e7d-9c43-59ca467bc620 raw_model=gpt-5.5 effective_model=gpt-5.5 reasoning= has_request_api_key=false has_effective_api_key=false base_url= env_var_keys= thread_id=
+
+结论:
+- 请求未传 model 时，sdk-wrapper.ts 中 `model || config.defaultModel` 回落到 'gpt-5.5'
+- 即 CODEX_DEFAULT_MODEL 未显式配置时，1.0.4 的硬编码默认值正确生效
+- 与旧版本的 'gpt-5.4-mini' 硬编码相比，新默认值已改为 'gpt-5.5'
+
+==========================================================================
+已知下游差异（非本条改动引起）
+==========================================================================
+三个 case 的任务最终都失败在 Codex CLI 订阅 token 刷新阶段:
+> "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again."
+
+这属于 Worker 主机的 `~/.codex/auth.json` 订阅凭据问题，需要手动 `codex login`
+或改用 API Key 模式。与 1.0.4-04 需求描述的"代码收口 + 模型串处理"验收范围无关。
+
+==========================================================================
+验收断言
+==========================================================================
+1. Worker 运行 @openai/codex-sdk@0.125.0（启动成功、health OK、无编译错误）✓
+2. 前端下拉选择 gpt-5.5 / gpt-5.5:high 时，model 字段完整透传到 worker ✓
+3. parseModelString 对 5.5 系列正确拆分 model/reasoning ✓
+4. 空 model 时回落到 config.defaultModel（1.0.4 新默认 gpt-5.5）✓
+5. 订阅模式与 API Key 模式的判定分支未改变 ✓
