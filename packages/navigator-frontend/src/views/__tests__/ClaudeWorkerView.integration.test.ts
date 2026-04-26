@@ -136,6 +136,19 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     updatedAt: '2026-02-16T00:00:00Z',
   }
 
+  const mockGeminiCompletedTask: ClaudeTask = {
+    taskId: 'task-gemini-1',
+    sessionId: 'session-gemini-1',
+    workerId: 'worker-1',
+    directoryId: 'dir-1',
+    prompt: 'hello gemini',
+    cwd: '/test/path',
+    status: 'COMPLETED',
+    model: 'gemini-3.1-pro-preview',
+    createdAt: '2026-02-16T00:00:00Z',
+    updatedAt: '2026-02-16T00:00:00Z',
+  }
+
   const mockResumedTask: ClaudeTask = {
     taskId: 'task-2',
     sessionId: 'session-2',
@@ -234,6 +247,28 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       // Verify: listTasksByDirectoryPagedUnified should be called again to refresh
       const finalCallCount = vi.mocked(unifiedTaskApi.listTasksByDirectoryPagedUnified).mock.calls.length
       expect(finalCallCount).toBeGreaterThan(initialCallCount)
+    })
+
+    it('should resume Gemini task by platform sessionId without provider-native id', async () => {
+      vi.mocked(unifiedTaskApi.resumeTaskUnified).mockResolvedValue(mockResumedTask as any)
+      vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: 'continue gemini' } as any)
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      vm.selectedDirectoryId = 'dir-1'
+      await flushPromises()
+
+      await vm.handleResumeFromHistory(mockGeminiCompletedTask)
+      await flushPromises()
+
+      expect(unifiedTaskApi.resumeTaskUnified).toHaveBeenCalledWith(expect.objectContaining({
+        workerId: 'worker-1',
+        prompt: 'continue gemini',
+        sessionId: 'session-gemini-1',
+      }))
     })
   })
 

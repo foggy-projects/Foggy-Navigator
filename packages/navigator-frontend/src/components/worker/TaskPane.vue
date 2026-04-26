@@ -122,6 +122,7 @@ import { useInputMemory } from '@/composables/useInputMemory'
 import type { SkillInfo } from '@/types'
 import SlashCommandInput from './SlashCommandInput.vue'
 import type { AgentItem } from './SlashCommandInput.vue'
+import { canShowContinuationInput } from './taskPaneResume'
 
 const props = defineProps<{
   paneState: TaskPaneState
@@ -207,14 +208,8 @@ const modelShort = computed(() => {
   return match ? match[0] : m.split('-').slice(1, 3).join('-')
 })
 
-const continuationRef = computed(() => {
-  const t = props.paneState.task.value
-  return t?.claudeSessionId || t?.codexThreadId || ''
-})
-
 const canInput = computed(() => {
-  const t = props.paneState.task.value
-  return !!t && t.status !== 'PENDING' && !!continuationRef.value
+  return canShowContinuationInput(props.paneState.task.value)
 })
 
 const sendDisabled = computed(() => {

@@ -6739,7 +6739,7 @@ function interactionStateLabel(state: string): string {
 async function handleResumeFromHistory(task: ClaudeTask) {
   const workerId = task.workerId || selectedWorkerId.value
   if (!workerId) return
-  if (!task.claudeSessionId && !task.codexThreadId) return
+  if (!task.sessionId) return
 
   try {
     const { value: prompt } = (await ElMessageBox.prompt('输入后续指令', '继续对话', {
