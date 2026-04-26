@@ -137,6 +137,10 @@ pnpm-debug.log*
 lerna-debug.log*
 tools/codex-agent-worker/release/output/
 tools/codex-agent-worker/release/staging/
+!tools/gemini-agent-worker/release/bin/
+!tools/gemini-agent-worker/release/bin/*
+tools/gemini-agent-worker/release/output/
+tools/gemini-agent-worker/release/staging/
 
 # Docker
 docker-compose.override.yml

@@ -26,6 +26,23 @@ function createGeminiProcess(args: string[], cwd?: string, env?: NodeJS.ProcessE
   })
 }
 
+export function buildGeminiProcessEnv(
+  taskId: string,
+  apiKey: string | undefined,
+  baseUrl: string | undefined,
+  envVars: Record<string, string> | undefined
+): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...(envVars || {}),
+    ...(apiKey ? { GEMINI_API_KEY: apiKey } : {}),
+    ...(baseUrl ? { GEMINI_BASE_URL: baseUrl } : {}),
+    // Headless worker tasks cannot answer Gemini CLI's interactive trusted-folder prompt.
+    GEMINI_CLI_TRUST_WORKSPACE: 'true',
+    FOGGY_GEMINI_TASK_ID: taskId,
+  }
+}
+
 function stripBase64Prefix(data: string): string {
   const marker = 'base64,'
   const markerIndex = data.indexOf(marker)
@@ -147,13 +164,11 @@ export async function runQuery(
     const attachmentPaths = await saveAttachments(taskId, cwd, images)
     const effectivePrompt = buildPrompt(prompt, attachmentPaths)
     const args = buildArgs(effectivePrompt, sessionId, model || config.defaultModel, skipTrust)
-    const child: ChildProcess = createGeminiProcess(args, cwd, {
-      ...process.env,
-      ...(envVars || {}),
-      ...(apiKey ? { GEMINI_API_KEY: apiKey } : {}),
-      ...(baseUrl ? { GEMINI_BASE_URL: baseUrl } : {}),
-      FOGGY_GEMINI_TASK_ID: taskId,
-    })
+    const child: ChildProcess = createGeminiProcess(
+      args,
+      cwd,
+      buildGeminiProcessEnv(taskId, apiKey, baseUrl, envVars)
+    )
 
     entry.pid = child.pid
 
