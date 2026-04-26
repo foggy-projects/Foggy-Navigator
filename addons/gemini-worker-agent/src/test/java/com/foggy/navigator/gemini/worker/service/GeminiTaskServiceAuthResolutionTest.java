@@ -5,7 +5,9 @@ import com.foggy.navigator.agent.framework.session.Message;
 import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.Session;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.entity.SessionEntity;
 import com.foggy.navigator.common.model.GeminiConfig;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.gemini.worker.model.entity.GeminiTaskEntity;
 import com.foggy.navigator.gemini.worker.repository.GeminiTaskRepository;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -21,6 +23,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -36,6 +39,7 @@ class GeminiTaskServiceAuthResolutionTest {
     private ApplicationEventPublisher eventPublisher;
     private LlmModelManager llmModelManager;
     private com.foggy.navigator.agent.framework.session.SessionManager sessionManager;
+    private SessionEntityRepository sessionEntityRepository;
     private GeminiTaskService taskService;
     private Map<String, GeminiTaskEntity> savedTasks;
 
@@ -46,9 +50,11 @@ class GeminiTaskServiceAuthResolutionTest {
         eventPublisher = mock(ApplicationEventPublisher.class);
         llmModelManager = mock(LlmModelManager.class);
         sessionManager = mock(com.foggy.navigator.agent.framework.session.SessionManager.class);
+        sessionEntityRepository = mock(SessionEntityRepository.class);
         taskService = new GeminiTaskService(taskRepository, workerManagementFacade, eventPublisher);
         ReflectionTestUtils.setField(taskService, "llmModelManager", llmModelManager);
         ReflectionTestUtils.setField(taskService, "sessionManager", sessionManager);
+        ReflectionTestUtils.setField(taskService, "sessionEntityRepository", sessionEntityRepository);
 
         // Wire save() and findByTaskId() to a shared map so flows that round-trip via
         // findByTaskId (e.g. createTaskDirect) see what was just persisted.
@@ -155,5 +161,38 @@ class GeminiTaskServiceAuthResolutionTest {
                 msg != null
                         && MessageRole.USER.equals(msg.getRole())
                         && "hi again".equals(msg.getContent())));
+    }
+
+    @Test
+    void deleteTaskSoftDeletesSessionAndRemovesGeminiTask() {
+        GeminiTaskEntity task = new GeminiTaskEntity();
+        task.setTaskId("task-1");
+        task.setUserId("user-1");
+        task.setSessionId("session-1");
+        task.setStatus("COMPLETED");
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+
+        when(taskRepository.findByTaskIdAndUserId("task-1", "user-1")).thenReturn(Optional.of(task));
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        taskService.deleteTask("user-1", "task-1");
+
+        verify(sessionEntityRepository).save(argThat(saved -> saved.getDeletedAt() != null));
+        verify(taskRepository).delete(task);
+        verify(sessionManager).deleteSession("session-1");
+    }
+
+    @Test
+    void deleteTaskRejectsRunningTask() {
+        GeminiTaskEntity task = new GeminiTaskEntity();
+        task.setTaskId("task-1");
+        task.setUserId("user-1");
+        task.setStatus("RUNNING");
+
+        when(taskRepository.findByTaskIdAndUserId("task-1", "user-1")).thenReturn(Optional.of(task));
+
+        assertThrows(IllegalStateException.class, () -> taskService.deleteTask("user-1", "task-1"));
+        verify(taskRepository, never()).delete(any());
     }
 }
