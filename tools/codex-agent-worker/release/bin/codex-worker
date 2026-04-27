@@ -174,19 +174,32 @@ _upgrade_from_archive() {
     echo -e "${GREEN}Upgraded to v${NEW_VERSION}!${NC}"
 }
 
+cmd_upgrade_sdk() {
+    local UPDATE_SCRIPT="$INSTALL_DIR/update.sh"
+    if [ ! -f "$UPDATE_SCRIPT" ]; then
+        echo -e "${RED}update.sh not found at $INSTALL_DIR${NC}"
+        echo -e "${YELLOW}Your install may predate the upgrade-sdk feature. Run 'codex-worker upgrade' first${NC}"
+        echo -e "${YELLOW}to pull a newer worker version that ships update.sh.${NC}"
+        return 1
+    fi
+    bash "$UPDATE_SCRIPT" "$@"
+}
+
 cmd_help() {
     echo "codex-worker v${VERSION} -- Codex Agent Worker CLI"
     echo ""
     echo "Usage: codex-worker <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  start              Start the worker service"
-    echo "  stop               Stop the worker service"
-    echo "  status             Show worker status and health"
-    echo "  version            Show installed version"
-    echo "  logs               Tail worker log output"
-    echo "  upgrade [archive]  Upgrade from OBS or local .tar.gz/.zip"
-    echo "  help               Show this help message"
+    echo "  start                Start the worker service"
+    echo "  stop                 Stop the worker service"
+    echo "  status               Show worker status and health"
+    echo "  version              Show installed version"
+    echo "  logs                 Tail worker log output"
+    echo "  upgrade [archive]    Upgrade the worker itself from OBS or local .tar.gz/.zip"
+    echo "  upgrade-sdk [opts]   Upgrade only @openai/codex-sdk in-place"
+    echo "                         opts: --sdk-version <ver>, --no-restart"
+    echo "  help                 Show this help message"
     echo ""
     echo "Environment:"
     echo "  CODEX_WORKER_HOME   Install directory (default: ~/.codex-worker)"
@@ -202,6 +215,7 @@ case "${1:-help}" in
     version|-v|--version) cmd_version ;;
     logs) cmd_logs ;;
     upgrade) shift; cmd_upgrade "$@" ;;
+    upgrade-sdk) shift; cmd_upgrade_sdk "$@" ;;
     help|--help|-h) cmd_help ;;
     *)
         echo -e "${RED}Unknown command: $1${NC}"

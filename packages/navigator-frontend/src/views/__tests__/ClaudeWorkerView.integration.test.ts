@@ -6,7 +6,7 @@ import * as claudeWorkerApi from '@/api/claudeWorker'
 import * as unifiedTaskApi from '@/api/unifiedTask'
 import * as platformApi from '@/api/platform'
 import * as codingAgentApi from '@/api/codingAgent'
-import type { ClaudeTask, ClaudeWorker, WorkingDirectory } from '@/types'
+import type { ClaudeTask, ClaudeWorker, LlmModelConfig, WorkingDirectory } from '@/types'
 
 // Mock APIs
 vi.mock('@/api/claudeWorker')
@@ -144,7 +144,42 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     prompt: 'hello gemini',
     cwd: '/test/path',
     status: 'COMPLETED',
+    providerType: 'gemini-worker',
     model: 'gemini-3.1-pro-preview',
+    createdAt: '2026-02-16T00:00:00Z',
+    updatedAt: '2026-02-16T00:00:00Z',
+  }
+
+  const mockClaudeModelConfig: LlmModelConfig = {
+    id: 'config-claude',
+    tenantId: 'tenant-1',
+    name: 'Claude Subscription',
+    category: 'CODING',
+    baseUrl: '',
+    modelName: 'opus[1m]',
+    isDefault: false,
+    hasApiKey: false,
+    scope: 'GLOBAL',
+    availableModels: ['opus[1m]', 'opus'],
+    workerBackend: 'CLAUDE_CODE',
+    sortOrder: 1,
+    createdAt: '2026-02-16T00:00:00Z',
+    updatedAt: '2026-02-16T00:00:00Z',
+  }
+
+  const mockGeminiModelConfig: LlmModelConfig = {
+    id: 'config-gemini',
+    tenantId: 'tenant-1',
+    name: 'Gemini Subscription',
+    category: 'CODING',
+    baseUrl: '',
+    modelName: 'gemini-pro',
+    isDefault: false,
+    hasApiKey: false,
+    scope: 'GLOBAL',
+    availableModels: ['gemini-pro', 'gemini-flash', 'gemini-flash-lite'],
+    workerBackend: 'GEMINI_CLI',
+    sortOrder: 2,
     createdAt: '2026-02-16T00:00:00Z',
     updatedAt: '2026-02-16T00:00:00Z',
   }
@@ -269,6 +304,32 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
         prompt: 'continue gemini',
         sessionId: 'session-gemini-1',
       }))
+    })
+
+    it('should restore Gemini model config when opening a Gemini history task without modelConfigId', async () => {
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([
+        mockClaudeModelConfig,
+        mockGeminiModelConfig,
+      ])
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      await vm.loadPlatformModelConfig()
+      await flushPromises()
+
+      expect(vm.platformModelConfigId).toBe('config-claude')
+
+      vm.restoreSessionModelSelection({
+        ...mockGeminiCompletedTask,
+        modelConfigId: undefined,
+      })
+      await flushPromises()
+
+      expect(vm.platformModelConfigId).toBe('config-gemini')
+      expect(vm.taskForm.model).toBe('gemini-pro')
     })
   })
 

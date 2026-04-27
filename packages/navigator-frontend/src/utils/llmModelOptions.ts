@@ -41,7 +41,7 @@ const CODEX_ALIAS_OPTIONS: SelectableModelOption[] = [
 ]
 
 const GEMINI_MODEL_OPTIONS: SelectableModelOption[] = [
-  { value: 'gemini-pro', label: 'Gemini Pro (Alias)', backend: 'GEMINI_CLI', description: 'Gemini Pro (Alias -> Gemini 3.1 Pro Preview)' },
+  { value: 'gemini-pro', label: 'Gemini Pro (Alias)', backend: 'GEMINI_CLI', description: 'Gemini Pro (Alias -> CLI Auto Gemini 3)' },
   { value: 'gemini-flash', label: 'Gemini Flash (Alias)', backend: 'GEMINI_CLI', description: 'Gemini Flash (Alias -> Gemini 3 Flash Preview)' },
   { value: 'gemini-flash-lite', label: 'Gemini Flash Lite (Alias)', backend: 'GEMINI_CLI', description: 'Gemini Flash Lite (Alias -> Gemini 3.1 Flash Lite Preview)' },
 ]

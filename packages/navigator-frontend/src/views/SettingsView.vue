@@ -730,7 +730,7 @@ codex-worker status</pre>
                 <template v-else-if="llmForm.workerBackend === 'GEMINI_CLI'">
                   <el-descriptions :column="1" size="small" border>
                     <el-descriptions-item label="GEMINI_MODEL_ALIASES">
-                      自定义模型别名映射，格式如 <code>gemini-pro=gemini-3.1-pro-preview,flash=gemini-3-flash-preview</code>。<br/>
+                      自定义模型别名映射，格式如 <code>gemini-pro=auto-gemini-3,flash=gemini-3-flash-preview</code>。<br/>
                       <el-tag size="small" type="info">用于把稳定别名映射到真实版本</el-tag>
                     </el-descriptions-item>
                     <el-descriptions-item label="GEMINI_DEFAULT_MODEL">

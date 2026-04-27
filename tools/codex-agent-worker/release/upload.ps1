@@ -3,9 +3,12 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File release\upload.ps1
 #   powershell -ExecutionPolicy Bypass -File release\upload.ps1 -Version 1.0.0
+#   powershell -ExecutionPolicy Bypass -File release\upload.ps1 -Version 1.0.0 -AllowSameVersion
 
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+
+    [switch]$AllowSameVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,11 +61,57 @@ if (-not $Version) {
     $Version = $PackageJson.version
 }
 
+function Compare-Semver {
+    param(
+        [string]$Left,
+        [string]$Right
+    )
+
+    try {
+        $leftCore = ($Left -split "[-+]")[0]
+        $rightCore = ($Right -split "[-+]")[0]
+        $leftVersion = [Version]$leftCore
+        $rightVersion = [Version]$rightCore
+        return $leftVersion.CompareTo($rightVersion)
+    }
+    catch {
+        return [string]::Compare($Left, $Right, $true)
+    }
+}
+
 Write-Host "=== Codex Agent Worker - OBS Upload ===" -ForegroundColor Cyan
 Write-Host "Version:  $Version" -ForegroundColor Cyan
 Write-Host "Bucket:   $ObsBucket" -ForegroundColor Cyan
 Write-Host "Base URL: $BaseUrl" -ForegroundColor Cyan
 Write-Host ""
+
+if (-not $AllowSameVersion) {
+    Write-Host "Checking remote latest.json..." -ForegroundColor Cyan
+    try {
+        $cacheBust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $remoteLatest = Invoke-RestMethod -Uri "$BaseUrl/latest.json?ts=$cacheBust" -Headers @{ "Cache-Control" = "no-cache" } -TimeoutSec 15 -ErrorAction Stop
+        $remoteVersion = "$($remoteLatest.version)".Trim()
+        if ($remoteVersion) {
+            $cmp = Compare-Semver -Left $Version -Right $remoteVersion
+            if ($cmp -eq 0) {
+                Write-Host "ERROR: Remote latest.json is already version $remoteVersion." -ForegroundColor Red
+                Write-Host "Bump the worker version before upload, for example:" -ForegroundColor Yellow
+                Write-Host "  powershell -ExecutionPolicy Bypass -File release\package.ps1 -OS all -Bump patch -Upload" -ForegroundColor White
+                Write-Host "Use -AllowSameVersion only for an intentional archive repair." -ForegroundColor Yellow
+                exit 1
+            }
+            if ($cmp -lt 0) {
+                Write-Host "ERROR: Local upload version $Version is older than remote latest version $remoteVersion." -ForegroundColor Red
+                exit 1
+            }
+            Write-Host "Remote latest version: $remoteVersion -> uploading $Version" -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Host "WARNING: Could not read remote latest.json, continuing as first publish or offline OBS metadata repair." -ForegroundColor Yellow
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
 
 if (-not (Test-Path $OutputDir)) {
     Write-Host "ERROR: release/output/ directory not found. Run release/package.ps1 first." -ForegroundColor Red

@@ -95,6 +95,7 @@ class MatchRule(BaseModel):
     keywords: Optional[List[str]] = None  # 关键词列表（OR 匹配）
     pattern: Optional[str] = None  # 正则表达式
     default: Optional[bool] = False  # 是否为默认响应
+    message_role: Optional[str] = None  # 指定从哪个角色的最后一条消息匹配，默认 user
 
 
 class StreamConfig(BaseModel):

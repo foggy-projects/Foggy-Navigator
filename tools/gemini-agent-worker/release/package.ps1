@@ -5,12 +5,19 @@
 #   powershell -ExecutionPolicy Bypass -File release\package.ps1
 #   powershell -ExecutionPolicy Bypass -File release\package.ps1 -OS all
 #   powershell -ExecutionPolicy Bypass -File release\package.ps1 -OS all -Upload
+#   powershell -ExecutionPolicy Bypass -File release\package.ps1 -OS all -Bump patch -Upload
+#   powershell -ExecutionPolicy Bypass -File release\package.ps1 -OS all -Version 1.0.1 -Upload
 
 param(
     [ValidateSet("auto", "windows", "linux", "macos", "all")]
     [string]$OS = "auto",
 
-    [switch]$Upload
+    [switch]$Upload,
+
+    [ValidateSet("none", "patch", "minor", "major")]
+    [string]$Bump = "none",
+
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,16 +36,44 @@ function ConvertTo-UnixLineEndings {
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkerDir = Split-Path -Parent $ScriptDir
 $PackageJsonPath = Join-Path $WorkerDir "package.json"
-$PackageJson = Get-Content $PackageJsonPath -Raw | ConvertFrom-Json
-$Version = $PackageJson.version
 
-if (-not $Version) {
+function Invoke-NpmVersion {
+    param([string]$TargetVersion)
+
+    Push-Location $WorkerDir
+    & npm version $TargetVersion --no-git-tag-version
+    $exitCode = $LASTEXITCODE
+    Pop-Location
+    if ($exitCode -ne 0) {
+        Write-Host "ERROR: npm version $TargetVersion failed" -ForegroundColor Red
+        exit 1
+    }
+}
+
+if ($Version -and $Bump -ne "none") {
+    Write-Host "ERROR: Use either -Version or -Bump, not both." -ForegroundColor Red
+    exit 1
+}
+
+if ($Version) {
+    Write-Host "Setting release version to $Version" -ForegroundColor Cyan
+    Invoke-NpmVersion $Version
+}
+elseif ($Bump -ne "none") {
+    Write-Host "Bumping release version: $Bump" -ForegroundColor Cyan
+    Invoke-NpmVersion $Bump
+}
+
+$PackageJson = Get-Content $PackageJsonPath -Raw | ConvertFrom-Json
+$ReleaseVersion = $PackageJson.version
+
+if (-not $ReleaseVersion) {
     Write-Host "ERROR: Could not read version from package.json" -ForegroundColor Red
     exit 1
 }
 
 Write-Host "=== Gemini Agent Worker Packager ===" -ForegroundColor Cyan
-Write-Host "Version: $Version" -ForegroundColor Cyan
+Write-Host "Version: $ReleaseVersion" -ForegroundColor Cyan
 Write-Host "Source:  $WorkerDir" -ForegroundColor Cyan
 Write-Host ""
 
@@ -83,7 +118,7 @@ function Build-ForOS {
     Copy-Item (Join-Path $ScriptDir "bin\gemini-worker.ps1") $BinDir
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText((Join-Path $StageDir "VERSION"), $Version, $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $StageDir "VERSION"), $ReleaseVersion, $utf8NoBom)
 
     if ($OsTag -ne "windows") {
         Get-ChildItem -Path $StageDir -Recurse -Include "*.sh","*.md","*.json","*.example","*.txt" -File | ForEach-Object {
@@ -99,7 +134,7 @@ function Build-ForOS {
 
     $OutputDir = Join-Path $WorkerDir "release\output"
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-    $ArchiveName = "gemini-worker-$Version-$OsTag"
+    $ArchiveName = "gemini-worker-$ReleaseVersion-$OsTag"
 
     if ($ext -eq "zip") {
         $ArchivePath = Join-Path $OutputDir "$ArchiveName.zip"
@@ -150,7 +185,7 @@ if ($Upload) {
     $uploadScript = Join-Path $ScriptDir "upload.ps1"
     if (Test-Path $uploadScript) {
         Write-Host "Uploading to OBS..." -ForegroundColor Cyan
-        & powershell -ExecutionPolicy Bypass -File $uploadScript -Version $Version
+        & powershell -ExecutionPolicy Bypass -File $uploadScript -Version $ReleaseVersion
     }
     else {
         Write-Host "WARNING: release\upload.ps1 not found, skipping upload." -ForegroundColor Yellow

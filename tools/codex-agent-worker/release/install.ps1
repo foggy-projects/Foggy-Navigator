@@ -97,7 +97,7 @@ if (Test-Path $DocsDir) {
     Copy-Item $DocsDir (Join-Path $InstallDir "docs") -Recurse -Force
 }
 
-foreach ($f in @("start.ps1", "stop.ps1", "start.sh", "stop.sh", "install.ps1", "install.sh")) {
+foreach ($f in @("start.ps1", "stop.ps1", "start.sh", "stop.sh", "install.ps1", "install.sh", "update.ps1", "update.sh")) {
     $srcFile = Join-Path $ScriptDir $f
     if (Test-Path $srcFile) {
         Copy-Item $srcFile $InstallDir -Force

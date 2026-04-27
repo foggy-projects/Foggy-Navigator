@@ -111,7 +111,7 @@ if [ -d "$SCRIPT_DIR/docs" ]; then
     cp -r "$SCRIPT_DIR/docs" "$INSTALL_DIR/"
 fi
 
-for f in start.sh stop.sh start.ps1 stop.ps1 install.sh install.ps1; do
+for f in start.sh stop.sh start.ps1 stop.ps1 install.sh install.ps1 update.sh update.ps1; do
     if [ -f "$SCRIPT_DIR/$f" ]; then
         cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
     fi

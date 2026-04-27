@@ -5,12 +5,19 @@
 #   powershell -ExecutionPolicy Bypass -File dist\package.ps1              # Windows .zip
 #   powershell -ExecutionPolicy Bypass -File dist\package.ps1 -OS all     # All platforms
 #   powershell -ExecutionPolicy Bypass -File dist\package.ps1 -OS all -Upload  # Package + upload to OBS
+#   powershell -ExecutionPolicy Bypass -File dist\package.ps1 -OS all -Bump patch -Upload
+#   powershell -ExecutionPolicy Bypass -File dist\package.ps1 -OS all -Version 1.1.1 -Upload
 
 param(
     [ValidateSet("auto", "windows", "linux", "macos", "all")]
     [string]$OS = "auto",
 
-    [switch]$Upload
+    [switch]$Upload,
+
+    [ValidateSet("none", "patch", "minor", "major")]
+    [string]$Bump = "none",
+
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,15 +40,76 @@ $ProxyDir = Split-Path -Parent $ScriptDir
 
 # --- Read version from src/__init__.py ------------------------------------
 $InitFile = Join-Path $ProxyDir "src\__init__.py"
+
+function Get-ProxyVersion {
+    $match = (Get-Content $InitFile | Select-String '__version__\s*=\s*"([^"]+)"')
+    if (-not $match) {
+        Write-Host "ERROR: Could not read version from src/__init__.py" -ForegroundColor Red
+        exit 1
+    }
+    return $match.Matches.Groups[1].Value
+}
+
+function Set-ProxyVersion {
+    param([string]$TargetVersion)
+
+    $content = [System.IO.File]::ReadAllText($InitFile)
+    if ($content -notmatch '__version__\s*=\s*"([^"]+)"') {
+        Write-Host "ERROR: Could not update version in src/__init__.py" -ForegroundColor Red
+        exit 1
+    }
+
+    $updated = [regex]::Replace($content, '(__version__\s*=\s*")[^"]+(")', "`${1}$TargetVersion`${2}", 1)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($InitFile, $updated, $utf8NoBom)
+}
+
+function Get-BumpedVersion {
+    param([string]$CurrentVersion, [string]$BumpType)
+
+    if ($CurrentVersion -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+        Write-Host "ERROR: Cannot bump non-semver version '$CurrentVersion'. Use -Version X.Y.Z instead." -ForegroundColor Red
+        exit 1
+    }
+
+    $major = [int]$Matches[1]
+    $minor = [int]$Matches[2]
+    $patch = [int]$Matches[3]
+
+    switch ($BumpType) {
+        "major" { $major++; $minor = 0; $patch = 0 }
+        "minor" { $minor++; $patch = 0 }
+        "patch" { $patch++ }
+    }
+
+    return "$major.$minor.$patch"
+}
+
+if ($Version -and $Bump -ne "none") {
+    Write-Host "ERROR: Use either -Version or -Bump, not both." -ForegroundColor Red
+    exit 1
+}
+
+if ($Version) {
+    Write-Host "Setting release version to $Version" -ForegroundColor Cyan
+    Set-ProxyVersion $Version
+}
+elseif ($Bump -ne "none") {
+    $currentVersion = Get-ProxyVersion
+    $nextVersion = Get-BumpedVersion -CurrentVersion $currentVersion -BumpType $Bump
+    Write-Host "Bumping release version: $currentVersion -> $nextVersion" -ForegroundColor Cyan
+    Set-ProxyVersion $nextVersion
+}
+
 $VersionMatch = (Get-Content $InitFile | Select-String '__version__\s*=\s*"([^"]+)"')
 if (-not $VersionMatch) {
     Write-Host "ERROR: Could not read version from src/__init__.py" -ForegroundColor Red
     exit 1
 }
-$Version = $VersionMatch.Matches.Groups[1].Value
+$ReleaseVersion = $VersionMatch.Matches.Groups[1].Value
 
 Write-Host "=== Claude Code Proxy Packager ===" -ForegroundColor Cyan
-Write-Host "Version: $Version" -ForegroundColor Cyan
+Write-Host "Version: $ReleaseVersion" -ForegroundColor Cyan
 Write-Host "Source:  $ProxyDir" -ForegroundColor Cyan
 Write-Host ""
 
@@ -99,7 +167,7 @@ function Build-ForOS {
 
     # --- Write VERSION file -----------------------------------------------
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText((Join-Path $StageDir "VERSION"), $Version, $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $StageDir "VERSION"), $ReleaseVersion, $utf8NoBom)
 
     # --- Convert text files to LF for linux/macos -------------------------
     if ($OsTag -ne "windows") {
@@ -123,7 +191,7 @@ function Build-ForOS {
     # --- Create archive ---------------------------------------------------
     $OutputDir = Join-Path $ProxyDir "dist\output"
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-    $ArchiveName = "claude-code-proxy-$Version-$OsTag"
+    $ArchiveName = "claude-code-proxy-$ReleaseVersion-$OsTag"
 
     if ($ext -eq "zip") {
         $ArchivePath = Join-Path $OutputDir "$ArchiveName.zip"
@@ -182,7 +250,7 @@ if ($Upload) {
     $uploadScript = Join-Path $ScriptDir "upload.ps1"
     if (Test-Path $uploadScript) {
         Write-Host "Uploading to OBS..." -ForegroundColor Cyan
-        & powershell -ExecutionPolicy Bypass -File $uploadScript $Version
+        & powershell -ExecutionPolicy Bypass -File $uploadScript -Version $ReleaseVersion
     }
     else {
         Write-Host "WARNING: dist\upload.ps1 not found, skipping upload." -ForegroundColor Yellow

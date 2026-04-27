@@ -2672,7 +2672,7 @@ import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
 import { ALL_MODEL_OPTIONS, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
-import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone } from '@/types'
+import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
 import type { AipMessageType, ChatMessage } from '@foggy/chat'
 
 const MAX_PANES = 1
@@ -3344,6 +3344,26 @@ function providerTypeFromWorkerBackend(workerBackend?: string | null): string | 
   return undefined
 }
 
+function workerBackendFromProviderType(providerType?: string | null): WorkerBackend | undefined {
+  if (providerType === 'codex-worker') return 'OPENAI_CODEX'
+  if (providerType === 'claude-worker') return 'CLAUDE_CODE'
+  if (providerType === 'gemini-worker') return 'GEMINI_CLI'
+  return undefined
+}
+
+function inferTaskWorkerBackend(task: ClaudeTask): WorkerBackend | undefined {
+  const providerBackend = workerBackendFromProviderType(task.providerType)
+  if (providerBackend) return providerBackend
+  if (task.geminiSessionId) return 'GEMINI_CLI'
+  if (task.codexThreadId) return 'OPENAI_CODEX'
+  if (task.claudeSessionId) return 'CLAUDE_CODE'
+  const model = (task.model || '').toLowerCase()
+  if (model.includes('gemini')) return 'GEMINI_CLI'
+  if (model.includes('codex') || model.startsWith('gpt-')) return 'OPENAI_CODEX'
+  if (model.includes('claude') || model.includes('opus') || model.includes('sonnet') || model.includes('haiku')) return 'CLAUDE_CODE'
+  return undefined
+}
+
 function processTypeLabel(type?: 'claude' | 'codex' | 'gemini'): string {
   if (type === 'codex') return 'Codex'
   if (type === 'gemini') return 'Gemini'
@@ -3492,37 +3512,81 @@ watch(() => taskForm.value.model, () => {
  * 切换会话时，根据会话最新任务的 modelConfigId 和 model 恢复表单选择。
  * 这样点击不同会话时，"API: xxx" 和 "模型: xxx" 标签会跟随切换。
  */
-function restoreSessionModelSelection(task: ClaudeTask) {
-  sessionRestoreVersion++ // 递增版本号，使进行中的 loadPlatformModelConfig 跳过模型选择
-  // 优先使用 modelConfigId 恢复 API 配置
+function findSessionModelConfig(task: ClaudeTask): LlmModelConfig | null {
   const configId = task.modelConfigId
-  if (configId && platformModels.value.some((m) => m.id === configId)) {
-    suppressModelAutoSelect = true
-    platformModelConfigId.value = configId
-    // 恢复模型：优先 per-session 缓存（用户实际选择），再尝试 task.model 匹配
-    const opts = claudeModelOptions.value
-    const sessionId = task.sessionId || ''
-    const cachedModel = sessionModelCache.get(sessionId)
-    if (cachedModel && opts.some((o) => o.value === cachedModel)) {
-      taskForm.value.model = cachedModel
-    } else {
-      const taskModel = task.model || ''
-      if (taskModel && opts.some((o) => o.value === taskModel)) {
-        taskForm.value.model = taskModel
-      } else {
-        // 尝试用 shortModel 匹配（task.model 可能是完整名如 "claude-opus-4-20250514"）
-        const matched = opts.find((o) => taskModel.includes(o.value.replace(/\[.*\]/, '')))
-        if (matched) {
-          taskForm.value.model = matched.value
-        } else if (opts.length > 0) {
-          taskForm.value.model = opts[0].value
-        }
-      }
-    }
-    suppressModelAutoSelect = false
-    // 同步更新 per-worker 缓存
-    saveWorkerLlmSelection(selectedWorkerId.value)
+  if (configId) {
+    const config = platformModels.value.find((m) => m.id === configId)
+    if (config) return config
   }
+
+  const backend = inferTaskWorkerBackend(task)
+  if (!backend) return null
+  const candidates = platformModels.value.filter((m) => m.workerBackend === backend)
+  if (candidates.length === 0) return null
+
+  const taskModel = (task.model || '').toLowerCase()
+  if (taskModel) {
+    const matched = candidates.find((config) =>
+      resolveModelOptions(config).some((option) => sessionModelMatchesOption(taskModel, option.value)),
+    )
+    if (matched) return matched
+  }
+  return candidates[0] || null
+}
+
+function sessionModelMatchesOption(taskModel: string, optionValue: string): boolean {
+  const option = optionValue.toLowerCase()
+  if (taskModel === option) return true
+  if (option === 'gemini-flash-lite') return taskModel.includes('gemini') && taskModel.includes('flash') && taskModel.includes('lite')
+  if (option === 'gemini-flash') return taskModel.includes('gemini') && taskModel.includes('flash') && !taskModel.includes('lite')
+  if (option === 'gemini-pro') return taskModel.includes('gemini') && taskModel.includes('pro')
+  const shortOption = option.replace(/\[.*\]/, '')
+  if (shortOption && taskModel.includes(shortOption)) return true
+  return false
+}
+
+function restoreSessionTaskModel(task: ClaudeTask) {
+  const opts = claudeModelOptions.value
+  if (opts.length === 0) return
+
+  const sessionId = task.sessionId || ''
+  const cachedModel = sessionModelCache.get(sessionId)
+  if (cachedModel && opts.some((o) => o.value === cachedModel)) {
+    taskForm.value.model = cachedModel
+    return
+  }
+
+  const taskModel = (task.model || '').toLowerCase()
+  if (taskModel && opts.some((o) => o.value === task.model)) {
+    taskForm.value.model = task.model!
+    return
+  }
+
+  const matched = taskModel
+    ? opts.find((o) => sessionModelMatchesOption(taskModel, o.value))
+    : undefined
+  taskForm.value.model = matched?.value || opts[0]!.value
+}
+
+function restoreSessionModelSelection(task: ClaudeTask): boolean {
+  sessionRestoreVersion++ // 递增版本号，使进行中的 loadPlatformModelConfig 跳过模型选择
+  const config = findSessionModelConfig(task)
+  if (!config) return false
+
+  suppressModelAutoSelect = true
+  platformModelConfigId.value = config.id
+  restoreSessionTaskModel(task)
+  suppressModelAutoSelect = false
+  // 同步更新 per-worker 缓存
+  saveWorkerLlmSelection(selectedWorkerId.value)
+  return true
+}
+
+function restoreFocusedPaneModelSelection(): boolean {
+  const focused = panes.value.find((pane) => pane.paneId === focusedPaneId.value)
+  const task = focused?.task.value
+  if (!task) return false
+  return restoreSessionModelSelection(task)
 }
 
 async function loadPlatformModelConfig() {
@@ -3536,6 +3600,7 @@ async function loadPlatformModelConfig() {
     // 防止竞态：如果在 await 期间又发起了新的调用，丢弃本次过期结果
     if (seq !== loadPlatformModelConfigSeq) return
     platformModels.value = models.filter(isSelectablePlatformModel)
+    if (restoreFocusedPaneModelSelection()) return
     // 如果在 await 期间已发生会话级恢复，跳过模型选择（会话优先级高于 Worker 级默认）
     if (restoreVer !== sessionRestoreVersion) return
     // 优先从 per-worker 缓存恢复选择

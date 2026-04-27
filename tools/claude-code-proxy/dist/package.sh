@@ -9,6 +9,8 @@
 #   bash dist/package.sh windows      # Force Windows build (.zip)
 #   bash dist/package.sh all          # Build for all platforms
 #   bash dist/package.sh all --upload # Build all + upload to OBS
+#   bash dist/package.sh all --bump patch --upload
+#   bash dist/package.sh all --version 1.1.1 --upload
 #
 # Output: dist/output/claude-code-proxy-{version}-{os}.tar.gz (or .zip)
 
@@ -16,21 +18,108 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROXY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+INIT_FILE="$PROXY_DIR/src/__init__.py"
 
-# --- Parse --upload flag --------------------------------------------------
+# --- Parse flags ----------------------------------------------------------
 DO_UPLOAD=false
+BUMP_TYPE="none"
+VERSION_OVERRIDE=""
 ARGS=()
-for arg in "$@"; do
-    if [ "$arg" = "--upload" ]; then
-        DO_UPLOAD=true
-    else
-        ARGS+=("$arg")
-    fi
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --upload)
+            DO_UPLOAD=true
+            ;;
+        --bump)
+            if [ "$#" -lt 2 ]; then
+                echo "ERROR: --bump requires a value: patch, minor, or major"
+                exit 1
+            fi
+            shift
+            BUMP_TYPE="${1:-}"
+            ;;
+        --bump=*)
+            BUMP_TYPE="${1#--bump=}"
+            ;;
+        --version)
+            if [ "$#" -lt 2 ]; then
+                echo "ERROR: --version requires a value"
+                exit 1
+            fi
+            shift
+            VERSION_OVERRIDE="${1:-}"
+            ;;
+        --version=*)
+            VERSION_OVERRIDE="${1#--version=}"
+            ;;
+        *)
+            ARGS+=("$1")
+            ;;
+    esac
+    shift
 done
 set -- "${ARGS[@]}"
 
+if [ -n "$VERSION_OVERRIDE" ] && [ "$BUMP_TYPE" != "none" ]; then
+    echo "ERROR: Use either --version or --bump, not both."
+    exit 1
+fi
+
+case "$BUMP_TYPE" in
+    none|patch|minor|major) ;;
+    *)
+        echo "ERROR: --bump must be one of: patch, minor, major"
+        exit 1
+        ;;
+esac
+
+set_proxy_version() {
+    local target_version="$1"
+    local tmp_file="${INIT_FILE}.tmp.$$"
+    sed -E "s/^(__version__[[:space:]]*=[[:space:]]*\")[^\"]+(\")/\1${target_version}\2/" "$INIT_FILE" > "$tmp_file"
+    mv "$tmp_file" "$INIT_FILE"
+}
+
+bump_version() {
+    local current_version="$1"
+    local bump_type="$2"
+
+    if ! echo "$current_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "ERROR: Cannot bump non-semver version '$current_version'. Use --version X.Y.Z instead."
+        exit 1
+    fi
+
+    local major minor patch
+    IFS=. read -r major minor patch <<EOF
+$current_version
+EOF
+
+    case "$bump_type" in
+        major) major=$((major + 1)); minor=0; patch=0 ;;
+        minor) minor=$((minor + 1)); patch=0 ;;
+        patch) patch=$((patch + 1)) ;;
+    esac
+
+    echo "${major}.${minor}.${patch}"
+}
+
 # --- Read version from src/__init__.py (single source of truth) -----------
-VERSION=$(grep '__version__' "$PROXY_DIR/src/__init__.py" | sed 's/.*"\(.*\)".*/\1/')
+VERSION=$(grep '__version__' "$INIT_FILE" | sed 's/.*"\(.*\)".*/\1/')
+if [ -z "$VERSION" ]; then
+    echo "ERROR: Could not read version from src/__init__.py"
+    exit 1
+fi
+
+if [ -n "$VERSION_OVERRIDE" ]; then
+    echo "Setting release version to $VERSION_OVERRIDE"
+    set_proxy_version "$VERSION_OVERRIDE"
+elif [ "$BUMP_TYPE" != "none" ]; then
+    NEXT_VERSION=$(bump_version "$VERSION" "$BUMP_TYPE")
+    echo "Bumping release version: $VERSION -> $NEXT_VERSION"
+    set_proxy_version "$NEXT_VERSION"
+fi
+
+VERSION=$(grep '__version__' "$INIT_FILE" | sed 's/.*"\(.*\)".*/\1/')
 if [ -z "$VERSION" ]; then
     echo "ERROR: Could not read version from src/__init__.py"
     exit 1
