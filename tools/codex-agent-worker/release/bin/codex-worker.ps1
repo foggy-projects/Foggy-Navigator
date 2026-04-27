@@ -205,19 +205,39 @@ function Invoke-UpgradeFromArchive {
     Write-Host "Upgraded to v$newVersion!" -ForegroundColor Green
 }
 
+function Invoke-UpgradeSdk {
+    param([string[]]$Args)
+
+    $updateScript = Join-Path $InstallDir "update.ps1"
+    if (-not (Test-Path $updateScript)) {
+        Write-Host "update.ps1 not found at $InstallDir" -ForegroundColor Red
+        Write-Host "Your install may predate the upgrade-sdk feature. Run 'codex-worker upgrade' first to" -ForegroundColor Yellow
+        Write-Host "pull a newer worker version that ships update.ps1." -ForegroundColor Yellow
+        exit 1
+    }
+
+    $passThrough = @("-ExecutionPolicy", "Bypass", "-File", $updateScript)
+    if ($Args) { $passThrough += $Args }
+
+    & powershell @passThrough
+    exit $LASTEXITCODE
+}
+
 function Invoke-Help {
     Write-Host "codex-worker v$Version -- Codex Agent Worker CLI"
     Write-Host ""
     Write-Host "Usage: codex-worker <command> [options]"
     Write-Host ""
     Write-Host "Commands:"
-    Write-Host "  start              Start the worker service"
-    Write-Host "  stop               Stop the worker service"
-    Write-Host "  status             Show worker status and health"
-    Write-Host "  version            Show installed version"
-    Write-Host "  logs               Tail worker log output"
-    Write-Host "  upgrade [archive]  Upgrade from OBS or local .zip"
-    Write-Host "  help               Show this help message"
+    Write-Host "  start                Start the worker service"
+    Write-Host "  stop                 Stop the worker service"
+    Write-Host "  status               Show worker status and health"
+    Write-Host "  version              Show installed version"
+    Write-Host "  logs                 Tail worker log output"
+    Write-Host "  upgrade [archive]    Upgrade the worker itself from OBS or local .zip"
+    Write-Host "  upgrade-sdk [opts]   Upgrade only @openai/codex-sdk in-place"
+    Write-Host "                         opts: -SdkVersion <ver>, -NoRestart"
+    Write-Host "  help                 Show this help message"
     Write-Host ""
     Write-Host "Environment:"
     Write-Host "  CODEX_WORKER_HOME   Install directory (default: ~\.codex-worker)"
@@ -233,6 +253,7 @@ switch ($Command) {
     { $_ -in "version", "-v", "--version" } { Invoke-Version }
     "logs" { Invoke-Logs }
     "upgrade" { Invoke-Upgrade -ArchivePath ($ExtraArgs | Select-Object -First 1) }
+    "upgrade-sdk" { Invoke-UpgradeSdk -Args $ExtraArgs }
     { $_ -in "help", "--help", "-h" } { Invoke-Help }
     default {
         Write-Host "Unknown command: $Command" -ForegroundColor Red

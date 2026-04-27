@@ -4,6 +4,7 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File dist\upload.ps1
 #   powershell -ExecutionPolicy Bypass -File dist\upload.ps1 -Version 0.2.0
+#   powershell -ExecutionPolicy Bypass -File dist\upload.ps1 -Version 0.2.0 -AllowSameVersion
 #
 # Prerequisites:
 #   - obsutil installed and configured (obsutil config -i=AK -k=SK -e=endpoint)
@@ -11,7 +12,8 @@
 #   - Archives already built in dist/output/
 
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [switch]$AllowSameVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +24,21 @@ function Write-UnixFile {
     $Content = $Content -replace "`r`n", "`n"
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
+function Compare-Semver {
+    param([string]$Left, [string]$Right)
+
+    try {
+        $leftCore = ($Left -split '[-+]')[0]
+        $rightCore = ($Right -split '[-+]')[0]
+        $leftVersion = [Version]$leftCore
+        $rightVersion = [Version]$rightCore
+        return $leftVersion.CompareTo($rightVersion)
+    }
+    catch {
+        return [string]::Compare($Left, $Right, $true)
+    }
 }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -76,6 +93,35 @@ Write-Host "Version:  $Version" -ForegroundColor Cyan
 Write-Host "Bucket:   $ObsBucket" -ForegroundColor Cyan
 Write-Host "Base URL: $BaseUrl" -ForegroundColor Cyan
 Write-Host ""
+
+# --- Guard against publishing the same or older version -------------------
+if (-not $AllowSameVersion) {
+    try {
+        $cacheBust = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $remoteLatest = Invoke-RestMethod -Uri "$BaseUrl/latest.json?ts=$cacheBust" -Headers @{ "Cache-Control" = "no-cache" } -TimeoutSec 15
+        $remoteVersion = [string]$remoteLatest.version
+
+        if ($remoteVersion) {
+            $comparison = Compare-Semver -Left $Version -Right $remoteVersion
+            if ($comparison -eq 0) {
+                Write-Host "ERROR: Remote latest is already version $remoteVersion. Bump the version before uploading." -ForegroundColor Red
+                Write-Host "Suggested: powershell -ExecutionPolicy Bypass -File dist\package.ps1 -OS all -Bump patch -Upload" -ForegroundColor Yellow
+                Write-Host "Override only when repairing metadata: add -AllowSameVersion to upload.ps1." -ForegroundColor Yellow
+                exit 1
+            }
+            elseif ($comparison -lt 0) {
+                Write-Host "ERROR: Local version $Version is older than remote latest $remoteVersion." -ForegroundColor Red
+                exit 1
+            }
+            else {
+                Write-Host "Remote latest version: $remoteVersion -> uploading $Version" -ForegroundColor Gray
+            }
+        }
+    }
+    catch {
+        Write-Host "WARNING: Could not read remote latest.json, continuing upload. $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
 
 # --- Check archives exist ------------------------------------------------
 if (-not (Test-Path $OutputDir)) {
