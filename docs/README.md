@@ -6,6 +6,7 @@
 
 | 文档 | 说明 | 状态 |
 |------|------|------|
+| [架构与安装说明](./ceo-architecture-and-installation.md) | 面向管理层和外部接入方的系统架构、安装路径与开放能力说明 | 已新增 |
 | [系统架构概览](./00-system-overview.md) | 当前系统定位、功能架构、模块职责、关键流程 | 已更新 (v4.0) |
 | [功能架构总说明](./functional-architecture-summary.md) | 面向团队沟通的收官版功能架构说明 | 已新增 |
 | [功能架构说明](./02-modules/functional-architecture.md) | 当前一级功能域与功能总图 | 已新增 |
