@@ -1,7 +1,7 @@
 <template>
   <div class="app-layout">
     <header v-show="!isSessionFullscreen" class="app-header">
-      <div class="header-brand" @click="router.push('/')">Foggy Navigator</div>
+      <div class="header-brand" @click="router.push('/')">道同</div>
       <el-menu
         :default-active="activeMenu"
         mode="horizontal"
