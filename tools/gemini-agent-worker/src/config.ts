@@ -97,13 +97,13 @@ function parseMaxConcurrentTasks(rawValue: string | undefined): number {
 
 function parseModelAliases(rawValue: string | undefined): Record<string, string> {
   const defaults: Record<string, string> = {
-    'gemini-pro': 'gemini-3.1-pro-preview',
+    'gemini-pro': 'auto-gemini-3',
     'gemini-flash': 'gemini-3-flash-preview',
     'gemini-flash-lite': 'gemini-3.1-flash-lite-preview',
-    'pro': 'gemini-3.1-pro-preview',
+    'pro': 'auto-gemini-3',
     'flash': 'gemini-3-flash-preview',
     'flash-lite': 'gemini-3.1-flash-lite-preview',
-    'latest-pro': 'gemini-3.1-pro-preview',
+    'latest-pro': 'auto-gemini-3',
     'latest-flash': 'gemini-3-flash-preview',
     'latest-flash-lite': 'gemini-3.1-flash-lite-preview',
   }
