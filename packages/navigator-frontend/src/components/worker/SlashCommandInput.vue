@@ -158,6 +158,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { SkillInfo } from '@/types'
 import { searchFiles as searchFilesApi } from '@/api/fileBrowser'
 import type { FileSearchResult } from '@/api/fileBrowser'
+import { resolveInputCursor } from './slashCommandInputUtils'
 
 interface CommandChild {
   name: string
@@ -508,6 +509,10 @@ function openPanel() {
 }
 
 function handleInput(val: string) {
+  const previousValue = props.modelValue
+  const textarea = getTextareaEl()
+  const cursor = resolveInputCursor(val, textarea?.selectionStart, previousValue)
+
   if (phase.value === 'sub') {
     // In sub-phase, extract the sub-query part after the command name
     const prefix = '/' + (activeCommand.value?.name || '')
@@ -519,12 +524,9 @@ function handleInput(val: string) {
 
   // Cursor-based trigger detection for @ mentions, ./ file paths, and / slash commands
   nextTick(() => {
-    const textarea = getTextareaEl()
-    if (textarea) {
-      detectAtTrigger(val, textarea.selectionStart)
-      if (props.directoryId) detectFileTrigger(val, textarea.selectionStart)
-      detectSlashTrigger(val, textarea.selectionStart)
-    }
+    detectAtTrigger(val, cursor)
+    if (props.directoryId) detectFileTrigger(val, cursor)
+    detectSlashTrigger(val, cursor)
   })
 }
 
