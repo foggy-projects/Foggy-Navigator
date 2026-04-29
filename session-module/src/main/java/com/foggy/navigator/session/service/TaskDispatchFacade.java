@@ -1404,6 +1404,7 @@ public class TaskDispatchFacade {
             case "OPENAI_CODEX" -> "codex-worker";
             case "CLAUDE_CODE" -> "claude-worker";
             case "GEMINI_CLI" -> "gemini-worker";
+            case "LANGGRAPH_BIZ" -> "langgraph-biz-worker";
             default -> null;
         };
     }

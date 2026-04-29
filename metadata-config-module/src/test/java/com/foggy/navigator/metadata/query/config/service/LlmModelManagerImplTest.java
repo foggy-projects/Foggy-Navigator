@@ -147,4 +147,29 @@ class LlmModelManagerImplTest {
         assertNull(service.getDecryptedApiKey("cfg-3"));
         verifyNoInteractions(credentialEncryptor);
     }
+
+    @Test
+    void updateModelConfig_clearsStoredApiKeyForLangGraphSubscriptionMode() {
+        LlmModelConfigEntity entity = new LlmModelConfigEntity();
+        entity.setId("cfg-langgraph");
+        entity.setTenantId("tenant-1");
+        entity.setCategory(LlmModelCategory.CODING);
+        entity.setWorkerBackend("LANGGRAPH_BIZ");
+        entity.setBaseUrl(null);
+        entity.setApiKey("encrypted-old-key");
+        entity.setModelName("biz-default");
+
+        LlmModelConfigForm form = new LlmModelConfigForm();
+        form.setWorkerBackend("LANGGRAPH_BIZ");
+        form.setBaseUrl("");
+        form.setModelName("biz-default");
+
+        when(llmModelRepo.findById("cfg-langgraph")).thenReturn(Optional.of(entity));
+
+        service.updateModelConfig("cfg-langgraph", form);
+
+        assertNull(entity.getApiKey());
+        verify(llmModelRepo).save(entity);
+        verifyNoInteractions(credentialEncryptor);
+    }
 }

@@ -19,6 +19,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -127,6 +128,12 @@ public class LanggraphTaskService implements TaskQueryProvider {
         taskRepository.save(entity);
 
         // 3. Publish WorkerTaskStartEvent → LanggraphStreamRelay listens
+        Map<String, Object> providerConfig = new LinkedHashMap<>();
+        if (form.getContext() != null) {
+            providerConfig.put("context", form.getContext());
+        }
+        putIfNotBlank(providerConfig, "modelConfigId", form.getModelConfigId());
+
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId)
                 .sessionId(sessionId)
@@ -136,9 +143,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
                 .cwd(form.getCwd())
                 .model(form.getModel())
                 .providerType(PROVIDER_TYPE)
-                .providerConfig(form.getContext() != null
-                        ? Map.of("context", form.getContext())
-                        : Map.of())
+                .providerConfig(providerConfig)
                 .build());
 
         log.info("Created langgraph task: taskId={}, sessionId={}, workerId={}",
@@ -175,6 +180,32 @@ public class LanggraphTaskService implements TaskQueryProvider {
             taskRepository.save(entity);
             log.warn("Task failed: taskId={}, error={}", taskId, errorMessage);
         });
+    }
+
+    @Override
+    @Transactional
+    public void cancelTask(String taskId, String userId) {
+        LanggraphTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!"RUNNING".equals(entity.getStatus()) && !"PENDING".equals(entity.getStatus())) {
+            return;
+        }
+        entity.setStatus("ABORTED");
+        entity.setErrorMessage("Cancelled by user");
+        taskRepository.save(entity);
+        log.info("Task cancelled: taskId={}", taskId);
+    }
+
+    @Override
+    @Transactional
+    public void deleteTask(String userId, String taskId) {
+        LanggraphTaskEntity entity = taskRepository.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if ("RUNNING".equals(entity.getStatus()) || "PENDING".equals(entity.getStatus())) {
+            throw new IllegalStateException("Cannot delete active task: " + taskId);
+        }
+        taskRepository.delete(entity);
+        log.info("Task deleted: taskId={}", taskId);
     }
 
     // ── Approval lifecycle (Doc 31 §16.4: Java side manages audit) ─────
@@ -280,5 +311,11 @@ public class LanggraphTaskService implements TaskQueryProvider {
 
     private static String truncate(String s, int maxLen) {
         return (s != null && s.length() > maxLen) ? s.substring(0, maxLen) : s;
+    }
+
+    private static void putIfNotBlank(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
+        }
     }
 }

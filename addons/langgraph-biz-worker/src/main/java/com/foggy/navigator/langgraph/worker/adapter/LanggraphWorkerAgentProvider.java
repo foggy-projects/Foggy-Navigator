@@ -1,15 +1,18 @@
 package com.foggy.navigator.langgraph.worker.adapter;
 
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.dto.a2a.A2aAgentCard;
-import com.foggy.navigator.common.dto.a2a.A2aAgentSkill;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
+import com.foggy.navigator.common.util.AgentCardBuilder;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphCodingAgentRepository;
 import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
 import com.foggy.navigator.session.agent.ContextResolvingA2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.A2aAgentProvider;
 import com.foggy.navigator.spi.agent.AgentContextStore;
+import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
@@ -28,6 +31,7 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
 
     private final LanggraphCodingAgentRepository agentRepository;
     private final LanggraphTaskService taskService;
+    private final LlmModelManager llmModelManager;
     @Nullable
     private final AgentContextStore contextStore;
 
@@ -39,16 +43,74 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
     @Override
     public List<A2aAgentCard> listAgentCards(String userId) {
         return agentRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-                .filter(e -> AGENT_TYPE.equals(e.getAgentType()))
+                .filter(this::isManagedAgent)
                 .map(this::toAgentCard)
                 .toList();
     }
 
     @Override
     public Optional<A2aAgent> resolveAgent(String agentId, String userId) {
-        return agentRepository.findByAgentIdAndUserId(agentId, userId)
-                .filter(e -> AGENT_TYPE.equals(e.getAgentType()))
+        return resolveManagedEntity(agentId, userId)
                 .map(this::toA2aAgent);
+    }
+
+    @Override
+    public List<A2aAgentCard> listAgentCards(AgentResolveContext context) {
+        if (context.getTenantId() != null && "OPEN_API".equals(context.getRequestSource())) {
+            return agentRepository.findByTenantIdOrderByCreatedAtDesc(context.getTenantId()).stream()
+                    .filter(this::isManagedAgent)
+                    .map(this::toAgentCard)
+                    .toList();
+        }
+        return listAgentCards(context.getUserId());
+    }
+
+    @Override
+    public Optional<A2aAgent> resolveAgent(String agentId, AgentResolveContext context) {
+        if (context.getTenantId() != null && "OPEN_API".equals(context.getRequestSource())) {
+            return agentRepository.findByAgentId(agentId)
+                    .filter(entity -> context.getTenantId().equals(entity.getTenantId()))
+                    .filter(this::isManagedAgent)
+                    .map(this::toA2aAgent);
+        }
+        return resolveAgent(agentId, context.getUserId());
+    }
+
+    private Optional<CodingAgentEntity> resolveManagedEntity(String lookupId, String userId) {
+        return agentRepository.findByAgentIdAndUserId(lookupId, userId)
+                .or(() -> agentRepository.findByNameAndUserId(lookupId, userId))
+                .filter(this::isManagedAgent);
+    }
+
+    private boolean isManagedAgent(CodingAgentEntity entity) {
+        String providerType = resolveProviderType(entity.getDefaultModelConfigId());
+        if (providerType != null) {
+            return LanggraphTaskService.PROVIDER_TYPE.equals(providerType);
+        }
+        return AGENT_TYPE.equals(entity.getAgentType());
+    }
+
+    private String resolveProviderType(String modelConfigId) {
+        if (modelConfigId == null || modelConfigId.isBlank()) {
+            return null;
+        }
+        return llmModelManager.getModelConfig(modelConfigId)
+                .map(LlmModelConfigDTO::getWorkerBackend)
+                .map(this::mapWorkerBackendToProviderType)
+                .orElse(null);
+    }
+
+    private String mapWorkerBackendToProviderType(String workerBackend) {
+        if (workerBackend == null || workerBackend.isBlank()) {
+            return null;
+        }
+        return switch (workerBackend) {
+            case "OPENAI_CODEX" -> "codex-worker";
+            case "CLAUDE_CODE" -> "claude-worker";
+            case "GEMINI_CLI" -> "gemini-worker";
+            case "LANGGRAPH_BIZ" -> LanggraphTaskService.PROVIDER_TYPE;
+            default -> null;
+        };
     }
 
     private A2aAgent toA2aAgent(CodingAgentEntity entity) {
@@ -59,16 +121,9 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
     }
 
     private A2aAgentCard toAgentCard(CodingAgentEntity entity) {
-        return A2aAgentCard.builder()
-                .id(entity.getAgentId())
-                .name(entity.getName())
-                .description(entity.getDescription())
-                .version("1.0.0")
-                .skills(List.of(A2aAgentSkill.builder()
-                        .id("business-query")
-                        .name("Business Query")
-                        .description("Execute controlled business queries via Skill Runtime")
-                        .build()))
-                .build();
+        return AgentCardBuilder.fromEntity(entity,
+                "business",
+                "Execute controlled business queries via LangGraph Skill Runtime",
+                List.of("business", "skill-runtime", LanggraphTaskService.PROVIDER_TYPE));
     }
 }

@@ -46,6 +46,16 @@ describe('llmModelOptions', () => {
     expect(isSelectablePlatformModel(config)).toBe(true)
   })
 
+  it('keeps LangGraph Biz configs selectable without api key', () => {
+    const config = createModelConfig({
+      workerBackend: 'LANGGRAPH_BIZ' as WorkerBackend,
+      hasApiKey: false,
+      modelName: 'biz-default',
+    })
+
+    expect(isSelectablePlatformModel(config)).toBe(true)
+  })
+
   it('still rejects configs without api key or subscription-capable backend', () => {
     const config = createModelConfig({
       workerBackend: undefined,
@@ -68,6 +78,11 @@ describe('llmModelOptions', () => {
     const codex = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
     const values = codex.map((opt) => opt.value)
     expect(values).toEqual(['codex-latest', 'codex-fast', 'codex-deep', 'codex-mini'])
+  })
+
+  it('exposes LangGraph Biz aliases for LANGGRAPH_BIZ backend', () => {
+    const langgraph = getModelOptionsByBackend('LANGGRAPH_BIZ' as WorkerBackend)
+    expect(langgraph.map((opt) => opt.value)).toEqual(['biz-default'])
   })
 
   it('does not leak real Codex model names (gpt-5.x) into ALL_MODEL_OPTIONS', () => {

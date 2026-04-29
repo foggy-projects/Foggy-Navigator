@@ -67,7 +67,7 @@ export interface RoutePayload {
 
 // ===== Worker 后端类型 =====
 
-export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX' | 'GEMINI_CLI'
+export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX' | 'GEMINI_CLI' | 'LANGGRAPH_BIZ'
 
 // ===== Claude Worker 类型 =====
 
@@ -76,6 +76,7 @@ export interface ClaudeWorker {
   workerId: string
   name: string
   baseUrl: string
+  workerBackend?: WorkerBackend
   authMode: 'SUBSCRIPTION' | 'API_KEY' | 'CUSTOM_ENDPOINT'
   status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN'
   hostname?: string

@@ -226,6 +226,51 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_usesDirectProviderRouteWhenModelConfigTargetsLangGraphBiz() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-langgraph-1")
+                .directoryId("dir-langgraph-1")
+                .prompt("hi langgraph")
+                .model("biz-default")
+                .modelConfigId("cfg-langgraph")
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("LANGGRAPH_BIZ");
+
+        DispatchTaskDTO directTask = DispatchTaskDTO.builder()
+                .taskId("task-langgraph-1")
+                .providerType("langgraph-biz-worker")
+                .workerId("worker-langgraph-1")
+                .directoryId("dir-langgraph-1")
+                .model("biz-default")
+                .build();
+
+        when(llmModelManager.getModelConfig("cfg-langgraph")).thenReturn(Optional.of(modelConfig));
+        when(taskQueryProvider.getProviderType()).thenReturn("langgraph-biz-worker");
+        when(taskQueryProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1")))
+                .thenReturn(directTask);
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("task-langgraph-1", result.getTaskId());
+        assertEquals("langgraph-biz-worker", result.getProviderType());
+        verify(taskQueryProvider).createTaskDirect(
+                argThat(params -> "worker-langgraph-1".equals(params.get("workerId"))
+                        && "dir-langgraph-1".equals(params.get("directoryId"))
+                        && "biz-default".equals(params.get("model"))
+                        && "cfg-langgraph".equals(params.get("modelConfigId"))),
+                eq("user-1"),
+                eq("tenant-1"));
+        verifyNoInteractions(agentResolver, bindingService, agent);
+    }
+
+    @Test
     void createTask_a2aRouteIncludesParentSessionIdFromCreatedSession() {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .sessionId("session-child-1")

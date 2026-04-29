@@ -153,6 +153,29 @@ class UnifiedAgentResolverTest {
         verify(provider1, never()).resolveAgent(eq("a2"), any(AgentResolveContext.class));
     }
 
+    @Test
+    void resolveAgent_prefersLangGraphProviderFromModelConfig() {
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .modelConfigId("cfg-langgraph")
+                .build();
+        A2aAgent agent = mock(A2aAgent.class);
+        LlmModelConfigDTO config = new LlmModelConfigDTO();
+        config.setId("cfg-langgraph");
+        config.setWorkerBackend("LANGGRAPH_BIZ");
+
+        when(llmModelManager.getModelConfig("cfg-langgraph")).thenReturn(Optional.of(config));
+        when(provider1.getProviderType()).thenReturn("claude-worker");
+        when(provider2.getProviderType()).thenReturn("langgraph-biz-worker");
+        when(provider2.resolveAgent("biz-agent", context)).thenReturn(Optional.of(agent));
+
+        Optional<A2aAgent> result = resolver.resolveAgent("biz-agent", context);
+
+        assertTrue(result.isPresent());
+        assertSame(agent, result.get());
+        verify(provider1, never()).resolveAgent(eq("biz-agent"), any(AgentResolveContext.class));
+    }
+
     // ---- getProviderType ----
 
     @Test

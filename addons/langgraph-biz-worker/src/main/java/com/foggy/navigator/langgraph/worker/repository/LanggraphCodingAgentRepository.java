@@ -16,5 +16,11 @@ public interface LanggraphCodingAgentRepository extends JpaRepository<CodingAgen
 
     Optional<CodingAgentEntity> findByAgentIdAndUserId(String agentId, String userId);
 
+    Optional<CodingAgentEntity> findByNameAndUserId(String name, String userId);
+
+    Optional<CodingAgentEntity> findByAgentId(String agentId);
+
     List<CodingAgentEntity> findByUserIdOrderByCreatedAtDesc(String userId);
+
+    List<CodingAgentEntity> findByTenantIdOrderByCreatedAtDesc(String tenantId);
 }

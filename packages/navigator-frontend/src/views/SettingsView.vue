@@ -93,6 +93,7 @@
             <template #default="{ row }">
               <el-tag v-if="row.workerBackend === 'OPENAI_CODEX'" type="success" size="small">Codex</el-tag>
               <el-tag v-else-if="row.workerBackend === 'GEMINI_CLI'" type="warning" size="small">Gemini</el-tag>
+              <el-tag v-else-if="row.workerBackend === 'LANGGRAPH_BIZ'" type="info" size="small">LangGraph</el-tag>
               <el-tag v-else-if="row.workerBackend === 'CLAUDE_CODE'" size="small">Claude</el-tag>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
@@ -617,6 +618,22 @@ codex-worker status</pre>
                   :label="opt.description || opt.label"
                 />
               </el-select>
+              <el-select
+                v-else-if="llmForm.workerBackend === 'LANGGRAPH_BIZ'"
+                v-model="llmForm.modelName"
+                filterable
+                allow-create
+                reserve-keyword
+                default-first-option
+                placeholder="选择或输入 LangGraph Biz 模型别名"
+              >
+                <el-option
+                  v-for="opt in langgraphBizBackendOptions"
+                  :key="opt.value"
+                  :value="opt.value"
+                  :label="opt.description || opt.label"
+                />
+              </el-select>
               <el-input v-else v-model="llmForm.modelName" placeholder="如：qwen-max" />
             </el-form-item>
           </el-col>
@@ -639,6 +656,11 @@ codex-worker status</pre>
         <el-form-item v-if="llmForm.workerBackend === 'GEMINI_CLI'" label="">
           <div class="form-hint" style="color: #909399; font-size: 12px">
             Gemini CLI 支持两种认证模式：填写 API Key 使用 Gemini API，留空则使用订阅或本机登录模式（依赖 Worker 本机 gemini login）
+          </div>
+        </el-form-item>
+        <el-form-item v-if="llmForm.workerBackend === 'LANGGRAPH_BIZ'" label="">
+          <div class="form-hint" style="color: #909399; font-size: 12px">
+            LangGraph Biz Worker 由 Worker 侧环境解析真实 LLM 配置；平台模型配置用于选择执行后端与传递稳定模型别名
           </div>
         </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'CLAUDE_CODE'" label="可用模型">
@@ -680,6 +702,19 @@ codex-worker status</pre>
             勾选可用的 Gemini 模型别名，Workers 页面仅显示已勾选项；不勾选则不限制
           </div>
         </el-form-item>
+        <el-form-item v-if="llmForm.workerBackend === 'LANGGRAPH_BIZ'" label="可用模型">
+          <el-checkbox-group v-model="llmForm.availableModels">
+            <el-checkbox
+              v-for="opt in langgraphBizBackendOptions"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
+          </el-checkbox-group>
+          <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
+            勾选可用的 LangGraph Biz 模型别名，Workers 页面仅显示已勾选项；不勾选则不限制
+          </div>
+        </el-form-item>
         <el-form-item>
           <el-checkbox v-model="llmForm.isDefault">设为该类别的默认模型</el-checkbox>
         </el-form-item>
@@ -688,6 +723,7 @@ codex-worker status</pre>
             <el-radio-button value="CLAUDE_CODE">Claude Code</el-radio-button>
             <el-radio-button value="OPENAI_CODEX">OpenAI Codex</el-radio-button>
             <el-radio-button value="GEMINI_CLI">Gemini CLI</el-radio-button>
+            <el-radio-button value="LANGGRAPH_BIZ">LangGraph Biz</el-radio-button>
           </el-radio-group>
           <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
             指定此编程模型由哪个 Worker 后端执行
@@ -736,6 +772,22 @@ codex-worker status</pre>
                     <el-descriptions-item label="GEMINI_DEFAULT_MODEL">
                       Worker 默认模型别名或真实模型名。平台未显式下发时会使用它。<br/>
                       <el-tag size="small" type="info">建议值：gemini-flash</el-tag>
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </template>
+                <template v-else-if="llmForm.workerBackend === 'LANGGRAPH_BIZ'">
+                  <el-descriptions :column="1" size="small" border>
+                    <el-descriptions-item label="BIZ_WORKER_LLM_PROVIDER">
+                      Worker 侧默认 LLM provider。<br/>
+                      <el-tag size="small" type="info">如：openai-compatible</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="BIZ_WORKER_LLM_MODEL">
+                      Worker 侧默认真实模型名。平台传入的模型别名为空时使用它。<br/>
+                      <el-tag size="small" type="info">建议搭配 biz-default</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="BIZ_WORKER_ALLOWED_CWDS">
+                      Worker 可访问工作目录白名单。<br/>
+                      <el-tag size="small" type="info">Linux 路径列表</el-tag>
                     </el-descriptions-item>
                   </el-descriptions>
                 </template>
@@ -969,12 +1021,13 @@ import type { TaskAssistantConfig } from '@/api/notification'
 import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, ModelAccessScope, UserMemory, UserMemoryCategory, ApiCredential, AuthType, WorkerBackend } from '@/types'
 import { getModelOptionsByBackend } from '@/utils/llmModelOptions'
 
-// 统一 Claude / Codex / Gemini 模型候选（见 utils/llmModelOptions.ts）。
-// 1.0.4 起：Codex 切到 alias-only 模式，三个 backend 都使用扁平 alias 列表，
+// 统一 Claude / Codex / Gemini / LangGraph Biz 模型候选（见 utils/llmModelOptions.ts）。
+// 1.0.4 起：Codex 切到 alias-only 模式，Worker backend 都使用扁平 alias 列表，
 // 与 Claude / Gemini 命名风格保持一致；模型版本升级时仅改 Worker 配置，前端零变动。
 const claudeBackendOptions = getModelOptionsByBackend('CLAUDE_CODE' as WorkerBackend)
 const codexBackendOptions = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
 const geminiBackendOptions = getModelOptionsByBackend('GEMINI_CLI' as WorkerBackend)
+const langgraphBizBackendOptions = getModelOptionsByBackend('LANGGRAPH_BIZ' as WorkerBackend)
 
 const activeTab = ref('git')
 const showHelpDrawer = ref(false)
@@ -1175,7 +1228,7 @@ async function saveLlm() {
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : undefined,
         envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
         workerBackend: llmForm.value.category === 'CODING' ? llmForm.value.workerBackend : undefined,
-        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX' || llmForm.value.workerBackend === 'GEMINI_CLI')
+        availableModels: supportsAvailableModels(llmForm.value.workerBackend)
           && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
           : undefined,
@@ -1194,7 +1247,7 @@ async function saveLlm() {
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : [],
         envVars: envVarsMap,
         workerBackend: llmForm.value.category === 'CODING' ? (llmForm.value.workerBackend || null) : null,
-        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX' || llmForm.value.workerBackend === 'GEMINI_CLI')
+        availableModels: supportsAvailableModels(llmForm.value.workerBackend)
           && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
           : null,
@@ -1235,10 +1288,20 @@ async function handleTestLlm() {
 }
 
 function supportsSubscriptionBackend(workerBackend?: import('@/types').WorkerBackend) {
-  return workerBackend === 'OPENAI_CODEX' || workerBackend === 'CLAUDE_CODE' || workerBackend === 'GEMINI_CLI'
+  return workerBackend === 'OPENAI_CODEX' || workerBackend === 'CLAUDE_CODE' || workerBackend === 'GEMINI_CLI' || workerBackend === 'LANGGRAPH_BIZ'
+}
+
+function supportsAvailableModels(workerBackend?: import('@/types').WorkerBackend) {
+  return workerBackend === 'CLAUDE_CODE'
+    || workerBackend === 'OPENAI_CODEX'
+    || workerBackend === 'GEMINI_CLI'
+    || workerBackend === 'LANGGRAPH_BIZ'
 }
 
 function baseUrlPlaceholder(workerBackend?: import('@/types').WorkerBackend) {
+  if (workerBackend === 'LANGGRAPH_BIZ') {
+    return '留空表示由 LangGraph Biz Worker 环境配置解析'
+  }
   if (workerBackend === 'OPENAI_CODEX') {
     return '留空使用默认 OpenAI 端点（订阅模式无需填写）'
   }

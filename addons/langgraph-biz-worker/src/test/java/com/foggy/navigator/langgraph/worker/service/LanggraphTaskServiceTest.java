@@ -57,6 +57,7 @@ class LanggraphTaskServiceTest {
         form.setPrompt("分析异常订单");
         form.setSessionId(SESSION_ID);
         form.setModel("claude-sonnet");
+        form.setModelConfigId("cfg-langgraph");
         return form;
     }
 
@@ -103,6 +104,7 @@ class LanggraphTaskServiceTest {
             assertEquals("分析异常订单", event.getPrompt());
             assertEquals("langgraph-biz-worker", event.getProviderType());
             assertEquals("claude-sonnet", event.getModel());
+            assertEquals("cfg-langgraph", event.getProviderConfigString("modelConfigId"));
         }
 
         @Test
@@ -153,6 +155,8 @@ class LanggraphTaskServiceTest {
             existingTask.setStatus("PENDING");
             when(taskRepository.findByTaskId("lgt_existing"))
                     .thenReturn(Optional.of(existingTask));
+            when(taskRepository.findByTaskIdAndUserId("lgt_existing", USER_ID))
+                    .thenReturn(Optional.of(existingTask));
         }
 
         @Test
@@ -181,6 +185,33 @@ class LanggraphTaskServiceTest {
             assertEquals("FAILED", existingTask.getStatus());
             assertEquals("connection timeout", existingTask.getErrorMessage());
             verify(taskRepository).save(existingTask);
+        }
+
+        @Test
+        void cancelTask_sets_aborted_for_active_task() {
+            service.cancelTask("lgt_existing", USER_ID);
+
+            assertEquals("ABORTED", existingTask.getStatus());
+            assertEquals("Cancelled by user", existingTask.getErrorMessage());
+            verify(taskRepository).save(existingTask);
+        }
+
+        @Test
+        void deleteTask_deletes_completed_task() {
+            existingTask.setStatus("COMPLETED");
+
+            service.deleteTask(USER_ID, "lgt_existing");
+
+            verify(taskRepository).delete(existingTask);
+        }
+
+        @Test
+        void deleteTask_rejects_active_task() {
+            IllegalStateException error = assertThrows(IllegalStateException.class,
+                    () -> service.deleteTask(USER_ID, "lgt_existing"));
+
+            assertTrue(error.getMessage().contains("lgt_existing"));
+            verify(taskRepository, never()).delete(any());
         }
 
         @Test

@@ -41,6 +41,7 @@
               </span>
               <span :class="['status-dot', worker.status?.toLowerCase()]" />
               <span class="worker-name">{{ worker.name }}</span>
+              <el-tag v-if="worker.workerBackend === 'LANGGRAPH_BIZ'" size="small" effect="plain">LangGraph</el-tag>
             </div>
             <div class="worker-meta">{{ worker.hostname || worker.baseUrl }}</div>
           </div>
@@ -1435,6 +1436,12 @@
     <!-- Add Worker Dialog -->
     <el-dialog v-model="showAddDialog" title="添加 Worker" width="480px">
       <el-form :model="addForm" label-position="top">
+        <el-form-item label="Worker 类型" required>
+          <el-radio-group v-model="addForm.workerBackend">
+            <el-radio value="CLAUDE_CODE">Claude Code Worker</el-radio>
+            <el-radio value="LANGGRAPH_BIZ">LangGraph Biz Worker</el-radio>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="名称" required>
           <el-input v-model="addForm.name" placeholder="如：我的家庭机" />
         </el-form-item>
@@ -1449,7 +1456,7 @@
             placeholder="Worker 预共享令牌"
           />
         </el-form-item>
-        <template>
+        <template v-if="addForm.workerBackend !== 'LANGGRAPH_BIZ'">
           <el-form-item label="认证模式">
             <el-select v-model="addForm.authMode" style="width: 100%">
               <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
@@ -1481,26 +1488,28 @@
             <el-input v-model="addForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
           </el-form-item>
         </template>
-        <el-divider content-position="left">Codex 配置（可选）</el-divider>
-        <el-form-item label="Codex 地址">
-          <el-input v-model="addForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
-        </el-form-item>
-        <el-form-item label="Codex 认证令牌">
-          <el-input v-model="addForm.codexAuthToken" type="password" show-password placeholder="Codex Worker 令牌" />
-        </el-form-item>
-        <el-form-item label="Codex 默认模型">
-          <el-input v-model="addForm.codexModel" placeholder="如：codex-mini-latest" />
-        </el-form-item>
-        <el-divider content-position="left">Gemini 配置（可选）</el-divider>
-        <el-form-item label="Gemini 地址">
-          <el-input v-model="addForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
-        </el-form-item>
-        <el-form-item label="Gemini 认证令牌">
-          <el-input v-model="addForm.geminiAuthToken" type="password" show-password placeholder="Gemini Worker 令牌" />
-        </el-form-item>
-        <el-form-item label="Gemini 默认模型">
-          <el-input v-model="addForm.geminiModel" placeholder="如：gemini-flash" />
-        </el-form-item>
+        <template v-if="addForm.workerBackend !== 'LANGGRAPH_BIZ'">
+          <el-divider content-position="left">Codex 配置（可选）</el-divider>
+          <el-form-item label="Codex 地址">
+            <el-input v-model="addForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
+          </el-form-item>
+          <el-form-item label="Codex 认证令牌">
+            <el-input v-model="addForm.codexAuthToken" type="password" show-password placeholder="Codex Worker 令牌" />
+          </el-form-item>
+          <el-form-item label="Codex 默认模型">
+            <el-input v-model="addForm.codexModel" placeholder="如：codex-mini-latest" />
+          </el-form-item>
+          <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+          <el-form-item label="Gemini 地址">
+            <el-input v-model="addForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
+          </el-form-item>
+          <el-form-item label="Gemini 认证令牌">
+            <el-input v-model="addForm.geminiAuthToken" type="password" show-password placeholder="Gemini Worker 令牌" />
+          </el-form-item>
+          <el-form-item label="Gemini 默认模型">
+            <el-input v-model="addForm.geminiModel" placeholder="如：gemini-flash" />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="showAddDialog = false">取消</el-button>
@@ -1511,6 +1520,10 @@
     <!-- Edit Worker Dialog -->
     <el-dialog v-model="showEditDialog" title="编辑 Worker" width="480px">
       <el-form :model="editForm" label-position="top">
+        <el-form-item label="Worker 类型">
+          <el-tag v-if="selectedWorkerIsLangGraph" effect="plain">LangGraph Biz Worker</el-tag>
+          <el-tag v-else effect="plain">Claude Code Worker</el-tag>
+        </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="editForm.name" />
         </el-form-item>
@@ -1525,76 +1538,78 @@
             placeholder="留空保持不变"
           />
         </el-form-item>
-        <el-form-item label="认证模式">
-          <el-select v-model="editForm.authMode" style="width: 100%">
-            <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
-            <el-option label="API Key 模式" value="API_KEY" />
-            <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
-          </el-select>
-        </el-form-item>
-        <el-divider content-position="left">SSH 终端（可选）</el-divider>
-        <el-form-item label="SSH 用户名">
-          <el-input v-model="editForm.sshUsername" placeholder="如 root" />
-        </el-form-item>
-        <el-form-item label="SSH 端口">
-          <el-input-number v-model="editForm.sshPort" :min="1" :max="65535" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="SSH 密码">
-          <el-input
-            v-model="editForm.sshPassword"
-            type="password"
-            show-password
-            :placeholder="selectedWorkerEntity?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
-          />
-        </el-form-item>
-        <el-divider content-position="left">Code Server（可选）</el-divider>
-        <el-form-item label="公网地址">
-          <el-input v-model="editForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
-        </el-form-item>
-        <el-form-item label="内网地址">
-          <el-input v-model="editForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input
-            v-model="editForm.codeServerPassword"
-            type="password"
-            show-password
-            :placeholder="selectedWorkerEntity?.codeServerPasswordConfigured ? '已保存，留空不改' : 'code-server 登录密码'"
-          />
-        </el-form-item>
-        <el-form-item label="Folder 前缀">
-          <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
-        </el-form-item>
-        <el-divider content-position="left">Codex 配置（可选）</el-divider>
-        <el-form-item label="Codex 地址">
-          <el-input v-model="editForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
-        </el-form-item>
-        <el-form-item label="Codex 认证令牌">
-          <el-input
-            v-model="editForm.codexAuthToken"
-            type="password"
-            show-password
-            :placeholder="selectedWorkerEntity?.codexAuthTokenConfigured ? '已保存，留空不改' : 'Codex Worker 令牌'"
-          />
-        </el-form-item>
-        <el-form-item label="Codex 默认模型">
-          <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
-        </el-form-item>
-        <el-divider content-position="left">Gemini 配置（可选）</el-divider>
-        <el-form-item label="Gemini 地址">
-          <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
-        </el-form-item>
-        <el-form-item label="Gemini 认证令牌">
-          <el-input
-            v-model="editForm.geminiAuthToken"
-            type="password"
-            show-password
-            :placeholder="selectedWorkerEntity?.geminiAuthTokenConfigured ? '已保存，留空不改' : 'Gemini Worker 令牌'"
-          />
-        </el-form-item>
-        <el-form-item label="Gemini 默认模型">
-          <el-input v-model="editForm.geminiModel" placeholder="如：gemini-flash" />
-        </el-form-item>
+        <template v-if="!selectedWorkerIsLangGraph">
+          <el-form-item label="认证模式">
+            <el-select v-model="editForm.authMode" style="width: 100%">
+              <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
+              <el-option label="API Key 模式" value="API_KEY" />
+              <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
+            </el-select>
+          </el-form-item>
+          <el-divider content-position="left">SSH 终端（可选）</el-divider>
+          <el-form-item label="SSH 用户名">
+            <el-input v-model="editForm.sshUsername" placeholder="如 root" />
+          </el-form-item>
+          <el-form-item label="SSH 端口">
+            <el-input-number v-model="editForm.sshPort" :min="1" :max="65535" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="SSH 密码">
+            <el-input
+              v-model="editForm.sshPassword"
+              type="password"
+              show-password
+              :placeholder="selectedWorkerEntity?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
+            />
+          </el-form-item>
+          <el-divider content-position="left">Code Server（可选）</el-divider>
+          <el-form-item label="公网地址">
+            <el-input v-model="editForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
+          </el-form-item>
+          <el-form-item label="内网地址">
+            <el-input v-model="editForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input
+              v-model="editForm.codeServerPassword"
+              type="password"
+              show-password
+              :placeholder="selectedWorkerEntity?.codeServerPasswordConfigured ? '已保存，留空不改' : 'code-server 登录密码'"
+            />
+          </el-form-item>
+          <el-form-item label="Folder 前缀">
+            <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
+          </el-form-item>
+          <el-divider content-position="left">Codex 配置（可选）</el-divider>
+          <el-form-item label="Codex 地址">
+            <el-input v-model="editForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
+          </el-form-item>
+          <el-form-item label="Codex 认证令牌">
+            <el-input
+              v-model="editForm.codexAuthToken"
+              type="password"
+              show-password
+              :placeholder="selectedWorkerEntity?.codexAuthTokenConfigured ? '已保存，留空不改' : 'Codex Worker 令牌'"
+            />
+          </el-form-item>
+          <el-form-item label="Codex 默认模型">
+            <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
+          </el-form-item>
+          <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+          <el-form-item label="Gemini 地址">
+            <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
+          </el-form-item>
+          <el-form-item label="Gemini 认证令牌">
+            <el-input
+              v-model="editForm.geminiAuthToken"
+              type="password"
+              show-password
+              :placeholder="selectedWorkerEntity?.geminiAuthTokenConfigured ? '已保存，留空不改' : 'Gemini Worker 令牌'"
+            />
+          </el-form-item>
+          <el-form-item label="Gemini 默认模型">
+            <el-input v-model="editForm.geminiModel" placeholder="如：gemini-flash" />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="showEditDialog = false">取消</el-button>
@@ -3225,6 +3240,7 @@ const sshForm = ref({ host: '', port: 22, username: '', password: '' })
 const sshConnecting = ref(false)
 
 const addForm = ref({
+  workerBackend: 'CLAUDE_CODE' as WorkerBackend,
   name: '',
   baseUrl: '',
   authToken: '',
@@ -3245,6 +3261,7 @@ const addForm = ref({
 })
 
 const editForm = ref({
+  workerBackend: 'CLAUDE_CODE' as WorkerBackend,
   name: '',
   baseUrl: '',
   authToken: '',
@@ -3341,6 +3358,7 @@ function providerTypeFromWorkerBackend(workerBackend?: string | null): string | 
   if (workerBackend === 'OPENAI_CODEX') return 'codex-worker'
   if (workerBackend === 'CLAUDE_CODE') return 'claude-worker'
   if (workerBackend === 'GEMINI_CLI') return 'gemini-worker'
+  if (workerBackend === 'LANGGRAPH_BIZ') return 'langgraph-biz-worker'
   return undefined
 }
 
@@ -3348,6 +3366,7 @@ function workerBackendFromProviderType(providerType?: string | null): WorkerBack
   if (providerType === 'codex-worker') return 'OPENAI_CODEX'
   if (providerType === 'claude-worker') return 'CLAUDE_CODE'
   if (providerType === 'gemini-worker') return 'GEMINI_CLI'
+  if (providerType === 'langgraph-biz-worker') return 'LANGGRAPH_BIZ'
   return undefined
 }
 
@@ -3358,6 +3377,7 @@ function inferTaskWorkerBackend(task: ClaudeTask): WorkerBackend | undefined {
   if (task.codexThreadId) return 'OPENAI_CODEX'
   if (task.claudeSessionId) return 'CLAUDE_CODE'
   const model = (task.model || '').toLowerCase()
+  if (model.includes('biz') || model.includes('langgraph')) return 'LANGGRAPH_BIZ'
   if (model.includes('gemini')) return 'GEMINI_CLI'
   if (model.includes('codex') || model.startsWith('gpt-')) return 'OPENAI_CODEX'
   if (model.includes('claude') || model.includes('opus') || model.includes('sonnet') || model.includes('haiku')) return 'CLAUDE_CODE'
@@ -3631,6 +3651,8 @@ function dirNameById(dirId?: string): string {
 function providerTypeLabel(providerType?: string): string {
   if (providerType === 'claude-worker') return 'Claude Worker'
   if (providerType === 'codex-worker') return 'Codex Worker'
+  if (providerType === 'gemini-worker') return 'Gemini Worker'
+  if (providerType === 'langgraph-biz-worker') return 'LangGraph Biz Worker'
   return providerType || '-'
 }
 
@@ -3883,6 +3905,8 @@ function insertDotSlash(comp: InstanceType<typeof SlashCommandInput> | null) {
 const selectedWorkerEntity = computed(() => {
   return workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value)
 })
+
+const selectedWorkerIsLangGraph = computed(() => selectedWorkerEntity.value?.workerBackend === 'LANGGRAPH_BIZ')
 
 const selectedDirectory = computed(() =>
   workerState.directories.value.find((d) => d.directoryId === selectedDirectoryId.value),
@@ -4592,6 +4616,7 @@ function handleAddCommand(command: string) {
 }
 
 const defaultAddForm = () => ({
+  workerBackend: 'CLAUDE_CODE' as WorkerBackend,
   name: '',
   baseUrl: '',
   authToken: '',
@@ -4625,12 +4650,14 @@ async function handleAdd() {
       geminiBaseUrl,
       geminiAuthToken,
       geminiModel,
+      workerBackend,
       ...baseForm
     } = addForm.value
     await workerState.registerWorker({
       ...baseForm,
-      ...(codexBaseUrl ? { codexConfig: { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined } } : {}),
-      ...(geminiBaseUrl ? { geminiConfig: { baseUrl: geminiBaseUrl, authToken: geminiAuthToken || undefined, model: geminiModel || undefined } } : {}),
+      workerBackend,
+      ...(workerBackend !== 'LANGGRAPH_BIZ' && codexBaseUrl ? { codexConfig: { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined } } : {}),
+      ...(workerBackend !== 'LANGGRAPH_BIZ' && geminiBaseUrl ? { geminiConfig: { baseUrl: geminiBaseUrl, authToken: geminiAuthToken || undefined, model: geminiModel || undefined } } : {}),
     })
     showAddDialog.value = false
     addForm.value = defaultAddForm()
@@ -4646,38 +4673,42 @@ async function handleEdit() {
   if (!selectedWorkerId.value) return
   saving.value = true
   try {
+    const isLangGraph = selectedWorkerIsLangGraph.value
     const form: Record<string, unknown> = {
       name: editForm.value.name,
       baseUrl: editForm.value.baseUrl,
-      authMode: editForm.value.authMode,
-      sshUsername: editForm.value.sshUsername,
-      sshPort: editForm.value.sshPort,
-      codeServerPublicUrl: editForm.value.codeServerPublicUrl || null,
-      codeServerInternalUrl: editForm.value.codeServerInternalUrl || null,
-      codeServerFolderPrefix: editForm.value.codeServerFolderPrefix || null,
+      workerBackend: editForm.value.workerBackend,
+      ...(isLangGraph ? {} : {
+        authMode: editForm.value.authMode,
+        sshUsername: editForm.value.sshUsername,
+        sshPort: editForm.value.sshPort,
+        codeServerPublicUrl: editForm.value.codeServerPublicUrl || null,
+        codeServerInternalUrl: editForm.value.codeServerInternalUrl || null,
+        codeServerFolderPrefix: editForm.value.codeServerFolderPrefix || null,
+      }),
     }
     // 密码类字段：有值才发送，空串不发（避免清空已保存的密码）
     if (editForm.value.authToken) {
       form.authToken = editForm.value.authToken
     }
-    if (editForm.value.sshPassword) {
+    if (!isLangGraph && editForm.value.sshPassword) {
       form.sshPassword = editForm.value.sshPassword
     }
-    if (editForm.value.codeServerPassword) {
+    if (!isLangGraph && editForm.value.codeServerPassword) {
       form.codeServerPassword = editForm.value.codeServerPassword
     }
     // codexConfig：有值 → 发送完整对象；原来有值现在清空 → 发送 {baseUrl:''} 清除
     const { codexBaseUrl, codexAuthToken, codexModel } = editForm.value
-    if (codexBaseUrl) {
+    if (!isLangGraph && codexBaseUrl) {
       form.codexConfig = { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined }
-    } else if (selectedWorkerEntity.value?.codexBaseUrl) {
+    } else if (!isLangGraph && selectedWorkerEntity.value?.codexBaseUrl) {
       form.codexConfig = { baseUrl: '' }
     }
     // geminiConfig：有值 → 发送完整对象；原来有值现在清空 → 发送 {baseUrl:''} 清除
     const { geminiBaseUrl, geminiAuthToken, geminiModel } = editForm.value
-    if (geminiBaseUrl) {
+    if (!isLangGraph && geminiBaseUrl) {
       form.geminiConfig = { baseUrl: geminiBaseUrl, authToken: geminiAuthToken || undefined, model: geminiModel || undefined }
-    } else if (selectedWorkerEntity.value?.geminiBaseUrl) {
+    } else if (!isLangGraph && selectedWorkerEntity.value?.geminiBaseUrl) {
       form.geminiConfig = { baseUrl: '' }
     }
     await workerState.updateWorker(selectedWorkerId.value, form)
@@ -6867,6 +6898,7 @@ async function handleResumeFromHistory(task: ClaudeTask) {
 watch(showEditDialog, (val) => {
   if (val && selectedWorkerEntity.value) {
     editForm.value = {
+      workerBackend: selectedWorkerEntity.value.workerBackend || 'CLAUDE_CODE',
       name: selectedWorkerEntity.value.name,
       baseUrl: selectedWorkerEntity.value.baseUrl,
       authToken: '',

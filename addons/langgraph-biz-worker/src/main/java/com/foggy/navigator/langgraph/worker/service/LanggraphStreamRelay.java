@@ -60,12 +60,13 @@ public class LanggraphStreamRelay {
             // Extract context from providerConfig
             @SuppressWarnings("unchecked")
             Map<String, Object> context = (Map<String, Object>) event.getProviderConfig().get("context");
+            String modelConfigId = event.getProviderConfigString("modelConfigId");
 
             Disposable subscription = client.streamQuery(
                     event.getPrompt(),
                     context,
                     event.getModel(),
-                    null, // modelConfigId not forwarded to Python Worker
+                    modelConfigId,
                     taskId,
                     sessionId
             ).doOnNext(sse -> handleEvent(sse, taskId, sessionId))

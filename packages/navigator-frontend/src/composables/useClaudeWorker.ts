@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import * as api from '@/api/claudeWorker'
+import * as langgraphApi from '@/api/langgraphWorker'
 import {
   createTaskUnified,
   cancelTaskUnified,
@@ -32,7 +33,14 @@ export function useClaudeWorker() {
   async function loadWorkers() {
     loading.value = true
     try {
-      workers.value = await api.listWorkers()
+      const [claudeWorkers, langgraphWorkers] = await Promise.all([
+        api.listWorkers(),
+        langgraphApi.listWorkers(),
+      ])
+      workers.value = [
+        ...claudeWorkers.map((worker) => ({ ...worker, workerBackend: worker.workerBackend || 'CLAUDE_CODE' as const })),
+        ...langgraphWorkers,
+      ]
     } finally {
       loading.value = false
     }
@@ -66,31 +74,45 @@ export function useClaudeWorker() {
     sshUsername?: string
     sshPort?: number
     sshPassword?: string
+    workerBackend?: 'CLAUDE_CODE' | 'LANGGRAPH_BIZ'
     codexConfig?: { baseUrl?: string; authToken?: string; model?: string }
     geminiConfig?: { baseUrl?: string; authToken?: string; model?: string }
   }) {
-    const worker = await api.registerWorker(form)
+    const worker = form.workerBackend === 'LANGGRAPH_BIZ'
+      ? await langgraphApi.registerWorker(form)
+      : await api.registerWorker(form)
     workers.value.push(worker)
     return worker
   }
 
   async function updateWorker(
     workerId: string,
-    form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; sshUsername?: string; sshPort?: number; sshPassword?: string; codexConfig?: { baseUrl?: string; authToken?: string; model?: string }; geminiConfig?: { baseUrl?: string; authToken?: string; model?: string } },
+    form: { name?: string; baseUrl?: string; authToken?: string; authMode?: string; workerBackend?: 'CLAUDE_CODE' | 'LANGGRAPH_BIZ'; sshUsername?: string; sshPort?: number; sshPassword?: string; codexConfig?: { baseUrl?: string; authToken?: string; model?: string }; geminiConfig?: { baseUrl?: string; authToken?: string; model?: string } },
   ) {
-    const updated = await api.updateWorker(workerId, form)
+    const existing = workers.value.find((w) => w.workerId === workerId)
+    const updated = existing?.workerBackend === 'LANGGRAPH_BIZ'
+      ? await langgraphApi.updateWorker(workerId, form)
+      : await api.updateWorker(workerId, form)
     const idx = workers.value.findIndex((w) => w.workerId === workerId)
     if (idx >= 0) workers.value[idx] = updated
     return updated
   }
 
   async function deleteWorker(workerId: string) {
-    await api.deleteWorker(workerId)
+    const existing = workers.value.find((w) => w.workerId === workerId)
+    if (existing?.workerBackend === 'LANGGRAPH_BIZ') {
+      await langgraphApi.deleteWorker(workerId)
+    } else {
+      await api.deleteWorker(workerId)
+    }
     workers.value = workers.value.filter((w) => w.workerId !== workerId)
   }
 
   async function refreshWorkerStatus(workerId: string) {
-    const updated = await api.triggerHealthCheck(workerId)
+    const existing = workers.value.find((w) => w.workerId === workerId)
+    const updated = existing?.workerBackend === 'LANGGRAPH_BIZ'
+      ? await langgraphApi.triggerHealthCheck(workerId)
+      : await api.triggerHealthCheck(workerId)
     const idx = workers.value.findIndex((w) => w.workerId === workerId)
     if (idx >= 0) workers.value[idx] = updated
     return updated

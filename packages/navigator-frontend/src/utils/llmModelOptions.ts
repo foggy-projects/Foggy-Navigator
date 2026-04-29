@@ -46,14 +46,19 @@ const GEMINI_MODEL_OPTIONS: SelectableModelOption[] = [
   { value: 'gemini-flash-lite', label: 'Gemini Flash Lite (Alias)', backend: 'GEMINI_CLI', description: 'Gemini Flash Lite (Alias -> Gemini 3.1 Flash Lite Preview)' },
 ]
 
+const LANGGRAPH_BIZ_MODEL_OPTIONS: SelectableModelOption[] = [
+  { value: 'biz-default', label: 'Biz Default', backend: 'LANGGRAPH_BIZ', description: 'Biz Default (Alias) — 由 LangGraph Biz Worker 环境配置解析' },
+]
+
 export const ALL_MODEL_OPTIONS: SelectableModelOption[] = [
   ...CLAUDE_MODEL_OPTIONS,
   ...CODEX_ALIAS_OPTIONS,
   ...GEMINI_MODEL_OPTIONS,
+  ...LANGGRAPH_BIZ_MODEL_OPTIONS,
 ]
 
 function supportsSubscriptionSelection(backend: WorkerBackend | undefined): boolean {
-  return backend === 'CLAUDE_CODE' || backend === 'OPENAI_CODEX' || backend === 'GEMINI_CLI'
+  return backend === 'CLAUDE_CODE' || backend === 'OPENAI_CODEX' || backend === 'GEMINI_CLI' || backend === 'LANGGRAPH_BIZ'
 }
 
 export function isSelectablePlatformModel(model: LlmModelConfig): boolean {

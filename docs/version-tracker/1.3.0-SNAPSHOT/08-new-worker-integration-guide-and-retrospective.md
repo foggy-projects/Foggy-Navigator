@@ -525,3 +525,33 @@ WorkerEndpointConfig
 ## 七、当前结论
 
 Gemini Worker 的接入方式是可行的，但它也说明当前平台“新增 Worker”还不是一个低成本插件化动作。短期内可以依赖本指南降低遗漏；中期应优先把前端 backend registry、CLI Worker Base Runtime、Java provider route 测试模板抽出来；长期再把 Worker endpoint 配置从 `ClaudeWorker` 概念下拆出来。
+
+## 八、LangGraph Biz Worker 集成应用记录
+
+本指南在 LangGraph Biz Worker 集成时已实际应用，当前已完成以下平台侧接入：
+
+1. `WorkerBackend=LANGGRAPH_BIZ` 映射到 `providerType=langgraph-biz-worker`
+2. 统一调度层支持通过 LangGraph 模型配置 direct route 到 LangGraph provider
+3. `UnifiedAgentResolver` 能按 `LANGGRAPH_BIZ` 模型配置优先解析 LangGraph provider
+4. LangGraph provider 支持逻辑 Agent 发现，并兼容按 `defaultModelConfigId` 判断归属
+5. LangGraph 任务创建事件透传 `modelConfigId`，Java relay 再转发给 Python Worker
+6. LangGraph provider 实现统一 `cancelTask` 与 `deleteTask`，避免统一历史删除路径报 provider 不支持
+7. 模型配置支持 `LANGGRAPH_BIZ` 订阅/本机环境模式，不强制要求 `baseUrl` / `apiKey`
+8. 前端 Settings 与 Workers 页面识别 LangGraph Biz backend、模型 alias 与 provider label
+
+验证记录：
+
+1. `mvn -pl session-module "-Dtest=TaskDispatchFacadeTest,UnifiedAgentResolverTest" test`
+2. `mvn -pl addons/langgraph-biz-worker "-Dtest=LanggraphTaskServiceTest,LanggraphTaskServiceApprovalTest" test`
+3. `mvn -pl metadata-config-module -Dtest=LlmModelManagerImplTest test`
+4. `mvn -pl session-module,addons/langgraph-biz-worker,metadata-config-module -am -DskipTests compile`
+5. `pnpm --filter @foggy/navigator-frontend test -- llmModelOptions`
+6. `pnpm --filter @foggy/navigator-frontend type-check`
+
+仍未在本次完成的 L4 项：
+
+1. 未启动 Linux LangGraph Biz Worker 做真实 `/health` 与 `/api/v1/query` 联调
+2. 未通过浏览器创建 LangGraph Biz 模型配置并跑一条真实任务
+3. 未验证真实任务的历史恢复、继续会话与删除按钮端到端行为
+
+这些项需要在 Linux 或 WSL Worker 环境准备好后执行。
