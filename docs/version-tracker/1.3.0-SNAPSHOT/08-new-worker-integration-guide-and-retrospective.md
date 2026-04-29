@@ -1,10 +1,10 @@
-# 新增 Worker 开发指南与 Gemini Worker 复盘
+# 新增 Worker 集成指南与 Gemini Worker 复盘
 
 ## 文档作用
 
-- doc_type: development-guide | retrospective
+- doc_type: integration-guide | retrospective
 - intended_for: execution-agent | reviewer | platform-owner
-- purpose: 沉淀新增 Worker 的标准接入清单，并复盘 Gemini Worker 暴露出的可抽象优化点
+- purpose: 沉淀新增 Worker 的标准集成接入清单，并复盘 Gemini Worker 暴露出的可抽象优化点
 
 ## Version
 
@@ -14,7 +14,7 @@
 
 Gemini Worker 首版接入已经证明平台可以继续扩展新的 CLI / Agent Worker，但也暴露出一个问题：当前平台仍有大量 `Claude/Codex/Gemini` 的枚举、配置和 UI 分支散落在 Java、Node Worker、前端、文档和部署脚本里。
 
-本指南用于后续新增 Worker 时减少遗漏，并明确哪些改动属于当前必须做，哪些应逐步抽象，避免每次新增 Worker 都复制同一批改动。
+本指南用于后续集成新增 Worker 时减少遗漏，并明确哪些改动属于当前必须做，哪些应逐步抽象，避免每次新增 Worker 接入都复制同一批改动。
 
 ## 一、当前新增 Worker 的必改清单
 
@@ -525,4 +525,3 @@ WorkerEndpointConfig
 ## 七、当前结论
 
 Gemini Worker 的接入方式是可行的，但它也说明当前平台“新增 Worker”还不是一个低成本插件化动作。短期内可以依赖本指南降低遗漏；中期应优先把前端 backend registry、CLI Worker Base Runtime、Java provider route 测试模板抽出来；长期再把 Worker endpoint 配置从 `ClaudeWorker` 概念下拆出来。
-
