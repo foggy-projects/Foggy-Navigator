@@ -112,10 +112,12 @@ build/
 
 # Environment variables
 .env
+.env.*
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+!.env.example
 
 # Configuration files with sensitive data
 **/application-docker.yml
@@ -154,6 +156,8 @@ docker-compose.override.yml
 
 # Test coverage
 coverage/
+!docs/version-tracker/**/coverage/
+!docs/version-tracker/**/coverage/*.md
 .nyc_output/
 *.lcov
 

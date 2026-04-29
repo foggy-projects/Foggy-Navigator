@@ -1,6 +1,6 @@
 """Skill manifest registry — loads from SKILL.md (YAML frontmatter + Markdown body).
 
-Supports a two-tier directory layout with priority: builtin → public.
+Supports a layered directory layout with priority: legacy < builtin < public < account.
 Also retains backward-compatible loading from legacy YAML manifests.
 
 Directory layout (Doc 31 §6.2)::
@@ -9,9 +9,10 @@ Directory layout (Doc 31 §6.2)::
       skills/
         builtin/<skill-name>/SKILL.md
         public/<skill-name>/SKILL.md
+      data/
+        accounts/<account-id>/skills/<skill-name>/SKILL.md
 
-Load priority: builtin first, public second.  If same ``name`` appears in both,
-builtin wins.
+Load priority: later layers overwrite earlier layers.
 """
 
 from __future__ import annotations
@@ -103,10 +104,12 @@ class SkillRegistry:
         self,
         skills_root: Path | None = None,
         manifests_dir: Path | None = None,
+        data_root: Path | None = None,
     ) -> None:
         self._manifests: dict[str, SkillManifest] = {}
         self._skills_root = skills_root or _DEFAULT_SKILLS_ROOT
         self._legacy_dir = manifests_dir or _LEGACY_MANIFESTS_DIR
+        self._data_root = data_root or self._skills_root.parent / "data"
 
     def load(self, account_id: str | None = None) -> None:
         """Load skills from all sources.
@@ -133,10 +136,9 @@ class SkillRegistry:
 
     def load_account_skills(self, account_id: str) -> None:
         """Load skills from an account's private directory (overwrites all lower layers)."""
+        account_id = _validate_account_id(account_id)
         # Account skills live under <data_root>/accounts/<account_id>/skills/
-        # _skills_root is typically <worker-root>/skills, data_root is sibling
-        data_root = self._skills_root.parent / "data"
-        account_dir = data_root / "accounts" / account_id / "skills"
+        account_dir = self._data_root / "accounts" / account_id / "skills"
         self._load_skill_md_dir(account_dir, f"account:{account_id}")
 
     def _load_skill_md_dir(self, base_dir: Path, scope: str) -> None:
@@ -187,3 +189,12 @@ class SkillRegistry:
     def register(self, manifest: SkillManifest) -> None:
         """Programmatically register a manifest (useful for tests)."""
         self._manifests[manifest.id] = manifest
+
+
+def _validate_account_id(account_id: str) -> str:
+    """Reject path traversal in account IDs before touching the filesystem."""
+    if not account_id or account_id.strip() != account_id:
+        raise ValueError("account_id must be non-empty and trimmed")
+    if account_id in {".", ".."} or "/" in account_id or "\\" in account_id:
+        raise ValueError("account_id must be a single path segment")
+    return account_id

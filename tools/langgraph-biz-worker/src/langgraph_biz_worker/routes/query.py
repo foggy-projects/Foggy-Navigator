@@ -36,6 +36,8 @@ async def _event_generator(
             "prompt": request.prompt,
             "model": request.model,
             "context": request.context,
+            "user_id": request.user_id,
+            "tenant_id": request.tenant_id,
             "events": [],
             "started_at": time.time(),
             "active_frame_id": None,

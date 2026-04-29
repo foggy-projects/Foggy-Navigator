@@ -1,14 +1,18 @@
 # LangGraph Biz Worker - Start Script
-# Usage: powershell -ExecutionPolicy Bypass -File start.ps1
+# Usage: powershell -ExecutionPolicy Bypass -File start.ps1 [-EnvFile .env.real-llm.local]
+
+param(
+    [string]$EnvFile = ".env"
+)
 
 $ErrorActionPreference = "Stop"
 $WorkerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Port = 3061
 
-# Load port from .env if present
-$EnvFile = Join-Path $WorkerDir ".env"
-if (Test-Path $EnvFile) {
-    $portLine = Get-Content $EnvFile | Where-Object { $_ -match "^BIZ_WORKER_PORT=(\d+)" }
+# Load port from selected env file if present
+$EnvFilePath = Join-Path $WorkerDir $EnvFile
+if (Test-Path $EnvFilePath) {
+    $portLine = Get-Content $EnvFilePath | Where-Object { $_ -match "^BIZ_WORKER_PORT=(\d+)" }
     if ($portLine -and $portLine -match "=(\d+)") {
         $Port = [int]$Matches[1]
     }
@@ -16,6 +20,7 @@ if (Test-Path $EnvFile) {
 
 Write-Host "=== LangGraph Biz Worker ===" -ForegroundColor Cyan
 Write-Host "Port: $Port" -ForegroundColor Cyan
+Write-Host "Env file: $EnvFile" -ForegroundColor Cyan
 
 # Kill existing process on the port
 $existingPid = (netstat -ano | Select-String ":$Port\s+.*LISTENING" | ForEach-Object {
@@ -80,6 +85,7 @@ if (-not (Test-Path $LogDir)) {
 
 # Start the worker in background
 $env:PYTHONPATH = Join-Path $WorkerDir "src"
+$env:BIZ_WORKER_ENV_FILE = $EnvFilePath
 Write-Host "Starting LangGraph Biz Worker on port $Port (background)..." -ForegroundColor Green
 
 Start-Process $VenvPython `

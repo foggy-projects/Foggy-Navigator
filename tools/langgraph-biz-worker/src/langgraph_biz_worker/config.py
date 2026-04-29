@@ -1,3 +1,5 @@
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +26,8 @@ class Settings(BaseSettings):
     llm_base_url: str = ""          # custom base URL (for Ollama/vLLM compatibility)
     llm_model: str = ""             # e.g. claude-sonnet-4-20250514, gpt-4o
     llm_temperature: float = 0.0
+    llm_execute_skills: bool = False  # when true, Skill frames run through LLM tool-call loop
+    llm_skill_max_iterations: int = 6
 
     # Public Skill sync from GitLab (leave skill_git_repo empty to disable)
     skill_git_repo: str = ""            # GitLab repo URL, e.g. https://gitlab.example.com/foggy/foggy-skills.git
@@ -37,7 +41,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="BIZ_WORKER_",
-        env_file=".env",
+        env_file=os.environ.get("BIZ_WORKER_ENV_FILE", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )

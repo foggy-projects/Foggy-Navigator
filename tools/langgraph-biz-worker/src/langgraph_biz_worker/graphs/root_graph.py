@@ -18,6 +18,7 @@ from ..models import FrameStatus, QueryEvent
 from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.frame_store import FrameStore
 from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model
+from ..runtime.llm_skill_agent import LlmSkillAgent
 from ..runtime.skill_registry import SkillRegistry
 from ..runtime.skill_runtime import SkillRuntime
 from .skills.exception_triage import (
@@ -33,13 +34,13 @@ from .skills.exception_triage import (
 # Shared runtime instances (singleton per process)
 # ---------------------------------------------------------------------------
 
-_frame_store = FrameStore()
-_skill_registry = SkillRegistry()
-_skill_registry.load()
-
 # File journal for Frame persistence (Doc 31 §16.3)
 # Uses data_root from config, falls back to <project>/data
 _data_root = settings.data_root or str(Path(__file__).resolve().parent.parent.parent.parent / "data")
+
+_frame_store = FrameStore()
+_skill_registry = SkillRegistry(data_root=Path(_data_root))
+_skill_registry.load()
 _journal = FileFrameJournal(_data_root)
 
 _runtime = SkillRuntime(frame_store=_frame_store, skill_registry=_skill_registry, journal=_journal)
@@ -47,6 +48,11 @@ _runtime = SkillRuntime(frame_store=_frame_store, skill_registry=_skill_registry
 # LLM-based Skill Router (None if llm_provider is empty → rule-based fallback)
 _chat_model = create_chat_model(settings)
 _llm_router: LlmSkillRouter | None = LlmSkillRouter(_chat_model) if _chat_model else None
+_llm_skill_agent: LlmSkillAgent | None = (
+    LlmSkillAgent(_chat_model, _runtime, settings.llm_skill_max_iterations, data_root=Path(_data_root))
+    if _chat_model and settings.llm_execute_skills
+    else None
+)
 
 
 def get_runtime() -> SkillRuntime:
@@ -72,6 +78,8 @@ class RootState(TypedDict):
     prompt: str
     model: str | None
     context: dict[str, Any] | None
+    user_id: str | None
+    tenant_id: str | None
     # Annotated with operator.add so each node's events are *appended*
     events: Annotated[list[QueryEvent], operator.add]
     started_at: float
@@ -90,6 +98,12 @@ def route_skill(state: RootState) -> dict:
     """Determine which skill to invoke based on the query context."""
     task_id = state["task_id"]
     context = state.get("context") or {}
+    account_id = state.get("user_id") or context.get("account_id") or context.get("accountId")
+
+    try:
+        _skill_registry.load(account_id=account_id)
+    except ValueError:
+        _skill_registry.load()
 
     events = [
         QueryEvent(
@@ -168,6 +182,18 @@ def run_skill(state: RootState) -> dict:
         return {"events": []}
 
     task_id = state["task_id"]
+    context = state.get("context") or {}
+    account_id = state.get("user_id") or context.get("account_id") or context.get("accountId")
+
+    if _llm_skill_agent:
+        return {
+            "events": _llm_skill_agent.run(
+                task_id=task_id,
+                frame_id=frame_id,
+                prompt=state["prompt"],
+                account_id=account_id,
+            )
+        }
 
     # Build skill subgraph state and run steps sequentially
     triage_state: TriageState = {

@@ -104,6 +104,12 @@ class SkillRuntime:
             started_at=now,
         )
 
+        manifest = self.registry.get_manifest(skill_id)
+        if manifest:
+            # Freeze the manifest for this frame so later account/public registry
+            # reloads cannot change validation or promotion semantics mid-run.
+            frame.private_working_state["_skill_manifest"] = manifest.model_dump()
+
         # CREATED → RUNNING
         self._transition(frame, FrameStatus.RUNNING)
         self._save(frame)
@@ -221,7 +227,7 @@ class SkillRuntime:
         frame.submit_attempts += 1
 
         # Validate output contract
-        manifest = self.registry.get_manifest(frame.skill_id)
+        manifest = self._manifest_for_frame(frame)
         if manifest:
             result = validate_output_contract(frame, manifest, structured_output)
         else:
@@ -277,7 +283,7 @@ class SkillRuntime:
             "skill_id": frame.skill_id,
         }
 
-        manifest = self.registry.get_manifest(frame.skill_id)
+        manifest = self._manifest_for_frame(frame)
         promote_fields = manifest.promote_to_parent if manifest else [
             "result_summary", "structured_output", "artifact_refs", "evidence_refs",
         ]
@@ -428,6 +434,16 @@ class SkillRuntime:
         if frame is None:
             raise FrameNotFound(f"Frame not found: {frame_id}")
         return frame
+
+    def _manifest_for_frame(self, frame: SkillFrameState) -> SkillManifest | None:
+        """Return the frame-frozen manifest, falling back to the current registry."""
+        snapshot = frame.private_working_state.get("_skill_manifest")
+        if isinstance(snapshot, dict):
+            try:
+                return SkillManifest(**snapshot)
+            except Exception:
+                logger.warning("Invalid manifest snapshot in frame=%s", frame.frame_id, exc_info=True)
+        return self.registry.get_manifest(frame.skill_id)
 
     def _save(self, frame: SkillFrameState) -> None:
         """Save frame to in-memory store and optionally persist to file journal."""
