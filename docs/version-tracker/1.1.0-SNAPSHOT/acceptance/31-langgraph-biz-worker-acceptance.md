@@ -11,7 +11,7 @@ signed_off_at: 2026-04-14
 reviewed_by: N/A
 blocking_items: []
 follow_up_required: yes
-evidence_count: 6
+evidence_count: 7
 ---
 
 # Feature Acceptance
@@ -88,6 +88,7 @@ evidence_count: 6
 | E4 | Python 测试 | `tools/langgraph-biz-worker/tests/` (20 files, 184 tests) | 93% 行覆盖率 |
 | E5 | Java 测试 | `addons/langgraph-biz-worker/src/test/` (2 files, 15 tests) | BUILD SUCCESS |
 | E6 | Git 提交 | 7 commits ff584d43..8491f1fe | 41 files, +3,776/-168 lines |
+| E7 | 真实 LLM 补充联调 | `docs/version-tracker/1.1.0-SNAPSHOT/36-mock-llm-skill-test-support.md` | OpenAI-compatible LLM Skill Agent 完整 tool-call loop + Journal 数据比对 |
 
 ## Failed Items
 
@@ -99,7 +100,7 @@ evidence_count: 6
 |---|------|------|-------|-----------|
 | R1 | resume.py configure() 全局模式 | 低 | Python Worker | 多实例部署时改造为 FastAPI Depends |
 | R2 | Java stringly-typed status | 低 | 项目级 | 跨模块统一引入状态枚举 |
-| R3 | LLM 路由未做真实 API 测试 | 低 | Python Worker | 有 Key 后补充集成测试 |
+| R3 | LLM 真实 API 联调覆盖不足 | 低 | Python Worker | 2026-04-28 已通过 36 补充 OpenAI-compatible Skill Agent 真实 LLM 联调；Anthropic tool_use 与真实业务工具注册表仍作为后续项 |
 | R4 | §16.7 第二阶段待做项 | 信息 | — | 前端 Skill 配置台、真实业务工具适配、Skill 注册中心 |
 
 ## Final Decision
@@ -114,7 +115,14 @@ langgraph-biz-worker Phase 6 全量交付达到验收标准：
 - 199 个自动化测试全部通过，93% 行覆盖率
 - 无阻断问题
 
-4 个非阻断风险（R1-R4）已记录，可在后续迭代处理。其中 R4（第二阶段待做项）属于设计文档已声明的 scope boundary，不影响本次验收。
+4 个非阻断风险（R1-R4）已记录，可在后续迭代处理。其中 R3 已由 36 的 OpenAI-compatible 真实 LLM Skill Agent 联调部分收敛，R4（第二阶段待做项）属于设计文档已声明的 scope boundary，不影响本次验收。
+
+## 2026-04-28 Addendum
+
+- 真实 LLM 联调已补充：使用 OpenAI-compatible API 驱动 `LlmSkillAgent`，Frame 达到 `COMPLETED`，事件链覆盖 `tool_use -> tool_result -> tool_use -> tool_result -> tool_use -> skill_result_submit`。
+- Journal 数据比对已补充：持久化 Frame、内存 Frame、promoted result 一致，`close_frame()` 后私有上下文与 tool_calls 已清空。
+- 2026-04-28 当前 Python Worker 回归测试为 `202 passed`。
+- 本补充不改变 31 的原始签收结论；仅将原 R3 从“未验证”调整为“OpenAI-compatible 已验证，其他 provider/真实业务工具后续验证”。
 
 ## Signoff Marker
 

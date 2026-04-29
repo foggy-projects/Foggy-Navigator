@@ -93,3 +93,49 @@ async def test_reload_responses(client):
     data = response.json()
     assert "message" in data
     assert "count" in data
+
+
+@pytest.mark.anyio
+async def test_langgraph_biz_worker_skill_tool_call_sequence(client):
+    """测试 Biz Worker Skill 场景可按 tool result 推进。"""
+    first = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "mock-model",
+            "messages": [{"role": "user", "content": "SKILL_AGENT_START exception_triage"}],
+            "stream": False,
+        },
+    )
+    assert first.status_code == 200
+    first_call = first.json()["choices"][0]["message"]["tool_calls"][0]
+    assert first_call["function"]["name"] == "mock_get_order"
+
+    second = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "mock-model",
+            "messages": [
+                {"role": "user", "content": "SKILL_AGENT_START exception_triage"},
+                {"role": "tool", "content": '{"delay_minutes":45,"vehicle_id":"V09"}'},
+            ],
+            "stream": False,
+        },
+    )
+    assert second.status_code == 200
+    second_call = second.json()["choices"][0]["message"]["tool_calls"][0]
+    assert second_call["function"]["name"] == "mock_get_vehicle_status"
+
+    third = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "mock-model",
+            "messages": [
+                {"role": "user", "content": "SKILL_AGENT_START exception_triage"},
+                {"role": "tool", "content": '{"status":"breakdown","error_code":"E_MOTOR_OVERHEAT"}'},
+            ],
+            "stream": False,
+        },
+    )
+    assert third.status_code == 200
+    third_call = third.json()["choices"][0]["message"]["tool_calls"][0]
+    assert third_call["function"]["name"] == "submit_skill_result"

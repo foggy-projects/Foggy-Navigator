@@ -131,7 +131,7 @@ follow_up_required: no
 | G1 | WAITING_CHILD → FAILED/CANCELLED 转换无显式测试 | major | 否 | 状态机合法转换已在 models.py 声明，非法转换测试已覆盖边界；这两条转换是异常路径，当前无触发场景 |
 | G2 | §4.3 一次 Frame 一个 Active Skill 无显式测试 | major | 否 | 架构设计保证：invoke_skill 创建独立 Frame，不存在同 Frame 多 Skill 的入口 |
 | G3 | Java SSE Relay → 前端推送未测试 | major | 否 | 属于前端集成范围（§16.7 第二阶段），当前 Java StreamRelay 事件处理逻辑已通过代码审查 |
-| G4 | 真实 LLM API 调用未测试 | minor | 否 | 用户确认 mock 测试足够，真实 API 测试需要 Key |
+| G4 | 真实 LLM API 调用未测试 | minor | 否 | 2026-04-28 已通过 36 补充 OpenAI-compatible Skill Agent 真实 LLM 联调；Anthropic tool_use 与真实业务工具仍未覆盖 |
 
 ## Recommended Next Skills
 
@@ -148,6 +148,11 @@ follow_up_required: no
 
 4 个缺口均为非阻断项：
 - G1/G2 是架构设计已保证的边界，无真实风险
+
+## 2026-04-28 Addendum
+
+- G4 对 OpenAI-compatible Skill Agent 路径已补充覆盖：真实 LLM 完成 tool-call loop，Frame `COMPLETED`，并通过 FileFrameJournal 数据一致性比对。
+- G4 仍保留为后续 provider/工具适配风险：Anthropic tool_use、统一业务工具注册表、完整 `SKILL.md` body 注入尚未纳入 1.1.0 自动化覆盖。
 - G3 属于第二阶段前端集成范围
 - G4 用户已确认跳过
 

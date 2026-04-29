@@ -147,7 +147,7 @@
 
 - 前端：`npm run build` 成功
 - 后端：`mvn -pl addons/claude-worker-agent -am -DskipTests compile` 成功
-- 定向单测：`session-module` 单独执行时受本地 SNAPSHOT 依赖缺失影响，未能直接跑通
+- 定向单测：2026-04-28 已补跑 `mvn -pl session-module -Dtest=TaskDispatchFacadeTest test`，结果 `Tests run: 38, Failures: 0, Errors: 0, Skipped: 0`，`BUILD SUCCESS`
 
 ## 结论
 

@@ -55,7 +55,7 @@ def test_pattern_match(strategy, sample_rules):
 
 def test_default_match(strategy, sample_rules):
     """测试默认响应"""
-    messages = [ChatMessage(role="user", content="something random")]
+    messages = [ChatMessage(role="user", content="unrelated random")]
     rule = strategy.match(messages, sample_rules)
     assert rule is not None
     assert rule.name == "default"
@@ -95,3 +95,28 @@ def test_case_insensitive_match(strategy, sample_rules):
     rule = strategy.match(messages, sample_rules)
     assert rule is not None
     assert rule.name == "greeting"
+
+
+def test_message_role_match_tool_result(strategy):
+    """测试可按 tool 结果消息匹配后续响应。"""
+    rules = [
+        ResponseRule(
+            name="tool-follow-up",
+            match=MatchRule(message_role="tool", keywords=["vehicle_id"]),
+            response=MockResponseConfig(content="follow up"),
+        ),
+        ResponseRule(
+            name="default",
+            match=MatchRule(default=True),
+            response=MockResponseConfig(content="Default response."),
+        ),
+    ]
+    messages = [
+        ChatMessage(role="user", content="run skill"),
+        ChatMessage(role="tool", content='{"vehicle_id":"V09"}'),
+    ]
+
+    rule = strategy.match(messages, rules)
+
+    assert rule is not None
+    assert rule.name == "tool-follow-up"
