@@ -69,7 +69,9 @@ public class LanggraphStreamRelay {
                     event.getModel(),
                     modelConfigId,
                     taskId,
-                    sessionId
+                    sessionId,
+                    event.getUserId(),
+                    event.getTenantId()
             ).doOnNext(sse -> handleEvent(sse, taskId, sessionId))
               .doOnError(e -> handleStreamError(e, taskId, sessionId))
               .doOnComplete(() -> handleStreamComplete(taskId, sessionId))
@@ -203,6 +205,10 @@ public class LanggraphStreamRelay {
 
     private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
         AgentMessage msg = AgentMessage.of(sessionId, LanggraphTaskService.PROVIDER_TYPE, type, payload);
+        Object taskId = payload.get("taskId");
+        if (taskId instanceof String taskIdValue && !taskIdValue.isBlank()) {
+            msg.setTaskId(taskIdValue);
+        }
         eventPublisher.publishEvent(msg);
     }
 }

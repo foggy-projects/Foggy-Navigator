@@ -82,6 +82,7 @@ class LanggraphStreamRelayTest {
         verify(eventPublisher).publishEvent(captor.capture());
         AgentMessage message = assertInstanceOf(AgentMessage.class, captor.getValue());
         assertEquals(MessageType.STATE_SYNC, message.getType());
+        assertEquals(taskId, message.getTaskId());
 
         @SuppressWarnings("unchecked")
         Map<String, Object> payload = (Map<String, Object>) message.getPayload();

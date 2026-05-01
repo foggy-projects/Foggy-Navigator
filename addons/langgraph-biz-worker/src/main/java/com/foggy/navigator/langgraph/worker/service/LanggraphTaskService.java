@@ -1,9 +1,14 @@
 package com.foggy.navigator.langgraph.worker.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphApprovalEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
@@ -22,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -34,12 +40,15 @@ import java.util.UUID;
 public class LanggraphTaskService implements TaskQueryProvider {
 
     public static final String PROVIDER_TYPE = "langgraph-biz-worker";
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final LanggraphTaskRepository taskRepository;
     private final LanggraphApprovalRepository approvalRepository;
     private final LanggraphWorkerService workerService;
     private final SessionManager sessionManager;
     private final ApplicationEventPublisher eventPublisher;
+    private final SessionTaskRepository sessionTaskRepository;
+    private final SessionEntityRepository sessionEntityRepository;
 
     // ── TaskQueryProvider SPI ──────────────────────────────────────────────
 
@@ -125,7 +134,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         entity.setDirectoryId(form.getDirectoryId());
         entity.setCwd(form.getCwd());
         entity.setContextId(form.getContextId());
-        taskRepository.save(entity);
+        persistTask(entity);
 
         // 3. Publish WorkerTaskStartEvent → LanggraphStreamRelay listens
         Map<String, Object> providerConfig = new LinkedHashMap<>();
@@ -139,6 +148,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
                 .sessionId(sessionId)
                 .workerId(form.getWorkerId())
                 .userId(userId)
+                .tenantId(tenantId)
                 .prompt(form.getPrompt())
                 .cwd(form.getCwd())
                 .model(form.getModel())
@@ -156,7 +166,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
     public void startTask(String taskId) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setStatus("RUNNING");
-            taskRepository.save(entity);
+            persistTask(entity);
         });
     }
 
@@ -167,7 +177,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
             entity.setResultText(resultText);
             entity.setStructuredOutput(structuredOutput);
             entity.setDurationMs(durationMs);
-            taskRepository.save(entity);
+            persistTask(entity);
             log.info("Task completed: taskId={}", taskId);
         });
     }
@@ -177,7 +187,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setStatus("FAILED");
             entity.setErrorMessage(errorMessage);
-            taskRepository.save(entity);
+            persistTask(entity);
             log.warn("Task failed: taskId={}, error={}", taskId, errorMessage);
         });
     }
@@ -192,7 +202,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         }
         entity.setStatus("ABORTED");
         entity.setErrorMessage("Cancelled by user");
-        taskRepository.save(entity);
+        persistTask(entity);
         log.info("Task cancelled: taskId={}", taskId);
     }
 
@@ -205,7 +215,99 @@ public class LanggraphTaskService implements TaskQueryProvider {
             throw new IllegalStateException("Cannot delete active task: " + taskId);
         }
         taskRepository.delete(entity);
+        sessionTaskRepository.deleteByTaskId(taskId);
         log.info("Task deleted: taskId={}", taskId);
+    }
+
+    private void persistTask(LanggraphTaskEntity entity) {
+        LanggraphTaskEntity saved = taskRepository.save(entity);
+        syncSessionTask(saved);
+        syncSessionProjection(saved);
+    }
+
+    private void syncSessionTask(LanggraphTaskEntity entity) {
+        if (entity.getSessionId() == null || entity.getSessionId().isBlank()) {
+            return;
+        }
+        SessionTaskEntity sessionTask = sessionTaskRepository.findByTaskId(entity.getTaskId())
+                .orElseGet(SessionTaskEntity::new);
+        sessionTask.setTaskId(entity.getTaskId());
+        sessionTask.setSessionId(entity.getSessionId());
+        sessionTask.setProviderType(PROVIDER_TYPE);
+        sessionTask.setProviderTaskId(entity.getTaskId());
+        sessionTask.setWorkerId(entity.getWorkerId());
+        sessionTask.setUserId(entity.getUserId());
+        sessionTask.setTenantId(entity.getTenantId());
+        sessionTask.setAgentId(PROVIDER_TYPE);
+        sessionTask.setDirectoryId(entity.getDirectoryId());
+        sessionTask.setPrompt(entity.getPrompt());
+        sessionTask.setCwd(entity.getCwd());
+        sessionTask.setStatus(entity.getStatus());
+        sessionTask.setModel(entity.getModel());
+        sessionTask.setModelConfigId(entity.getModelConfigId());
+        sessionTask.setDurationMs(entity.getDurationMs());
+        sessionTask.setResultText(entity.getResultText());
+        sessionTask.setErrorMessage(entity.getErrorMessage());
+        sessionTask.setSource("PLATFORM");
+        sessionTask.setCreatedAt(entity.getCreatedAt());
+        sessionTask.setUpdatedAt(entity.getUpdatedAt());
+        sessionTask.setTaskStateJson(buildTaskStateJson(entity));
+        sessionTaskRepository.save(sessionTask);
+    }
+
+    private void syncSessionProjection(LanggraphTaskEntity entity) {
+        if (entity.getSessionId() == null || entity.getSessionId().isBlank()) {
+            return;
+        }
+        sessionEntityRepository.findById(entity.getSessionId()).ifPresent(session -> {
+            boolean changed = false;
+            if (!Objects.equals(session.getAgentId(), PROVIDER_TYPE)) {
+                session.setAgentId(PROVIDER_TYPE);
+                changed = true;
+            }
+            if (!Objects.equals(session.getProviderType(), PROVIDER_TYPE)) {
+                session.setProviderType(PROVIDER_TYPE);
+                changed = true;
+            }
+            if (!Objects.equals(session.getCurrentWorkerId(), entity.getWorkerId())) {
+                session.setCurrentWorkerId(entity.getWorkerId());
+                changed = true;
+            }
+            if (!Objects.equals(session.getCurrentDirectoryId(), entity.getDirectoryId())) {
+                session.setCurrentDirectoryId(entity.getDirectoryId());
+                changed = true;
+            }
+            if (!Objects.equals(session.getLatestTaskId(), entity.getTaskId())) {
+                session.setLatestTaskId(entity.getTaskId());
+                changed = true;
+            }
+            if (!Objects.equals(session.getLatestModel(), entity.getModel())) {
+                session.setLatestModel(entity.getModel());
+                changed = true;
+            }
+            if (entity.getUpdatedAt() != null && !entity.getUpdatedAt().equals(session.getLastActivityAt())) {
+                session.setLastActivityAt(entity.getUpdatedAt());
+                changed = true;
+            }
+            if (changed) {
+                sessionEntityRepository.save(session);
+            }
+        });
+    }
+
+    private String buildTaskStateJson(LanggraphTaskEntity entity) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        putIfNotBlank(state, "contextId", entity.getContextId());
+        putIfNotBlank(state, "structuredOutput", entity.getStructuredOutput());
+        if (state.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(state);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize langgraph task state: taskId={}", entity.getTaskId(), e);
+            return null;
+        }
     }
 
     // ── Approval lifecycle (Doc 31 §16.4: Java side manages audit) ─────

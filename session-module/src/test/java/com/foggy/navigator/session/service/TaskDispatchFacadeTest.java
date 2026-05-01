@@ -233,6 +233,7 @@ class TaskDispatchFacadeTest {
                 .prompt("hi langgraph")
                 .model("biz-default")
                 .modelConfigId("cfg-langgraph")
+                .context(Map.of("language", "fsscript", "script", "return 1;"))
                 .build();
         AgentResolveContext context = AgentResolveContext.builder()
                 .userId("user-1")
@@ -264,7 +265,8 @@ class TaskDispatchFacadeTest {
                 argThat(params -> "worker-langgraph-1".equals(params.get("workerId"))
                         && "dir-langgraph-1".equals(params.get("directoryId"))
                         && "biz-default".equals(params.get("model"))
-                        && "cfg-langgraph".equals(params.get("modelConfigId"))),
+                        && "cfg-langgraph".equals(params.get("modelConfigId"))
+                        && Map.of("language", "fsscript", "script", "return 1;").equals(params.get("context"))),
                 eq("user-1"),
                 eq("tenant-1"));
         verifyNoInteractions(agentResolver, bindingService, agent);

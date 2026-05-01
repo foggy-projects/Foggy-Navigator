@@ -57,7 +57,9 @@ public class LanggraphWorkerClient {
             String model,
             String modelConfigId,
             String taskId,
-            String sessionId
+            String sessionId,
+            String userId,
+            String tenantId
     ) {
         Map<String, Object> body = new HashMap<>();
         body.put("prompt", prompt);
@@ -66,6 +68,8 @@ public class LanggraphWorkerClient {
         if (modelConfigId != null) body.put("model_config_id", modelConfigId);
         if (taskId != null) body.put("taskId", taskId);
         if (sessionId != null) body.put("session_id", sessionId);
+        if (userId != null) body.put("userId", userId);
+        if (tenantId != null) body.put("tenantId", tenantId);
 
         return webClient.post()
                 .uri("/api/v1/query")

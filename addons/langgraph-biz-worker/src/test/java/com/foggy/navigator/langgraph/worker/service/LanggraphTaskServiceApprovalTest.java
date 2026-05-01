@@ -1,6 +1,8 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphApprovalEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
@@ -45,6 +47,8 @@ class LanggraphTaskServiceApprovalTest {
         workerService = mock(LanggraphWorkerService.class);
         SessionManager sessionManager = mock(SessionManager.class);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        SessionTaskRepository sessionTaskRepository = mock(SessionTaskRepository.class);
+        SessionEntityRepository sessionEntityRepository = mock(SessionEntityRepository.class);
 
         when(approvalRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -57,7 +61,7 @@ class LanggraphTaskServiceApprovalTest {
 
         service = new LanggraphTaskService(
                 taskRepository, approvalRepository, workerService,
-                sessionManager, publisher
+                sessionManager, publisher, sessionTaskRepository, sessionEntityRepository
         );
     }
 

@@ -38,6 +38,9 @@ public class WorkerTaskStartEvent {
     /** 用户 ID（可选，部分 Provider 需要） */
     private String userId;
 
+    /** 租户 ID（可选，部分 Provider 需要） */
+    private String tenantId;
+
     // ── Provider 特有配置（组合方式，避免继承膨胀） ──
 
     /** Provider 特有配置项，key-value 形式 */

@@ -3,6 +3,9 @@ package com.foggy.navigator.langgraph.worker.service;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.common.entity.SessionTaskEntity;
+import com.foggy.navigator.common.repository.SessionEntityRepository;
+import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
@@ -26,6 +29,8 @@ import static org.mockito.Mockito.*;
 class LanggraphTaskServiceTest {
 
     private LanggraphTaskRepository taskRepository;
+    private SessionTaskRepository sessionTaskRepository;
+    private SessionEntityRepository sessionEntityRepository;
     private SessionManager sessionManager;
     private ApplicationEventPublisher eventPublisher;
     private LanggraphTaskService service;
@@ -38,16 +43,20 @@ class LanggraphTaskServiceTest {
     @BeforeEach
     void setUp() {
         taskRepository = mock(LanggraphTaskRepository.class);
+        sessionTaskRepository = mock(SessionTaskRepository.class);
+        sessionEntityRepository = mock(SessionEntityRepository.class);
         LanggraphApprovalRepository approvalRepository = mock(LanggraphApprovalRepository.class);
         LanggraphWorkerService workerService = mock(LanggraphWorkerService.class);
         sessionManager = mock(SessionManager.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
 
         when(taskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sessionTaskRepository.findByTaskId(anyString())).thenReturn(Optional.empty());
+        when(sessionTaskRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service = new LanggraphTaskService(
                 taskRepository, approvalRepository, workerService,
-                sessionManager, eventPublisher
+                sessionManager, eventPublisher, sessionTaskRepository, sessionEntityRepository
         );
     }
 
@@ -88,6 +97,14 @@ class LanggraphTaskServiceTest {
             assertEquals(WORKER_ID, saved.getWorkerId());
             assertNotNull(saved.getTaskId());
             assertTrue(saved.getTaskId().startsWith("lgt_"));
+
+            verify(sessionTaskRepository).save(argThat((SessionTaskEntity projection) ->
+                    saved.getTaskId().equals(projection.getTaskId())
+                            && SESSION_ID.equals(projection.getSessionId())
+                            && WORKER_ID.equals(projection.getWorkerId())
+                            && "langgraph-biz-worker".equals(projection.getProviderType())
+                            && "cfg-langgraph".equals(projection.getModelConfigId())
+            ));
         }
 
         @Test
