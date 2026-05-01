@@ -413,6 +413,57 @@ export interface UserMemoryForm {
   content: string
 }
 
+// ===== 用户管理类型 =====
+
+export type UserStatus = 'ACTIVE' | 'DISABLED' | 'DELETED'
+
+export interface UserDTO {
+  id: string
+  tenantId?: string
+  username: string
+  email?: string
+  displayName?: string
+  roles?: string
+  status: UserStatus
+  lastLoginAt?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface UserRegisterForm {
+  tenantId?: string
+  username: string
+  password: string
+  email?: string
+  displayName?: string
+  roles?: string
+}
+
+export interface UserUpdateForm {
+  email?: string
+  displayName?: string
+  roles?: string
+  status?: UserStatus
+  newPassword?: string
+}
+
+export interface ApiKeyDTO {
+  id: string
+  userId: string
+  name: string
+  apiKey?: string
+  maskedApiKey?: string
+  enabled?: boolean
+  expiresAt?: string
+  lastUsedAt?: string
+  createdAt?: string
+}
+
+export interface ApiKeyCreateForm {
+  name: string
+  expiresAt?: string
+}
+
 // ===== API 凭证类型 =====
 
 export type AuthType = 'API_KEY' | 'BEARER_TOKEN' | 'BASIC_AUTH' | 'CUSTOM_HEADER'

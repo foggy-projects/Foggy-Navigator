@@ -6,8 +6,6 @@ import {
   cancelTaskUnified,
   listTasksUnified,
   respondToTaskUnified,
-  reconnectTaskUnified,
-  resyncTaskUnified,
   resumeTaskUnified,
   deleteTaskUnified,
   listTasksPagedUnified,

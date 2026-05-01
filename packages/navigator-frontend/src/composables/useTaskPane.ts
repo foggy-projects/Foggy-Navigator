@@ -361,7 +361,6 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       // Convert DB messages to ChatMessages
       // We need to build the array first, then unshift, to preserve the conversion logic
       // that peeks at the next message (for waiting-hint suppression).
-      const olderMessages: ChatMessage[] = []
       const prevMessagesSnapshot = chatState.messages.value
 
       // Temporarily use a separate array to collect converted messages

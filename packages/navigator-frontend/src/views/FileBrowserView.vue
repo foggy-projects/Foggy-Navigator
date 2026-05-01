@@ -1,7 +1,7 @@
 <template>
   <div class="file-browser">
     <!-- Left: File tree / Git changes -->
-    <aside class="file-sidebar" ref="sidebarEl" :style="{ width: sidebarWidth + 'px' }">
+    <aside class="file-sidebar" :style="{ width: sidebarWidth + 'px' }">
       <div class="sidebar-tabs">
         <button :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">文件</button>
         <button :class="{ active: activeTab === 'git' }" @click="switchToGitTab">Git 改动</button>
@@ -631,6 +631,7 @@ const LONG_PRESS_DURATION = 500 // ms
 function handleTouchStart(e: TouchEvent, data: TreeNode) {
   longPressTriggered = false
   const touch = e.touches[0]
+  if (!touch) return
   const tx = touch.clientX
   const ty = touch.clientY
   longPressTimer = setTimeout(() => {
@@ -1328,7 +1329,6 @@ function formatSize(bytes: number): string {
 }
 
 // ---- Resize sidebar -------------------------------------------------------
-const sidebarEl = ref<HTMLElement>()
 const sidebarWidth = ref(260)
 
 function onResizeStart(e: PointerEvent) {

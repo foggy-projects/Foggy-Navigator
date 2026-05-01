@@ -240,6 +240,36 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     updatedAt: '2026-02-16T00:02:00Z',
   }
 
+  const mockClaudeFailedTask: ClaudeTask = {
+    taskId: 'task-claude-failed-1',
+    sessionId: 'session-claude-failed-1',
+    workerId: 'worker-1',
+    directoryId: 'dir-1',
+    prompt: 'claude failed task',
+    cwd: '/test/path',
+    status: 'FAILED',
+    providerType: 'claude-worker',
+    model: 'sonnet',
+    claudeSessionId: 'claude-session-failed',
+    createdAt: '2026-02-16T00:04:00Z',
+    updatedAt: '2026-02-16T00:04:00Z',
+  }
+
+  const mockLangGraphFailedTask: ClaudeTask = {
+    taskId: 'task-langgraph-failed-1',
+    sessionId: 'session-langgraph-failed-1',
+    workerId: 'worker-1',
+    directoryId: 'dir-1',
+    prompt: 'langgraph failed task',
+    cwd: '/test/path',
+    status: 'FAILED',
+    providerType: 'langgraph-biz-worker',
+    model: 'biz-default',
+    claudeSessionId: 'worker-session-langgraph-1',
+    createdAt: '2026-02-16T00:05:00Z',
+    updatedAt: '2026-02-16T00:05:00Z',
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -508,6 +538,115 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
 
       expect(vm.directoryTasks[0].status).toBe('COMPLETED')
       expect(vm.conversationInteractionState(vm.activeConversations[0])).toBe('AWAITING_REPLY')
+    })
+  })
+
+  describe('LangGraph Biz Worker UI boundaries', () => {
+    const paneGridStubs = {
+      ...commonGlobal.stubs,
+      TaskPaneGrid: {
+        props: ['panes'],
+        template: `
+          <div class="mock-pane-grid">
+            <div v-for="pane in panes" :key="pane.paneId" class="mock-pane">
+              <slot name="header-extra" :pane-state="pane" />
+            </div>
+          </div>
+        `,
+      },
+    }
+
+    it('does not show resync for a failed LangGraph task', async () => {
+      const wrapper = mount(ClaudeWorkerView, {
+        global: {
+          ...commonGlobal,
+          stubs: paneGridStubs,
+        },
+      })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectDirectory('worker-1', 'dir-1')
+      await flushPromises()
+
+      await vm.viewTask(mockLangGraphFailedTask)
+      await flushPromises()
+
+      expect(vm.canResyncTask(mockLangGraphFailedTask)).toBe(false)
+    })
+
+    it('keeps resync visible for a failed Claude Code task', async () => {
+      const wrapper = mount(ClaudeWorkerView, {
+        global: {
+          ...commonGlobal,
+          stubs: paneGridStubs,
+        },
+      })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectDirectory('worker-1', 'dir-1')
+      await flushPromises()
+
+      await vm.viewTask(mockClaudeFailedTask)
+      await flushPromises()
+
+      expect(vm.canResyncTask(mockClaudeFailedTask)).toBe(true)
+    })
+
+    it('shows the LangGraph worker session reference in conversation detail', async () => {
+      const wrapper = mount(ClaudeWorkerView, {
+        global: {
+          ...commonGlobal,
+          stubs: {
+            ...commonGlobal.stubs,
+            ElDialog: {
+              props: ['modelValue'],
+              template: '<section v-if="modelValue" class="mock-dialog"><slot /><slot name="footer" /></section>',
+            },
+            'el-dialog': {
+              props: ['modelValue'],
+              template: '<section v-if="modelValue" class="mock-dialog"><slot /><slot name="footer" /></section>',
+            },
+            ElDescriptions: {
+              template: '<dl><slot /></dl>',
+            },
+            'el-descriptions': {
+              template: '<dl><slot /></dl>',
+            },
+            ElDescriptionsItem: {
+              props: ['label'],
+              template: '<div class="mock-desc-item"><dt>{{ label }}</dt><dd><slot /></dd></div>',
+            },
+            'el-descriptions-item': {
+              props: ['label'],
+              template: '<div class="mock-desc-item"><dt>{{ label }}</dt><dd><slot /></dd></div>',
+            },
+          },
+        },
+      })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.handleShowDetail({
+        sessionId: mockLangGraphFailedTask.sessionId,
+        claudeSessionId: mockLangGraphFailedTask.claudeSessionId,
+        codexThreadId: '',
+        latestTask: mockLangGraphFailedTask,
+        tasks: [mockLangGraphFailedTask],
+        totalCost: 0,
+        firstPrompt: mockLangGraphFailedTask.prompt,
+      })
+      await flushPromises()
+
+      const dialog = wrapper.find('.mock-dialog')
+      if (dialog.exists()) {
+        const detailText = dialog.text()
+        expect(detailText).toContain('Worker Session ID')
+        expect(detailText).toContain('worker-session-langgraph-1')
+      }
+      expect(vm.taskSessionRefLabel(mockLangGraphFailedTask)).toBe('Worker Session ID')
+      expect(vm.taskSessionRefValue(mockLangGraphFailedTask)).toBe('worker-session-langgraph-1')
     })
   })
 })

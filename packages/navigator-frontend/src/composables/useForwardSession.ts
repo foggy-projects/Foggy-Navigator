@@ -1,7 +1,7 @@
 import { ref, computed, watch, type Ref } from 'vue'
 import { listModelConfigs } from '@/api/platform'
 import type { ForwardTargetMode } from '@/api/unifiedTask'
-import type { ClaudeTask, LlmModelConfig, DirectoryMilestone } from '@/types'
+import type { ClaudeTask, LlmModelConfig, DirectoryMilestone, ConversationConfig } from '@/types'
 import type { useClaudeWorker } from './useClaudeWorker'
 import { useAttachments, toImagesJson } from './useAttachments'
 import { sortMilestones } from '@/utils/milestone'
@@ -30,7 +30,7 @@ export interface ConversationGroup {
   tasks: ClaudeTask[]
   totalCost: number
   firstPrompt: string
-  config?: { milestoneId?: string; [key: string]: unknown }
+  config?: ConversationConfig
 }
 
 export interface ForwardSessionDeps {

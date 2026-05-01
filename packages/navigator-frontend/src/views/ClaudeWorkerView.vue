@@ -2666,9 +2666,9 @@ import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import SessionSearchDialog from '@/components/worker/SessionSearchDialog.vue'
 import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
 import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
-import { useForwardSession, type ConversationGroup as ForwardConversationGroup } from '@/composables/useForwardSession'
+import { useForwardSession } from '@/composables/useForwardSession'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
-import { useAttachments, compressImage, fileIcon, toImagesJson, type Attachment } from '@/composables/useAttachments'
+import { useAttachments, compressImage, fileIcon, toImagesJson } from '@/composables/useAttachments'
 import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
 import {
@@ -2676,7 +2676,6 @@ import {
   resyncTaskUnified,
   rewindTaskUnified,
   scanCheckpointsUnified,
-  searchSessionsUnified,
   listTasksByDirectoryUnified,
   listTasksByDirectoryPagedUnified,
 } from '@/api/unifiedTask'
@@ -2852,7 +2851,7 @@ async function handleResyncTask(taskId: string) {
     return // cancelled
   }
   try {
-    const result = await resyncTaskUnified(taskId) as Record<string, unknown>
+    const result = await resyncTaskUnified(taskId) as { status?: string }
     if (result?.status === 'RESYNCED') {
       ElMessage.success('任务已重新同步')
       // 不需要刷新进程列表，因为任务状态改变不影响 CLI 进程
@@ -2917,15 +2916,7 @@ const selectedDirectoryId = ref<string | null>(null)
 
 // ── Agent-centric navigation ──
 // selectedAgentId is the primary key for task operations (create/resume/respond).
-// resolvedWorkerId derives workerId from the agent when available, falling back to selectedWorkerId.
 const selectedAgentId = ref<string | null>(null)
-const resolvedWorkerId = computed(() => {
-  if (selectedAgentId.value) {
-    const agent = agentState.agents.value.find(a => a.agentId === selectedAgentId.value)
-    return agent?.workerId || selectedWorkerId.value
-  }
-  return selectedWorkerId.value
-})
 const expandedWorkerIds = reactive(new Set<string>())
 const expandedProjectIds = reactive(new Set<string>())
 const { prefs } = useUserPreferences()
@@ -3316,14 +3307,14 @@ const forwardState = useForwardSession({
   ALL_MODELS,
 })
 const {
-  showForwardDialog, forwardSubmitting, forwardForm, forwardSource, forwardPlatformModels,
-  forwardSourcePreview, forwardDialogTitle, forwardConversationPool, forwardExistingTargets,
-  forwardSelectedExistingConversation, forwardDirectories, forwardSelectedDirectory,
-  forwardMilestoneOptions, forwardSelectedModelConfig, forwardModelOptions,
+  showForwardDialog, forwardSubmitting, forwardForm, forwardPlatformModels,
+  forwardSourcePreview, forwardDialogTitle, forwardExistingTargets,
+  forwardSelectedExistingConversation, forwardDirectories,
+  forwardMilestoneOptions, forwardModelOptions,
   forwardExistingWorkerName, forwardExistingDirectoryName, forwardExistingProviderLabel,
   forwardExistingModelConfigLabel, forwardExistingModelLabel, forwardExistingMilestoneLabel,
   forwardSubmitButtonText, forwardSubmitDisabled,
-  openForwardDialog, submitForward, resetForwardDialog, forwardConversationOptionLabel,
+  openForwardDialog, submitForward, forwardConversationOptionLabel,
   forwardAttachments, forwardRemoveAttachment,
   forwardHandlePaste, forwardHandleDrop, forwardHandleDragOver,
 } = forwardState
@@ -3479,7 +3470,7 @@ function syncAgentDefaultModel() {
 watch(claudeModelOptions, (opts) => {
   if (suppressModelAutoSelect) return
   if (opts.length > 0 && !opts.some(o => o.value === taskForm.value.model)) {
-    taskForm.value.model = opts[0].value
+    taskForm.value.model = opts[0]!.value
   }
 })
 
@@ -3488,7 +3479,7 @@ watch(platformModelConfigId, () => {
   if (suppressModelAutoSelect) return
   const opts = claudeModelOptions.value
   if (opts.length > 0 && !opts.some(o => o.value === taskForm.value.model)) {
-    taskForm.value.model = opts[0].value
+    taskForm.value.model = opts[0]!.value
   }
   // 用户手动切换配置时立即持久化（suppress 时是恢复缓存，不需要重复保存）
   saveWorkerLlmSelection(selectedWorkerId.value)
@@ -3800,7 +3791,6 @@ function handleTaskHistoryNext() {
 // --- Attachment state (images + files) — delegated to useAttachments composable ---
 const {
   attachments,
-  addFiles,
   removeAttachment,
   clearAttachments,
   handlePaste,
@@ -3885,7 +3875,7 @@ const effectiveDirectoryAuthTag = computed(() => {
   if (dir?.defaultAuthMode) {
     return {
       label: authModeLabel(dir.defaultAuthMode),
-      type: (dir.defaultAuthConfigured ? 'success' : 'info') as const,
+      type: (dir.defaultAuthConfigured ? 'success' : 'info') as 'success' | 'info',
     }
   }
   return null
@@ -3925,15 +3915,6 @@ interface MilestoneConversationGroup {
   label: string
   milestone?: DirectoryMilestone
   conversations: ConversationGroup[]
-}
-
-/** 会话是否可以 resume（有 sessionId 即可，provider 内部状态由后端恢复） */
-function getTaskResumeRef(task: Pick<ClaudeTask, 'sessionId'>): string {
-  return task.sessionId || ''
-}
-
-function getConversationResumeRef(conv: ConversationGroup): string {
-  return conv.sessionId || ''
 }
 
 function taskSessionRefValue(task: ClaudeTask): string {
@@ -4121,30 +4102,6 @@ const groupedActiveConversations = computed<MilestoneConversationGroup[]>(() => 
 
 // Active sessions: group activeTasks into ConversationGroups
 const activeSessionConvs = computed(() => groupTasksToConversations(workerState.activeTasks.value))
-
-// Set of provider session refs that currently have a RUNNING task (for concurrency protection)
-const runningConversationRefs = computed(() => {
-  const refs = new Set<string>()
-  for (const task of workerState.activeTasks.value) {
-    if (task.status !== 'RUNNING') continue
-    const ref = getTaskResumeRef(task)
-    if (ref) {
-      refs.add(ref)
-    }
-  }
-  return refs
-})
-
-function canResumeConversation(conv: ConversationGroup): boolean {
-  return !['RUNNING', 'AWAITING_PERMISSION'].includes(conv.latestTask.status)
-    && !!getConversationResumeRef(conv)
-}
-
-/** Check if a conversation session is currently busy (has a RUNNING task) */
-function isSessionBusy(conv: ConversationGroup): boolean {
-  const ref = getConversationResumeRef(conv)
-  return !!ref && runningConversationRefs.value.has(ref)
-}
 
 function directoriesForWorker(workerId: string): WorkingDirectory[] {
   return workerState.directories.value.filter((d) => d.workerId === workerId)
@@ -4981,13 +4938,6 @@ async function openCodeServer(network: 'internal' | 'public') {
   }
 
   window.open(`${base}/?folder=${folder}`, '_blank')
-}
-
-function isInternalNetwork(): boolean {
-  const h = window.location.hostname
-  return h === 'localhost' || h === '127.0.0.1'
-    || h.startsWith('192.168.') || h.startsWith('10.')
-    || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
 }
 
 async function handleSyncGitInfo() {
@@ -6012,7 +5962,11 @@ async function handlePaneReconnect(paneId: string, taskId: string) {
 async function doResync(taskId: string, pane?: TaskPaneState) {
   resyncingTaskId.value = taskId
   try {
-    const result = await resyncTaskUnified(taskId) as Record<string, unknown>
+    const result = await resyncTaskUnified(taskId) as {
+      action?: string
+      messageSync?: { imported?: number }
+      cliStatus?: { detail?: string }
+    }
 
     switch (result?.action) {
       case 'RECONNECTED': {
@@ -6603,7 +6557,6 @@ async function executeContextRepair() {
     const task = conv.latestTask
     const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
       workerId: selectedWorkerId.value,
-      claudeSessionId: task.claudeSessionId!,
       prompt: contextRepairPrompt.value,
       cwd: task.cwd,
       directoryId: task.directoryId,
@@ -6871,6 +6824,15 @@ async function handleResumeFromHistory(task: ClaudeTask) {
     }
   }
 }
+
+defineExpose({
+  canResyncTask,
+  handleShowDetail,
+  handleResumeFromHistory,
+  taskSessionRefLabel,
+  taskSessionRefValue,
+  viewTask,
+})
 
 watch(showEditDialog, (val) => {
   if (val && selectedWorkerEntity.value) {

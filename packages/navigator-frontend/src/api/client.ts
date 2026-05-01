@@ -12,7 +12,7 @@ const client = axios.create({
   timeout: 30000,
 })
 
-function isRxEnvelope(value: unknown): value is { code: number; message?: string; data?: unknown } {
+function isRxEnvelope(value: unknown): value is { code: number; message?: string; msg?: string; data?: unknown } {
   return !!value && typeof value === 'object' && 'code' in value && typeof (value as { code?: unknown }).code === 'number'
 }
 

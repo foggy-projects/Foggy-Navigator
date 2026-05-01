@@ -1,3 +1,6 @@
+import type { ClaudeTask } from '@/types'
+import { isClaudeCodeTask } from '@/utils/workerBackend'
+
 export interface ContinuableTask {
   sessionId?: string | null
   status?: string | null
@@ -11,4 +14,8 @@ export function getContinuationRef(task?: ContinuableTask | null): string {
 
 export function canShowContinuationInput(task?: ContinuableTask | null): boolean {
   return !!task && task.status !== 'PENDING' && !!getContinuationRef(task)
+}
+
+export function canEnableRewind(task?: ClaudeTask | null): boolean {
+  return !!task?.claudeSessionId && isClaudeCodeTask(task) && task.status !== 'RUNNING' && task.status !== 'PENDING'
 }
