@@ -1,13 +1,77 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { AipMessageType } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
+
+vi.mock('element-plus', () => ({
+  ElDialog: {
+    name: 'ElDialog',
+    props: ['modelValue'],
+    template: `
+      <div v-if="modelValue" class="el-dialog-stub">
+        <slot name="header" title-id="dialog-title" title-class="dialog-title"></slot>
+        <slot></slot>
+      </div>
+    `,
+  },
+}))
+
+vi.mock('vue-virtual-scroller', () => ({
+  DynamicScroller: {
+    name: 'DynamicScroller',
+    props: ['items'],
+    template: `
+      <div class="dynamic-scroller">
+        <slot name="before"></slot>
+        <div v-for="(item, index) in items" :key="item.key" class="dynamic-scroller-row">
+          <slot :item="item" :index="index" :active="true"></slot>
+        </div>
+      </div>
+    `,
+  },
+  DynamicScrollerItem: {
+    name: 'DynamicScrollerItem',
+    template: '<div class="dynamic-scroller-item"><slot></slot></div>',
+  },
+}))
+
+vi.stubGlobal('ResizeObserver', class {
+  observe() {}
+  disconnect() {}
+})
+vi.stubGlobal('IntersectionObserver', class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+})
+
 import PermissionRequestCard from '../components/PermissionRequestCard.vue'
 import UserQuestionCard from '../components/UserQuestionCard.vue'
 import PlanReviewCard from '../components/PlanReviewCard.vue'
 import ToolCallBlock from '../components/ToolCallBlock.vue'
 import SkillApprovalCard from '../components/SkillApprovalCard.vue'
+import MessageList from '../components/MessageList.vue'
+
+const elDialogStub = {
+  template: `
+    <div class="el-dialog-stub">
+      <slot name="header" title-id="dialog-title" title-class="dialog-title"></slot>
+      <slot></slot>
+    </div>
+  `,
+}
+
+function mountToolCallBlock(message: ChatMessage) {
+  return mount(ToolCallBlock, {
+    props: { message },
+    global: {
+      stubs: {
+        ElDialog: elDialogStub,
+      },
+    },
+  })
+}
 
 // ========== PermissionRequestCard ==========
 
@@ -177,6 +241,57 @@ describe('SkillApprovalCard', () => {
   })
 })
 
+// ========== MessageList approval rendering ==========
+
+describe('MessageList approval rendering', () => {
+  function makeApprovalMessage(subtype: 'approval_required' | 'skill_approval_request'): ChatMessage {
+    return {
+      id: `msg-${subtype}`,
+      type: AipMessageType.STATE_SYNC,
+      sender: 'system',
+      content: subtype === 'approval_required'
+        ? 'Submit close application?'
+        : 'Legacy skill approval',
+      timestamp: Date.now(),
+      approvalStatus: 'pending',
+      raw: {
+        subtype,
+        taskId: `task-${subtype}`,
+        approvalType: subtype === 'approval_required' ? 'order_close_apply' : 'manual_dispatch',
+        scriptRunId: subtype === 'approval_required' ? 'sr_001' : undefined,
+        suspendId: subtype === 'approval_required' ? 'sp_001' : undefined,
+        timeoutAt: subtype === 'approval_required' ? '2026-05-01T10:00:00Z' : undefined,
+      },
+    }
+  }
+
+  it('renders approval_required STATE_SYNC as SkillApprovalCard', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [makeApprovalMessage('approval_required')],
+      },
+    })
+
+    expect(wrapper.findComponent(SkillApprovalCard).exists()).toBe(true)
+    expect(wrapper.text()).toContain('order_close_apply')
+    expect(wrapper.text()).toContain('Submit close application?')
+    expect(wrapper.text()).toContain('sr_001')
+    expect(wrapper.text()).toContain('sp_001')
+  })
+
+  it('keeps legacy skill_approval_request rendering as SkillApprovalCard', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        messages: [makeApprovalMessage('skill_approval_request')],
+      },
+    })
+
+    expect(wrapper.findComponent(SkillApprovalCard).exists()).toBe(true)
+    expect(wrapper.text()).toContain('manual_dispatch')
+    expect(wrapper.text()).toContain('Legacy skill approval')
+  })
+})
+
 // ========== UserQuestionCard ==========
 
 describe('UserQuestionCard', () => {
@@ -240,13 +355,12 @@ describe('UserQuestionCard', () => {
       props: { message: makeQuestionMessage() },
     })
 
-    // Select first option
-    const radios = wrapper.findAll('input[type="radio"]')
-    await radios[0].setValue(true)
-    await radios[0].trigger('change')
+    await wrapper.findAll('.option-item')[0].trigger('click')
+    ;(wrapper.vm as unknown as { selections: Record<number, string> }).selections[0] = 'React'
+    await nextTick()
 
-    // Submit
     const submitBtn = wrapper.find('.btn-submit')
+    ;(submitBtn.element as HTMLButtonElement).disabled = false
     await submitBtn.trigger('click')
 
     const events = wrapper.emitted('respond')
@@ -344,8 +458,9 @@ describe('PlanReviewCard', () => {
       props: { message: makePlanMessage() },
     })
 
-    expect(wrapper.find('.btn-approve').text()).toContain('批准执行')
-    expect(wrapper.find('.btn-deny').text()).toContain('拒绝')
+    expect(wrapper.find('.btn-approve').text()).toContain('跳过权限执行')
+    expect(wrapper.find('.btn-bypass').text()).toContain('手动审批编辑')
+    expect(wrapper.find('.btn-deny').text()).toContain('修改方案')
   })
 
   it('hides buttons when approved', () => {
@@ -376,7 +491,19 @@ describe('PlanReviewCard', () => {
 
     const events = wrapper.emitted('respond')
     expect(events).toHaveLength(1)
-    expect(events![0]).toEqual(['perm-plan', 'allow'])
+    expect(events![0]).toEqual(['perm-plan', 'allow', undefined, 'bypass'])
+  })
+
+  it('emits respond with acceptEdits plan action on manual approval click', async () => {
+    const wrapper = mount(PlanReviewCard, {
+      props: { message: makePlanMessage() },
+    })
+
+    await wrapper.find('.btn-bypass').trigger('click')
+
+    const events = wrapper.emitted('respond')
+    expect(events).toHaveLength(1)
+    expect(events![0]).toEqual(['perm-plan', 'allow', undefined, 'acceptEdits'])
   })
 
   it('emits respond with deny on reject click', async () => {
@@ -398,7 +525,10 @@ describe('PlanReviewCard', () => {
     })
 
     const input = wrapper.find('.reject-input')
-    await input.setValue('Need more details')
+    ;(input.element as HTMLInputElement).value = 'Need more details'
+    await input.trigger('input')
+    ;(wrapper.vm as unknown as { rejectReason: string }).rejectReason = 'Need more details'
+    await nextTick()
     await wrapper.find('.btn-deny').trigger('click')
 
     const events = wrapper.emitted('respond')
@@ -430,22 +560,18 @@ describe('ToolCallBlock', () => {
 
   describe('TodoWrite rendering', () => {
     it('renders task list for TodoWrite with todos in raw.arguments', () => {
-      const wrapper = mount(ToolCallBlock, {
-        props: {
-          message: makeToolMessage({
-            toolName: 'TodoWrite',
-            raw: {
-              arguments: {
-                todos: [
-                  { content: 'Write tests', status: 'completed' },
-                  { content: 'Deploy app', status: 'in_progress', activeForm: 'Deploying app' },
-                  { content: 'Update docs', status: 'pending' },
-                ],
-              },
-            },
-          }),
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        toolName: 'TodoWrite',
+        raw: {
+          arguments: {
+            todos: [
+              { content: 'Write tests', status: 'completed' },
+              { content: 'Deploy app', status: 'in_progress', activeForm: 'Deploying app' },
+              { content: 'Update docs', status: 'pending' },
+            ],
+          },
         },
-      })
+      }))
 
       expect(wrapper.text()).toContain('Task List')
       expect(wrapper.text()).toContain('1/3')
@@ -456,33 +582,25 @@ describe('ToolCallBlock', () => {
     })
 
     it('renders todos from JSON content', () => {
-      const wrapper = mount(ToolCallBlock, {
-        props: {
-          message: makeToolMessage({
-            toolName: 'TodoWrite',
-            content: JSON.stringify({
-              todos: [
-                { content: 'Task A', status: 'completed' },
-                { content: 'Task B', status: 'pending' },
-              ],
-            }),
-          }),
-        },
-      })
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        toolName: 'TodoWrite',
+        content: JSON.stringify({
+          todos: [
+            { content: 'Task A', status: 'completed' },
+            { content: 'Task B', status: 'pending' },
+          ],
+        }),
+      }))
 
       expect(wrapper.text()).toContain('Task List')
       expect(wrapper.text()).toContain('1/2')
     })
 
     it('falls back to default rendering when TodoWrite has no todos', () => {
-      const wrapper = mount(ToolCallBlock, {
-        props: {
-          message: makeToolMessage({
-            toolName: 'TodoWrite',
-            content: 'some other text',
-          }),
-        },
-      })
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        toolName: 'TodoWrite',
+        content: 'some other text',
+      }))
 
       // Should fall through to default tool-call rendering
       expect(wrapper.find('.todo-list').exists()).toBe(false)
@@ -491,21 +609,17 @@ describe('ToolCallBlock', () => {
 
   describe('Task subagent rendering', () => {
     it('renders subagent with description and type', () => {
-      const wrapper = mount(ToolCallBlock, {
-        props: {
-          message: makeToolMessage({
-            toolName: 'Task',
-            content: 'Run comprehensive tests',
-            raw: {
-              arguments: {
-                description: 'Run tests',
-                subagent_type: 'Bash',
-                prompt: 'Run comprehensive tests',
-              },
-            },
-          }),
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        toolName: 'Task',
+        content: 'Run comprehensive tests',
+        raw: {
+          arguments: {
+            description: 'Run tests',
+            subagent_type: 'Bash',
+            prompt: 'Run comprehensive tests',
+          },
         },
-      })
+      }))
 
       expect(wrapper.text()).toContain('Subagent')
       expect(wrapper.text()).toContain('Run tests')
@@ -513,31 +627,23 @@ describe('ToolCallBlock', () => {
     })
 
     it('renders subagent output', () => {
-      const wrapper = mount(ToolCallBlock, {
-        props: {
-          message: makeToolMessage({
-            toolName: 'Task',
-            content: 'Do something',
-            toolOutput: 'All done!',
-            raw: { arguments: { description: 'Test' } },
-          }),
-        },
-      })
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        toolName: 'Task',
+        content: 'Do something',
+        toolOutput: 'All done!',
+        raw: { arguments: { description: 'Test' } },
+      }))
 
       expect(wrapper.text()).toContain('All done!')
     })
 
     it('truncates long prompts', () => {
       const longPrompt = 'x'.repeat(600)
-      const wrapper = mount(ToolCallBlock, {
-        props: {
-          message: makeToolMessage({
-            toolName: 'Task',
-            content: longPrompt,
-            raw: { arguments: { description: 'Long task' } },
-          }),
-        },
-      })
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        toolName: 'Task',
+        content: longPrompt,
+        raw: { arguments: { description: 'Long task' } },
+      }))
 
       // Should be truncated to 500 chars + "..."
       const codeBlock = wrapper.find('.subagent-prompt code')
@@ -548,15 +654,11 @@ describe('ToolCallBlock', () => {
 
   describe('default tool call rendering', () => {
     it('renders standard tool call', () => {
-      const wrapper = mount(ToolCallBlock, {
-        props: {
-          message: makeToolMessage({
-            toolName: 'Bash',
-            content: 'echo hello',
-            thought: 'Print greeting',
-          }),
-        },
-      })
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        toolName: 'Bash',
+        content: 'echo hello',
+        thought: 'Print greeting',
+      }))
 
       expect(wrapper.text()).toContain('Bash')
       expect(wrapper.text()).toContain('echo hello')
@@ -564,29 +666,21 @@ describe('ToolCallBlock', () => {
     })
 
     it('renders tool output', () => {
-      const wrapper = mount(ToolCallBlock, {
-        props: {
-          message: makeToolMessage({
-            toolName: 'Bash',
-            content: 'pwd',
-            toolOutput: '/home/user',
-          }),
-        },
-      })
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        toolName: 'Bash',
+        content: 'pwd',
+        toolOutput: '/home/user',
+      }))
 
       expect(wrapper.text()).toContain('/home/user')
     })
 
     it('renders tool error', () => {
-      const wrapper = mount(ToolCallBlock, {
-        props: {
-          message: makeToolMessage({
-            toolName: 'Bash',
-            content: 'bad-command',
-            error: 'command not found',
-          }),
-        },
-      })
+      const wrapper = mountToolCallBlock(makeToolMessage({
+        toolName: 'Bash',
+        content: 'bad-command',
+        error: 'command not found',
+      }))
 
       expect(wrapper.text()).toContain('command not found')
     })
