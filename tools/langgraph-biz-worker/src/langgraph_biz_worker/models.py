@@ -65,6 +65,15 @@ class QueryEvent(BaseModel):
     # Structured output (populated on type="result")
     structured_output: dict[str, Any] | None = None
 
+    # Approval / suspension metadata (used by skill approval and FSScript pause)
+    approval_type: str | None = None
+    payload: dict[str, Any] | None = None
+    script_run_id: str | None = None
+    suspend_id: str | None = None
+    reason: str | None = None
+    summary: dict[str, Any] | None = None
+    timeout_at: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # Frame status enum

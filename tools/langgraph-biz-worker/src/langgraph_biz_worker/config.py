@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # Navigator platform URL (for future callback integration)
     navigator_api_base: str = "http://localhost:8112"
 
+    # Optional path to foggy-data-mcp-bridge-python. When set, the worker
+    # prepends either <path>/src or <path> to sys.path before importing FSScript.
+    fsscript_python_path: str = ""
+
     model_config = SettingsConfigDict(
         env_prefix="BIZ_WORKER_",
         env_file=os.environ.get("BIZ_WORKER_ENV_FILE", ".env"),
