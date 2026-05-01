@@ -7,6 +7,7 @@ import PermissionRequestCard from '../components/PermissionRequestCard.vue'
 import UserQuestionCard from '../components/UserQuestionCard.vue'
 import PlanReviewCard from '../components/PlanReviewCard.vue'
 import ToolCallBlock from '../components/ToolCallBlock.vue'
+import SkillApprovalCard from '../components/SkillApprovalCard.vue'
 
 // ========== PermissionRequestCard ==========
 
@@ -127,6 +128,52 @@ describe('PermissionRequestCard', () => {
     })
 
     expect(wrapper.find('.tool-input').text()).toBe('/src/main.ts')
+  })
+})
+
+// ========== SkillApprovalCard ==========
+
+describe('SkillApprovalCard', () => {
+  function makeApprovalMessage(overrides?: Partial<ChatMessage>): ChatMessage {
+    return {
+      id: 'msg-approval',
+      type: AipMessageType.STATE_SYNC,
+      sender: 'system',
+      content: 'Submit close application?',
+      timestamp: Date.now(),
+      approvalStatus: 'pending',
+      raw: {
+        subtype: 'approval_required',
+        taskId: 'task-1',
+        approvalType: 'order_close_apply',
+        scriptRunId: 'sr_001',
+        suspendId: 'sp_001',
+        timeoutAt: '2026-05-01T10:00:00Z',
+      },
+      ...overrides,
+    }
+  }
+
+  it('renders fsscript approval metadata', () => {
+    const wrapper = mount(SkillApprovalCard, {
+      props: { message: makeApprovalMessage() },
+    })
+
+    expect(wrapper.text()).toContain('order_close_apply')
+    expect(wrapper.text()).toContain('Submit close application?')
+    expect(wrapper.text()).toContain('sr_001')
+    expect(wrapper.text()).toContain('sp_001')
+    expect(wrapper.text()).toContain('2026-05-01T10:00:00Z')
+  })
+
+  it('emits approval response with task id', async () => {
+    const wrapper = mount(SkillApprovalCard, {
+      props: { message: makeApprovalMessage() },
+    })
+
+    await wrapper.find('.btn-approve').trigger('click')
+
+    expect(wrapper.emitted('skillApprovalRespond')?.[0]).toEqual(['task-1', 'approved', ''])
   })
 })
 

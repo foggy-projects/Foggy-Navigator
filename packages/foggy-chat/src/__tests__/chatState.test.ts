@@ -249,6 +249,48 @@ describe('createChatState', () => {
       expect(state.messages.value[1].raw).toMatchObject({ subtype: 'reconnected', taskId: 'task-2' })
     })
 
+    it('renders approval_required as pending approval request', () => {
+      state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {
+        content: 'Submit close application?',
+        subtype: 'approval_required',
+        taskId: 'task-1',
+        approvalType: 'order_close_apply',
+        scriptRunId: 'sr_001',
+        suspendId: 'sp_001',
+        timeoutAt: '2026-05-01T10:00:00Z',
+      }))
+
+      expect(state.messages.value).toHaveLength(1)
+      expect(state.messages.value[0]).toMatchObject({
+        type: AipMessageType.STATE_SYNC,
+        sender: 'system',
+        content: 'Submit close application?',
+        approvalStatus: 'pending',
+      })
+      expect(state.messages.value[0].raw).toMatchObject({
+        subtype: 'approval_required',
+        taskId: 'task-1',
+        scriptRunId: 'sr_001',
+        suspendId: 'sp_001',
+      })
+    })
+
+    it('keeps legacy skill_approval_request approval rendering', () => {
+      state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {
+        content: 'Skill requires approval',
+        subtype: 'skill_approval_request',
+        taskId: 'task-1',
+        approvalType: 'manual_dispatch',
+      }))
+
+      expect(state.messages.value).toHaveLength(1)
+      expect(state.messages.value[0].approvalStatus).toBe('pending')
+      expect(state.messages.value[0].raw).toMatchObject({
+        subtype: 'skill_approval_request',
+        approvalType: 'manual_dispatch',
+      })
+    })
+
     it('skips STATE_SYNC with no status and no content', () => {
       state.processAipMessage(makeAip(AipMessageType.STATE_SYNC, {}))
 

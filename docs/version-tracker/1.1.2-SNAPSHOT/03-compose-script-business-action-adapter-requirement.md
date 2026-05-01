@@ -429,10 +429,10 @@ approval_required: true
 7. 文档明确 `orderBiz` 首版在 LangGraph Biz Worker Python 侧注册。
 8. 文档明确 Worker 需要后台执行脚本，并将阻塞式 `compose_pause(...)` 桥接为审批事件。
 9. 文档明确 FSScript Python runtime 活动 suspension 查询 API 已满足，Worker 不再依赖私有字段。
+10. 文档明确前端复用现有 Skill approval 卡片消费 `approval_required`，并展示 `scriptRunId`、`suspendId`、`timeoutAt` 与业务摘要。
 
 ## 当前未决问题
 
-1. 前端是否需要针对 `approval_required` 增加专用审批 UI，展示 `scriptRunId`、`suspendId`、`timeoutAt` 与业务摘要。
-2. 脚本资产先落 Worker 文件系统、Java 数据库，还是 Artifact Store。
-3. `orderBiz` PoC 使用 mock adapter 还是真实上游 REST。
-4. 生产化是否需要 durable resume / 跨进程恢复，以及由 Navigator wrapper 还是 FSScript 后续版本承担。
+1. 脚本资产先落 Worker 文件系统、Java 数据库，还是 Artifact Store。
+2. `orderBiz` PoC 使用 mock adapter 还是真实上游 REST。
+3. 生产化是否需要 durable resume / 跨进程恢复，以及由 Navigator wrapper 还是 FSScript 后续版本承担。
