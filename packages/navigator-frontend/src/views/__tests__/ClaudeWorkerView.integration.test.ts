@@ -3,13 +3,32 @@ import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox, ElMessage } from 'element-plus'
 import ClaudeWorkerView from '../ClaudeWorkerView.vue'
 import * as claudeWorkerApi from '@/api/claudeWorker'
+import * as langgraphWorkerApi from '@/api/langgraphWorker'
 import * as unifiedTaskApi from '@/api/unifiedTask'
+import * as sessionApi from '@/api/session'
 import * as platformApi from '@/api/platform'
 import * as codingAgentApi from '@/api/codingAgent'
 import type { ClaudeTask, ClaudeWorker, LlmModelConfig, WorkingDirectory } from '@/types'
 
 // Mock APIs
 vi.mock('@/api/claudeWorker')
+vi.mock('@/api/langgraphWorker', () => ({
+  listWorkers: vi.fn().mockResolvedValue([]),
+  registerWorker: vi.fn(),
+  updateWorker: vi.fn(),
+  deleteWorker: vi.fn(),
+  triggerHealthCheck: vi.fn(),
+  approveTask: vi.fn(),
+}))
+vi.mock('@/api/session', () => ({
+  getLatestMessages: vi.fn().mockResolvedValue({
+    messages: [],
+    total: 0,
+    limit: 800,
+    offset: 0,
+    hasMore: false,
+  }),
+}))
 vi.mock('@/api/codingAgent', () => ({
   listAgents: vi.fn().mockResolvedValue([]),
   getAgent: vi.fn(),
@@ -45,9 +64,19 @@ vi.mock('@/api/unifiedTask', () => ({
 vi.mock('@/api/ssh', () => ({
   connectSsh: vi.fn(),
   disconnectSsh: vi.fn(),
+  listSshSessions: vi.fn().mockResolvedValue([]),
 }))
 vi.mock('@/api/fileBrowser', () => ({
   searchFiles: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/composables/useUnifiedSse', () => ({
+  useUnifiedSse: () => ({
+    connected: { value: true },
+    subscribeSession: vi.fn(() => vi.fn()),
+    addNotificationListener: vi.fn(() => vi.fn()),
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+  }),
 }))
 vi.mock('element-plus', async () => {
   const actual = await vi.importActual('element-plus')
@@ -227,10 +256,24 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       totalSessions: 0,
       page: 0, size: 20,
     })
+    vi.mocked(claudeWorkerApi.getWorkerSessionMessageCount).mockResolvedValue({
+      user_count: 0,
+      assistant_count: 0,
+      total: 0,
+    })
+    vi.mocked(claudeWorkerApi.getWorkerSessionMessagesPaged).mockResolvedValue([])
     vi.mocked(claudeWorkerApi.listAwaitingReplyTasks).mockResolvedValue([])
     vi.mocked(claudeWorkerApi.listConversationConfigs).mockResolvedValue([])
 
     // Re-setup unified / platform / codingAgent mocks (clearAllMocks resets factory defaults)
+    vi.mocked(langgraphWorkerApi.listWorkers).mockResolvedValue([])
+    vi.mocked(sessionApi.getLatestMessages).mockResolvedValue({
+      messages: [],
+      total: 0,
+      limit: 800,
+      offset: 0,
+      hasMore: false,
+    })
     vi.mocked(unifiedTaskApi.listTasksUnified).mockResolvedValue([])
     vi.mocked(unifiedTaskApi.listTasksPagedUnified).mockResolvedValue({
       content: [], totalSessions: 0, page: 0, size: 20,

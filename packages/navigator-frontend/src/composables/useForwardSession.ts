@@ -1,4 +1,4 @@
-import { ref, computed, watch, type Ref, type ComputedRef } from 'vue'
+import { ref, computed, watch, type Ref } from 'vue'
 import { listModelConfigs } from '@/api/platform'
 import type { ForwardTargetMode } from '@/api/unifiedTask'
 import type { ClaudeTask, LlmModelConfig, DirectoryMilestone } from '@/types'
@@ -6,6 +6,7 @@ import type { useClaudeWorker } from './useClaudeWorker'
 import { useAttachments, toImagesJson } from './useAttachments'
 import { sortMilestones } from '@/utils/milestone'
 import { isSelectablePlatformModel, resolveModelOptions, type SelectableModelOption } from '@/utils/llmModelOptions'
+import { providerTypeLabel } from '@/utils/workerBackend'
 
 // ── Types ──
 
@@ -63,7 +64,7 @@ function defaultForwardForm() {
 // ── Composable ──
 
 export function useForwardSession(deps: ForwardSessionDeps) {
-  const { workerState, directoryTasks, groupTasksToConversations, resolveConversationMilestone, shortModel, milestoneStatusLabel, formatTime, ALL_MODELS } = deps
+  const { workerState, directoryTasks, groupTasksToConversations, resolveConversationMilestone, shortModel, milestoneStatusLabel, formatTime } = deps
 
   // --- State ---
   const showForwardDialog = ref(false)
@@ -236,12 +237,6 @@ export function useForwardSession(deps: ForwardSessionDeps) {
     if (!dirId) return '-'
     const dir = workerState.directories.value.find(d => d.directoryId === dirId)
     return dir?.projectName || dirId.substring(0, 8)
-  }
-
-  function providerTypeLabel(providerType?: string): string {
-    if (providerType === 'claude-worker') return 'Claude Worker'
-    if (providerType === 'codex-worker') return 'Codex Worker'
-    return providerType || '-'
   }
 
   // --- Computed ---

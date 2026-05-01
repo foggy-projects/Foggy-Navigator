@@ -200,7 +200,7 @@ export interface AgentTeamsConfig {
   updatedAt: string
 }
 
-/** Worker 上的 Claude Code 本地会话 */
+/** Worker 上的本地/业务会话 */
 export interface WorkerSession {
   session_id: string
   cwd: string

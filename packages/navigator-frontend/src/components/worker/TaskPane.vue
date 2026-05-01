@@ -119,6 +119,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import { useInputMemory } from '@/composables/useInputMemory'
+import { isClaudeCodeTask } from '@/utils/workerBackend'
 import type { SkillInfo } from '@/types'
 import SlashCommandInput from './SlashCommandInput.vue'
 import type { AgentItem } from './SlashCommandInput.vue'
@@ -266,10 +267,10 @@ function handleReconnect(taskId: string) {
   emit('reconnect', props.paneState.paneId, taskId)
 }
 
-// Rewind is enabled when task has a Claude session and is not running
+// Rewind is a Claude Code checkpoint feature.
 const rewindEnabled = computed(() => {
   const t = props.paneState.task.value
-  return !!t?.claudeSessionId && t.status !== 'RUNNING' && t.status !== 'PENDING'
+  return !!t?.claudeSessionId && isClaudeCodeTask(t) && t.status !== 'RUNNING' && t.status !== 'PENDING'
 })
 
 function truncate(text: string, maxLen: number) {

@@ -230,7 +230,7 @@
               同步 Git
             </el-button>
             <el-button size="small" :loading="syncingSessions" @click="handleSyncSessions">
-              同步会话
+              {{ selectedWorkerIsLangGraph ? '刷新会话' : '同步会话' }}
             </el-button>
             <el-button
               v-if="!selectedDirectory.worktree && selectedDirectory.directoryType !== 'PROJECT'"
@@ -509,7 +509,7 @@
               @click="handlePaneDelete(paneState.task.value?.sessionId)"
             >删除</el-button>
             <el-button
-              v-if="paneState.task.value?.status === 'FAILED'"
+              v-if="paneState.task.value?.status === 'FAILED' && canResyncTask(paneState.task.value)"
               size="small"
               text
               title="重新同步失败的任务"
@@ -876,7 +876,7 @@
               @click="handlePaneDelete(paneState.task.value?.sessionId)"
             >删除</el-button>
             <el-button
-              v-if="paneState.task.value?.status === 'FAILED'"
+              v-if="paneState.task.value?.status === 'FAILED' && canResyncTask(paneState.task.value)"
               size="small"
               text
               title="重新同步失败的任务"
@@ -889,7 +889,7 @@
 
       <template v-else>
         <div class="empty-state">
-          <h2>Claude Workers</h2>
+          <h2>Agent Workers</h2>
           <p>选择一个 Worker 或添加新的 Worker 开始使用</p>
         </div>
       </template>
@@ -1191,7 +1191,7 @@
                           修复上下文
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
+                          v-if="isClaudeCodeTask(conv.latestTask) && conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
                           @click="showRewindDialog(conv.latestTask)"
                         >
                           回退
@@ -1204,7 +1204,7 @@
                           {{ scanningTaskId === conv.latestTask.taskId ? '扫描中...' : '扫描' }}
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.latestTask.status === 'FAILED'"
+                          v-if="conv.latestTask.status === 'FAILED' && canResyncTask(conv.latestTask)"
                           :disabled="resyncingTaskId === conv.latestTask.taskId"
                           @click="handleResyncFromList(conv)"
                         >
@@ -1384,7 +1384,7 @@
                         修复上下文
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
+                        v-if="isClaudeCodeTask(conv.latestTask) && conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
                         @click="showRewindDialog(conv.latestTask)"
                       >
                         回退
@@ -1397,7 +1397,7 @@
                         {{ scanningTaskId === conv.latestTask.taskId ? '扫描中...' : '扫描' }}
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.latestTask.status === 'FAILED'"
+                        v-if="conv.latestTask.status === 'FAILED' && canResyncTask(conv.latestTask)"
                         :disabled="resyncingTaskId === conv.latestTask.taskId"
                         @click="handleResyncFromList(conv)"
                       >
@@ -2246,8 +2246,8 @@
         <el-descriptions-item label="Session ID" :span="2">
           <code>{{ detailConv.sessionId }}</code>
         </el-descriptions-item>
-        <el-descriptions-item label="Claude Session ID" :span="2">
-          <code>{{ detailConv.claudeSessionId || '-' }}</code>
+        <el-descriptions-item :label="taskSessionRefLabel(detailConv.latestTask)" :span="2">
+          <code>{{ taskSessionRefValue(detailConv.latestTask) || '-' }}</code>
         </el-descriptions-item>
         <el-descriptions-item label="自定义标题" :span="2">
           {{ detailConv.config?.customTitle || '(未设置)' }}
@@ -2687,10 +2687,12 @@ import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
 import { ALL_MODEL_OPTIONS, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
+import { inferTaskWorkerBackend, isClaudeCodeTask, providerTypeFromWorkerBackend, taskSessionRefLabel } from '@/utils/workerBackend'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
 import type { AipMessageType, ChatMessage } from '@foggy/chat'
 
 const MAX_PANES = 1
+type RegisterableWorkerBackend = Extract<WorkerBackend, 'CLAUDE_CODE' | 'LANGGRAPH_BIZ'>
 
 const router = useRouter()
 const workerState = useClaudeWorker()
@@ -3240,7 +3242,7 @@ const sshForm = ref({ host: '', port: 22, username: '', password: '' })
 const sshConnecting = ref(false)
 
 const addForm = ref({
-  workerBackend: 'CLAUDE_CODE' as WorkerBackend,
+  workerBackend: 'CLAUDE_CODE' as RegisterableWorkerBackend,
   name: '',
   baseUrl: '',
   authToken: '',
@@ -3353,36 +3355,6 @@ const platformModelConfigId = ref('')
 const platformModelConfig = computed(() =>
   platformModels.value.find((m) => m.id === platformModelConfigId.value) || null,
 )
-
-function providerTypeFromWorkerBackend(workerBackend?: string | null): string | undefined {
-  if (workerBackend === 'OPENAI_CODEX') return 'codex-worker'
-  if (workerBackend === 'CLAUDE_CODE') return 'claude-worker'
-  if (workerBackend === 'GEMINI_CLI') return 'gemini-worker'
-  if (workerBackend === 'LANGGRAPH_BIZ') return 'langgraph-biz-worker'
-  return undefined
-}
-
-function workerBackendFromProviderType(providerType?: string | null): WorkerBackend | undefined {
-  if (providerType === 'codex-worker') return 'OPENAI_CODEX'
-  if (providerType === 'claude-worker') return 'CLAUDE_CODE'
-  if (providerType === 'gemini-worker') return 'GEMINI_CLI'
-  if (providerType === 'langgraph-biz-worker') return 'LANGGRAPH_BIZ'
-  return undefined
-}
-
-function inferTaskWorkerBackend(task: ClaudeTask): WorkerBackend | undefined {
-  const providerBackend = workerBackendFromProviderType(task.providerType)
-  if (providerBackend) return providerBackend
-  if (task.geminiSessionId) return 'GEMINI_CLI'
-  if (task.codexThreadId) return 'OPENAI_CODEX'
-  if (task.claudeSessionId) return 'CLAUDE_CODE'
-  const model = (task.model || '').toLowerCase()
-  if (model.includes('biz') || model.includes('langgraph')) return 'LANGGRAPH_BIZ'
-  if (model.includes('gemini')) return 'GEMINI_CLI'
-  if (model.includes('codex') || model.startsWith('gpt-')) return 'OPENAI_CODEX'
-  if (model.includes('claude') || model.includes('opus') || model.includes('sonnet') || model.includes('haiku')) return 'CLAUDE_CODE'
-  return undefined
-}
 
 function processTypeLabel(type?: 'claude' | 'codex' | 'gemini'): string {
   if (type === 'codex') return 'Codex'
@@ -3647,16 +3619,6 @@ function dirNameById(dirId?: string): string {
   const dir = workerState.directories.value.find(d => d.directoryId === dirId)
   return dir?.projectName || dirId.substring(0, 8)
 }
-
-function providerTypeLabel(providerType?: string): string {
-  if (providerType === 'claude-worker') return 'Claude Worker'
-  if (providerType === 'codex-worker') return 'Codex Worker'
-  if (providerType === 'gemini-worker') return 'Gemini Worker'
-  if (providerType === 'langgraph-biz-worker') return 'LangGraph Biz Worker'
-  return providerType || '-'
-}
-
-
 
 function dirBranchById(dirId?: string): string | undefined {
   if (!dirId) return undefined
@@ -3972,6 +3934,17 @@ function getTaskResumeRef(task: Pick<ClaudeTask, 'sessionId'>): string {
 
 function getConversationResumeRef(conv: ConversationGroup): string {
   return conv.sessionId || ''
+}
+
+function taskSessionRefValue(task: ClaudeTask): string {
+  const backend = inferTaskWorkerBackend(task)
+  if (backend === 'OPENAI_CODEX') return task.codexThreadId || ''
+  if (backend === 'GEMINI_CLI') return task.geminiSessionId || ''
+  return task.claudeSessionId || ''
+}
+
+function canResyncTask(task?: ClaudeTask | null): boolean {
+  return !!task && isClaudeCodeTask(task)
 }
 
 function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] {
@@ -4616,7 +4589,7 @@ function handleAddCommand(command: string) {
 }
 
 const defaultAddForm = () => ({
-  workerBackend: 'CLAUDE_CODE' as WorkerBackend,
+  workerBackend: 'CLAUDE_CODE' as RegisterableWorkerBackend,
   name: '',
   baseUrl: '',
   authToken: '',
@@ -5035,7 +5008,10 @@ async function handleSyncSessions() {
   syncingSessions.value = true
   try {
     const result = await workerState.syncSessions(selectedWorkerId.value)
-    ElMessage.success(`已同步 ${result.synced} 个新会话，共 ${result.total} 个`)
+    const message = selectedWorkerIsLangGraph.value
+      ? `已刷新业务会话，共 ${result.total} 个`
+      : `已同步 ${result.synced} 个新会话，共 ${result.total} 个`
+    ElMessage.success(message)
     // Refresh task lists to show newly synced sessions
     await reloadWorkerTasks()
     if (selectedDirectoryId.value) {
@@ -6065,7 +6041,7 @@ async function doResync(taskId: string, pane?: TaskPaneState) {
         break
       }
       case 'MESSAGES_SYNCED': {
-        // 策略 B：CLI 已退出，从 Worker JSONL 补齐了消息
+        // 策略 B：CLI 已退出，从 Claude Code Worker 会话补齐了消息
         const imported = result.messageSync?.imported ?? 0
         if (pane) {
           if (pane.task.value) pane.task.value.status = 'COMPLETED'
@@ -6120,11 +6096,11 @@ async function handleResyncFromList(conv: ConversationGroup) {
 
 /**
  * 策略 B 同步后重新加载 pane 中的消息。
- * 从 Worker JSONL 读取最新消息并替换 ChatPanel 显示。
+ * 从 Claude Code Worker 会话读取最新消息并替换 ChatPanel 显示。
  */
 async function reloadPaneMessages(pane: TaskPaneState) {
   const task = pane.task.value
-  if (!task?.claudeSessionId || !task?.workerId) return
+  if (!task?.claudeSessionId || !task?.workerId || !isClaudeCodeTask(task)) return
   try {
     // Load only the latest PAGE_SIZE messages to avoid performance issues
     const pageSize = 50
@@ -6381,9 +6357,9 @@ async function viewTask(task: ClaudeTask) {
   // Sync task metadata — the `task` param may be stale from the cached conversation list
   pane.syncTaskStatus()
 
-  // For synced tasks: if Navigator session was empty, load JSONL history from Worker
+  // For synced Claude Code tasks: if Navigator session was empty, load Worker session history.
   // Load only the latest PAGE_SIZE messages to avoid performance issues with long sessions.
-  if (pane.chatState.messages.value.length === 0 && task.claudeSessionId && task.workerId) {
+  if (pane.chatState.messages.value.length === 0 && task.claudeSessionId && task.workerId && isClaudeCodeTask(task)) {
     try {
       // Get total count first, then load only the latest batch
       const countResult = await dirApi.getWorkerSessionMessageCount(task.workerId, task.claudeSessionId)
@@ -6401,13 +6377,13 @@ async function viewTask(task: ClaudeTask) {
           timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
         }))
         pane.chatState.messages.value.push(...historyMsgs)
-        // If there are older messages, mark hasMoreHistory (best-effort for JSONL-only sessions)
+        // If there are older messages, mark hasMoreHistory (best-effort for Worker-only sessions)
         if (offset > 0) {
           pane.hasMoreHistory.value = true
         }
       }
     } catch {
-      // JSONL history loading is best-effort
+      // Worker session history loading is best-effort
     }
   }
 }
@@ -6493,7 +6469,7 @@ async function handleRewind() {
 }
 
 function canScanCheckpoints(task: ClaudeTask): boolean {
-  return !!task.claudeSessionId && !hasCheckpoints(task) && task.status !== 'RUNNING'
+  return isClaudeCodeTask(task) && !!task.claudeSessionId && !hasCheckpoints(task) && task.status !== 'RUNNING'
 }
 
 async function handleScanCheckpoints(task: ClaudeTask) {
@@ -6517,7 +6493,8 @@ async function handleScanCheckpoints(task: ClaudeTask) {
 // ─── Context Repair / Compact (修复上下文 / 手动压缩) ──────────────
 
 function canRepairContext(conv: ConversationGroup): boolean {
-  return !!conv.latestTask.claudeSessionId
+  return isClaudeCodeTask(conv.latestTask)
+    && !!conv.latestTask.claudeSessionId
     && conv.latestTask.status !== 'RUNNING'
     && conv.latestTask.status !== 'AWAITING_PERMISSION'
 }
