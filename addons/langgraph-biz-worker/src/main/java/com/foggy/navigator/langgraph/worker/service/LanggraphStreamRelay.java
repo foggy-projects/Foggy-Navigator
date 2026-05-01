@@ -15,6 +15,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -137,27 +138,8 @@ public class LanggraphStreamRelay {
                     taskService.completeTask(taskId, content, structuredOutput, durationMs);
                 }
 
-                case "skill_approval_request" -> {
-                    String approvalType = node.path("approval_type").asText("");
-                    String approvalSummary = node.path("content").asText("");
-                    String approvalPayload = node.has("payload") && !node.get("payload").isNull()
-                            ? node.get("payload").toString() : null;
-
-                    // Persist audit record (Doc 31 §16.4: Java side manages audit)
-                    // Resolve userId from task entity for the approval record
-                    taskService.getTaskById(taskId).ifPresent(task ->
-                            taskService.createApprovalRecord(
-                                    taskId, sessionId, task.getUserId(),
-                                    approvalType, approvalSummary, approvalPayload));
-
-                    publishMessage(sessionId, MessageType.STATE_SYNC,
-                            Map.of("content", approvalSummary,
-                                    "subtype", "skill_approval_request",
-                                    "taskId", taskId,
-                                    "approvalType", approvalType,
-                                    "skillFrameId", node.path("skill_frame_id").asText(""),
-                                    "skillId", node.path("skill_id").asText("")));
-                }
+                case "approval_required", "skill_approval_request" ->
+                        handleApprovalRequired(node, type, taskId, sessionId);
 
                 case "error" -> {
                     String error = node.path("error").asText(node.path("content").asText("Unknown error"));
@@ -180,6 +162,38 @@ public class LanggraphStreamRelay {
         taskService.failTask(taskId, "Stream error: " + error.getMessage());
         publishMessage(sessionId, MessageType.ERROR,
                 Map.of("content", "Stream connection lost: " + error.getMessage(), "taskId", taskId));
+    }
+
+    private void handleApprovalRequired(JsonNode node, String eventType, String taskId, String sessionId) {
+        String approvalType = node.path("approval_type").asText("");
+        if (approvalType.isBlank()) {
+            approvalType = node.path("reason").asText("");
+        }
+        String approvalSummary = node.path("content").asText("");
+        String approvalPayload = node.has("payload") && !node.get("payload").isNull()
+                ? node.get("payload").toString() : null;
+
+        // Persist audit record (Doc 31 §16.4: Java side manages audit)
+        // Resolve userId from task entity for the approval record
+        String finalApprovalType = approvalType;
+        taskService.getTaskById(taskId).ifPresent(task ->
+                taskService.createApprovalRecord(
+                        taskId, sessionId, task.getUserId(),
+                        finalApprovalType, approvalSummary, approvalPayload));
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("content", approvalSummary);
+        payload.put("subtype", eventType);
+        payload.put("taskId", taskId);
+        payload.put("approvalType", approvalType);
+        payload.put("skillFrameId", node.path("skill_frame_id").asText(""));
+        payload.put("skillId", node.path("skill_id").asText(""));
+        payload.put("scriptRunId", node.path("script_run_id").asText(""));
+        payload.put("suspendId", node.path("suspend_id").asText(""));
+        payload.put("reason", node.path("reason").asText(""));
+        payload.put("timeoutAt", node.path("timeout_at").asText(""));
+
+        publishMessage(sessionId, MessageType.STATE_SYNC, payload);
     }
 
     private void handleStreamComplete(String taskId, String sessionId) {

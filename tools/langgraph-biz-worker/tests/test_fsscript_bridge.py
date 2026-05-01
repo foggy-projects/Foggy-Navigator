@@ -98,7 +98,7 @@ def test_fsscript_bridge_streams_approval_then_result_after_resume():
             tenant_id="tenant-1",
         ):
             seen.append(event.type)
-            if event.type == "skill_approval_request":
+            if event.type == "approval_required":
                 assert event.approval_type == "order_close_apply"
                 assert event.script_run_id == "sr_test"
                 assert event.suspend_id == "sp_test"
@@ -113,4 +113,4 @@ def test_fsscript_bridge_streams_approval_then_result_after_resume():
                 }
         return seen
 
-    assert asyncio.run(run()) == ["system", "skill_approval_request", "result"]
+    assert asyncio.run(run()) == ["system", "approval_required", "result"]

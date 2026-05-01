@@ -23,7 +23,7 @@ FSScript 团队边界已经明确：他们提供底层脚本、安全 DSL、capa
 3. 由于 `compose_pause(...)` 是阻塞式 primitive，Worker 必须在后台线程或后台任务中执行脚本，并将 suspension 转成任务事件。
 4. Worker 需要维护 `task_id -> script_run_id -> suspend_id -> SuspensionManager` 的进程内映射。
 5. FSScript Python runtime 已补齐正式的活动 suspension 查询 API 和 `on_suspended` hook。Worker 首版优先使用 callback 捕获 `SuspensionResult`，查询 API 作为巡检和兜底能力。
-6. LangGraph Biz Worker 已开始实现内存态 `FsscriptRunBridge`，将 `compose_pause(...)` 映射为现有 Java 可识别的 `skill_approval_request` 事件，并通过 `/api/v1/resume` 完成同进程恢复。
+6. LangGraph Biz Worker 已开始实现内存态 `FsscriptRunBridge`，将 `compose_pause(...)` 映射为 `approval_required` 事件；Java relay 同时兼容旧 `skill_approval_request` 事件，并通过 `/api/v1/resume` 完成同进程恢复。
 
 ## 已有底座
 
@@ -270,7 +270,7 @@ capability_policy:
 2. FSScript 调用可信业务函数。
 3. 业务函数内部调用 pause primitive。
 4. Engine 返回 suspension 信息：`script_run_id`、`suspend_id`、`reason`、`summary`、`timeout_at`。
-5. Worker 将 suspension 映射为 `skill_approval_request` 兼容事件，复用 Java 侧现有审批记录与 resume 通道。
+5. Worker 将 suspension 映射为 `approval_required` 事件，复用 Java 侧现有审批记录与 resume 通道；Java relay 保留 `skill_approval_request` 兼容处理。
 6. Java 平台创建审批记录并生成确认码。
 7. 前端展示 `summary`、风险等级、确认码输入要求。
 8. 用户输入确认码。
@@ -398,7 +398,7 @@ approval_required: true
 4. `orderBiz` 内部通过 REST / RPC / mock adapter 调用真实上游或测试替身，不在 Worker 内实现业务规则。
 5. Worker 侧提供 Skill，指导 LLM 生成或选择脚本。
 6. Java 侧提供最小审批确认码 API。
-7. Worker 将 suspension 事件转为 `skill_approval_request` 兼容事件。
+7. Worker 将 suspension 事件转为 `approval_required` 事件，Java relay 保留 `skill_approval_request` 兼容处理。
 8. 前端展示审批请求并提交确认码。
 9. Java 调 Worker resume / reject endpoint。
 10. Worker 在同一 Python 进程内调用 `SuspensionManager.resume(...)` / `reject(...)`。
@@ -432,7 +432,7 @@ approval_required: true
 
 ## 当前未决问题
 
-1. Worker/Java resume/reject endpoint 是否需要从兼容 `skill_approval_request` 升级为独立 `approval_required` 事件协议。
+1. 前端是否需要针对 `approval_required` 增加专用审批 UI，展示 `scriptRunId`、`suspendId`、`timeoutAt` 与业务摘要。
 2. 脚本资产先落 Worker 文件系统、Java 数据库，还是 Artifact Store。
 3. `orderBiz` PoC 使用 mock adapter 还是真实上游 REST。
 4. 生产化是否需要 durable resume / 跨进程恢复，以及由 Navigator wrapper 还是 FSScript 后续版本承担。

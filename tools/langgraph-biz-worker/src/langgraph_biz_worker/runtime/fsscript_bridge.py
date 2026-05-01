@@ -170,7 +170,7 @@ class FsscriptRunBridge:
             }
             events.put(
                 QueryEvent(
-                    type="skill_approval_request",
+                    type="approval_required",
                     task_id=task_id,
                     session_id=session_id,
                     content=(
