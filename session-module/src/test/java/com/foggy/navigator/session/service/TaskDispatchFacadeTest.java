@@ -1099,6 +1099,60 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void listWorkerSessions_skipsProviderWhenWorkerBelongsToAnotherBackend() {
+        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(claudeProvider, langgraphProvider), llmModelManager);
+
+        List<Map<String, Object>> sessions = List.of(Map.of("session_id", "lg-session-1"));
+        when(claudeProvider.listWorkerSessions("lg-worker-1", "user-1"))
+                .thenThrow(new IllegalArgumentException("Worker not found: lg-worker-1"));
+        when(langgraphProvider.listWorkerSessions("lg-worker-1", "user-1")).thenReturn(sessions);
+
+        List<Map<String, Object>> result = facade.listWorkerSessions("lg-worker-1", "user-1");
+
+        assertEquals(sessions, result);
+    }
+
+    @Test
+    void getWorkerSessionMessageCount_skipsProviderWhenWorkerBelongsToAnotherBackend() {
+        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(claudeProvider, langgraphProvider), llmModelManager);
+
+        Map<String, Object> count = Map.of("user_count", 1, "assistant_count", 1, "total", 2);
+        when(claudeProvider.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1"))
+                .thenThrow(new IllegalArgumentException("Worker not found"));
+        when(langgraphProvider.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1"))
+                .thenReturn(count);
+
+        Map<String, Object> result = facade.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1");
+
+        assertEquals(count, result);
+    }
+
+    @Test
+    void getWorkerSessionMessages_skipsProviderWhenWorkerBelongsToAnotherBackend() {
+        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(claudeProvider, langgraphProvider), llmModelManager);
+
+        List<Map<String, Object>> messages = List.of(Map.of("role", "assistant", "content", "ok"));
+        when(claudeProvider.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50))
+                .thenThrow(new IllegalArgumentException("Worker not found"));
+        when(langgraphProvider.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50))
+                .thenReturn(messages);
+
+        List<Map<String, Object>> result =
+                facade.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50);
+
+        assertEquals(messages, result);
+    }
+
+    @Test
     void syncWorkerSessions_delegatesToProvider() {
         Map<String, Object> syncResult = Map.of("synced", 5, "workerId", "worker-1");
         when(taskQueryProvider.syncWorkerSessions("worker-1", "user-1", "tenant-1")).thenReturn(syncResult);
@@ -1107,6 +1161,23 @@ class TaskDispatchFacadeTest {
 
         assertEquals(5, result.get("synced"));
         verify(taskQueryProvider).syncWorkerSessions("worker-1", "user-1", "tenant-1");
+    }
+
+    @Test
+    void syncWorkerSessions_skipsProviderWhenWorkerBelongsToAnotherBackend() {
+        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(claudeProvider, langgraphProvider), llmModelManager);
+
+        Map<String, Object> syncResult = Map.of("synced", 0, "total", 1);
+        when(claudeProvider.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1"))
+                .thenThrow(new IllegalArgumentException("Worker not found"));
+        when(langgraphProvider.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1")).thenReturn(syncResult);
+
+        Map<String, Object> result = facade.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1");
+
+        assertEquals(syncResult, result);
     }
 
     @Test

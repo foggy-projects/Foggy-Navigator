@@ -3,19 +3,24 @@ package com.foggy.navigator.langgraph.worker.service;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
+import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
+import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
+import com.foggy.navigator.session.repository.SessionMessageRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -31,6 +36,8 @@ class LanggraphTaskServiceTest {
     private LanggraphTaskRepository taskRepository;
     private SessionTaskRepository sessionTaskRepository;
     private SessionEntityRepository sessionEntityRepository;
+    private SessionMessageRepository sessionMessageRepository;
+    private LanggraphWorkerService workerService;
     private SessionManager sessionManager;
     private ApplicationEventPublisher eventPublisher;
     private LanggraphTaskService service;
@@ -45,8 +52,9 @@ class LanggraphTaskServiceTest {
         taskRepository = mock(LanggraphTaskRepository.class);
         sessionTaskRepository = mock(SessionTaskRepository.class);
         sessionEntityRepository = mock(SessionEntityRepository.class);
+        sessionMessageRepository = mock(SessionMessageRepository.class);
         LanggraphApprovalRepository approvalRepository = mock(LanggraphApprovalRepository.class);
-        LanggraphWorkerService workerService = mock(LanggraphWorkerService.class);
+        workerService = mock(LanggraphWorkerService.class);
         sessionManager = mock(SessionManager.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
 
@@ -56,7 +64,7 @@ class LanggraphTaskServiceTest {
 
         service = new LanggraphTaskService(
                 taskRepository, approvalRepository, workerService,
-                sessionManager, eventPublisher, sessionTaskRepository, sessionEntityRepository
+                sessionManager, eventPublisher, sessionTaskRepository, sessionEntityRepository, sessionMessageRepository
         );
     }
 
@@ -237,5 +245,121 @@ class LanggraphTaskServiceTest {
             // Should not throw, just skip
             verify(taskRepository, never()).save(any());
         }
+    }
+
+    @Nested
+    class WorkerSessions {
+
+        @BeforeEach
+        void stubWorker() {
+            LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+            worker.setWorkerId(WORKER_ID);
+            worker.setUserId(USER_ID);
+            when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(worker);
+        }
+
+        @Test
+        void lists_sessions_from_unified_session_store() {
+            SessionTaskEntity older = sessionTask("lgt_older", SESSION_ID, "COMPLETED",
+                    LocalDateTime.of(2026, 4, 1, 10, 0));
+            older.setModel("biz-default");
+            older.setCwd("/workspace/orders");
+
+            SessionTaskEntity latest = sessionTask("lgt_latest", SESSION_ID, "RUNNING",
+                    LocalDateTime.of(2026, 4, 1, 10, 5));
+            latest.setModel("biz-default");
+            latest.setCwd("/workspace/orders");
+
+            when(sessionTaskRepository.findByWorkerIdAndUserIdOrderByCreatedAtDesc(WORKER_ID, USER_ID))
+                    .thenReturn(List.of(latest, older));
+
+            List<Map<String, Object>> result = service.listWorkerSessions(WORKER_ID, USER_ID);
+
+            assertEquals(1, result.size());
+            assertEquals(SESSION_ID, result.get(0).get("session_id"));
+            assertEquals("lgt_latest", result.get(0).get("latest_task_id"));
+            assertEquals("/workspace/orders", result.get(0).get("project"));
+        }
+
+        @Test
+        void counts_session_messages_by_role() {
+            when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(SESSION_ID))
+                    .thenReturn(List.of(sessionTask("lgt_task", SESSION_ID, "RUNNING",
+                            LocalDateTime.of(2026, 4, 1, 10, 0))));
+            when(sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(SESSION_ID))
+                    .thenReturn(List.of(
+                            sessionMessage("m1", "user", "close order", LocalDateTime.of(2026, 4, 1, 10, 0)),
+                            sessionMessage("m2", "assistant", "needs approval", LocalDateTime.of(2026, 4, 1, 10, 1)),
+                            sessionMessage("m3", "tool", "approval_required", LocalDateTime.of(2026, 4, 1, 10, 2))
+                    ));
+
+            Map<String, Object> result = service.getWorkerSessionMessageCount(WORKER_ID, SESSION_ID, USER_ID);
+
+            assertEquals(1L, result.get("user_count"));
+            assertEquals(1L, result.get("assistant_count"));
+            assertEquals(3, result.get("total"));
+        }
+
+        @Test
+        void returns_paginated_session_messages() {
+            when(sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(SESSION_ID))
+                    .thenReturn(List.of(sessionTask("lgt_task", SESSION_ID, "RUNNING",
+                            LocalDateTime.of(2026, 4, 1, 10, 0))));
+            when(sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(SESSION_ID))
+                    .thenReturn(List.of(
+                            sessionMessage("m1", "user", "first", LocalDateTime.of(2026, 4, 1, 10, 0)),
+                            sessionMessage("m2", "assistant", "second", LocalDateTime.of(2026, 4, 1, 10, 1)),
+                            sessionMessage("m3", "assistant", "third", LocalDateTime.of(2026, 4, 1, 10, 2))
+                    ));
+
+            List<Map<String, Object>> result =
+                    service.getWorkerSessionMessages(WORKER_ID, SESSION_ID, USER_ID, 1, 1);
+
+            assertEquals(1, result.size());
+            assertEquals("assistant", result.get(0).get("role"));
+            assertEquals("second", result.get(0).get("content"));
+            assertEquals("lgt_task", result.get(0).get("taskId"));
+        }
+
+        @Test
+        void sync_sessions_reports_local_projection_total() {
+            when(sessionTaskRepository.findByWorkerIdAndUserIdOrderByCreatedAtDesc(WORKER_ID, USER_ID))
+                    .thenReturn(List.of(
+                            sessionTask("lgt_task_1", SESSION_ID, "COMPLETED",
+                                    LocalDateTime.of(2026, 4, 1, 10, 0)),
+                            sessionTask("lgt_task_2", "session-002", "COMPLETED",
+                                    LocalDateTime.of(2026, 4, 1, 11, 0))
+                    ));
+
+            Map<String, Object> result = service.syncWorkerSessions(WORKER_ID, USER_ID, TENANT_ID);
+
+            assertEquals(0, result.get("synced"));
+            assertEquals(2L, result.get("total"));
+            assertEquals("session-store", result.get("source"));
+        }
+    }
+
+    private SessionTaskEntity sessionTask(String taskId, String sessionId, String status, LocalDateTime createdAt) {
+        SessionTaskEntity entity = new SessionTaskEntity();
+        entity.setTaskId(taskId);
+        entity.setSessionId(sessionId);
+        entity.setProviderType(LanggraphTaskService.PROVIDER_TYPE);
+        entity.setWorkerId(WORKER_ID);
+        entity.setUserId(USER_ID);
+        entity.setStatus(status);
+        entity.setCreatedAt(createdAt);
+        entity.setUpdatedAt(createdAt.plusMinutes(1));
+        return entity;
+    }
+
+    private SessionMessageEntity sessionMessage(String id, String role, String content, LocalDateTime createdAt) {
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId(id);
+        entity.setSessionId(SESSION_ID);
+        entity.setTaskId("lgt_task");
+        entity.setRole(role);
+        entity.setContent(content);
+        entity.setCreatedAt(createdAt);
+        return entity;
     }
 }

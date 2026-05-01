@@ -525,6 +525,10 @@ public class TaskDispatchFacade {
             try {
                 return provider.listWorkerSessions(workerId, userId);
             } catch (UnsupportedOperationException ignored) {
+            } catch (IllegalArgumentException e) {
+                if (!isWorkerNotFound(e)) {
+                    throw e;
+                }
             }
         }
         return List.of();
@@ -535,6 +539,10 @@ public class TaskDispatchFacade {
             try {
                 return provider.getWorkerSessionMessageCount(workerId, sessionId, userId);
             } catch (UnsupportedOperationException ignored) {
+            } catch (IllegalArgumentException e) {
+                if (!isWorkerNotFound(e)) {
+                    throw e;
+                }
             }
         }
         return Map.of("user_count", 0, "assistant_count", 0, "total", 0);
@@ -546,6 +554,10 @@ public class TaskDispatchFacade {
             try {
                 return provider.getWorkerSessionMessages(workerId, sessionId, userId, offset, limit);
             } catch (UnsupportedOperationException ignored) {
+            } catch (IllegalArgumentException e) {
+                if (!isWorkerNotFound(e)) {
+                    throw e;
+                }
             }
         }
         return List.of();
@@ -556,9 +568,18 @@ public class TaskDispatchFacade {
             try {
                 return provider.syncWorkerSessions(workerId, userId, tenantId);
             } catch (UnsupportedOperationException ignored) {
+            } catch (IllegalArgumentException e) {
+                if (!isWorkerNotFound(e)) {
+                    throw e;
+                }
             }
         }
         throw new UnsupportedOperationException("No provider supports syncWorkerSessions");
+    }
+
+    private boolean isWorkerNotFound(IllegalArgumentException e) {
+        String message = e.getMessage();
+        return message != null && message.toLowerCase().contains("worker not found");
     }
 
     private TaskQueryProvider findProviderForTask(String taskId) {

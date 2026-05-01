@@ -6,6 +6,7 @@ import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
@@ -17,6 +18,7 @@ import com.foggy.navigator.langgraph.worker.model.form.ApproveTaskForm;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
+import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +51,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
     private final ApplicationEventPublisher eventPublisher;
     private final SessionTaskRepository sessionTaskRepository;
     private final SessionEntityRepository sessionEntityRepository;
+    private final SessionMessageRepository sessionMessageRepository;
 
     // ── TaskQueryProvider SPI ──────────────────────────────────────────────
 
@@ -101,6 +104,76 @@ public class LanggraphTaskService implements TaskQueryProvider {
 
         LanggraphTaskDTO task = createTask(userId, tenantId, form);
         return getTaskById(task.getTaskId()).orElseThrow();
+    }
+
+    @Override
+    public List<Map<String, Object>> listWorkerSessions(String workerId, String userId) {
+        assertWorkerOwnedByUser(workerId, userId);
+
+        Map<String, SessionTaskEntity> latestBySession = new LinkedHashMap<>();
+        for (SessionTaskEntity task : sessionTaskRepository.findByWorkerIdAndUserIdOrderByCreatedAtDesc(workerId, userId)) {
+            if (PROVIDER_TYPE.equals(task.getProviderType()) && task.getSessionId() != null) {
+                latestBySession.putIfAbsent(task.getSessionId(), task);
+            }
+        }
+
+        return latestBySession.values().stream()
+                .map(this::toWorkerSessionMap)
+                .toList();
+    }
+
+    @Override
+    public Map<String, Object> getWorkerSessionMessageCount(String workerId, String sessionId, String userId) {
+        assertSessionOwnedByWorker(workerId, sessionId, userId);
+
+        List<SessionMessageEntity> messages = sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        long userCount = messages.stream().filter(message -> "user".equalsIgnoreCase(message.getRole())).count();
+        long assistantCount = messages.stream().filter(message -> "assistant".equalsIgnoreCase(message.getRole())).count();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("user_count", userCount);
+        result.put("assistant_count", assistantCount);
+        result.put("total", messages.size());
+        return result;
+    }
+
+    @Override
+    public List<Map<String, Object>> getWorkerSessionMessages(String workerId, String sessionId,
+                                                              String userId, Integer offset, Integer limit) {
+        assertSessionOwnedByWorker(workerId, sessionId, userId);
+
+        List<SessionMessageEntity> messages = sessionMessageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        int fromIndex = Math.max(0, offset == null ? 0 : offset);
+        if (fromIndex >= messages.size()) {
+            return List.of();
+        }
+        int requestedLimit = limit == null ? messages.size() - fromIndex : Math.max(0, limit);
+        int toIndex = Math.min(messages.size(), fromIndex + requestedLimit);
+        if (toIndex <= fromIndex) {
+            return List.of();
+        }
+
+        return messages.subList(fromIndex, toIndex).stream()
+                .map(this::toWorkerSessionMessageMap)
+                .toList();
+    }
+
+    @Override
+    public Map<String, Object> syncWorkerSessions(String workerId, String userId, String tenantId) {
+        assertWorkerOwnedByUser(workerId, userId);
+
+        long total = sessionTaskRepository.findByWorkerIdAndUserIdOrderByCreatedAtDesc(workerId, userId).stream()
+                .filter(task -> PROVIDER_TYPE.equals(task.getProviderType()))
+                .map(SessionTaskEntity::getSessionId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .count();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("synced", 0);
+        result.put("total", total);
+        result.put("source", "session-store");
+        return result;
     }
 
     // ── Task lifecycle ────────────────────────────────────────────────────
@@ -367,6 +440,50 @@ public class LanggraphTaskService implements TaskQueryProvider {
 
     // ── Mapping helpers ───────────────────────────────────────────────────
 
+    private void assertWorkerOwnedByUser(String workerId, String userId) {
+        LanggraphWorkerEntity worker = workerService.getWorkerEntity(workerId);
+        if (!Objects.equals(worker.getUserId(), userId)) {
+            throw new IllegalArgumentException("Worker not found: " + workerId);
+        }
+    }
+
+    private void assertSessionOwnedByWorker(String workerId, String sessionId, String userId) {
+        assertWorkerOwnedByUser(workerId, userId);
+        boolean owned = sessionTaskRepository.findBySessionIdOrderByCreatedAtDesc(sessionId).stream()
+                .anyMatch(task -> PROVIDER_TYPE.equals(task.getProviderType())
+                        && Objects.equals(workerId, task.getWorkerId())
+                        && Objects.equals(userId, task.getUserId()));
+        if (!owned) {
+            throw new IllegalArgumentException("Session not found: " + sessionId);
+        }
+    }
+
+    private Map<String, Object> toWorkerSessionMap(SessionTaskEntity task) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("session_id", task.getSessionId());
+        map.put("sessionId", task.getSessionId());
+        map.put("worker_id", task.getWorkerId());
+        map.put("workerId", task.getWorkerId());
+        map.put("project", firstNotBlank(task.getCwd(), task.getDirectoryId(), "LangGraph"));
+        map.put("model", firstNotBlank(task.getModel(), "biz-default"));
+        map.put("status", task.getStatus());
+        map.put("latest_task_id", task.getTaskId());
+        map.put("taskId", task.getTaskId());
+        map.put("prompt", task.getPrompt());
+        map.put("created_at", task.getCreatedAt());
+        map.put("updated_at", task.getUpdatedAt());
+        return map;
+    }
+
+    private Map<String, Object> toWorkerSessionMessageMap(SessionMessageEntity message) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("role", firstNotBlank(message.getRole(), "assistant"));
+        map.put("content", firstNotBlank(message.getContent(), ""));
+        map.put("timestamp", message.getCreatedAt());
+        map.put("taskId", message.getTaskId());
+        return map;
+    }
+
     private DispatchTaskDTO toDispatchDTO(LanggraphTaskEntity entity) {
         return DispatchTaskDTO.builder()
                 .taskId(entity.getTaskId())
@@ -419,5 +536,14 @@ public class LanggraphTaskService implements TaskQueryProvider {
         if (value != null && !value.isBlank()) {
             target.put(key, value);
         }
+    }
+
+    private static String firstNotBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 }
