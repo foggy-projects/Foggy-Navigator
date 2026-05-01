@@ -2,7 +2,7 @@
 
 - doc_type: implementation-checkin
 - version: 1.1.2-SNAPSHOT
-- status: ui-e2e-verified-history-live-blocked
+- status: api-unit-and-ui-e2e-verified-history-live-blocked
 - date: 2026-05-01
 - intended_for: platform-owner | worker-owner | frontend-owner | reviewer
 - purpose: 记录 LangGraph Biz Worker 会话历史链路、Worker Backend 分类、Claude Code 与 LangGraph UI 边界，以及 Skill / 标准工具 / 业务工具 / FSScript 编排层契约。
@@ -89,6 +89,18 @@ Claude Code：
 
 该验收只证明前端 UI 分类和展示边界正确，API 使用 Playwright route mock；不等同于 live Java history API 联调。
 
+## Java API 单元验收
+
+已补齐 `TaskControllerTest` 的统一 Worker Session 控制器层覆盖：
+
+1. `listWorkerSessions(...)` 将 `workerId` 与当前 `userId` 传入 `TaskDispatchFacade`。
+2. `getWorkerSessionMessageCount(...)` 将 `workerId`、`sessionId` 与当前 `userId` 传入 `TaskDispatchFacade`。
+3. `getWorkerSessionMessages(...)` 保留分页参数，并将当前 `userId` 传入 `TaskDispatchFacade`。
+4. `syncWorkerSessions(...)` 将当前 `userId`、`tenantId` 传入 `TaskDispatchFacade`。
+5. `syncWorkerSessions(...)` 的 provider 异常返回 `RX.failB(...)`，不把异常泄露为未处理错误。
+
+该验收确认 Java 统一 REST 边界、UserContext 传递和 facade 调用契约；live 登录态验收仍需真实凭证。
+
 ## 本地联调状态
 
 本机只做只读探测，未启动新端口：
@@ -114,5 +126,7 @@ Claude Code：
 2. `pnpm --filter @foggy/navigator-frontend test`
 3. `pnpm --filter @foggy/navigator-frontend build`
 4. `pnpm --filter @foggy/navigator-frontend build:check`
+5. `mvn -pl session-module -am "-Dtest=TaskControllerTest,TaskDispatchFacadeTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
+6. `mvn -pl addons/langgraph-biz-worker -am "-Dtest=LanggraphTaskServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 早前定向验证也已覆盖 `workerBackend.test.ts`、`taskPaneResume.test.ts`、`ClaudeWorkerView.integration.test.ts`。live history API 仍需登录态或可用凭证后补验。
