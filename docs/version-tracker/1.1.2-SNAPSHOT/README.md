@@ -16,7 +16,7 @@
 4. 业务脚本编排、审批确认码与脚本资产沉淀
 5. 基于 Compose Script P2.6 暂停恢复原语设计 Navigator 侧业务动作审批适配
 6. 基于 FSScript Python runtime 已补齐的活动 suspension 查询 API / `on_suspended` hook，落地 Worker 侧 suspension bridge
-7. LangGraph Biz Worker 会话历史链路、Worker Backend 分类与 Claude Code UI 行为边界
+7. LangGraph Biz Worker 会话历史链路、Worker Backend 分类、Claude Code UI 行为边界与浏览器级 UI 验收证据
 
 ## 条目列表
 
@@ -24,4 +24,4 @@
 - [02-business-script-engine-and-function-manifest.md](./02-business-script-engine-and-function-manifest.md) - 架构规划 / 业务脚本引擎、Business Function Manifest、审批确认码与脚本复用
 - [03-compose-script-business-action-adapter-requirement.md](./03-compose-script-business-action-adapter-requirement.md) - 集成需求 / 基于 Compose Script P2.6 的业务动作审批适配、事件桥接与脚本复用
 - [04-fsscript-active-suspension-query-api-request.md](./04-fsscript-active-suspension-query-api-request.md) - 外部协作需求 / FSScript Python runtime 活动 suspension 查询 API
-- [05-langgraph-biz-worker-session-history-and-ui-boundary.md](./05-langgraph-biz-worker-session-history-and-ui-boundary.md) - 实现收口 / LangGraph 会话历史、Worker Backend 分类、Claude/LangGraph UI 边界与工具契约
+- [05-langgraph-biz-worker-session-history-and-ui-boundary.md](./05-langgraph-biz-worker-session-history-and-ui-boundary.md) - 实现收口 / LangGraph 会话历史、Worker Backend 分类、Claude/LangGraph UI 边界、浏览器级验收与工具契约

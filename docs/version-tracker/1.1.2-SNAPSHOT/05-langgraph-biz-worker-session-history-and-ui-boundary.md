@@ -2,7 +2,7 @@
 
 - doc_type: implementation-checkin
 - version: 1.1.2-SNAPSHOT
-- status: static-verified
+- status: ui-e2e-verified-history-live-blocked
 - date: 2026-05-01
 - intended_for: platform-owner | worker-owner | frontend-owner | reviewer
 - purpose: 记录 LangGraph Biz Worker 会话历史链路、Worker Backend 分类、Claude Code 与 LangGraph UI 边界，以及 Skill / 标准工具 / 业务工具 / FSScript 编排层契约。
@@ -77,6 +77,18 @@ Claude Code：
 5. `useTaskPane` 的 Claude JSONL delta fallback 由 `isClaudeCodeTask(...)` 保护。
 6. `ClaudeWorkerView` 的 `回退`、`重新同步`、checkpoint / context repair / JSONL resync 入口由 Claude Code 分类保护。
 
+## 浏览器级 UI 验收
+
+已新增 mock-based Playwright 验收：`packages/navigator-frontend/e2e/langgraph-worker-ui.spec.ts`。
+
+覆盖边界：
+
+1. LangGraph Biz Worker 任务详情展示 `Worker Session ID`，并显示 worker session 值。
+2. failed LangGraph Biz Worker task 的操作菜单不显示 Claude Code 专属 `回退`、`重新同步`。
+3. failed Claude Code task 的操作菜单继续保留 `回退`、`重新同步`，证明 LangGraph 收口未破坏既有 Claude Code 行为。
+
+该验收只证明前端 UI 分类和展示边界正确，API 使用 Playwright route mock；不等同于 live Java history API 联调。
+
 ## 本地联调状态
 
 本机只做只读探测，未启动新端口：
@@ -98,9 +110,9 @@ Claude Code：
 
 已执行并通过：
 
-1. `pnpm --filter @foggy/navigator-frontend build:check`
-2. `pnpm --filter @foggy/navigator-frontend exec vitest run src/__tests__/workerBackend.test.ts`
-3. `pnpm --filter @foggy/navigator-frontend exec vitest run src/components/worker/__tests__/taskPaneResume.test.ts`
-4. `pnpm --filter @foggy/navigator-frontend exec vitest run src/views/__tests__/ClaudeWorkerView.integration.test.ts`
+1. `pnpm --filter @foggy/navigator-frontend exec playwright test e2e/langgraph-worker-ui.spec.ts`
+2. `pnpm --filter @foggy/navigator-frontend test`
+3. `pnpm --filter @foggy/navigator-frontend build`
+4. `pnpm --filter @foggy/navigator-frontend build:check`
 
-最终全量验证结果以本轮交付报告为准。
+早前定向验证也已覆盖 `workerBackend.test.ts`、`taskPaneResume.test.ts`、`ClaudeWorkerView.integration.test.ts`。live history API 仍需登录态或可用凭证后补验。
