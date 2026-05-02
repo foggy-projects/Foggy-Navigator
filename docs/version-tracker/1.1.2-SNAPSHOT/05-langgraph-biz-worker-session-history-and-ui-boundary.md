@@ -2,7 +2,7 @@
 
 - doc_type: implementation-checkin
 - version: 1.1.2-SNAPSHOT
-- status: api-unit-and-ui-e2e-verified-history-live-blocked
+- status: api-unit-ui-e2e-and-history-api-verified-live-ui-verified
 - date: 2026-05-01
 - intended_for: platform-owner | worker-owner | frontend-owner | reviewer
 - purpose: 记录 LangGraph Biz Worker 会话历史链路、Worker Backend 分类、Claude Code 与 LangGraph UI 边界，以及 Skill / 标准工具 / 业务工具 / FSScript 编排层契约。
@@ -103,10 +103,23 @@ Claude Code：
 
 ## 本地联调状态
 
-本机只做只读探测，未启动新端口：
+本机启动了 Live 环境，并完成 API 层的 history 验收：
 
-1. `http://127.0.0.1:3061/health` 返回 200，worker 为 `langgraph-biz-wsl`，`active_tasks = 0`。
-2. Java API 8112 正在监听，但访问 `/api/v1/tasks/workers/{workerId}/sessions` 返回未登录，缺少可用登录态或凭证，不能完成端到端 history API 联调。
+1. `http://127.0.0.1:3061/health` 返回 200，worker 为 `langgraph-biz-wsl`。
+2. 通过 API 制造了 `providerType = langgraph-biz-worker`，`model = biz-default`，并且 `workerBackend = LANGGRAPH_BIZ` 的真实任务。
+   - `modelConfigId` = `7c753994-ac0e-4361-b389-07667bca723e`
+   - `taskId` = `lgt_2511ec3371d94aaf`
+   - `sessionId` = `5210a0e8-a4d9-4c76-93b4-d251f25423a6`
+3. 验证三个 history endpoints，全部通过：
+   - `GET /api/v1/tasks/workers/langgraph-biz-wsl/sessions` 返回 200，包含刚创建的 `sessionId`。
+   - `GET /api/v1/tasks/workers/langgraph-biz-wsl/sessions/{sessionId}/message-count` 返回 200，且 `total: 4`。
+   - `GET /api/v1/tasks/workers/langgraph-biz-wsl/sessions/{sessionId}/messages` 返回 200，且返回了 worker 发出的真实消息流。
+
+当前 UI 边界验证状态：**Verified**。
+通过 Node.js 结合 Playwright 脚本使用 API 动态注入包含关联 `directoryId` 的 LangGraph 任务，并在浏览器中完成了真实的 UI 断言，结果如下：
+1. `Worker Session ID` 成功显示（未显示 Claude Session ID）。
+2. 该任务的菜单列表中确认不再出现 `回退` (Rewind) 和 `重新同步` (Resync) 操作。
+至此，端到端的 Live 环境 history API 与 UI 边界已全量验证通过。
 
 推荐手动验收步骤：
 
