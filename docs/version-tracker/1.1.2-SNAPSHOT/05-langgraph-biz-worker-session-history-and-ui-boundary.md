@@ -99,7 +99,7 @@ Claude Code：
 4. `syncWorkerSessions(...)` 将当前 `userId`、`tenantId` 传入 `TaskDispatchFacade`。
 5. `syncWorkerSessions(...)` 的 provider 异常返回 `RX.failB(...)`，不把异常泄露为未处理错误。
 
-该验收确认 Java 统一 REST 边界、UserContext 传递和 facade 调用契约；live 登录态验收仍需真实凭证。
+该验收确认 Java 统一 REST 边界、UserContext 传递和 facade 调用契约；live 登录态、History API 与 UI 边界已在后续本地联调中完成补验。
 
 ## 本地联调状态
 
@@ -142,4 +142,4 @@ Claude Code：
 5. `mvn -pl session-module -am "-Dtest=TaskControllerTest,TaskDispatchFacadeTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 6. `mvn -pl addons/langgraph-biz-worker -am "-Dtest=LanggraphTaskServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
-早前定向验证也已覆盖 `workerBackend.test.ts`、`taskPaneResume.test.ts`、`ClaudeWorkerView.integration.test.ts`。live history API 仍需登录态或可用凭证后补验。
+早前定向验证也已覆盖 `workerBackend.test.ts`、`taskPaneResume.test.ts`、`ClaudeWorkerView.integration.test.ts`。live history API 与 Live UI 边界已完成补验并记录于本文件。

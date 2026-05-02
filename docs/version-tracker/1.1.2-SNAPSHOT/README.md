@@ -25,3 +25,14 @@
 - [03-compose-script-business-action-adapter-requirement.md](./03-compose-script-business-action-adapter-requirement.md) - 集成需求 / 基于 Compose Script P2.6 的业务动作审批适配、事件桥接与脚本复用
 - [04-fsscript-active-suspension-query-api-request.md](./04-fsscript-active-suspension-query-api-request.md) - 外部协作需求 / FSScript Python runtime 活动 suspension 查询 API
 - [05-langgraph-biz-worker-session-history-and-ui-boundary.md](./05-langgraph-biz-worker-session-history-and-ui-boundary.md) - 实现收口 / LangGraph 会话历史、Worker Backend 分类、Claude/LangGraph UI 边界、浏览器级验收与工具契约
+- [acceptance/version-signoff.md](./acceptance/version-signoff.md) - 版本签收 / 1.1.2 验收结论与证据汇总
+
+## Acceptance Status
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: platform-owner
+- signed_off_at: 2026-05-02
+- acceptance_record: docs/version-tracker/1.1.2-SNAPSHOT/acceptance/version-signoff.md
+- blocking_items: none
+- follow_up_required: yes
