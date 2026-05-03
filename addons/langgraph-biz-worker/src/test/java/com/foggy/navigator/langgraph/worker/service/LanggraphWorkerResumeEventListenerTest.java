@@ -1,0 +1,190 @@
+package com.foggy.navigator.langgraph.worker.service;
+
+import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
+import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
+import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
+import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
+import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import reactor.core.publisher.Mono;
+
+import java.util.Optional;
+
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+class LanggraphWorkerResumeEventListenerTest {
+
+    @Mock
+    private LanggraphTaskRepository taskRepository;
+
+    @Mock
+    private LanggraphWorkerService workerService;
+
+    @Mock
+    private LanggraphWorkerClient workerClient;
+
+    @InjectMocks
+    private LanggraphWorkerResumeEventListener listener;
+
+    // ===== Helper =====
+
+    private LanggraphTaskEntity buildTask(String taskId, String sessionId, String workerId, String tenantId) {
+        LanggraphTaskEntity task = new LanggraphTaskEntity();
+        task.setTaskId(taskId);
+        task.setSessionId(sessionId);
+        task.setWorkerId(workerId);
+        task.setTenantId(tenantId);
+        return task;
+    }
+
+    // ===== Stage 4C: existing passing tests (updated for Stage 7B) =====
+
+    @Test
+    void handleWorkerGatewayResumeEvent_success_taskAndSessionAndTenantMatch() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("t_1")
+                .sessionId("s_1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .comment("OK")
+                .tenantId("tenant_1")
+                .build();
+
+        LanggraphTaskEntity task = buildTask("t_1", "s_1", "w_1", "tenant_1");
+        when(taskRepository.findByTaskId("t_1")).thenReturn(Optional.of(task));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.resumeTask("t_1", "approved", "OK")).thenReturn(Mono.empty());
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verify(workerClient).resumeTask("t_1", "approved", "OK");
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_success_noEventTenantId_backwardCompatible() {
+        // Event with no tenantId — backward-compatible path, should still dispatch
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("t_1")
+                .sessionId("s_1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .comment("OK")
+                .build();
+
+        LanggraphTaskEntity task = buildTask("t_1", "s_1", "w_1", "tenant_1");
+        when(taskRepository.findByTaskId("t_1")).thenReturn(Optional.of(task));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.resumeTask("t_1", "approved", "OK")).thenReturn(Mono.empty());
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verify(workerClient).resumeTask("t_1", "approved", "OK");
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_fails_on_session_mismatch() {
+        LanggraphTaskEntity task = buildTask("t_1", "s_different", "w_1", "tenant_1");
+        when(taskRepository.findByTaskId("t_1")).thenReturn(Optional.of(task));
+
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("t_1")
+                .sessionId("s_1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .tenantId("tenant_1")
+                .build();
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verifyNoInteractions(workerService);
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_ignores_missing_task() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("t_1")
+                .build();
+
+        when(taskRepository.findByTaskId("t_1")).thenReturn(Optional.empty());
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verifyNoInteractions(workerService);
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_ignores_missing_workerId() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("t_1")
+                .sessionId("s_1")
+                .tenantId("tenant_1")
+                .build();
+
+        LanggraphTaskEntity task = buildTask("t_1", "s_1", null, "tenant_1");
+        when(taskRepository.findByTaskId("t_1")).thenReturn(Optional.of(task));
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verifyNoInteractions(workerService);
+    }
+
+    // ===== Stage 7B: tenant binding hardening =====
+
+    @Test
+    void handleWorkerGatewayResumeEvent_rejects_tenantMismatch() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("t_1")
+                .sessionId("s_1")
+                .tenantId("tenant_evil")     // mismatched tenant
+                .approvalResult("approved")
+                .build();
+
+        // Task is registered under a different tenant
+        LanggraphTaskEntity task = buildTask("t_1", "s_1", "w_1", "tenant_legit");
+        when(taskRepository.findByTaskId("t_1")).thenReturn(Optional.of(task));
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        // Must not dispatch
+        verifyNoInteractions(workerService);
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_rejects_eventHasTenantId_butTaskHasNone() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("t_1")
+                .sessionId("s_1")
+                .tenantId("tenant_1")       // event carries tenantId
+                .approvalResult("approved")
+                .build();
+
+        // Task entity has no tenantId — fail closed
+        LanggraphTaskEntity task = buildTask("t_1", "s_1", "w_1", null);
+        when(taskRepository.findByTaskId("t_1")).thenReturn(Optional.of(task));
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verifyNoInteractions(workerService);
+    }
+}

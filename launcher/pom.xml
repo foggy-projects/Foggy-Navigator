@@ -30,6 +30,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Business Agent - Client App 接入与业务 Worker 公共控制面 -->
+        <dependency>
+            <groupId>com.foggy.navigator</groupId>
+            <artifactId>business-agent-module</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Tutor Agent - 导师Agent模块 -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>

@@ -1,0 +1,181 @@
+package com.foggy.navigator.business.agent.service;
+
+import com.foggy.navigator.business.agent.model.dto.BusinessAgentTaskDTO;
+import com.foggy.navigator.business.agent.model.dto.CreatedBusinessAgentTaskDTO;
+import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
+import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
+import com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm;
+import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository;
+import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+public class BusinessAgentTaskService {
+
+    public static final String STATUS_CREATED = "CREATED";
+    public static final String STATUS_ACTIVE = "ACTIVE";
+
+    private final BusinessAgentTaskRepository taskRepository;
+    private final BusinessTaskScopedTokenRepository tokenRepository;
+    private final ClientAppService clientAppService;
+    private final BizWorkerPoolService bizWorkerPoolService;
+    private final ClientAppModelConfigGrantService grantService;
+    private final ClientAppUserGrantService userGrantService;
+    private final SkillRegistryService skillRegistryService;
+    private final BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
+
+    @Transactional
+    public CreatedBusinessAgentTaskDTO createTask(String tenantId, String actorUserId, CreateBusinessAgentTaskForm form) {
+        if (form == null) {
+            throw new IllegalArgumentException("form is required");
+        }
+        requireText(tenantId, "tenantId is required");
+        requireText(actorUserId, "actorUserId is required");
+        requireText(form.getClientAppId(), "clientAppId is required");
+        requireText(form.getSessionId(), "sessionId is required");
+        requireText(form.getWorkerPoolId(), "workerPoolId is required");
+        requireText(form.getUpstreamUserId(), "upstreamUserId is required");
+        requireText(form.getSkillId(), "skillId is required");
+
+        // 2. 校验 clientAppId 存在、属于当前 tenant、状态可用
+        clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
+
+        // 3. 校验 workerPoolId 存在、属于当前 tenant、状态可用
+        bizWorkerPoolService.requireAvailablePool(tenantId, form.getWorkerPoolId());
+
+        // 校验 upstream user grant
+        userGrantService.checkUpstreamUserAccess(tenantId, form.getClientAppId(), form.getUpstreamUserId());
+
+        // 校验 client app skill grant
+        skillRegistryService.checkClientAppSkillAccess(tenantId, form.getClientAppId(), form.getSkillId());
+
+        String finalModelConfigId;
+
+        if (StringUtils.hasText(form.getResumeFromTaskId())) {
+            BusinessAgentTaskEntity existingTask = taskRepository.findByTaskId(form.getResumeFromTaskId())
+                    .orElseThrow(() -> new IllegalArgumentException("resume task not found: " + form.getResumeFromTaskId()));
+
+            if (!tenantId.equals(existingTask.getTenantId()) ||
+                !form.getClientAppId().equals(existingTask.getClientAppId()) ||
+                !form.getSessionId().equals(existingTask.getSessionId())) {
+                throw new IllegalArgumentException("resume task context mismatch");
+            }
+            if (StringUtils.hasText(form.getRequestedModelConfigId()) &&
+                !form.getRequestedModelConfigId().equals(existingTask.getModelConfigId())) {
+                throw new IllegalArgumentException("cannot change modelConfigId when resuming task");
+            }
+            finalModelConfigId = existingTask.getModelConfigId();
+        } else {
+            // 4, 5, 6. 新建 task 时必须调用 resolveEffectiveModelConfigId
+            finalModelConfigId = grantService.resolveEffectiveModelConfigId(tenantId, form.getClientAppId(), form.getRequestedModelConfigId());
+        }
+
+        // 7. task 创建后固定最终 modelConfigId
+        BusinessAgentTaskEntity task = new BusinessAgentTaskEntity();
+        task.setTaskId("bt_" + UUID.randomUUID().toString().replace("-", ""));
+        task.setSessionId(form.getSessionId());
+        task.setTenantId(tenantId);
+        task.setClientAppId(form.getClientAppId());
+        task.setUpstreamUserId(form.getUpstreamUserId());
+        task.setNavigatorEffectiveUserId(actorUserId);
+        task.setSkillId(form.getSkillId());
+        task.setWorkerPoolId(form.getWorkerPoolId());
+        task.setModelConfigId(finalModelConfigId);
+        task.setRequestedModelConfigId(form.getRequestedModelConfigId());
+        task.setStatus(STATUS_CREATED);
+        task = taskRepository.save(task);
+
+        // 9, 10. token 绑定并返回一次
+        String plainToken = "btt_" + UUID.randomUUID().toString().replace("-", "");
+
+        BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
+        token.setTokenId("tst_" + UUID.randomUUID().toString().replace("-", ""));
+        token.setTokenHash(SecretTokenSupport.sha256(plainToken));
+        token.setTaskId(task.getTaskId());
+        token.setSessionId(task.getSessionId());
+        token.setTenantId(task.getTenantId());
+        token.setClientAppId(task.getClientAppId());
+        token.setUpstreamUserId(task.getUpstreamUserId());
+        token.setNavigatorEffectiveUserId(task.getNavigatorEffectiveUserId());
+        token.setSkillId(task.getSkillId());
+        token.setWorkerPoolId(task.getWorkerPoolId());
+        token.setModelConfigId(task.getModelConfigId());
+        token.setStatus(STATUS_ACTIVE);
+        // Expiration defaults to 2 hours
+        LocalDateTime expiresAt = LocalDateTime.now().plusHours(2);
+        token.setExpiresAt(expiresAt);
+        tokenRepository.save(token);
+
+        // Inject into runtime store
+        tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getTaskId(), plainToken, expiresAt);
+
+        CreatedBusinessAgentTaskDTO dto = new CreatedBusinessAgentTaskDTO();
+        BusinessAgentTaskDTO baseDto = BusinessAgentTaskDTO.fromEntity(task);
+        dto.setTaskId(baseDto.getTaskId());
+        dto.setSessionId(baseDto.getSessionId());
+        dto.setTenantId(baseDto.getTenantId());
+        dto.setClientAppId(baseDto.getClientAppId());
+        dto.setUpstreamUserId(baseDto.getUpstreamUserId());
+        dto.setNavigatorEffectiveUserId(baseDto.getNavigatorEffectiveUserId());
+        dto.setSkillId(baseDto.getSkillId());
+        dto.setWorkerPoolId(baseDto.getWorkerPoolId());
+        dto.setModelConfigId(baseDto.getModelConfigId());
+        dto.setRequestedModelConfigId(baseDto.getRequestedModelConfigId());
+        dto.setStatus(baseDto.getStatus());
+        dto.setCreatedAt(baseDto.getCreatedAt());
+        dto.setUpdatedAt(baseDto.getUpdatedAt());
+        dto.setTaskScopedToken(plainToken);
+
+        return dto;
+    }
+
+    @Transactional(readOnly = true)
+    public BusinessAgentTaskDTO getTask(String tenantId, String taskId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(taskId, "taskId is required");
+        BusinessAgentTaskEntity task = taskRepository.findByTaskIdAndTenantId(taskId, tenantId)
+                .orElseThrow(() -> new IllegalArgumentException("task not found: " + taskId));
+        return BusinessAgentTaskDTO.fromEntity(task);
+    }
+
+    @Transactional(readOnly = true)
+    public List<BusinessAgentTaskDTO> listTasksBySession(String tenantId, String sessionId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(sessionId, "sessionId is required");
+        return taskRepository.findBySessionIdAndTenantIdOrderByCreatedAtDesc(sessionId, tenantId)
+                .stream()
+                .map(BusinessAgentTaskDTO::fromEntity)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public com.foggy.navigator.business.agent.model.dto.BusinessTaskScopedTokenDTO resolveTaskScopedToken(String plainToken) {
+        requireText(plainToken, "plainToken is required");
+        String hash = SecretTokenSupport.sha256(plainToken);
+        BusinessTaskScopedTokenEntity token = tokenRepository.findByTokenHash(hash)
+                .orElseThrow(() -> new IllegalArgumentException("invalid token"));
+
+        if (!STATUS_ACTIVE.equals(token.getStatus())) {
+            throw new IllegalStateException("token is not active");
+        }
+        if (token.getExpiresAt() != null && token.getExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new IllegalStateException("token is expired");
+        }
+
+        return com.foggy.navigator.business.agent.model.dto.BusinessTaskScopedTokenDTO.fromEntity(token);
+    }
+
+    private void requireText(String value, String message) {
+        if (!StringUtils.hasText(value)) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+}

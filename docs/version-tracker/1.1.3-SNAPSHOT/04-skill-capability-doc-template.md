@@ -11,7 +11,7 @@
 
 ## 核心定位
 
-Skill/SKILL.md 是 LLM 理解业务能力的入口，不是上游 API 文档，也不是凭证或网络访问说明。1.1.3 中 Upstream App 可以维护自己的 App 作用域 Skill，但不能把它发布、升级或复制为平台公共技能。
+Skill/SKILL.md 是 LLM 理解业务能力的入口，不是上游 API 文档，也不是凭证或网络访问说明。1.1.3 中 Client App 可以维护自己的 App 作用域 Skill，但不能把它发布、升级或复制为平台公共技能。
 
 Skill 应描述：
 
@@ -36,8 +36,8 @@ Skill 不得描述：
 | 来源 | 维护方 | 可见范围 | 说明 |
 | --- | --- | --- | --- |
 | `account_skill` | Navigator 内部用户 | 当前账号 | 个人账号目录技能，只服务内部人类用户会话 |
-| `upstream_app_skill` | Upstream App owner / collaborator | 当前 `upstream_app_id` | App 私有技能，可授权给该 App 下的 upstream user |
-| `builtin_public_skill` | Navigator Java / Biz Worker 平台团队 | 平台内置 | 上游 App 可以被授权使用，但不能维护或发布 |
+| `client_app_skill` | Client App owner / collaborator | 当前 `client_app_id` | App 私有技能，可授权给该 App 下的 upstream user |
+| `builtin_public_skill` | Navigator Java / Biz Worker 平台团队 | 平台内置 | Client App 可以被授权使用，但不能维护或发布 |
 
 `role_skill` 本版本不考虑，不参与 Skill 暴露、合并或授权计算。
 
@@ -45,14 +45,14 @@ Skill 不得描述：
 
 ```text
 account_skill
-  + authorized upstream_app_skill
+  + authorized client_app_skill
   + builtin_public_skill
 ```
 
-上游 App 发起调用可见技能：
+Client App 发起调用可见技能：
 
 ```text
-upstream_app_skill
+client_app_skill
   intersect upstream_user_skill_grant
   intersect business_function_grant
   intersect Java Registry enabled functions
@@ -60,10 +60,10 @@ upstream_app_skill
 
 约束：
 
-1. Upstream App Skill 只在当前 App 作用域内可见。
+1. Client App Skill 只在当前 App 作用域内可见。
 2. App 下的 upstream user 能否使用某个 Skill，由 Java 侧 App user grant 决定。
 3. Skill 告诉 LLM 业务语义和边界，Java Registry/Grant 决定最终能否执行。
-4. Upstream App 不能维护 `builtin_public_skill`，也不能影响其他 App 的 Skill。
+4. Client App 不能维护 `builtin_public_skill`，也不能影响其他 App 的 Skill。
 
 ## 推荐 Skill 文档结构
 
@@ -75,8 +75,8 @@ Use this skill when <自然语言触发意图>.
 ## Scope
 
 - domain: <业务域>
-- skill_source: upstream_app_skill | account_skill | builtin_public_skill
-- upstream_app_scope: <仅 App Skill 填写 upstream_app_id 或占位>
+- skill_source: client_app_skill | account_skill | builtin_public_skill
+- client_app_scope: <仅 App Skill 填写 client_app_id 或占位>
 - supported_intents:
   - <意图 1>
   - <意图 2>
@@ -174,8 +174,8 @@ Use this skill when the user asks to inspect, create, or submit an order close a
 ## Scope
 
 - domain: order
-- skill_source: upstream_app_skill
-- upstream_app_scope: app_tms_tenant_a
+- skill_source: client_app_skill
+- client_app_scope: app_tms_tenant_a
 - supported_intents:
   - 查询订单是否可关单
   - 创建关单申请草稿
@@ -214,7 +214,7 @@ Only these business functions may be used by this skill:
 - Stop and wait for Java-owned confirmation code approval.
 - If approval is rejected or expired, report cancellation and do not retry submission.
 - Never approve the submission by yourself.
-- This skill can only be used inside the authorized Upstream App scope.
+- This skill can only be used inside the authorized Client App scope.
 
 ## Example Flow
 
@@ -242,7 +242,7 @@ Only these business functions may be used by this skill:
 
 1. Skill 文档写明 allowlist，供 LLM 理解边界。
 2. Java Registry 保存同一 allowlist 或动态下发 allowlist，供运行时强制校验。
-3. Upstream App Grant 决定当前 App 是否可见该 Skill。
+3. Client App Grant 决定当前 App 是否可见该 Skill。
 4. App user grant 决定该 App 下的 upstream user 是否可使用该 Skill。
 
 如果二者不一致，运行时以 Java Registry 为准，Skill 文档应在发布流程中被修正。Skill 不是最终授权源。
@@ -277,5 +277,5 @@ POST https://upstream.example.com/api/orders/{id}/close
 1. Skill allowlist 首版写入 SKILL.md、独立 manifest，还是由 Java Registry 动态注入。
 2. Skill 发布流程是否需要自动校验文档 allowlist 与 Java Registry 一致。
 3. 是否需要为高风险 Skill 增加人工审核和发布签名。
-4. Upstream App Skill 的存储位置使用 App 私有目录、DB 记录，还是二者组合。
-5. 内部用户访问 Upstream App Skill 的授权角色先用 App owner/collaborator，还是建立独立 App collaborator 表。
+4. Client App Skill 的存储位置使用 App 私有目录、DB 记录，还是二者组合。
+5. 内部用户访问 Client App Skill 的授权角色先用 App owner/collaborator，还是建立独立 App collaborator 表。

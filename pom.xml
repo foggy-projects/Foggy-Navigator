@@ -35,6 +35,7 @@
         <module>metadata-config-module</module>
         <module>metadata-query-module</module>
         <module>session-module</module>
+        <module>business-agent-module</module>
         <module>tutor-agent</module>
         <module>addons/coding-agent</module>
         <module>addons/claude-worker-agent</module>

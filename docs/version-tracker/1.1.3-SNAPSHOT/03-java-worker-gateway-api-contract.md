@@ -24,11 +24,11 @@ LangGraph Biz Worker
 
 Java 服务是业务执行控制面，Worker 是自然语言推理、Skill 路由、脚本编排和暂停恢复执行面。
 
-Upstream App 不直接调用 Worker Gateway，也不直接选择 Biz Worker。Java 在创建 task/session 时根据 `upstream_app_id`、App Grant、Skill 作用域和 Worker 路由策略分配 Biz Worker Pool，再给 Worker 下发 task scoped token。
+Client App 不直接调用 Worker Gateway，也不直接选择 Biz Worker。Java 在创建 task/session 时根据 `client_app_id`、App Grant、Skill 作用域和 Worker 路由策略分配 Biz Worker Pool，再给 Worker 下发 task scoped token。
 
 ## API 总览
 
-首版内部能力映射为 5 个稳定工具/API：
+首版内部能力映射为 6 个稳定工具/API：
 
 | Worker 工具名 | Java API | 用途 |
 | --- | --- | --- |
@@ -36,7 +36,8 @@ Upstream App 不直接调用 Worker Gateway，也不直接选择 Biz Worker。Ja
 | `get_business_function_schema` | `GET /internal/worker-gateway/v1/business-functions/{functionId}/schema` | 获取脱敏 schema、风险等级和审批摘要 |
 | `invoke_business_function` | `POST /internal/worker-gateway/v1/business-functions/{functionId}/invoke` | 调用 Java 注册函数或触发 suspension |
 | `run_business_script` | `POST /internal/worker-gateway/v1/business-scripts/run` | 请求 Java 记录并调度受控脚本运行上下文 |
-| `resume_suspension` | `POST /internal/worker-gateway/v1/suspensions/{suspendId}/resume` | 审批完成后恢复 Worker/脚本暂停点 |
+| `resume_suspension` | `POST /api/v1/business-agent/suspensions/{suspendId}/resume` | 审批完成后恢复 Worker/脚本暂停点 |
+| *(audit)* | `POST /internal/worker-gateway/v1/tool-messages` | Worker 上报工具执行事件（审计日志） |
 
 这组 API 仅供受信 Worker 调用，不对上游业务系统、浏览器或普通插件开放。
 
@@ -61,9 +62,9 @@ X-Request-Id: req_xxx
 
 1. 校验 worker identity 是否为已注册 Worker。
 2. 校验 task scoped token 未过期、未撤销，且绑定当前 `task_id`。
-3. 校验 `upstream_app_id`、`navigator_effective_user_id`、`navigator_tenant_id`、`session_id` 与 Java task/session 记录一致。
+3. 校验 `client_app_id`、`navigator_effective_user_id`、`navigator_tenant_id`、`session_id` 与 Java task/session 记录一致。
 4. 校验当前 `skill_id` 是否属于 App 可见 Skill 且允许访问目标函数。
-5. 校验 Upstream App、upstream user 和 Navigator effective subject 是否拥有函数 `auth_scope`。
+5. 校验 Client App、upstream user 和 Navigator effective subject 是否拥有函数 `auth_scope`。
 6. 对副作用函数执行审批、幂等和审计拦截。
 
 ## 统一调用上下文
@@ -76,9 +77,9 @@ X-Request-Id: req_xxx
     "task_id": "lgt_001",
     "session_id": "worker-session-001",
     "skill_id": "order-close-apply",
-    "skill_source": "upstream_app_skill",
+    "skill_source": "client_app_skill",
     "script_run_id": "sr_001",
-    "upstream_app_id": "app_tms_tenant_a",
+    "client_app_id": "app_tms_tenant_a",
     "upstream_user_id": "u_001",
     "navigator_effective_user_id": "svc_app_tms_tenant_a",
     "navigator_tenant_id": "nav-tenant-a",
@@ -91,11 +92,11 @@ X-Request-Id: req_xxx
 
 约束：
 
-1. `upstream_app_id`、`navigator_effective_user_id` 和 `navigator_tenant_id` 不能只信请求体，Java 必须与 token/session 绑定值比对。
+1. `client_app_id`、`navigator_effective_user_id` 和 `navigator_tenant_id` 不能只信请求体，Java 必须与 token/session 绑定值比对。
 2. `skill_id` 是函数可见性校验输入，不等同于最终授权。
 3. `idempotency_key` 可由 Worker 提供候选值，但最终以 Java 生成和校验为准。
 4. `script_run_id` 可为空；非脚本场景由 Java 记录为空或生成内部引用。
-5. Worker 不能通过修改 `upstream_app_id`、`upstream_user_id` 或 `worker_pool_id` 来改变授权边界。
+5. Worker 不能通过修改 `client_app_id`、`upstream_user_id` 或 `worker_pool_id` 来改变授权边界。
 
 ## `list_business_functions`
 
@@ -135,7 +136,7 @@ GET /internal/worker-gateway/v1/business-functions?domain=order&intent=close_app
 
 约束：
 
-1. 只返回当前 Worker、task、Upstream App、upstream user、Navigator effective subject、skill 可见的函数摘要。
+1. 只返回当前 Worker、task、Client App、upstream user、Navigator effective subject、skill 可见的函数摘要。
 2. 不返回 `transport`、`adapter`、`auth_scope`、上游 path、header 或 credential。
 3. 不触发任何业务动作。
 
@@ -207,9 +208,9 @@ POST /internal/worker-gateway/v1/business-functions/{functionId}/invoke
     "task_id": "lgt_001",
     "session_id": "worker-session-001",
     "skill_id": "order-close-apply",
-    "skill_source": "upstream_app_skill",
+    "skill_source": "client_app_skill",
     "script_run_id": "sr_001",
-    "upstream_app_id": "app_tms_tenant_a",
+    "client_app_id": "app_tms_tenant_a",
     "upstream_user_id": "u_001",
     "navigator_effective_user_id": "svc_app_tms_tenant_a",
     "navigator_tenant_id": "nav-tenant-a",
@@ -223,16 +224,12 @@ POST /internal/worker-gateway/v1/business-functions/{functionId}/invoke
 
 ```json
 {
-  "status": "completed",
+  "status": "SUCCESS",
   "function_id": "tms.order.close_apply.submit",
   "version": "v1",
-  "result": {
-    "status": "submitted",
-    "application_id": "APP-001",
-    "submitted_at": "2026-05-02T16:20:00+08:00"
-  },
-  "audit_ref": "audit_001",
-  "idempotency_key": "close_apply_submit:app_tms_tenant_a:APP-001"
+  "approval_required": false,
+  "output_json": "{\"status\":\"submitted\",\"application_id\":\"APP-001\"}",
+  "message": "Adapter execution successful"
 }
 ```
 
@@ -287,7 +284,7 @@ POST /internal/worker-gateway/v1/business-scripts/run
     "task_id": "lgt_001",
     "session_id": "worker-session-001",
     "skill_id": "order-close-apply",
-    "upstream_app_id": "app_tms_tenant_a",
+    "client_app_id": "app_tms_tenant_a",
     "upstream_user_id": "u_001",
     "navigator_effective_user_id": "svc_app_tms_tenant_a",
     "navigator_tenant_id": "nav-tenant-a",
@@ -321,7 +318,7 @@ POST /internal/worker-gateway/v1/business-scripts/run
 ### 请求
 
 ```text
-POST /internal/worker-gateway/v1/suspensions/{suspendId}/resume
+POST /api/v1/business-agent/suspensions/{suspendId}/resume
 ```
 
 ```json
@@ -336,7 +333,7 @@ POST /internal/worker-gateway/v1/suspensions/{suspendId}/resume
     "task_id": "lgt_001",
     "session_id": "worker-session-001",
     "script_run_id": "sr_001",
-    "upstream_app_id": "app_tms_tenant_a",
+    "client_app_id": "app_tms_tenant_a",
     "upstream_user_id": "u_001",
     "navigator_effective_user_id": "svc_app_tms_tenant_a",
     "navigator_tenant_id": "nav-tenant-a"
@@ -365,15 +362,15 @@ POST /internal/worker-gateway/v1/suspensions/{suspendId}/resume
 
 Java 必须执行：
 
-1. task/session 属于当前 `upstream_app_id` 和 `navigator_tenant_id`。
+1. task/session 属于当前 `client_app_id` 和 `navigator_tenant_id`。
 2. Worker 注册关系和 Biz Worker Pool 路由允许服务该 App。
 3. 当前 App、upstream user 和 Navigator effective subject 对 `auth_scope` 有权限。
 4. 当前 Skill 在 `skill_allowlist` 中，且 App 下该 upstream user 被授权使用该 Skill。
 5. 函数版本处于 enabled 状态。
-6. 上游 credential 由 Java 根据 `upstream_app_id` 注入。
-7. 函数输出按 Upstream App、upstream user、Navigator effective subject、Skill 和 exposure 做字段裁剪。
+6. 上游 credential 由 Java 根据 `client_app_id` 注入。
+7. 函数输出按 Client App、upstream user、Navigator effective subject、Skill 和 exposure 做字段裁剪。
 
-Worker 不能把 `upstream_app_id`、`upstream_user_id`、`navigator_effective_user_id`、`auth_scope` 或 approval 状态当作可信事实自行判定。
+Worker 不能把 `client_app_id`、`upstream_user_id`、`navigator_effective_user_id`、`auth_scope` 或 approval 状态当作可信事实自行判定。
 
 ## 审计要求
 
@@ -384,7 +381,7 @@ Worker 不能把 `upstream_app_id`、`upstream_user_id`、`navigator_effective_u
 3. `session_id`
 4. `worker_id`
 5. `worker_pool_id`
-6. `upstream_app_id`
+6. `client_app_id`
 7. `upstream_user_id`
 8. `navigator_effective_user_id`
 9. `navigator_tenant_id`
@@ -422,7 +419,7 @@ Worker 不能把 `upstream_app_id`、`upstream_user_id`、`navigator_effective_u
 
 | 分类 | 示例 code | 说明 |
 | --- | --- | --- |
-| `auth` | `auth/unauthorized`、`auth/forbidden`、`auth/not-visible` | Worker、Upstream App、upstream user、Navigator effective subject 或 Skill 无权访问 |
+| `auth` | `auth/unauthorized`、`auth/forbidden`、`auth/not-visible` | Worker、Client App、upstream user、Navigator effective subject 或 Skill 无权访问 |
 | `validation` | `validation/schema-invalid` | 入参不符合 schema |
 | `approval` | `approval/required`、`approval/rejected`、`approval/expired` | 审批相关状态 |
 | `idempotency` | `idempotency/conflict` | 幂等键冲突或重复提交 |

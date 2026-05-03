@@ -22,7 +22,10 @@ import com.foggy.navigator.agent.framework.tool.BuiltInTool;
 import com.foggy.navigator.agent.framework.tool.ToolDefinition;
 import com.foggy.navigator.agent.framework.tool.ToolExecutionRequest;
 import com.foggy.navigator.agent.framework.tool.ToolExecutionResult;
+import com.foggy.navigator.agent.framework.tool.ToolRuntimeContextProvider;
+import com.foggy.navigator.agent.framework.tool.ToolRuntimeContextRequest;
 import com.foggy.navigator.agent.framework.tool.builtin.DelegateTool;
+
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.spi.config.LlmModelManager;
@@ -40,6 +43,7 @@ import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.lang.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -73,6 +77,7 @@ public class DefaultAgentInvoker implements AgentInvoker {
     private final MeterRegistry meterRegistry;
     @Nullable
     private final AgentTaskManager agentTaskManager;
+    private final List<ToolRuntimeContextProvider> runtimeContextProviders;
 
     public DefaultAgentInvoker(AgentRegistry agentRegistry,
                                SessionManager sessionManager,
@@ -86,6 +91,23 @@ public class DefaultAgentInvoker implements AgentInvoker {
                                @Nullable UserMemoryManager userMemoryManager,
                                @Nullable MeterRegistry meterRegistry,
                                @Nullable AgentTaskManager agentTaskManager) {
+        this(agentRegistry, sessionManager, llmAdapter, eventPublisher, agentExecutor, skillManager,
+             sessionRouter, builtInTools, llmModelManager, userMemoryManager, meterRegistry, agentTaskManager, List.of());
+    }
+
+    public DefaultAgentInvoker(AgentRegistry agentRegistry,
+                               SessionManager sessionManager,
+                               LlmAdapter llmAdapter,
+                               ApplicationEventPublisher eventPublisher,
+                               AsyncTaskExecutor agentExecutor,
+                               SkillManager skillManager,
+                               SessionRouter sessionRouter,
+                               List<BuiltInTool> builtInTools,
+                               @Nullable LlmModelManager llmModelManager,
+                               @Nullable UserMemoryManager userMemoryManager,
+                               @Nullable MeterRegistry meterRegistry,
+                               @Nullable AgentTaskManager agentTaskManager,
+                               List<ToolRuntimeContextProvider> runtimeContextProviders) {
         this.agentRegistry = agentRegistry;
         this.sessionManager = sessionManager;
         this.llmAdapter = llmAdapter;
@@ -98,6 +120,7 @@ public class DefaultAgentInvoker implements AgentInvoker {
         this.userMemoryManager = userMemoryManager;
         this.meterRegistry = meterRegistry;
         this.agentTaskManager = agentTaskManager;
+        this.runtimeContextProviders = runtimeContextProviders != null ? runtimeContextProviders : List.of();
     }
 
     @Override
@@ -141,6 +164,12 @@ public class DefaultAgentInvoker implements AgentInvoker {
             if (tenantId == null || tenantId.isEmpty()) {
                 tenantId = userId;
             }
+        }
+
+        // 2.2 提取运行时 taskId（如为空白字符串视作 absent）
+        String runtimeTaskId = null;
+        if (userMessage != null && userMessage.getTaskId() != null && !userMessage.getTaskId().isBlank()) {
+            runtimeTaskId = userMessage.getTaskId();
         }
 
         // 2.5 获取历史消息和配置（token-aware 上下文窗口）
@@ -271,7 +300,7 @@ public class DefaultAgentInvoker implements AgentInvoker {
                         )
                 ));
 
-                ToolExecutionResult result = findAndExecuteTool(toolCall, sessionId, agentId, userId, tenantId);
+                ToolExecutionResult result = findAndExecuteTool(toolCall, sessionId, agentId, userId, tenantId, runtimeTaskId);
                 toolResults.add(result);
 
                 eventPublisher.publishEvent(AgentMessage.of(
@@ -323,9 +352,33 @@ public class DefaultAgentInvoker implements AgentInvoker {
     /**
      * 查找并执行工具
      */
-    private ToolExecutionResult findAndExecuteTool(ToolCall toolCall, String sessionId, String agentId, String userId, String tenantId) {
+    private ToolExecutionResult findAndExecuteTool(ToolCall toolCall, String sessionId, String agentId, String userId, String tenantId, String taskId) {
         for (BuiltInTool tool : builtInTools) {
             if (tool.getName().equals(toolCall.getName())) {
+                Map<String, Object> runtimeContext = new HashMap<>();
+                if (runtimeContextProviders != null && !runtimeContextProviders.isEmpty()) {
+                    ToolRuntimeContextRequest contextReq = ToolRuntimeContextRequest.builder()
+                            .toolName(toolCall.getName())
+                            .sessionId(sessionId)
+                            .taskId(taskId)
+                            .agentId(agentId)
+                            .userId(userId)
+                            .tenantId(tenantId)
+                            .parameters(toolCall.getArguments())
+                            .build();
+                    for (ToolRuntimeContextProvider provider : runtimeContextProviders) {
+                        try {
+                            Map<String, Object> ctx = provider.provide(contextReq);
+                            if (ctx != null) {
+                                runtimeContext.putAll(ctx);
+                            }
+                        } catch (Exception e) {
+                            log.warn("Error getting runtime context from provider {} for tool {}: {}",
+                                    provider.getClass().getSimpleName(), toolCall.getName(), e.getMessage(), e);
+                        }
+                    }
+                }
+
                 ToolExecutionRequest execRequest = ToolExecutionRequest.builder()
                         .toolName(toolCall.getName())
                         .userId(userId)
@@ -333,6 +386,7 @@ public class DefaultAgentInvoker implements AgentInvoker {
                         .sessionId(sessionId)
                         .agentId(agentId)
                         .parameters(toolCall.getArguments())
+                        .runtimeContext(runtimeContext)
                         .build();
                 long toolStart = System.currentTimeMillis();
                 try {
