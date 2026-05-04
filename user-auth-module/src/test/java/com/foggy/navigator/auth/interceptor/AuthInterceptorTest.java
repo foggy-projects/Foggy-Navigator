@@ -57,6 +57,10 @@ class AuthInterceptorTest {
         assertNotNull(user);
         assertEquals("user-1", user.getUserId());
         assertEquals("alice", user.getUsername());
+        verify(request).setAttribute("userId", "user-1");
+        verify(request).setAttribute("username", "alice");
+        verify(request).setAttribute("tenantId", "t1");
+        verify(request).setAttribute("roles", "DEVELOPER");
     }
 
     @Test

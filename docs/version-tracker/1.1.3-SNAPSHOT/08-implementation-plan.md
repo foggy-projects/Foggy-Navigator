@@ -278,6 +278,8 @@ flowchart LR
 | Stage 8A Business Function Adapter Invocation Minimal Loop | completed | Local Echo adapter implemented for non-approval functions. Unsupported configs fail-closed. No exposed config in Worker DTOs; 2026-05-03 |
 | Stage 8B Outbound REST Adapter Minimal Secure Loop | completed | RestBusinessFunctionAdapterInvoker implemented with property-based SSRF protection, URL/path/method/header hardening, non-2xx fail-closed, and JSON path evaluation; 2026-05-04 |
 | Stage 9 Persistent Audit + Upstream E2E | completed | BusinessFunctionRuntimeAuditEntity/Service; best-effort audit writes for invoke/tool-message/resume lifecycle; RestAdapterUpstreamE2ETest with real local HTTP server; 2026-05-04 |
+| Stage 9B Upstream Integration Guide | completed | SDK/component-first upstream onboarding docs added under `upstream-integration/` (00-overview ～ 10-demo-checklist); README and implementation plan linked; 2026-05-04 |
+| Stage 9C LLM SDK Guide + Personal Skill | completed | Added LLM-facing SDK usage guide and created personal `navigator-upstream-llm-integration` skill for upstream LLM coding agents; 2026-05-04 |
 
 > [!NOTE]
 > `BusinessObject` 是用于组织函数（Function）的业务对象概念，不是授权主体。授权主体仍然由 ClientApp / upstreamUser / Skill / Function grant 进行细粒度控制。
