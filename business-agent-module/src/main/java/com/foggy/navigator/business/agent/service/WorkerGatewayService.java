@@ -32,6 +32,7 @@ public class WorkerGatewayService {
     private final BusinessFunctionSuspensionService suspensionService;
     private final BusinessFunctionAdapterInvoker adapterInvoker;
     private final ObjectMapper objectMapper;
+    private final BusinessFunctionRuntimeAuditService auditService;
 
     @Transactional(readOnly = true)
     public WorkerGatewayFunctionListDTO listBusinessFunctions(String tokenStr, String domain, String riskLevel) {
@@ -142,6 +143,11 @@ public class WorkerGatewayService {
             }
         }
 
+        // Audit: invoke started (best-effort)
+        String inputHash = BusinessFunctionRuntimeAuditService.sha256(finalInputJson);
+        auditService.recordInvokeStarted(token, functionId, form.getVersion(), inputHash);
+        long startTime = System.currentTimeMillis();
+
         WorkerGatewayInvokeResponseDTO response = new WorkerGatewayInvokeResponseDTO();
         response.setFunctionId(context.getFunction().getFunctionId());
         response.setVersion(context.getVersionData().getVersion());
@@ -152,20 +158,33 @@ public class WorkerGatewayService {
             response.setStatus(WorkerGatewayInvokeResponseDTO.STATUS_SUSPENDED);
             response.setSuspendId(suspension.getSuspendId());
             response.setMessage("Approval required, execution suspended.");
+            // Audit: invoke suspended (best-effort)
+            auditService.recordInvokeSuspended(token, functionId, form.getVersion(), suspension.getSuspendId());
         } else {
-            BusinessFunctionAdapterResult adapterResult = adapterInvoker.invoke(context, finalInputJson);
-            if (adapterResult == null) {
-                throw new IllegalArgumentException("Adapter execution returned no result");
+            try {
+                BusinessFunctionAdapterResult adapterResult = adapterInvoker.invoke(context, finalInputJson);
+                if (adapterResult == null) {
+                    throw new IllegalArgumentException("Adapter execution returned no result");
+                }
+                if (!BusinessFunctionAdapterResult.STATUS_SUCCESS.equals(adapterResult.getStatus())) {
+                    String message = StringUtils.hasText(adapterResult.getMessage())
+                            ? adapterResult.getMessage()
+                            : "Adapter execution failed";
+                    throw new IllegalArgumentException(message);
+                }
+                response.setStatus(WorkerGatewayInvokeResponseDTO.STATUS_SUCCESS);
+                response.setOutputJson(adapterResult.getOutputJson());
+                response.setMessage(adapterResult.getMessage());
+                // Audit: invoke success (best-effort)
+                long durationMs = System.currentTimeMillis() - startTime;
+                String outputHash = BusinessFunctionRuntimeAuditService.sha256(adapterResult.getOutputJson());
+                auditService.recordInvokeSuccess(token, functionId, form.getVersion(), outputHash, durationMs);
+            } catch (Exception e) {
+                // Audit: invoke failed (best-effort)
+                long durationMs = System.currentTimeMillis() - startTime;
+                auditService.recordInvokeFailed(token, functionId, form.getVersion(), "ADAPTER_ERROR", e.getMessage(), durationMs);
+                throw e;
             }
-            if (!BusinessFunctionAdapterResult.STATUS_SUCCESS.equals(adapterResult.getStatus())) {
-                String message = StringUtils.hasText(adapterResult.getMessage())
-                        ? adapterResult.getMessage()
-                        : "Adapter execution failed";
-                throw new IllegalArgumentException(message);
-            }
-            response.setStatus(WorkerGatewayInvokeResponseDTO.STATUS_SUCCESS);
-            response.setOutputJson(adapterResult.getOutputJson());
-            response.setMessage(adapterResult.getMessage());
         }
 
         return response;
@@ -175,16 +194,23 @@ public class WorkerGatewayService {
      * Accept a tool execution message from the Worker for audit logging.
      * Validates the task-scoped token to ensure the message comes from a legitimate Worker context.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public com.foggy.navigator.business.agent.model.dto.WorkerGatewayToolMessageResponseDTO reportToolMessage(
             String tokenStr,
             com.foggy.navigator.business.agent.model.form.WorkerGatewayToolMessageForm form) {
+        if (form == null) {
+            throw new IllegalArgumentException("form is required");
+        }
+
         BusinessTaskScopedTokenDTO token = taskService.resolveTaskScopedToken(tokenStr);
         requireCompleteToken(token);
 
         log.info("Tool message received: tool={}, functionId={}, status={}, suspendId={}, taskId={}, tenantId={}",
                 form.getToolName(), form.getFunctionId(), form.getStatus(),
                 form.getSuspendId(), token.getTaskId(), token.getTenantId());
+
+        // Audit: tool message (best-effort)
+        auditService.recordToolMessage(token, form.getToolName(), form.getFunctionId(), form.getStatus(), form.getMessage());
 
         return com.foggy.navigator.business.agent.model.dto.WorkerGatewayToolMessageResponseDTO.accepted();
     }

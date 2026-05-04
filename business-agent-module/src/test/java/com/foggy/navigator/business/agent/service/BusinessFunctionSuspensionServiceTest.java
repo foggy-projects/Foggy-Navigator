@@ -31,6 +31,9 @@ class BusinessFunctionSuspensionServiceTest {
     @Mock
     private ApplicationEventPublisher eventPublisher;
 
+    @Mock
+    private BusinessFunctionRuntimeAuditService auditService;
+
     @InjectMocks
     private BusinessFunctionSuspensionService suspensionService;
 

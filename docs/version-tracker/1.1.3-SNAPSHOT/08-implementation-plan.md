@@ -277,6 +277,7 @@ flowchart LR
 | Stage 7D TaskId Propagation | completed | Propagate `Message.taskId` from invocation into ToolRuntimeContextRequest; 2026-05-03 |
 | Stage 8A Business Function Adapter Invocation Minimal Loop | completed | Local Echo adapter implemented for non-approval functions. Unsupported configs fail-closed. No exposed config in Worker DTOs; 2026-05-03 |
 | Stage 8B Outbound REST Adapter Minimal Secure Loop | completed | RestBusinessFunctionAdapterInvoker implemented with property-based SSRF protection, URL/path/method/header hardening, non-2xx fail-closed, and JSON path evaluation; 2026-05-04 |
+| Stage 9 Persistent Audit + Upstream E2E | completed | BusinessFunctionRuntimeAuditEntity/Service; best-effort audit writes for invoke/tool-message/resume lifecycle; RestAdapterUpstreamE2ETest with real local HTTP server; 2026-05-04 |
 
 > [!NOTE]
 > `BusinessObject` 是用于组织函数（Function）的业务对象概念，不是授权主体。授权主体仍然由 ClientApp / upstreamUser / Skill / Function grant 进行细粒度控制。

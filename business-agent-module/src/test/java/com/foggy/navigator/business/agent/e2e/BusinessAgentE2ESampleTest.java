@@ -73,6 +73,7 @@ class BusinessAgentE2ESampleTest {
     @Mock BizWorkerPoolMemberRepository poolMemberRepository;
     @Mock BizWorkerIdentityRepository identityRepository;
     @Mock BusinessFunctionSuspensionRepository suspensionRepository;
+    @Mock BusinessFunctionRuntimeAuditRepository auditRepository;
 
     // ---- external deps ----
     @Mock LlmModelManager llmModelManager;
@@ -91,6 +92,7 @@ class BusinessAgentE2ESampleTest {
     BusinessAgentTaskService taskService;
     BusinessFunctionAuthorizationService authorizationService;
     BusinessFunctionSuspensionService suspensionService;
+    BusinessFunctionRuntimeAuditService auditService;
     WorkerGatewayService workerGatewayService;
 
     // ---- live entities persisted across steps ----
@@ -123,9 +125,10 @@ class BusinessAgentE2ESampleTest {
         clientAppUserGrantService = userGrantService;
         taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService, skillRegistryService, tokenRuntimeStore);
         authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService, skillRegistryService, functionRegistryService);
-        suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher);
+        auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
+        suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher, auditService);
         com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker adapterInvoker = new com.foggy.navigator.business.agent.service.adapter.LocalEchoBusinessFunctionAdapterInvoker(objectMapper);
-        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, clientAppUserGrantService, suspensionService, adapterInvoker, objectMapper);
+        workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, clientAppUserGrantService, suspensionService, adapterInvoker, objectMapper, auditService);
     }
 
     // ===== Helper: build active ClientApp entity =====

@@ -40,6 +40,8 @@ class WorkerGatewayServiceTest {
     private com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker adapterInvoker;
     @Mock
     private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    @Mock
+    private BusinessFunctionRuntimeAuditService auditService;
 
     @InjectMocks
     private WorkerGatewayService workerGatewayService;

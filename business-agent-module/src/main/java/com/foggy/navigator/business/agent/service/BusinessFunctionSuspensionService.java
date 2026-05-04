@@ -22,6 +22,7 @@ public class BusinessFunctionSuspensionService {
 
     private final BusinessFunctionSuspensionRepository repository;
     private final ApplicationEventPublisher eventPublisher;
+    private final BusinessFunctionRuntimeAuditService auditService;
 
     @Transactional
     public BusinessFunctionSuspensionEntity createSuspension(BusinessTaskScopedTokenDTO token, String functionId, String version, String inputJson, String idempotencyKey) {
@@ -46,102 +47,120 @@ public class BusinessFunctionSuspensionService {
 
     @Transactional
     public void resumeSuspension(String tenantId, String userId, String suspendId, WorkerGatewayResumeForm form) {
-        if (form == null) {
-            throw new IllegalArgumentException("Resume form cannot be null");
-        }
+        // Audit: resume requested (best-effort)
+        auditService.recordResumeRequested(tenantId, suspendId, userId);
 
-        BusinessFunctionSuspensionEntity suspension = repository.findBySuspendId(suspendId)
-                .orElseThrow(() -> new IllegalArgumentException("Suspension not found: " + suspendId));
+        try {
+            if (form == null) {
+                throw new IllegalArgumentException("Resume form cannot be null");
+            }
 
-        if (!"PENDING".equals(suspension.getStatus())) {
-            throw new IllegalStateException("Suspension is not in PENDING state: " + suspension.getStatus());
-        }
+            BusinessFunctionSuspensionEntity suspension = repository.findBySuspendId(suspendId)
+                    .orElseThrow(() -> new IllegalArgumentException("Suspension not found: " + suspendId));
 
-        if (suspension.getExpiresAt() != null && suspension.getExpiresAt().isBefore(LocalDateTime.now())) {
-            suspension.setStatus("EXPIRED");
+            if (!"PENDING".equals(suspension.getStatus())) {
+                throw new IllegalStateException("Suspension is not in PENDING state: " + suspension.getStatus());
+            }
+
+            if (suspension.getExpiresAt() != null && suspension.getExpiresAt().isBefore(LocalDateTime.now())) {
+                suspension.setStatus("EXPIRED");
+                repository.save(suspension);
+                throw new IllegalStateException("Suspension has expired");
+            }
+
+            // Binding Validation
+            WorkerGatewayResumeForm.BindingContext binding = form.getBindingContext();
+            if (binding == null) {
+                throw new IllegalArgumentException("binding_context is required");
+            }
+
+            if (!suspension.getTenantId().equals(tenantId)) {
+                throw new SecurityException("Tenant ID mismatch: unauthorized resume attempt");
+            }
+            if (!suspension.getClientAppId().equals(binding.getClientAppId())) {
+                throw new SecurityException("Client App ID mismatch");
+            }
+            if (!suspension.getUpstreamUserId().equals(binding.getUpstreamUserId())) {
+                throw new SecurityException("Upstream User ID mismatch");
+            }
+            if (!suspension.getTaskId().equals(binding.getTaskId())) {
+                throw new SecurityException("Task ID mismatch");
+            }
+            if (!suspension.getSessionId().equals(binding.getSessionId())) {
+                throw new SecurityException("Session ID mismatch");
+            }
+            if (!suspension.getFunctionId().equals(binding.getFunctionId())) {
+                throw new SecurityException("Function ID mismatch");
+            }
+            if (!suspension.getVersion().equals(binding.getVersion())) {
+                throw new SecurityException("Version mismatch");
+            }
+
+            // Input Hash Validation
+            if (!StringUtils.hasText(binding.getInputHash())) {
+                throw new SecurityException("input_hash is required for fail-closed validation");
+            }
+
+            String expectedHash = computeSha256Hex(suspension.getInputJson());
+            if (!expectedHash.equalsIgnoreCase(binding.getInputHash())) {
+                throw new SecurityException("Input hash mismatch");
+            }
+
+            WorkerGatewayResumeForm.ApprovalResult result = form.getApprovalResult();
+            if (result == null) {
+                throw new IllegalArgumentException("approval_result is required");
+            }
+
+            String resultStatus = result.getStatus();
+            if ("approved".equalsIgnoreCase(resultStatus)) {
+                suspension.setStatus("APPROVED");
+            } else if ("rejected".equalsIgnoreCase(resultStatus)) {
+                suspension.setStatus("REJECTED");
+            } else {
+                throw new IllegalArgumentException("Unknown approval status: " + resultStatus);
+            }
+
+            suspension.setApprovalId(result.getApprovalId());
+            // For control plane, the actual user approving might be the admin
+            suspension.setApprovedBy(userId);
+            suspension.setApprovedAt(result.getApprovedAt() != null ? result.getApprovedAt() : LocalDateTime.now());
+            suspension.setComment(result.getComment());
+
+            // Publish event to notify LangGraph or other listeners
+            WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                    .source(this)
+                    .taskId(suspension.getTaskId())
+                    .sessionId(suspension.getSessionId())
+                    .suspendId(suspension.getSuspendId())
+                    .approvalResult(resultStatus)
+                    .comment(result.getComment())
+                    .tenantId(suspension.getTenantId())
+                    .clientAppId(suspension.getClientAppId())
+                    .upstreamUserId(suspension.getUpstreamUserId())
+                    .functionId(suspension.getFunctionId())
+                    .inputHash(expectedHash)
+                    .build();
+
+            try {
+                eventPublisher.publishEvent(event);
+            } catch (Exception e) {
+                log.error("Failed to publish WorkerGatewayResumeEvent for suspendId: {}", suspendId, e);
+                throw new IllegalStateException("Failed to publish resume event: " + e.getMessage(), e);
+            }
+
+            log.info("Dispatched WorkerGatewayResumeEvent for suspendId: {}, status: {}", suspendId, suspension.getStatus());
+
+            // Update status to RESUME_DISPATCHED after event emission
+            suspension.setStatus("RESUME_DISPATCHED");
             repository.save(suspension);
-            throw new IllegalStateException("Suspension has expired");
-        }
 
-        // Binding Validation
-        WorkerGatewayResumeForm.BindingContext binding = form.getBindingContext();
-        if (binding == null) {
-            throw new IllegalArgumentException("binding_context is required");
-        }
+            // Audit: resume dispatched (best-effort)
+            auditService.recordResumeDispatched(tenantId, suspendId);
 
-        if (!suspension.getTenantId().equals(tenantId)) {
-            throw new SecurityException("Tenant ID mismatch: unauthorized resume attempt");
+        } catch (Exception e) {
+            auditService.recordResumeFailed(tenantId, suspendId, e.getMessage());
+            throw e;
         }
-        if (!suspension.getClientAppId().equals(binding.getClientAppId())) {
-            throw new SecurityException("Client App ID mismatch");
-        }
-        if (!suspension.getUpstreamUserId().equals(binding.getUpstreamUserId())) {
-            throw new SecurityException("Upstream User ID mismatch");
-        }
-        if (!suspension.getTaskId().equals(binding.getTaskId())) {
-            throw new SecurityException("Task ID mismatch");
-        }
-        if (!suspension.getSessionId().equals(binding.getSessionId())) {
-            throw new SecurityException("Session ID mismatch");
-        }
-        if (!suspension.getFunctionId().equals(binding.getFunctionId())) {
-            throw new SecurityException("Function ID mismatch");
-        }
-        if (!suspension.getVersion().equals(binding.getVersion())) {
-            throw new SecurityException("Version mismatch");
-        }
-
-        // Input Hash Validation
-        if (!StringUtils.hasText(binding.getInputHash())) {
-            throw new SecurityException("input_hash is required for fail-closed validation");
-        }
-
-        String expectedHash = computeSha256Hex(suspension.getInputJson());
-        if (!expectedHash.equalsIgnoreCase(binding.getInputHash())) {
-            throw new SecurityException("Input hash mismatch");
-        }
-
-        WorkerGatewayResumeForm.ApprovalResult result = form.getApprovalResult();
-        if (result == null) {
-            throw new IllegalArgumentException("approval_result is required");
-        }
-
-        String resultStatus = result.getStatus();
-        if ("approved".equalsIgnoreCase(resultStatus)) {
-            suspension.setStatus("APPROVED");
-        } else if ("rejected".equalsIgnoreCase(resultStatus)) {
-            suspension.setStatus("REJECTED");
-        } else {
-            throw new IllegalArgumentException("Unknown approval status: " + resultStatus);
-        }
-
-        suspension.setApprovalId(result.getApprovalId());
-        // For control plane, the actual user approving might be the admin
-        suspension.setApprovedBy(userId);
-        suspension.setApprovedAt(result.getApprovedAt() != null ? result.getApprovedAt() : LocalDateTime.now());
-        suspension.setComment(result.getComment());
-
-        // Publish event to notify LangGraph or other listeners
-        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
-                .source(this)
-                .taskId(suspension.getTaskId())
-                .sessionId(suspension.getSessionId())
-                .suspendId(suspension.getSuspendId())
-                .approvalResult(resultStatus)
-                .comment(result.getComment())
-                .tenantId(suspension.getTenantId())
-                .clientAppId(suspension.getClientAppId())
-                .upstreamUserId(suspension.getUpstreamUserId())
-                .functionId(suspension.getFunctionId())
-                .inputHash(expectedHash)
-                .build();
-
-        eventPublisher.publishEvent(event);
-        log.info("Dispatched WorkerGatewayResumeEvent for suspendId: {}, status: {}", suspendId, suspension.getStatus());
-
-        // Update status to RESUME_DISPATCHED after event emission
-        suspension.setStatus("RESUME_DISPATCHED");
-        repository.save(suspension);
     }
 
     private String computeSha256Hex(String input) {
