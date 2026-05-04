@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
+import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.env.Environment;
@@ -31,6 +32,9 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
     private final Environment environment;
+    private final ClientAppUserGrantService userGrantService;
+    private static final String UPSTREAM_PROPERTY_PREFIX = "foggy.navigator.business.agent.upstreams.";
+    private static final String CONTROLLED_HEADER_PREFIX = "x-navigator-";
     private static final Set<HttpMethod> ALLOWED_METHODS = Set.of(
             HttpMethod.GET, HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH, HttpMethod.DELETE
     );
@@ -65,11 +69,15 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
                 throw new IllegalArgumentException("Rest adapter requires 'upstream_ref'");
             }
 
-            String baseUrl = environment.getProperty("foggy.navigator.business.agent.upstreams." + upstreamRef + ".url");
+            String baseUrl = environment.getProperty(UPSTREAM_PROPERTY_PREFIX + upstreamRef + ".url");
             if (!StringUtils.hasText(baseUrl)) {
                 throw new IllegalArgumentException("Unauthorized or unconfigured upstream_ref: " + upstreamRef);
             }
             validateBaseUrl(baseUrl);
+            String userTokenHeader = environment.getProperty(UPSTREAM_PROPERTY_PREFIX + upstreamRef + ".user-token-header");
+            if (StringUtils.hasText(userTokenHeader)) {
+                validateControlledHeaderName(userTokenHeader);
+            }
 
             // 2. Prepare Context Node for evaluation
             ObjectNode rootEvalNode = objectMapper.createObjectNode();
@@ -107,13 +115,15 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
                 Iterator<Map.Entry<String, JsonNode>> fields = headersNode.fields();
                 while (fields.hasNext()) {
                     Map.Entry<String, JsonNode> field = fields.next();
-                    validateHeaderName(field.getKey());
+                    validateHeaderName(field.getKey(), userTokenHeader);
                     String resolved = SimpleJsonPathEvaluator.evaluate(field.getValue().asText(), rootEvalNode);
                     if (StringUtils.hasText(resolved)) {
                         httpHeaders.add(field.getKey(), resolved);
                     }
                 }
             }
+            injectControlledHeaders(httpHeaders, context);
+            injectUserTokenHeader(httpHeaders, context, userTokenHeader);
 
             // 5. Resolve Body
             JsonNode bodyNode = adapterNode.path("body");
@@ -194,12 +204,47 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
         }
     }
 
-    private void validateHeaderName(String headerName) {
+    private void validateHeaderName(String headerName, String userTokenHeader) {
+        validateControlledHeaderName(headerName);
+        if (StringUtils.hasText(userTokenHeader) && userTokenHeader.equalsIgnoreCase(headerName)) {
+            throw new IllegalArgumentException("Forbidden REST adapter header: " + headerName);
+        }
+    }
+
+    private void validateControlledHeaderName(String headerName) {
         if (!StringUtils.hasText(headerName)) {
             throw new IllegalArgumentException("Rest adapter header name is required");
         }
-        if (FORBIDDEN_HEADERS.contains(headerName.toLowerCase(Locale.ROOT))) {
+        String normalized = headerName.toLowerCase(Locale.ROOT);
+        if (FORBIDDEN_HEADERS.contains(normalized) || normalized.startsWith(CONTROLLED_HEADER_PREFIX)) {
             throw new IllegalArgumentException("Forbidden REST adapter header: " + headerName);
+        }
+    }
+
+    private void injectControlledHeaders(HttpHeaders headers, BusinessFunctionRuntimeContextDTO context) {
+        setIfPresent(headers, "X-Navigator-Tenant-Id", context.getTenantId());
+        setIfPresent(headers, "X-Navigator-Client-App-Id", context.getClientAppId());
+        setIfPresent(headers, "X-Navigator-Upstream-User-Id", context.getUpstreamUserId());
+        setIfPresent(headers, "X-Navigator-Task-Id", context.getTaskId());
+        setIfPresent(headers, "X-Navigator-Session-Id", context.getSessionId());
+        setIfPresent(headers, "X-Navigator-Function-Id", context.getFunctionId());
+        setIfPresent(headers, "X-Navigator-Function-Version", context.getVersion());
+    }
+
+    private void injectUserTokenHeader(HttpHeaders headers, BusinessFunctionRuntimeContextDTO context, String userTokenHeader) {
+        if (!StringUtils.hasText(userTokenHeader)) {
+            return;
+        }
+        String token = userGrantService.resolveUpstreamUserToken(
+                context.getTenantId(),
+                context.getClientAppId(),
+                context.getUpstreamUserId());
+        headers.set(userTokenHeader, token);
+    }
+
+    private void setIfPresent(HttpHeaders headers, String name, String value) {
+        if (StringUtils.hasText(value)) {
+            headers.set(name, value);
         }
     }
 }

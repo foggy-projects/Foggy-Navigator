@@ -7,6 +7,12 @@ import lombok.Data;
 @Data
 public class BusinessFunctionRuntimeContextDTO {
     private String tenantId;
+    private String clientAppId;
+    private String upstreamUserId;
+    private String skillId;
+    private String taskId;
+    private String sessionId;
+    private String workerPoolId;
     private String functionId;
     private String version;
     private String manifestJson;

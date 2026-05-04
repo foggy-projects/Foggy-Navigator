@@ -27,6 +27,9 @@ public class ClientAppUpstreamUserGrantEntity {
     @Column(nullable = false, length = 255)
     private String upstreamUserId;
 
+    @Column(length = 2048)
+    private String upstreamUserToken;
+
     @Column(nullable = false, length = 64)
     private String status;
 

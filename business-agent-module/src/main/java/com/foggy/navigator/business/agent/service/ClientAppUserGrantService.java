@@ -53,6 +53,9 @@ public class ClientAppUserGrantService {
         grant.setTenantId(tenantId);
         grant.setClientAppId(clientAppId);
         grant.setUpstreamUserId(form.getUpstreamUserId());
+        if (StringUtils.hasText(form.getUpstreamUserToken())) {
+            grant.setUpstreamUserToken(form.getUpstreamUserToken());
+        }
         grant.setStatus(status);
         if (!StringUtils.hasText(grant.getCreatedBy())) {
             grant.setCreatedBy(actorUserId);
@@ -91,5 +94,21 @@ public class ClientAppUserGrantService {
         if (!STATUS_ENABLED.equals(grant.getStatus())) {
             throw new IllegalStateException("Upstream user grant is disabled");
         }
+    }
+
+    @Transactional(readOnly = true)
+    public String resolveUpstreamUserToken(String tenantId, String clientAppId, String upstreamUserId) {
+        clientAppService.requireActiveClientApp(tenantId, clientAppId);
+
+        ClientAppUpstreamUserGrantEntity grant = grantRepository.findByTenantIdAndClientAppIdAndUpstreamUserId(tenantId, clientAppId, upstreamUserId)
+                .orElseThrow(() -> new IllegalStateException("Upstream user is not granted access to this Client App"));
+
+        if (!STATUS_ENABLED.equals(grant.getStatus())) {
+            throw new IllegalStateException("Upstream user grant is disabled");
+        }
+        if (!StringUtils.hasText(grant.getUpstreamUserToken())) {
+            throw new IllegalStateException("Upstream user token is not configured");
+        }
+        return grant.getUpstreamUserToken();
     }
 }

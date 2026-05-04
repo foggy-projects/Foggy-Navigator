@@ -12,6 +12,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -33,6 +35,7 @@ class ClientAppUserGrantServiceTest {
     void grantUpstreamUserAccess_success() {
         GrantUpstreamUserForm form = new GrantUpstreamUserForm();
         form.setUpstreamUserId("user_01");
+        form.setUpstreamUserToken("tms-token-01");
 
         when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
         when(grantRepository.findByTenantIdAndClientAppIdAndUpstreamUserId("tenant_1", "app_01", "user_01")).thenReturn(Optional.empty());
@@ -43,6 +46,49 @@ class ClientAppUserGrantServiceTest {
         assertNotNull(dto);
         assertEquals("user_01", dto.getUpstreamUserId());
         assertEquals("ENABLED", dto.getStatus());
+
+        verify(grantRepository).save(argThat(entity ->
+                "tms-token-01".equals(entity.getUpstreamUserToken())));
+        assertFalse(Arrays.stream(ClientAppUpstreamUserGrantDTO.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName)
+                .collect(Collectors.toSet())
+                .contains("upstreamUserToken"));
+    }
+
+    @Test
+    void resolveUpstreamUserToken_success() {
+        when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
+        ClientAppUpstreamUserGrantEntity grant = new ClientAppUpstreamUserGrantEntity();
+        grant.setStatus("ENABLED");
+        grant.setUpstreamUserToken("tms-token-01");
+        when(grantRepository.findByTenantIdAndClientAppIdAndUpstreamUserId("tenant_1", "app_01", "user_01")).thenReturn(Optional.of(grant));
+
+        String token = clientAppUserGrantService.resolveUpstreamUserToken("tenant_1", "app_01", "user_01");
+
+        assertEquals("tms-token-01", token);
+    }
+
+    @Test
+    void resolveUpstreamUserToken_rejects_missing_token() {
+        when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
+        ClientAppUpstreamUserGrantEntity grant = new ClientAppUpstreamUserGrantEntity();
+        grant.setStatus("ENABLED");
+        when(grantRepository.findByTenantIdAndClientAppIdAndUpstreamUserId("tenant_1", "app_01", "user_01")).thenReturn(Optional.of(grant));
+
+        assertThrows(IllegalStateException.class, () ->
+                clientAppUserGrantService.resolveUpstreamUserToken("tenant_1", "app_01", "user_01"));
+    }
+
+    @Test
+    void resolveUpstreamUserToken_rejects_disabled_grant() {
+        when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
+        ClientAppUpstreamUserGrantEntity grant = new ClientAppUpstreamUserGrantEntity();
+        grant.setStatus("DISABLED");
+        grant.setUpstreamUserToken("tms-token-01");
+        when(grantRepository.findByTenantIdAndClientAppIdAndUpstreamUserId("tenant_1", "app_01", "user_01")).thenReturn(Optional.of(grant));
+
+        assertThrows(IllegalStateException.class, () ->
+                clientAppUserGrantService.resolveUpstreamUserToken("tenant_1", "app_01", "user_01"));
     }
 
     @Test

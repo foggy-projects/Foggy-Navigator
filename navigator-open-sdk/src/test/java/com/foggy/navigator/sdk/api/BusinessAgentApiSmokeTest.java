@@ -152,6 +152,25 @@ public class BusinessAgentApiSmokeTest {
     }
 
     @Test
+    public void testGrantUpstreamUserAccess_withServerSideToken() {
+        GrantUpstreamUserForm form = new GrantUpstreamUserForm();
+        form.setUpstreamUserId("tms-user-001");
+        form.setUpstreamUserToken("tms-user-token-secret");
+        form.setStatus("ENABLED");
+
+        responseOverride = "{\"grantId\":\"ug-001\", \"upstreamUserId\":\"tms-user-001\", \"status\":\"ENABLED\"}";
+        ClientAppUpstreamUserGrantDTO grant = client.businessAgent().grantUpstreamUserAccess("app-123", form);
+        assertNotNull(grant);
+        assertEquals("ug-001", grant.getGrantId());
+        assertEquals("tms-user-001", grant.getUpstreamUserId());
+        assertEquals("/api/v1/business-agent/client-apps/app-123/upstream-users", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"upstreamUserId\":\"tms-user-001\""));
+        assertTrue(lastBody.contains("\"upstreamUserToken\":\"tms-user-token-secret\""));
+        assertCommon();
+    }
+
+    @Test
     public void testCreateBusinessAgentTask() {
         CreateBusinessAgentTaskForm form = new CreateBusinessAgentTaskForm();
         form.setClientAppId("app-456");

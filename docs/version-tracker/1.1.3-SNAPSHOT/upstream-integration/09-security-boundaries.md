@@ -40,6 +40,14 @@
 | `approval_token` | 审批令牌 |
 | 上游 credential | App Secret、upstream REST 凭证 |
 
+## Upstream User Token 注入
+
+- 上游用户 token 可在 `grantUpstreamUserAccess` 时提交给 Navigator 服务端。
+- token 绑定在 `tenantId + clientAppId + upstreamUserId` 授权关系上，控制面 DTO 不返回 token。
+- REST Adapter 只有在配置 `foggy.navigator.business.agent.upstreams.<upstream-ref>.user-token-header` 时才注入该 token。
+- Manifest 不允许声明或覆盖该 token header，也不允许声明 `X-Navigator-*` 上下文 header。
+- 当前推荐 TMS 使用 `X-TMS-Agent-Token`；`Authorization` 仍禁止由 Manifest 写入。
+
 ## Worker Gateway 是内部 API
 
 Worker Gateway（`/internal/worker-gateway/v1/**`）是**内部 API**，仅供受信 Biz Worker 调用。

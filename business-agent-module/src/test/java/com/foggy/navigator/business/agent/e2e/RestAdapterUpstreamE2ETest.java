@@ -127,6 +127,7 @@ class RestAdapterUpstreamE2ETest {
         StandardEnvironment env = new StandardEnvironment();
         Map<String, Object> props = new HashMap<>();
         props.put("foggy.navigator.business.agent.upstreams.test-tms.url", "http://localhost:" + serverPort);
+        props.put("foggy.navigator.business.agent.upstreams.test-tms.user-token-header", "X-TMS-Agent-Token");
         env.getPropertySources().addFirst(new MapPropertySource("test", props));
 
         // 3. Wire services
@@ -152,7 +153,7 @@ class RestAdapterUpstreamE2ETest {
         BusinessFunctionAdapterInvoker adapterInvoker = new CompositeBusinessFunctionAdapterInvoker(
                 Arrays.asList(
                         new LocalEchoBusinessFunctionAdapterInvoker(objectMapper),
-                        new RestBusinessFunctionAdapterInvoker(objectMapper, restTemplate, env)
+                        new RestBusinessFunctionAdapterInvoker(objectMapper, restTemplate, env, userGrantService1)
                 ),
                 objectMapper
         );
@@ -215,6 +216,15 @@ class RestAdapterUpstreamE2ETest {
         assertNotNull(receivedBody.get());
         // The body should contain the mapped fields
         assertTrue(receivedBody.get().contains("ORD-9001") || receivedBody.get().contains("orderId"));
+        Map<String, String> headers = receivedHeaders.get();
+        assertEquals("tms-token-rest-e2e", getHeaderIgnoreCase(headers, "X-TMS-Agent-Token"));
+        assertEquals(TENANT, getHeaderIgnoreCase(headers, "X-Navigator-Tenant-Id"));
+        assertEquals(APP_ID, getHeaderIgnoreCase(headers, "X-Navigator-Client-App-Id"));
+        assertEquals(USER_ID, getHeaderIgnoreCase(headers, "X-Navigator-Upstream-User-Id"));
+        assertEquals(taskEntity.getTaskId(), getHeaderIgnoreCase(headers, "X-Navigator-Task-Id"));
+        assertEquals(taskEntity.getSessionId(), getHeaderIgnoreCase(headers, "X-Navigator-Session-Id"));
+        assertEquals(FUNCTION_ID, getHeaderIgnoreCase(headers, "X-Navigator-Function-Id"));
+        assertEquals(VERSION, getHeaderIgnoreCase(headers, "X-Navigator-Function-Version"));
 
         // 5. Assert audit rows were created (INVOKE_STARTED + INVOKE_SUCCESS)
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> auditCaptor =
@@ -268,6 +278,7 @@ class RestAdapterUpstreamE2ETest {
         grant.setTenantId(TENANT);
         grant.setClientAppId(APP_ID);
         grant.setUpstreamUserId(USER_ID);
+        grant.setUpstreamUserToken("tms-token-rest-e2e");
         grant.setStatus("ENABLED");
         when(userGrantRepository.findByTenantIdAndClientAppIdAndUpstreamUserId(TENANT, APP_ID, USER_ID))
                 .thenReturn(Optional.of(grant));
@@ -379,5 +390,13 @@ class RestAdapterUpstreamE2ETest {
             }
             return Optional.empty();
         });
+    }
+
+    private String getHeaderIgnoreCase(Map<String, String> headers, String name) {
+        return headers.entrySet().stream()
+                .filter(entry -> entry.getKey().equalsIgnoreCase(name))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse(null);
     }
 }

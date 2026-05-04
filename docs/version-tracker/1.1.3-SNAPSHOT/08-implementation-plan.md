@@ -275,12 +275,13 @@ flowchart LR
 - 本阶段不实现 TMS 用户 token 存储，也不修改 REST Adapter header 注入。
 - 验收结论（2026-05-04）：`accepted-with-risks`。SDK 已兼容 `RX<T>` 与裸 JSON 响应，Form/DTO 已与后端契约对齐；风险为 smoke test 尚未覆盖全部 wrapper。
 
-### Stage 10B：Upstream User Credential + REST Adapter Header Injection [PENDING]
+### Stage 10B：Upstream User Credential + REST Adapter Header Injection [COMPLETED]
 
-- 新增独立 upstream user credential 存储，不复用 grant 表承载 token。
+- 在 `ClientAppUpstreamUserGrantEntity` 上保存 grant-bound upstream user token，维度为 `tenantId + clientAppId + upstreamUserId`。
 - REST Adapter 根据 task 上下文解析 `tenantId + clientAppId + upstreamUserId` 对应凭据。
 - 服务端注入用户 token header 与 Navigator 上下文 header。
 - token 不进入 LLM、Manifest、前端 DTO、日志、audit output。
+- 验收记录：[stage-10b-upstream-user-credential-and-rest-header-injection-acceptance.md](acceptance/stage-10b-upstream-user-credential-and-rest-header-injection-acceptance.md)
 
 ### Stage 10C：TMS Mock E2E + LLM-Facing Safety Verification [PENDING]
 
@@ -312,7 +313,7 @@ flowchart LR
 | Stage 9B Upstream Integration Guide | completed | SDK/component-first upstream onboarding docs added under `upstream-integration/` (00-overview ～ 10-demo-checklist); README and implementation plan linked; 2026-05-04 |
 | Stage 9C LLM SDK Guide + Personal Skill | completed | Added LLM-facing SDK usage guide and created personal `navigator-upstream-llm-integration` skill for upstream LLM coding agents; 2026-05-04 |
 | Stage 10A navigator-open-sdk Business Agent API | completed | accepted-with-risks; SDK control-plane wrappers; Auth uses existing X-API-Key which resolves TENANT_ADMIN context; no TMS token storage yet; 2026-05-04 |
-| Stage 10B Upstream User Credential + REST Adapter Headers | pending | Server-side user credential storage and controlled header injection |
+| Stage 10B Upstream User Credential + REST Adapter Headers | completed | Grant-bound upstream user token storage; REST adapter controlled user-token and Navigator context header injection; 2026-05-04 |
 | Stage 10C TMS Mock E2E + Safety Verification | pending | TMS mock E2E, `orderIdentifier` schema guard, sensitive-field checks |
 
 > [!NOTE]

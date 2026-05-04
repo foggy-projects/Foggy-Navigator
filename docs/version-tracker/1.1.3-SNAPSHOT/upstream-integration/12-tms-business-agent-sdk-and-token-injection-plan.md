@@ -98,12 +98,12 @@ TMS 负责：
 
 目标：Navigator 在调用 TMS 业务函数时，按当前 task 上下文解析对应 upstream user credential，并注入到上游 HTTP 请求。
 
-建议模型：
+落地模型：
 
-1. 新增独立凭据表，不复用 `ClientAppUpstreamUserGrantEntity` 承载 token。
-2. 推荐语义：`ClientAppUpstreamUserCredentialEntity`。
-3. 推荐唯一键：`tenantId + clientAppId + upstreamUserId + credentialType`。
-4. 开发阶段可先简化 token 有效性，但字段与 DTO 必须为后续 secret store / 加密存储留边界。
+1. 首版复用 `ClientAppUpstreamUserGrantEntity`，将 upstream user token 绑定在授权关系上。
+2. 唯一维度仍为 `tenantId + clientAppId + upstreamUserId`。
+3. 控制面 Form 可提交 token；控制面 DTO 不返回 token。
+4. 开发阶段先简化 token 有效性，后续可将该字段迁移到 secret store / 加密存储。
 
 REST Adapter 注入规则：
 

@@ -131,6 +131,7 @@ public class WorkerGatewayService {
                 functionId,
                 form.getVersion()
         );
+        attachTokenContext(context, token);
 
         // Normalize inputJson
         String finalInputJson = form.getInputJson();
@@ -223,6 +224,15 @@ public class WorkerGatewayService {
         requireText(token.getTaskId(), "token missing taskId");
         requireText(token.getSessionId(), "token missing sessionId");
         requireText(token.getWorkerPoolId(), "token missing workerPoolId");
+    }
+
+    private void attachTokenContext(BusinessFunctionRuntimeContextDTO context, BusinessTaskScopedTokenDTO token) {
+        context.setClientAppId(token.getClientAppId());
+        context.setUpstreamUserId(token.getUpstreamUserId());
+        context.setSkillId(token.getSkillId());
+        context.setTaskId(token.getTaskId());
+        context.setSessionId(token.getSessionId());
+        context.setWorkerPoolId(token.getWorkerPoolId());
     }
 
     private void requireText(String value, String message) {

@@ -9,6 +9,7 @@ import com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapte
 import com.foggy.navigator.business.agent.service.adapter.CompositeBusinessFunctionAdapterInvoker;
 import com.foggy.navigator.business.agent.service.adapter.LocalEchoBusinessFunctionAdapterInvoker;
 import com.foggy.navigator.business.agent.service.adapter.RestBusinessFunctionAdapterInvoker;
+import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -39,11 +40,14 @@ public class BusinessAgentAutoConfiguration {
 
     @Bean
     @Primary
-    public BusinessFunctionAdapterInvoker businessFunctionAdapterInvoker(ObjectMapper objectMapper, RestTemplate restTemplate, Environment environment) {
+    public BusinessFunctionAdapterInvoker businessFunctionAdapterInvoker(ObjectMapper objectMapper,
+                                                                         RestTemplate restTemplate,
+                                                                         Environment environment,
+                                                                         ClientAppUserGrantService userGrantService) {
         return new CompositeBusinessFunctionAdapterInvoker(
                 Arrays.asList(
                         new LocalEchoBusinessFunctionAdapterInvoker(objectMapper),
-                        new RestBusinessFunctionAdapterInvoker(objectMapper, restTemplate, environment)
+                        new RestBusinessFunctionAdapterInvoker(objectMapper, restTemplate, environment, userGrantService)
                 ),
                 objectMapper
         );

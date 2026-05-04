@@ -169,6 +169,14 @@ modelGrant.setModelConfigId(modelConfigId);
 modelGrant.setIsDefault(true);
 client.businessAgent().grantModelConfig(app.getClientAppId(), modelGrant);
 
+// 授权 upstream user，并提交 TMS 侧用户 token。
+// 该 token 只保存在 Navigator 服务端授权关系内，不会出现在 LLM schema 或前端 DTO。
+GrantUpstreamUserForm userGrant = new GrantUpstreamUserForm();
+userGrant.setUpstreamUserId(upstreamUserId);
+userGrant.setUpstreamUserToken(tmsUserToken);
+userGrant.setStatus("ENABLED");
+client.businessAgent().grantUpstreamUserAccess(app.getClientAppId(), userGrant);
+
 // 导入函数清单并授权
 ImportBusinessFunctionManifestForm functionManifest = new ImportBusinessFunctionManifestForm();
 functionManifest.setFunctionId("tms.create_order");
