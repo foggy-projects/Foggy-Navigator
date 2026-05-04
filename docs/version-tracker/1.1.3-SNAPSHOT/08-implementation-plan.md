@@ -283,12 +283,13 @@ flowchart LR
 - token 不进入 LLM、Manifest、前端 DTO、日志、audit output。
 - 验收记录：[stage-10b-upstream-user-credential-and-rest-header-injection-acceptance.md](acceptance/stage-10b-upstream-user-credential-and-rest-header-injection-acceptance.md)
 
-### Stage 10C：TMS Mock E2E + LLM-Facing Safety Verification [PENDING]
+### Stage 10C：TMS Mock E2E + LLM-Facing Safety Verification [COMPLETED]
 
 - 使用 TMS mock 服务验证 SDK 初始化、函数注册、task 创建、REST Adapter 调用。
 - LLM-facing 运单字段统一验证为 `orderIdentifier`。
 - 验证 `expressOrderId` 不进入 BusinessFunction input schema、tool schema、前端可填参数。
 - 补充 upstream integration 文档与敏感字段检查证据。
+- 验收记录：[stage-10c-tms-mock-e2e-and-safety-acceptance.md](acceptance/stage-10c-tms-mock-e2e-and-safety-acceptance.md)
 
 ## 当前进度
 
@@ -314,7 +315,7 @@ flowchart LR
 | Stage 9C LLM SDK Guide + Personal Skill | completed | Added LLM-facing SDK usage guide and created personal `navigator-upstream-llm-integration` skill for upstream LLM coding agents; 2026-05-04 |
 | Stage 10A navigator-open-sdk Business Agent API | completed | accepted-with-risks; SDK control-plane wrappers; Auth uses existing X-API-Key which resolves TENANT_ADMIN context; no TMS token storage yet; 2026-05-04 |
 | Stage 10B Upstream User Credential + REST Adapter Headers | completed | Grant-bound upstream user token storage; REST adapter controlled user-token and Navigator context header injection; 2026-05-04 |
-| Stage 10C TMS Mock E2E + Safety Verification | pending | TMS mock E2E, `orderIdentifier` schema guard, sensitive-field checks |
+| Stage 10C TMS Mock E2E + Safety Verification | completed | SDK onboarding smoke, TMS mock REST E2E, `orderIdentifier` schema guard, sensitive-field checks; 2026-05-04 |
 
 > [!NOTE]
 > `BusinessObject` 是用于组织函数（Function）的业务对象概念，不是授权主体。授权主体仍然由 ClientApp / upstreamUser / Skill / Function grant 进行细粒度控制。

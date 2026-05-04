@@ -220,4 +220,106 @@ public class BusinessAgentApiSmokeTest {
         assertTrue(lastBody.contains("\"input_hash\":\"hash123\""), "Must have input_hash");
         assertCommon();
     }
+
+    @Test
+    public void testTmsOnboardingSequence_usesOrderIdentifierAndCreatesTask() {
+        CreateBusinessObjectForm objectForm = new CreateBusinessObjectForm();
+        objectForm.setObjectId("tms_order");
+        objectForm.setDomain("tms.order");
+        objectForm.setName("TMS Order");
+        objectForm.setStatus("ENABLED");
+
+        responseOverride = "{\"objectId\":\"tms_order\", \"domain\":\"tms.order\"}";
+        client.businessAgent().createBusinessObject(objectForm);
+        assertEquals("/api/v1/business-agent/business-objects", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"objectId\":\"tms_order\""));
+        assertCommon();
+
+        ImportBusinessFunctionManifestForm functionForm = new ImportBusinessFunctionManifestForm();
+        functionForm.setFunctionId("tms.order.submit");
+        functionForm.setBusinessObjectId("tms_order");
+        functionForm.setVersion("v1");
+        functionForm.setDomain("tms.order");
+        functionForm.setName("Submit TMS Order");
+        functionForm.setRiskLevel("state_change");
+        functionForm.setApprovalRequired(false);
+        functionForm.setIdempotencyRequired(true);
+        functionForm.setStatus("ENABLED");
+        functionForm.setManifestJson("""
+                {"function_id":"tms.order.submit","input":{"orderIdentifier":"string"}}
+                """);
+        functionForm.setInputSchemaJson("""
+                {"type":"object","required":["orderIdentifier"],"properties":{"orderIdentifier":{"type":"string"}}}
+                """);
+        functionForm.setOutputSchemaJson("""
+                {"type":"object","properties":{"orderIdentifier":{"type":"string"},"result":{"type":"string"}}}
+                """);
+        functionForm.setLlmVisibleSummary("Submit a TMS order by orderIdentifier.");
+        functionForm.setSchemaVisibleSummary("orderIdentifier: string");
+        functionForm.setAdapterConfigJson("""
+                {"type":"rest","upstream_ref":"tms","method":"POST","path":"/api/orders","adapter":{"body":{"orderIdentifier":"$.input.orderIdentifier"}}}
+                """);
+
+        responseOverride = "{\"code\":0,\"data\":null}";
+        client.businessAgent().importBusinessFunctionManifest(functionForm);
+        assertEquals("/api/v1/business-agent/functions/import", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"functionId\":\"tms.order.submit\""));
+        assertTrue(lastBody.contains("orderIdentifier"));
+        assertFalse(lastBody.contains("expressOrderId"));
+        assertCommon();
+
+        AddFunctionToSkillForm allowForm = new AddFunctionToSkillForm();
+        allowForm.setFunctionId("tms.order.submit");
+        allowForm.setStatus("ENABLED");
+        responseOverride = "{\"allowlistId\":\"allow-001\",\"functionId\":\"tms.order.submit\"}";
+        client.businessAgent().addFunctionToSkillAllowlist("tms_skill", allowForm);
+        assertEquals("/api/v1/business-agent/skills/tms_skill/functions", lastPath);
+        assertTrue(lastBody.contains("\"functionId\":\"tms.order.submit\""));
+        assertCommon();
+
+        GrantBusinessFunctionForm functionGrantForm = new GrantBusinessFunctionForm();
+        functionGrantForm.setFunctionId("tms.order.submit");
+        functionGrantForm.setVersion("v1");
+        functionGrantForm.setStatus("ENABLED");
+        responseOverride = "{\"grantId\":\"fg-001\",\"functionId\":\"tms.order.submit\",\"version\":\"v1\"}";
+        client.businessAgent().grantFunctionToClientApp("app-tms", functionGrantForm);
+        assertEquals("/api/v1/business-agent/client-apps/app-tms/function-grants", lastPath);
+        assertTrue(lastBody.contains("\"version\":\"v1\""));
+        assertCommon();
+
+        GrantSkillToClientAppForm skillGrantForm = new GrantSkillToClientAppForm();
+        skillGrantForm.setSkillId("tms_skill");
+        skillGrantForm.setStatus("ENABLED");
+        responseOverride = "{\"grantId\":\"sg-001\",\"skillId\":\"tms_skill\"}";
+        client.businessAgent().grantSkillToClientApp("app-tms", skillGrantForm);
+        assertEquals("/api/v1/business-agent/client-apps/app-tms/skill-grants", lastPath);
+        assertTrue(lastBody.contains("\"skillId\":\"tms_skill\""));
+        assertCommon();
+
+        GrantUpstreamUserForm userGrantForm = new GrantUpstreamUserForm();
+        userGrantForm.setUpstreamUserId("tms-user-001");
+        userGrantForm.setUpstreamUserToken("tms-user-token-secret");
+        userGrantForm.setStatus("ENABLED");
+        responseOverride = "{\"grantId\":\"ug-001\",\"upstreamUserId\":\"tms-user-001\"}";
+        client.businessAgent().grantUpstreamUserAccess("app-tms", userGrantForm);
+        assertEquals("/api/v1/business-agent/client-apps/app-tms/upstream-users", lastPath);
+        assertTrue(lastBody.contains("\"upstreamUserToken\":\"tms-user-token-secret\""));
+        assertCommon();
+
+        CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();
+        taskForm.setClientAppId("app-tms");
+        taskForm.setSessionId("session-tms-001");
+        taskForm.setUpstreamUserId("tms-user-001");
+        taskForm.setSkillId("tms_skill");
+        taskForm.setWorkerPoolId("langgraph-biz-pool");
+        responseOverride = "{\"taskId\":\"task-tms-001\",\"taskScopedToken\":\"token-runtime-only\"}";
+        CreatedBusinessAgentTaskDTO task = client.businessAgent().createBusinessAgentTask(taskForm);
+        assertEquals("task-tms-001", task.getTaskId());
+        assertEquals("/api/v1/business-agent/tasks", lastPath);
+        assertTrue(lastBody.contains("\"upstreamUserId\":\"tms-user-001\""));
+        assertFalse(lastBody.contains("orderIdentifier"), "Task creation must not carry business inputs");
+        assertCommon();
+    }
 }

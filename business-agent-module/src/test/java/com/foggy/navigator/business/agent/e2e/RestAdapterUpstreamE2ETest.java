@@ -55,6 +55,7 @@ class RestAdapterUpstreamE2ETest {
     static final String VERSION = "v1";
     static final String POOL_ID = "rest_e2e_pool";
     static final String MODEL_ID = "model_rest_e2e";
+    static final String ORDER_IDENTIFIER = "TMS-ORDER-9001";
 
     // repos
     @Mock ClientAppRepository clientAppRepository;
@@ -113,7 +114,7 @@ class RestAdapterUpstreamE2ETest {
             byte[] bodyBytes = exchange.getRequestBody().readAllBytes();
             receivedBody.set(new String(bodyBytes, StandardCharsets.UTF_8));
 
-            String responseBody = "{\"result\":\"accepted\",\"orderId\":\"ORD-9001\"}";
+            String responseBody = "{\"result\":\"accepted\",\"orderIdentifier\":\"" + ORDER_IDENTIFIER + "\"}";
             byte[] respBytes = responseBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, respBytes.length);
@@ -169,7 +170,7 @@ class RestAdapterUpstreamE2ETest {
     }
 
     @Test
-    void restAdapter_e2e_invokesUpstream_and_returnsSuccess_and_writesAudit() {
+    void tmsRestAdapter_e2e_usesOrderIdentifier_injectsHeaders_and_writesAudit() {
         // Arrange all grants
         stubActiveClientApp();
         stubModelGrant();
@@ -196,26 +197,35 @@ class RestAdapterUpstreamE2ETest {
         tokenEntity.setStatus("ACTIVE");
         tokenEntity.setExpiresAt(LocalDateTime.now().plusHours(2));
 
-        // 2. Invoke through gateway
+        // 2. Verify LLM-facing schema uses TMS public order identifier only
+        WorkerGatewayFunctionSchemaDTO schema = workerGatewayService.getBusinessFunctionSchema(plainToken, FUNCTION_ID, VERSION);
+        assertTrue(schema.getInputSchemaJson().contains("orderIdentifier"));
+        assertFalse(schema.getInputSchemaJson().contains("expressOrderId"));
+        assertTrue(schema.getSchemaVisibleSummary().contains("orderIdentifier"));
+        assertFalse(schema.getSchemaVisibleSummary().contains("expressOrderId"));
+
+        // 3. Invoke through gateway
         WorkerGatewayInvokeForm invokeForm = new WorkerGatewayInvokeForm();
         invokeForm.setVersion(VERSION);
-        invokeForm.setInputJson("{\"orderId\":\"ORD-9001\",\"reason\":\"test submit\"}");
+        invokeForm.setInputJson("{\"orderIdentifier\":\"" + ORDER_IDENTIFIER + "\",\"reason\":\"test submit\"}");
 
         WorkerGatewayInvokeResponseDTO response = workerGatewayService.invokeBusinessFunction(plainToken, FUNCTION_ID, invokeForm);
 
-        // 3. Assert gateway response
+        // 4. Assert gateway response
         assertEquals(WorkerGatewayInvokeResponseDTO.STATUS_SUCCESS, response.getStatus());
         assertNotNull(response.getOutputJson());
         assertTrue(response.getOutputJson().contains("accepted"));
-        assertTrue(response.getOutputJson().contains("ORD-9001"));
+        assertTrue(response.getOutputJson().contains(ORDER_IDENTIFIER));
         assertFalse(response.getApprovalRequired());
+        assertFalse(response.getOutputJson().contains("expressOrderId"));
 
-        // 4. Assert upstream received correct request
+        // 5. Assert upstream received correct request
         assertEquals("POST", receivedMethod.get());
         assertEquals("/api/orders", receivedPath.get());
         assertNotNull(receivedBody.get());
-        // The body should contain the mapped fields
-        assertTrue(receivedBody.get().contains("ORD-9001") || receivedBody.get().contains("orderId"));
+        assertTrue(receivedBody.get().contains(ORDER_IDENTIFIER));
+        assertTrue(receivedBody.get().contains("orderIdentifier"));
+        assertFalse(receivedBody.get().contains("expressOrderId"));
         Map<String, String> headers = receivedHeaders.get();
         assertEquals("tms-token-rest-e2e", getHeaderIgnoreCase(headers, "X-TMS-Agent-Token"));
         assertEquals(TENANT, getHeaderIgnoreCase(headers, "X-Navigator-Tenant-Id"));
@@ -226,7 +236,7 @@ class RestAdapterUpstreamE2ETest {
         assertEquals(FUNCTION_ID, getHeaderIgnoreCase(headers, "X-Navigator-Function-Id"));
         assertEquals(VERSION, getHeaderIgnoreCase(headers, "X-Navigator-Function-Version"));
 
-        // 5. Assert audit rows were created (INVOKE_STARTED + INVOKE_SUCCESS)
+        // 6. Assert audit rows were created (INVOKE_STARTED + INVOKE_SUCCESS)
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> auditCaptor =
                 ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
         verify(auditRepository, atLeast(2)).save(auditCaptor.capture());
@@ -334,7 +344,7 @@ class RestAdapterUpstreamE2ETest {
               "path": "/api/orders",
               "adapter": {
                 "headers": { "X-Tenant": "$.context.tenantId" },
-                "body": { "orderId": "$.input.orderId", "reason": "$.input.reason" }
+                "body": { "orderIdentifier": "$.input.orderIdentifier", "reason": "$.input.reason" }
               }
             }
             """;
@@ -343,10 +353,27 @@ class RestAdapterUpstreamE2ETest {
         version.setFunctionId(FUNCTION_ID);
         version.setTenantId(TENANT);
         version.setVersion(VERSION);
-        version.setInputSchemaJson("{\"type\":\"object\"}");
-        version.setOutputSchemaJson("{\"type\":\"object\"}");
+        version.setInputSchemaJson("""
+            {
+              "type": "object",
+              "required": ["orderIdentifier"],
+              "properties": {
+                "orderIdentifier": { "type": "string", "description": "TMS public order number visible to users and LLMs" },
+                "reason": { "type": "string" }
+              }
+            }
+            """);
+        version.setOutputSchemaJson("""
+            {
+              "type": "object",
+              "properties": {
+                "result": { "type": "string" },
+                "orderIdentifier": { "type": "string" }
+              }
+            }
+            """);
         version.setLlmVisibleSummary("Submit order via REST");
-        version.setSchemaVisibleSummary("orderId: string");
+        version.setSchemaVisibleSummary("orderIdentifier: string");
         version.setAdapterConfigJson(adapterConfigJson);
         version.setStatus("ENABLED");
         when(versionRepository.findByTenantIdAndFunctionIdAndVersion(TENANT, FUNCTION_ID, VERSION))

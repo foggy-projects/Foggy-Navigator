@@ -160,6 +160,15 @@ rg -n "task_scoped_token|adapterConfigJson|manifestJson|X-TMS-Agent-Token|Author
 
 命中项必须逐条解释：内部实现允许，LLM-facing / frontend-facing / ordinary DTO / audit output 不允许。
 
+实现记录（2026-05-04）：
+
+1. 新增 TMS 最小接入样例文档：[13-tms-minimal-onboarding-sample.md](./13-tms-minimal-onboarding-sample.md)。
+2. SDK smoke test 已覆盖 TMS onboarding sequence，验证 BusinessObject、Function import、Skill/User/Function grant 与 task 创建请求。
+3. Business Agent E2E 已使用真实本地 mock TMS HTTP 服务验证 REST Adapter 出站调用。
+4. `orderIdentifier` 已作为 LLM-facing 运单字段进入 input schema、schema summary、adapter body 和 mock response。
+5. `expressOrderId` 只允许出现在安全说明与搜索校验中，不进入样例 payload、Worker schema 或前端可填参数。
+6. 验收记录：[stage-10c-tms-mock-e2e-and-safety-acceptance.md](../acceptance/stage-10c-tms-mock-e2e-and-safety-acceptance.md)。
+
 ## Stage 10A 开发会话提示词
 
 ```markdown

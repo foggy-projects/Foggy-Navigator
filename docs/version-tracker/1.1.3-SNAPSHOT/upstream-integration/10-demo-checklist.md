@@ -16,9 +16,9 @@
 | # | 步骤 | API / 工具 | SDK 状态 |
 | --- | --- | --- | --- |
 | 1 | 注册第三方系统 | `NavigatorClient.register()` | ✅ SDK 已有 |
-| 2 | 签发 Provisioning Credential | `POST /api/v1/admin/client-apps/provisioning-credentials` | ❌ SDK 待补齐 |
-| 3 | 创建 Client Application | `POST /api/v1/client-apps` | ❌ SDK 待补齐 |
-| 4 | 签发 Runtime Credential | `POST /api/v1/client-apps/{id}/runtime-credentials` | ❌ SDK 待补齐 |
+| 2 | 签发 Provisioning Credential | `client.businessAgent().issueProvisioningCredential()` | ✅ SDK 已有 |
+| 3 | 创建 Client Application | `client.businessAgent().createClientApp()` | ✅ SDK 已有 |
+| 4 | 签发 Runtime Credential | `client.businessAgent().issueRuntimeCredential()` | ✅ SDK 已有 |
 | 5 | 注册 Biz Worker Identity | `POST /api/v1/business-agent/worker-identities` | ❌ SDK 待补齐 |
 | 6 | 创建 Biz Worker Pool | `POST /api/v1/business-agent/worker-pools` | ❌ SDK 待补齐 |
 | 7 | 将 Worker 加入 Pool | `POST /api/v1/business-agent/worker-pools/{poolId}/members` | ❌ SDK 待补齐 |
@@ -27,27 +27,27 @@
 
 | # | 步骤 | API / 工具 | SDK 状态 |
 | --- | --- | --- | --- |
-| 8 | 授权 LLM 模型给 ClientApp | `POST /api/v1/client-apps/{id}/model-config-grants` | ❌ SDK 待补齐 |
-| 9 | 设置默认模型 | `PUT /api/v1/client-apps/{id}/model-config-grants/{grantId}/default` | ❌ SDK 待补齐 |
-| 10 | 创建 Skill | `POST /api/v1/business-agent/skills` | ❌ SDK 待补齐 |
-| 11 | 授权 Skill 给 ClientApp | `POST /api/v1/business-agent/client-apps/{id}/skill-grants` | ❌ SDK 待补齐 |
-| 12 | 授权 upstream user | `POST /api/v1/business-agent/client-apps/{id}/upstream-users` | ❌ SDK 待补齐 |
+| 8 | 授权 LLM 模型给 ClientApp | `client.businessAgent().grantModelConfig()` | ✅ SDK 已有 |
+| 9 | 设置默认模型 | `client.businessAgent().setDefaultModelConfigGrant()` | ✅ SDK 已有 |
+| 10 | 创建 Skill | `client.businessAgent().createSkill()` | ✅ SDK 已有 |
+| 11 | 授权 Skill 给 ClientApp | `client.businessAgent().grantSkillToClientApp()` | ✅ SDK 已有 |
+| 12 | 授权 upstream user | `client.businessAgent().grantUpstreamUserAccess()` | ✅ SDK 已有 |
 
 ### Phase 3：业务函数注册（上游后端 / 平台管理员）
 
 | # | 步骤 | API / 工具 | SDK 状态 |
 | --- | --- | --- | --- |
-| 13 | 注册 BusinessObject | `POST /api/v1/business-agent/business-objects` | ❌ SDK 待补齐 |
-| 14 | 导入 BusinessFunction（Manifest） | `POST /api/v1/business-agent/functions/import` | ❌ SDK 待补齐 |
-| 15 | 绑定函数到 Skill allowlist | `POST /api/v1/business-agent/skills/{skillId}/functions` | ❌ SDK 待补齐 |
-| 16 | 授权函数给 ClientApp（Function Grant） | `POST /api/v1/business-agent/client-apps/{id}/function-grants` | ❌ SDK 待补齐 |
+| 13 | 注册 BusinessObject | `client.businessAgent().createBusinessObject()` | ✅ SDK 已有 |
+| 14 | 导入 BusinessFunction（Manifest） | `client.businessAgent().importBusinessFunctionManifest()` | ✅ SDK 已有 |
+| 15 | 绑定函数到 Skill allowlist | `client.businessAgent().addFunctionToSkillAllowlist()` | ✅ SDK 已有 |
+| 16 | 授权函数给 ClientApp（Function Grant） | `client.businessAgent().grantFunctionToClientApp()` | ✅ SDK 已有 |
 
 ### Phase 4：任务与会话（上游后端）
 
 | # | 步骤 | API / 工具 | SDK 状态 |
 | --- | --- | --- | --- |
-| 17 | 创建 Business Task | `POST /api/v1/business-agent/tasks` | ❌ SDK 待补齐 |
-| 18 | 查询 Task 状态 | `GET /api/v1/business-agent/tasks/{taskId}` | ❌ SDK 待补齐 |
+| 17 | 创建 Business Task | `client.businessAgent().createBusinessAgentTask()` | ✅ SDK 已有 |
+| 18 | 查询 Task 状态 | `client.businessAgent().getBusinessAgentTask()` | ✅ SDK 已有 |
 | 19 | 发起普通 Agent 任务（轮询消息） | `client.agents().ask()` / `getTaskMessages()` | ✅ SDK 已有 |
 | 20 | 会话回放 | `client.agents().getSessionMessages()` | ✅ SDK 已有 |
 
@@ -68,7 +68,7 @@
 | --- | --- | --- | --- |
 | 27 | 调用需审批的函数 → 收到 SUSPENDED | Worker invoke_business_function | 内部自动 |
 | 28 | 前端展示审批卡片 | ChatPanel/MessageList 内置审批渲染 | ✅ 已有 |
-| 29 | 通过 BFF 转发 Resume 请求 | `POST /api/v1/business-agent/suspensions/{suspendId}/resume` | ❌ SDK 待补齐 |
+| 29 | 通过 BFF 转发 Resume 请求 | `client.businessAgent().resumeSuspension()` | ✅ SDK 已有 |
 | 30 | 验证审批后函数正确执行 | 查看 Task 状态和消息 | — |
 
 ### Phase 7：审计验证（平台管理员）
@@ -89,18 +89,18 @@
 | 前端聊天 UI | ✅ `@foggy/chat` ChatPanel | — |
 | 前端审批 UI | ✅ `@foggy/chat` ChatPanel/MessageList 内置审批渲染 | — |
 | 前端快速集成 | ✅ `@foggy/navigator-chat-widget` NavigatorChat | — |
-| ClientApp CRUD | — | ❌ REST 兜底 |
-| Provisioning/Runtime Credential | — | ❌ REST 兜底 |
-| Skill / User / Model Grant | — | ❌ REST 兜底 |
-| BusinessObject / Function 注册 | — | ❌ REST 兜底 |
-| Function Grant | — | ❌ REST 兜底 |
-| Business Task 创建/查询 | — | ❌ REST 兜底 |
-| Approval Resume | — | ❌ REST 兜底 |
+| ClientApp CRUD | ✅ `client.businessAgent().createClientApp()` / `listClientApps()` / `updateClientAppStatus()` | — |
+| Provisioning/Runtime Credential | ✅ `issueProvisioningCredential()` / `issueRuntimeCredential()` | — |
+| Skill / User / Model Grant | ✅ `createSkill()` / grant APIs | — |
+| BusinessObject / Function 注册 | ✅ `createBusinessObject()` / `importBusinessFunctionManifest()` | — |
+| Function Grant | ✅ `grantFunctionToClientApp()` | — |
+| Business Task 创建/查询 | ✅ `createBusinessAgentTask()` / query APIs | — |
+| Approval Resume | ✅ `resumeSuspension()` | — |
 | Worker Pool 管理 | — | ❌ REST 兜底 |
 
 ## 下一阶段建议
 
-1. **补齐 `navigator-open-sdk` 的 Business Agent API 封装**：ClientApp CRUD、Grant 管理、Task、Approval Resume。
-2. **补前端组件与审批流 Demo**：完整的 Business Agent 审批流前端集成示例。
-3. **补 REST Adapter 更多 transport 类型**：当前仅支持 REST，后续扩展 RPC/MQ/MCP。
-4. **补 fsscript 运行时集成**：`run_business_script` 当前为占位工具。
+1. **补前端组件与审批流 Demo**：完整的 Business Agent 审批流前端集成示例。
+2. **补 REST Adapter 更多 transport 类型**：当前仅支持 REST，后续扩展 RPC/MQ/MCP。
+3. **补 fsscript 运行时集成**：`run_business_script` 当前为占位工具。
+4. **拆分正式上游沙箱环境**：当前 TMS 样例先接入开发环境，首轮反馈稳定后再整理独立 sandbox。

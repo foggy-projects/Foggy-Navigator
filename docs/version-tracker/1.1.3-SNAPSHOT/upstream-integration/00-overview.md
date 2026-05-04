@@ -63,9 +63,9 @@ graph TB
 
 | 职责 | 说明 | 接入方式 |
 | --- | --- | --- |
-| 创建 Client Application | 签发 provisioning credential、绑定 `tenantId` | REST 控制面 / SDK（待补齐） |
-| 授权 LLM 模型 | 将 `LlmModelConfig` 授权给 ClientApp | REST 控制面 |
-| 授权 Skill | 将 Skill 授权给 ClientApp | REST 控制面 |
+| 创建 Client Application | 签发 provisioning credential、绑定 `tenantId` | SDK / REST 控制面 |
+| 授权 LLM 模型 | 将 `LlmModelConfig` 授权给 ClientApp | SDK / REST 控制面 |
+| 授权 Skill | 将 Skill 授权给 ClientApp | SDK / REST 控制面 |
 | 注册 Biz Worker | 注册 Worker identity 并加入 Pool | REST 控制面（`SUPER_ADMIN`） |
 
 ### 上游后端开发者
@@ -78,8 +78,8 @@ graph TB
 | 轮询任务状态 | 获取任务进度和结果 | SDK `client.agents().getTask()` |
 | 轮询增量消息 | 获取任务执行中产生的消息 | SDK `client.agents().getTaskMessages()` |
 | 会话回放 | 获取完整会话消息 | SDK `client.agents().getSessionMessages()` |
-| 注册 BusinessObject / Function | 定义业务对象和函数 | REST 控制面（SDK 待补齐） |
-| 处理审批 | Resume suspension | REST 控制面（SDK 待补齐） |
+| 注册 BusinessObject / Function | 定义业务对象和函数 | SDK / REST 控制面 |
+| 处理审批 | Resume suspension | SDK / REST 控制面 |
 
 ### 上游前端开发者
 
@@ -112,3 +112,5 @@ graph TB
 | [09-security-boundaries.md](./09-security-boundaries.md) | 安全边界 | 全部角色 |
 | [10-demo-checklist.md](./10-demo-checklist.md) | 最小接入 Checklist | 上游后端 / 上游前端 |
 | [11-llm-sdk-usage-guide.md](./11-llm-sdk-usage-guide.md) | LLM SDK 使用指南 | 上游 LLM coding agent |
+| [12-tms-business-agent-sdk-and-token-injection-plan.md](./12-tms-business-agent-sdk-and-token-injection-plan.md) | TMS Stage 10 计划 | Navigator / reviewer |
+| [13-tms-minimal-onboarding-sample.md](./13-tms-minimal-onboarding-sample.md) | TMS 最小接入样例 | 上游 LLM coding agent / 上游后端 |

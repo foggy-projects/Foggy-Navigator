@@ -41,6 +41,7 @@
 - [upstream-integration/](./upstream-integration/00-overview.md) - 上游接入文档 / SDK + 前端组件优先、REST 协议参考兜底的上游业务系统接入指南（00-overview ～ 10-demo-checklist）
   - [11-llm-sdk-usage-guide.md](./upstream-integration/11-llm-sdk-usage-guide.md) - LLM 使用手册 / 给上游 LLM coding agent 的 SDK 安装、使用边界与安全红线
   - [12-tms-business-agent-sdk-and-token-injection-plan.md](./upstream-integration/12-tms-business-agent-sdk-and-token-injection-plan.md) - Stage 10 计划 / TMS 接入所需 SDK、上游用户凭据注入、REST Adapter header 与 E2E 验证
+  - [13-tms-minimal-onboarding-sample.md](./upstream-integration/13-tms-minimal-onboarding-sample.md) - TMS 样例 / SDK 初始化、`orderIdentifier` 字段约束与 mock E2E 证据
 
 ## Acceptance Status
 
