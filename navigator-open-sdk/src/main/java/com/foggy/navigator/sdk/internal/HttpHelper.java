@@ -118,21 +118,24 @@ public class HttpHelper {
                 return null;
             }
 
-            // Parse RX wrapper: {"code": 0, "data": ...}
             JsonNode root = objectMapper.readTree(body);
-            int code = root.has("code") ? root.get("code").asInt(-1) : -1;
-            if (code != 0) {
-                String msg = root.has("msg") ? root.get("msg").asText() : body;
-                throw new NavigatorApiException(response.statusCode(),
-                        "API error (code=" + code + "): " + msg);
-            }
+            if (root.isObject() && root.has("code")) {
+                int code = root.get("code").asInt(-1);
+                if (code != 0) {
+                    String msg = root.has("msg") ? root.get("msg").asText() : body;
+                    throw new NavigatorApiException(response.statusCode(),
+                            "API error (code=" + code + "): " + msg);
+                }
 
-            JsonNode dataNode = root.get("data");
-            if (dataNode == null || dataNode.isNull()) {
-                return null;
+                JsonNode dataNode = root.get("data");
+                if (dataNode == null || dataNode.isNull()) {
+                    return null;
+                }
+                return objectMapper.convertValue(dataNode, type);
+            } else {
+                // Raw JSON response
+                return objectMapper.convertValue(root, type);
             }
-
-            return objectMapper.convertValue(dataNode, type);
         } catch (NavigatorApiException e) {
             throw e;
         } catch (IOException | InterruptedException e) {

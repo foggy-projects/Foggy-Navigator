@@ -49,6 +49,7 @@ public class NavigatorClient {
     private final DirectoryApi directoryApi;
     private final EmployeeApi employeeApi;
     private final AgentApi agentApi;
+    private final BusinessAgentApi businessAgentApi;
 
     private NavigatorClient(HttpHelper http) {
         this.http = http;
@@ -56,6 +57,7 @@ public class NavigatorClient {
         this.directoryApi = new DirectoryApi(http);
         this.employeeApi = new EmployeeApi(http);
         this.agentApi = new AgentApi(http);
+        this.businessAgentApi = new BusinessAgentApi(http);
     }
 
     // ===== API 模块访问 =====
@@ -71,6 +73,9 @@ public class NavigatorClient {
 
     /** Agent 交互（A2A 协议） */
     public AgentApi agents() { return agentApi; }
+
+    /** Business Agent 控制面 API（如 ClientApp、授权、Business Function 管理等） */
+    public BusinessAgentApi businessAgent() { return businessAgentApi; }
 
     // ===== 系统注册（静态方法，无需 API Key） =====
 

@@ -50,6 +50,9 @@ flowchart LR
     S3 --> S4[Stage 4 Worker Gateway / Approval]
     S4 --> S5[Stage 5 Worker Tools / fsscript]
     S5 --> S6[Stage 6 E2E Sample]
+    S6 --> S10A[Stage 10A navigator-open-sdk Business Agent API]
+    S10A --> S10B[Stage 10B Upstream User Credential + REST Adapter Headers]
+    S10B --> S10C[Stage 10C TMS Mock E2E + Safety Verification]
 ```
 
 ## Stage 0：代码基线确认
@@ -258,6 +261,34 @@ flowchart LR
 **实现记录（2026-05-03）**：新增 `BusinessAgentE2ESampleTest`，包含 6 个测试用例（1 个完整生命周期 + 5 个负例）。
 所有测试通过；验收结论为 `accepted-with-risks`，记录详见：[stage-6-e2e-sample-acceptance.md](acceptance/stage-6-e2e-sample-acceptance.md)。
 
+## Stage 10：TMS Business Agent SDK 与上游用户凭据注入
+
+目标：让 TMS 这类外部业务系统可以通过 SDK 完成 Business Agent 控制面初始化，并在运行时由 Navigator 服务端受控注入上游用户凭据和调用上下文 header。
+
+详细计划见：[upstream-integration/12-tms-business-agent-sdk-and-token-injection-plan.md](upstream-integration/12-tms-business-agent-sdk-and-token-injection-plan.md)
+
+### Stage 10A：navigator-open-sdk Business Agent Control Plane API [ACCEPTED-WITH-RISKS]
+
+- 新增 `client.businessAgent()` SDK 聚合入口。
+- 封装 ClientApp、Credential、Model Grant、Skill/User/Function Grant、BusinessObject、BusinessFunction、Task、Approval Resume。
+- 明确 SDK 控制面鉴权模式。
+- 本阶段不实现 TMS 用户 token 存储，也不修改 REST Adapter header 注入。
+- 验收结论（2026-05-04）：`accepted-with-risks`。SDK 已兼容 `RX<T>` 与裸 JSON 响应，Form/DTO 已与后端契约对齐；风险为 smoke test 尚未覆盖全部 wrapper。
+
+### Stage 10B：Upstream User Credential + REST Adapter Header Injection [PENDING]
+
+- 新增独立 upstream user credential 存储，不复用 grant 表承载 token。
+- REST Adapter 根据 task 上下文解析 `tenantId + clientAppId + upstreamUserId` 对应凭据。
+- 服务端注入用户 token header 与 Navigator 上下文 header。
+- token 不进入 LLM、Manifest、前端 DTO、日志、audit output。
+
+### Stage 10C：TMS Mock E2E + LLM-Facing Safety Verification [PENDING]
+
+- 使用 TMS mock 服务验证 SDK 初始化、函数注册、task 创建、REST Adapter 调用。
+- LLM-facing 运单字段统一验证为 `orderIdentifier`。
+- 验证 `expressOrderId` 不进入 BusinessFunction input schema、tool schema、前端可填参数。
+- 补充 upstream integration 文档与敏感字段检查证据。
+
 ## 当前进度
 
 | Stage | 状态 | 备注 |
@@ -280,6 +311,9 @@ flowchart LR
 | Stage 9 Persistent Audit + Upstream E2E | completed | BusinessFunctionRuntimeAuditEntity/Service; best-effort audit writes for invoke/tool-message/resume lifecycle; RestAdapterUpstreamE2ETest with real local HTTP server; 2026-05-04 |
 | Stage 9B Upstream Integration Guide | completed | SDK/component-first upstream onboarding docs added under `upstream-integration/` (00-overview ～ 10-demo-checklist); README and implementation plan linked; 2026-05-04 |
 | Stage 9C LLM SDK Guide + Personal Skill | completed | Added LLM-facing SDK usage guide and created personal `navigator-upstream-llm-integration` skill for upstream LLM coding agents; 2026-05-04 |
+| Stage 10A navigator-open-sdk Business Agent API | completed | accepted-with-risks; SDK control-plane wrappers; Auth uses existing X-API-Key which resolves TENANT_ADMIN context; no TMS token storage yet; 2026-05-04 |
+| Stage 10B Upstream User Credential + REST Adapter Headers | pending | Server-side user credential storage and controlled header injection |
+| Stage 10C TMS Mock E2E + Safety Verification | pending | TMS mock E2E, `orderIdentifier` schema guard, sensitive-field checks |
 
 > [!NOTE]
 > `BusinessObject` 是用于组织函数（Function）的业务对象概念，不是授权主体。授权主体仍然由 ClientApp / upstreamUser / Skill / Function grant 进行细粒度控制。

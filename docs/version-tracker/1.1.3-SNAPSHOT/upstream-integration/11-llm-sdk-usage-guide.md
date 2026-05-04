@@ -7,7 +7,7 @@
 - status: draft
 - date: 2026-05-04
 - intended_for: upstream-llm-coding-agent
-- purpose: 指导上游项目中的 LLM coding agent 在本机开发阶段使用 Navigator SDK、前端组件和 REST 兜底能力完成接入
+- purpose: 指导上游项目中的 LLM coding agent 在本机开发阶段优先使用 Navigator SDK 和前端组件完成接入
 
 ## LLM 执行原则
 
@@ -15,7 +15,7 @@
 
 1. **优先使用 SDK / 组件**：后端优先使用 `navigator-open-sdk`，前端优先使用 `@foggy/chat` 或 `@foggy/navigator-chat-widget`。
 2. **不得编造 SDK 方法**：先检查 SDK 源码，确认方法存在后再调用。
-3. **SDK 未封装时才使用 REST**：Business Agent 控制面能力当前多数仍需 REST 兜底，REST 路径以 [08-rest-api-reference.md](./08-rest-api-reference.md) 为准。
+3. **REST 仅作协议排障或扩展兜底**：Business Agent 控制面优先使用 `client.businessAgent()`；只有 SDK 未覆盖的新扩展或排查协议问题时才参考 [08-rest-api-reference.md](./08-rest-api-reference.md)。
 4. **不得暴露内部凭据**：任何 token、secret、`task_scoped_token`、`adapterConfigJson`、`manifestJson` 都不能写入前端代码、LLM prompt、日志、测试快照或业务库明文字段。
 5. **Worker Gateway 是内部 API**：上游前端和上游后端都不要直接调用 `/internal/worker-gateway/v1/**`。
 
@@ -58,16 +58,9 @@ Get-Content navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/NavigatorCl
 | 目录环境变量 | `client.directories()` |
 | 员工 provision | `client.employees()` |
 | 普通 Agent 任务、轮询、消息、会话 | `client.agents()` |
+| Business Agent 控制面 (ClientApp/Grant/Task/Approval等) | `client.businessAgent()` |
 
-当前尚未封装，需 REST 兜底：
-
-| Business Agent 能力 | 当前做法 |
-| --- | --- |
-| ClientApp / Credential | REST |
-| Skill / User Grant / Model Grant | REST |
-| BusinessObject / BusinessFunction / Function Grant | REST |
-| Business Task | REST |
-| Approval Resume | REST |
+当前已全面支持 Business Agent，无需 REST 兜底。
 
 ## 后端接入流程
 
@@ -90,9 +83,16 @@ AgentTask task = client.agents().ask(agentId, "分析订单异常");
 AgentTask done = client.agents().pollUntilDone(agentId, task.getTaskId(), Duration.ofMinutes(5));
 ```
 
-### 3. Business Agent 走 REST 兜底
+### 3. Business Agent 接入
 
-当需要创建 ClientApp、注册 BusinessObject/Function、授权 Skill 或创建 Business Task 时，使用 REST 控制面。
+推荐直接使用 SDK 的 `client.businessAgent()` 进行 App 初始化和授权。例如：
+
+```java
+CreateClientAppForm form = new CreateClientAppForm();
+form.setProvisioningToken(provisioningToken);
+form.setName("TMS");
+ClientAppDTO app = client.businessAgent().createClientApp(form);
+```
 
 调用 REST 前必须：
 
@@ -155,8 +155,7 @@ pnpm build
 
 上游 LLM 完成接入后，应报告：
 
-- 是否使用了 `navigator-open-sdk`，如果没有，说明原因。
-- 哪些 Business Agent 能力因 SDK 未封装而使用 REST 兜底。
+- 是否使用了 `navigator-open-sdk` 的 `client.businessAgent()`，如果没有，说明原因。
 - 前端是否通过 BFF 或公开会话 API 交互。
 - 是否确认没有暴露内部 token、secret、Worker Gateway、`adapterConfigJson`、`manifestJson`。
 - 运行过的测试和检查命令。

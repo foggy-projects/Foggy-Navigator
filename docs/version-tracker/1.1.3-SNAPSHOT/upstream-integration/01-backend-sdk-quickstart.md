@@ -26,8 +26,7 @@
 | 目录管理 | `DirectoryApi` | ✅ 已有 | 更新环境变量 |
 | 员工管理 | `EmployeeApi` | ✅ 已有 | Provision 员工、绑定 Worker |
 | Agent 交互 | `AgentApi` | ✅ 已有 | 发起任务、轮询状态、增量消息、会话管理 |
-
-> **Business Agent 新能力**（1.1.3 新增的 ClientApp、Skill、BusinessFunction、Approval 等控制面 API）**当前 SDK 尚未封装**。这些能力目前需通过 REST 控制面 API 完成，后续 SDK 版本将补齐。
+| 业务 Agent 控制面 | `BusinessAgentApi` | ✅ 已有 (1.1.3 新增) | ClientApp管理、授权(Model/Skill/Function)、创建Task、审批Resume |
 
 ## 快速开始
 
@@ -152,26 +151,55 @@ do {
 } while (true);
 ```
 
-## Business Agent 能力（SDK 待补齐）
+## Business Agent 能力
 
-以下 1.1.3 Business Agent 能力当前 **SDK 尚未封装**，需使用 REST 控制面 API：
+在 1.1.3 中，SDK 的 `BusinessAgentApi` 提供了完整的 Business Agent 控制面 API：
 
-| 能力 | REST API 路径 | SDK 状态 |
-| --- | --- | --- |
-| 创建 Client Application | `POST /api/v1/client-apps` | ❌ SDK 待补齐 |
-| 签发 Runtime Credential | `POST /api/v1/client-apps/{id}/runtime-credentials` | ❌ SDK 待补齐 |
-| 签发 Provisioning Credential | `POST /api/v1/admin/client-apps/provisioning-credentials` | ❌ SDK 待补齐 |
-| 授权 LLM 模型 | `POST /api/v1/client-apps/{id}/model-config-grants` | ❌ SDK 待补齐 |
-| 注册 Skill | `POST /api/v1/business-agent/skills` | ❌ SDK 待补齐 |
-| 授权 Skill 给 ClientApp | `POST /api/v1/business-agent/client-apps/{id}/skill-grants` | ❌ SDK 待补齐 |
-| 授权 upstream user | `POST /api/v1/business-agent/client-apps/{id}/upstream-users` | ❌ SDK 待补齐 |
-| 注册 BusinessObject | `POST /api/v1/business-agent/business-objects` | ❌ SDK 待补齐 |
-| 导入 BusinessFunction | `POST /api/v1/business-agent/functions/import` | ❌ SDK 待补齐 |
-| 授权函数给 ClientApp | `POST /api/v1/business-agent/client-apps/{id}/function-grants` | ❌ SDK 待补齐 |
-| 创建 Business Task | `POST /api/v1/business-agent/tasks` | ❌ SDK 待补齐 |
-| Resume Suspension | `POST /api/v1/business-agent/suspensions/{suspendId}/resume` | ❌ SDK 待补齐 |
+```java
+// 创建 ClientApp
+CreateClientAppForm appForm = new CreateClientAppForm();
+appForm.setProvisioningToken(provisioningToken);
+appForm.setName("MyTMS");
+appForm.setDescription("TMS App");
+ClientAppDTO app = client.businessAgent().createClientApp(appForm);
 
-> 上述 REST API 的详细参数请参考 [08-rest-api-reference.md](./08-rest-api-reference.md)。
+// 授权模型
+GrantModelConfigForm modelGrant = new GrantModelConfigForm();
+modelGrant.setModelConfigId(modelConfigId);
+modelGrant.setIsDefault(true);
+client.businessAgent().grantModelConfig(app.getClientAppId(), modelGrant);
+
+// 导入函数清单并授权
+ImportBusinessFunctionManifestForm functionManifest = new ImportBusinessFunctionManifestForm();
+functionManifest.setFunctionId("tms.create_order");
+functionManifest.setVersion("1.0.0");
+functionManifest.setDomain("tms");
+functionManifest.setName("Create Order");
+functionManifest.setRiskLevel("MEDIUM");
+functionManifest.setManifestJson(manifestJson);
+client.businessAgent().importBusinessFunctionManifest(functionManifest);
+
+GrantBusinessFunctionForm functionGrant = new GrantBusinessFunctionForm();
+functionGrant.setFunctionId("tms.create_order");
+functionGrant.setVersion("1.0.0");
+functionGrant.setStatus("ENABLED");
+client.businessAgent().grantFunctionToClientApp(app.getClientAppId(), functionGrant);
+
+// 创建 Business Task
+CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();
+taskForm.setClientAppId(app.getClientAppId());
+taskForm.setSessionId(sessionId);
+taskForm.setUpstreamUserId(upstreamUserId);
+taskForm.setSkillId(skillId);
+taskForm.setWorkerPoolId(workerPoolId);
+CreatedBusinessAgentTaskDTO task = client.businessAgent().createBusinessAgentTask(taskForm);
+
+// 恢复被挂起的审批
+WorkerGatewayResumeForm resumeForm = new WorkerGatewayResumeForm();
+resumeForm.setApprovalResult(approvalResult);
+resumeForm.setBindingContext(bindingContext);
+client.businessAgent().resumeSuspension(suspendId, resumeForm);
+```
 
 ## 完整 Demo
 
@@ -193,5 +221,4 @@ java -cp navigator-open-sdk.jar \
 
 ## 下一步
 
-- SDK 后续版本将封装 Business Agent 控制面 API（ClientApp CRUD、Skill/Function/Model Grant、Task、Approval）。
-- 当前过渡期请参考 [08-rest-api-reference.md](./08-rest-api-reference.md) 和 [10-demo-checklist.md](./10-demo-checklist.md)。
+- 参考 [10-demo-checklist.md](./10-demo-checklist.md) 了解完整的从零到一接入流程。
