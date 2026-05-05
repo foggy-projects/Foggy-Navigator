@@ -169,6 +169,25 @@ rg -n "task_scoped_token|adapterConfigJson|manifestJson|X-TMS-Agent-Token|Author
 5. `expressOrderId` 只允许出现在安全说明与搜索校验中，不进入样例 payload、Worker schema 或前端可填参数。
 6. 验收记录：[stage-10c-tms-mock-e2e-and-safety-acceptance.md](../acceptance/stage-10c-tms-mock-e2e-and-safety-acceptance.md)。
 
+## Stage 10D：Upstream Auto Bootstrap Contract
+
+目标：让上游 LLM 不再手工复制 REST 或 SDK 调用，而是通过非敏感 manifest、本地 secret env 和 SDK bootstrap runner 自动完成接入初始化。
+
+范围：
+
+1. 定义上游可提交的 manifest 模板。
+2. 定义本地 secret env 模板。
+3. 定义上游 bootstrap runner 的职责与禁止事项。
+4. 更新 personal `navigator-upstream-llm-integration` skill，使上游 LLM 优先读取自动化 runbook。
+5. 明确 Worker Gateway 仍是 Navigator 内部 API，上游 bootstrap 不直接调用。
+
+实现记录（2026-05-05）：
+
+1. 新增自动化契约：[14-upstream-auto-bootstrap-contract.md](./14-upstream-auto-bootstrap-contract.md)。
+2. 更新 TMS 最小接入样例，链接自动化契约与 personal skill runbook。
+3. personal skill 新增 TMS auto bootstrap runbook、manifest template 与 env template。
+4. 验收记录：[stage-10d-upstream-auto-bootstrap-contract-acceptance.md](../acceptance/stage-10d-upstream-auto-bootstrap-contract-acceptance.md)。
+
 ## Stage 10A 开发会话提示词
 
 ```markdown

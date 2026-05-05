@@ -114,3 +114,4 @@ graph TB
 | [11-llm-sdk-usage-guide.md](./11-llm-sdk-usage-guide.md) | LLM SDK 使用指南 | 上游 LLM coding agent |
 | [12-tms-business-agent-sdk-and-token-injection-plan.md](./12-tms-business-agent-sdk-and-token-injection-plan.md) | TMS Stage 10 计划 | Navigator / reviewer |
 | [13-tms-minimal-onboarding-sample.md](./13-tms-minimal-onboarding-sample.md) | TMS 最小接入样例 | 上游 LLM coding agent / 上游后端 |
+| [14-upstream-auto-bootstrap-contract.md](./14-upstream-auto-bootstrap-contract.md) | 上游自动 bootstrap 契约 | 上游 LLM coding agent / 上游后端 |

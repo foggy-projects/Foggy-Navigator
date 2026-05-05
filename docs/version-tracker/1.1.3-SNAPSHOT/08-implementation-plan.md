@@ -53,6 +53,7 @@ flowchart LR
     S6 --> S10A[Stage 10A navigator-open-sdk Business Agent API]
     S10A --> S10B[Stage 10B Upstream User Credential + REST Adapter Headers]
     S10B --> S10C[Stage 10C TMS Mock E2E + Safety Verification]
+    S10C --> S10D[Stage 10D Upstream Auto Bootstrap Contract]
 ```
 
 ## Stage 0：代码基线确认
@@ -291,6 +292,14 @@ flowchart LR
 - 补充 upstream integration 文档与敏感字段检查证据。
 - 验收记录：[stage-10c-tms-mock-e2e-and-safety-acceptance.md](acceptance/stage-10c-tms-mock-e2e-and-safety-acceptance.md)
 
+### Stage 10D：Upstream Auto Bootstrap Contract [COMPLETED]
+
+- 将上游真实联调从手工提示词操作收敛为 manifest + env + SDK bootstrap runner。
+- 明确上游自动化 runner 可创建/复用 ClientApp、BusinessObject、Function、Skill、Grant 与 BusinessAgentTask。
+- 明确 Worker Gateway 仍是 Navigator 内部 API，上游 runner 不直接调用。
+- 更新 personal `navigator-upstream-llm-integration` skill，提供 TMS auto bootstrap runbook、manifest template 与 env template。
+- 验收记录：[stage-10d-upstream-auto-bootstrap-contract-acceptance.md](acceptance/stage-10d-upstream-auto-bootstrap-contract-acceptance.md)
+
 ## 当前进度
 
 | Stage | 状态 | 备注 |
@@ -316,6 +325,7 @@ flowchart LR
 | Stage 10A navigator-open-sdk Business Agent API | completed | accepted-with-risks; SDK control-plane wrappers; Auth uses existing X-API-Key which resolves TENANT_ADMIN context; no TMS token storage yet; 2026-05-04 |
 | Stage 10B Upstream User Credential + REST Adapter Headers | completed | Grant-bound upstream user token storage; REST adapter controlled user-token and Navigator context header injection; 2026-05-04 |
 | Stage 10C TMS Mock E2E + Safety Verification | completed | SDK onboarding smoke, TMS mock REST E2E, `orderIdentifier` schema guard, sensitive-field checks; 2026-05-04 |
+| Stage 10D Upstream Auto Bootstrap Contract | completed | manifest + env + SDK runner 契约；personal skill 增加 TMS auto bootstrap runbook 与模板；2026-05-05 |
 
 > [!NOTE]
 > `BusinessObject` 是用于组织函数（Function）的业务对象概念，不是授权主体。授权主体仍然由 ClientApp / upstreamUser / Skill / Function grant 进行细粒度控制。

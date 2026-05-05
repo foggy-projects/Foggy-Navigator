@@ -42,6 +42,7 @@
   - [11-llm-sdk-usage-guide.md](./upstream-integration/11-llm-sdk-usage-guide.md) - LLM 使用手册 / 给上游 LLM coding agent 的 SDK 安装、使用边界与安全红线
   - [12-tms-business-agent-sdk-and-token-injection-plan.md](./upstream-integration/12-tms-business-agent-sdk-and-token-injection-plan.md) - Stage 10 计划 / TMS 接入所需 SDK、上游用户凭据注入、REST Adapter header 与 E2E 验证
   - [13-tms-minimal-onboarding-sample.md](./upstream-integration/13-tms-minimal-onboarding-sample.md) - TMS 样例 / SDK 初始化、`orderIdentifier` 字段约束与 mock E2E 证据
+  - [14-upstream-auto-bootstrap-contract.md](./upstream-integration/14-upstream-auto-bootstrap-contract.md) - 自动化契约 / 上游 LLM 通过 manifest + env + SDK runner 自动完成 Business Agent bootstrap
 
 ## Acceptance Status
 

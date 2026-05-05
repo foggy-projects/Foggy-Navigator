@@ -13,6 +13,12 @@
 
 TMS 不作为 Biz Worker。TMS 只提供受控 HTTP API，Navigator 负责 ClientApp、Skill、User、Function、Model 授权、Worker Gateway、审批和平台审计。
 
+如果目标是让上游 LLM 自动处理接入，不建议让它手工复制本文中的每个 SDK 调用。应优先采用自动 bootstrap 契约：
+
+- [14-upstream-auto-bootstrap-contract.md](./14-upstream-auto-bootstrap-contract.md)
+- personal skill: `navigator-upstream-llm-integration`
+- skill runbook: `references/tms-auto-bootstrap-runbook.md`
+
 本样例面向开发联调阶段：
 
 1. 上游用户 token 由上游后端通过 SDK 提交到 `grantUpstreamUserAccess`。
