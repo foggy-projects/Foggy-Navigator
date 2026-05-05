@@ -23,6 +23,7 @@ public class BusinessAgentApiSmokeTest {
     private static String lastPath;
     private static String lastMethod;
     private static String lastAuthHeader;
+    private static String lastAuthorizationHeader;
     private static String lastBody;
     private static String responseOverride;
     private NavigatorClient client;
@@ -36,6 +37,7 @@ public class BusinessAgentApiSmokeTest {
             lastPath = exchange.getRequestURI().toString();
             lastMethod = exchange.getRequestMethod();
             lastAuthHeader = exchange.getRequestHeaders().getFirst("X-API-Key");
+            lastAuthorizationHeader = exchange.getRequestHeaders().getFirst("Authorization");
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 
             String responseStr = responseOverride != null ? responseOverride : "{\"code\":0, \"data\":{}}";
@@ -67,12 +69,47 @@ public class BusinessAgentApiSmokeTest {
         lastPath = null;
         lastMethod = null;
         lastAuthHeader = null;
+        lastAuthorizationHeader = null;
         lastBody = null;
         responseOverride = "{\"code\":0, \"data\":{}}";
     }
 
     private void assertCommon() {
         assertEquals("sk-test-admin-key", lastAuthHeader, "X-API-Key must be present");
+        assertNull(lastAuthorizationHeader, "Authorization must not be present for apiKey auth");
+    }
+
+    @Test
+    public void testBearerTokenAuthHeader() {
+        NavigatorClient bearerClient = NavigatorClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .bearerToken("tenant-admin-jwt")
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        responseOverride = "[]";
+        List<ClientAppDTO> apps = bearerClient.businessAgent().listClientApps();
+
+        assertNotNull(apps);
+        assertEquals("/api/v1/client-apps", lastPath);
+        assertEquals("GET", lastMethod);
+        assertNull(lastAuthHeader, "X-API-Key must not be present for bearer auth");
+        assertEquals("Bearer tenant-admin-jwt", lastAuthorizationHeader);
+    }
+
+    @Test
+    public void testAdminTokenAliasKeepsBearerPrefix() {
+        NavigatorClient bearerClient = NavigatorClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .adminToken("Bearer tenant-admin-jwt")
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        responseOverride = "[]";
+        bearerClient.businessAgent().listClientApps();
+
+        assertNull(lastAuthHeader, "X-API-Key must not be present for bearer auth");
+        assertEquals("Bearer tenant-admin-jwt", lastAuthorizationHeader);
     }
 
     @Test

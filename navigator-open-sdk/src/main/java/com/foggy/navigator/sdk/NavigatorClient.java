@@ -18,6 +18,12 @@ import java.util.Map;
  *     .apiKey("sk-xxxx")
  *     .build();
  *
+ * // Or use a tenant-admin bearer token:
+ * NavigatorClient adminClient = NavigatorClient.builder()
+ *     .baseUrl("http://navigator.example.com:8112")
+ *     .bearerToken("jwt-token")
+ *     .build();
+ *
  * // Worker 管理
  * Worker worker = client.workers().create("GPU-01", "http://10.0.1.1:3031", "token");
  * client.workers().healthCheck(worker.getWorkerId());
@@ -109,6 +115,7 @@ public class NavigatorClient {
     public static class Builder {
         private String baseUrl;
         private String apiKey;
+        private String bearerToken;
         private Duration timeout;
 
         private Builder() {}
@@ -130,6 +137,23 @@ public class NavigatorClient {
         }
 
         /**
+         * Bearer token（例如当前登录态或本地 dev admin token）。
+         * <p>
+         * 如果传入值未包含 {@code Bearer } 前缀，SDK 会自动补齐。
+         */
+        public Builder bearerToken(String bearerToken) {
+            this.bearerToken = bearerToken;
+            return this;
+        }
+
+        /**
+         * {@link #bearerToken(String)} 的语义别名，用于控制面 bootstrap 场景。
+         */
+        public Builder adminToken(String adminToken) {
+            return bearerToken(adminToken);
+        }
+
+        /**
          * HTTP 请求超时（默认 30 秒）
          */
         public Builder timeout(Duration timeout) {
@@ -141,10 +165,12 @@ public class NavigatorClient {
             if (baseUrl == null || baseUrl.isBlank()) {
                 throw new IllegalArgumentException("baseUrl is required");
             }
-            if (apiKey == null || apiKey.isBlank()) {
-                throw new IllegalArgumentException("apiKey is required");
+            boolean hasApiKey = apiKey != null && !apiKey.isBlank();
+            boolean hasBearerToken = bearerToken != null && !bearerToken.isBlank();
+            if (!hasApiKey && !hasBearerToken) {
+                throw new IllegalArgumentException("apiKey or bearerToken is required");
             }
-            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, timeout));
+            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, bearerToken, timeout));
         }
     }
 }

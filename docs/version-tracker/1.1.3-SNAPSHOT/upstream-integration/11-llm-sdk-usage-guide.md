@@ -74,6 +74,13 @@ NavigatorClient client = NavigatorClient.builder()
     .build();
 ```
 
+控制面鉴权支持两种常用方式：
+
+- `apiKey("sk-*")`：发送 `X-API-Key`，要求该 key 解析出的用户具备 `TENANT_ADMIN`。
+- `adminToken(jwt)` / `bearerToken(jwt)`：发送 `Authorization: Bearer <jwt>`，用于当前本地 sandbox 提供登录态/admin token 的场景。
+
+不要把 JWT 塞进 `apiKey(...)`；这会被服务端当成 API key 查库，通常返回 401。
+
 ### 2. 优先使用已有 SDK 能力
 
 普通 Agent 任务示例：

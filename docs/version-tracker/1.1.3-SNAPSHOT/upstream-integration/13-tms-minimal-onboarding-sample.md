@@ -71,10 +71,17 @@ Manifest 不允许声明或覆盖这些受控 header，也不允许声明 `Autho
 
 ## SDK 初始化样例
 
+`sk-*` API key 使用 `apiKey(...)`。如果本地 dev sandbox 提供的是当前登录态或 admin JWT（例如 `NAVIGATOR_ADMIN_TOKEN`），不要把它传给 `apiKey(...)`，应使用 `adminToken(...)` 或 `bearerToken(...)`。
+
 ```java
 NavigatorClient client = NavigatorClient.builder()
         .baseUrl("http://localhost:8080")
         .apiKey("tenant-admin-api-key")
+        .build();
+
+NavigatorClient sandboxClient = NavigatorClient.builder()
+        .baseUrl("http://localhost:8112")
+        .adminToken(navigatorAdminToken)
         .build();
 
 // 1. 注册业务对象

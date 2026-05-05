@@ -82,7 +82,9 @@ env 至少包含：
 
 ```properties
 NAVIGATOR_BASE_URL=http://localhost:8112
+# Use one of the following:
 NAVIGATOR_ADMIN_API_KEY=
+NAVIGATOR_ADMIN_TOKEN=
 NAVIGATOR_TENANT_ID=
 NAVIGATOR_ACTOR_USER_ID=
 NAVIGATOR_MODEL_CONFIG_ID=
@@ -99,9 +101,29 @@ TMS_USER_TOKEN=
 runner 需要执行：
 
 1. 读取 env，缺失敏感值时 fail-fast。
+   - `NAVIGATOR_ADMIN_API_KEY` 用于 `sk-*` API key。
+   - `NAVIGATOR_ADMIN_TOKEN` 用于当前登录态/admin JWT。
+   - 两者至少提供一个；如果提供的是 JWT，必须走 `adminToken(...)`，不要走 `apiKey(...)`。
 2. 读取 manifest，校验不含 `expressOrderId`、`esOrderId`、`task_scoped_token`。
 3. 安装或检查 `navigator-open-sdk` 依赖。
-4. 用 `NavigatorClient.builder().baseUrl(...).apiKey(...).build()` 初始化 SDK。
+4. 初始化 SDK：
+
+```java
+NavigatorClient client = NavigatorClient.builder()
+        .baseUrl(navigatorBaseUrl)
+        .apiKey(navigatorAdminApiKey)      // X-API-Key: sk-*
+        .build();
+```
+
+或在本地 dev 环境使用登录态/admin JWT：
+
+```java
+NavigatorClient client = NavigatorClient.builder()
+        .baseUrl(navigatorBaseUrl)
+        .adminToken(navigatorAdminToken)   // Authorization: Bearer <token>
+        .build();
+```
+
 5. 创建或复用 ClientApp。
 6. 创建 BusinessObject。
 7. 导入 BusinessFunction manifest。

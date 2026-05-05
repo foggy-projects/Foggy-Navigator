@@ -54,6 +54,7 @@ flowchart LR
     S10A --> S10B[Stage 10B Upstream User Credential + REST Adapter Headers]
     S10B --> S10C[Stage 10C TMS Mock E2E + Safety Verification]
     S10C --> S10D[Stage 10D Upstream Auto Bootstrap Contract]
+    S10D --> S10E[Stage 10E SDK Bearer Control Plane Auth]
 ```
 
 ## Stage 0：代码基线确认
@@ -300,6 +301,14 @@ flowchart LR
 - 更新 personal `navigator-upstream-llm-integration` skill，提供 TMS auto bootstrap runbook、manifest template 与 env template。
 - 验收记录：[stage-10d-upstream-auto-bootstrap-contract-acceptance.md](acceptance/stage-10d-upstream-auto-bootstrap-contract-acceptance.md)
 
+### Stage 10E：SDK Bearer Control Plane Auth [COMPLETED]
+
+- `NavigatorClient.Builder` 新增 `bearerToken(...)` 与 `adminToken(...)`，用于当前登录态/admin JWT。
+- `apiKey("sk-*")` 继续发送 `X-API-Key`；`adminToken(jwt)` 发送 `Authorization: Bearer <jwt>`。
+- 明确禁止把 JWT 复用为 `apiKey(...)`，避免控制面 bootstrap 在首个 SDK 调用处 401。
+- 更新 upstream integration 文档与 personal skill 的 TMS bootstrap runbook。
+- 验收记录：[stage-10e-sdk-bearer-control-plane-auth-acceptance.md](acceptance/stage-10e-sdk-bearer-control-plane-auth-acceptance.md)
+
 ## 当前进度
 
 | Stage | 状态 | 备注 |
@@ -326,6 +335,7 @@ flowchart LR
 | Stage 10B Upstream User Credential + REST Adapter Headers | completed | Grant-bound upstream user token storage; REST adapter controlled user-token and Navigator context header injection; 2026-05-04 |
 | Stage 10C TMS Mock E2E + Safety Verification | completed | SDK onboarding smoke, TMS mock REST E2E, `orderIdentifier` schema guard, sensitive-field checks; 2026-05-04 |
 | Stage 10D Upstream Auto Bootstrap Contract | completed | manifest + env + SDK runner 契约；personal skill 增加 TMS auto bootstrap runbook 与模板；2026-05-05 |
+| Stage 10E SDK Bearer Control Plane Auth | completed | `NavigatorClient.adminToken/bearerToken` 支持 Bearer 控制面鉴权；当前 sandbox JWT 不再误走 `X-API-Key`; 2026-05-05 |
 
 > [!NOTE]
 > `BusinessObject` 是用于组织函数（Function）的业务对象概念，不是授权主体。授权主体仍然由 ClientApp / upstreamUser / Skill / Function grant 进行细粒度控制。

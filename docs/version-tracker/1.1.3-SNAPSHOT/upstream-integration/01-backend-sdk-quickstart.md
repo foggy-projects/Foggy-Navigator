@@ -58,6 +58,16 @@ NavigatorClient client = NavigatorClient.builder()
     .build();
 ```
 
+控制面 bootstrap 如果拿到的是 admin/login JWT，而不是 `sk-*` API key，应使用：
+
+```java
+NavigatorClient client = NavigatorClient.builder()
+    .baseUrl("http://navigator.example.com:8112")
+    .adminToken(adminJwt)
+    .timeout(Duration.ofSeconds(30))
+    .build();
+```
+
 ### 3. Worker 和员工 Provisioning
 
 ```java

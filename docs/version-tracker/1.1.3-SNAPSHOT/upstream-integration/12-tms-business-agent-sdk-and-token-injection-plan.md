@@ -80,8 +80,8 @@ TMS 负责：
 要求：
 
 1. 以 controller 源码和 `08-rest-api-reference.md` 为准，不凭文档猜字段。
-2. SDK 需要明确控制面鉴权模式：现有 `X-API-Key` 是否足够；若 Business Agent 控制面需要 admin bearer/control-plane token，必须在 SDK builder 中显式建模。
-3. 如果 `X-API-Key` 不能形成 `CurrentUser` / `TENANT_ADMIN` 上下文，本阶段必须先给出鉴权结论，不得硬写无法运行的 SDK 示例。
+2. SDK 需要明确控制面鉴权模式：`X-API-Key` 适用于 `sk-*` API key；当前登录态/admin JWT 必须在 SDK builder 中显式建模为 Bearer token。
+3. 如果 `X-API-Key` 不能形成 `CurrentUser` / `TENANT_ADMIN` 上下文，本阶段必须先给出鉴权结论，不得硬写无法运行的 SDK 示例；不得把 JWT 复用为 `apiKey(...)`。
 4. SDK DTO/Form 不得新增 token 泄露字段。
 5. 每组 API 至少有最小单元测试或 smoke test，验证 path、method、header、body。
 6. 不封装 BizWorkerPool 管理 API。Worker Pool 属于 Navigator 侧预配置能力，TMS 上游 SDK 只消费创建 task 所需的 `workerPoolId`。
@@ -225,8 +225,9 @@ rg -n "task_scoped_token|adapterConfigJson|manifestJson|X-TMS-Agent-Token|Author
    - Business Task create/query
    - Approval Resume
 3. 明确 SDK 鉴权模式：
-   - 检查现有 `NavigatorClient` 的 `X-API-Key` 是否能调用 Business Agent 控制面。
-   - 如果控制面实际需要 admin bearer/control-plane token，请在 SDK builder 中新增清晰字段，不要复用含义错误的 `apiKey`。
+   - `apiKey("sk-*")` 发送 `X-API-Key`，要求解析出的用户具备 `TENANT_ADMIN`。
+   - `adminToken(jwt)` / `bearerToken(jwt)` 发送 `Authorization: Bearer <jwt>`，用于本地 sandbox 或控制面 admin JWT。
+   - 不允许把 JWT 复用为 `apiKey(...)`。
    - 如果 `X-API-Key` 不能形成 `CurrentUser` / `TENANT_ADMIN` 上下文，本阶段必须先给出鉴权结论，不得硬写无法运行的 SDK 示例。
 4. 增加最小测试或 smoke test，至少验证每组 API 的 HTTP method、path、auth header、body 序列化。
 5. 更新 upstream integration 文档中的 SDK 使用说明。

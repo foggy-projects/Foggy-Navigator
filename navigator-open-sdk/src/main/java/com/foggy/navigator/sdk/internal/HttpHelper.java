@@ -27,13 +27,19 @@ public class HttpHelper {
 
     private final String baseUrl;
     private final String apiKey;
+    private final String bearerToken;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final Duration timeout;
 
     public HttpHelper(String baseUrl, String apiKey, Duration timeout) {
+        this(baseUrl, apiKey, null, timeout);
+    }
+
+    public HttpHelper(String baseUrl, String apiKey, String bearerToken, Duration timeout) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.apiKey = apiKey;
+        this.bearerToken = bearerToken;
         this.timeout = timeout != null ? timeout : Duration.ofSeconds(30);
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
@@ -86,8 +92,13 @@ public class HttpHelper {
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json");
 
-        if (withAuth && apiKey != null) {
-            builder.header("X-API-Key", apiKey);
+        if (withAuth) {
+            if (apiKey != null && !apiKey.isBlank()) {
+                builder.header("X-API-Key", apiKey);
+            }
+            if (bearerToken != null && !bearerToken.isBlank()) {
+                builder.header("Authorization", normalizeBearerToken(bearerToken));
+            }
         }
 
         if (body != null) {
@@ -102,6 +113,14 @@ public class HttpHelper {
         }
 
         return builder.build();
+    }
+
+    private String normalizeBearerToken(String token) {
+        String trimmed = token.trim();
+        if (trimmed.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())) {
+            return trimmed;
+        }
+        return "Bearer " + trimmed;
     }
 
     private <T> T execute(HttpRequest request, TypeReference<T> type) {
