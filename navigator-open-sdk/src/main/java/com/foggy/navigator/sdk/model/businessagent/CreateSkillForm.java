@@ -9,6 +9,7 @@ public class CreateSkillForm {
     private String name;
     private String description;
     private String status;
+    private String markdownBody;
 
     public String getSkillId() { return skillId; }
     public void setSkillId(String skillId) { this.skillId = skillId; }
@@ -18,4 +19,6 @@ public class CreateSkillForm {
     public void setDescription(String description) { this.description = description; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getMarkdownBody() { return markdownBody; }
+    public void setMarkdownBody(String markdownBody) { this.markdownBody = markdownBody; }
 }

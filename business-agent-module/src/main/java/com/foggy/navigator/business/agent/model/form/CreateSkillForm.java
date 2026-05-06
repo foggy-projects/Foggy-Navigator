@@ -8,4 +8,5 @@ public class CreateSkillForm {
     private String name;
     private String description;
     private String status;
+    private String markdownBody;
 }

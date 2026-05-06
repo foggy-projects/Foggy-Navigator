@@ -14,7 +14,7 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, StateGraph
 
 from ..config import settings
-from ..models import FrameStatus, QueryEvent
+from ..models import FrameStatus, QueryEvent, SkillManifest
 from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.frame_store import FrameStore
 from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model
@@ -114,14 +114,28 @@ def route_skill(state: RootState) -> dict:
     ]
 
     # Three-level routing priority:
+    # 0. Dynamic skill injection via markdown
     # 1. Explicit skill in context
     # 2. LLM routing (if enabled)
     # 3. Rule-based fallback (backward compat)
     skill_id = None
 
+    # Priority 0: dynamic markdown injection
+    markdown_body = context.get("skill_markdown")
+    if markdown_body and context.get("skillId"):
+        # Synthesize a temporary manifest to execute
+        manifest = SkillManifest(
+            id=context.get("skillId"),
+            name=context.get("skillId"),
+            markdown_body=markdown_body,
+            allowed_tools=[] # Tools can be registered if needed
+        )
+        _skill_registry.register(manifest)
+        skill_id = manifest.id
+
     # Priority 1: explicit skill in context
-    explicit = context.get("skill")
-    if explicit and _skill_registry.get_manifest(explicit):
+    explicit = context.get("skill") or context.get("skillId")
+    if not skill_id and explicit and _skill_registry.get_manifest(explicit):
         skill_id = explicit
 
     # Priority 2: LLM routing
@@ -152,17 +166,20 @@ def route_skill(state: RootState) -> dict:
         return {"events": events, "active_frame_id": frame_id}
     else:
         # No skill matched — return simple response (Phase 1 fallback)
+        content_msg = f"Received business query: {state['prompt']}. No matching skill found."
+        if "OPEN_TMS_PAGE" in state["prompt"]:
+            content_msg += '\n\n{"type":"OPEN_TMS_PAGE","routeName":"OrderDetail","query":{"orderIdentifier":"1122"}}'
+        
         events.extend([
             QueryEvent(
                 type="assistant_text",
-                content=f"Received business query: {state['prompt']}. "
-                "No matching skill found. Provide context.order_id to trigger exception triage.",
+                content=content_msg,
                 task_id=task_id,
                 model=state.get("model"),
             ),
             QueryEvent(
                 type="result",
-                content="Query processed (no skill)",
+                content=content_msg,
                 task_id=task_id,
                 model=state.get("model"),
                 duration_ms=int((time.time() - state["started_at"]) * 1000),

@@ -211,6 +211,8 @@ public class BusinessAgentTaskService {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
+        String markdownBody = skillRegistryService.getSkill(tenantId, task.getSkillId()).getMarkdownBody();
+
         return workerTaskLaunchers.stream()
                 .filter(Objects::nonNull)
                 .filter(launcher -> workerPool.getWorkerBackend().equals(launcher.getWorkerBackend()))
@@ -226,6 +228,7 @@ public class BusinessAgentTaskService {
                         .workerPoolId(task.getWorkerPoolId())
                         .workerBackend(workerPool.getWorkerBackend())
                         .modelConfigId(task.getModelConfigId())
+                        .markdownBody(markdownBody)
                         .build()))
                 .orElse(null);
     }

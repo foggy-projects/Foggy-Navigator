@@ -60,6 +60,7 @@ public class SkillRegistryService {
         skill.setSkillId(form.getSkillId());
         skill.setName(form.getName());
         skill.setDescription(form.getDescription());
+        skill.setMarkdownBody(form.getMarkdownBody());
         skill.setStatus(status);
         if (!StringUtils.hasText(skill.getCreatedBy())) {
             skill.setCreatedBy(actorUserId);
@@ -188,5 +189,11 @@ public class SkillRegistryService {
         if (!STATUS_ENABLED.equals(allowlist.getStatus())) {
             throw new IllegalStateException("Skill function allowlist is disabled");
         }
+    }
+
+    @Transactional(readOnly = true)
+    public SkillEntity getSkill(String tenantId, String skillId) {
+        return skillRepository.findByTenantIdAndSkillId(tenantId, skillId)
+                .orElseThrow(() -> new IllegalArgumentException("Skill not found: " + skillId));
     }
 }

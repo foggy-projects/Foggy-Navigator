@@ -27,6 +27,9 @@ public class SkillEntity {
     @Column(columnDefinition = "TEXT")
     private String description;
 
+    @Column(columnDefinition = "LONGTEXT")
+    private String markdownBody;
+
     @Column(nullable = false, length = 64)
     private String status;
 

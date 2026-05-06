@@ -98,13 +98,22 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             case "ABORTED" -> A2aTaskState.CANCELED;
             default -> A2aTaskState.WORKING;
         };
-        return A2aTask.builder()
+        A2aTask.A2aTaskBuilder builder = A2aTask.builder()
                 .id(dto.getTaskId())
                 .status(A2aTaskStatus.builder()
                         .state(state)
                         .timestamp(Instant.now())
-                        .build())
-                .build();
+                        .build());
+                        
+        if (dto.getResultText() != null && !dto.getResultText().isBlank()) {
+            builder.artifacts(java.util.List.of(
+                A2aArtifact.builder()
+                    .parts(java.util.List.of(A2aPart.text(dto.getResultText())))
+                    .build()
+            ));
+        }
+        
+        return builder.build();
     }
 
     private String extractPrompt(A2aMessage message) {

@@ -166,6 +166,7 @@ class SkillManifest(BaseModel):
     id: str
     name: str
     description: str = ""
+    markdown_body: str = ""
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     allowed_tools: list[str] = Field(default_factory=list)

@@ -284,13 +284,19 @@ class LlmSkillAgent:
 
     @staticmethod
     def _build_system_prompt(manifest: SkillManifest) -> str:
-        return (
+        prompt = (
             f"You are executing skill {manifest.id}.\n"
             f"Description: {manifest.description}\n"
             f"Output schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
+        )
+        if manifest.markdown_body:
+            prompt += f"\n---\nSkill Instructions:\n{manifest.markdown_body}\n---\n\n"
+        
+        prompt += (
             "Use only the provided tools. When the skill is complete, call "
             "submit_skill_result. Natural-language completion is not accepted."
         )
+        return prompt
 
     @staticmethod
     def _build_user_prompt(prompt: str, skill_input: dict[str, Any], skill_id: str) -> str:

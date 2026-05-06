@@ -1,13 +1,19 @@
 <template>
   <view class="message-bubble" :class="[senderClass]">
     <!-- 用户消息 -->
-    <view v-if="message.sender === 'user'" class="bubble user-bubble">
-      <rich-text :nodes="message.content" />
+    <view v-if="message.sender === 'user'" class="copyable-group">
+      <view class="bubble user-bubble" @longpress="handleCopy">
+        <rich-text :nodes="message.content" />
+      </view>
+      <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
     </view>
 
     <!-- 助手消息 -->
-    <view v-else-if="message.sender === 'assistant'" class="bubble assistant-bubble">
-      <rich-text :nodes="renderedContent" />
+    <view v-else-if="message.sender === 'assistant'" class="copyable-group">
+      <view class="bubble assistant-bubble" @longpress="handleCopy">
+        <rich-text :nodes="renderedContent" />
+      </view>
+      <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
     </view>
 
     <!-- 工具调用 -->
@@ -23,9 +29,12 @@
 
     <!-- 系统消息 -->
     <view v-else-if="message.sender === 'system'" class="system-area">
-      <view v-if="isTaskCompleted" class="task-card" :class="taskStatusClass">
-        <text class="task-card-title">{{ taskStatus === 'FAILED' ? '任务失败' : '任务完成' }}</text>
-        <text class="task-card-desc">{{ message.content }}</text>
+      <view v-if="isTaskCompleted" class="copyable-group system-copy-group">
+        <view class="task-card" :class="taskStatusClass" @longpress="handleCopy">
+          <text class="task-card-title">{{ taskStatus === 'FAILED' ? '任务失败' : '任务完成' }}</text>
+          <text class="task-card-desc">{{ message.content }}</text>
+        </view>
+        <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
       </view>
       <PlanReviewCard
         v-else-if="isConfirmation && isPlanReview"
@@ -42,16 +51,22 @@
         :message="message"
         @permission-respond="(pid, decision, scope) => $emit('permission-respond', pid, decision, scope)"
       />
-      <view v-else-if="message.error" class="error-block">
-        <text class="error-text">{{ message.error }}</text>
+      <view v-else-if="message.error" class="copyable-group system-copy-group">
+        <view class="error-block" @longpress="handleCopy">
+          <text class="error-text">{{ message.error }}</text>
+        </view>
+        <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
       </view>
-      <text v-else class="system-text">{{ message.content }}</text>
+      <view v-else class="copyable-group system-copy-group">
+        <text class="system-text" @longpress="handleCopy">{{ message.content }}</text>
+        <text v-if="copyable" class="copy-action" @tap.stop="handleCopy">{{ copyLabel }}</text>
+      </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { AipMessageType } from '@foggy/chat-core'
 import type { ChatMessage } from '@foggy/chat-core'
 import ToolCallCard from './ToolCallCard.vue'
@@ -59,6 +74,7 @@ import PlanReviewCard from './PlanReviewCard.vue'
 import PermissionRequestCard from './PermissionRequestCard.vue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import { renderMarkdown } from '@/utils/markdown'
+import { copyTextToClipboard } from '@/utils/clipboard'
 
 const props = defineProps<{
   message: ChatMessage
@@ -71,6 +87,7 @@ defineEmits<{
 }>()
 
 const senderClass = computed(() => `sender-${props.message.sender}`)
+const isCopied = ref(false)
 
 const renderedContent = computed(() => {
   if (!props.message.content) return ''
@@ -90,6 +107,42 @@ const taskStatus = computed(() => {
 const taskStatusClass = computed(() =>
   taskStatus.value === 'FAILED' ? 'task-card-failed' : 'task-card-success',
 )
+
+const copyText = computed(() => {
+  if (props.message.sender === 'tool') return ''
+  if (isConfirmation.value) return ''
+  return (props.message.error || props.message.content || '').trim()
+})
+
+const copyable = computed(() => copyText.value.length > 0)
+const copyLabel = computed(() => (isCopied.value ? '已复制' : '复制'))
+
+let copyTimer: ReturnType<typeof setTimeout> | null = null
+
+async function handleCopy() {
+  if (!copyable.value) return
+
+  try {
+    await copyTextToClipboard(copyText.value)
+    isCopied.value = true
+    uni.showToast({ title: '已复制', icon: 'none' })
+    if (copyTimer) clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => {
+      isCopied.value = false
+      copyTimer = null
+    }, 1500)
+  } catch (error) {
+    console.error('Failed to copy message:', error)
+    uni.showToast({ title: '复制失败', icon: 'none' })
+  }
+}
+
+onBeforeUnmount(() => {
+  if (copyTimer) {
+    clearTimeout(copyTimer)
+    copyTimer = null
+  }
+})
 </script>
 
 <style scoped>
@@ -115,6 +168,11 @@ const taskStatusClass = computed(() =>
   overflow-wrap: break-word;
   word-break: normal;
 }
+.copyable-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+}
 .user-bubble {
   background: #667eea;
   color: #ffffff;
@@ -134,12 +192,27 @@ const taskStatusClass = computed(() =>
   display: flex;
   justify-content: center;
 }
+.system-copy-group {
+  align-items: center;
+}
 .system-text {
   font-size: 24rpx;
   color: #909399;
   background: rgba(0, 0, 0, 0.04);
   padding: 8rpx 24rpx;
   border-radius: 20rpx;
+}
+.copy-action {
+  font-size: 22rpx;
+  line-height: 1;
+  color: #667eea;
+  background: rgba(102, 126, 234, 0.12);
+  border-radius: 999rpx;
+  padding: 10rpx 18rpx;
+  align-self: flex-end;
+}
+.system-copy-group .copy-action {
+  align-self: center;
 }
 .error-block {
   background: #fef0f0;
