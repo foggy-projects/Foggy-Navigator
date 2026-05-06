@@ -5,7 +5,7 @@
 - doc_type: integration-guide
 - version: 1.1.3-SNAPSHOT
 - status: draft
-- date: 2026-05-04
+- date: 2026-05-06
 - intended_for: upstream-frontend-developer
 - purpose: 指导上游前端开发者使用 `@foggy/chat` 和 `@foggy/navigator-chat-widget` 集成聊天、工具调用和审批 UI
 
@@ -27,6 +27,7 @@ Navigator 提供两个前端组件包，分别面向不同集成深度：
 - **MessageInput**：输入框 + 发送按钮
 - **ToolCallBlock**：工具调用卡片（命令 + 输出展示）
 - **ChatPanel / MessageList 内置审批渲染**：通过内部审批卡片展示 Approve / Reject 按钮和状态
+- **BusinessSuspensionDialog**：受控业务暂停弹窗，用于上游在聊天卡片外展示审批、人工确认等暂停交互
 - **ThinkingIndicator**：思考中动画
 - **StatusBadge**：状态徽章
 - **useChatStore**：Pinia Store，管理消息状态
@@ -126,7 +127,7 @@ const eventSource = createSseClient({
 })
 ```
 
-### 5. 审批卡片
+### 5. 审批卡片与弹窗
 
 `ChatPanel` / `MessageList` 会根据 `ChatMessage.approvalStatus` 自动渲染内部审批卡片：
 
@@ -146,6 +147,63 @@ const eventSource = createSseClient({
 ```text
 POST /api/v1/business-agent/suspensions/{suspendId}/resume
 ```
+
+如果上游需要更强的业务确认感，可以使用 `BusinessSuspensionDialog` 作为受控弹窗。组件只接收已清洗的展示模型，并只向宿主发出决策事件；BFF 负责把决策转成 Navigator resume 请求。
+
+```vue
+<template>
+  <BusinessSuspensionDialog
+    v-model="visible"
+    :suspension="suspension"
+    :submitting="submitting"
+    @submit="handleDecision"
+  />
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import {
+  BusinessSuspensionDialog,
+  type BusinessSuspensionDecisionPayload,
+  type BusinessSuspensionDialogModel,
+} from '@foggy/chat'
+
+const visible = ref(true)
+const submitting = ref(false)
+
+const suspension = ref<BusinessSuspensionDialogModel>({
+  suspendId: 'sus_xxx',
+  suspensionType: 'APPROVAL_REQUIRED',
+  status: 'pending',
+  title: '签收确认',
+  summary: '确认要执行自提签收操作',
+  functionId: 'tms.fulfillment.selfPickupSign',
+  version: 'v1',
+  riskLevel: 'P1',
+  displayFields: [
+    { label: 'orderIdentifier', value: '1129' },
+  ],
+})
+
+async function handleDecision(payload: BusinessSuspensionDecisionPayload) {
+  submitting.value = true
+  try {
+    await fetch(`/bff/navigator/suspensions/${payload.suspendId}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision: payload.decision,
+        comment: payload.comment,
+      }),
+    })
+  } finally {
+    submitting.value = false
+  }
+}
+</script>
+```
+
+`BusinessSuspensionDialogModel.displayFields` 必须由上游 BFF 或 Navigator 控制面清洗后生成，不允许传入 token、凭据、`adapterConfigJson`、`manifestJson`、完整 binding context 或 input hash 原文。
 
 ## 快速开始：`@foggy/navigator-chat-widget`
 
@@ -207,6 +265,7 @@ chatRef.value.clear()
 | 流式文本 | ✅ TEXT_CHUNK / TEXT_COMPLETE | ✅ 内置 |
 | 工具调用展示 | ✅ ToolCallBlock | — 需扩展 |
 | 审批卡片 | ✅ ChatPanel/MessageList 内置审批渲染 | — 需扩展 |
+| Suspension 弹窗 | ✅ BusinessSuspensionDialog | — 可由宿主组合 |
 | 思考动画 | ✅ ThinkingIndicator | ✅ 内置 |
 | SSE 客户端 | ✅ createSseClient | ✅ 内置 |
 | 状态管理 | ✅ useChatStore (Pinia) | ✅ useNavigatorChat |

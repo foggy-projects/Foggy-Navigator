@@ -59,25 +59,26 @@
 | 22 | 集成 ChatPanel + MessageInput | `<ChatPanel>` 组件 | ✅ 已有 |
 | 23 | 集成 ToolCallBlock | 工具调用展示 | ✅ 已有 |
 | 24 | 集成 ChatPanel/MessageList 审批渲染 | 审批 UI | ✅ 已有 |
-| 25 | 配置 SSE 订阅（通过 BFF） | `createSseClient()` | ✅ 已有 |
-| 26 | 或使用 NavigatorChat（快速集成） | `<NavigatorChat>` 组件 | ✅ 已有 |
+| 25 | 集成 BusinessSuspensionDialog | 高风险业务确认弹窗 | ✅ 已有 |
+| 26 | 配置 SSE 订阅（通过 BFF） | `createSseClient()` | ✅ 已有 |
+| 27 | 或使用 NavigatorChat（快速集成） | `<NavigatorChat>` 组件 | ✅ 已有 |
 
 ### Phase 6：审批链路验证（上游后端 / 前端）
 
 | # | 步骤 | API / 工具 | SDK 状态 |
 | --- | --- | --- | --- |
-| 27 | 调用需审批的函数 → 收到 SUSPENDED | Worker invoke_business_function | 内部自动 |
-| 28 | 前端展示审批卡片 | ChatPanel/MessageList 内置审批渲染 | ✅ 已有 |
-| 29 | 通过 BFF 转发 Resume 请求 | `client.businessAgent().resumeSuspension()` | ✅ SDK 已有 |
-| 30 | 验证审批后函数正确执行 | 查看 Task 状态和消息 | — |
+| 28 | 调用需审批的函数 → 收到 SUSPENDED | Worker invoke_business_function | 内部自动 |
+| 29 | 前端展示审批卡片或 Suspension 弹窗 | ChatPanel/MessageList / BusinessSuspensionDialog | ✅ 已有 |
+| 30 | 通过 BFF 转发 Resume 请求 | `client.businessAgent().resumeSuspension()` | ✅ SDK 已有 |
+| 31 | 验证审批后函数由 Java 执行且重复 resume 不重复调用 | 查看 Task 状态、消息和审计 | — |
 
 ### Phase 7：审计验证（平台管理员）
 
 | # | 步骤 | 说明 |
 | --- | --- | --- |
-| 31 | 验证审计日志包含 clientAppId、upstreamUserId | 数据库查询 `BusinessFunctionRuntimeAuditEntity` |
-| 32 | 验证审计日志不包含 secret、token、adapter config | 安全合规检查 |
-| 33 | 验证 invoke / resume / tool-message 都有审计记录 | 全链路审计覆盖 |
+| 32 | 验证审计日志包含 clientAppId、upstreamUserId | 数据库查询 `BusinessFunctionRuntimeAuditEntity` |
+| 33 | 验证审计日志不包含 secret、token、adapter config | 安全合规检查 |
+| 34 | 验证 invoke / resume / tool-message 都有审计记录 | 全链路审计覆盖 |
 
 ## 能力覆盖汇总
 
@@ -88,6 +89,7 @@
 | Agent 任务交互 | ✅ `AgentApi`（ask/poll/messages/sessions） | — |
 | 前端聊天 UI | ✅ `@foggy/chat` ChatPanel | — |
 | 前端审批 UI | ✅ `@foggy/chat` ChatPanel/MessageList 内置审批渲染 | — |
+| 前端 Suspension 弹窗 | ✅ `@foggy/chat` BusinessSuspensionDialog | — |
 | 前端快速集成 | ✅ `@foggy/navigator-chat-widget` NavigatorChat | — |
 | ClientApp CRUD | ✅ `client.businessAgent().createClientApp()` / `listClientApps()` / `updateClientAppStatus()` | — |
 | Provisioning/Runtime Credential | ✅ `issueProvisioningCredential()` / `issueRuntimeCredential()` | — |
@@ -100,7 +102,7 @@
 
 ## 下一阶段建议
 
-1. **补前端组件与审批流 Demo**：完整的 Business Agent 审批流前端集成示例。
+1. **补审批流 Demo**：完整的 Business Agent 审批流前端集成示例，覆盖内联卡片和 `BusinessSuspensionDialog` 两种形态。
 2. **补 REST Adapter 更多 transport 类型**：当前仅支持 REST，后续扩展 RPC/MQ/MCP。
 3. **补 fsscript 运行时集成**：`run_business_script` 当前为占位工具。
 4. **拆分正式上游沙箱环境**：当前 TMS 样例先接入开发环境，首轮反馈稳定后再整理独立 sandbox。

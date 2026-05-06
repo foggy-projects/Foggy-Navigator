@@ -12,6 +12,7 @@ vi.mock('element-plus', () => ({
       <div v-if="modelValue" class="el-dialog-stub">
         <slot name="header" title-id="dialog-title" title-class="dialog-title"></slot>
         <slot></slot>
+        <slot name="footer"></slot>
       </div>
     `,
   },
@@ -51,6 +52,7 @@ import UserQuestionCard from '../components/UserQuestionCard.vue'
 import PlanReviewCard from '../components/PlanReviewCard.vue'
 import ToolCallBlock from '../components/ToolCallBlock.vue'
 import SkillApprovalCard from '../components/SkillApprovalCard.vue'
+import BusinessSuspensionDialog from '../components/BusinessSuspensionDialog.vue'
 import MessageList from '../components/MessageList.vue'
 
 const elDialogStub = {
@@ -58,6 +60,7 @@ const elDialogStub = {
     <div class="el-dialog-stub">
       <slot name="header" title-id="dialog-title" title-class="dialog-title"></slot>
       <slot></slot>
+      <slot name="footer"></slot>
     </div>
   `,
 }
@@ -238,6 +241,80 @@ describe('SkillApprovalCard', () => {
     await wrapper.find('.btn-approve').trigger('click')
 
     expect(wrapper.emitted('skillApprovalRespond')?.[0]).toEqual(['task-1', 'approved', ''])
+  })
+})
+
+// ========== BusinessSuspensionDialog ==========
+
+describe('BusinessSuspensionDialog', () => {
+  function makeSuspension(overrides = {}) {
+    return {
+      suspendId: 'sus_001',
+      suspensionType: 'APPROVAL_REQUIRED',
+      status: 'pending',
+      title: '签收确认',
+      summary: '确认要签收运单 1130',
+      functionId: 'tms.fulfillment.selfPickupSign',
+      version: 'v1',
+      riskLevel: 'P1',
+      expiresAt: '2026-05-06T23:59:59+08:00',
+      displayFields: [
+        { label: 'orderIdentifier', value: '1130' },
+        { label: 'task_scoped_token', value: 'should-not-render' },
+      ],
+      adapterConfigJson: 'adapter-secret',
+      manifestJson: 'manifest-secret',
+      ...overrides,
+    }
+  }
+
+  it('renders sanitized suspension details', () => {
+    const wrapper = mount(BusinessSuspensionDialog, {
+      props: {
+        modelValue: true,
+        suspension: makeSuspension(),
+      },
+    })
+
+    expect(wrapper.text()).toContain('签收确认')
+    expect(wrapper.text()).toContain('tms.fulfillment.selfPickupSign')
+    expect(wrapper.text()).toContain('orderIdentifier')
+    expect(wrapper.text()).toContain('1130')
+    expect(wrapper.text()).not.toContain('should-not-render')
+    expect(wrapper.text()).not.toContain('adapter-secret')
+    expect(wrapper.text()).not.toContain('manifest-secret')
+  })
+
+  it('emits a controlled decision payload', async () => {
+    const wrapper = mount(BusinessSuspensionDialog, {
+      props: {
+        modelValue: true,
+        suspension: makeSuspension(),
+      },
+    })
+
+    await wrapper.find('textarea').setValue('同意签收')
+    await wrapper.find('.btn-approve').trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]).toEqual([{
+      suspendId: 'sus_001',
+      suspensionType: 'APPROVAL_REQUIRED',
+      decision: 'approved',
+      comment: '同意签收',
+    }])
+  })
+
+  it('hides decision buttons for terminal status', () => {
+    const wrapper = mount(BusinessSuspensionDialog, {
+      props: {
+        modelValue: true,
+        suspension: makeSuspension({ status: 'completed' }),
+      },
+    })
+
+    expect(wrapper.find('.btn-approve').exists()).toBe(false)
+    expect(wrapper.find('.btn-reject').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Completed')
   })
 })
 
