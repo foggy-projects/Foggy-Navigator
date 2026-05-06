@@ -106,6 +106,7 @@ import {
 const chatConfig: NavigatorChatConfig = {
   baseUrl: '/bff/navigator',
   agentId: 'business-agent',
+  pollInterval: 4000,
 }
 
 const suspensionVisible = ref(false)
@@ -137,7 +138,7 @@ async function submitDecision(payload: BusinessSuspensionDecisionPayload) {
 </script>
 ```
 
-`openSuspension` 可以由上游自己的 SSE、任务消息解析或业务页面按钮触发。
+该 Demo 先使用 4s 任务轮询：TMS 前端轮询 TMS BFF，TMS BFF 代理查询 Navigator task。`openSuspension` 可以由上游自己的 SSE、任务消息解析或业务页面按钮触发。
 
 ## ChatPanel 内联卡片 Demo
 

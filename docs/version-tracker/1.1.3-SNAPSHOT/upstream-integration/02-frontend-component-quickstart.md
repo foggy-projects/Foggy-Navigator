@@ -239,6 +239,7 @@ import type {
 const chatConfig: NavigatorChatConfig = {
   baseUrl: '/bff/api',    // 上游 BFF 代理地址
   agentId: 'your-agent-id',
+  pollInterval: 4000,     // TMS 初始接入先使用 4s 轮询，后续按体验和服务负载再调整
   // 不在浏览器中配置 Navigator admin/provisioning/runtime credential。
   // 如需鉴权，推荐通过 cookie 或自定义 fetch 与上游 BFF 会话绑定。
 }
@@ -272,6 +273,8 @@ async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) 
 }
 </script>
 ```
+
+`NavigatorChat` 默认采用 `ask -> poll task -> display result` 模式。TMS 初始接入建议显式传入 `pollInterval: 4000`，即浏览器轮询 TMS BFF，TMS BFF 再代理查询 Navigator task 状态。
 
 `NavigatorChat` 不会自动从普通轮询任务结果中推断 suspension。上游宿主应从自己的 BFF、SSE 或任务消息中解析出 `BusinessSuspensionDialogModel` 后传入 `currentSuspension`，再打开 `suspensionVisible`。
 

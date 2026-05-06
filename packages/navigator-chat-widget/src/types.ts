@@ -40,7 +40,7 @@ export interface NavigatorChatConfig {
   apiKey?: string
   /** Agent ID */
   agentId: string
-  /** 轮询间隔（毫秒，默认 2000） */
+  /** 轮询间隔（毫秒，默认 2000；TMS 初始接入建议显式设置为 4000） */
   pollInterval?: number
   /** 超时时间（毫秒，默认 300000 = 5 分钟） */
   timeout?: number
