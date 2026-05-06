@@ -54,3 +54,10 @@ export interface NavigatorChatConfig {
    */
   fetch?: (url: string, init: RequestInit) => Promise<Response>
 }
+
+export type {
+  BusinessSuspensionDecisionPayload,
+  BusinessSuspensionDialogModel,
+  BusinessSuspensionStatus,
+  BusinessSuspensionType,
+} from '@foggy/chat'

@@ -32,6 +32,12 @@ pnpm add @foggy/chat
 }
 ```
 
+`@foggy/navigator-chat-widget` 如果启用默认 suspension 弹窗，也会复用本包的 `BusinessSuspensionDialog`。消费方需要导入：
+
+```typescript
+import '@foggy/chat/style.css'
+```
+
 ## 快速开始
 
 ### 1. 导入样式

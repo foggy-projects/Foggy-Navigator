@@ -22,6 +22,9 @@ vi.mock('vue-virtual-scroller', () => ({
   DynamicScroller: {
     name: 'DynamicScroller',
     props: ['items'],
+    methods: {
+      scrollToBottom() {},
+    },
     template: `
       <div class="dynamic-scroller">
         <slot name="before"></slot>

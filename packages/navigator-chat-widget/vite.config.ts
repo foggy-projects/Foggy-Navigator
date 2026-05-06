@@ -12,12 +12,13 @@ export default defineConfig({
       formats: ['es']
     },
     rollupOptions: {
-      external: ['vue', 'element-plus', '@element-plus/icons-vue'],
+      external: ['vue', 'element-plus', '@element-plus/icons-vue', '@foggy/chat'],
       output: {
         globals: {
           vue: 'Vue',
           'element-plus': 'ElementPlus',
-          '@element-plus/icons-vue': 'ElementPlusIconsVue'
+          '@element-plus/icons-vue': 'ElementPlusIconsVue',
+          '@foggy/chat': 'FoggyChat'
         }
       }
     }

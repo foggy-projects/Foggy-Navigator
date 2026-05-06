@@ -350,7 +350,7 @@ flowchart LR
 3. Approval P1 真实 invoke 仍保持 Gateway final status `SUCCESS`、TMS code `200`、leak check `false`。
 4. 新增或更新测试覆盖：worker waiting frame 缺失、worker notify 失败、重复 resume、非 approval suspension 类型建模。
 
-### Stage 12 Follow-up：上游 Suspension UI Dialog 组件 [IN_PROGRESS]
+### Stage 12 Follow-up：上游 Suspension UI Dialog 组件 [COMPLETED]
 
 目标：不进入新的通用 Suspension 状态机阶段，先为上游前端提供可组合的对话框能力，让审批、人工确认、支付二维码、外部回调等待等暂停交互可以在 UI 层有统一展示表面。
 
@@ -359,13 +359,14 @@ flowchart LR
 1. 在 `@foggy/chat` 提供 `BusinessSuspensionDialog` 受控组件和类型导出。
 2. 组件只接收清洗后的展示模型，不渲染任意原始 payload，不持有 token、credential、`adapterConfigJson` 或 `manifestJson`。
 3. 用户决策只通过 `submit` 事件回传给宿主；上游 BFF 再使用 SDK 或 Control Plane REST 调用 resume。
-4. 更新上游集成文档，明确 UI dialog 不改变 Stage 12 的执行所有权：Java Suspension service 负责业务副作用执行，Worker 只负责对话恢复通知。
+4. 在 `@foggy/navigator-chat-widget` 提供可选默认 dialog shell 和 `suspensionDecision` 事件，宿主仍负责从 BFF 取得清洗后的 suspension model。
+5. 更新上游集成文档，明确 UI dialog 不改变 Stage 12 的执行所有权：Java Suspension service 负责业务副作用执行，Worker 只负责对话恢复通知。
 
 验收：
 
 1. `@foggy/chat` 单测覆盖弹窗展示、决策事件和敏感展示字段过滤。
 2. 前端快速上手、审批流和上游 Suspension Dialog 契约文档同步。
-3. `pnpm --filter @foggy/chat test` 与 `pnpm --filter @foggy/chat build` 通过。
+3. `pnpm --filter @foggy/chat test`、`pnpm --filter @foggy/chat build` 与 `pnpm --filter @foggy/navigator-chat-widget build` 通过。
 
 ## 当前进度
 
@@ -396,7 +397,7 @@ flowchart LR
 | Stage 10E SDK Bearer Control Plane Auth | completed | `NavigatorClient.adminToken/bearerToken` 支持 Bearer 控制面鉴权；当前 sandbox JWT 不再误走 `X-API-Key`; 2026-05-05 |
 | Stage 11 Business Task Worker Binding | completed | `bt_*` 创建时绑定真实 `lgt_*`；resume event 投递到 worker task；runtime token 注册 worker task alias；TMS P1 approval invoke 已重启后复测通过，Gateway=`SUCCESS`、TMS code=`200`、data=yes、leak=false；2026-05-06 |
 | Stage 12 Suspension Execution Semantics | accepted-with-live-retest | 双事件语义已落地：Worker 只做 conversation resume notification；Java suspension service 负责 approved business execution；补充 resume/execution 幂等、执行/通知状态、通用 suspension type 预留；after-commit 决策监听器使用新事务获取 suspension 行锁；approved execution 成功/失败审计携带 `suspendId`；TMS test-only fresh order live retest 使用 `orderIdentifier=1129` 验证首个 approve 执行业务副作用、重复 resume 不重复调用；fake upstream E2E 覆盖重复 approve 只调用一次上游；验收记录见 `stage-12-suspension-execution-semantics-acceptance.md`；2026-05-06 |
-| Stage 12 Follow-up Upstream Suspension Dialog | in-progress | 不进入通用 Suspension 后端下一阶段；先补 `@foggy/chat` 的 `BusinessSuspensionDialog` 与上游 UI/BFF 契约，供审批和后续人工确认/支付/外部等待交互复用；2026-05-06 |
+| Stage 12 Follow-up Upstream Suspension Dialog | completed | 不进入通用 Suspension 后端下一阶段；已补 `@foggy/chat` 的 `BusinessSuspensionDialog`，并让 `@foggy/navigator-chat-widget` 提供可选默认 dialog shell 与 `suspensionDecision` 事件；补 UI + BFF demo，供审批和后续人工确认/支付/外部等待交互复用；2026-05-06 |
 
 > [!NOTE]
 > `BusinessObject` 是用于组织函数（Function）的业务对象概念，不是授权主体。授权主体仍然由 ClientApp / upstreamUser / Skill / Function grant 进行细粒度控制。

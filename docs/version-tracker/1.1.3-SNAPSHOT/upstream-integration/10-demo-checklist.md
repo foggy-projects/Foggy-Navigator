@@ -61,7 +61,7 @@
 | 24 | 集成 ChatPanel/MessageList 审批渲染 | 审批 UI | ✅ 已有 |
 | 25 | 集成 BusinessSuspensionDialog | 高风险业务确认弹窗 | ✅ 已有 |
 | 26 | 配置 SSE 订阅（通过 BFF） | `createSseClient()` | ✅ 已有 |
-| 27 | 或使用 NavigatorChat（快速集成） | `<NavigatorChat>` 组件 | ✅ 已有 |
+| 27 | 或使用 NavigatorChat（快速集成） | `<NavigatorChat>` 组件，可选默认 suspension 弹窗 | ✅ 已有 |
 
 ### Phase 6：审批链路验证（上游后端 / 前端）
 
@@ -90,7 +90,7 @@
 | 前端聊天 UI | ✅ `@foggy/chat` ChatPanel | — |
 | 前端审批 UI | ✅ `@foggy/chat` ChatPanel/MessageList 内置审批渲染 | — |
 | 前端 Suspension 弹窗 | ✅ `@foggy/chat` BusinessSuspensionDialog | — |
-| 前端快速集成 | ✅ `@foggy/navigator-chat-widget` NavigatorChat | — |
+| 前端快速集成 | ✅ `@foggy/navigator-chat-widget` NavigatorChat + optional suspension dialog | — |
 | ClientApp CRUD | ✅ `client.businessAgent().createClientApp()` / `listClientApps()` / `updateClientAppStatus()` | — |
 | Provisioning/Runtime Credential | ✅ `issueProvisioningCredential()` / `issueRuntimeCredential()` | — |
 | Skill / User / Model Grant | ✅ `createSkill()` / grant APIs | — |

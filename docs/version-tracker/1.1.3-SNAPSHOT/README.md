@@ -44,6 +44,7 @@
   - [13-tms-minimal-onboarding-sample.md](./upstream-integration/13-tms-minimal-onboarding-sample.md) - TMS 样例 / SDK 初始化、`orderIdentifier` 字段约束与 mock E2E 证据
   - [14-upstream-auto-bootstrap-contract.md](./upstream-integration/14-upstream-auto-bootstrap-contract.md) - 自动化契约 / 上游 LLM 通过 manifest + env + SDK runner 自动完成 Business Agent bootstrap
   - [15-upstream-suspension-dialog-component-contract.md](./upstream-integration/15-upstream-suspension-dialog-component-contract.md) - 前端组件契约 / 上游通过 `BusinessSuspensionDialog` 展示审批与通用暂停交互
+  - [16-upstream-suspension-ui-bff-demo.md](./upstream-integration/16-upstream-suspension-ui-bff-demo.md) - 前端/BFF 示例 / 上游组合 `NavigatorChat`、`BusinessSuspensionDialog` 与 BFF decision 转发
 
 ## Acceptance Status
 

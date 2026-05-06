@@ -7,8 +7,8 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/navigator-chat-widget.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/navigator-chat-widget.js"
     },
     "./style.css": "./dist/navigator-chat-widget.css"
   },
@@ -31,6 +31,7 @@
     "vue-tsc": "^3.1.4"
   },
   "dependencies": {
+    "@foggy/chat": "workspace:*",
     "markdown-it": "^14.1.0"
   }
 }

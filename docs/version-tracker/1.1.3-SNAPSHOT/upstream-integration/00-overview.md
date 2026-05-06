@@ -88,7 +88,7 @@ graph TB
 | 聊天 UI | 消息展示、输入、流式渲染 | `@foggy/chat` ChatPanel |
 | 工具调用展示 | 展示 Agent 工具执行过程 | `@foggy/chat` ToolCallBlock |
 | 审批卡片 | 展示审批请求、Approve/Reject | `@foggy/chat` ChatPanel/MessageList 内置审批渲染 |
-| Suspension 弹窗 | 展示审批、人工确认、支付等暂停交互 | `@foggy/chat` BusinessSuspensionDialog |
+| Suspension 弹窗 | 展示审批、人工确认、支付等暂停交互 | `@foggy/chat` BusinessSuspensionDialog / `NavigatorChat` optional dialog |
 | 快速集成 | 开箱即用的对话组件 | `@foggy/navigator-chat-widget` NavigatorChat |
 
 ## 安全边界概要
@@ -117,3 +117,4 @@ graph TB
 | [13-tms-minimal-onboarding-sample.md](./13-tms-minimal-onboarding-sample.md) | TMS 最小接入样例 | 上游 LLM coding agent / 上游后端 |
 | [14-upstream-auto-bootstrap-contract.md](./14-upstream-auto-bootstrap-contract.md) | 上游自动 bootstrap 契约 | 上游 LLM coding agent / 上游后端 |
 | [15-upstream-suspension-dialog-component-contract.md](./15-upstream-suspension-dialog-component-contract.md) | 上游 Suspension 对话框组件契约 | 上游前端 / 上游后端 |
+| [16-upstream-suspension-ui-bff-demo.md](./16-upstream-suspension-ui-bff-demo.md) | 上游 Suspension UI + BFF Demo | 上游前端 / 上游后端 |

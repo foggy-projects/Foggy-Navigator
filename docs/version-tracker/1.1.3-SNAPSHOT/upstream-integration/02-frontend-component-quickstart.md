@@ -39,8 +39,9 @@ Navigator 提供两个前端组件包，分别面向不同集成深度：
 封装 `useNavigatorChat` composable 的开箱即用 Vue 3 组件，提供：
 
 - **NavigatorChat**：完整对话组件，内置消息列表、输入、Markdown 渲染、状态标签
+- 可选内置 **BusinessSuspensionDialog** 弹窗表面，由宿主传入清洗后的 suspension model 并处理决策事件
 - 支持 `send` / `cancel` / `clear` 编程式控制
-- 支持 `@send` / `@statusChange` / `@reply` 事件
+- 支持 `@send` / `@statusChange` / `@reply` / `@suspensionDecision` 事件
 
 ## 安全边界
 
@@ -82,6 +83,8 @@ npm install @foggy/chat
 // main.ts
 import '@foggy/chat/style.css'
 ```
+
+如果使用 `@foggy/navigator-chat-widget` 的默认 suspension 弹窗，也需要导入 `@foggy/chat/style.css`，因为弹窗组件来自 `@foggy/chat`。
 
 ### 3. 基本使用
 
@@ -215,14 +218,23 @@ async function handleDecision(payload: BusinessSuspensionDecisionPayload) {
     :config="chatConfig"
     title="业务助手"
     height="600px"
+    v-model:suspension-dialog-visible="suspensionVisible"
+    :suspension="currentSuspension"
+    :suspension-submitting="submittingSuspension"
     @send="onSend"
     @status-change="onStatusChange"
+    @suspension-decision="onSuspensionDecision"
   />
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import { NavigatorChat } from '@foggy/navigator-chat-widget'
-import type { NavigatorChatConfig } from '@foggy/navigator-chat-widget'
+import type {
+  BusinessSuspensionDecisionPayload,
+  BusinessSuspensionDialogModel,
+  NavigatorChatConfig,
+} from '@foggy/navigator-chat-widget'
 
 const chatConfig: NavigatorChatConfig = {
   baseUrl: '/bff/api',    // 上游 BFF 代理地址
@@ -231,6 +243,10 @@ const chatConfig: NavigatorChatConfig = {
   // 如需鉴权，推荐通过 cookie 或自定义 fetch 与上游 BFF 会话绑定。
 }
 
+const suspensionVisible = ref(false)
+const submittingSuspension = ref(false)
+const currentSuspension = ref<BusinessSuspensionDialogModel | null>(null)
+
 function onSend(content: string) {
   console.log('用户发送:', content)
 }
@@ -238,8 +254,26 @@ function onSend(content: string) {
 function onStatusChange(status) {
   console.log('状态变化:', status)
 }
+
+async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) {
+  submittingSuspension.value = true
+  try {
+    await fetch(`/bff/navigator/suspensions/${payload.suspendId}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision: payload.decision,
+        comment: payload.comment,
+      }),
+    })
+  } finally {
+    submittingSuspension.value = false
+  }
+}
 </script>
 ```
+
+`NavigatorChat` 不会自动从普通轮询任务结果中推断 suspension。上游宿主应从自己的 BFF、SSE 或任务消息中解析出 `BusinessSuspensionDialogModel` 后传入 `currentSuspension`，再打开 `suspensionVisible`。
 
 ### 2. 编程式控制
 
@@ -265,7 +299,7 @@ chatRef.value.clear()
 | 流式文本 | ✅ TEXT_CHUNK / TEXT_COMPLETE | ✅ 内置 |
 | 工具调用展示 | ✅ ToolCallBlock | — 需扩展 |
 | 审批卡片 | ✅ ChatPanel/MessageList 内置审批渲染 | — 需扩展 |
-| Suspension 弹窗 | ✅ BusinessSuspensionDialog | — 可由宿主组合 |
+| Suspension 弹窗 | ✅ BusinessSuspensionDialog | ✅ 可选默认弹窗 / slot 覆盖 |
 | 思考动画 | ✅ ThinkingIndicator | ✅ 内置 |
 | SSE 客户端 | ✅ createSseClient | ✅ 内置 |
 | 状态管理 | ✅ useChatStore (Pinia) | ✅ useNavigatorChat |
