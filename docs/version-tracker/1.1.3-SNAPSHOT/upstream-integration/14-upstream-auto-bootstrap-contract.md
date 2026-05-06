@@ -185,3 +185,56 @@ runner 或联调报告只输出：
 2. 本地使用当前 Navigator 开发环境验证 bootstrap。
 3. Navigator 侧运行真实 REST Adapter E2E 或 Worker invoke。
 4. 通过后再拆正式联调环境和正式 skill。
+
+## TMS P1 Approval-Required 联调补充
+
+`tms.fulfillment.selfPickupSign` 属于 approval-required 状态变更函数。上游 bootstrap 仍只负责注册函数、授权 upstream user token、创建 task；业务函数执行必须由 Navigator Java Gateway/Suspension service 在审批通过后执行，上游不得直接调用 Navigator `/internal/worker-gateway/v1/**`。
+
+本地 Navigator 启动建议：
+
+```powershell
+$env:JAVA_TOOL_OPTIONS = '-Dfoggy.navigator.business.agent.upstreams.tms-x3-agent.url=http://localhost:12580 -Dfoggy.navigator.business.agent.upstreams.tms-x3-agent.user-token-header=X-TMS-Agent-Token'
+.\start-launcher.ps1
+```
+
+TMS 本地联调依赖：
+
+```text
+Basic baseUrl: http://localhost:10001
+TMS Web baseUrl: http://localhost:12580
+X-Tenant-Id: 88800
+```
+
+测试 StaffSessionToken 通过 Basic 测试签发接口获取，token 字段路径为 `data.sessionTokenId`。该值只允许进入 Navigator upstream-user credential 的服务端存储或当前本地 shell 运行态，不得写入 manifest、LLM prompt、前端 DTO、日志或联调报告。
+
+生成可签收新单：
+
+```bash
+curl -X POST "http://localhost:12580/api/test/business-agent/orders/self-pickup-sign-ready" \
+  -H "Authorization: Bearer <TMS_STAFF_SESSION_TOKEN>" \
+  -H "X-Tenant-Id: 88800" \
+  -H "Content-Type: application/json" \
+  -d '{"scenario":"SELF_PICKUP_SIGN_P1","requestedBy":"navigator-p1-test","remark":"Navigator Business Agent approval-required retest"}'
+```
+
+readiness:
+
+```bash
+curl -X GET "http://localhost:12580/api/test/business-agent/orders/<orderIdentifier>/self-pickup-sign-readiness" \
+  -H "Authorization: Bearer <TMS_STAFF_SESSION_TOKEN>" \
+  -H "X-Tenant-Id: 88800"
+```
+
+Navigator 调用 `tms.fulfillment.selfPickupSign` 时，LLM/tool input 仍只能包含：
+
+```json
+{"orderIdentifier":"<fresh-orderIdentifier>"}
+```
+
+验收期望：
+
+1. fresh order readiness 为 `ready=true`。
+2. Gateway invoke 返回 `SUSPENDED`。
+3. 首次 approve/resume 后，Java suspension service 调 TMS 一次，TMS 返回 `code=200`。
+4. 重复 approve/resume 不重复调用 TMS。
+5. `INVOKE_SUCCESS`、`BUSINESS_EXECUTION_REQUESTED/SKIPPED` 等 suspension 相关审计记录可通过 `suspendId` 串联。

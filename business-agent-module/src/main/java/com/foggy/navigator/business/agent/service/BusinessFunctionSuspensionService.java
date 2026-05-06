@@ -2,6 +2,7 @@ package com.foggy.navigator.business.agent.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.business.agent.event.BusinessSuspensionResumeDecisionEvent;
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessTaskScopedTokenDTO;
@@ -14,13 +15,16 @@ import com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapte
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.Optional;
 import java.util.UUID;
 
 @Slf4j
@@ -29,6 +33,28 @@ import java.util.UUID;
 public class BusinessFunctionSuspensionService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    public static final String TYPE_APPROVAL_REQUIRED = "APPROVAL_REQUIRED";
+    public static final String TYPE_USER_PAYMENT_REQUIRED = "USER_PAYMENT_REQUIRED";
+    public static final String TYPE_USER_CONFIRMATION_REQUIRED = "USER_CONFIRMATION_REQUIRED";
+    public static final String TYPE_EXTERNAL_CALLBACK_WAIT = "EXTERNAL_CALLBACK_WAIT";
+    public static final String TYPE_MANUAL_CHECK_REQUIRED = "MANUAL_CHECK_REQUIRED";
+
+    private static final String STATUS_PENDING = "PENDING";
+    private static final String STATUS_REJECTED = "REJECTED";
+    private static final String STATUS_RESUME_DISPATCHED = "RESUME_DISPATCHED";
+    private static final String STATUS_EXPIRED = "EXPIRED";
+    private static final String STATUS_EXECUTING = "EXECUTING";
+    private static final String STATUS_COMPLETED = "COMPLETED";
+    private static final String STATUS_EXECUTE_FAILED = "EXECUTE_FAILED";
+
+    private static final String EXECUTION_WAITING_DECISION = "WAITING_DECISION";
+    private static final String EXECUTION_REQUESTED = "REQUESTED";
+    private static final String EXECUTION_EXECUTING = "EXECUTING";
+    private static final String EXECUTION_COMPLETED = "COMPLETED";
+    private static final String EXECUTION_FAILED = "FAILED";
+    private static final String EXECUTION_NOT_APPLICABLE = "NOT_APPLICABLE";
+    private static final String WORKER_NOTIFICATION_NOT_DISPATCHED = "NOT_DISPATCHED";
+    private static final String WORKER_NOTIFICATION_DISPATCH_REQUESTED = "DISPATCH_REQUESTED";
 
     private final BusinessFunctionSuspensionRepository repository;
     private final ApplicationEventPublisher eventPublisher;
@@ -53,7 +79,10 @@ public class BusinessFunctionSuspensionService {
         entity.setVersion(version);
         entity.setInputJson(inputJson);
         entity.setIdempotencyKey(idempotencyKey);
-        entity.setStatus("PENDING");
+        entity.setSuspensionType(TYPE_APPROVAL_REQUIRED);
+        entity.setStatus(STATUS_PENDING);
+        entity.setBusinessExecutionStatus(EXECUTION_WAITING_DECISION);
+        entity.setWorkerNotificationStatus(WORKER_NOTIFICATION_NOT_DISPATCHED);
         // default expiration, e.g., 24 hours
         entity.setExpiresAt(LocalDateTime.now().plusHours(24));
 
@@ -70,69 +99,34 @@ public class BusinessFunctionSuspensionService {
                 throw new IllegalArgumentException("Resume form cannot be null");
             }
 
-            BusinessFunctionSuspensionEntity suspension = repository.findBySuspendId(suspendId)
+            BusinessFunctionSuspensionEntity suspension = findSuspensionForUpdate(suspendId)
                     .orElseThrow(() -> new IllegalArgumentException("Suspension not found: " + suspendId));
-
-            if (!"PENDING".equals(suspension.getStatus())) {
-                throw new IllegalStateException("Suspension is not in PENDING state: " + suspension.getStatus());
-            }
-
-            if (suspension.getExpiresAt() != null && suspension.getExpiresAt().isBefore(LocalDateTime.now())) {
-                suspension.setStatus("EXPIRED");
-                repository.save(suspension);
-                throw new IllegalStateException("Suspension has expired");
-            }
-
-            // Binding Validation
-            WorkerGatewayResumeForm.BindingContext binding = form.getBindingContext();
-            if (binding == null) {
-                throw new IllegalArgumentException("binding_context is required");
-            }
-
-            if (!suspension.getTenantId().equals(tenantId)) {
-                throw new SecurityException("Tenant ID mismatch: unauthorized resume attempt");
-            }
-            if (!suspension.getClientAppId().equals(binding.getClientAppId())) {
-                throw new SecurityException("Client App ID mismatch");
-            }
-            if (!suspension.getUpstreamUserId().equals(binding.getUpstreamUserId())) {
-                throw new SecurityException("Upstream User ID mismatch");
-            }
-            if (!suspension.getTaskId().equals(binding.getTaskId())) {
-                throw new SecurityException("Task ID mismatch");
-            }
-            if (!suspension.getSessionId().equals(binding.getSessionId())) {
-                throw new SecurityException("Session ID mismatch");
-            }
-            if (!suspension.getFunctionId().equals(binding.getFunctionId())) {
-                throw new SecurityException("Function ID mismatch");
-            }
-            if (!suspension.getVersion().equals(binding.getVersion())) {
-                throw new SecurityException("Version mismatch");
-            }
-
-            // Input Hash Validation
-            if (!StringUtils.hasText(binding.getInputHash())) {
-                throw new SecurityException("input_hash is required for fail-closed validation");
-            }
-
-            String expectedHash = computeSha256Hex(suspension.getInputJson());
-            if (!expectedHash.equalsIgnoreCase(binding.getInputHash())) {
-                throw new SecurityException("Input hash mismatch");
-            }
 
             WorkerGatewayResumeForm.ApprovalResult result = form.getApprovalResult();
             if (result == null) {
                 throw new IllegalArgumentException("approval_result is required");
             }
-
             String resultStatus = result.getStatus();
-            if ("approved".equalsIgnoreCase(resultStatus)) {
-                suspension.setStatus("APPROVED");
-            } else if ("rejected".equalsIgnoreCase(resultStatus)) {
-                suspension.setStatus("REJECTED");
-            } else {
+            boolean approved = "approved".equalsIgnoreCase(resultStatus);
+            boolean rejected = "rejected".equalsIgnoreCase(resultStatus);
+            if (!approved && !rejected) {
                 throw new IllegalArgumentException("Unknown approval status: " + resultStatus);
+            }
+
+            String expectedHash = validateResumeBinding(suspension, tenantId, form.getBindingContext());
+            if (!STATUS_PENDING.equals(suspension.getStatus())) {
+                if (isIdempotentResumeReplay(suspension, approved, rejected)) {
+                    log.info("Ignoring idempotent suspension resume replay: suspendId={}, status={}, decision={}",
+                            suspendId, suspension.getStatus(), resultStatus);
+                    return;
+                }
+                throw new IllegalStateException("Suspension is not in PENDING state: " + suspension.getStatus());
+            }
+
+            if (suspension.getExpiresAt() != null && suspension.getExpiresAt().isBefore(LocalDateTime.now())) {
+                suspension.setStatus(STATUS_EXPIRED);
+                repository.save(suspension);
+                throw new IllegalStateException("Suspension has expired");
             }
 
             suspension.setApprovalId(result.getApprovalId());
@@ -141,13 +135,17 @@ public class BusinessFunctionSuspensionService {
             suspension.setApprovedAt(result.getApprovedAt() != null ? result.getApprovedAt() : LocalDateTime.now());
             suspension.setComment(result.getComment());
 
-            if ("approved".equalsIgnoreCase(resultStatus)) {
-                suspension.setStatus("RESUME_DISPATCHED");
+            if (approved) {
+                suspension.setStatus(STATUS_RESUME_DISPATCHED);
+                suspension.setBusinessExecutionStatus(EXECUTION_REQUESTED);
+            } else {
+                suspension.setStatus(STATUS_REJECTED);
+                suspension.setBusinessExecutionStatus(EXECUTION_NOT_APPLICABLE);
             }
+            suspension.setWorkerNotificationStatus(WORKER_NOTIFICATION_DISPATCH_REQUESTED);
             repository.save(suspension);
 
-            // Publish event to notify LangGraph or other listeners
-            WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+            WorkerGatewayResumeEvent workerNotificationEvent = WorkerGatewayResumeEvent.builder()
                     .source(this)
                     .taskId(StringUtils.hasText(suspension.getWorkerTaskId()) ? suspension.getWorkerTaskId() : suspension.getTaskId())
                     .sessionId(StringUtils.hasText(suspension.getWorkerSessionId()) ? suspension.getWorkerSessionId() : suspension.getSessionId())
@@ -162,12 +160,34 @@ public class BusinessFunctionSuspensionService {
                     .inputHash(expectedHash)
                     .build();
 
-            publishResumeEventAfterCommit(suspendId, event);
+            BusinessSuspensionResumeDecisionEvent businessDecisionEvent = BusinessSuspensionResumeDecisionEvent.builder()
+                    .source(this)
+                    .taskId(suspension.getTaskId())
+                    .workerTaskId(suspension.getWorkerTaskId())
+                    .sessionId(suspension.getSessionId())
+                    .workerSessionId(suspension.getWorkerSessionId())
+                    .suspendId(suspension.getSuspendId())
+                    .suspensionType(suspension.getSuspensionType())
+                    .decisionStatus(resultStatus)
+                    .comment(result.getComment())
+                    .tenantId(suspension.getTenantId())
+                    .clientAppId(suspension.getClientAppId())
+                    .upstreamUserId(suspension.getUpstreamUserId())
+                    .functionId(suspension.getFunctionId())
+                    .version(suspension.getVersion())
+                    .inputHash(expectedHash)
+                    .build();
 
-            log.info("Dispatched WorkerGatewayResumeEvent for suspendId: {}, status: {}", suspendId, suspension.getStatus());
+            publishResumeEventsAfterCommit(suspendId, workerNotificationEvent, businessDecisionEvent);
+
+            log.info("Dispatched suspension resume events for suspendId: {}, status: {}, businessExecutionStatus={}, workerNotificationStatus={}",
+                    suspendId, suspension.getStatus(), suspension.getBusinessExecutionStatus(), suspension.getWorkerNotificationStatus());
 
             // Audit: resume dispatched (best-effort)
             auditService.recordResumeDispatched(tenantId, suspendId);
+            if (approved) {
+                auditService.recordBusinessExecutionRequested(buildAuditToken(suspension), suspension.getFunctionId(), suspension.getVersion(), suspendId);
+            }
 
         } catch (Exception e) {
             auditService.recordResumeFailed(tenantId, suspendId, e.getMessage());
@@ -175,29 +195,70 @@ public class BusinessFunctionSuspensionService {
         }
     }
 
-    private void publishResumeEventAfterCommit(String suspendId, WorkerGatewayResumeEvent event) {
+    private void publishResumeEventsAfterCommit(String suspendId,
+                                                WorkerGatewayResumeEvent workerNotificationEvent,
+                                                BusinessSuspensionResumeDecisionEvent businessDecisionEvent) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    publishResumeEventNow(suspendId, event);
+                    publishResumeEventsNow(suspendId, workerNotificationEvent, businessDecisionEvent);
                 }
             });
             return;
         }
-        publishResumeEventNow(suspendId, event);
+        publishResumeEventsNow(suspendId, workerNotificationEvent, businessDecisionEvent);
     }
 
-    private void publishResumeEventNow(String suspendId, WorkerGatewayResumeEvent event) {
+    private void publishResumeEventsNow(String suspendId,
+                                        WorkerGatewayResumeEvent workerNotificationEvent,
+                                        BusinessSuspensionResumeDecisionEvent businessDecisionEvent) {
         try {
-            eventPublisher.publishEvent(event);
+            eventPublisher.publishEvent(workerNotificationEvent);
         } catch (Exception e) {
-            log.error("Failed to publish WorkerGatewayResumeEvent for suspendId: {}", suspendId, e);
+            log.error("Failed to publish worker conversation resume notification for suspendId: {}", suspendId, e);
+        }
+        try {
+            eventPublisher.publishEvent(businessDecisionEvent);
+        } catch (Exception e) {
+            log.error("Failed to publish business suspension execution decision for suspendId: {}", suspendId, e);
+        }
+    }
+
+    @EventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void handleBusinessSuspensionResumeDecisionEvent(BusinessSuspensionResumeDecisionEvent event) {
+        if (event == null || !"approved".equalsIgnoreCase(event.getDecisionStatus())) {
+            return;
+        }
+        WorkerGatewayResumeEvent executionEvent = WorkerGatewayResumeEvent.builder()
+                .source(event.getSource())
+                .taskId(StringUtils.hasText(event.getWorkerTaskId()) ? event.getWorkerTaskId() : event.getTaskId())
+                .sessionId(StringUtils.hasText(event.getWorkerSessionId()) ? event.getWorkerSessionId() : event.getSessionId())
+                .businessSessionId(event.getSessionId())
+                .suspendId(event.getSuspendId())
+                .approvalResult(event.getDecisionStatus())
+                .comment(event.getComment())
+                .tenantId(event.getTenantId())
+                .clientAppId(event.getClientAppId())
+                .upstreamUserId(event.getUpstreamUserId())
+                .functionId(event.getFunctionId())
+                .inputHash(event.getInputHash())
+                .build();
+        try {
+            executeApprovedSuspensionInternal(executionEvent);
+        } catch (Exception e) {
+            log.error("Approved business suspension execution failed: suspendId={}, functionId={}",
+                    event.getSuspendId(), event.getFunctionId(), e);
         }
     }
 
     @Transactional
     public WorkerGatewayInvokeResponseDTO executeApprovedSuspension(WorkerGatewayResumeEvent event) {
+        return executeApprovedSuspensionInternal(event);
+    }
+
+    private WorkerGatewayInvokeResponseDTO executeApprovedSuspensionInternal(WorkerGatewayResumeEvent event) {
         if (event == null) {
             throw new IllegalArgumentException("resume event is required");
         }
@@ -208,19 +269,22 @@ public class BusinessFunctionSuspensionService {
             throw new IllegalArgumentException("suspendId is required");
         }
 
-        BusinessFunctionSuspensionEntity suspension = repository.findBySuspendId(event.getSuspendId())
+        BusinessFunctionSuspensionEntity suspension = findSuspensionForUpdate(event.getSuspendId())
                 .orElseThrow(() -> new IllegalArgumentException("Suspension not found: " + event.getSuspendId()));
 
         validateExecutionBinding(suspension, event);
 
         String status = suspension.getStatus();
-        if ("COMPLETED".equals(status)) {
-            throw new IllegalStateException("Suspension already completed: " + event.getSuspendId());
+        if (STATUS_COMPLETED.equals(status)) {
+            return idempotentExecutionResponse(suspension, "Suspension already completed; duplicate execution skipped.");
         }
-        if ("EXECUTING".equals(status)) {
-            throw new IllegalStateException("Suspension is already executing: " + event.getSuspendId());
+        if (STATUS_EXECUTING.equals(status)) {
+            return idempotentExecutionResponse(suspension, "Suspension execution already in progress; duplicate execution skipped.");
         }
-        if (!"APPROVED".equals(status) && !"RESUME_DISPATCHED".equals(status)) {
+        if (STATUS_EXECUTE_FAILED.equals(status)) {
+            return idempotentExecutionResponse(suspension, "Suspension execution already failed; automatic replay skipped.");
+        }
+        if (!STATUS_RESUME_DISPATCHED.equals(status)) {
             throw new IllegalStateException("Suspension is not approved for execution: " + status);
         }
 
@@ -229,7 +293,8 @@ public class BusinessFunctionSuspensionService {
         String inputHash = BusinessFunctionRuntimeAuditService.sha256(suspension.getInputJson());
         auditService.recordInvokeStarted(auditToken, suspension.getFunctionId(), suspension.getVersion(), inputHash);
 
-        suspension.setStatus("EXECUTING");
+        suspension.setStatus(STATUS_EXECUTING);
+        suspension.setBusinessExecutionStatus(EXECUTION_EXECUTING);
         repository.save(suspension);
 
         try {
@@ -254,12 +319,13 @@ public class BusinessFunctionSuspensionService {
                 throw new IllegalArgumentException(message);
             }
 
-            suspension.setStatus("COMPLETED");
+            suspension.setStatus(STATUS_COMPLETED);
+            suspension.setBusinessExecutionStatus(EXECUTION_COMPLETED);
             repository.save(suspension);
 
             long durationMs = System.currentTimeMillis() - startTime;
             String outputHash = BusinessFunctionRuntimeAuditService.sha256(adapterResult.getOutputJson());
-            auditService.recordInvokeSuccess(auditToken, suspension.getFunctionId(), suspension.getVersion(), outputHash, durationMs);
+            auditService.recordInvokeSuccess(auditToken, suspension.getFunctionId(), suspension.getVersion(), suspension.getSuspendId(), outputHash, durationMs);
             log.info("Approved business function adapter execution completed: suspendId={}, functionId={}, status={}, outputCode={}, dataPresent={}",
                     suspension.getSuspendId(),
                     suspension.getFunctionId(),
@@ -277,12 +343,85 @@ public class BusinessFunctionSuspensionService {
             response.setMessage(adapterResult.getMessage());
             return response;
         } catch (Exception e) {
-            suspension.setStatus("EXECUTE_FAILED");
+            suspension.setStatus(STATUS_EXECUTE_FAILED);
+            suspension.setBusinessExecutionStatus(EXECUTION_FAILED);
             repository.save(suspension);
             long durationMs = System.currentTimeMillis() - startTime;
-            auditService.recordInvokeFailed(auditToken, suspension.getFunctionId(), suspension.getVersion(), "ADAPTER_ERROR", e.getMessage(), durationMs);
+            auditService.recordInvokeFailed(auditToken, suspension.getFunctionId(), suspension.getVersion(), suspension.getSuspendId(), "ADAPTER_ERROR", e.getMessage(), durationMs);
             throw e;
         }
+    }
+
+    private Optional<BusinessFunctionSuspensionEntity> findSuspensionForUpdate(String suspendId) {
+        Optional<BusinessFunctionSuspensionEntity> locked = repository.findBySuspendIdForUpdate(suspendId);
+        if (locked != null && locked.isPresent()) {
+            return locked;
+        }
+        Optional<BusinessFunctionSuspensionEntity> fallback = repository.findBySuspendId(suspendId);
+        return fallback != null ? fallback : Optional.empty();
+    }
+
+    private String validateResumeBinding(BusinessFunctionSuspensionEntity suspension,
+                                         String tenantId,
+                                         WorkerGatewayResumeForm.BindingContext binding) {
+        if (binding == null) {
+            throw new IllegalArgumentException("binding_context is required");
+        }
+        if (!suspension.getTenantId().equals(tenantId)) {
+            throw new SecurityException("Tenant ID mismatch: unauthorized resume attempt");
+        }
+        if (!suspension.getClientAppId().equals(binding.getClientAppId())) {
+            throw new SecurityException("Client App ID mismatch");
+        }
+        if (!suspension.getUpstreamUserId().equals(binding.getUpstreamUserId())) {
+            throw new SecurityException("Upstream User ID mismatch");
+        }
+        if (!suspension.getTaskId().equals(binding.getTaskId())) {
+            throw new SecurityException("Task ID mismatch");
+        }
+        if (!suspension.getSessionId().equals(binding.getSessionId())) {
+            throw new SecurityException("Session ID mismatch");
+        }
+        if (!suspension.getFunctionId().equals(binding.getFunctionId())) {
+            throw new SecurityException("Function ID mismatch");
+        }
+        if (!suspension.getVersion().equals(binding.getVersion())) {
+            throw new SecurityException("Version mismatch");
+        }
+        if (!StringUtils.hasText(binding.getInputHash())) {
+            throw new SecurityException("input_hash is required for fail-closed validation");
+        }
+
+        String expectedHash = computeSha256Hex(suspension.getInputJson());
+        if (!expectedHash.equalsIgnoreCase(binding.getInputHash())) {
+            throw new SecurityException("Input hash mismatch");
+        }
+        return expectedHash;
+    }
+
+    private boolean isIdempotentResumeReplay(BusinessFunctionSuspensionEntity suspension, boolean approved, boolean rejected) {
+        String status = suspension.getStatus();
+        if (approved) {
+            return STATUS_RESUME_DISPATCHED.equals(status)
+                    || STATUS_EXECUTING.equals(status)
+                    || STATUS_COMPLETED.equals(status)
+                    || STATUS_EXECUTE_FAILED.equals(status);
+        }
+        return rejected && STATUS_REJECTED.equals(status);
+    }
+
+    private WorkerGatewayInvokeResponseDTO idempotentExecutionResponse(BusinessFunctionSuspensionEntity suspension, String message) {
+        auditService.recordBusinessExecutionSkipped(buildAuditToken(suspension), suspension.getFunctionId(),
+                suspension.getVersion(), suspension.getSuspendId(), message);
+
+        WorkerGatewayInvokeResponseDTO response = new WorkerGatewayInvokeResponseDTO();
+        response.setFunctionId(suspension.getFunctionId());
+        response.setVersion(suspension.getVersion());
+        response.setStatus(WorkerGatewayInvokeResponseDTO.STATUS_SUCCESS);
+        response.setApprovalRequired(true);
+        response.setSuspendId(suspension.getSuspendId());
+        response.setMessage(message);
+        return response;
     }
 
     private String computeSha256Hex(String input) {

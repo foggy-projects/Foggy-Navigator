@@ -1,12 +1,14 @@
 package com.foggy.navigator.business.agent.e2e;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.business.agent.event.BusinessSuspensionResumeDecisionEvent;
 import com.foggy.navigator.business.agent.model.dto.*;
 import com.foggy.navigator.business.agent.model.entity.*;
 import com.foggy.navigator.business.agent.model.form.*;
 import com.foggy.navigator.business.agent.repository.*;
 import com.foggy.navigator.business.agent.service.*;
 import com.foggy.navigator.business.agent.service.adapter.*;
+import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import com.sun.net.httpserver.HttpServer;
@@ -19,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
@@ -30,6 +33,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -93,12 +97,15 @@ class RestAdapterUpstreamE2ETest {
     private final AtomicReference<String> receivedPath = new AtomicReference<>();
     private final AtomicReference<String> receivedBody = new AtomicReference<>();
     private final AtomicReference<Map<String, String>> receivedHeaders = new AtomicReference<>(new HashMap<>());
+    private final AtomicInteger upstreamRequestCount = new AtomicInteger();
 
     // live entities
     private BusinessAgentTaskEntity taskEntity;
     private BusinessTaskScopedTokenEntity tokenEntity;
+    private BusinessFunctionSuspensionEntity suspensionEntity;
 
     private BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
+    private BusinessFunctionSuspensionService suspensionService;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -107,6 +114,7 @@ class RestAdapterUpstreamE2ETest {
         serverPort = httpServer.getAddress().getPort();
 
         httpServer.createContext("/api/orders", exchange -> {
+            upstreamRequestCount.incrementAndGet();
             receivedMethod.set(exchange.getRequestMethod());
             receivedPath.set(exchange.getRequestURI().getPath());
             exchange.getRequestHeaders().forEach((k, v) -> receivedHeaders.get().put(k, String.join(",", v)));
@@ -157,7 +165,7 @@ class RestAdapterUpstreamE2ETest {
                 ),
                 objectMapper
         );
-        BusinessFunctionSuspensionService suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher, auditService, authorizationService, adapterInvoker);
+        suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher, auditService, authorizationService, adapterInvoker);
 
         workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, userGrantService1, suspensionService, adapterInvoker, objectMapper, auditService);
     }
@@ -235,6 +243,7 @@ class RestAdapterUpstreamE2ETest {
         assertEquals(taskEntity.getSessionId(), getHeaderIgnoreCase(headers, "X-Navigator-Session-Id"));
         assertEquals(FUNCTION_ID, getHeaderIgnoreCase(headers, "X-Navigator-Function-Id"));
         assertEquals(VERSION, getHeaderIgnoreCase(headers, "X-Navigator-Function-Version"));
+        assertEquals(1, upstreamRequestCount.get());
 
         // 6. Assert audit rows were created (INVOKE_STARTED + INVOKE_SUCCESS)
         ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> auditCaptor =
@@ -250,6 +259,88 @@ class RestAdapterUpstreamE2ETest {
             assertNotNull(a.getTenantId());
             assertNotNull(a.getAuditId());
         }
+    }
+
+    @Test
+    void approvalRequiredRestAdapter_e2e_duplicateApprove_doesNotInvokeUpstreamTwice() {
+        // Arrange all grants
+        stubActiveClientApp();
+        stubModelGrant();
+        stubUserGrant();
+        stubSkillAndAllowlist();
+        stubRestFunctionAndGrant(true);
+        stubPoolAndTask();
+        stubTokenResolution();
+
+        when(auditRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(suspensionRepository.save(any(BusinessFunctionSuspensionEntity.class))).thenAnswer(inv -> {
+            suspensionEntity = inv.getArgument(0);
+            return suspensionEntity;
+        });
+
+        CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();
+        taskForm.setClientAppId(APP_ID);
+        taskForm.setSessionId("session_rest_approval_e2e");
+        taskForm.setWorkerPoolId(POOL_ID);
+        taskForm.setUpstreamUserId(USER_ID);
+        taskForm.setSkillId(SKILL_ID);
+
+        CreatedBusinessAgentTaskDTO created = taskService.createTask(TENANT, ADMIN, taskForm);
+        String plainToken = created.getTaskScopedToken();
+        tokenEntity.setStatus("ACTIVE");
+        tokenEntity.setExpiresAt(LocalDateTime.now().plusHours(2));
+
+        WorkerGatewayInvokeForm invokeForm = new WorkerGatewayInvokeForm();
+        invokeForm.setVersion(VERSION);
+        invokeForm.setInputJson("{\"orderIdentifier\":\"" + ORDER_IDENTIFIER + "\",\"reason\":\"approval retest\"}");
+
+        WorkerGatewayInvokeResponseDTO invokeResponse = workerGatewayService.invokeBusinessFunction(plainToken, FUNCTION_ID, invokeForm);
+
+        assertEquals(WorkerGatewayInvokeResponseDTO.STATUS_SUSPENDED, invokeResponse.getStatus());
+        assertEquals(0, upstreamRequestCount.get(), "approval-required invoke must suspend before upstream side effect");
+
+        String suspendId = invokeResponse.getSuspendId();
+        assertNotNull(suspensionEntity);
+        suspensionEntity.setExpiresAt(LocalDateTime.now().plusHours(24));
+        when(suspensionRepository.findBySuspendId(suspendId)).thenReturn(Optional.of(suspensionEntity));
+
+        WorkerGatewayResumeForm resumeForm = new WorkerGatewayResumeForm();
+        WorkerGatewayResumeForm.BindingContext binding = new WorkerGatewayResumeForm.BindingContext();
+        binding.setClientAppId(APP_ID);
+        binding.setUpstreamUserId(USER_ID);
+        binding.setTaskId(taskEntity.getTaskId());
+        binding.setSessionId(taskEntity.getSessionId());
+        binding.setFunctionId(FUNCTION_ID);
+        binding.setVersion(VERSION);
+        binding.setInputHash(BusinessFunctionRuntimeAuditService.sha256(invokeForm.getInputJson()));
+        resumeForm.setBindingContext(binding);
+
+        WorkerGatewayResumeForm.ApprovalResult approval = new WorkerGatewayResumeForm.ApprovalResult();
+        approval.setStatus("approved");
+        approval.setComment("approved once");
+        resumeForm.setApprovalResult(approval);
+
+        suspensionService.resumeSuspension(TENANT, ADMIN, suspendId, resumeForm);
+
+        BusinessSuspensionResumeDecisionEvent decisionEvent = captureBusinessDecisionEvent();
+        suspensionService.handleBusinessSuspensionResumeDecisionEvent(decisionEvent);
+
+        assertEquals(WorkerGatewayInvokeResponseDTO.STATUS_SUCCESS, suspensionService.executeApprovedSuspension(buildExecutionReplayEvent()).getStatus());
+        assertEquals(1, upstreamRequestCount.get(), "approved execution replay must not call upstream twice");
+        assertEquals("COMPLETED", suspensionEntity.getStatus());
+        assertEquals("COMPLETED", suspensionEntity.getBusinessExecutionStatus());
+
+        suspensionService.resumeSuspension(TENANT, ADMIN, suspendId, resumeForm);
+        assertEquals(1, upstreamRequestCount.get(), "duplicate approve/resume must not call upstream again");
+
+        ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> auditCaptor =
+                ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
+        verify(auditRepository, atLeastOnce()).save(auditCaptor.capture());
+        List<BusinessFunctionRuntimeAuditEntity> audits = auditCaptor.getAllValues();
+        assertTrue(audits.stream()
+                .anyMatch(a -> "INVOKE_SUCCESS".equals(a.getEventType()) && suspendId.equals(a.getSuspendId())));
+        assertTrue(audits.stream()
+                .anyMatch(a -> "BUSINESS_EXECUTION_SKIPPED".equals(a.getEventType()) && suspendId.equals(a.getSuspendId())));
     }
 
     // ===== Stubs =====
@@ -322,13 +413,17 @@ class RestAdapterUpstreamE2ETest {
     }
 
     private void stubRestFunctionAndGrant() {
+        stubRestFunctionAndGrant(false);
+    }
+
+    private void stubRestFunctionAndGrant(boolean approvalRequired) {
         BusinessFunctionEntity func = new BusinessFunctionEntity();
         func.setFunctionId(FUNCTION_ID);
         func.setTenantId(TENANT);
         func.setDomain("order");
         func.setName("Submit Order REST");
         func.setRiskLevel("state_change");
-        func.setApprovalRequired(false);  // Non-approval for direct adapter execution
+        func.setApprovalRequired(approvalRequired);
         func.setIdempotencyRequired(false);
         func.setStatus("ENABLED");
         func.setCurrentVersion(VERSION);
@@ -388,6 +483,32 @@ class RestAdapterUpstreamE2ETest {
         funcGrant.setStatus("ENABLED");
         when(functionGrantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(TENANT, APP_ID, FUNCTION_ID, VERSION))
                 .thenReturn(Optional.of(funcGrant));
+    }
+
+    private BusinessSuspensionResumeDecisionEvent captureBusinessDecisionEvent() {
+        ArgumentCaptor<ApplicationEvent> eventCaptor = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(eventPublisher, atLeastOnce()).publishEvent(eventCaptor.capture());
+        return eventCaptor.getAllValues().stream()
+                .filter(BusinessSuspensionResumeDecisionEvent.class::isInstance)
+                .map(BusinessSuspensionResumeDecisionEvent.class::cast)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("BusinessSuspensionResumeDecisionEvent not published"));
+    }
+
+    private WorkerGatewayResumeEvent buildExecutionReplayEvent() {
+        return WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId(taskEntity.getTaskId())
+                .sessionId(taskEntity.getSessionId())
+                .businessSessionId(taskEntity.getSessionId())
+                .suspendId(suspensionEntity.getSuspendId())
+                .approvalResult("approved")
+                .tenantId(TENANT)
+                .clientAppId(APP_ID)
+                .upstreamUserId(USER_ID)
+                .functionId(FUNCTION_ID)
+                .inputHash(BusinessFunctionRuntimeAuditService.sha256(suspensionEntity.getInputJson()))
+                .build();
     }
 
     private void stubPoolAndTask() {

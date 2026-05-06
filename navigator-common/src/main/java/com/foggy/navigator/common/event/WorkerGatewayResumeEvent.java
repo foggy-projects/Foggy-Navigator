@@ -7,6 +7,15 @@ import lombok.Getter;
 @Getter
 public class WorkerGatewayResumeEvent extends ApplicationEvent {
 
+    /**
+     * Worker conversation resume notification.
+     *
+     * <p>This event tells a Worker runtime that a suspension decision happened so it
+     * can update conversation state and continue natural-language generation. It is
+     * not the owner of approved business function side effects; those are executed
+     * by the Java Business Function Suspension service from the original persisted
+     * suspension context.
+     */
     private final String taskId;
     private final String sessionId;
     private final String businessSessionId;

@@ -81,6 +81,21 @@ class BusinessFunctionRuntimeAuditServiceTest {
     }
 
     @Test
+    void recordInvokeSuccess_withSuspendId_persists_suspend_id() {
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        auditService.recordInvokeSuccess(token, "fn1", "v1", "sus_123", "outhash", 42L);
+
+        ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
+        verify(repository).save(captor.capture());
+        BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
+
+        assertEquals("INVOKE_SUCCESS", entity.getEventType());
+        assertEquals("sus_123", entity.getSuspendId());
+        assertEquals("outhash", entity.getOutputHash());
+    }
+
+    @Test
     void recordInvokeSuspended_persists_suspend_id() {
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -109,6 +124,21 @@ class BusinessFunctionRuntimeAuditServiceTest {
         assertEquals("ADAPTER_ERROR", entity.getErrorCode());
         assertEquals("Connection refused", entity.getErrorMessage());
         assertEquals(100L, entity.getDurationMs());
+    }
+
+    @Test
+    void recordInvokeFailed_withSuspendId_persists_suspend_id() {
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        auditService.recordInvokeFailed(token, "fn1", "v1", "sus_123", "ADAPTER_ERROR", "Connection refused", 100L);
+
+        ArgumentCaptor<BusinessFunctionRuntimeAuditEntity> captor = ArgumentCaptor.forClass(BusinessFunctionRuntimeAuditEntity.class);
+        verify(repository).save(captor.capture());
+        BusinessFunctionRuntimeAuditEntity entity = captor.getValue();
+
+        assertEquals("INVOKE_FAILED", entity.getEventType());
+        assertEquals("sus_123", entity.getSuspendId());
+        assertEquals("ADAPTER_ERROR", entity.getErrorCode());
     }
 
     @Test

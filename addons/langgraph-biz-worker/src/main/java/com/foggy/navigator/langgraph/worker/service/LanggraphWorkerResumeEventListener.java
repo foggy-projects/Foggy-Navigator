@@ -1,7 +1,6 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
-import com.foggy.navigator.business.agent.service.BusinessFunctionSuspensionService;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
@@ -16,7 +15,12 @@ import java.util.Optional;
 
 /**
  * Listens for {@link WorkerGatewayResumeEvent} published by the control plane after
- * an approval decision and dispatches the resume to the appropriate Python Worker.
+ * a suspension resume decision and dispatches a conversation-state notification to
+ * the appropriate Python Worker.
+ *
+ * <p>Business function side effects are not executed by this listener. Approved
+ * suspension execution is owned by the Java BusinessFunctionSuspensionService via a
+ * separate business execution decision event.
  *
  * <p>Stage 7B binding hardening:
  * <ul>
@@ -35,7 +39,6 @@ public class LanggraphWorkerResumeEventListener {
 
     private final LanggraphTaskRepository taskRepository;
     private final LanggraphWorkerService workerService;
-    private final BusinessFunctionSuspensionService suspensionService;
 
     @EventListener
     public void handleWorkerGatewayResumeEvent(WorkerGatewayResumeEvent event) {
@@ -89,32 +92,18 @@ public class LanggraphWorkerResumeEventListener {
 
         client.resumeTask(event.getTaskId(), event.getApprovalResult(), event.getComment())
                 .doOnSuccess(resp -> {
-                    log.info("Successfully dispatched resume to worker: taskId={}, workerId={}", event.getTaskId(), workerId);
-                    executeApprovedBusinessSuspensionIfNeeded(event);
+                    log.info("Successfully dispatched worker conversation resume notification: taskId={}, workerId={}",
+                            event.getTaskId(), workerId);
                 })
                 .doOnError(e -> {
-                    log.error("Failed to dispatch resume to worker: taskId={}, workerId={}", event.getTaskId(), workerId, e);
+                    log.error("Failed to dispatch worker conversation resume notification: taskId={}, workerId={}",
+                            event.getTaskId(), workerId, e);
                     if (isWorkerResumeFrameNotFound(e)) {
-                        log.warn("Worker has no awaiting approval frame for taskId={}, suspendId={}; executing approved business suspension via Java gateway",
+                        log.warn("Worker has no awaiting approval frame for taskId={}, suspendId={}; business execution is handled by Java suspension service",
                                 event.getTaskId(), event.getSuspendId());
-                        executeApprovedBusinessSuspensionIfNeeded(event);
                     }
                 })
                 .subscribe(ignored -> { }, e -> { });
-    }
-
-    private void executeApprovedBusinessSuspensionIfNeeded(WorkerGatewayResumeEvent event) {
-        if (!"approved".equalsIgnoreCase(event.getApprovalResult())) {
-            return;
-        }
-        try {
-            var result = suspensionService.executeApprovedSuspension(event);
-            log.info("Approved business function execution completed: taskId={}, suspendId={}, functionId={}, status={}",
-                    event.getTaskId(), event.getSuspendId(), event.getFunctionId(), result != null ? result.getStatus() : "UNKNOWN");
-        } catch (Exception e) {
-            log.error("Approved business function execution failed: taskId={}, suspendId={}, functionId={}",
-                    event.getTaskId(), event.getSuspendId(), event.getFunctionId(), e);
-        }
     }
 
     private boolean isWorkerResumeFrameNotFound(Throwable error) {

@@ -63,8 +63,17 @@ public class BusinessFunctionSuspensionEntity {
     @Column(name = "idempotency_key", length = 255)
     private String idempotencyKey;
 
+    @Column(name = "suspension_type", length = 64)
+    private String suspensionType;
+
     @Column(name = "status", nullable = false, length = 32)
     private String status;
+
+    @Column(name = "business_execution_status", length = 64)
+    private String businessExecutionStatus;
+
+    @Column(name = "worker_notification_status", length = 64)
+    private String workerNotificationStatus;
 
     @Column(name = "expires_at")
     private LocalDateTime expiresAt;

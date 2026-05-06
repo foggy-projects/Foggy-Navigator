@@ -1,7 +1,6 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
-import com.foggy.navigator.business.agent.service.BusinessFunctionSuspensionService;
 import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
@@ -34,9 +33,6 @@ class LanggraphWorkerResumeEventListenerTest {
 
     @Mock
     private LanggraphWorkerClient workerClient;
-
-    @Mock
-    private BusinessFunctionSuspensionService suspensionService;
 
     @InjectMocks
     private LanggraphWorkerResumeEventListener listener;
@@ -77,7 +73,6 @@ class LanggraphWorkerResumeEventListenerTest {
         listener.handleWorkerGatewayResumeEvent(event);
 
         verify(workerClient).resumeTask("t_1", "approved", "OK");
-        verify(suspensionService).executeApprovedSuspension(event);
     }
 
     @Test
@@ -104,11 +99,10 @@ class LanggraphWorkerResumeEventListenerTest {
         listener.handleWorkerGatewayResumeEvent(event);
 
         verify(workerClient).resumeTask("lgt_1", "approved", "OK");
-        verify(suspensionService).executeApprovedSuspension(event);
     }
 
     @Test
-    void handleWorkerGatewayResumeEvent_workerResume404_executesApprovedBusinessSuspension() {
+    void handleWorkerGatewayResumeEvent_workerResume404_onlyLogsConversationNotificationFailure() {
         WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
                 .source(this)
                 .taskId("lgt_1")
@@ -138,11 +132,10 @@ class LanggraphWorkerResumeEventListenerTest {
         listener.handleWorkerGatewayResumeEvent(event);
 
         verify(workerClient).resumeTask("lgt_1", "approved", "OK");
-        verify(suspensionService).executeApprovedSuspension(event);
     }
 
     @Test
-    void handleWorkerGatewayResumeEvent_workerResume500_doesNotExecuteApprovedBusinessSuspension() {
+    void handleWorkerGatewayResumeEvent_workerResume500_doesNotOwnBusinessExecution() {
         WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
                 .source(this)
                 .taskId("lgt_1")
@@ -172,7 +165,6 @@ class LanggraphWorkerResumeEventListenerTest {
         listener.handleWorkerGatewayResumeEvent(event);
 
         verify(workerClient).resumeTask("lgt_1", "approved", "OK");
-        verify(suspensionService, never()).executeApprovedSuspension(event);
     }
 
     @Test
@@ -198,7 +190,6 @@ class LanggraphWorkerResumeEventListenerTest {
         listener.handleWorkerGatewayResumeEvent(event);
 
         verify(workerClient).resumeTask("t_1", "approved", "OK");
-        verify(suspensionService).executeApprovedSuspension(event);
     }
 
     @Test

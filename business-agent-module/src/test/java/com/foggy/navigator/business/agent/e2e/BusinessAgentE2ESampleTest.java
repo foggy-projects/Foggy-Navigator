@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.nio.charset.StandardCharsets;
@@ -408,10 +409,13 @@ class BusinessAgentE2ESampleTest {
         assertEquals(ADMIN, lastSaved.getApprovedBy());
 
         // Verify resume event was published
-        ArgumentCaptor<WorkerGatewayResumeEvent> eventCaptor =
-                ArgumentCaptor.forClass(WorkerGatewayResumeEvent.class);
-        verify(eventPublisher).publishEvent(eventCaptor.capture());
-        WorkerGatewayResumeEvent event = eventCaptor.getValue();
+        ArgumentCaptor<ApplicationEvent> eventCaptor = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(eventPublisher, atLeastOnce()).publishEvent(eventCaptor.capture());
+        WorkerGatewayResumeEvent event = eventCaptor.getAllValues().stream()
+                .filter(WorkerGatewayResumeEvent.class::isInstance)
+                .map(WorkerGatewayResumeEvent.class::cast)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("WorkerGatewayResumeEvent not published"));
         assertEquals(suspensionEntity.getTaskId(), event.getTaskId());
         assertEquals(suspendId, event.getSuspendId());
         assertEquals("approved", event.getApprovalResult());
