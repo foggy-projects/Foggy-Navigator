@@ -1,9 +1,13 @@
 package com.foggy.navigator.sdk.internal;
 
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.foggy.navigator.sdk.exception.NavigatorApiException;
 import org.slf4j.Logger;
@@ -15,11 +19,15 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 
 /**
  * Internal HTTP helper — wraps Java HttpClient + Jackson for Navigator Open API calls.
  * <p>
  * All responses are expected in {@code RX<T>} format: {@code {"code": 0, "data": ..., "msg": "..."}}
+ * or the Foggy framework convention {@code {"code": 200, "data": ..., "msg": "..."}}
  */
 public class HttpHelper {
 
@@ -45,7 +53,8 @@ public class HttpHelper {
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         this.objectMapper = new ObjectMapper()
-                .registerModule(new JavaTimeModule())
+                .registerModule(javaTimeModule())
+                .configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false)
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
 
@@ -123,6 +132,25 @@ public class HttpHelper {
         return "Bearer " + trimmed;
     }
 
+    private static JavaTimeModule javaTimeModule() {
+        JavaTimeModule module = new JavaTimeModule();
+        module.addDeserializer(LocalDateTime.class, new JsonDeserializer<LocalDateTime>() {
+            @Override
+            public LocalDateTime deserialize(JsonParser parser, DeserializationContext context) throws IOException {
+                String value = parser.getValueAsString();
+                if (value == null || value.isBlank()) {
+                    return null;
+                }
+                try {
+                    return LocalDateTime.parse(value);
+                } catch (DateTimeParseException ignored) {
+                    return OffsetDateTime.parse(value).toLocalDateTime();
+                }
+            }
+        });
+        return module;
+    }
+
     private <T> T execute(HttpRequest request, TypeReference<T> type) {
         try {
             log.debug("SDK {} {}", request.method(), request.uri());
@@ -140,7 +168,7 @@ public class HttpHelper {
             JsonNode root = objectMapper.readTree(body);
             if (root.isObject() && root.has("code")) {
                 int code = root.get("code").asInt(-1);
-                if (code != 0) {
+                if (code != 0 && code != 200) {
                     String msg = root.has("msg") ? root.get("msg").asText() : body;
                     throw new NavigatorApiException(response.statusCode(),
                             "API error (code=" + code + "): " + msg);

@@ -55,6 +55,7 @@ flowchart LR
     S10B --> S10C[Stage 10C TMS Mock E2E + Safety Verification]
     S10C --> S10D[Stage 10D Upstream Auto Bootstrap Contract]
     S10D --> S10E[Stage 10E SDK Bearer Control Plane Auth]
+    S10E --> S11[Stage 11 Business Task Worker Binding]
 ```
 
 ## Stage 0：代码基线确认
@@ -309,6 +310,23 @@ flowchart LR
 - 更新 upstream integration 文档与 personal skill 的 TMS bootstrap runbook。
 - 验收记录：[stage-10e-sdk-bearer-control-plane-auth-acceptance.md](acceptance/stage-10e-sdk-bearer-control-plane-auth-acceptance.md)
 
+## Stage 11：Business Task 与 Worker Task 运行时绑定 [ACCEPTED-WITH-RUNTIME-RETEST]
+
+目标：修复 TMS P1 approval-required 真实 invoke 验证中发现的 Navigator 内部绑定缺口。Business Agent 创建 `bt_*` task 后，需要同步创建并绑定真实 LangGraph `lgt_*` task；审批 resume 时必须投递到 `lgt_*`，同时 runtime token 也必须能按 `lgt_*` 精确解析。
+
+已实现：
+
+1. `business-agent-module` 新增 `BusinessAgentWorkerTaskLauncher` SPI。
+2. `addons/langgraph-biz-worker` 新增 `LanggraphBusinessAgentWorkerTaskLauncher`，按 Worker Pool 选择 enabled worker member，并通过 `LanggraphTaskService` 创建真实 LangGraph task。
+3. `BusinessAgentTaskEntity` / `BusinessTaskScopedTokenEntity` / `BusinessFunctionSuspensionEntity` 增加 worker task binding 字段。
+4. `BusinessAgentTaskService.createTask` 保存 `workerTaskId`、`workerId`、`workerProviderType`，并将 task scoped token 同时注册到 `bt_*` 与 `lgt_*`。
+5. `BusinessFunctionSuspensionService.resumeSuspension` 在存在 `workerTaskId` 时向 `lgt_*` 分发 resume event，旧记录继续 fallback 到 `bt_*`。
+6. 新增单元测试覆盖 worker task 创建、token alias、suspension 绑定和 resume event 分发。
+
+验收记录：[stage-11-business-task-worker-binding-acceptance.md](acceptance/stage-11-business-task-worker-binding-acceptance.md)
+
+限制：已有旧 task / suspension 不会自动补齐 `workerTaskId`。真实 P1 approval invoke 需要重启 Navigator 后重新创建 Business Agent task 再验收。
+
 ## 当前进度
 
 | Stage | 状态 | 备注 |
@@ -336,6 +354,7 @@ flowchart LR
 | Stage 10C TMS Mock E2E + Safety Verification | completed | SDK onboarding smoke, TMS mock REST E2E, `orderIdentifier` schema guard, sensitive-field checks; 2026-05-04 |
 | Stage 10D Upstream Auto Bootstrap Contract | completed | manifest + env + SDK runner 契约；personal skill 增加 TMS auto bootstrap runbook 与模板；2026-05-05 |
 | Stage 10E SDK Bearer Control Plane Auth | completed | `NavigatorClient.adminToken/bearerToken` 支持 Bearer 控制面鉴权；当前 sandbox JWT 不再误走 `X-API-Key`; 2026-05-05 |
+| Stage 11 Business Task Worker Binding | completed | `bt_*` 创建时绑定真实 `lgt_*`；resume event 投递到 worker task；runtime token 注册 worker task alias；TMS P1 approval invoke 已重启后复测通过，Gateway=`SUCCESS`、TMS code=`200`、data=yes、leak=false；2026-05-06 |
 
 > [!NOTE]
 > `BusinessObject` 是用于组织函数（Function）的业务对象概念，不是授权主体。授权主体仍然由 ClientApp / upstreamUser / Skill / Function grant 进行细粒度控制。

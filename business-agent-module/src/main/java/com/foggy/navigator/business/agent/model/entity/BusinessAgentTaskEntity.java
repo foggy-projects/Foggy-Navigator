@@ -42,6 +42,18 @@ public class BusinessAgentTaskEntity {
     @Column(length = 64, nullable = false)
     private String workerPoolId;
 
+    @Column(length = 64)
+    private String workerTaskId;
+
+    @Column(length = 64)
+    private String workerSessionId;
+
+    @Column(length = 64)
+    private String workerId;
+
+    @Column(length = 64)
+    private String workerProviderType;
+
     @Column(length = 64, nullable = false)
     private String modelConfigId;
 

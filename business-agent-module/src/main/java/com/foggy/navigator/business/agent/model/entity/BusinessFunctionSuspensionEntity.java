@@ -27,6 +27,12 @@ public class BusinessFunctionSuspensionEntity {
     @Column(name = "task_id", nullable = false, length = 64)
     private String taskId;
 
+    @Column(name = "worker_task_id", length = 64)
+    private String workerTaskId;
+
+    @Column(name = "worker_session_id", length = 64)
+    private String workerSessionId;
+
     @Column(name = "session_id", nullable = false, length = 64)
     private String sessionId;
 
@@ -41,6 +47,9 @@ public class BusinessFunctionSuspensionEntity {
 
     @Column(name = "skill_id", nullable = false, length = 128)
     private String skillId;
+
+    @Column(name = "worker_pool_id", length = 64)
+    private String workerPoolId;
 
     @Column(name = "function_id", nullable = false, length = 128)
     private String functionId;

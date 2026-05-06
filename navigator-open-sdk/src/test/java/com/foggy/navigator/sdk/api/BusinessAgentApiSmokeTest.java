@@ -12,6 +12,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -123,6 +124,18 @@ public class BusinessAgentApiSmokeTest {
     }
 
     @Test
+    public void testRxCode200IsSuccess() {
+        responseOverride = "{\"code\":200,\"data\":[{\"clientAppId\":\"app-rx-200\",\"name\":\"RX 200\",\"createdAt\":\"2026-05-04T12:35:47.460353+08:00\"}]}";
+        List<ClientAppDTO> apps = client.businessAgent().listClientApps();
+
+        assertNotNull(apps);
+        assertEquals(1, apps.size());
+        assertEquals("app-rx-200", apps.get(0).getClientAppId());
+        assertNotNull(apps.get(0).getCreatedAt());
+        assertCommon();
+    }
+
+    @Test
     public void testCreateClientApp() {
         CreateClientAppForm form = new CreateClientAppForm();
         form.setName("Test App");
@@ -145,6 +158,7 @@ public class BusinessAgentApiSmokeTest {
         IssueProvisioningCredentialForm form = new IssueProvisioningCredentialForm();
         form.setTargetTenantId("tenant-x");
         form.setCapabilityDomain("domain");
+        form.setExpiresAt(LocalDateTime.of(2026, 6, 1, 0, 0));
 
         responseOverride = "{\"credentialId\":\"cred-001\", \"appKey\":\"key-abc\"}"; // naked object
         IssuedCredentialDTO cred = client.businessAgent().issueProvisioningCredential(form);
@@ -153,6 +167,7 @@ public class BusinessAgentApiSmokeTest {
         assertEquals("/api/v1/admin/client-apps/provisioning-credentials", lastPath);
         assertEquals("POST", lastMethod);
         assertTrue(lastBody.contains("\"targetTenantId\":\"tenant-x\""), "Payload must have targetTenantId");
+        assertTrue(lastBody.contains("\"expiresAt\":\"2026-06-01T00:00:00\""), "LocalDateTime must be serialized as ISO text");
         assertCommon();
     }
 

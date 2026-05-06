@@ -15,6 +15,10 @@ public class BusinessAgentTaskDTO {
     private String navigatorEffectiveUserId;
     private String skillId;
     private String workerPoolId;
+    private String workerTaskId;
+    private String workerSessionId;
+    private String workerId;
+    private String workerProviderType;
     private String modelConfigId;
     private String requestedModelConfigId;
     private String status;
@@ -34,6 +38,10 @@ public class BusinessAgentTaskDTO {
         dto.setNavigatorEffectiveUserId(entity.getNavigatorEffectiveUserId());
         dto.setSkillId(entity.getSkillId());
         dto.setWorkerPoolId(entity.getWorkerPoolId());
+        dto.setWorkerTaskId(entity.getWorkerTaskId());
+        dto.setWorkerSessionId(entity.getWorkerSessionId());
+        dto.setWorkerId(entity.getWorkerId());
+        dto.setWorkerProviderType(entity.getWorkerProviderType());
         dto.setModelConfigId(entity.getModelConfigId());
         dto.setRequestedModelConfigId(entity.getRequestedModelConfigId());
         dto.setStatus(entity.getStatus());

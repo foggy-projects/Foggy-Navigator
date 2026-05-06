@@ -9,6 +9,7 @@ public class WorkerGatewayResumeEvent extends ApplicationEvent {
 
     private final String taskId;
     private final String sessionId;
+    private final String businessSessionId;
     private final String suspendId;
     private final String approvalResult;
     private final String comment;
@@ -21,11 +22,12 @@ public class WorkerGatewayResumeEvent extends ApplicationEvent {
     private final String inputHash;
 
     @Builder
-    public WorkerGatewayResumeEvent(Object source, String taskId, String sessionId, String suspendId, String approvalResult, String comment,
+    public WorkerGatewayResumeEvent(Object source, String taskId, String sessionId, String businessSessionId, String suspendId, String approvalResult, String comment,
                                     String tenantId, String clientAppId, String upstreamUserId, String functionId, String inputHash) {
         super(source);
         this.taskId = taskId;
         this.sessionId = sessionId;
+        this.businessSessionId = businessSessionId;
         this.suspendId = suspendId;
         this.approvalResult = approvalResult;
         this.comment = comment;

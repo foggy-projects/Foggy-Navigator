@@ -25,6 +25,12 @@ public class BusinessTaskScopedTokenEntity {
     @Column(length = 64, nullable = false)
     private String taskId;
 
+    @Column(length = 64)
+    private String workerTaskId;
+
+    @Column(length = 64)
+    private String workerSessionId;
+
     @Column(length = 64, nullable = false)
     private String sessionId;
 

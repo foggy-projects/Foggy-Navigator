@@ -143,11 +143,10 @@ class RestAdapterUpstreamE2ETest {
         SkillRegistryService skillRegistryService = new SkillRegistryService(skillRepository, allowlistRepository, skillGrantRepository, functionRepository, clientAppService);
         BizWorkerPoolService bizWorkerPoolService = new BizWorkerPoolService(identityRepository, poolRepository, poolMemberRepository);
 
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, java.util.List.of());
         BusinessFunctionAuthorizationService authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService1, skillRegistryService, functionRegistryService);
 
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
-        BusinessFunctionSuspensionService suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher, auditService);
 
         // Build composite adapter with real REST invoker
         RestTemplate restTemplate = new RestTemplate();
@@ -158,6 +157,7 @@ class RestAdapterUpstreamE2ETest {
                 ),
                 objectMapper
         );
+        BusinessFunctionSuspensionService suspensionService = new BusinessFunctionSuspensionService(suspensionRepository, eventPublisher, auditService, authorizationService, adapterInvoker);
 
         workerGatewayService = new WorkerGatewayService(taskService, authorizationService, functionRegistryService, skillRegistryService, userGrantService1, suspensionService, adapterInvoker, objectMapper, auditService);
     }

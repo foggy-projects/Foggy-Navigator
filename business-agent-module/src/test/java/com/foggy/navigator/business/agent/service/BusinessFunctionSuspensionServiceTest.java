@@ -1,10 +1,16 @@
 package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
+import com.foggy.navigator.business.agent.model.dto.BusinessFunctionDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessFunctionVersionDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessTaskScopedTokenDTO;
+import com.foggy.navigator.business.agent.model.dto.WorkerGatewayInvokeResponseDTO;
 import com.foggy.navigator.business.agent.model.entity.BusinessFunctionSuspensionEntity;
 import com.foggy.navigator.business.agent.model.form.WorkerGatewayResumeForm;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionSuspensionRepository;
+import com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker;
+import com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -34,6 +40,12 @@ class BusinessFunctionSuspensionServiceTest {
     @Mock
     private BusinessFunctionRuntimeAuditService auditService;
 
+    @Mock
+    private BusinessFunctionAuthorizationService authorizationService;
+
+    @Mock
+    private BusinessFunctionAdapterInvoker adapterInvoker;
+
     @InjectMocks
     private BusinessFunctionSuspensionService suspensionService;
 
@@ -54,17 +66,23 @@ class BusinessFunctionSuspensionServiceTest {
         tokenDTO.setClientAppId("app1");
         tokenDTO.setUpstreamUserId("user1");
         tokenDTO.setSkillId("skill1");
+        tokenDTO.setWorkerPoolId("pool1");
+        tokenDTO.setWorkerSessionId("worker_session1");
     }
 
     @Test
     void createSuspension_success() {
         when(repository.save(any(BusinessFunctionSuspensionEntity.class))).thenAnswer(i -> i.getArguments()[0]);
+        tokenDTO.setWorkerTaskId("lgt_1");
 
         BusinessFunctionSuspensionEntity result = suspensionService.createSuspension(tokenDTO, "f1", "v1", "{}", "idem_key");
 
         assertNotNull(result);
         assertTrue(result.getSuspendId().startsWith("sus_"));
         assertEquals("task1", result.getTaskId());
+        assertEquals("lgt_1", result.getWorkerTaskId());
+        assertEquals("worker_session1", result.getWorkerSessionId());
+        assertEquals("pool1", result.getWorkerPoolId());
         assertEquals("f1", result.getFunctionId());
         assertEquals("PENDING", result.getStatus());
         assertNotNull(result.getExpiresAt());
@@ -122,6 +140,49 @@ class BusinessFunctionSuspensionServiceTest {
     }
 
     @Test
+    void resumeSuspension_dispatchesWorkerTaskId_whenBound() {
+        BusinessFunctionSuspensionEntity entity = new BusinessFunctionSuspensionEntity();
+        entity.setSuspendId("sus_1");
+        entity.setTaskId("task1");
+        entity.setWorkerTaskId("lgt_1");
+        entity.setWorkerSessionId("worker_session1");
+        entity.setSessionId("session1");
+        entity.setTenantId("tenant1");
+        entity.setClientAppId("app1");
+        entity.setUpstreamUserId("user1");
+        entity.setFunctionId("f1");
+        entity.setVersion("v1");
+        entity.setInputJson("{\"key\":\"value\"}");
+        entity.setStatus("PENDING");
+        entity.setExpiresAt(LocalDateTime.now().plusHours(1));
+
+        when(repository.findBySuspendId("sus_1")).thenReturn(Optional.of(entity));
+
+        WorkerGatewayResumeForm form = new WorkerGatewayResumeForm();
+        WorkerGatewayResumeForm.ApprovalResult result = new WorkerGatewayResumeForm.ApprovalResult();
+        result.setStatus("approved");
+        form.setApprovalResult(result);
+
+        WorkerGatewayResumeForm.BindingContext binding = new WorkerGatewayResumeForm.BindingContext();
+        binding.setClientAppId("app1");
+        binding.setUpstreamUserId("user1");
+        binding.setTaskId("task1");
+        binding.setSessionId("session1");
+        binding.setFunctionId("f1");
+        binding.setVersion("v1");
+        binding.setInputHash(computeSha256Hex("{\"key\":\"value\"}"));
+        form.setBindingContext(binding);
+
+        suspensionService.resumeSuspension("tenant1", "admin1", "sus_1", form);
+
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        WorkerGatewayResumeEvent event = eventCaptor.getValue();
+        assertEquals("lgt_1", event.getTaskId());
+        assertEquals("worker_session1", event.getSessionId());
+        assertEquals("session1", event.getBusinessSessionId());
+    }
+
+    @Test
     void resumeSuspension_rejected() {
         BusinessFunctionSuspensionEntity entity = new BusinessFunctionSuspensionEntity();
         entity.setSuspendId("sus_1");
@@ -156,7 +217,7 @@ class BusinessFunctionSuspensionServiceTest {
         suspensionService.resumeSuspension("tenant1", "admin1", "sus_1", form);
 
         verify(repository).save(entityCaptor.capture());
-        assertEquals("RESUME_DISPATCHED", entityCaptor.getValue().getStatus());
+        assertEquals("REJECTED", entityCaptor.getValue().getStatus());
 
         verify(eventPublisher).publishEvent(any(WorkerGatewayResumeEvent.class));
     }
@@ -336,6 +397,109 @@ class BusinessFunctionSuspensionServiceTest {
         );
         assertTrue(ex.getMessage().contains("Resume form cannot be null"));
         verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void executeApprovedSuspension_success_executesAdapterWithOriginalBinding() {
+        BusinessFunctionSuspensionEntity entity = new BusinessFunctionSuspensionEntity();
+        entity.setSuspendId("sus_1");
+        entity.setTaskId("task1");
+        entity.setWorkerTaskId("lgt_1");
+        entity.setWorkerSessionId("worker_session1");
+        entity.setSessionId("session1");
+        entity.setTenantId("tenant1");
+        entity.setClientAppId("app1");
+        entity.setUpstreamUserId("user1");
+        entity.setSkillId("skill1");
+        entity.setWorkerPoolId("pool1");
+        entity.setFunctionId("f1");
+        entity.setVersion("v1");
+        entity.setInputJson("{\"key\":\"value\"}");
+        entity.setStatus("RESUME_DISPATCHED");
+
+        when(repository.findBySuspendId("sus_1")).thenReturn(Optional.of(entity));
+        when(repository.save(any(BusinessFunctionSuspensionEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BusinessFunctionRuntimeContextDTO context = new BusinessFunctionRuntimeContextDTO();
+        BusinessFunctionDTO function = new BusinessFunctionDTO();
+        function.setFunctionId("f1");
+        function.setApprovalRequired(true);
+        context.setFunction(function);
+        BusinessFunctionVersionDTO version = new BusinessFunctionVersionDTO();
+        version.setVersion("v1");
+        context.setVersionData(version);
+
+        when(authorizationService.resolveExecutableBusinessFunction("tenant1", "app1", "user1", "skill1", "f1", "v1"))
+                .thenReturn(context);
+        when(adapterInvoker.invoke(any(BusinessFunctionRuntimeContextDTO.class), eq("{\"key\":\"value\"}")))
+                .thenReturn(BusinessFunctionAdapterResult.success("{\"code\":200,\"data\":{}}"));
+
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("lgt_1")
+                .sessionId("worker_session1")
+                .businessSessionId("session1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .tenantId("tenant1")
+                .clientAppId("app1")
+                .upstreamUserId("user1")
+                .functionId("f1")
+                .inputHash(computeSha256Hex("{\"key\":\"value\"}"))
+                .build();
+
+        WorkerGatewayInvokeResponseDTO response = suspensionService.executeApprovedSuspension(event);
+
+        assertEquals(WorkerGatewayInvokeResponseDTO.STATUS_SUCCESS, response.getStatus());
+        assertEquals("{\"code\":200,\"data\":{}}", response.getOutputJson());
+        assertEquals("COMPLETED", entity.getStatus());
+
+        ArgumentCaptor<BusinessFunctionRuntimeContextDTO> contextCaptor = ArgumentCaptor.forClass(BusinessFunctionRuntimeContextDTO.class);
+        verify(adapterInvoker).invoke(contextCaptor.capture(), eq("{\"key\":\"value\"}"));
+        assertEquals("task1", contextCaptor.getValue().getTaskId());
+        assertEquals("session1", contextCaptor.getValue().getSessionId());
+        assertEquals("app1", contextCaptor.getValue().getClientAppId());
+        assertEquals("user1", contextCaptor.getValue().getUpstreamUserId());
+        verify(auditService).recordInvokeSuccess(any(BusinessTaskScopedTokenDTO.class), eq("f1"), eq("v1"), any(), anyLong());
+    }
+
+    @Test
+    void executeApprovedSuspension_rejectsInputHashMismatch() {
+        BusinessFunctionSuspensionEntity entity = new BusinessFunctionSuspensionEntity();
+        entity.setSuspendId("sus_1");
+        entity.setTaskId("task1");
+        entity.setWorkerTaskId("lgt_1");
+        entity.setWorkerSessionId("worker_session1");
+        entity.setSessionId("session1");
+        entity.setTenantId("tenant1");
+        entity.setClientAppId("app1");
+        entity.setUpstreamUserId("user1");
+        entity.setSkillId("skill1");
+        entity.setFunctionId("f1");
+        entity.setVersion("v1");
+        entity.setInputJson("{\"key\":\"value\"}");
+        entity.setStatus("RESUME_DISPATCHED");
+
+        when(repository.findBySuspendId("sus_1")).thenReturn(Optional.of(entity));
+
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("lgt_1")
+                .sessionId("worker_session1")
+                .businessSessionId("session1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .tenantId("tenant1")
+                .clientAppId("app1")
+                .upstreamUserId("user1")
+                .functionId("f1")
+                .inputHash(computeSha256Hex("{\"key\":\"wrong\"}"))
+                .build();
+
+        SecurityException ex = assertThrows(SecurityException.class,
+                () -> suspensionService.executeApprovedSuspension(event));
+        assertTrue(ex.getMessage().contains("Input hash mismatch"));
+        verifyNoInteractions(adapterInvoker);
     }
 
     private String computeSha256Hex(String input) {

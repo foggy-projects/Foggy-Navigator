@@ -1,6 +1,7 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
+import com.foggy.navigator.business.agent.service.BusinessFunctionSuspensionService;
 import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
@@ -12,8 +13,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.http.HttpHeaders;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 import static org.mockito.Mockito.*;
@@ -30,6 +34,9 @@ class LanggraphWorkerResumeEventListenerTest {
 
     @Mock
     private LanggraphWorkerClient workerClient;
+
+    @Mock
+    private BusinessFunctionSuspensionService suspensionService;
 
     @InjectMocks
     private LanggraphWorkerResumeEventListener listener;
@@ -70,6 +77,102 @@ class LanggraphWorkerResumeEventListenerTest {
         listener.handleWorkerGatewayResumeEvent(event);
 
         verify(workerClient).resumeTask("t_1", "approved", "OK");
+        verify(suspensionService).executeApprovedSuspension(event);
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_success_usesWorkerSessionForDispatchAndKeepsBusinessSession() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("lgt_1")
+                .sessionId("worker_session_1")
+                .businessSessionId("business_session_1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .comment("OK")
+                .tenantId("tenant_1")
+                .build();
+
+        LanggraphTaskEntity task = buildTask("lgt_1", "worker_session_1", "w_1", "tenant_1");
+        when(taskRepository.findByTaskId("lgt_1")).thenReturn(Optional.of(task));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.resumeTask("lgt_1", "approved", "OK")).thenReturn(Mono.empty());
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verify(workerClient).resumeTask("lgt_1", "approved", "OK");
+        verify(suspensionService).executeApprovedSuspension(event);
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_workerResume404_executesApprovedBusinessSuspension() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("lgt_1")
+                .sessionId("worker_session_1")
+                .businessSessionId("business_session_1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .comment("OK")
+                .tenantId("tenant_1")
+                .build();
+
+        LanggraphTaskEntity task = buildTask("lgt_1", "worker_session_1", "w_1", "tenant_1");
+        when(taskRepository.findByTaskId("lgt_1")).thenReturn(Optional.of(task));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.resumeTask("lgt_1", "approved", "OK"))
+                .thenReturn(Mono.error(WebClientResponseException.create(
+                        404,
+                        "Not Found",
+                        HttpHeaders.EMPTY,
+                        new byte[0],
+                        StandardCharsets.UTF_8
+                )));
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verify(workerClient).resumeTask("lgt_1", "approved", "OK");
+        verify(suspensionService).executeApprovedSuspension(event);
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_workerResume500_doesNotExecuteApprovedBusinessSuspension() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("lgt_1")
+                .sessionId("worker_session_1")
+                .businessSessionId("business_session_1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .comment("OK")
+                .tenantId("tenant_1")
+                .build();
+
+        LanggraphTaskEntity task = buildTask("lgt_1", "worker_session_1", "w_1", "tenant_1");
+        when(taskRepository.findByTaskId("lgt_1")).thenReturn(Optional.of(task));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.resumeTask("lgt_1", "approved", "OK"))
+                .thenReturn(Mono.error(WebClientResponseException.create(
+                        500,
+                        "Internal Server Error",
+                        HttpHeaders.EMPTY,
+                        new byte[0],
+                        StandardCharsets.UTF_8
+                )));
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verify(workerClient).resumeTask("lgt_1", "approved", "OK");
+        verify(suspensionService, never()).executeApprovedSuspension(event);
     }
 
     @Test
@@ -95,6 +198,7 @@ class LanggraphWorkerResumeEventListenerTest {
         listener.handleWorkerGatewayResumeEvent(event);
 
         verify(workerClient).resumeTask("t_1", "approved", "OK");
+        verify(suspensionService).executeApprovedSuspension(event);
     }
 
     @Test

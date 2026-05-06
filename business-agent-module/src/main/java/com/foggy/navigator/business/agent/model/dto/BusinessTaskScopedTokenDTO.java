@@ -9,6 +9,8 @@ import java.time.LocalDateTime;
 public class BusinessTaskScopedTokenDTO {
     private String tokenId;
     private String taskId;
+    private String workerTaskId;
+    private String workerSessionId;
     private String sessionId;
     private String tenantId;
     private String clientAppId;
@@ -29,6 +31,8 @@ public class BusinessTaskScopedTokenDTO {
         BusinessTaskScopedTokenDTO dto = new BusinessTaskScopedTokenDTO();
         dto.setTokenId(entity.getTokenId());
         dto.setTaskId(entity.getTaskId());
+        dto.setWorkerTaskId(entity.getWorkerTaskId());
+        dto.setWorkerSessionId(entity.getWorkerSessionId());
         dto.setSessionId(entity.getSessionId());
         dto.setTenantId(entity.getTenantId());
         dto.setClientAppId(entity.getClientAppId());

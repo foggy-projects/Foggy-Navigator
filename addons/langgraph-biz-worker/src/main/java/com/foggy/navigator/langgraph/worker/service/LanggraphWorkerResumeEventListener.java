@@ -1,6 +1,7 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
+import com.foggy.navigator.business.agent.service.BusinessFunctionSuspensionService;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
@@ -9,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.Optional;
 
@@ -33,6 +35,7 @@ public class LanggraphWorkerResumeEventListener {
 
     private final LanggraphTaskRepository taskRepository;
     private final LanggraphWorkerService workerService;
+    private final BusinessFunctionSuspensionService suspensionService;
 
     @EventListener
     public void handleWorkerGatewayResumeEvent(WorkerGatewayResumeEvent event) {
@@ -85,8 +88,40 @@ public class LanggraphWorkerResumeEventListener {
         var client = workerService.createClient(worker);
 
         client.resumeTask(event.getTaskId(), event.getApprovalResult(), event.getComment())
-                .doOnSuccess(resp -> log.info("Successfully dispatched resume to worker: taskId={}, workerId={}", event.getTaskId(), workerId))
-                .doOnError(e -> log.error("Failed to dispatch resume to worker: taskId={}, workerId={}", event.getTaskId(), workerId, e))
-                .subscribe();
+                .doOnSuccess(resp -> {
+                    log.info("Successfully dispatched resume to worker: taskId={}, workerId={}", event.getTaskId(), workerId);
+                    executeApprovedBusinessSuspensionIfNeeded(event);
+                })
+                .doOnError(e -> {
+                    log.error("Failed to dispatch resume to worker: taskId={}, workerId={}", event.getTaskId(), workerId, e);
+                    if (isWorkerResumeFrameNotFound(e)) {
+                        log.warn("Worker has no awaiting approval frame for taskId={}, suspendId={}; executing approved business suspension via Java gateway",
+                                event.getTaskId(), event.getSuspendId());
+                        executeApprovedBusinessSuspensionIfNeeded(event);
+                    }
+                })
+                .subscribe(ignored -> { }, e -> { });
+    }
+
+    private void executeApprovedBusinessSuspensionIfNeeded(WorkerGatewayResumeEvent event) {
+        if (!"approved".equalsIgnoreCase(event.getApprovalResult())) {
+            return;
+        }
+        try {
+            var result = suspensionService.executeApprovedSuspension(event);
+            log.info("Approved business function execution completed: taskId={}, suspendId={}, functionId={}, status={}",
+                    event.getTaskId(), event.getSuspendId(), event.getFunctionId(), result != null ? result.getStatus() : "UNKNOWN");
+        } catch (Exception e) {
+            log.error("Approved business function execution failed: taskId={}, suspendId={}, functionId={}",
+                    event.getTaskId(), event.getSuspendId(), event.getFunctionId(), e);
+        }
+    }
+
+    private boolean isWorkerResumeFrameNotFound(Throwable error) {
+        if (error instanceof WebClientResponseException webError) {
+            return webError.getStatusCode().value() == 404;
+        }
+        Throwable cause = error.getCause();
+        return cause != null && isWorkerResumeFrameNotFound(cause);
     }
 }

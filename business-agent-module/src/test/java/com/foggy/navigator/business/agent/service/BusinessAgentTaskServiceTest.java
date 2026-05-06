@@ -1,11 +1,15 @@
 package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.CreatedBusinessAgentTaskDTO;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
 import com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm;
 import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository;
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
+import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
+import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
+import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -44,6 +49,8 @@ class BusinessAgentTaskServiceTest {
     private SkillRegistryService skillRegistryService;
     @Mock
     private BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
+    @Mock
+    private BusinessAgentWorkerTaskLauncher workerTaskLauncher;
 
     @InjectMocks
     private BusinessAgentTaskService taskService;
@@ -99,6 +106,57 @@ class BusinessAgentTaskServiceTest {
         assertEquals(BusinessAgentTaskService.STATUS_ACTIVE, savedToken.getStatus());
 
         verify(tokenRuntimeStore).registerToken("tenant_01", "session_01", result.getTaskId(), result.getTaskScopedToken(), savedToken.getExpiresAt());
+    }
+
+    @Test
+    void createTask_withWorkerTaskLauncher_bindsWorkerTaskAndRuntimeTokenAlias() {
+        BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
+                taskRepository,
+                tokenRepository,
+                clientAppService,
+                bizWorkerPoolService,
+                grantService,
+                userGrantService,
+                skillRegistryService,
+                tokenRuntimeStore,
+                List.of(workerTaskLauncher));
+
+        BizWorkerPoolEntity pool = new BizWorkerPoolEntity();
+        pool.setPoolId("pool_01");
+        pool.setWorkerBackend("LANGGRAPH_BIZ");
+
+        when(bizWorkerPoolService.requireAvailablePool("tenant_01", "pool_01")).thenReturn(pool);
+        when(grantService.resolveEffectiveModelConfigId("tenant_01", "app_01", null)).thenReturn("model_01");
+        doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
+        doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
+        when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
+        when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class))).thenReturn(
+                BusinessAgentWorkerTaskLaunchResult.builder()
+                        .workerTaskId("lgt_123")
+                        .workerSessionId("worker_session_123")
+                        .workerId("worker_01")
+                        .providerType("langgraph-biz-worker")
+                        .build());
+        when(taskRepository.save(any(BusinessAgentTaskEntity.class))).thenAnswer(invocation -> {
+            BusinessAgentTaskEntity entity = invocation.getArgument(0);
+            entity.setId(1L);
+            return entity;
+        });
+
+        CreatedBusinessAgentTaskDTO result = serviceWithLauncher.createTask("tenant_01", "actor_01", form);
+
+        assertEquals("lgt_123", result.getWorkerTaskId());
+        assertEquals("worker_session_123", result.getWorkerSessionId());
+        assertEquals("worker_01", result.getWorkerId());
+        assertEquals("langgraph-biz-worker", result.getWorkerProviderType());
+
+        ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor = ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
+        verify(tokenRepository).save(tokenCaptor.capture());
+        assertEquals("lgt_123", tokenCaptor.getValue().getWorkerTaskId());
+        assertEquals("worker_session_123", tokenCaptor.getValue().getWorkerSessionId());
+
+        verify(tokenRuntimeStore).registerToken(eq("tenant_01"), eq("session_01"), eq(result.getTaskId()), eq(result.getTaskScopedToken()), any());
+        verify(tokenRuntimeStore).registerToken(eq("tenant_01"), eq("session_01"), eq("lgt_123"), eq(result.getTaskScopedToken()), any());
     }
 
     @Test

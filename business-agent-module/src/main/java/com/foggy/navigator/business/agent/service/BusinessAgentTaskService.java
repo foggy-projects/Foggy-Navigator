@@ -2,11 +2,15 @@ package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentTaskDTO;
 import com.foggy.navigator.business.agent.model.dto.CreatedBusinessAgentTaskDTO;
+import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
 import com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm;
 import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository;
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
+import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
+import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
+import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,6 +18,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -31,6 +36,7 @@ public class BusinessAgentTaskService {
     private final ClientAppUserGrantService userGrantService;
     private final SkillRegistryService skillRegistryService;
     private final BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
+    private final List<BusinessAgentWorkerTaskLauncher> workerTaskLaunchers;
 
     @Transactional
     public CreatedBusinessAgentTaskDTO createTask(String tenantId, String actorUserId, CreateBusinessAgentTaskForm form) {
@@ -49,7 +55,7 @@ public class BusinessAgentTaskService {
         clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
 
         // 3. 校验 workerPoolId 存在、属于当前 tenant、状态可用
-        bizWorkerPoolService.requireAvailablePool(tenantId, form.getWorkerPoolId());
+        BizWorkerPoolEntity workerPool = bizWorkerPoolService.requireAvailablePool(tenantId, form.getWorkerPoolId());
 
         // 校验 upstream user grant
         userGrantService.checkUpstreamUserAccess(tenantId, form.getClientAppId(), form.getUpstreamUserId());
@@ -93,6 +99,15 @@ public class BusinessAgentTaskService {
         task.setStatus(STATUS_CREATED);
         task = taskRepository.save(task);
 
+        BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(tenantId, actorUserId, task, workerPool);
+        if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
+            task.setWorkerTaskId(launchResult.getWorkerTaskId());
+            task.setWorkerSessionId(launchResult.getWorkerSessionId());
+            task.setWorkerId(launchResult.getWorkerId());
+            task.setWorkerProviderType(launchResult.getProviderType());
+            task = taskRepository.save(task);
+        }
+
         // 9, 10. token 绑定并返回一次
         String plainToken = "btt_" + UUID.randomUUID().toString().replace("-", "");
 
@@ -100,6 +115,8 @@ public class BusinessAgentTaskService {
         token.setTokenId("tst_" + UUID.randomUUID().toString().replace("-", ""));
         token.setTokenHash(SecretTokenSupport.sha256(plainToken));
         token.setTaskId(task.getTaskId());
+        token.setWorkerTaskId(task.getWorkerTaskId());
+        token.setWorkerSessionId(task.getWorkerSessionId());
         token.setSessionId(task.getSessionId());
         token.setTenantId(task.getTenantId());
         token.setClientAppId(task.getClientAppId());
@@ -116,6 +133,9 @@ public class BusinessAgentTaskService {
 
         // Inject into runtime store
         tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getTaskId(), plainToken, expiresAt);
+        if (StringUtils.hasText(task.getWorkerTaskId())) {
+            tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getWorkerTaskId(), plainToken, expiresAt);
+        }
 
         CreatedBusinessAgentTaskDTO dto = new CreatedBusinessAgentTaskDTO();
         BusinessAgentTaskDTO baseDto = BusinessAgentTaskDTO.fromEntity(task);
@@ -127,6 +147,10 @@ public class BusinessAgentTaskService {
         dto.setNavigatorEffectiveUserId(baseDto.getNavigatorEffectiveUserId());
         dto.setSkillId(baseDto.getSkillId());
         dto.setWorkerPoolId(baseDto.getWorkerPoolId());
+        dto.setWorkerTaskId(baseDto.getWorkerTaskId());
+        dto.setWorkerSessionId(baseDto.getWorkerSessionId());
+        dto.setWorkerId(baseDto.getWorkerId());
+        dto.setWorkerProviderType(baseDto.getWorkerProviderType());
         dto.setModelConfigId(baseDto.getModelConfigId());
         dto.setRequestedModelConfigId(baseDto.getRequestedModelConfigId());
         dto.setStatus(baseDto.getStatus());
@@ -177,5 +201,32 @@ public class BusinessAgentTaskService {
         if (!StringUtils.hasText(value)) {
             throw new IllegalArgumentException(message);
         }
+    }
+
+    private BusinessAgentWorkerTaskLaunchResult launchWorkerTaskIfAvailable(
+            String tenantId,
+            String actorUserId,
+            BusinessAgentTaskEntity task,
+            BizWorkerPoolEntity workerPool) {
+        if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
+            return null;
+        }
+        return workerTaskLaunchers.stream()
+                .filter(Objects::nonNull)
+                .filter(launcher -> workerPool.getWorkerBackend().equals(launcher.getWorkerBackend()))
+                .findFirst()
+                .map(launcher -> launcher.launch(BusinessAgentWorkerTaskLaunchRequest.builder()
+                        .tenantId(tenantId)
+                        .actorUserId(actorUserId)
+                        .businessTaskId(task.getTaskId())
+                        .sessionId(task.getSessionId())
+                        .clientAppId(task.getClientAppId())
+                        .upstreamUserId(task.getUpstreamUserId())
+                        .skillId(task.getSkillId())
+                        .workerPoolId(task.getWorkerPoolId())
+                        .workerBackend(workerPool.getWorkerBackend())
+                        .modelConfigId(task.getModelConfigId())
+                        .build()))
+                .orElse(null);
     }
 }
