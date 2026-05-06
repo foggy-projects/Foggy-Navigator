@@ -56,6 +56,7 @@ flowchart LR
     S10C --> S10D[Stage 10D Upstream Auto Bootstrap Contract]
     S10D --> S10E[Stage 10E SDK Bearer Control Plane Auth]
     S10E --> S11[Stage 11 Business Task Worker Binding]
+    S11 --> S12[Stage 12 Suspension Execution Semantics]
 ```
 
 ## Stage 0：代码基线确认
@@ -327,6 +328,26 @@ flowchart LR
 
 限制：已有旧 task / suspension 不会自动补齐 `workerTaskId`。真实 P1 approval invoke 需要重启 Navigator 后重新创建 Business Agent task 再验收。
 
+## Stage 12：Suspension 执行语义与通用化收口 [PLANNED]
+
+目标：将 P1 approval-required 真实 invoke 中暴露出的 `suspension -> resume -> execute` 职责边界固化为可维护语义，并避免 Suspension 被审批场景过度绑定。
+
+执行项：
+
+1. 明确 Business Function suspension 的执行所有权：审批通过后的受控业务副作用应由 Java Gateway/Suspension service 在服务端执行；Worker resume 主要用于对话状态通知和后续自然语言继续生成。
+2. 将当前 “Python worker 无 active waiting frame 时 Java fallback 执行” 收口为显式策略，而不是隐式补救路径，并补充状态、审计和文档说明。
+3. 对 suspension resume 增加幂等执行约束，避免重复 approve/resume 或 worker retry 导致同一业务函数被重复调用。
+4. 梳理 `APPROVAL_REQUIRED` 之外的通用暂停类型，例如 `USER_PAYMENT_REQUIRED`、`USER_CONFIRMATION_REQUIRED`、`EXTERNAL_CALLBACK_WAIT`、`MANUAL_CHECK_REQUIRED`。审批只是 Suspension 的一种类型，不应成为底层模型唯一语义。
+5. 继续保留 binding context、input hash、tenant/clientApp/upstreamUser/task/session/function/version 的 fail-closed 校验，不允许 resume payload 或 LLM 参数伪造受控上下文。
+6. 更新上游文档：支付二维码、外部回调、人工确认等场景应走 Suspension 控制面，而不是让 TMS 或前端直接调用 Worker Gateway internal API。
+
+验收：
+
+1. 代码和文档明确区分 “业务函数执行” 与 “Worker 对话恢复通知”。
+2. 同一 suspendId 的 approve/resume 重放不会重复执行业务副作用。
+3. Approval P1 真实 invoke 仍保持 Gateway final status `SUCCESS`、TMS code `200`、leak check `false`。
+4. 新增或更新测试覆盖：worker waiting frame 缺失、worker notify 失败、重复 resume、非 approval suspension 类型建模。
+
 ## 当前进度
 
 | Stage | 状态 | 备注 |
@@ -355,6 +376,7 @@ flowchart LR
 | Stage 10D Upstream Auto Bootstrap Contract | completed | manifest + env + SDK runner 契约；personal skill 增加 TMS auto bootstrap runbook 与模板；2026-05-05 |
 | Stage 10E SDK Bearer Control Plane Auth | completed | `NavigatorClient.adminToken/bearerToken` 支持 Bearer 控制面鉴权；当前 sandbox JWT 不再误走 `X-API-Key`; 2026-05-05 |
 | Stage 11 Business Task Worker Binding | completed | `bt_*` 创建时绑定真实 `lgt_*`；resume event 投递到 worker task；runtime token 注册 worker task alias；TMS P1 approval invoke 已重启后复测通过，Gateway=`SUCCESS`、TMS code=`200`、data=yes、leak=false；2026-05-06 |
+| Stage 12 Suspension Execution Semantics | planned | 收口 approval-required 真实 invoke 暴露的 resume/execute 职责边界；将 Suspension 通用化为可支持审批、支付、人工确认、外部回调等待的暂停模型；2026-05-06 |
 
 > [!NOTE]
 > `BusinessObject` 是用于组织函数（Function）的业务对象概念，不是授权主体。授权主体仍然由 ClientApp / upstreamUser / Skill / Function grant 进行细粒度控制。
