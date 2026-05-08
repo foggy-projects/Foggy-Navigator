@@ -74,6 +74,7 @@ class BizWorkerControlPlaneAuthorizationTest {
         assertMethodRole(com.foggy.navigator.business.agent.controller.SkillRegistryController.class.getMethod("createSkill", String.class, String.class, com.foggy.navigator.business.agent.model.form.CreateSkillForm.class), "TENANT_ADMIN");
         assertMethodRole(com.foggy.navigator.business.agent.controller.SkillRegistryController.class.getMethod("addFunctionToSkillAllowlist", String.class, String.class, String.class, com.foggy.navigator.business.agent.model.form.AddFunctionToSkillForm.class), "TENANT_ADMIN");
         assertMethodRole(com.foggy.navigator.business.agent.controller.SkillRegistryController.class.getMethod("grantSkillToClientApp", String.class, String.class, String.class, com.foggy.navigator.business.agent.model.form.GrantSkillToClientAppForm.class), "TENANT_ADMIN");
+        assertMethodRole(com.foggy.navigator.business.agent.controller.SkillRegistryController.class.getMethod("materializePublicSkill", String.class, String.class), "TENANT_ADMIN");
     }
 
     @Test

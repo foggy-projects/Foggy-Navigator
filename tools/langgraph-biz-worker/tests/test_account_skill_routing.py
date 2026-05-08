@@ -12,14 +12,18 @@ from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
 
 def _write_skill(path: Path, description: str) -> None:
+    _write_named_skill(path, "exception_triage", "Exception Triage", description)
+
+
+def _write_named_skill(path: Path, name: str, display_name: str, description: str) -> None:
     path.mkdir(parents=True)
     (path / "SKILL.md").write_text(
         "\n".join([
             "---",
-            "name: exception_triage",
+            f"name: {name}",
             f"description: {description}",
             "metadata:",
-            "  display_name: Exception Triage",
+            f"  display_name: {display_name}",
             "  output-schema:",
             "    type: object",
             "  promote-to-parent:",
@@ -70,6 +74,49 @@ def test_route_skill_loads_account_private_skill_and_snapshots_manifest(tmp_path
 
     assert frame is not None
     assert frame.private_working_state["_skill_manifest"]["description"] == "account version"
+
+
+def test_route_skill_loads_client_app_public_skill_and_snapshots_manifest(tmp_path, monkeypatch):
+    skills_root = tmp_path / "skills"
+    data_root = tmp_path / "data"
+
+    _write_named_skill(skills_root / "public" / "shared-skill", "shared_skill", "Shared Skill", "global version")
+    _write_named_skill(
+        skills_root / "public" / "apps" / "tms_app" / "shared-skill",
+        "shared_skill",
+        "TMS Shared Skill",
+        "tms app version",
+    )
+
+    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
+    runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(tmp_path / "frames"),
+    )
+
+    monkeypatch.setattr(root_module, "_skill_registry", registry)
+    monkeypatch.setattr(root_module, "_runtime", runtime)
+
+    result = root_module.route_skill({
+        "task_id": "task-app-public-skill",
+        "session_id": None,
+        "prompt": "use shared skill",
+        "model": None,
+        "context": {"skill": "shared_skill", "clientAppId": "tms_app"},
+        "user_id": None,
+        "tenant_id": None,
+        "events": [],
+        "started_at": 0.0,
+        "active_frame_id": None,
+        "skill_results": [],
+    })
+
+    frame_id = result["active_frame_id"]
+    frame = runtime.get_frame(frame_id)
+
+    assert frame is not None
+    assert frame.private_working_state["_skill_manifest"]["description"] == "tms app version"
 
 
 # ---------------------------------------------------------------------------

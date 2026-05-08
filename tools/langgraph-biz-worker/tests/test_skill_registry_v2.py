@@ -127,6 +127,28 @@ class TestSkillMdLoading:
         assert m is not None
         assert m.allowed_tools == ["tool_x", "tool_y"]
 
+    def test_markdown_body_and_metadata_visibility(self, tmp_path):
+        md = """---
+name: tms_skill
+description: TMS public skill
+metadata:
+  display_name: TMS Skill
+  visibility: public
+---
+
+Use this skill for TMS operations.
+"""
+        _write_skill_md(tmp_path, "public", "tms-skill", md)
+        registry = SkillRegistry(skills_root=tmp_path / "skills", manifests_dir=tmp_path / "empty")
+        registry.load()
+
+        m = registry.get_manifest("tms_skill")
+
+        assert m is not None
+        assert m.name == "TMS Skill"
+        assert m.visibility == "public"
+        assert m.markdown_body == "Use this skill for TMS operations."
+
 
 class TestDefaultSkillsLoad:
     """Test that the actual skills/builtin/ directory loads correctly."""

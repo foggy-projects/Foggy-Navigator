@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     llm_base_url: str = ""          # custom base URL (for Ollama/vLLM compatibility)
     llm_model: str = ""             # e.g. claude-sonnet-4-20250514, gpt-4o
     llm_temperature: float = 0.0
+    llm_agentic_routing: bool = True  # Enable Tool Calling agent mode instead of standalone LLM router
     llm_execute_skills: bool = False  # when true, Skill frames run through LLM tool-call loop
     llm_skill_max_iterations: int = 6
 

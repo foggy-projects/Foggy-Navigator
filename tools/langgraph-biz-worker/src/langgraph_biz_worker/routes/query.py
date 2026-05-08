@@ -53,6 +53,7 @@ async def _event_generator(
             "prompt": request.prompt,
             "model": request.model,
             "context": request.context,
+            "runtime_context": request.runtime_context,
             "user_id": request.user_id,
             "tenant_id": request.tenant_id,
             "events": [],

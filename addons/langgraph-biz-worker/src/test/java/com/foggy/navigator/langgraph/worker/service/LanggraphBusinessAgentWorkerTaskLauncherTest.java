@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -77,6 +78,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("app_01", form.getContext().get("clientAppId"));
         assertEquals("user_01", form.getContext().get("upstreamUserId"));
         assertFalse(form.getContext().containsKey("task_scoped_token"));
+        assertEquals(Map.of("task_scoped_token", "rt_token"), form.getRuntimeContext());
     }
 
     @Test
@@ -118,6 +120,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
                 .workerPoolId("pool_01")
                 .workerBackend("LANGGRAPH_BIZ")
                 .modelConfigId("model_01")
+                .taskScopedToken("rt_token")
                 .build();
     }
 }

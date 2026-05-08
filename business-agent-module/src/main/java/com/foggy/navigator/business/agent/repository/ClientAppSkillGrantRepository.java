@@ -11,4 +11,5 @@ import java.util.Optional;
 public interface ClientAppSkillGrantRepository extends JpaRepository<ClientAppSkillGrantEntity, Long> {
     Optional<ClientAppSkillGrantEntity> findByTenantIdAndClientAppIdAndSkillId(String tenantId, String clientAppId, String skillId);
     List<ClientAppSkillGrantEntity> findByTenantIdAndClientAppId(String tenantId, String clientAppId);
+    List<ClientAppSkillGrantEntity> findByTenantIdAndSkillId(String tenantId, String skillId);
 }

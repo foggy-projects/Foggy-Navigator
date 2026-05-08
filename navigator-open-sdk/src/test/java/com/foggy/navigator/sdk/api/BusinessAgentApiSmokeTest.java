@@ -25,6 +25,10 @@ public class BusinessAgentApiSmokeTest {
     private static String lastMethod;
     private static String lastAuthHeader;
     private static String lastAuthorizationHeader;
+    private static String lastClientAppKeyHeader;
+    private static String lastClientAppSecretHeader;
+    private static String lastClientAppAccessTokenHeader;
+    private static String lastUpstreamUserIdHeader;
     private static String lastBody;
     private static String responseOverride;
     private NavigatorClient client;
@@ -39,6 +43,10 @@ public class BusinessAgentApiSmokeTest {
             lastMethod = exchange.getRequestMethod();
             lastAuthHeader = exchange.getRequestHeaders().getFirst("X-API-Key");
             lastAuthorizationHeader = exchange.getRequestHeaders().getFirst("Authorization");
+            lastClientAppKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Key");
+            lastClientAppSecretHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Secret");
+            lastClientAppAccessTokenHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Access-Token");
+            lastUpstreamUserIdHeader = exchange.getRequestHeaders().getFirst("X-Upstream-User-Id");
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 
             String responseStr = responseOverride != null ? responseOverride : "{\"code\":0, \"data\":{}}";
@@ -71,6 +79,10 @@ public class BusinessAgentApiSmokeTest {
         lastMethod = null;
         lastAuthHeader = null;
         lastAuthorizationHeader = null;
+        lastClientAppKeyHeader = null;
+        lastClientAppSecretHeader = null;
+        lastClientAppAccessTokenHeader = null;
+        lastUpstreamUserIdHeader = null;
         lastBody = null;
         responseOverride = "{\"code\":0, \"data\":{}}";
     }
@@ -172,6 +184,45 @@ public class BusinessAgentApiSmokeTest {
     }
 
     @Test
+    public void testExchangeRuntimeAccessToken() {
+        responseOverride = "{\"accessToken\":\"cat-runtime\",\"tokenType\":\"Bearer\",\"expiresInSeconds\":1800,\"appKey\":\"cak-test\"}";
+        ClientAppRuntimeAccessTokenDTO token = client.businessAgent()
+                .exchangeRuntimeAccessToken("cak-test", "cas-secret");
+
+        assertNotNull(token);
+        assertEquals("cat-runtime", token.getAccessToken());
+        assertEquals("/api/v1/open/client-apps/runtime-token", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cas-secret", lastClientAppSecretHeader);
+        assertCommon();
+    }
+
+    @Test
+    public void testAskWithClientAppAccessToken() {
+        responseOverride = "{\"taskId\":\"task-openapi\",\"status\":\"SUBMITTED\"}";
+        var task = client.agents().askWithClientAppAccessToken(
+                "tms_skill",
+                "提交运单",
+                "ctx-1",
+                3,
+                "cak-test",
+                "cat-runtime",
+                "tms-user-001");
+
+        assertNotNull(task);
+        assertEquals("/api/v1/open/agents/tms_skill/ask", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cat-runtime", lastClientAppAccessTokenHeader);
+        assertEquals("tms-user-001", lastUpstreamUserIdHeader);
+        assertTrue(lastBody.contains("\"message\":\"提交运单\""));
+        assertTrue(lastBody.contains("\"contextId\":\"ctx-1\""));
+        assertFalse(lastBody.contains("cas-secret"));
+        assertCommon();
+    }
+
+    @Test
     public void testCreateSkill() {
         CreateSkillForm form = new CreateSkillForm();
         form.setName("test-skill");
@@ -183,6 +234,18 @@ public class BusinessAgentApiSmokeTest {
         assertEquals("/api/v1/business-agent/skills", lastPath);
         assertEquals("POST", lastMethod);
         assertTrue(lastBody.contains("\"name\":\"test-skill\""));
+        assertCommon();
+    }
+
+    @Test
+    public void testMaterializePublicSkill() {
+        responseOverride = "{\"skillId\":\"tms_skill\",\"scope\":\"public\",\"status\":\"MATERIALIZED\",\"workerStatusCode\":200}";
+        SkillMaterializeResultDTO result = client.businessAgent().materializePublicSkill("tms_skill");
+        assertNotNull(result);
+        assertEquals("MATERIALIZED", result.getStatus());
+        assertEquals("/api/v1/business-agent/skills/tms_skill/materialize", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("", lastBody);
         assertCommon();
     }
 

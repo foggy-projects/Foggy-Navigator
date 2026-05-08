@@ -20,6 +20,13 @@ import java.util.List;
 @RequiredArgsConstructor
 public class BizWorkerPoolController {
 
+    private String resolveTenantId() {
+        com.foggy.navigator.common.dto.CurrentUser user = UserContext.getCurrentUser();
+        String tenantId = user.getTenantId();
+        return (tenantId != null && !tenantId.isEmpty()) ? tenantId : user.getUserId();
+    }
+
+
     private final BizWorkerPoolService workerPoolService;
 
     @PostMapping("/worker-identities")
@@ -31,20 +38,20 @@ public class BizWorkerPoolController {
     @GetMapping("/worker-pools")
     @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<List<BizWorkerPoolDTO>> listPools() {
-        return RX.ok(workerPoolService.listPools(UserContext.getCurrentTenantId()));
+        return RX.ok(workerPoolService.listPools(resolveTenantId()));
     }
 
     @PostMapping("/worker-pools")
     @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<BizWorkerPoolDTO> createPool(@RequestBody CreateWorkerPoolForm form) {
-        return RX.ok(workerPoolService.createPool(UserContext.getCurrentTenantId(), form));
+        return RX.ok(workerPoolService.createPool(resolveTenantId(), form));
     }
 
     @PostMapping("/worker-pools/{poolId}/members")
     @RequireAuth(roles = {"TENANT_ADMIN"})
     public RX<Void> addMember(@PathVariable String poolId,
                               @RequestBody AddWorkerPoolMemberForm form) {
-        workerPoolService.addMember(UserContext.getCurrentTenantId(), poolId, form);
+        workerPoolService.addMember(resolveTenantId(), poolId, form);
         return RX.ok(null);
     }
 
@@ -53,6 +60,6 @@ public class BizWorkerPoolController {
     public RX<BizWorkerPoolDTO> updatePoolStatus(@PathVariable String poolId,
                                                  @RequestBody UpdateStatusForm form) {
         return RX.ok(workerPoolService.updatePoolStatus(
-                UserContext.getCurrentTenantId(), poolId, form == null ? null : form.getStatus()));
+                resolveTenantId(), poolId, form == null ? null : form.getStatus()));
     }
 }

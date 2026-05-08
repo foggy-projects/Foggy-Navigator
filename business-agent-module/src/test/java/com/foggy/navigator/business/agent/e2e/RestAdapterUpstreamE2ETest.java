@@ -148,7 +148,7 @@ class RestAdapterUpstreamE2ETest {
         ClientAppUserGrantService userGrantService1 = new ClientAppUserGrantService(userGrantRepository, clientAppService);
         BusinessObjectService businessObjectService = new BusinessObjectService(businessObjectRepository);
         BusinessFunctionRegistryService functionRegistryService = new BusinessFunctionRegistryService(functionRepository, versionRepository, functionGrantRepository, clientAppService, businessObjectService);
-        SkillRegistryService skillRegistryService = new SkillRegistryService(skillRepository, allowlistRepository, skillGrantRepository, functionRepository, clientAppService);
+        SkillRegistryService skillRegistryService = new SkillRegistryService(skillRepository, allowlistRepository, skillGrantRepository, functionRepository, versionRepository, clientAppService, objectMapper);
         BizWorkerPoolService bizWorkerPoolService = new BizWorkerPoolService(identityRepository, poolRepository, poolMemberRepository);
 
         taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, java.util.List.of());

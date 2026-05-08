@@ -56,6 +56,12 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             Map<String, Object> contextMap = (Map<String, Object>) ctx;
             form.setContext(contextMap);
         }
+        Object rawRuntimeContext = meta.get("runtimeContext");
+        if (rawRuntimeContext instanceof Map<?, ?> runtimeCtx) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> runtimeContextMap = (Map<String, Object>) runtimeCtx;
+            form.setRuntimeContext(runtimeContextMap);
+        }
 
         LanggraphTaskDTO task = taskService.createTask(
                 entity.getUserId(), entity.getTenantId(), form);

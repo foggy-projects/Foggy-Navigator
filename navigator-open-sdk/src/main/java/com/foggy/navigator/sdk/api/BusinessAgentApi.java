@@ -5,6 +5,7 @@ import com.foggy.navigator.sdk.internal.HttpHelper;
 import com.foggy.navigator.sdk.model.businessagent.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Foggy Navigator Business Agent 控制面 API
@@ -33,6 +34,13 @@ public class BusinessAgentApi {
 
     public IssuedCredentialDTO issueRuntimeCredential(String clientAppId, IssueRuntimeCredentialForm form) {
         return http.post("/api/v1/client-apps/" + clientAppId + "/runtime-credentials", form, new TypeReference<>() {});
+    }
+
+    public ClientAppRuntimeAccessTokenDTO exchangeRuntimeAccessToken(String appKey, String appSecret) {
+        return http.post("/api/v1/open/client-apps/runtime-token", null, Map.of(
+                "X-Client-App-Key", appKey,
+                "X-Client-App-Secret", appSecret
+        ), new TypeReference<>() {});
     }
 
     public ClientAppDTO updateClientAppStatus(String clientAppId, UpdateStatusForm form) {
@@ -69,6 +77,10 @@ public class BusinessAgentApi {
 
     public ClientAppSkillGrantDTO grantSkillToClientApp(String clientAppId, GrantSkillToClientAppForm form) {
         return http.post("/api/v1/business-agent/client-apps/" + clientAppId + "/skill-grants", form, new TypeReference<>() {});
+    }
+
+    public SkillMaterializeResultDTO materializePublicSkill(String skillId) {
+        return http.post("/api/v1/business-agent/skills/" + skillId + "/materialize", null, new TypeReference<>() {});
     }
 
     // ===== Upstream User Grant =====

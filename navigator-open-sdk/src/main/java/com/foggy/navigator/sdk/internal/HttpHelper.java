@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.Map;
 
 /**
  * Internal HTTP helper — wraps Java HttpClient + Jackson for Navigator Open API calls.
@@ -36,18 +37,20 @@ public class HttpHelper {
     private final String baseUrl;
     private final String apiKey;
     private final String bearerToken;
+    private final String tenantId;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final Duration timeout;
 
     public HttpHelper(String baseUrl, String apiKey, Duration timeout) {
-        this(baseUrl, apiKey, null, timeout);
+        this(baseUrl, apiKey, null, null, timeout);
     }
 
-    public HttpHelper(String baseUrl, String apiKey, String bearerToken, Duration timeout) {
+    public HttpHelper(String baseUrl, String apiKey, String bearerToken, String tenantId, Duration timeout) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.apiKey = apiKey;
         this.bearerToken = bearerToken;
+        this.tenantId = tenantId;
         this.timeout = timeout != null ? timeout : Duration.ofSeconds(30);
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
@@ -72,6 +75,10 @@ public class HttpHelper {
         return execute(buildRequest("POST", path, body), type);
     }
 
+    public <T> T post(String path, Object body, Map<String, String> headers, TypeReference<T> type) {
+        return execute(buildRequest("POST", path, body, true, headers), type);
+    }
+
     public <T> T put(String path, Object body, TypeReference<T> type) {
         return execute(buildRequest("PUT", path, body), type);
     }
@@ -94,6 +101,15 @@ public class HttpHelper {
     }
 
     private HttpRequest buildRequest(String method, String path, Object body, boolean withAuth) {
+        return buildRequest(method, path, body, withAuth, null);
+    }
+
+    private HttpRequest buildRequest(
+            String method,
+            String path,
+            Object body,
+            boolean withAuth,
+            Map<String, String> headers) {
         String url = baseUrl + path;
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -108,6 +124,17 @@ public class HttpHelper {
             if (bearerToken != null && !bearerToken.isBlank()) {
                 builder.header("Authorization", normalizeBearerToken(bearerToken));
             }
+            if (tenantId != null && !tenantId.isBlank()) {
+                builder.header("X-Tenant-Id", tenantId);
+            }
+        }
+
+        if (headers != null) {
+            headers.forEach((name, value) -> {
+                if (name != null && !name.isBlank() && value != null && !value.isBlank()) {
+                    builder.header(name, value);
+                }
+            });
         }
 
         if (body != null) {

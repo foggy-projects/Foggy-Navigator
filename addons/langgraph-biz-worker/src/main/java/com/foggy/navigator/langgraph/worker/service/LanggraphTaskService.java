@@ -101,6 +101,11 @@ public class LanggraphTaskService implements TaskQueryProvider {
             Map<String, Object> contextMap = (Map<String, Object>) ctx;
             form.setContext(contextMap);
         }
+        if (params.get("runtimeContext") instanceof Map<?, ?> runtimeCtx) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> runtimeContextMap = (Map<String, Object>) runtimeCtx;
+            form.setRuntimeContext(runtimeContextMap);
+        }
 
         LanggraphTaskDTO task = createTask(userId, tenantId, form);
         return getTaskById(task.getTaskId()).orElseThrow();
@@ -213,6 +218,9 @@ public class LanggraphTaskService implements TaskQueryProvider {
         Map<String, Object> providerConfig = new LinkedHashMap<>();
         if (form.getContext() != null) {
             providerConfig.put("context", form.getContext());
+        }
+        if (form.getRuntimeContext() != null && !form.getRuntimeContext().isEmpty()) {
+            providerConfig.put("runtimeContext", form.getRuntimeContext());
         }
         putIfNotBlank(providerConfig, "modelConfigId", form.getModelConfigId());
 

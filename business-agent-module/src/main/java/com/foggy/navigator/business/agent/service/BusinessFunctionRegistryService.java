@@ -14,15 +14,25 @@ import com.foggy.navigator.business.agent.repository.BusinessFunctionRepository;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionVersionRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppFunctionGrantRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class BusinessFunctionRegistryService {
@@ -36,8 +46,14 @@ public class BusinessFunctionRegistryService {
     private final ClientAppService clientAppService;
     private final BusinessObjectService businessObjectService;
 
+    @Value("${foggy.navigator.business.agent.dev-sync-worker-url:http://localhost:3061}")
+    private String devSyncWorkerUrl;
+
+    @Value("${foggy.navigator.business.agent.dev-sync-worker-token:}")
+    private String devSyncWorkerToken;
+
     @Transactional
-    public void importManifest(String tenantId, String actorUserId, ImportBusinessFunctionManifestForm form) {
+    public BusinessFunctionVersionEntity importManifest(String tenantId, String actorUserId, ImportBusinessFunctionManifestForm form) {
         requireText(tenantId, "tenantId is required");
         requireText(actorUserId, "actorUserId is required");
         if (form == null) {
@@ -100,6 +116,63 @@ public class BusinessFunctionRegistryService {
         version.setStatus(status);
 
         versionRepository.save(version);
+        
+        syncToWorker(form);
+        
+        return version;
+    }
+
+    private void syncToWorker(ImportBusinessFunctionManifestForm form) {
+        if (!StringUtils.hasText(devSyncWorkerUrl)) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("skill_id", form.getFunctionId());
+            payload.put("name", form.getFunctionId());
+            payload.put("display_name", form.getName());
+            payload.put("description", StringUtils.hasText(form.getDescription()) ? form.getDescription() : form.getLlmVisibleSummary());
+            
+            // For dev phase, default to public so LLM can access it easily if auto_inject_public_skills is true
+            payload.put("scope", "public");
+
+            StringBuilder md = new StringBuilder();
+            if (StringUtils.hasText(form.getLlmVisibleSummary())) {
+                md.append("## Purpose\n").append(form.getLlmVisibleSummary()).append("\n\n");
+            }
+            if (StringUtils.hasText(form.getSchemaVisibleSummary())) {
+                md.append("## Input Parameters\n```json\n").append(form.getSchemaVisibleSummary()).append("\n```\n\n");
+            }
+            if (StringUtils.hasText(form.getManifestJson())) {
+                md.append("## Tools\n```json\n").append(form.getManifestJson()).append("\n```\n");
+            }
+            payload.put("markdown_body", md.toString());
+
+            String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(payload);
+
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(devSyncWorkerUrl + "/api/v1/skills/materialize"))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(json));
+            
+            if (StringUtils.hasText(devSyncWorkerToken)) {
+                requestBuilder.header("Authorization", "Bearer " + devSyncWorkerToken);
+            }
+
+            HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(3))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .build()
+                    .sendAsync(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
+                    .thenAccept(res -> log.info("Synced skill {} to worker {}: {}", form.getFunctionId(), devSyncWorkerUrl, res.statusCode()))
+                    .exceptionally(ex -> {
+                        log.warn("Failed to sync skill to worker: {}", ex.getMessage());
+                        return null;
+                    });
+        } catch (Exception e) {
+            log.warn("Error triggering skill materialization", e);
+        }
     }
 
     @Transactional

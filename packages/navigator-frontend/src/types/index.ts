@@ -649,3 +649,31 @@ export interface SessionSearchPage {
   page: number
   size: number
 }
+
+// ===== 业务 Agent 管理类型 =====
+
+/** 业务 Worker 池 */
+export interface BizWorkerPool {
+  poolId: string
+  tenantId: string
+  name: string
+  workerBackend: string
+  routingPolicy: string
+  status: 'ACTIVE' | 'INACTIVE'
+  healthStatus?: 'HEALTHY' | 'UNHEALTHY' | 'UNKNOWN'
+}
+
+/** 客户端应用模型授权 */
+export interface ClientAppModelConfigGrant {
+  id: number
+  clientAppId: string
+  tenantId: string
+  modelConfigId: string
+  modelConfigName?: string
+  workerBackend?: string
+  status: 'ACTIVE' | 'INACTIVE'
+  isDefault: boolean
+  grantScope?: string
+  createdAt: string
+  updatedAt: string
+}

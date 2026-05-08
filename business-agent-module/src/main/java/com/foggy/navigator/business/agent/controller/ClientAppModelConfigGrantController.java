@@ -18,18 +18,25 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ClientAppModelConfigGrantController {
 
+    private String resolveTenantId() {
+        com.foggy.navigator.common.dto.CurrentUser user = UserContext.getCurrentUser();
+        String tenantId = user.getTenantId();
+        return (tenantId != null && !tenantId.isEmpty()) ? tenantId : user.getUserId();
+    }
+
+
     private final ClientAppModelConfigGrantService grantService;
 
     @GetMapping
     public RX<List<ClientAppModelConfigGrantDTO>> listGrants(@PathVariable String clientAppId) {
-        return RX.ok(grantService.listGrants(UserContext.getCurrentTenantId(), clientAppId));
+        return RX.ok(grantService.listGrants(resolveTenantId(), clientAppId));
     }
 
     @PostMapping
     public RX<ClientAppModelConfigGrantDTO> grantModelConfig(@PathVariable String clientAppId,
                                                              @RequestBody GrantModelConfigForm form) {
         return RX.ok(grantService.grantModelConfig(
-                UserContext.getCurrentTenantId(), UserContext.getCurrentUserId(), clientAppId, form));
+                resolveTenantId(), UserContext.getCurrentUserId(), clientAppId, form));
     }
 
     @PutMapping("/{grantId}/status")
@@ -37,12 +44,12 @@ public class ClientAppModelConfigGrantController {
                                                          @PathVariable Long grantId,
                                                          @RequestBody UpdateStatusForm form) {
         return RX.ok(grantService.updateStatus(
-                UserContext.getCurrentTenantId(), clientAppId, grantId, form == null ? null : form.getStatus()));
+                resolveTenantId(), clientAppId, grantId, form == null ? null : form.getStatus()));
     }
 
     @PutMapping("/{grantId}/default")
     public RX<ClientAppModelConfigGrantDTO> setDefault(@PathVariable String clientAppId,
                                                        @PathVariable Long grantId) {
-        return RX.ok(grantService.setDefault(UserContext.getCurrentTenantId(), clientAppId, grantId));
+        return RX.ok(grantService.setDefault(resolveTenantId(), clientAppId, grantId));
     }
 }

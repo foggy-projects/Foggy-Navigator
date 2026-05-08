@@ -116,6 +116,7 @@ public class NavigatorClient {
         private String baseUrl;
         private String apiKey;
         private String bearerToken;
+        private String tenantId;
         private Duration timeout;
 
         private Builder() {}
@@ -153,6 +154,11 @@ public class NavigatorClient {
             return bearerToken(adminToken);
         }
 
+        public Builder tenantId(String tenantId) {
+            this.tenantId = tenantId;
+            return this;
+        }
+
         /**
          * HTTP 请求超时（默认 30 秒）
          */
@@ -170,7 +176,7 @@ public class NavigatorClient {
             if (!hasApiKey && !hasBearerToken) {
                 throw new IllegalArgumentException("apiKey or bearerToken is required");
             }
-            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, bearerToken, timeout));
+            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, bearerToken, tenantId, timeout));
         }
     }
 }

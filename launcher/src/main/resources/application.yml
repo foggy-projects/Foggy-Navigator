@@ -97,6 +97,12 @@ navigator:
 
 # Foggy Navigator 配置
 foggy:
+  navigator:
+    business:
+      agent:
+        dev-sync-worker-url: ${BUSINESS_AGENT_DEV_SYNC_WORKER_URL:http://localhost:3061}
+        dev-sync-worker-token: ${BUSINESS_AGENT_DEV_SYNC_WORKER_TOKEN:}
+
   coding-agent:
     # OpenHands 配置
     openhands:

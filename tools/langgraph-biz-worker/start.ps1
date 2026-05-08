@@ -2,7 +2,7 @@
 # Usage: powershell -ExecutionPolicy Bypass -File start.ps1 [-EnvFile .env.real-llm.local]
 
 param(
-    [string]$EnvFile = ".env"
+    [string]$EnvFile = ".env.local"
 )
 
 $ErrorActionPreference = "Stop"

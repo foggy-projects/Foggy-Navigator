@@ -1,6 +1,7 @@
 """Skill manifest registry — loads from SKILL.md (YAML frontmatter + Markdown body).
 
-Supports a layered directory layout with priority: legacy < builtin < public < account.
+Supports a layered directory layout with priority:
+legacy < builtin < public < app-public < account.
 Also retains backward-compatible loading from legacy YAML manifests.
 
 Directory layout (Doc 31 §6.2)::
@@ -9,6 +10,7 @@ Directory layout (Doc 31 §6.2)::
       skills/
         builtin/<skill-name>/SKILL.md
         public/<skill-name>/SKILL.md
+        public/apps/<client-app-id>/<skill-name>/SKILL.md
       data/
         accounts/<account-id>/skills/<skill-name>/SKILL.md
 
@@ -59,6 +61,7 @@ def _parse_skill_md(path: Path) -> dict[str, Any] | None:
         logger.warning("Frontmatter is not a dict: %s", path)
         return None
 
+    data["markdown_body"] = text[match.end():].strip()
     return data
 
 
@@ -83,12 +86,14 @@ def _frontmatter_to_manifest(data: dict[str, Any], source_path: Path) -> SkillMa
         id=name,
         name=metadata.get("display_name", name),
         description=data.get("description", ""),
+        markdown_body=data.get("markdown_body", ""),
         input_schema=metadata.get("input-schema", {}),
         output_schema=metadata.get("output-schema", {}),
         allowed_tools=allowed_tools,
         promote_to_parent=metadata.get("promote-to-parent", []),
         business_rules=metadata.get("business-rules", {}),
         subgraph=metadata.get("subgraph"),
+        visibility=metadata.get("visibility", data.get("visibility", "public")),
     )
 
 
@@ -111,10 +116,11 @@ class SkillRegistry:
         self._legacy_dir = manifests_dir or _LEGACY_MANIFESTS_DIR
         self._data_root = data_root or self._skills_root.parent / "data"
 
-    def load(self, account_id: str | None = None) -> None:
+    def load(self, account_id: str | None = None, client_app_id: str | None = None) -> None:
         """Load skills from all sources.
 
-        Priority (later overwrites earlier): legacy < builtin < public < account.
+        Priority (later overwrites earlier): legacy < builtin < public < app-public < account.
+        If ``client_app_id`` is provided, also loads that app's public skills.
         If ``account_id`` is provided, also loads account-private skills.
         """
         self._manifests.clear()
@@ -130,9 +136,19 @@ class SkillRegistry:
         public_dir = self._skills_root / "public"
         self._load_skill_md_dir(public_dir, "public")
 
-        # 4. Load account-private skills (highest priority, Doc 34 §6)
+        # 4. Load app-scoped public skills (overwrites global public)
+        if client_app_id:
+            self.load_client_app_public_skills(client_app_id)
+
+        # 5. Load account-private skills (highest priority, Doc 34 §6)
         if account_id:
             self.load_account_skills(account_id)
+
+    def load_client_app_public_skills(self, client_app_id: str) -> None:
+        """Load public skills granted to a single client app."""
+        client_app_id = _validate_path_segment(client_app_id, "client_app_id")
+        app_dir = self._skills_root / "public" / "apps" / client_app_id
+        self._load_skill_md_dir(app_dir, f"public-app:{client_app_id}")
 
     def load_account_skills(self, account_id: str) -> None:
         """Load skills from an account's private directory (overwrites all lower layers)."""
@@ -193,8 +209,13 @@ class SkillRegistry:
 
 def _validate_account_id(account_id: str) -> str:
     """Reject path traversal in account IDs before touching the filesystem."""
-    if not account_id or account_id.strip() != account_id:
-        raise ValueError("account_id must be non-empty and trimmed")
-    if account_id in {".", ".."} or "/" in account_id or "\\" in account_id:
-        raise ValueError("account_id must be a single path segment")
-    return account_id
+    return _validate_path_segment(account_id, "account_id")
+
+
+def _validate_path_segment(value: str, field_name: str) -> str:
+    """Reject path traversal before touching the filesystem."""
+    if not value or value.strip() != value:
+        raise ValueError(f"{field_name} must be non-empty and trimmed")
+    if value in {".", ".."} or "/" in value or "\\" in value:
+        raise ValueError(f"{field_name} must be a single path segment")
+    return value

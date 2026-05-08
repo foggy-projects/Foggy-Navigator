@@ -17,4 +17,5 @@ public class BusinessAgentWorkerTaskLaunchRequest {
     private String workerBackend;
     private String modelConfigId;
     private String markdownBody;
+    private String taskScopedToken;
 }

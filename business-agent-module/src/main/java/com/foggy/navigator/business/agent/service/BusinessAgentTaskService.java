@@ -99,24 +99,13 @@ public class BusinessAgentTaskService {
         task.setStatus(STATUS_CREATED);
         task = taskRepository.save(task);
 
-        BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(tenantId, actorUserId, task, workerPool);
-        if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
-            task.setWorkerTaskId(launchResult.getWorkerTaskId());
-            task.setWorkerSessionId(launchResult.getWorkerSessionId());
-            task.setWorkerId(launchResult.getWorkerId());
-            task.setWorkerProviderType(launchResult.getProviderType());
-            task = taskRepository.save(task);
-        }
-
-        // 9, 10. token 绑定并返回一次
+        // Token must exist before the worker task starts so it can be passed as hidden runtime context.
         String plainToken = "btt_" + UUID.randomUUID().toString().replace("-", "");
-
+        LocalDateTime expiresAt = LocalDateTime.now().plusHours(2);
         BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
         token.setTokenId("tst_" + UUID.randomUUID().toString().replace("-", ""));
         token.setTokenHash(SecretTokenSupport.sha256(plainToken));
         token.setTaskId(task.getTaskId());
-        token.setWorkerTaskId(task.getWorkerTaskId());
-        token.setWorkerSessionId(task.getWorkerSessionId());
         token.setSessionId(task.getSessionId());
         token.setTenantId(task.getTenantId());
         token.setClientAppId(task.getClientAppId());
@@ -126,14 +115,21 @@ public class BusinessAgentTaskService {
         token.setWorkerPoolId(task.getWorkerPoolId());
         token.setModelConfigId(task.getModelConfigId());
         token.setStatus(STATUS_ACTIVE);
-        // Expiration defaults to 2 hours
-        LocalDateTime expiresAt = LocalDateTime.now().plusHours(2);
         token.setExpiresAt(expiresAt);
-        tokenRepository.save(token);
-
-        // Inject into runtime store
+        token = tokenRepository.save(token);
         tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getTaskId(), plainToken, expiresAt);
-        if (StringUtils.hasText(task.getWorkerTaskId())) {
+
+        BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
+                tenantId, actorUserId, task, workerPool, plainToken);
+        if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
+            task.setWorkerTaskId(launchResult.getWorkerTaskId());
+            task.setWorkerSessionId(launchResult.getWorkerSessionId());
+            task.setWorkerId(launchResult.getWorkerId());
+            task.setWorkerProviderType(launchResult.getProviderType());
+            task = taskRepository.save(task);
+            token.setWorkerTaskId(task.getWorkerTaskId());
+            token.setWorkerSessionId(task.getWorkerSessionId());
+            tokenRepository.save(token);
             tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getWorkerTaskId(), plainToken, expiresAt);
         }
 
@@ -159,6 +155,54 @@ public class BusinessAgentTaskService {
         dto.setTaskScopedToken(plainToken);
 
         return dto;
+    }
+
+    @Transactional
+    public String issueOpenApiTaskScopedToken(
+            String tenantId,
+            String actorUserId,
+            String clientAppId,
+            String upstreamUserId,
+            String skillId,
+            String sessionId,
+            String requestedModelConfigId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(actorUserId, "actorUserId is required");
+        requireText(clientAppId, "clientAppId is required");
+        requireText(upstreamUserId, "upstreamUserId is required");
+        requireText(skillId, "skillId is required");
+        requireText(sessionId, "sessionId is required");
+
+        clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
+        skillRegistryService.checkClientAppSkillAccess(tenantId, clientAppId, skillId);
+
+        String finalModelConfigId = StringUtils.hasText(requestedModelConfigId)
+                ? grantService.resolveEffectiveModelConfigId(tenantId, clientAppId, requestedModelConfigId)
+                : grantService.resolveEffectiveModelConfigId(tenantId, clientAppId, null);
+
+        String taskId = "obt_" + UUID.randomUUID().toString().replace("-", "");
+        String plainToken = "btt_" + UUID.randomUUID().toString().replace("-", "");
+        LocalDateTime expiresAt = LocalDateTime.now().plusHours(2);
+
+        BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
+        token.setTokenId("tst_" + UUID.randomUUID().toString().replace("-", ""));
+        token.setTokenHash(SecretTokenSupport.sha256(plainToken));
+        token.setTaskId(taskId);
+        token.setSessionId(sessionId);
+        token.setTenantId(tenantId);
+        token.setClientAppId(clientAppId);
+        token.setUpstreamUserId(upstreamUserId);
+        token.setNavigatorEffectiveUserId(actorUserId);
+        token.setSkillId(skillId);
+        token.setWorkerPoolId("OPEN_API");
+        token.setModelConfigId(finalModelConfigId);
+        token.setStatus(STATUS_ACTIVE);
+        token.setExpiresAt(expiresAt);
+        tokenRepository.save(token);
+
+        tokenRuntimeStore.registerToken(tenantId, sessionId, taskId, plainToken, expiresAt);
+        return plainToken;
     }
 
     @Transactional(readOnly = true)
@@ -207,7 +251,8 @@ public class BusinessAgentTaskService {
             String tenantId,
             String actorUserId,
             BusinessAgentTaskEntity task,
-            BizWorkerPoolEntity workerPool) {
+            BizWorkerPoolEntity workerPool,
+            String taskScopedToken) {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
@@ -229,6 +274,7 @@ public class BusinessAgentTaskService {
                         .workerBackend(workerPool.getWorkerBackend())
                         .modelConfigId(task.getModelConfigId())
                         .markdownBody(markdownBody)
+                        .taskScopedToken(taskScopedToken)
                         .build()))
                 .orElse(null);
     }

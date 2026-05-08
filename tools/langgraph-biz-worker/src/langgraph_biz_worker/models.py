@@ -21,6 +21,8 @@ class QueryRequest(BaseModel):
     model: str | None = None
     model_config_id: str | None = None
     context: dict[str, Any] | None = None
+    # Hidden runtime data from Navigator Java. Never include this in LLM prompts.
+    runtime_context: dict[str, Any] | None = None
 
     # Tracking IDs forwarded by Java side
     task_id: str | None = Field(None, alias="taskId")
@@ -174,6 +176,8 @@ class SkillManifest(BaseModel):
     promote_to_parent: list[str] = Field(default_factory=list)
     business_rules: dict[str, Any] = Field(default_factory=dict)
     subgraph: str | None = None
+    # Visibility: 'builtin' skills are internal/test-only and excluded from LLM routing prompt
+    visibility: str = "public"  # "builtin" | "public" | "private"
 
 
 # ---------------------------------------------------------------------------

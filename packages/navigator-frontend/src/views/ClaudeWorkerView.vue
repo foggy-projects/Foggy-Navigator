@@ -2691,6 +2691,7 @@ import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmMo
 import type { AipMessageType, ChatMessage } from '@foggy/chat'
 
 const MAX_PANES = 1
+const BASE_DOCUMENT_TITLE = '道同'
 type RegisterableWorkerBackend = Extract<WorkerBackend, 'CLAUDE_CODE' | 'LANGGRAPH_BIZ'>
 
 const router = useRouter()
@@ -3864,6 +3865,19 @@ const selectedDirectory = computed(() =>
   workerState.directories.value.find((d) => d.directoryId === selectedDirectoryId.value),
 )
 
+const viewActive = ref(true)
+
+function updateDocumentTitle() {
+  const directoryName = selectedDirectory.value?.projectName?.trim()
+  document.title = directoryName ? `${directoryName} - ${BASE_DOCUMENT_TITLE}` : BASE_DOCUMENT_TITLE
+}
+
+watch(() => selectedDirectory.value?.projectName, () => {
+  if (viewActive.value) {
+    updateDocumentTitle()
+  }
+}, { immediate: true })
+
 const effectiveDirectoryAuthTag = computed(() => {
   if (platformModelConfig.value) {
     return {
@@ -4249,10 +4263,13 @@ onUnmounted(() => {
   window.removeEventListener('message', handleFileBrowserMessage)
   document.removeEventListener('click', closeFavScriptCtx)
   disposeAllWorkspaces()
+  document.title = BASE_DOCUMENT_TITLE
 })
 
 // keep-alive: suspend all SSE when navigating away to free browser connections
 onDeactivated(() => {
+  viewActive.value = false
+  document.title = BASE_DOCUMENT_TITLE
   suspendOtherWorkspaces(null) // null = suspend ALL workspaces
   if (activeTasksInterval) {
     clearInterval(activeTasksInterval)
@@ -4262,6 +4279,8 @@ onDeactivated(() => {
 
 // keep-alive: re-sync all pane task statuses + resume SSE when view is activated
 onActivated(() => {
+  viewActive.value = true
+  updateDocumentTitle()
   // Resume SSE for the currently active workspace
   const key = activeWorkspaceKey.value
   if (key) {

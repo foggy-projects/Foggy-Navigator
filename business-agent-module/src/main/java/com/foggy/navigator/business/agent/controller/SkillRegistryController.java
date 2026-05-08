@@ -3,6 +3,7 @@ package com.foggy.navigator.business.agent.controller;
 import com.foggy.navigator.business.agent.model.dto.ClientAppSkillGrantDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillFunctionAllowlistDTO;
+import com.foggy.navigator.business.agent.model.dto.SkillMaterializeResultDTO;
 import com.foggy.navigator.business.agent.model.form.AddFunctionToSkillForm;
 import com.foggy.navigator.business.agent.model.form.CreateSkillForm;
 import com.foggy.navigator.business.agent.model.form.GrantSkillToClientAppForm;
@@ -45,5 +46,13 @@ public class SkillRegistryController {
             @PathVariable String clientAppId,
             @RequestBody GrantSkillToClientAppForm form) {
         return skillRegistryService.grantSkillToClientApp(tenantId, clientAppId, actorUserId, form);
+    }
+
+    @RequireAuth(roles = "TENANT_ADMIN")
+    @PostMapping("/skills/{skillId}/materialize")
+    public SkillMaterializeResultDTO materializePublicSkill(
+            @RequestAttribute("tenantId") String tenantId,
+            @PathVariable String skillId) {
+        return skillRegistryService.materializePublicSkill(tenantId, skillId);
     }
 }

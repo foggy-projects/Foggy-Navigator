@@ -52,6 +52,9 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
                 + " for skill " + request.getSkillId()
                 + ". Use the business function tools when user intent requires controlled business execution.");
         form.setContext(buildContext(request));
+        if (StringUtils.hasText(request.getTaskScopedToken())) {
+            form.setRuntimeContext(Map.of("task_scoped_token", request.getTaskScopedToken()));
+        }
 
         LanggraphTaskDTO workerTask = taskService.createTask(request.getActorUserId(), request.getTenantId(), form);
         return BusinessAgentWorkerTaskLaunchResult.builder()

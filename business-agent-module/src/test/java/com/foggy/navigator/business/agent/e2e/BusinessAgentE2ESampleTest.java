@@ -121,7 +121,7 @@ class BusinessAgentE2ESampleTest {
         userGrantService = new ClientAppUserGrantService(userGrantRepository, clientAppService);
         businessObjectService = new BusinessObjectService(businessObjectRepository);
         functionRegistryService = new BusinessFunctionRegistryService(functionRepository, versionRepository, functionGrantRepository, clientAppService, businessObjectService);
-        skillRegistryService = new SkillRegistryService(skillRepository, allowlistRepository, skillGrantRepository, functionRepository, clientAppService);
+        skillRegistryService = new SkillRegistryService(skillRepository, allowlistRepository, skillGrantRepository, functionRepository, versionRepository, clientAppService, objectMapper);
         bizWorkerPoolService = new BizWorkerPoolService(identityRepository, poolRepository, poolMemberRepository);
         clientAppUserGrantService = userGrantService;
         taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService, skillRegistryService, tokenRuntimeStore, java.util.List.of());

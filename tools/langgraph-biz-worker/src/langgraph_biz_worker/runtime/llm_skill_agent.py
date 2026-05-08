@@ -20,6 +20,12 @@ from ..tools.mock_biz_tools import (
     mock_get_vehicle_status,
     mock_search_incidents,
 )
+from ..tools.business_function_tools import (
+    BusinessFunctionToolError,
+    get_business_function_schema,
+    invoke_business_function,
+    list_business_functions,
+)
 from .account_file_tools import AccountFileTools, FileToolError
 from .artifact_store import ArtifactError, ArtifactStore
 from .skill_runtime import SkillRuntime
@@ -54,6 +60,7 @@ class LlmSkillAgent:
         frame_id: str,
         prompt: str,
         account_id: str | None = None,
+        runtime_context: dict[str, Any] | None = None,
     ) -> list[QueryEvent]:
         """Execute a Skill until ``submit_skill_result`` completes the frame."""
         frame = self._runtime.get_frame(frame_id)
@@ -96,6 +103,7 @@ class LlmSkillAgent:
                 event = self._execute_tool_call(
                     task_id, frame_id, manifest, call,
                     account_id=account_id,
+                    runtime_context=runtime_context,
                     artifact_store=artifact_store,
                     file_tools=file_tools,
                 )
@@ -136,6 +144,7 @@ class LlmSkillAgent:
         call: dict[str, Any],
         *,
         account_id: str | None = None,
+        runtime_context: dict[str, Any] | None = None,
         artifact_store: ArtifactStore | None = None,
         file_tools: AccountFileTools | None = None,
     ) -> dict[str, Any]:
@@ -168,6 +177,7 @@ class LlmSkillAgent:
                 frame_id, name, args,
                 task_id=task_id,
                 account_id=account_id,
+                runtime_context=runtime_context,
                 artifact_store=artifact_store,
                 file_tools=file_tools,
             )
@@ -208,6 +218,7 @@ class LlmSkillAgent:
         *,
         task_id: str = "",
         account_id: str | None = None,
+        runtime_context: dict[str, Any] | None = None,
         artifact_store: ArtifactStore | None = None,
         file_tools: AccountFileTools | None = None,
     ) -> dict[str, Any]:
@@ -221,6 +232,57 @@ class LlmSkillAgent:
 
         if name == "mock_search_incidents":
             return {"ok": True, "result": mock_search_incidents(args.get("query", ""))}
+
+        # --- Navigator worker-gateway business function tools ---
+        if name == "list_business_functions":
+            token = _runtime_task_scoped_token(runtime_context)
+            if not token:
+                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
+            try:
+                return {
+                    "ok": True,
+                    "result": list_business_functions(
+                        token,
+                        domain=args.get("domain"),
+                        risk_level=args.get("risk_level"),
+                    ),
+                }
+            except BusinessFunctionToolError as exc:
+                return {"ok": False, "error": str(exc)}
+
+        if name == "get_business_function_schema":
+            token = _runtime_task_scoped_token(runtime_context)
+            if not token:
+                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
+            try:
+                return {
+                    "ok": True,
+                    "result": get_business_function_schema(
+                        token,
+                        function_id=args.get("function_id", ""),
+                        version=args.get("version"),
+                    ),
+                }
+            except BusinessFunctionToolError as exc:
+                return {"ok": False, "error": str(exc)}
+
+        if name == "invoke_business_function":
+            token = _runtime_task_scoped_token(runtime_context)
+            if not token:
+                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
+            try:
+                return {
+                    "ok": True,
+                    "result": invoke_business_function(
+                        token,
+                        function_id=args.get("function_id", ""),
+                        version=args.get("version"),
+                        input_data=args.get("input"),
+                        idempotency_key=args.get("idempotency_key"),
+                    ),
+                }
+            except BusinessFunctionToolError as exc:
+                return {"ok": False, "error": str(exc)}
 
         # --- Artifact tools ---
         if name == "create_artifact":
@@ -314,6 +376,13 @@ class LlmSkillAgent:
 _FILE_TOOL_NAMES = frozenset({
     "list_files", "read_file", "write_file", "str_replace", "edit_file", "patch_file",
 })
+
+
+def _runtime_task_scoped_token(runtime_context: dict[str, Any] | None) -> str | None:
+    if not runtime_context:
+        return None
+    token = runtime_context.get("task_scoped_token")
+    return token if isinstance(token, str) and token else None
 
 
 def _dispatch_file_tool(
@@ -416,6 +485,53 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
                 "required": ["query"],
+            },
+        },
+    },
+    "list_business_functions": {
+        "type": "function",
+        "function": {
+            "name": "list_business_functions",
+            "description": "List business functions available to this task's app/user/skill scope.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string"},
+                    "risk_level": {"type": "string"},
+                },
+                "required": [],
+            },
+        },
+    },
+    "get_business_function_schema": {
+        "type": "function",
+        "function": {
+            "name": "get_business_function_schema",
+            "description": "Get the input/output schema for a business function.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "function_id": {"type": "string"},
+                    "version": {"type": "string"},
+                },
+                "required": ["function_id"],
+            },
+        },
+    },
+    "invoke_business_function": {
+        "type": "function",
+        "function": {
+            "name": "invoke_business_function",
+            "description": "Invoke an allowlisted business function through Navigator Java.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "function_id": {"type": "string"},
+                    "version": {"type": "string"},
+                    "input": {"type": "object"},
+                    "idempotency_key": {"type": "string"},
+                },
+                "required": ["function_id", "input"],
             },
         },
     },

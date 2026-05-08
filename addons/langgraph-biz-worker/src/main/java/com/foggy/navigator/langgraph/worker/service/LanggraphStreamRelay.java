@@ -61,11 +61,14 @@ public class LanggraphStreamRelay {
             // Extract context from providerConfig
             @SuppressWarnings("unchecked")
             Map<String, Object> context = (Map<String, Object>) event.getProviderConfig().get("context");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> runtimeContext = (Map<String, Object>) event.getProviderConfig().get("runtimeContext");
             String modelConfigId = event.getProviderConfigString("modelConfigId");
 
             Disposable subscription = client.streamQuery(
                     event.getPrompt(),
                     context,
+                    runtimeContext,
                     event.getModel(),
                     modelConfigId,
                     taskId,
