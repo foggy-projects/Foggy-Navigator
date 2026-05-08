@@ -119,7 +119,12 @@ follow_up_required: no
 |-----------|------|------|
 | resume.py Depends 改造 | 低 | 多实例部署时需改造，当前单进程无影响 |
 | Java stringly-typed status | 低 | 项目级技术债，不在本模块范围 |
-| LLM 路由未做真实 API 测试 | 低 | mock 测试覆盖逻辑，真实 API 测试需要 Key，用户确认跳过 |
+| LLM 路由 / Skill Agent 真实 API 测试不足 | 低 | 2026-04-28 已通过 36 补充 OpenAI-compatible 真实 LLM Skill Agent 联调；Anthropic 与真实业务工具注册表仍作为后续项 |
+
+## 2026-04-28 Addendum
+
+- 36 已补充 Mock LLM 与真实 LLM Skill Agent 测试支持，覆盖 tool-call loop、`submit_skill_result` schema reject/retry、Frame 完成和上下文清理。
+- 原质量记录中的“真实 API 未测试”不再适用于 OpenAI-compatible Skill Agent 路径，但仍不代表 Anthropic tool_use 或真实业务工具适配已完成。
 
 ## Recommended Next Skills
 

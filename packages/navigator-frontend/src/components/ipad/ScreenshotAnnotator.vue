@@ -363,8 +363,6 @@ function renderFrame() {
   if (!canvas) return
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const dpr = window.devicePixelRatio || 1
-
   // Clear annotation layer
   ctx.save()
   ctx.setTransform(1, 0, 0, 1, 0, 0)

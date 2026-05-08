@@ -226,7 +226,7 @@ const emit = defineEmits<{
 function isSkillApprovalRequest(msg: ChatMessage): boolean {
   if (msg.type !== AipMessageType.STATE_SYNC) return false
   const raw = msg.raw as Record<string, unknown> | undefined
-  return raw?.subtype === 'skill_approval_request'
+  return raw?.subtype === 'approval_required' || raw?.subtype === 'skill_approval_request'
 }
 
 function handleLoadAllCommand(command: number) {

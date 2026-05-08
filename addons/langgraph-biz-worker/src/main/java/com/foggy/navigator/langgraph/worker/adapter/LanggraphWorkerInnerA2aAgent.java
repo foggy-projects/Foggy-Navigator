@@ -56,6 +56,12 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             Map<String, Object> contextMap = (Map<String, Object>) ctx;
             form.setContext(contextMap);
         }
+        Object rawRuntimeContext = meta.get("runtimeContext");
+        if (rawRuntimeContext instanceof Map<?, ?> runtimeCtx) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> runtimeContextMap = (Map<String, Object>) runtimeCtx;
+            form.setRuntimeContext(runtimeContextMap);
+        }
 
         LanggraphTaskDTO task = taskService.createTask(
                 entity.getUserId(), entity.getTenantId(), form);
@@ -98,13 +104,22 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             case "ABORTED" -> A2aTaskState.CANCELED;
             default -> A2aTaskState.WORKING;
         };
-        return A2aTask.builder()
+        A2aTask.A2aTaskBuilder builder = A2aTask.builder()
                 .id(dto.getTaskId())
                 .status(A2aTaskStatus.builder()
                         .state(state)
                         .timestamp(Instant.now())
-                        .build())
-                .build();
+                        .build());
+                        
+        if (dto.getResultText() != null && !dto.getResultText().isBlank()) {
+            builder.artifacts(java.util.List.of(
+                A2aArtifact.builder()
+                    .parts(java.util.List.of(A2aPart.text(dto.getResultText())))
+                    .build()
+            ));
+        }
+        
+        return builder.build();
     }
 
     private String extractPrompt(A2aMessage message) {

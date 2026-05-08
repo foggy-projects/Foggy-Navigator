@@ -3,6 +3,7 @@ package com.foggy.navigator.agent.framework.config;
 import com.foggy.navigator.agent.framework.core.AgentInvoker;
 import com.foggy.navigator.agent.framework.core.AgentRegistry;
 import com.foggy.navigator.agent.framework.core.impl.DefaultAgentInvoker;
+import com.foggy.navigator.agent.framework.tool.ToolRuntimeContextProvider;
 import com.foggy.navigator.agent.framework.llm.LlmAdapter;
 import com.foggy.navigator.agent.framework.router.SessionRouter;
 import com.foggy.navigator.agent.framework.session.SessionManager;
@@ -59,10 +60,11 @@ public class AgentFrameworkAutoConfiguration {
                                             @Autowired(required = false) LlmModelManager llmModelManager,
                                             @Autowired(required = false) UserMemoryManager userMemoryManager,
                                             @Autowired(required = false) MeterRegistry meterRegistry,
-                                            @Autowired(required = false) AgentTaskManager agentTaskManager) {
+                                            @Autowired(required = false) AgentTaskManager agentTaskManager,
+                                            @Autowired(required = false) List<ToolRuntimeContextProvider> runtimeContextProviders) {
         return new DefaultAgentInvoker(registry, sessionManager, llmAdapter, publisher,
                 agentExecutor, skillManager, sessionRouter, builtInTools, llmModelManager,
-                userMemoryManager, meterRegistry, agentTaskManager);
+                userMemoryManager, meterRegistry, agentTaskManager, runtimeContextProviders);
     }
 
     @Bean("agentExecutor")

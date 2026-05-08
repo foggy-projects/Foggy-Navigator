@@ -6,6 +6,7 @@ import * as sessionApi from '@/api/session'
 import * as workerApi from '@/api/claudeWorker'
 import { getTaskUnified } from '@/api/unifiedTask'
 import { useUnifiedSse } from '@/composables/useUnifiedSse'
+import { isClaudeCodeTask } from '@/utils/workerBackend'
 import type { AgentMessage, ClaudeTask, Message } from '@/types'
 
 /** Number of messages to load per page */
@@ -283,29 +284,30 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
     createSseSubscription(sessionId)
     attachTaskUpdateListener()
 
-    // Non-blocking: detect and load JSONL delta messages.
+    // Non-blocking: detect and load external Claude Code session delta messages.
     // Use totalDbMessages (total count) for comparison, not the loaded count.
     // Skip for ABORTED tasks — the delta is typically caused by the CLI
     // continuing to run after abort (undelivered SSE events), not by real
     // external conversations.
     if (connectVersion !== myVersion) return
-    if (task.value?.claudeSessionId && task.value?.workerId && task.value?.status !== 'ABORTED') {
+    if (task.value?.claudeSessionId && task.value?.workerId && task.value?.status !== 'ABORTED'
+      && isClaudeCodeTask(task.value)) {
       detectAndLoadDelta(task.value.workerId, task.value.claudeSessionId, totalDbMessages, myVersion)
     }
   }
 
-  /** Detect new messages in JSONL that are not in the DB and append them to chat */
+  /** Detect external Claude Code session messages that are not in the DB and append them to chat */
   async function detectAndLoadDelta(workerId: string, claudeSessionId: string, dbMsgCount: number, myVersion: number) {
     try {
-      // 1. Get JSONL message count from Worker
+      // 1. Get Worker session message count
       const countResult = await workerApi.getWorkerSessionMessageCount(workerId, claudeSessionId)
       if (connectVersion !== myVersion) return
-      const jsonlTotal = countResult.total
+      const workerSessionTotal = countResult.total
 
-      // 2. If JSONL has more messages than DB and DB has at least some messages
-      if (jsonlTotal > dbMsgCount && dbMsgCount > 0) {
+      // 2. If Worker session has more messages than DB and DB has at least some messages
+      if (workerSessionTotal > dbMsgCount && dbMsgCount > 0) {
         // 3. Fetch ONLY the delta using offset-based pagination (optimized)
-        const deltaCount = jsonlTotal - dbMsgCount
+        const deltaCount = workerSessionTotal - dbMsgCount
         const delta = await workerApi.getWorkerSessionMessagesPaged(
           workerId, claudeSessionId, dbMsgCount, deltaCount,
         )
@@ -317,7 +319,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
           id: `delta-separator-${Date.now()}`,
           type: AipMessageType.TEXT_COMPLETE,
           sender: 'assistant',
-          content: `--- 检测到 ${delta.length} 条外部对话 ---`,
+          content: `--- 检测到 ${delta.length} 条外部会话消息 ---`,
           timestamp: Date.now(),
         }
         chatState.messages.value.push(separatorMsg)
@@ -334,7 +336,7 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
           chatState.messages.value.push(chatMsg)
         }
 
-        console.log(`[TaskPane ${paneId}] Loaded ${delta.length} delta messages from JSONL`)
+        console.log(`[TaskPane ${paneId}] Loaded ${delta.length} external session messages`)
       }
     } catch (e) {
       if (connectVersion !== myVersion) return
@@ -359,7 +361,6 @@ export function useTaskPane(paneId: string, options?: UseTaskPaneOptions): TaskP
       // Convert DB messages to ChatMessages
       // We need to build the array first, then unshift, to preserve the conversion logic
       // that peeks at the next message (for waiting-hint suppression).
-      const olderMessages: ChatMessage[] = []
       const prevMessagesSnapshot = chatState.messages.value
 
       // Temporarily use a separate array to collect converted messages

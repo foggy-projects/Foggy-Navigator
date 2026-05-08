@@ -84,6 +84,10 @@ curl http://localhost:3061/health
 | `BIZ_WORKER_WORKER_TOKEN` | （空） | Bearer Token，空=开发模式免认证 |
 | `BIZ_WORKER_WORKER_NAME` | （空） | Worker 显示名称 |
 | `BIZ_WORKER_MAX_CONCURRENT_TASKS` | 5 | 最大并发任务数 |
+| `BIZ_WORKER_LLM_PROVIDER` | （空） | `openai` / `anthropic`，空=禁用 LLM |
+| `BIZ_WORKER_LLM_BASE_URL` | （空） | 自定义 LLM API 地址，可指向 `tools/mock-llm-service` |
+| `BIZ_WORKER_LLM_EXECUTE_SKILLS` | false | 启用 LLM tool-call loop 执行 Skill |
+| `BIZ_WORKER_LLM_SKILL_MAX_ITERATIONS` | 6 | 单个 Skill 最大模型轮次 |
 | `BIZ_WORKER_NAVIGATOR_API_BASE` | http://localhost:8112 | Navigator 平台地址 |
 
 ## API
@@ -118,6 +122,35 @@ pytest tests/test_single_skill.py -v       # 单 Skill E2E
 pytest tests/test_multi_child_aggregation.py -v  # 多子聚合
 pytest tests/test_auth.py -v               # 认证
 pytest tests/test_rate_limit.py -v         # 并发限制
+pytest tests/test_llm_skill_agent.py -v    # LLM tool-call Skill 执行
+```
+
+### 使用 Mock LLM 联调 Skill
+
+1. 启动 `tools/mock-llm-service`。
+2. 配置 Worker：
+
+```env
+BIZ_WORKER_LLM_PROVIDER=openai
+BIZ_WORKER_LLM_API_KEY=mock-key
+BIZ_WORKER_LLM_BASE_URL=http://localhost:8200/v1
+BIZ_WORKER_LLM_MODEL=mock-model
+BIZ_WORKER_LLM_EXECUTE_SKILLS=true
+```
+
+`mock-llm-service/responses/scenarios/langgraph-biz-worker-skill.yaml` 已内置一条完整链路：路由到 `exception_triage`，依次调用 `mock_get_order`、`mock_get_vehicle_status`，最后调用 `submit_skill_result`。
+
+也可以通过 `BIZ_WORKER_ENV_FILE` 或启动参数切换配置：
+
+```powershell
+# Mock LLM
+$env:BIZ_WORKER_ENV_FILE=".env.mock-llm.local"
+
+# 真实 OpenAI-compatible LLM
+$env:BIZ_WORKER_ENV_FILE=".env.real-llm.local"
+
+# 启动服务时指定
+powershell -ExecutionPolicy Bypass -File start.ps1 -EnvFile .env.real-llm.local
 ```
 
 ## 目录结构

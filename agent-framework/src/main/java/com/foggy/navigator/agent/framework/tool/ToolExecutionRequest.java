@@ -21,4 +21,11 @@ public class ToolExecutionRequest {
     private String sessionId;
     private String agentId;
     private Map<String, Object> parameters;
+
+    /**
+     * Framework-injected runtime context. NOT visible to LLM tool schemas.
+     * Use this to pass secrets (e.g. task_scoped_token) from the Worker runtime
+     * to tools without exposing them to the LLM.
+     */
+    private Map<String, Object> runtimeContext;
 }

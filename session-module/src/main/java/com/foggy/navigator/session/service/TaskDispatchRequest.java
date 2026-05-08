@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 统一任务创建请求 —— 屏蔽 Claude / Codex 差异，
@@ -63,6 +64,9 @@ public class TaskDispatchRequest {
 
     /** A2A 多轮上下文 ID */
     private String contextId;
+
+    /** Provider-specific structured context, e.g. LangGraph FSScript execution hints */
+    private Map<String, Object> context;
 
     /** 上下文别名（用于按别名复用会话） */
     private String contextAlias;

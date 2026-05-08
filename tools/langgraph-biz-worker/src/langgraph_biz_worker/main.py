@@ -22,7 +22,8 @@ async def lifespan(app: FastAPI):
     # Wire up resume route with the shared runtime and journal (Doc 31 §16.5)
     from .graphs.root_graph import get_journal, get_runtime, _skill_registry
     from .runtime.skill_registry import _DEFAULT_SKILLS_ROOT
-    resume.configure(get_runtime(), get_journal())
+    from .runtime.fsscript_bridge import get_fsscript_bridge
+    resume.configure(get_runtime(), get_journal(), get_fsscript_bridge())
     logger.info("Resume endpoint configured with shared runtime and journal")
 
     # Wire up skills route with sync callback (Doc 34 §4)

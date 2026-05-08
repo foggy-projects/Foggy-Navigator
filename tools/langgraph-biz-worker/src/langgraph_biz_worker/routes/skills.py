@@ -40,6 +40,86 @@ class SyncResponse(BaseModel):
     skills_found: list[str]
 
 
+class MaterializeRequest(BaseModel):
+    skill_id: str
+    scope: str = "public"
+    account_id: str | None = None
+    client_app_id: str | None = None
+    name: str | None = None
+    display_name: str | None = None
+    description: str | None = None
+    markdown_body: str | None = None
+
+
+@router.post("/materialize", dependencies=[Depends(verify_token)])
+async def materialize_skill(req: MaterializeRequest) -> dict:
+    """Materialize a dynamically registered skill to the local filesystem."""
+    if not _skills_root:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Skills route not configured",
+        )
+        
+    from ..runtime.skill_registry import _validate_path_segment
+
+    try:
+        skill_id = _validate_path_segment(req.skill_id, "skill_id")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    client_app_id = None
+    if req.scope == "account":
+        if not req.account_id:
+            raise HTTPException(status_code=400, detail="account_id required for account scope")
+        from ..runtime.skill_registry import _validate_account_id
+        try:
+            account_id = _validate_account_id(req.account_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        target_dir = _skills_root.parent / "data" / "accounts" / account_id / "skills" / skill_id
+        visibility = "private"
+    else:
+        if req.client_app_id:
+            try:
+                client_app_id = _validate_path_segment(req.client_app_id, "client_app_id")
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            target_dir = _skills_root / "public" / "apps" / client_app_id / skill_id
+        else:
+            target_dir = _skills_root / "public" / skill_id
+        visibility = "public"
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
+    manifest_name = req.name or skill_id
+    display_name = req.display_name or req.name or skill_id
+    yaml_lines = [
+        "---",
+        f"name: {manifest_name}",
+    ]
+    if req.description:
+        desc = req.description.replace("\n", " ").replace("\r", "")
+        yaml_lines.append(f"description: {desc}")
+    yaml_lines.append("metadata:")
+    yaml_lines.append(f"  display_name: {display_name}")
+    yaml_lines.append(f"  visibility: {visibility}")
+    if client_app_id:
+        yaml_lines.append(f"  client_app_id: {client_app_id}")
+    yaml_lines.append("---")
+    
+    md_content = "\n".join(yaml_lines) + "\n\n"
+    if req.markdown_body:
+        md_content += req.markdown_body
+        
+    skill_file = target_dir / "SKILL.md"
+    skill_file.write_text(md_content, encoding="utf-8")
+    
+    if _on_sync_complete:
+        _on_sync_complete()
+        
+    return {"status": "success", "path": str(skill_file), "client_app_id": client_app_id}
+
+
 @router.post("/sync", response_model=SyncResponse, dependencies=[Depends(verify_token)])
 async def sync_skills() -> SyncResponse:
     """Manually trigger a pull of public skills from GitLab."""

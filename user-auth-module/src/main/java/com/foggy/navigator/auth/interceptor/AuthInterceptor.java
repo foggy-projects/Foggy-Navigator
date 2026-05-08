@@ -36,6 +36,10 @@ public class AuthInterceptor implements HandlerInterceptor {
 
         if (currentUser != null) {
             UserContext.setCurrentUser(currentUser);
+            request.setAttribute("userId", currentUser.getUserId());
+            request.setAttribute("username", currentUser.getUsername());
+            request.setAttribute("tenantId", currentUser.getTenantId());
+            request.setAttribute("roles", currentUser.getRoles());
             log.debug("User authenticated: userId={}, username={}",
                     currentUser.getUserId(), currentUser.getUsername());
         }

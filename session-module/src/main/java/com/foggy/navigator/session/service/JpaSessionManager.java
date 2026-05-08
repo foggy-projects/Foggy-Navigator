@@ -301,6 +301,7 @@ public class JpaSessionManager implements SessionManager {
         return Message.builder()
                 .id(entity.getId())
                 .sessionId(entity.getSessionId())
+                .taskId(entity.getTaskId())
                 .role(MessageRole.valueOf(entity.getRole()))
                 .content(entity.getContent())
                 .metadata(deserializeMetadata(entity.getMetadata()))

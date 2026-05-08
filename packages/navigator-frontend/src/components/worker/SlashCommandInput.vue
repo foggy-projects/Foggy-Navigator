@@ -154,10 +154,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import type { SkillInfo } from '@/types'
 import { searchFiles as searchFilesApi } from '@/api/fileBrowser'
 import type { FileSearchResult } from '@/api/fileBrowser'
+import { resolveInputCursor } from './slashCommandInputUtils'
 
 interface CommandChild {
   name: string
@@ -343,7 +344,7 @@ function detectAtTrigger(text: string, cursor: number) {
     const queryPart = before.slice(idx + 1)
     if (/\s/.test(queryPart)) continue
     // '@' must be at start of text or preceded by whitespace (avoid email addresses)
-    if (idx > 0 && !/\s/.test(before[idx - 1])) continue
+    if (idx > 0 && !/\s/.test(before.charAt(idx - 1))) continue
     triggerIdx = idx
     break
   }
@@ -383,7 +384,7 @@ function detectSlashTrigger(text: string, cursor: number) {
     const queryPart = before.slice(idx + 1)
     if (/\s/.test(queryPart)) continue
     // '/' must be at start of text or preceded by whitespace
-    if (idx > 0 && !/\s/.test(before[idx - 1])) continue
+    if (idx > 0 && !/\s/.test(before.charAt(idx - 1))) continue
     triggerIdx = idx
     break
   }
@@ -501,13 +502,11 @@ function resolveFlat(idx: number): { type: 'cmd' | 'cli' | 'skill'; index: numbe
   return { type: 'skill', index: afterCmd - filteredCliSkills.value.length }
 }
 
-function openPanel() {
-  showPanel.value = true
-  activeIndex.value = 0
-  nextTick(updatePanelPosition)
-}
-
 function handleInput(val: string) {
+  const previousValue = props.modelValue
+  const textarea = getTextareaEl()
+  const cursor = resolveInputCursor(val, textarea?.selectionStart, previousValue)
+
   if (phase.value === 'sub') {
     // In sub-phase, extract the sub-query part after the command name
     const prefix = '/' + (activeCommand.value?.name || '')
@@ -519,12 +518,9 @@ function handleInput(val: string) {
 
   // Cursor-based trigger detection for @ mentions, ./ file paths, and / slash commands
   nextTick(() => {
-    const textarea = getTextareaEl()
-    if (textarea) {
-      detectAtTrigger(val, textarea.selectionStart)
-      if (props.directoryId) detectFileTrigger(val, textarea.selectionStart)
-      detectSlashTrigger(val, textarea.selectionStart)
-    }
+    detectAtTrigger(val, cursor)
+    if (props.directoryId) detectFileTrigger(val, cursor)
+    detectSlashTrigger(val, cursor)
   })
 }
 
@@ -533,7 +529,7 @@ function handleFocus() {
   const textarea = getTextareaEl()
   if (textarea) {
     const val = props.modelValue
-    const cursor = textarea.selectionStart
+    const cursor = textarea.selectionStart ?? val.length
     detectAtTrigger(val, cursor)
     detectSlashTrigger(val, cursor)
     if (props.directoryId) detectFileTrigger(val, cursor)
@@ -735,7 +731,7 @@ function handleKeydown(e: KeyboardEvent) {
     // ArrowUp/Down → history navigation (only when cursor is at boundary)
     if (e.key === 'ArrowUp') {
       const textarea = getTextareaEl()
-      if (textarea && textarea.selectionStart === 0) {
+      if (textarea && (textarea.selectionStart ?? 0) === 0) {
         e.preventDefault()
         emit('history-prev')
       }
@@ -743,7 +739,7 @@ function handleKeydown(e: KeyboardEvent) {
     }
     if (e.key === 'ArrowDown') {
       const textarea = getTextareaEl()
-      if (textarea && textarea.selectionStart === textarea.value.length) {
+      if (textarea && (textarea.selectionStart ?? textarea.value.length) === textarea.value.length) {
         e.preventDefault()
         emit('history-next')
       }

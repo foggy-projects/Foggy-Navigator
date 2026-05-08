@@ -14,6 +14,7 @@ from ..auth import verify_token
 from ..config import settings
 from ..graphs.root_graph import RootState, root_graph
 from ..models import QueryEvent, QueryRequest
+from ..runtime.fsscript_bridge import extract_fsscript_script, get_fsscript_bridge
 from .health import active_tasks
 
 import time
@@ -30,12 +31,31 @@ async def _event_generator(
     """Run the root graph and yield SSE events."""
     active_tasks.add(task_id)
     try:
+        fsscript = extract_fsscript_script(request.context)
+        if fsscript is not None:
+            async for event in get_fsscript_bridge().stream_events(
+                task_id=task_id,
+                session_id=request.session_id,
+                script=fsscript,
+                context=request.context,
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+            ):
+                yield {
+                    "event": "message",
+                    "data": event.model_dump_json(),
+                }
+            return
+
         initial_state: RootState = {
             "task_id": task_id,
             "session_id": request.session_id,
             "prompt": request.prompt,
             "model": request.model,
             "context": request.context,
+            "runtime_context": request.runtime_context,
+            "user_id": request.user_id,
+            "tenant_id": request.tenant_id,
             "events": [],
             "started_at": time.time(),
             "active_frame_id": None,

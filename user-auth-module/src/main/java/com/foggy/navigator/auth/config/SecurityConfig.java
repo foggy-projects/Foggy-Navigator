@@ -105,6 +105,12 @@ public class SecurityConfig {
                         // Open API（第三方系统集成）
                         .requestMatchers("/api/v1/open/register").permitAll()
                         .requestMatchers("/api/v1/open", "/api/v1/open/**").permitAll()
+                        // Business Agent 控制面由 AuthInterceptor + @RequireAuth 做鉴权。
+                        // Spring Security 这里放行，避免无自定义 JWT filter 时提前 403。
+                        .requestMatchers("/api/v1/admin/client-apps", "/api/v1/admin/client-apps/**").permitAll()
+                        .requestMatchers("/api/v1/client-apps", "/api/v1/client-apps/**").permitAll()
+                        .requestMatchers("/api/v1/business-agent", "/api/v1/business-agent/**").permitAll()
+                        .requestMatchers("/internal/worker-gateway/v1", "/internal/worker-gateway/v1/**").permitAll()
 
                         // 开放 Spring Boot 错误端点（避免异常转发时被拦截返回 403）
                         .requestMatchers("/error").permitAll()

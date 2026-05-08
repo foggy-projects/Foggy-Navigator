@@ -4,6 +4,10 @@ export type {
   TaskStatus,
   AgentTask,
   NavigatorChatConfig,
+  BusinessSuspensionDecisionPayload,
+  BusinessSuspensionDialogModel,
+  BusinessSuspensionStatus,
+  BusinessSuspensionType,
 } from './types'
 
 // Composable (headless — for custom UI)

@@ -18,6 +18,12 @@ import java.util.Map;
  *     .apiKey("sk-xxxx")
  *     .build();
  *
+ * // Or use a tenant-admin bearer token:
+ * NavigatorClient adminClient = NavigatorClient.builder()
+ *     .baseUrl("http://navigator.example.com:8112")
+ *     .bearerToken("jwt-token")
+ *     .build();
+ *
  * // Worker 管理
  * Worker worker = client.workers().create("GPU-01", "http://10.0.1.1:3031", "token");
  * client.workers().healthCheck(worker.getWorkerId());
@@ -49,6 +55,7 @@ public class NavigatorClient {
     private final DirectoryApi directoryApi;
     private final EmployeeApi employeeApi;
     private final AgentApi agentApi;
+    private final BusinessAgentApi businessAgentApi;
 
     private NavigatorClient(HttpHelper http) {
         this.http = http;
@@ -56,6 +63,7 @@ public class NavigatorClient {
         this.directoryApi = new DirectoryApi(http);
         this.employeeApi = new EmployeeApi(http);
         this.agentApi = new AgentApi(http);
+        this.businessAgentApi = new BusinessAgentApi(http);
     }
 
     // ===== API 模块访问 =====
@@ -71,6 +79,9 @@ public class NavigatorClient {
 
     /** Agent 交互（A2A 协议） */
     public AgentApi agents() { return agentApi; }
+
+    /** Business Agent 控制面 API（如 ClientApp、授权、Business Function 管理等） */
+    public BusinessAgentApi businessAgent() { return businessAgentApi; }
 
     // ===== 系统注册（静态方法，无需 API Key） =====
 
@@ -104,6 +115,8 @@ public class NavigatorClient {
     public static class Builder {
         private String baseUrl;
         private String apiKey;
+        private String bearerToken;
+        private String tenantId;
         private Duration timeout;
 
         private Builder() {}
@@ -125,6 +138,28 @@ public class NavigatorClient {
         }
 
         /**
+         * Bearer token（例如当前登录态或本地 dev admin token）。
+         * <p>
+         * 如果传入值未包含 {@code Bearer } 前缀，SDK 会自动补齐。
+         */
+        public Builder bearerToken(String bearerToken) {
+            this.bearerToken = bearerToken;
+            return this;
+        }
+
+        /**
+         * {@link #bearerToken(String)} 的语义别名，用于控制面 bootstrap 场景。
+         */
+        public Builder adminToken(String adminToken) {
+            return bearerToken(adminToken);
+        }
+
+        public Builder tenantId(String tenantId) {
+            this.tenantId = tenantId;
+            return this;
+        }
+
+        /**
          * HTTP 请求超时（默认 30 秒）
          */
         public Builder timeout(Duration timeout) {
@@ -136,10 +171,12 @@ public class NavigatorClient {
             if (baseUrl == null || baseUrl.isBlank()) {
                 throw new IllegalArgumentException("baseUrl is required");
             }
-            if (apiKey == null || apiKey.isBlank()) {
-                throw new IllegalArgumentException("apiKey is required");
+            boolean hasApiKey = apiKey != null && !apiKey.isBlank();
+            boolean hasBearerToken = bearerToken != null && !bearerToken.isBlank();
+            if (!hasApiKey && !hasBearerToken) {
+                throw new IllegalArgumentException("apiKey or bearerToken is required");
             }
-            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, timeout));
+            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, bearerToken, tenantId, timeout));
         }
     }
 }

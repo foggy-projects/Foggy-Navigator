@@ -56,3 +56,15 @@ responses:
 ```
 
 修改后调用 `POST /admin/reload` 重新加载。
+
+### Tool Result 场景
+
+`match.message_role` 可指定匹配最近一条特定角色消息，默认是 `user`。这用于模拟 LLM tool-call loop 中“看到工具结果后继续调用下一个工具”的场景。
+
+```yaml
+match:
+  message_role: "tool"
+  keywords: ["vehicle_id"]
+```
+
+`responses/scenarios/langgraph-biz-worker-skill.yaml` 提供了 LangGraph Biz Worker 的完整 Skill 测试场景：选择 `exception_triage`，调用业务工具，并通过 `submit_skill_result` 交卷。

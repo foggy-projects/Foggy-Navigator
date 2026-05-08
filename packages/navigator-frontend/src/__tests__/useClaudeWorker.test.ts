@@ -18,11 +18,36 @@ vi.mock('@/api/claudeWorker', () => ({
   syncDirectoryGitInfo: vi.fn(),
 }))
 
+vi.mock('@/api/langgraphWorker', () => ({
+  listWorkers: vi.fn(),
+  registerWorker: vi.fn(),
+  updateWorker: vi.fn(),
+  deleteWorker: vi.fn(),
+  triggerHealthCheck: vi.fn(),
+}))
+
+vi.mock('@/api/unifiedTask', () => ({
+  createTaskUnified: vi.fn(),
+  cancelTaskUnified: vi.fn(),
+  listTasksUnified: vi.fn(),
+  respondToTaskUnified: vi.fn(),
+  reconnectTaskUnified: vi.fn(),
+  resyncTaskUnified: vi.fn(),
+  resumeTaskUnified: vi.fn(),
+  deleteTaskUnified: vi.fn(),
+  listTasksPagedUnified: vi.fn(),
+  forwardSessionUnified: vi.fn(),
+}))
+
 import * as api from '@/api/claudeWorker'
+import * as langgraphApi from '@/api/langgraphWorker'
+import * as unifiedTaskApi from '@/api/unifiedTask'
 import { useClaudeWorker } from '@/composables/useClaudeWorker'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory } from '@/types'
 
 const mockApi = vi.mocked(api)
+const mockLanggraphApi = vi.mocked(langgraphApi)
+const mockUnifiedTaskApi = vi.mocked(unifiedTaskApi)
 
 function makeWorker(overrides?: Partial<ClaudeWorker>): ClaudeWorker {
   return {
@@ -64,6 +89,7 @@ function makeDirectory(overrides?: Partial<WorkingDirectory>): WorkingDirectory 
 describe('useClaudeWorker', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockLanggraphApi.listWorkers.mockResolvedValue([])
     // Reset the module-level state by directly mutating refs
     const { workers, tasks, directories, loading, taskPage, taskSize, taskTotal } =
       useClaudeWorker()
@@ -122,7 +148,7 @@ describe('useClaudeWorker', () => {
 
   describe('loadTasks', () => {
     it('uses paged API', async () => {
-      mockApi.listTasksPaged.mockResolvedValue({
+      mockUnifiedTaskApi.listTasksPagedUnified.mockResolvedValue({
         content: [makeTask()],
         totalSessions: 50,
         page: 0, size: 20,
@@ -131,19 +157,19 @@ describe('useClaudeWorker', () => {
       const { loadTasks, tasks, taskTotal } = useClaudeWorker()
       await loadTasks()
 
-      expect(mockApi.listTasksPaged).toHaveBeenCalledWith(0, 20)
+      expect(mockUnifiedTaskApi.listTasksPagedUnified).toHaveBeenCalledWith(0, 20, undefined)
       expect(tasks.value).toHaveLength(1)
       expect(taskTotal.value).toBe(50)
     })
 
     it('falls back to non-paged API on error', async () => {
-      mockApi.listTasksPaged.mockRejectedValue(new Error('404'))
-      mockApi.listTasks.mockResolvedValue([makeTask(), makeTask({ taskId: 't-2' })])
+      mockUnifiedTaskApi.listTasksPagedUnified.mockRejectedValue(new Error('404'))
+      mockUnifiedTaskApi.listTasksUnified.mockResolvedValue([makeTask(), makeTask({ taskId: 't-2' })] as any)
 
       const { loadTasks, tasks, taskTotal } = useClaudeWorker()
       await loadTasks()
 
-      expect(mockApi.listTasks).toHaveBeenCalled()
+      expect(mockUnifiedTaskApi.listTasksUnified).toHaveBeenCalled()
       expect(tasks.value).toHaveLength(2)
       expect(taskTotal.value).toBe(2)
     })
@@ -153,7 +179,7 @@ describe('useClaudeWorker', () => {
 
   describe('loadTasksPage', () => {
     it('updates page and size then loads', async () => {
-      mockApi.listTasksPaged.mockResolvedValue({
+      mockUnifiedTaskApi.listTasksPagedUnified.mockResolvedValue({
         content: [],
         totalSessions: 0,
         page: 0, size: 20,
@@ -164,11 +190,11 @@ describe('useClaudeWorker', () => {
 
       expect(taskPage.value).toBe(2)
       expect(taskSize.value).toBe(10)
-      expect(mockApi.listTasksPaged).toHaveBeenCalledWith(2, 10)
+      expect(mockUnifiedTaskApi.listTasksPagedUnified).toHaveBeenCalledWith(2, 10, undefined)
     })
 
     it('keeps existing size if not provided', async () => {
-      mockApi.listTasksPaged.mockResolvedValue({
+      mockUnifiedTaskApi.listTasksPagedUnified.mockResolvedValue({
         content: [],
         totalSessions: 0,
         page: 0, size: 20,
@@ -179,7 +205,7 @@ describe('useClaudeWorker', () => {
       await loadTasksPage(1)
 
       expect(taskSize.value).toBe(15)
-      expect(mockApi.listTasksPaged).toHaveBeenCalledWith(1, 15)
+      expect(mockUnifiedTaskApi.listTasksPagedUnified).toHaveBeenCalledWith(1, 15, undefined)
     })
   })
 
@@ -240,7 +266,7 @@ describe('useClaudeWorker', () => {
   describe('createTask', () => {
     it('prepends task to list', async () => {
       const task = makeTask({ taskId: 't-new', status: 'PENDING' })
-      mockApi.createTask.mockResolvedValue(task)
+      mockUnifiedTaskApi.createTaskUnified.mockResolvedValue(task as any)
 
       const { createTask, tasks } = useClaudeWorker()
       tasks.value = [makeTask({ taskId: 't-existing' })]
@@ -253,12 +279,12 @@ describe('useClaudeWorker', () => {
 
     it('passes directoryId when provided', async () => {
       const task = makeTask({ taskId: 't-dir', directoryId: 'd-1' })
-      mockApi.createTask.mockResolvedValue(task)
+      mockUnifiedTaskApi.createTaskUnified.mockResolvedValue(task as any)
 
       const { createTask } = useClaudeWorker()
       await createTask({ workerId: 'w-1', prompt: 'Do stuff', directoryId: 'd-1' })
 
-      expect(mockApi.createTask).toHaveBeenCalledWith({
+      expect(mockUnifiedTaskApi.createTaskUnified).toHaveBeenCalledWith({
         workerId: 'w-1',
         prompt: 'Do stuff',
         directoryId: 'd-1',
@@ -270,7 +296,7 @@ describe('useClaudeWorker', () => {
 
   describe('abortTask', () => {
     it('sets task status to ABORTED', async () => {
-      mockApi.abortTask.mockResolvedValue({ taskId: 't-1', status: 'ABORTED' })
+      mockUnifiedTaskApi.cancelTaskUnified.mockResolvedValue(undefined)
 
       const { abortTask, tasks } = useClaudeWorker()
       tasks.value = [makeTask({ taskId: 't-1', status: 'RUNNING' })]

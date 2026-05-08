@@ -199,3 +199,11 @@ class TestAccountSkillLoading:
         m = registry.get_manifest("my_skill")
         assert m is not None
         assert m.description == "builtin"
+
+    def test_rejects_path_traversal_account_id(self, tmp_path):
+        from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
+
+        registry = SkillRegistry(skills_root=tmp_path / "skills", data_root=tmp_path / "data")
+
+        with pytest.raises(ValueError):
+            registry.load(account_id="../other-user")

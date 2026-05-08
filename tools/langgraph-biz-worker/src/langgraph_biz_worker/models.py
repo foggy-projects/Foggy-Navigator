@@ -21,6 +21,8 @@ class QueryRequest(BaseModel):
     model: str | None = None
     model_config_id: str | None = None
     context: dict[str, Any] | None = None
+    # Hidden runtime data from Navigator Java. Never include this in LLM prompts.
+    runtime_context: dict[str, Any] | None = None
 
     # Tracking IDs forwarded by Java side
     task_id: str | None = Field(None, alias="taskId")
@@ -64,6 +66,15 @@ class QueryEvent(BaseModel):
 
     # Structured output (populated on type="result")
     structured_output: dict[str, Any] | None = None
+
+    # Approval / suspension metadata (used by skill approval and FSScript pause)
+    approval_type: str | None = None
+    payload: dict[str, Any] | None = None
+    script_run_id: str | None = None
+    suspend_id: str | None = None
+    reason: str | None = None
+    summary: dict[str, Any] | None = None
+    timeout_at: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +168,7 @@ class SkillManifest(BaseModel):
     id: str
     name: str
     description: str = ""
+    markdown_body: str = ""
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     allowed_tools: list[str] = Field(default_factory=list)
@@ -164,6 +176,8 @@ class SkillManifest(BaseModel):
     promote_to_parent: list[str] = Field(default_factory=list)
     business_rules: dict[str, Any] = Field(default_factory=dict)
     subgraph: str | None = None
+    # Visibility: 'builtin' skills are internal/test-only and excluded from LLM routing prompt
+    visibility: str = "public"  # "builtin" | "public" | "private"
 
 
 # ---------------------------------------------------------------------------

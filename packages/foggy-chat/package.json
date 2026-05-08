@@ -7,8 +7,8 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/foggy-chat.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/foggy-chat.js"
     },
     "./style.css": "./dist/foggy-chat.css"
   },

@@ -54,18 +54,24 @@ public class LanggraphWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(
             String prompt,
             Map<String, Object> context,
+            Map<String, Object> runtimeContext,
             String model,
             String modelConfigId,
             String taskId,
-            String sessionId
+            String sessionId,
+            String userId,
+            String tenantId
     ) {
         Map<String, Object> body = new HashMap<>();
         body.put("prompt", prompt);
         if (context != null) body.put("context", context);
+        if (runtimeContext != null) body.put("runtime_context", runtimeContext);
         if (model != null) body.put("model", model);
         if (modelConfigId != null) body.put("model_config_id", modelConfigId);
         if (taskId != null) body.put("taskId", taskId);
         if (sessionId != null) body.put("session_id", sessionId);
+        if (userId != null) body.put("userId", userId);
+        if (tenantId != null) body.put("tenantId", tenantId);
 
         return webClient.post()
                 .uri("/api/v1/query")

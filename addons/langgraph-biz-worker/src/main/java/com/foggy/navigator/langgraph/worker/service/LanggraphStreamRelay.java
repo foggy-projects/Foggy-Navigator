@@ -15,6 +15,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -60,14 +61,20 @@ public class LanggraphStreamRelay {
             // Extract context from providerConfig
             @SuppressWarnings("unchecked")
             Map<String, Object> context = (Map<String, Object>) event.getProviderConfig().get("context");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> runtimeContext = (Map<String, Object>) event.getProviderConfig().get("runtimeContext");
+            String modelConfigId = event.getProviderConfigString("modelConfigId");
 
             Disposable subscription = client.streamQuery(
                     event.getPrompt(),
                     context,
+                    runtimeContext,
                     event.getModel(),
-                    null, // modelConfigId not forwarded to Python Worker
+                    modelConfigId,
                     taskId,
-                    sessionId
+                    sessionId,
+                    event.getUserId(),
+                    event.getTenantId()
             ).doOnNext(sse -> handleEvent(sse, taskId, sessionId))
               .doOnError(e -> handleStreamError(e, taskId, sessionId))
               .doOnComplete(() -> handleStreamComplete(taskId, sessionId))
@@ -136,27 +143,8 @@ public class LanggraphStreamRelay {
                     taskService.completeTask(taskId, content, structuredOutput, durationMs);
                 }
 
-                case "skill_approval_request" -> {
-                    String approvalType = node.path("approval_type").asText("");
-                    String approvalSummary = node.path("content").asText("");
-                    String approvalPayload = node.has("payload") && !node.get("payload").isNull()
-                            ? node.get("payload").toString() : null;
-
-                    // Persist audit record (Doc 31 §16.4: Java side manages audit)
-                    // Resolve userId from task entity for the approval record
-                    taskService.getTaskById(taskId).ifPresent(task ->
-                            taskService.createApprovalRecord(
-                                    taskId, sessionId, task.getUserId(),
-                                    approvalType, approvalSummary, approvalPayload));
-
-                    publishMessage(sessionId, MessageType.STATE_SYNC,
-                            Map.of("content", approvalSummary,
-                                    "subtype", "skill_approval_request",
-                                    "taskId", taskId,
-                                    "approvalType", approvalType,
-                                    "skillFrameId", node.path("skill_frame_id").asText(""),
-                                    "skillId", node.path("skill_id").asText("")));
-                }
+                case "approval_required", "skill_approval_request" ->
+                        handleApprovalRequired(node, type, taskId, sessionId);
 
                 case "error" -> {
                     String error = node.path("error").asText(node.path("content").asText("Unknown error"));
@@ -181,6 +169,38 @@ public class LanggraphStreamRelay {
                 Map.of("content", "Stream connection lost: " + error.getMessage(), "taskId", taskId));
     }
 
+    private void handleApprovalRequired(JsonNode node, String eventType, String taskId, String sessionId) {
+        String approvalType = node.path("approval_type").asText("");
+        if (approvalType.isBlank()) {
+            approvalType = node.path("reason").asText("");
+        }
+        String approvalSummary = node.path("content").asText("");
+        String approvalPayload = node.has("payload") && !node.get("payload").isNull()
+                ? node.get("payload").toString() : null;
+
+        // Persist audit record (Doc 31 §16.4: Java side manages audit)
+        // Resolve userId from task entity for the approval record
+        String finalApprovalType = approvalType;
+        taskService.getTaskById(taskId).ifPresent(task ->
+                taskService.createApprovalRecord(
+                        taskId, sessionId, task.getUserId(),
+                        finalApprovalType, approvalSummary, approvalPayload));
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("content", approvalSummary);
+        payload.put("subtype", eventType);
+        payload.put("taskId", taskId);
+        payload.put("approvalType", approvalType);
+        payload.put("skillFrameId", node.path("skill_frame_id").asText(""));
+        payload.put("skillId", node.path("skill_id").asText(""));
+        payload.put("scriptRunId", node.path("script_run_id").asText(""));
+        payload.put("suspendId", node.path("suspend_id").asText(""));
+        payload.put("reason", node.path("reason").asText(""));
+        payload.put("timeoutAt", node.path("timeout_at").asText(""));
+
+        publishMessage(sessionId, MessageType.STATE_SYNC, payload);
+    }
+
     private void handleStreamComplete(String taskId, String sessionId) {
         log.info("SSE stream completed for langgraph task {}", taskId);
         activeStreams.remove(taskId);
@@ -188,6 +208,10 @@ public class LanggraphStreamRelay {
 
     private void publishMessage(String sessionId, MessageType type, Map<String, Object> payload) {
         AgentMessage msg = AgentMessage.of(sessionId, LanggraphTaskService.PROVIDER_TYPE, type, payload);
+        Object taskId = payload.get("taskId");
+        if (taskId instanceof String taskIdValue && !taskIdValue.isBlank()) {
+            msg.setTaskId(taskIdValue);
+        }
         eventPublisher.publishEvent(msg);
     }
 }

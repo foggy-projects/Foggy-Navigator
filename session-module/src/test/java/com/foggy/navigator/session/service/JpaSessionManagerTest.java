@@ -140,6 +140,7 @@ class JpaSessionManagerTest {
         String sessionId = sessionManager.createSession(createTestRequest());
         Message message = Message.builder()
                 .role(MessageRole.USER)
+                .taskId("task-1")
                 .content("Hello")
                 .build();
 
@@ -150,6 +151,7 @@ class JpaSessionManagerTest {
         assertEquals(1, messages.size());
         assertEquals("Hello", messages.get(0).getContent());
         assertEquals(sessionId, messages.get(0).getSessionId());
+        assertEquals("task-1", messages.get(0).getTaskId());
         assertEquals(MessageRole.USER, messages.get(0).getRole());
     }
 

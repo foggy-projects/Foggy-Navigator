@@ -41,6 +41,7 @@
               </span>
               <span :class="['status-dot', worker.status?.toLowerCase()]" />
               <span class="worker-name">{{ worker.name }}</span>
+              <el-tag v-if="worker.workerBackend === 'LANGGRAPH_BIZ'" size="small" effect="plain">LangGraph</el-tag>
             </div>
             <div class="worker-meta">{{ worker.hostname || worker.baseUrl }}</div>
           </div>
@@ -229,7 +230,7 @@
               同步 Git
             </el-button>
             <el-button size="small" :loading="syncingSessions" @click="handleSyncSessions">
-              同步会话
+              {{ selectedWorkerIsLangGraph ? '刷新会话' : '同步会话' }}
             </el-button>
             <el-button
               v-if="!selectedDirectory.worktree && selectedDirectory.directoryType !== 'PROJECT'"
@@ -508,7 +509,7 @@
               @click="handlePaneDelete(paneState.task.value?.sessionId)"
             >删除</el-button>
             <el-button
-              v-if="paneState.task.value?.status === 'FAILED'"
+              v-if="paneState.task.value?.status === 'FAILED' && canResyncTask(paneState.task.value)"
               size="small"
               text
               title="重新同步失败的任务"
@@ -875,7 +876,7 @@
               @click="handlePaneDelete(paneState.task.value?.sessionId)"
             >删除</el-button>
             <el-button
-              v-if="paneState.task.value?.status === 'FAILED'"
+              v-if="paneState.task.value?.status === 'FAILED' && canResyncTask(paneState.task.value)"
               size="small"
               text
               title="重新同步失败的任务"
@@ -888,7 +889,7 @@
 
       <template v-else>
         <div class="empty-state">
-          <h2>Claude Workers</h2>
+          <h2>Agent Workers</h2>
           <p>选择一个 Worker 或添加新的 Worker 开始使用</p>
         </div>
       </template>
@@ -1190,7 +1191,7 @@
                           修复上下文
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
+                          v-if="isClaudeCodeTask(conv.latestTask) && conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
                           @click="showRewindDialog(conv.latestTask)"
                         >
                           回退
@@ -1203,7 +1204,7 @@
                           {{ scanningTaskId === conv.latestTask.taskId ? '扫描中...' : '扫描' }}
                         </el-dropdown-item>
                         <el-dropdown-item
-                          v-if="conv.latestTask.status === 'FAILED'"
+                          v-if="conv.latestTask.status === 'FAILED' && canResyncTask(conv.latestTask)"
                           :disabled="resyncingTaskId === conv.latestTask.taskId"
                           @click="handleResyncFromList(conv)"
                         >
@@ -1383,7 +1384,7 @@
                         修复上下文
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
+                        v-if="isClaudeCodeTask(conv.latestTask) && conv.latestTask.status !== 'RUNNING' && hasCheckpoints(conv.latestTask)"
                         @click="showRewindDialog(conv.latestTask)"
                       >
                         回退
@@ -1396,7 +1397,7 @@
                         {{ scanningTaskId === conv.latestTask.taskId ? '扫描中...' : '扫描' }}
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="conv.latestTask.status === 'FAILED'"
+                        v-if="conv.latestTask.status === 'FAILED' && canResyncTask(conv.latestTask)"
                         :disabled="resyncingTaskId === conv.latestTask.taskId"
                         @click="handleResyncFromList(conv)"
                       >
@@ -1435,6 +1436,12 @@
     <!-- Add Worker Dialog -->
     <el-dialog v-model="showAddDialog" title="添加 Worker" width="480px">
       <el-form :model="addForm" label-position="top">
+        <el-form-item label="Worker 类型" required>
+          <el-radio-group v-model="addForm.workerBackend">
+            <el-radio value="CLAUDE_CODE">Claude Code Worker</el-radio>
+            <el-radio value="LANGGRAPH_BIZ">LangGraph Biz Worker</el-radio>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="名称" required>
           <el-input v-model="addForm.name" placeholder="如：我的家庭机" />
         </el-form-item>
@@ -1449,7 +1456,7 @@
             placeholder="Worker 预共享令牌"
           />
         </el-form-item>
-        <template>
+        <template v-if="addForm.workerBackend !== 'LANGGRAPH_BIZ'">
           <el-form-item label="认证模式">
             <el-select v-model="addForm.authMode" style="width: 100%">
               <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
@@ -1481,26 +1488,28 @@
             <el-input v-model="addForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
           </el-form-item>
         </template>
-        <el-divider content-position="left">Codex 配置（可选）</el-divider>
-        <el-form-item label="Codex 地址">
-          <el-input v-model="addForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
-        </el-form-item>
-        <el-form-item label="Codex 认证令牌">
-          <el-input v-model="addForm.codexAuthToken" type="password" show-password placeholder="Codex Worker 令牌" />
-        </el-form-item>
-        <el-form-item label="Codex 默认模型">
-          <el-input v-model="addForm.codexModel" placeholder="如：codex-mini-latest" />
-        </el-form-item>
-        <el-divider content-position="left">Gemini 配置（可选）</el-divider>
-        <el-form-item label="Gemini 地址">
-          <el-input v-model="addForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
-        </el-form-item>
-        <el-form-item label="Gemini 认证令牌">
-          <el-input v-model="addForm.geminiAuthToken" type="password" show-password placeholder="Gemini Worker 令牌" />
-        </el-form-item>
-        <el-form-item label="Gemini 默认模型">
-          <el-input v-model="addForm.geminiModel" placeholder="如：gemini-flash" />
-        </el-form-item>
+        <template v-if="addForm.workerBackend !== 'LANGGRAPH_BIZ'">
+          <el-divider content-position="left">Codex 配置（可选）</el-divider>
+          <el-form-item label="Codex 地址">
+            <el-input v-model="addForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
+          </el-form-item>
+          <el-form-item label="Codex 认证令牌">
+            <el-input v-model="addForm.codexAuthToken" type="password" show-password placeholder="Codex Worker 令牌" />
+          </el-form-item>
+          <el-form-item label="Codex 默认模型">
+            <el-input v-model="addForm.codexModel" placeholder="如：codex-mini-latest" />
+          </el-form-item>
+          <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+          <el-form-item label="Gemini 地址">
+            <el-input v-model="addForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
+          </el-form-item>
+          <el-form-item label="Gemini 认证令牌">
+            <el-input v-model="addForm.geminiAuthToken" type="password" show-password placeholder="Gemini Worker 令牌" />
+          </el-form-item>
+          <el-form-item label="Gemini 默认模型">
+            <el-input v-model="addForm.geminiModel" placeholder="如：gemini-flash" />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="showAddDialog = false">取消</el-button>
@@ -1511,6 +1520,10 @@
     <!-- Edit Worker Dialog -->
     <el-dialog v-model="showEditDialog" title="编辑 Worker" width="480px">
       <el-form :model="editForm" label-position="top">
+        <el-form-item label="Worker 类型">
+          <el-tag v-if="selectedWorkerIsLangGraph" effect="plain">LangGraph Biz Worker</el-tag>
+          <el-tag v-else effect="plain">Claude Code Worker</el-tag>
+        </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="editForm.name" />
         </el-form-item>
@@ -1525,76 +1538,78 @@
             placeholder="留空保持不变"
           />
         </el-form-item>
-        <el-form-item label="认证模式">
-          <el-select v-model="editForm.authMode" style="width: 100%">
-            <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
-            <el-option label="API Key 模式" value="API_KEY" />
-            <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
-          </el-select>
-        </el-form-item>
-        <el-divider content-position="left">SSH 终端（可选）</el-divider>
-        <el-form-item label="SSH 用户名">
-          <el-input v-model="editForm.sshUsername" placeholder="如 root" />
-        </el-form-item>
-        <el-form-item label="SSH 端口">
-          <el-input-number v-model="editForm.sshPort" :min="1" :max="65535" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="SSH 密码">
-          <el-input
-            v-model="editForm.sshPassword"
-            type="password"
-            show-password
-            :placeholder="selectedWorkerEntity?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
-          />
-        </el-form-item>
-        <el-divider content-position="left">Code Server（可选）</el-divider>
-        <el-form-item label="公网地址">
-          <el-input v-model="editForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
-        </el-form-item>
-        <el-form-item label="内网地址">
-          <el-input v-model="editForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input
-            v-model="editForm.codeServerPassword"
-            type="password"
-            show-password
-            :placeholder="selectedWorkerEntity?.codeServerPasswordConfigured ? '已保存，留空不改' : 'code-server 登录密码'"
-          />
-        </el-form-item>
-        <el-form-item label="Folder 前缀">
-          <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
-        </el-form-item>
-        <el-divider content-position="left">Codex 配置（可选）</el-divider>
-        <el-form-item label="Codex 地址">
-          <el-input v-model="editForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
-        </el-form-item>
-        <el-form-item label="Codex 认证令牌">
-          <el-input
-            v-model="editForm.codexAuthToken"
-            type="password"
-            show-password
-            :placeholder="selectedWorkerEntity?.codexAuthTokenConfigured ? '已保存，留空不改' : 'Codex Worker 令牌'"
-          />
-        </el-form-item>
-        <el-form-item label="Codex 默认模型">
-          <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
-        </el-form-item>
-        <el-divider content-position="left">Gemini 配置（可选）</el-divider>
-        <el-form-item label="Gemini 地址">
-          <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
-        </el-form-item>
-        <el-form-item label="Gemini 认证令牌">
-          <el-input
-            v-model="editForm.geminiAuthToken"
-            type="password"
-            show-password
-            :placeholder="selectedWorkerEntity?.geminiAuthTokenConfigured ? '已保存，留空不改' : 'Gemini Worker 令牌'"
-          />
-        </el-form-item>
-        <el-form-item label="Gemini 默认模型">
-          <el-input v-model="editForm.geminiModel" placeholder="如：gemini-flash" />
-        </el-form-item>
+        <template v-if="!selectedWorkerIsLangGraph">
+          <el-form-item label="认证模式">
+            <el-select v-model="editForm.authMode" style="width: 100%">
+              <el-option label="订阅模式 (Claude Max)" value="SUBSCRIPTION" />
+              <el-option label="API Key 模式" value="API_KEY" />
+              <el-option label="自定义端点" value="CUSTOM_ENDPOINT" />
+            </el-select>
+          </el-form-item>
+          <el-divider content-position="left">SSH 终端（可选）</el-divider>
+          <el-form-item label="SSH 用户名">
+            <el-input v-model="editForm.sshUsername" placeholder="如 root" />
+          </el-form-item>
+          <el-form-item label="SSH 端口">
+            <el-input-number v-model="editForm.sshPort" :min="1" :max="65535" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="SSH 密码">
+            <el-input
+              v-model="editForm.sshPassword"
+              type="password"
+              show-password
+              :placeholder="selectedWorkerEntity?.sshPasswordConfigured ? '已保存，留空不改' : 'SSH 登录密码'"
+            />
+          </el-form-item>
+          <el-divider content-position="left">Code Server（可选）</el-divider>
+          <el-form-item label="公网地址">
+            <el-input v-model="editForm.codeServerPublicUrl" placeholder="如 https://code.example.com" />
+          </el-form-item>
+          <el-form-item label="内网地址">
+            <el-input v-model="editForm.codeServerInternalUrl" placeholder="如 http://192.168.1.100:18443" />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input
+              v-model="editForm.codeServerPassword"
+              type="password"
+              show-password
+              :placeholder="selectedWorkerEntity?.codeServerPasswordConfigured ? '已保存，留空不改' : 'code-server 登录密码'"
+            />
+          </el-form-item>
+          <el-form-item label="Folder 前缀">
+            <el-input v-model="editForm.codeServerFolderPrefix" placeholder="如 /mnt/{drive}（{drive} 替换为盘符）" />
+          </el-form-item>
+          <el-divider content-position="left">Codex 配置（可选）</el-divider>
+          <el-form-item label="Codex 地址">
+            <el-input v-model="editForm.codexBaseUrl" placeholder="如：http://localhost:3032" />
+          </el-form-item>
+          <el-form-item label="Codex 认证令牌">
+            <el-input
+              v-model="editForm.codexAuthToken"
+              type="password"
+              show-password
+              :placeholder="selectedWorkerEntity?.codexAuthTokenConfigured ? '已保存，留空不改' : 'Codex Worker 令牌'"
+            />
+          </el-form-item>
+          <el-form-item label="Codex 默认模型">
+            <el-input v-model="editForm.codexModel" placeholder="如：codex-mini-latest" />
+          </el-form-item>
+          <el-divider content-position="left">Gemini 配置（可选）</el-divider>
+          <el-form-item label="Gemini 地址">
+            <el-input v-model="editForm.geminiBaseUrl" placeholder="如：http://localhost:3071" />
+          </el-form-item>
+          <el-form-item label="Gemini 认证令牌">
+            <el-input
+              v-model="editForm.geminiAuthToken"
+              type="password"
+              show-password
+              :placeholder="selectedWorkerEntity?.geminiAuthTokenConfigured ? '已保存，留空不改' : 'Gemini Worker 令牌'"
+            />
+          </el-form-item>
+          <el-form-item label="Gemini 默认模型">
+            <el-input v-model="editForm.geminiModel" placeholder="如：gemini-flash" />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="showEditDialog = false">取消</el-button>
@@ -2231,8 +2246,8 @@
         <el-descriptions-item label="Session ID" :span="2">
           <code>{{ detailConv.sessionId }}</code>
         </el-descriptions-item>
-        <el-descriptions-item label="Claude Session ID" :span="2">
-          <code>{{ detailConv.claudeSessionId || '-' }}</code>
+        <el-descriptions-item :label="taskSessionRefLabel(detailConv.latestTask)" :span="2">
+          <code>{{ taskSessionRefValue(detailConv.latestTask) || '-' }}</code>
         </el-descriptions-item>
         <el-descriptions-item label="自定义标题" :span="2">
           {{ detailConv.config?.customTitle || '(未设置)' }}
@@ -2651,9 +2666,9 @@ import SlashCommandInput from '@/components/worker/SlashCommandInput.vue'
 import SessionSearchDialog from '@/components/worker/SessionSearchDialog.vue'
 import PencilCanvas from '@/components/ipad/PencilCanvas.vue'
 import ScreenshotAnnotator from '@/components/ipad/ScreenshotAnnotator.vue'
-import { useForwardSession, type ConversationGroup as ForwardConversationGroup } from '@/composables/useForwardSession'
+import { useForwardSession } from '@/composables/useForwardSession'
 import { useSessionFullscreen } from '@/composables/useSessionFullscreen'
-import { useAttachments, compressImage, fileIcon, toImagesJson, type Attachment } from '@/composables/useAttachments'
+import { useAttachments, compressImage, fileIcon, toImagesJson } from '@/composables/useAttachments'
 import { useUserPreferences } from '@/composables/useUserPreferences'
 import * as dirApi from '@/api/claudeWorker'
 import {
@@ -2661,7 +2676,6 @@ import {
   resyncTaskUnified,
   rewindTaskUnified,
   scanCheckpointsUnified,
-  searchSessionsUnified,
   listTasksByDirectoryUnified,
   listTasksByDirectoryPagedUnified,
 } from '@/api/unifiedTask'
@@ -2672,10 +2686,13 @@ import * as agentApi from '@/api/codingAgent'
 import { resolveChatLinkTarget } from '@/utils/chatLinkResolver'
 import { compareMilestonesDefault, sortMilestones, type MilestoneSortBy, type MilestoneSortDir } from '@/utils/milestone'
 import { ALL_MODEL_OPTIONS, isSelectablePlatformModel, resolveModelOptions } from '@/utils/llmModelOptions'
+import { inferTaskWorkerBackend, isClaudeCodeTask, providerTypeFromWorkerBackend, taskSessionRefLabel } from '@/utils/workerBackend'
 import type { ClaudeTask, WorkingDirectory, SkillInfo, ConversationConfig, LlmModelConfig, CodingAgent, DirectorySummary, AgentTeamsConfig, SessionSearchResult, CliProcessListResponse, DirectoryMilestone, WorkerBackend } from '@/types'
 import type { AipMessageType, ChatMessage } from '@foggy/chat'
 
 const MAX_PANES = 1
+const BASE_DOCUMENT_TITLE = '道同'
+type RegisterableWorkerBackend = Extract<WorkerBackend, 'CLAUDE_CODE' | 'LANGGRAPH_BIZ'>
 
 const router = useRouter()
 const workerState = useClaudeWorker()
@@ -2835,7 +2852,7 @@ async function handleResyncTask(taskId: string) {
     return // cancelled
   }
   try {
-    const result = await resyncTaskUnified(taskId) as Record<string, unknown>
+    const result = await resyncTaskUnified(taskId) as { status?: string }
     if (result?.status === 'RESYNCED') {
       ElMessage.success('任务已重新同步')
       // 不需要刷新进程列表，因为任务状态改变不影响 CLI 进程
@@ -2900,15 +2917,7 @@ const selectedDirectoryId = ref<string | null>(null)
 
 // ── Agent-centric navigation ──
 // selectedAgentId is the primary key for task operations (create/resume/respond).
-// resolvedWorkerId derives workerId from the agent when available, falling back to selectedWorkerId.
 const selectedAgentId = ref<string | null>(null)
-const resolvedWorkerId = computed(() => {
-  if (selectedAgentId.value) {
-    const agent = agentState.agents.value.find(a => a.agentId === selectedAgentId.value)
-    return agent?.workerId || selectedWorkerId.value
-  }
-  return selectedWorkerId.value
-})
 const expandedWorkerIds = reactive(new Set<string>())
 const expandedProjectIds = reactive(new Set<string>())
 const { prefs } = useUserPreferences()
@@ -3225,6 +3234,7 @@ const sshForm = ref({ host: '', port: 22, username: '', password: '' })
 const sshConnecting = ref(false)
 
 const addForm = ref({
+  workerBackend: 'CLAUDE_CODE' as RegisterableWorkerBackend,
   name: '',
   baseUrl: '',
   authToken: '',
@@ -3245,6 +3255,7 @@ const addForm = ref({
 })
 
 const editForm = ref({
+  workerBackend: 'CLAUDE_CODE' as WorkerBackend,
   name: '',
   baseUrl: '',
   authToken: '',
@@ -3297,14 +3308,14 @@ const forwardState = useForwardSession({
   ALL_MODELS,
 })
 const {
-  showForwardDialog, forwardSubmitting, forwardForm, forwardSource, forwardPlatformModels,
-  forwardSourcePreview, forwardDialogTitle, forwardConversationPool, forwardExistingTargets,
-  forwardSelectedExistingConversation, forwardDirectories, forwardSelectedDirectory,
-  forwardMilestoneOptions, forwardSelectedModelConfig, forwardModelOptions,
+  showForwardDialog, forwardSubmitting, forwardForm, forwardPlatformModels,
+  forwardSourcePreview, forwardDialogTitle, forwardExistingTargets,
+  forwardSelectedExistingConversation, forwardDirectories,
+  forwardMilestoneOptions, forwardModelOptions,
   forwardExistingWorkerName, forwardExistingDirectoryName, forwardExistingProviderLabel,
   forwardExistingModelConfigLabel, forwardExistingModelLabel, forwardExistingMilestoneLabel,
   forwardSubmitButtonText, forwardSubmitDisabled,
-  openForwardDialog, submitForward, resetForwardDialog, forwardConversationOptionLabel,
+  openForwardDialog, submitForward, forwardConversationOptionLabel,
   forwardAttachments, forwardRemoveAttachment,
   forwardHandlePaste, forwardHandleDrop, forwardHandleDragOver,
 } = forwardState
@@ -3336,33 +3347,6 @@ const platformModelConfigId = ref('')
 const platformModelConfig = computed(() =>
   platformModels.value.find((m) => m.id === platformModelConfigId.value) || null,
 )
-
-function providerTypeFromWorkerBackend(workerBackend?: string | null): string | undefined {
-  if (workerBackend === 'OPENAI_CODEX') return 'codex-worker'
-  if (workerBackend === 'CLAUDE_CODE') return 'claude-worker'
-  if (workerBackend === 'GEMINI_CLI') return 'gemini-worker'
-  return undefined
-}
-
-function workerBackendFromProviderType(providerType?: string | null): WorkerBackend | undefined {
-  if (providerType === 'codex-worker') return 'OPENAI_CODEX'
-  if (providerType === 'claude-worker') return 'CLAUDE_CODE'
-  if (providerType === 'gemini-worker') return 'GEMINI_CLI'
-  return undefined
-}
-
-function inferTaskWorkerBackend(task: ClaudeTask): WorkerBackend | undefined {
-  const providerBackend = workerBackendFromProviderType(task.providerType)
-  if (providerBackend) return providerBackend
-  if (task.geminiSessionId) return 'GEMINI_CLI'
-  if (task.codexThreadId) return 'OPENAI_CODEX'
-  if (task.claudeSessionId) return 'CLAUDE_CODE'
-  const model = (task.model || '').toLowerCase()
-  if (model.includes('gemini')) return 'GEMINI_CLI'
-  if (model.includes('codex') || model.startsWith('gpt-')) return 'OPENAI_CODEX'
-  if (model.includes('claude') || model.includes('opus') || model.includes('sonnet') || model.includes('haiku')) return 'CLAUDE_CODE'
-  return undefined
-}
 
 function processTypeLabel(type?: 'claude' | 'codex' | 'gemini'): string {
   if (type === 'codex') return 'Codex'
@@ -3487,7 +3471,7 @@ function syncAgentDefaultModel() {
 watch(claudeModelOptions, (opts) => {
   if (suppressModelAutoSelect) return
   if (opts.length > 0 && !opts.some(o => o.value === taskForm.value.model)) {
-    taskForm.value.model = opts[0].value
+    taskForm.value.model = opts[0]!.value
   }
 })
 
@@ -3496,7 +3480,7 @@ watch(platformModelConfigId, () => {
   if (suppressModelAutoSelect) return
   const opts = claudeModelOptions.value
   if (opts.length > 0 && !opts.some(o => o.value === taskForm.value.model)) {
-    taskForm.value.model = opts[0].value
+    taskForm.value.model = opts[0]!.value
   }
   // 用户手动切换配置时立即持久化（suppress 时是恢复缓存，不需要重复保存）
   saveWorkerLlmSelection(selectedWorkerId.value)
@@ -3627,14 +3611,6 @@ function dirNameById(dirId?: string): string {
   const dir = workerState.directories.value.find(d => d.directoryId === dirId)
   return dir?.projectName || dirId.substring(0, 8)
 }
-
-function providerTypeLabel(providerType?: string): string {
-  if (providerType === 'claude-worker') return 'Claude Worker'
-  if (providerType === 'codex-worker') return 'Codex Worker'
-  return providerType || '-'
-}
-
-
 
 function dirBranchById(dirId?: string): string | undefined {
   if (!dirId) return undefined
@@ -3816,7 +3792,6 @@ function handleTaskHistoryNext() {
 // --- Attachment state (images + files) — delegated to useAttachments composable ---
 const {
   attachments,
-  addFiles,
   removeAttachment,
   clearAttachments,
   handlePaste,
@@ -3884,9 +3859,24 @@ const selectedWorkerEntity = computed(() => {
   return workerState.workers.value.find((w) => w.workerId === selectedWorkerId.value)
 })
 
+const selectedWorkerIsLangGraph = computed(() => selectedWorkerEntity.value?.workerBackend === 'LANGGRAPH_BIZ')
+
 const selectedDirectory = computed(() =>
   workerState.directories.value.find((d) => d.directoryId === selectedDirectoryId.value),
 )
+
+const viewActive = ref(true)
+
+function updateDocumentTitle() {
+  const directoryName = selectedDirectory.value?.projectName?.trim()
+  document.title = directoryName ? `${directoryName} - ${BASE_DOCUMENT_TITLE}` : BASE_DOCUMENT_TITLE
+}
+
+watch(() => selectedDirectory.value?.projectName, () => {
+  if (viewActive.value) {
+    updateDocumentTitle()
+  }
+}, { immediate: true })
 
 const effectiveDirectoryAuthTag = computed(() => {
   if (platformModelConfig.value) {
@@ -3899,7 +3889,7 @@ const effectiveDirectoryAuthTag = computed(() => {
   if (dir?.defaultAuthMode) {
     return {
       label: authModeLabel(dir.defaultAuthMode),
-      type: (dir.defaultAuthConfigured ? 'success' : 'info') as const,
+      type: (dir.defaultAuthConfigured ? 'success' : 'info') as 'success' | 'info',
     }
   }
   return null
@@ -3941,13 +3931,15 @@ interface MilestoneConversationGroup {
   conversations: ConversationGroup[]
 }
 
-/** 会话是否可以 resume（有 sessionId 即可，provider 内部状态由后端恢复） */
-function getTaskResumeRef(task: Pick<ClaudeTask, 'sessionId'>): string {
-  return task.sessionId || ''
+function taskSessionRefValue(task: ClaudeTask): string {
+  const backend = inferTaskWorkerBackend(task)
+  if (backend === 'OPENAI_CODEX') return task.codexThreadId || ''
+  if (backend === 'GEMINI_CLI') return task.geminiSessionId || ''
+  return task.claudeSessionId || ''
 }
 
-function getConversationResumeRef(conv: ConversationGroup): string {
-  return conv.sessionId || ''
+function canResyncTask(task?: ClaudeTask | null): boolean {
+  return !!task && isClaudeCodeTask(task)
 }
 
 function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] {
@@ -4125,30 +4117,6 @@ const groupedActiveConversations = computed<MilestoneConversationGroup[]>(() => 
 // Active sessions: group activeTasks into ConversationGroups
 const activeSessionConvs = computed(() => groupTasksToConversations(workerState.activeTasks.value))
 
-// Set of provider session refs that currently have a RUNNING task (for concurrency protection)
-const runningConversationRefs = computed(() => {
-  const refs = new Set<string>()
-  for (const task of workerState.activeTasks.value) {
-    if (task.status !== 'RUNNING') continue
-    const ref = getTaskResumeRef(task)
-    if (ref) {
-      refs.add(ref)
-    }
-  }
-  return refs
-})
-
-function canResumeConversation(conv: ConversationGroup): boolean {
-  return !['RUNNING', 'AWAITING_PERMISSION'].includes(conv.latestTask.status)
-    && !!getConversationResumeRef(conv)
-}
-
-/** Check if a conversation session is currently busy (has a RUNNING task) */
-function isSessionBusy(conv: ConversationGroup): boolean {
-  const ref = getConversationResumeRef(conv)
-  return !!ref && runningConversationRefs.value.has(ref)
-}
-
 function directoriesForWorker(workerId: string): WorkingDirectory[] {
   return workerState.directories.value.filter((d) => d.workerId === workerId)
 }
@@ -4295,10 +4263,13 @@ onUnmounted(() => {
   window.removeEventListener('message', handleFileBrowserMessage)
   document.removeEventListener('click', closeFavScriptCtx)
   disposeAllWorkspaces()
+  document.title = BASE_DOCUMENT_TITLE
 })
 
 // keep-alive: suspend all SSE when navigating away to free browser connections
 onDeactivated(() => {
+  viewActive.value = false
+  document.title = BASE_DOCUMENT_TITLE
   suspendOtherWorkspaces(null) // null = suspend ALL workspaces
   if (activeTasksInterval) {
     clearInterval(activeTasksInterval)
@@ -4308,6 +4279,8 @@ onDeactivated(() => {
 
 // keep-alive: re-sync all pane task statuses + resume SSE when view is activated
 onActivated(() => {
+  viewActive.value = true
+  updateDocumentTitle()
   // Resume SSE for the currently active workspace
   const key = activeWorkspaceKey.value
   if (key) {
@@ -4592,6 +4565,7 @@ function handleAddCommand(command: string) {
 }
 
 const defaultAddForm = () => ({
+  workerBackend: 'CLAUDE_CODE' as RegisterableWorkerBackend,
   name: '',
   baseUrl: '',
   authToken: '',
@@ -4625,12 +4599,14 @@ async function handleAdd() {
       geminiBaseUrl,
       geminiAuthToken,
       geminiModel,
+      workerBackend,
       ...baseForm
     } = addForm.value
     await workerState.registerWorker({
       ...baseForm,
-      ...(codexBaseUrl ? { codexConfig: { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined } } : {}),
-      ...(geminiBaseUrl ? { geminiConfig: { baseUrl: geminiBaseUrl, authToken: geminiAuthToken || undefined, model: geminiModel || undefined } } : {}),
+      workerBackend,
+      ...(workerBackend !== 'LANGGRAPH_BIZ' && codexBaseUrl ? { codexConfig: { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined } } : {}),
+      ...(workerBackend !== 'LANGGRAPH_BIZ' && geminiBaseUrl ? { geminiConfig: { baseUrl: geminiBaseUrl, authToken: geminiAuthToken || undefined, model: geminiModel || undefined } } : {}),
     })
     showAddDialog.value = false
     addForm.value = defaultAddForm()
@@ -4646,38 +4622,42 @@ async function handleEdit() {
   if (!selectedWorkerId.value) return
   saving.value = true
   try {
+    const isLangGraph = selectedWorkerIsLangGraph.value
     const form: Record<string, unknown> = {
       name: editForm.value.name,
       baseUrl: editForm.value.baseUrl,
-      authMode: editForm.value.authMode,
-      sshUsername: editForm.value.sshUsername,
-      sshPort: editForm.value.sshPort,
-      codeServerPublicUrl: editForm.value.codeServerPublicUrl || null,
-      codeServerInternalUrl: editForm.value.codeServerInternalUrl || null,
-      codeServerFolderPrefix: editForm.value.codeServerFolderPrefix || null,
+      workerBackend: editForm.value.workerBackend,
+      ...(isLangGraph ? {} : {
+        authMode: editForm.value.authMode,
+        sshUsername: editForm.value.sshUsername,
+        sshPort: editForm.value.sshPort,
+        codeServerPublicUrl: editForm.value.codeServerPublicUrl || null,
+        codeServerInternalUrl: editForm.value.codeServerInternalUrl || null,
+        codeServerFolderPrefix: editForm.value.codeServerFolderPrefix || null,
+      }),
     }
     // 密码类字段：有值才发送，空串不发（避免清空已保存的密码）
     if (editForm.value.authToken) {
       form.authToken = editForm.value.authToken
     }
-    if (editForm.value.sshPassword) {
+    if (!isLangGraph && editForm.value.sshPassword) {
       form.sshPassword = editForm.value.sshPassword
     }
-    if (editForm.value.codeServerPassword) {
+    if (!isLangGraph && editForm.value.codeServerPassword) {
       form.codeServerPassword = editForm.value.codeServerPassword
     }
     // codexConfig：有值 → 发送完整对象；原来有值现在清空 → 发送 {baseUrl:''} 清除
     const { codexBaseUrl, codexAuthToken, codexModel } = editForm.value
-    if (codexBaseUrl) {
+    if (!isLangGraph && codexBaseUrl) {
       form.codexConfig = { baseUrl: codexBaseUrl, authToken: codexAuthToken || undefined, model: codexModel || undefined }
-    } else if (selectedWorkerEntity.value?.codexBaseUrl) {
+    } else if (!isLangGraph && selectedWorkerEntity.value?.codexBaseUrl) {
       form.codexConfig = { baseUrl: '' }
     }
     // geminiConfig：有值 → 发送完整对象；原来有值现在清空 → 发送 {baseUrl:''} 清除
     const { geminiBaseUrl, geminiAuthToken, geminiModel } = editForm.value
-    if (geminiBaseUrl) {
+    if (!isLangGraph && geminiBaseUrl) {
       form.geminiConfig = { baseUrl: geminiBaseUrl, authToken: geminiAuthToken || undefined, model: geminiModel || undefined }
-    } else if (selectedWorkerEntity.value?.geminiBaseUrl) {
+    } else if (!isLangGraph && selectedWorkerEntity.value?.geminiBaseUrl) {
       form.geminiConfig = { baseUrl: '' }
     }
     await workerState.updateWorker(selectedWorkerId.value, form)
@@ -4979,13 +4959,6 @@ async function openCodeServer(network: 'internal' | 'public') {
   window.open(`${base}/?folder=${folder}`, '_blank')
 }
 
-function isInternalNetwork(): boolean {
-  const h = window.location.hostname
-  return h === 'localhost' || h === '127.0.0.1'
-    || h.startsWith('192.168.') || h.startsWith('10.')
-    || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
-}
-
 async function handleSyncGitInfo() {
   if (!selectedDirectoryId.value) return
   syncing.value = true
@@ -5004,7 +4977,10 @@ async function handleSyncSessions() {
   syncingSessions.value = true
   try {
     const result = await workerState.syncSessions(selectedWorkerId.value)
-    ElMessage.success(`已同步 ${result.synced} 个新会话，共 ${result.total} 个`)
+    const message = selectedWorkerIsLangGraph.value
+      ? `已刷新业务会话，共 ${result.total} 个`
+      : `已同步 ${result.synced} 个新会话，共 ${result.total} 个`
+    ElMessage.success(message)
     // Refresh task lists to show newly synced sessions
     await reloadWorkerTasks()
     if (selectedDirectoryId.value) {
@@ -6005,7 +5981,11 @@ async function handlePaneReconnect(paneId: string, taskId: string) {
 async function doResync(taskId: string, pane?: TaskPaneState) {
   resyncingTaskId.value = taskId
   try {
-    const result = await resyncTaskUnified(taskId) as Record<string, unknown>
+    const result = await resyncTaskUnified(taskId) as {
+      action?: string
+      messageSync?: { imported?: number }
+      cliStatus?: { detail?: string }
+    }
 
     switch (result?.action) {
       case 'RECONNECTED': {
@@ -6034,7 +6014,7 @@ async function doResync(taskId: string, pane?: TaskPaneState) {
         break
       }
       case 'MESSAGES_SYNCED': {
-        // 策略 B：CLI 已退出，从 Worker JSONL 补齐了消息
+        // 策略 B：CLI 已退出，从 Claude Code Worker 会话补齐了消息
         const imported = result.messageSync?.imported ?? 0
         if (pane) {
           if (pane.task.value) pane.task.value.status = 'COMPLETED'
@@ -6089,11 +6069,11 @@ async function handleResyncFromList(conv: ConversationGroup) {
 
 /**
  * 策略 B 同步后重新加载 pane 中的消息。
- * 从 Worker JSONL 读取最新消息并替换 ChatPanel 显示。
+ * 从 Claude Code Worker 会话读取最新消息并替换 ChatPanel 显示。
  */
 async function reloadPaneMessages(pane: TaskPaneState) {
   const task = pane.task.value
-  if (!task?.claudeSessionId || !task?.workerId) return
+  if (!task?.claudeSessionId || !task?.workerId || !isClaudeCodeTask(task)) return
   try {
     // Load only the latest PAGE_SIZE messages to avoid performance issues
     const pageSize = 50
@@ -6350,9 +6330,9 @@ async function viewTask(task: ClaudeTask) {
   // Sync task metadata — the `task` param may be stale from the cached conversation list
   pane.syncTaskStatus()
 
-  // For synced tasks: if Navigator session was empty, load JSONL history from Worker
+  // For synced Claude Code tasks: if Navigator session was empty, load Worker session history.
   // Load only the latest PAGE_SIZE messages to avoid performance issues with long sessions.
-  if (pane.chatState.messages.value.length === 0 && task.claudeSessionId && task.workerId) {
+  if (pane.chatState.messages.value.length === 0 && task.claudeSessionId && task.workerId && isClaudeCodeTask(task)) {
     try {
       // Get total count first, then load only the latest batch
       const countResult = await dirApi.getWorkerSessionMessageCount(task.workerId, task.claudeSessionId)
@@ -6370,13 +6350,13 @@ async function viewTask(task: ClaudeTask) {
           timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
         }))
         pane.chatState.messages.value.push(...historyMsgs)
-        // If there are older messages, mark hasMoreHistory (best-effort for JSONL-only sessions)
+        // If there are older messages, mark hasMoreHistory (best-effort for Worker-only sessions)
         if (offset > 0) {
           pane.hasMoreHistory.value = true
         }
       }
     } catch {
-      // JSONL history loading is best-effort
+      // Worker session history loading is best-effort
     }
   }
 }
@@ -6462,7 +6442,7 @@ async function handleRewind() {
 }
 
 function canScanCheckpoints(task: ClaudeTask): boolean {
-  return !!task.claudeSessionId && !hasCheckpoints(task) && task.status !== 'RUNNING'
+  return isClaudeCodeTask(task) && !!task.claudeSessionId && !hasCheckpoints(task) && task.status !== 'RUNNING'
 }
 
 async function handleScanCheckpoints(task: ClaudeTask) {
@@ -6486,7 +6466,8 @@ async function handleScanCheckpoints(task: ClaudeTask) {
 // ─── Context Repair / Compact (修复上下文 / 手动压缩) ──────────────
 
 function canRepairContext(conv: ConversationGroup): boolean {
-  return !!conv.latestTask.claudeSessionId
+  return isClaudeCodeTask(conv.latestTask)
+    && !!conv.latestTask.claudeSessionId
     && conv.latestTask.status !== 'RUNNING'
     && conv.latestTask.status !== 'AWAITING_PERMISSION'
 }
@@ -6595,7 +6576,6 @@ async function executeContextRepair() {
     const task = conv.latestTask
     const resumeForm: Parameters<typeof workerState.resumeTask>[0] = {
       workerId: selectedWorkerId.value,
-      claudeSessionId: task.claudeSessionId!,
       prompt: contextRepairPrompt.value,
       cwd: task.cwd,
       directoryId: task.directoryId,
@@ -6864,9 +6844,19 @@ async function handleResumeFromHistory(task: ClaudeTask) {
   }
 }
 
+defineExpose({
+  canResyncTask,
+  handleShowDetail,
+  handleResumeFromHistory,
+  taskSessionRefLabel,
+  taskSessionRefValue,
+  viewTask,
+})
+
 watch(showEditDialog, (val) => {
   if (val && selectedWorkerEntity.value) {
     editForm.value = {
+      workerBackend: selectedWorkerEntity.value.workerBackend || 'CLAUDE_CODE',
       name: selectedWorkerEntity.value.name,
       baseUrl: selectedWorkerEntity.value.baseUrl,
       authToken: '',

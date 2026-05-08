@@ -93,6 +93,7 @@
             <template #default="{ row }">
               <el-tag v-if="row.workerBackend === 'OPENAI_CODEX'" type="success" size="small">Codex</el-tag>
               <el-tag v-else-if="row.workerBackend === 'GEMINI_CLI'" type="warning" size="small">Gemini</el-tag>
+              <el-tag v-else-if="row.workerBackend === 'LANGGRAPH_BIZ'" type="info" size="small">LangGraph</el-tag>
               <el-tag v-else-if="row.workerBackend === 'CLAUDE_CODE'" size="small">Claude</el-tag>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
@@ -104,13 +105,103 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="260" align="center">
+          <el-table-column label="配置 ID" width="160" align="center">
+            <template #default="{ row }">
+              <el-text truncated style="width: 140px" :title="row.id">{{ row.id }}</el-text>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="310" align="center">
             <template #default="{ row, $index }">
               <el-button text size="small" :disabled="$index === 0" @click="moveLlm($index, -1)">&#9650;</el-button>
               <el-button text size="small" :disabled="$index === llmModels.length - 1" @click="moveLlm($index, 1)">&#9660;</el-button>
               <el-button text size="small" :loading="row._testing" @click="handleTestSaved(row)">测试</el-button>
+              <el-button text size="small" @click="showGrantModelConfigDialog(row)">授权</el-button>
               <el-button text size="small" @click="editLlmModel(row)">编辑</el-button>
               <el-button text type="danger" size="small" @click="deleteLlm(row.id)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <!-- Tab: Biz Worker Pools -->
+      <el-tab-pane label="业务工作池" name="biz-worker-pools">
+        <div class="tab-toolbar">
+          <el-button type="primary" size="small" @click="showBizPoolDialog = true">+ 添加工作池</el-button>
+        </div>
+
+        <el-table :data="bizWorkerPools" v-loading="loadingBizPools" stripe>
+          <el-table-column prop="poolId" label="Pool ID" width="180" />
+          <el-table-column prop="name" label="名称" min-width="150" />
+          <el-table-column prop="workerBackend" label="后端执行器" width="140" />
+          <el-table-column prop="routingPolicy" label="路由策略" width="120" />
+          <el-table-column label="运行状态" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'ACTIVE' ? 'success' : 'info'" size="small">
+                {{ row.status === 'ACTIVE' ? '启用' : '禁用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="健康状态" width="100" align="center">
+            <template #default="{ row }">
+              <span :class="['status-dot', (row.healthStatus || 'UNKNOWN').toLowerCase()]" />
+              {{ row.healthStatus || 'UNKNOWN' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="120" align="center">
+            <template #default="{ row }">
+              <el-button text size="small" @click="toggleBizPoolStatus(row)">
+                {{ row.status === 'ACTIVE' ? '禁用' : '启用' }}
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <!-- Tab: Model Grants -->
+      <el-tab-pane label="模型授权" name="model-grants">
+        <div class="tab-toolbar" style="display: flex; gap: 12px;">
+          <el-input
+            v-model="grantSearchClientAppId"
+            placeholder="输入 Client App ID 按回车查询"
+            style="width: 280px"
+            clearable
+            @keyup.enter="handleSearchGrants"
+            @clear="handleSearchGrants"
+          />
+          <el-button type="primary" :loading="loadingGrants" @click="handleSearchGrants">
+            查询
+          </el-button>
+        </div>
+
+        <el-table :data="modelGrants" v-loading="loadingGrants" stripe>
+          <el-table-column prop="id" label="授权 ID" width="100" />
+          <el-table-column prop="modelConfigName" label="模型名称" min-width="160" />
+          <el-table-column prop="workerBackend" label="模型后端" width="120" />
+          <el-table-column prop="grantScope" label="授权范围" min-width="120">
+            <template #default="{ row }">
+              {{ row.grantScope || '全局' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="默认" width="80" align="center">
+            <template #default="{ row }">
+              <span v-if="row.isDefault" style="color: #67c23a">&#10003;</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'ACTIVE' ? 'success' : 'info'" size="small">
+                {{ row.status === 'ACTIVE' ? '启用' : '禁用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="180" align="center">
+            <template #default="{ row }">
+              <el-button text size="small" @click="toggleGrantStatus(row)">
+                {{ row.status === 'ACTIVE' ? '禁用' : '启用' }}
+              </el-button>
+              <el-button text size="small" :disabled="row.isDefault" @click="setGrantDefaultAction(row)">
+                设为默认
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -617,6 +708,22 @@ codex-worker status</pre>
                   :label="opt.description || opt.label"
                 />
               </el-select>
+              <el-select
+                v-else-if="llmForm.workerBackend === 'LANGGRAPH_BIZ'"
+                v-model="llmForm.modelName"
+                filterable
+                allow-create
+                reserve-keyword
+                default-first-option
+                placeholder="选择或输入 LangGraph Biz 模型别名"
+              >
+                <el-option
+                  v-for="opt in langgraphBizBackendOptions"
+                  :key="opt.value"
+                  :value="opt.value"
+                  :label="opt.description || opt.label"
+                />
+              </el-select>
               <el-input v-else v-model="llmForm.modelName" placeholder="如：qwen-max" />
             </el-form-item>
           </el-col>
@@ -639,6 +746,11 @@ codex-worker status</pre>
         <el-form-item v-if="llmForm.workerBackend === 'GEMINI_CLI'" label="">
           <div class="form-hint" style="color: #909399; font-size: 12px">
             Gemini CLI 支持两种认证模式：填写 API Key 使用 Gemini API，留空则使用订阅或本机登录模式（依赖 Worker 本机 gemini login）
+          </div>
+        </el-form-item>
+        <el-form-item v-if="llmForm.workerBackend === 'LANGGRAPH_BIZ'" label="">
+          <div class="form-hint" style="color: #909399; font-size: 12px">
+            LangGraph Biz Worker 由 Worker 侧环境解析真实 LLM 配置；平台模型配置用于选择执行后端与传递稳定模型别名
           </div>
         </el-form-item>
         <el-form-item v-if="llmForm.workerBackend === 'CLAUDE_CODE'" label="可用模型">
@@ -680,6 +792,19 @@ codex-worker status</pre>
             勾选可用的 Gemini 模型别名，Workers 页面仅显示已勾选项；不勾选则不限制
           </div>
         </el-form-item>
+        <el-form-item v-if="llmForm.workerBackend === 'LANGGRAPH_BIZ'" label="可用模型">
+          <el-checkbox-group v-model="llmForm.availableModels">
+            <el-checkbox
+              v-for="opt in langgraphBizBackendOptions"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
+          </el-checkbox-group>
+          <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
+            勾选可用的 LangGraph Biz 模型别名，Workers 页面仅显示已勾选项；不勾选则不限制
+          </div>
+        </el-form-item>
         <el-form-item>
           <el-checkbox v-model="llmForm.isDefault">设为该类别的默认模型</el-checkbox>
         </el-form-item>
@@ -688,6 +813,7 @@ codex-worker status</pre>
             <el-radio-button value="CLAUDE_CODE">Claude Code</el-radio-button>
             <el-radio-button value="OPENAI_CODEX">OpenAI Codex</el-radio-button>
             <el-radio-button value="GEMINI_CLI">Gemini CLI</el-radio-button>
+            <el-radio-button value="LANGGRAPH_BIZ">LangGraph Biz</el-radio-button>
           </el-radio-group>
           <div class="form-hint" style="color: #909399; font-size: 12px; margin-top: 4px">
             指定此编程模型由哪个 Worker 后端执行
@@ -736,6 +862,22 @@ codex-worker status</pre>
                     <el-descriptions-item label="GEMINI_DEFAULT_MODEL">
                       Worker 默认模型别名或真实模型名。平台未显式下发时会使用它。<br/>
                       <el-tag size="small" type="info">建议值：gemini-flash</el-tag>
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </template>
+                <template v-else-if="llmForm.workerBackend === 'LANGGRAPH_BIZ'">
+                  <el-descriptions :column="1" size="small" border>
+                    <el-descriptions-item label="BIZ_WORKER_LLM_PROVIDER">
+                      Worker 侧默认 LLM provider。<br/>
+                      <el-tag size="small" type="info">如：openai-compatible</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="BIZ_WORKER_LLM_MODEL">
+                      Worker 侧默认真实模型名。平台传入的模型别名为空时使用它。<br/>
+                      <el-tag size="small" type="info">建议搭配 biz-default</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="BIZ_WORKER_ALLOWED_CWDS">
+                      Worker 可访问工作目录白名单。<br/>
+                      <el-tag size="small" type="info">Linux 路径列表</el-tag>
                     </el-descriptions-item>
                   </el-descriptions>
                 </template>
@@ -917,6 +1059,53 @@ codex-worker status</pre>
         <el-button type="primary" :loading="saving" @click="saveCredentialForm">保存</el-button>
       </template>
     </el-dialog>
+    <!-- Biz Pool Dialog -->
+    <el-dialog v-model="showBizPoolDialog" title="添加业务工作池" width="480px">
+      <el-form :model="bizPoolForm" label-position="top">
+        <el-form-item label="Pool ID" required>
+          <el-input v-model="bizPoolForm.poolId" placeholder="如：finance-pool" />
+        </el-form-item>
+        <el-form-item label="名称" required>
+          <el-input v-model="bizPoolForm.name" placeholder="如：财务智能体池" />
+        </el-form-item>
+        <el-form-item label="后端执行器">
+          <el-select v-model="bizPoolForm.workerBackend" style="width: 100%">
+            <el-option label="LangGraph Biz" value="LANGGRAPH_BIZ" />
+            <el-option label="Spring AI Biz" value="SPRING_AI_BIZ" />
+            <el-option label="HTTP Proxy" value="HTTP_PROXY" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="路由策略">
+          <el-select v-model="bizPoolForm.routingPolicy" style="width: 100%">
+            <el-option label="Round Robin" value="ROUND_ROBIN" />
+            <el-option label="Direct" value="DIRECT" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showBizPoolDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingBizPool" @click="handleCreateBizPool">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Grant Model Dialog -->
+    <el-dialog v-model="showGrantDialog" title="授权模型配置" width="480px">
+      <el-form :model="grantForm" label-position="top">
+        <el-form-item label="Client App ID" required>
+          <el-input v-model="grantForm.clientAppId" placeholder="如：tms-backend" />
+        </el-form-item>
+        <el-form-item label="授权范围">
+          <el-input v-model="grantForm.grantScope" placeholder="可选，如 specific-agent-id" />
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="grantForm.isDefault">设为默认模型</el-checkbox>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showGrantDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingGrant" @click="handleGrantModelConfig">授权</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -965,16 +1154,26 @@ import {
   deleteAssistant as apiDeleteAssistant,
   testNotification as apiTestNotification,
 } from '@/api/notification'
+import {
+  listBizWorkerPools as apiListBizPools,
+  createBizWorkerPool as apiCreateBizPool,
+  updateBizWorkerPoolStatus as apiUpdateBizPoolStatus,
+  listModelConfigGrants as apiListGrants,
+  grantModelConfig as apiGrantModelConfig,
+  updateGrantStatus as apiUpdateGrantStatus,
+  setGrantDefault as apiSetGrantDefault
+} from '@/api/businessAgent'
 import type { TaskAssistantConfig } from '@/api/notification'
-import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, ModelAccessScope, UserMemory, UserMemoryCategory, ApiCredential, AuthType, WorkerBackend } from '@/types'
+import type { GitProviderConfig, LlmModelConfig, AgentModelOverride, ClaudeWorker, GitProviderType, LlmModelCategory, ModelAccessScope, UserMemory, UserMemoryCategory, ApiCredential, AuthType, WorkerBackend, BizWorkerPool, ClientAppModelConfigGrant } from '@/types'
 import { getModelOptionsByBackend } from '@/utils/llmModelOptions'
 
-// 统一 Claude / Codex / Gemini 模型候选（见 utils/llmModelOptions.ts）。
-// 1.0.4 起：Codex 切到 alias-only 模式，三个 backend 都使用扁平 alias 列表，
+// 统一 Claude / Codex / Gemini / LangGraph Biz 模型候选（见 utils/llmModelOptions.ts）。
+// 1.0.4 起：Codex 切到 alias-only 模式，Worker backend 都使用扁平 alias 列表，
 // 与 Claude / Gemini 命名风格保持一致；模型版本升级时仅改 Worker 配置，前端零变动。
 const claudeBackendOptions = getModelOptionsByBackend('CLAUDE_CODE' as WorkerBackend)
 const codexBackendOptions = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
 const geminiBackendOptions = getModelOptionsByBackend('GEMINI_CLI' as WorkerBackend)
+const langgraphBizBackendOptions = getModelOptionsByBackend('LANGGRAPH_BIZ' as WorkerBackend)
 
 const activeTab = ref('git')
 const showHelpDrawer = ref(false)
@@ -988,6 +1187,10 @@ const loadingOverrides = ref(false)
 const loadingWorkers = ref(false)
 const loadingMemories = ref(false)
 const loadingCredentials = ref(false)
+const loadingBizPools = ref(false)
+const loadingGrants = ref(false)
+const savingBizPool = ref(false)
+const savingGrant = ref(false)
 
 // ===== Data =====
 const gitProviders = ref<GitProviderConfig[]>([])
@@ -996,6 +1199,9 @@ const agentOverrides = ref<AgentModelOverride[]>([])
 const workers = ref<ClaudeWorker[]>([])
 const memories = ref<UserMemory[]>([])
 const credentials = ref<ApiCredential[]>([])
+const bizWorkerPools = ref<BizWorkerPool[]>([])
+const modelGrants = ref<ClientAppModelConfigGrant[]>([])
+const grantSearchClientAppId = ref('')
 
 // ===== Git Dialog =====
 const showGitDialog = ref(false)
@@ -1066,6 +1272,134 @@ async function deleteGit(id: string) {
     ElMessage.success('已删除')
     await loadGitProviders()
   } catch { /* cancelled */ }
+}
+
+// ===== Biz Worker Pools =====
+const showBizPoolDialog = ref(false)
+const bizPoolForm = ref({
+  poolId: '',
+  name: '',
+  workerBackend: 'LANGGRAPH_BIZ',
+  routingPolicy: 'ROUND_ROBIN'
+})
+
+async function loadBizWorkerPools() {
+  loadingBizPools.value = true
+  try {
+    bizWorkerPools.value = await apiListBizPools()
+  } catch (err: any) {
+    console.error('Failed to load biz worker pools:', err)
+  } finally {
+    loadingBizPools.value = false
+  }
+}
+
+async function handleCreateBizPool() {
+  if (!bizPoolForm.value.poolId || !bizPoolForm.value.name) {
+    ElMessage.warning('请填写 Pool ID 和名称')
+    return
+  }
+  savingBizPool.value = true
+  try {
+    await apiCreateBizPool(bizPoolForm.value)
+    ElMessage.success('创建成功')
+    showBizPoolDialog.value = false
+    await loadBizWorkerPools()
+  } catch (err: any) {
+    // handled by interceptor
+  } finally {
+    savingBizPool.value = false
+  }
+}
+
+async function toggleBizPoolStatus(row: BizWorkerPool) {
+  const newStatus = row.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'
+  try {
+    await apiUpdateBizPoolStatus(row.poolId, newStatus)
+    ElMessage.success('状态已更新')
+    await loadBizWorkerPools()
+  } catch (err: any) {
+    //
+  }
+}
+
+// ===== Model Grants =====
+const showGrantDialog = ref(false)
+const grantForm = ref({
+  clientAppId: '',
+  modelConfigId: '',
+  isDefault: true,
+  grantScope: ''
+})
+
+async function handleSearchGrants() {
+  if (!grantSearchClientAppId.value.trim()) {
+    ElMessage.warning('请输入 Client App ID')
+    return
+  }
+  loadingGrants.value = true
+  try {
+    modelGrants.value = await apiListGrants(grantSearchClientAppId.value.trim())
+  } catch (err: any) {
+    console.error('Failed to search grants:', err)
+  } finally {
+    loadingGrants.value = false
+  }
+}
+
+function showGrantModelConfigDialog(row: LlmModelConfig) {
+  grantForm.value = {
+    clientAppId: '',
+    modelConfigId: row.id,
+    isDefault: true,
+    grantScope: ''
+  }
+  showGrantDialog.value = true
+}
+
+async function handleGrantModelConfig() {
+  if (!grantForm.value.clientAppId.trim()) {
+    ElMessage.warning('请输入 Client App ID')
+    return
+  }
+  savingGrant.value = true
+  try {
+    await apiGrantModelConfig(grantForm.value.clientAppId.trim(), {
+      modelConfigId: grantForm.value.modelConfigId,
+      isDefault: grantForm.value.isDefault,
+      grantScope: grantForm.value.grantScope || undefined
+    })
+    ElMessage.success('授权成功')
+    showGrantDialog.value = false
+    if (grantSearchClientAppId.value === grantForm.value.clientAppId.trim()) {
+      await handleSearchGrants()
+    }
+  } catch (err: any) {
+    //
+  } finally {
+    savingGrant.value = false
+  }
+}
+
+async function toggleGrantStatus(row: ClientAppModelConfigGrant) {
+  const newStatus = row.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'
+  try {
+    await apiUpdateGrantStatus(row.clientAppId, row.id, newStatus)
+    ElMessage.success('状态已更新')
+    await handleSearchGrants()
+  } catch (err: any) {
+    //
+  }
+}
+
+async function setGrantDefaultAction(row: ClientAppModelConfigGrant) {
+  try {
+    await apiSetGrantDefault(row.clientAppId, row.id)
+    ElMessage.success('已设为默认')
+    await handleSearchGrants()
+  } catch (err: any) {
+    //
+  }
 }
 
 // ===== LLM Dialog =====
@@ -1175,7 +1509,7 @@ async function saveLlm() {
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : undefined,
         envVars: Object.keys(envVarsMap).length > 0 ? envVarsMap : undefined,
         workerBackend: llmForm.value.category === 'CODING' ? llmForm.value.workerBackend : undefined,
-        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX' || llmForm.value.workerBackend === 'GEMINI_CLI')
+        availableModels: supportsAvailableModels(llmForm.value.workerBackend)
           && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
           : undefined,
@@ -1194,7 +1528,7 @@ async function saveLlm() {
         allowedWorkerIds: llmForm.value.scope === 'RESTRICTED' ? llmForm.value.allowedWorkerIds : [],
         envVars: envVarsMap,
         workerBackend: llmForm.value.category === 'CODING' ? (llmForm.value.workerBackend || null) : null,
-        availableModels: (llmForm.value.workerBackend === 'CLAUDE_CODE' || llmForm.value.workerBackend === 'OPENAI_CODEX' || llmForm.value.workerBackend === 'GEMINI_CLI')
+        availableModels: supportsAvailableModels(llmForm.value.workerBackend)
           && llmForm.value.availableModels.length > 0
           ? llmForm.value.availableModels
           : null,
@@ -1235,10 +1569,20 @@ async function handleTestLlm() {
 }
 
 function supportsSubscriptionBackend(workerBackend?: import('@/types').WorkerBackend) {
-  return workerBackend === 'OPENAI_CODEX' || workerBackend === 'CLAUDE_CODE' || workerBackend === 'GEMINI_CLI'
+  return workerBackend === 'OPENAI_CODEX' || workerBackend === 'CLAUDE_CODE' || workerBackend === 'GEMINI_CLI' || workerBackend === 'LANGGRAPH_BIZ'
+}
+
+function supportsAvailableModels(workerBackend?: import('@/types').WorkerBackend) {
+  return workerBackend === 'CLAUDE_CODE'
+    || workerBackend === 'OPENAI_CODEX'
+    || workerBackend === 'GEMINI_CLI'
+    || workerBackend === 'LANGGRAPH_BIZ'
 }
 
 function baseUrlPlaceholder(workerBackend?: import('@/types').WorkerBackend) {
+  if (workerBackend === 'LANGGRAPH_BIZ') {
+    return '留空表示由 LangGraph Biz Worker 环境配置解析'
+  }
   if (workerBackend === 'OPENAI_CODEX') {
     return '留空使用默认 OpenAI 端点（订阅模式无需填写）'
   }
@@ -1504,6 +1848,7 @@ async function saveMemoryForm() {
     showMemoryDialog_.value = false
     ElMessage.success('保存成功')
     await loadMemories()
+  loadBizWorkerPools()
   } catch {
     ElMessage.error('保存失败')
   } finally {
@@ -1517,6 +1862,7 @@ async function deleteMemoryById(id: string) {
     await apiDeleteMemory(id)
     ElMessage.success('已删除')
     await loadMemories()
+  loadBizWorkerPools()
   } catch { /* cancelled */ }
 }
 
@@ -1776,6 +2122,7 @@ onMounted(() => {
   loadOverrides()
   loadWorkers()
   loadMemories()
+  loadBizWorkerPools()
   loadCredentials()
   loadAssistantConfig()
 })

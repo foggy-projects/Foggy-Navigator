@@ -82,7 +82,6 @@
           <div class="pane-input-wrap">
             <div class="input-with-send">
               <SlashCommandInput
-                ref="paneSlashInputRef"
                 v-model="paneInput"
                 :rows="1"
                 auto-grow
@@ -115,14 +114,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { ChatPanel } from '@foggy/chat'
 import type { TaskPaneState } from '@/composables/useTaskPane'
 import { useInputMemory } from '@/composables/useInputMemory'
 import type { SkillInfo } from '@/types'
 import SlashCommandInput from './SlashCommandInput.vue'
 import type { AgentItem } from './SlashCommandInput.vue'
-import { canShowContinuationInput } from './taskPaneResume'
+import { canEnableRewind, canShowContinuationInput } from './taskPaneResume'
 
 const props = defineProps<{
   paneState: TaskPaneState
@@ -149,8 +148,6 @@ const emit = defineEmits<{
 }>()
 
 const paneInput = ref('')
-const paneSlashInputRef = ref<InstanceType<typeof SlashCommandInput> | null>(null)
-
 // --- Input memory: draft persistence + history for pane input ---
 const paneInputScope = computed(() => {
   const sid = props.paneState.task.value?.sessionId
@@ -266,10 +263,9 @@ function handleReconnect(taskId: string) {
   emit('reconnect', props.paneState.paneId, taskId)
 }
 
-// Rewind is enabled when task has a Claude session and is not running
+// Rewind is a Claude Code checkpoint feature.
 const rewindEnabled = computed(() => {
-  const t = props.paneState.task.value
-  return !!t?.claudeSessionId && t.status !== 'RUNNING' && t.status !== 'PENDING'
+  return canEnableRewind(props.paneState.task.value)
 })
 
 function truncate(text: string, maxLen: number) {

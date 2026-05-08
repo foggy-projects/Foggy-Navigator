@@ -1,6 +1,8 @@
 """Tests for configuration loading and defaults (P1)."""
 
 import os
+import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -47,3 +49,30 @@ class TestSettingsEnvOverride:
             # Should not raise thanks to extra="ignore"
             s = Settings(_env_file=None)
             assert not hasattr(s, "unknown_field")
+
+    def test_biz_worker_env_file_selects_env_file(self, tmp_path):
+        env_file = tmp_path / "real.env"
+        env_file.write_text(
+            "BIZ_WORKER_LLM_PROVIDER=openai\n"
+            "BIZ_WORKER_LLM_MODEL=qwen-test\n",
+            encoding="utf-8",
+        )
+        env = {
+            **os.environ,
+            "BIZ_WORKER_ENV_FILE": str(env_file),
+            "PYTHONPATH": "src",
+        }
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from langgraph_biz_worker.config import settings; print(settings.llm_model)",
+            ],
+            cwd=os.getcwd(),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+        assert result.stdout.strip() == "qwen-test"

@@ -473,7 +473,8 @@ public class LlmModelManagerImpl implements LlmModelManager {
     private boolean isSubscriptionBackend(String workerBackend) {
         return "OPENAI_CODEX".equals(workerBackend)
                 || "CLAUDE_CODE".equals(workerBackend)
-                || "GEMINI_CLI".equals(workerBackend);
+                || "GEMINI_CLI".equals(workerBackend)
+                || "LANGGRAPH_BIZ".equals(workerBackend);
     }
 
     private String serializeEnvVars(Map<String, String> envVars) {

@@ -6,6 +6,10 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.*;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.*;
+import com.foggy.navigator.business.agent.model.dto.ClientAppRuntimeAccessTokenDTO;
+import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
+import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
+import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -25,13 +29,17 @@ import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggyframework.core.ex.RX;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -60,6 +68,8 @@ public class OpenApiController {
     private final TaskStateReconciler reconciler;
     private final OpenApiSessionQueryService sessionQueryService;
     private final ObjectMapper objectMapper;
+    private final ObjectProvider<ClientAppRuntimeCredentialResolver> clientAppCredentialResolver;
+    private final ObjectProvider<BusinessAgentTaskService> businessAgentTaskService;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -403,6 +413,31 @@ public class OpenApiController {
     }
 
     /**
+     * 使用 ClientApp runtime credential 换取短期访问 token。
+     * <p>
+     * 后续 ask 请求只应携带 X-Client-App-Key + X-Client-App-Access-Token。
+     */
+    @PostMapping("/client-apps/runtime-token")
+    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
+    public RX<ClientAppRuntimeAccessTokenDTO> issueClientAppRuntimeToken(HttpServletRequest request) {
+        String tenantId = UserContext.getCurrentTenantId();
+        ClientAppRuntimeCredentialResolver resolver = clientAppCredentialResolver.getIfAvailable();
+        if (resolver == null) {
+            return RX.failB("client app runtime credential resolver is not available");
+        }
+
+        String appKey = firstHeader(request,
+                "X-Client-App-Key",
+                "X-App-Key",
+                "X-Foggy-App-Key");
+        String appSecret = firstHeader(request,
+                "X-Client-App-Secret",
+                "X-App-Secret",
+                "X-Foggy-App-Secret");
+        return RX.ok(resolver.issueAccessToken(tenantId, appKey, appSecret));
+    }
+
+    /**
      * 向 Agent 发送查询（异步模式）
      * <p>
      * 立即返回 SUBMITTED 状态的任务，调用者通过轮询端点获取结果。
@@ -413,8 +448,11 @@ public class OpenApiController {
     @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
     public RX<OpenApiTaskDTO> askAgent(
             @PathVariable String agentId,
-            @RequestBody OpenApiQueryForm form) {
+            @RequestBody OpenApiQueryForm form,
+            HttpServletRequest request) {
         String tenantId = UserContext.getCurrentTenantId();
+        ResolvedClientAppCredentialDTO clientAppCredential = resolveClientAppCredential(
+                tenantId, agentId, request);
 
         String messageContent = form.resolveMessage();
         if (messageContent == null || messageContent.isBlank()) {
@@ -439,6 +477,8 @@ public class OpenApiController {
         if (form.getMetadata() != null && !form.getMetadata().isEmpty()) {
             metadata.putAll(form.getMetadata());
         }
+        metadata.remove("runtimeContext");
+        metadata.remove("runtime_context");
         if (form.getMaxTurns() != null) {
             metadata.put("maxTurns", form.getMaxTurns());
         }
@@ -448,6 +488,7 @@ public class OpenApiController {
         if (form.getFirstMsg() != null && !form.getFirstMsg().isBlank()) {
             metadata.put("firstMsg", form.getFirstMsg());
         }
+        enrichBusinessRuntimeContext(tenantId, metadata, agentId, clientAppCredential, request, contextId);
         if (!metadata.isEmpty()) {
             message.setMetadata(metadata);
         }
@@ -457,6 +498,121 @@ public class OpenApiController {
         log.info("Open API askAgent: agentId={}, taskId={}, tenantId={}", agentId, task.getId(), tenantId);
 
         return RX.ok(toOpenApiTaskDTO(task, agentId));
+    }
+
+    private ResolvedClientAppCredentialDTO resolveClientAppCredential(
+            String tenantId,
+            String skillId,
+            HttpServletRequest request) {
+        ClientAppRuntimeCredentialResolver resolver = clientAppCredentialResolver.getIfAvailable();
+        if (resolver == null || request == null) {
+            return null;
+        }
+
+        String appKey = firstHeader(request,
+                "X-Client-App-Key",
+                "X-App-Key",
+                "X-Foggy-App-Key");
+        String accessToken = firstHeader(request,
+                "X-Client-App-Access-Token",
+                "X-App-Access-Token",
+                "X-Foggy-App-Access-Token");
+
+        return resolver.resolveAccessTokenForSkill(tenantId, appKey, accessToken, skillId)
+                .orElse(null);
+    }
+
+    private void enrichBusinessRuntimeContext(
+            String tenantId,
+            Map<String, Object> metadata,
+            String skillId,
+            ResolvedClientAppCredentialDTO clientAppCredential,
+            HttpServletRequest request,
+            String contextId) {
+        if (clientAppCredential == null) {
+            return;
+        }
+
+        Map<String, Object> context = new LinkedHashMap<>();
+        Object rawContext = metadata.get("context");
+        if (rawContext instanceof Map<?, ?> existingContext) {
+            existingContext.forEach((key, value) -> {
+                if (key instanceof String stringKey) {
+                    context.put(stringKey, value);
+                }
+            });
+        }
+
+        context.putIfAbsent("clientAppId", clientAppCredential.getClientAppId());
+        context.putIfAbsent("skillId", skillId);
+        context.putIfAbsent("credentialId", clientAppCredential.getCredentialId());
+
+        String upstreamUserId = firstHeader(request,
+                "X-Upstream-User-Id",
+                "X-Foggy-Upstream-User-Id",
+                "X-Client-Upstream-User-Id");
+        if (StringUtils.hasText(upstreamUserId)) {
+            context.putIfAbsent("upstreamUserId", upstreamUserId);
+            issueBusinessRuntimeToken(
+                    tenantId,
+                    UserContext.getCurrentUserId(),
+                    metadata,
+                    clientAppCredential.getClientAppId(),
+                    upstreamUserId,
+                    skillId,
+                    contextId,
+                    metadata.get("modelConfigId"));
+        }
+
+        metadata.put("context", context);
+    }
+
+    private void issueBusinessRuntimeToken(
+            String tenantId,
+            String actorUserId,
+            Map<String, Object> metadata,
+            String clientAppId,
+            String upstreamUserId,
+            String skillId,
+            String sessionId,
+            Object requestedModelConfigId) {
+        BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
+        if (service == null) {
+            return;
+        }
+        String token = service.issueOpenApiTaskScopedToken(
+                tenantId,
+                actorUserId,
+                clientAppId,
+                upstreamUserId,
+                skillId,
+                sessionId,
+                requestedModelConfigId instanceof String value ? value : null);
+
+        Map<String, Object> runtimeContext = new LinkedHashMap<>();
+        Object existingRuntimeContext = metadata.get("runtimeContext");
+        if (existingRuntimeContext instanceof Map<?, ?> existingMap) {
+            existingMap.forEach((key, value) -> {
+                if (key instanceof String stringKey) {
+                    runtimeContext.put(stringKey, value);
+                }
+            });
+        }
+        runtimeContext.put("task_scoped_token", token);
+        metadata.put("runtimeContext", runtimeContext);
+    }
+
+    private String firstHeader(HttpServletRequest request, String... names) {
+        if (request == null || names == null) {
+            return null;
+        }
+        for (String name : names) {
+            String value = request.getHeader(name);
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
     }
 
     /**

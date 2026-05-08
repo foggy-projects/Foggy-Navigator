@@ -67,7 +67,7 @@ export interface RoutePayload {
 
 // ===== Worker 鍚庣绫诲瀷 =====
 
-export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX' | 'GEMINI_CLI'
+export type WorkerBackend = 'CLAUDE_CODE' | 'OPENAI_CODEX' | 'GEMINI_CLI' | 'LANGGRAPH_BIZ'
 
 // ===== Claude Worker 绫诲瀷 =====
 
@@ -76,6 +76,7 @@ export interface ClaudeWorker {
   workerId: string
   name: string
   baseUrl: string
+  workerBackend?: WorkerBackend
   authMode: 'SUBSCRIPTION' | 'API_KEY' | 'CUSTOM_ENDPOINT'
   status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN'
   hostname?: string
@@ -199,7 +200,7 @@ export interface AgentTeamsConfig {
   updatedAt: string
 }
 
-/** Worker 涓婄殑 Claude Code 鏈湴浼氳瘽 */
+/** Worker 涓婄殑鏈湴/涓氬姟浼氳瘽 */
 export interface WorkerSession {
   session_id: string
   cwd: string
@@ -412,6 +413,57 @@ export interface UserMemoryForm {
   content: string
 }
 
+// ===== 鐢ㄦ埛绠＄悊绫诲瀷 =====
+
+export type UserStatus = 'ACTIVE' | 'DISABLED' | 'DELETED'
+
+export interface UserDTO {
+  id: string
+  tenantId?: string
+  username: string
+  email?: string
+  displayName?: string
+  roles?: string
+  status: UserStatus
+  lastLoginAt?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface UserRegisterForm {
+  tenantId?: string
+  username: string
+  password: string
+  email?: string
+  displayName?: string
+  roles?: string
+}
+
+export interface UserUpdateForm {
+  email?: string
+  displayName?: string
+  roles?: string
+  status?: UserStatus
+  newPassword?: string
+}
+
+export interface ApiKeyDTO {
+  id: string
+  userId: string
+  name: string
+  apiKey?: string
+  maskedApiKey?: string
+  enabled?: boolean
+  expiresAt?: string
+  lastUsedAt?: string
+  createdAt?: string
+}
+
+export interface ApiKeyCreateForm {
+  name: string
+  expiresAt?: string
+}
+
 // ===== API 鍑瘉绫诲瀷 =====
 
 export type AuthType = 'API_KEY' | 'BEARER_TOKEN' | 'BASIC_AUTH' | 'CUSTOM_HEADER'
@@ -596,4 +648,32 @@ export interface SessionSearchPage {
   total: number
   page: number
   size: number
+}
+
+// ===== 业务 Agent 管理类型 =====
+
+/** 业务 Worker 池 */
+export interface BizWorkerPool {
+  poolId: string
+  tenantId: string
+  name: string
+  workerBackend: string
+  routingPolicy: string
+  status: 'ACTIVE' | 'INACTIVE'
+  healthStatus?: 'HEALTHY' | 'UNHEALTHY' | 'UNKNOWN'
+}
+
+/** 客户端应用模型授权 */
+export interface ClientAppModelConfigGrant {
+  id: number
+  clientAppId: string
+  tenantId: string
+  modelConfigId: string
+  modelConfigName?: string
+  workerBackend?: string
+  status: 'ACTIVE' | 'INACTIVE'
+  isDefault: boolean
+  grantScope?: string
+  createdAt: string
+  updatedAt: string
 }

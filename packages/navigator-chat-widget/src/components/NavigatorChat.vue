@@ -87,6 +87,24 @@
         </el-button>
       </div>
     </div>
+
+    <slot
+      name="suspension-dialog"
+      :suspension="suspension"
+      :visible="suspensionDialogVisible"
+      :submitting="suspensionSubmitting"
+      :submit="handleSuspensionDecision"
+      :updateVisible="updateSuspensionDialogVisible"
+    >
+      <BusinessSuspensionDialog
+        v-if="showSuspensionDialog && suspension"
+        :model-value="suspensionDialogVisible"
+        :suspension="suspension"
+        :submitting="suspensionSubmitting"
+        @update:model-value="updateSuspensionDialogVisible"
+        @submit="handleSuspensionDecision"
+      />
+    </slot>
   </div>
 </template>
 
@@ -94,8 +112,14 @@
 import { ref, computed, watch, nextTick, type CSSProperties } from 'vue'
 import { ElInput, ElButton, ElTag, ElEmpty, ElAlert, ElIcon } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
+import { BusinessSuspensionDialog } from '@foggy/chat'
 import { useNavigatorChat } from '../composables/useNavigatorChat'
-import type { NavigatorChatConfig, TaskStatus } from '../types'
+import type {
+  BusinessSuspensionDecisionPayload,
+  BusinessSuspensionDialogModel,
+  NavigatorChatConfig,
+  TaskStatus,
+} from '../types'
 import MarkdownIt from 'markdown-it'
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
@@ -115,6 +139,14 @@ const props = withDefaults(defineProps<{
   showHeader?: boolean
   /** 是否显示输入框 */
   showInput?: boolean
+  /** 是否启用默认 suspension 弹窗 */
+  showSuspensionDialog?: boolean
+  /** suspension 弹窗是否可见 */
+  suspensionDialogVisible?: boolean
+  /** 当前展示的业务 suspension，必须由宿主/BFF 清洗后传入 */
+  suspension?: BusinessSuspensionDialogModel | null
+  /** suspension 决策提交中 */
+  suspensionSubmitting?: boolean
   /** 加载中提示文本 */
   thinkingText?: string
 }>(), {
@@ -124,6 +156,10 @@ const props = withDefaults(defineProps<{
   placeholder: '输入消息...',
   showHeader: true,
   showInput: true,
+  showSuspensionDialog: true,
+  suspensionDialogVisible: false,
+  suspension: null,
+  suspensionSubmitting: false,
   thinkingText: 'AI 正在思考...',
 })
 
@@ -134,6 +170,10 @@ const emit = defineEmits<{
   statusChange: [status: TaskStatus | null]
   /** 收到 AI 回复时触发 */
   reply: [content: string, taskId: string]
+  /** suspension 弹窗显隐变化 */
+  'update:suspensionDialogVisible': [visible: boolean]
+  /** 用户提交 suspension 决策，由宿主/BFF 转发给 Navigator Control Plane */
+  suspensionDecision: [payload: BusinessSuspensionDecisionPayload]
 }>()
 
 const chat = useNavigatorChat(props.config)
@@ -194,6 +234,14 @@ function handleSend() {
 
 function handleScroll() {
   // Reserved for future load-more
+}
+
+function updateSuspensionDialogVisible(visible: boolean) {
+  emit('update:suspensionDialogVisible', visible)
+}
+
+function handleSuspensionDecision(payload: BusinessSuspensionDecisionPayload) {
+  emit('suspensionDecision', payload)
 }
 
 // Auto-scroll to bottom when new messages arrive

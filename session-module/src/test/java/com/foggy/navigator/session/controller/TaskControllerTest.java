@@ -237,4 +237,67 @@ class TaskControllerTest {
 
         assertNull(result.getData());
     }
+
+    @Test
+    void listWorkerSessions_delegatesWithCurrentUser() {
+        List<Map<String, Object>> sessions = List.of(
+                Map.of("sessionId", "worker-session-1", "source", "session-store")
+        );
+        when(taskDispatchFacade.listWorkerSessions("lg-worker-1", USER_ID)).thenReturn(sessions);
+
+        RX<List<Map<String, Object>>> result = controller.listWorkerSessions("lg-worker-1");
+
+        assertEquals(sessions, result.getData());
+        verify(taskDispatchFacade).listWorkerSessions("lg-worker-1", USER_ID);
+    }
+
+    @Test
+    void getWorkerSessionMessageCount_delegatesWithCurrentUser() {
+        Map<String, Object> count = Map.of("total", 2, "user_count", 1, "assistant_count", 1);
+        when(taskDispatchFacade.getWorkerSessionMessageCount("lg-worker-1", "worker-session-1", USER_ID))
+                .thenReturn(count);
+
+        RX<Map<String, Object>> result =
+                controller.getWorkerSessionMessageCount("lg-worker-1", "worker-session-1");
+
+        assertEquals(count, result.getData());
+        verify(taskDispatchFacade).getWorkerSessionMessageCount("lg-worker-1", "worker-session-1", USER_ID);
+    }
+
+    @Test
+    void getWorkerSessionMessages_delegatesWithCurrentUserAndPaging() {
+        List<Map<String, Object>> messages = List.of(
+                Map.of("role", "assistant", "content", "ok", "taskId", "lgt-task-1")
+        );
+        when(taskDispatchFacade.getWorkerSessionMessages("lg-worker-1", "worker-session-1", USER_ID, 10, 20))
+                .thenReturn(messages);
+
+        RX<List<Map<String, Object>>> result =
+                controller.getWorkerSessionMessages("lg-worker-1", "worker-session-1", 10, 20);
+
+        assertEquals(messages, result.getData());
+        verify(taskDispatchFacade).getWorkerSessionMessages("lg-worker-1", "worker-session-1", USER_ID, 10, 20);
+    }
+
+    @Test
+    void syncWorkerSessions_delegatesWithCurrentUserAndTenant() {
+        Map<String, Object> syncResult = Map.of("synced", 0, "total", 1, "source", "session-store");
+        when(taskDispatchFacade.syncWorkerSessions("lg-worker-1", USER_ID, TENANT_ID)).thenReturn(syncResult);
+
+        RX<Map<String, Object>> result = controller.syncWorkerSessions("lg-worker-1");
+
+        assertEquals(syncResult, result.getData());
+        verify(taskDispatchFacade).syncWorkerSessions("lg-worker-1", USER_ID, TENANT_ID);
+    }
+
+    @Test
+    void syncWorkerSessions_failureReturnsFailB() {
+        when(taskDispatchFacade.syncWorkerSessions("lg-worker-1", USER_ID, TENANT_ID))
+                .thenThrow(new IllegalArgumentException("Worker not found"));
+
+        RX<Map<String, Object>> result = controller.syncWorkerSessions("lg-worker-1");
+
+        assertNull(result.getData());
+        assertTrue(result.getMsg().contains("Worker not found"));
+    }
 }

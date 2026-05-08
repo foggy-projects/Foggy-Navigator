@@ -17,4 +17,6 @@ public class CreateLanggraphTaskForm {
     private String sessionId;
     /** Business context passed to Python Worker (serialized as JSON in request) */
     private Map<String, Object> context;
+    /** Hidden runtime context for Worker internals. Never include this in LLM-visible prompts. */
+    private Map<String, Object> runtimeContext;
 }

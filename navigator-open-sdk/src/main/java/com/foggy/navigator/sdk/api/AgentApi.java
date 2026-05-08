@@ -82,6 +82,30 @@ public class AgentApi {
      */
     public AgentTask ask(String agentId, String question, String contextId, Integer maxTurns,
                          String systemPrompt, String firstMsg) {
+        Map<String, Object> body = buildAskBody(question, contextId, maxTurns, systemPrompt, firstMsg);
+        return http.post("/api/v1/open/agents/" + agentId + "/ask",
+                body, new TypeReference<>() {});
+    }
+
+    public AgentTask askWithClientAppAccessToken(
+            String agentId,
+            String question,
+            String contextId,
+            Integer maxTurns,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        Map<String, Object> body = buildAskBody(question, contextId, maxTurns, null, null);
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("X-Client-App-Key", clientAppKey);
+        headers.put("X-Client-App-Access-Token", clientAppAccessToken);
+        headers.put("X-Upstream-User-Id", upstreamUserId);
+        return http.post("/api/v1/open/agents/" + agentId + "/ask",
+                body, headers, new TypeReference<>() {});
+    }
+
+    private Map<String, Object> buildAskBody(String question, String contextId, Integer maxTurns,
+                                             String systemPrompt, String firstMsg) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("message", question);    // 合同字段
         body.put("question", question);   // 兼容字段
@@ -89,8 +113,7 @@ public class AgentApi {
         if (maxTurns != null) body.put("maxTurns", maxTurns);
         if (systemPrompt != null) body.put("systemPrompt", systemPrompt);
         if (firstMsg != null) body.put("firstMsg", firstMsg);
-        return http.post("/api/v1/open/agents/" + agentId + "/ask",
-                body, new TypeReference<>() {});
+        return body;
     }
 
     /**

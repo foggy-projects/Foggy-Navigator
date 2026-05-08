@@ -386,12 +386,6 @@ async function handleFinish() {
   }
 }
 
-function handleSkipAndFinish() {
-  ElMessage.success('配置完成！')
-  resetSetupStatus()
-  router.push('/')
-}
-
 function handleSkipSetup() {
   markSetupSkipped()
   ElMessage.info('已跳过初始化配置，可随时在「设置」中补充')

@@ -12,8 +12,22 @@
 
 ## Status
 
-- Draft
+- Ready for execution planning
 - 2026-04-18
+
+## 1.1.1 执行口径
+
+本设计在 `1.1.1-SNAPSHOT` 首版按以下口径落地：
+
+1. 只实现 `create_artifact` 和 `read_artifact`。
+2. 只支持文本和 JSON 内容。
+3. 只支持 `task` 与 `account` scope。
+4. `account_id`、`task_id`、`created_by` 由 Runtime 注入，不接受模型传入。
+5. 对模型只暴露 `artifact_id`、`name`、`scope`、`mime_type`、`size`、`summary`，不暴露 `content_ref`。
+6. `read_artifact` 默认读取 summary，全文读取必须显式传 `mode=content`。
+7. 长内容外部化后，活跃上下文默认只保留轻量引用，不继续携带原始 `content`。
+8. Worker 自己持久化或继续传给 LLM 的历史消息中，`create_artifact(content=...)` 的原始 `content` 必须替换为轻量占位；外部 LLM provider 请求日志不纳入本轮治理范围。
+9. 首版 `create_artifact` 单次内容大小上限为 1MB。
 
 ## 1. 背景
 
@@ -88,7 +102,15 @@ artifact 创建成功后，活跃上下文中只保留：
 3. `mime_type`
 4. `summary`
 
-原始 `content` 默认不继续驻留。
+原始 `content` 默认不继续驻留。治理边界为 Worker 自己持久化或继续传给 LLM 的上下文，包括 tool message、private message、Frame state 或后续 provider message history；这些位置中的原始 `content` 必须替换为轻量占位，例如：
+
+```json
+{
+  "content": "[externalized: art_01JZ8Y6Y8M7C4H2K9P1D, size=8342, summary=异常订单分析原始载荷]"
+}
+```
+
+外部 LLM provider 的请求日志、网关日志或第三方审计日志不纳入 `1.1.1-SNAPSHOT` 的上下文治理范围。
 
 ### 4.3 物理实现可先用文件系统，但上层协议不得绑定文件
 
@@ -156,20 +178,21 @@ artifact 是一个由 Worker 托管的外部化内容对象，用于保存：
 在账号目录下新增：
 
 ```text
-accounts/
-  <account-id>/
-    artifacts/
-      task/
-        <task-id>/
+<data_root>/
+  accounts/
+    <account-id>/
+      artifacts/
+        task/
+          <task-id>/
+            meta/
+              art_xxx.json
+            content/
+              art_xxx.bin
+        account/
           meta/
             art_xxx.json
           content/
             art_xxx.bin
-      account/
-        meta/
-          art_xxx.json
-        content/
-          art_xxx.bin
 ```
 
 说明：
@@ -240,6 +263,7 @@ accounts/
 2. `scope` 首版只允许 `task | account`
 3. `summary` 可由模型提供，也可由 Runtime 在缺失时自动生成
 4. `account_id`、`task_id` 不由模型提供，由 Runtime 注入
+5. 首版单次 `content` 最大 1MB，超出时返回 `content_too_large`
 
 ### 9.3 输出建议
 
@@ -262,6 +286,17 @@ accounts/
 4. 将 metadata 写入 `meta/`
 5. 将 `artifact_id + summary` 返回给模型
 6. 默认不把原始 `content` 继续留在后续活跃上下文
+
+### 9.5 错误边界
+
+首版至少需要返回可区分的错误：
+
+1. `invalid_scope`：scope 不是 `task | account`
+2. `invalid_content_type`：非文本或 JSON 内容
+3. `missing_task_context`：创建 task-scope artifact 时缺少 `task_id`
+4. `account_context_required`：Runtime 未取得当前账号
+5. `content_too_large`：超过首版 1MB 内容上限
+6. `storage_write_failed`：metadata 或 content 写入失败
 
 ## 10. `read_artifact`
 
@@ -306,6 +341,15 @@ accounts/
 2. 全文读取必须显式指定 `mode = content`
 3. Runtime 应校验当前账号是否有权访问该 artifact
 
+### 10.5 读取权限
+
+首版读取权限规则：
+
+1. account-scope artifact：只允许同一 `account_id` 读取。
+2. task-scope artifact：只允许同一 `account_id + task_id` 读取。
+3. `content_ref` 为内部字段，任何 `mode` 都不返回给模型。
+4. 找不到 artifact 或无权读取时，不泄漏真实物理路径。
+
 ## 11. 与工具调用的关系
 
 业务工具应尽量支持两种输入模式：
@@ -338,6 +382,7 @@ accounts/
 2. 某些工具参数可直接定义为只接受 `*_ref`
 3. artifact 创建成功后，活跃上下文默认只保留 `artifact_id + summary`
 4. 如需重新查看原文，模型必须显式调用 `read_artifact`
+5. 对 Worker 后续持久化或继续传给 LLM 的历史消息，必须 scrub `create_artifact` 的原始 `content`，保留轻量占位和可审计 metadata
 
 这样可以避免：
 

@@ -106,6 +106,7 @@ public class GeminiWorkerAgentProvider implements A2aAgentProvider {
             case "OPENAI_CODEX" -> "codex-worker";
             case "CLAUDE_CODE" -> "claude-worker";
             case "GEMINI_CLI" -> GeminiTaskService.AGENT_ID;
+            case "LANGGRAPH_BIZ" -> "langgraph-biz-worker";
             default -> null;
         };
     }

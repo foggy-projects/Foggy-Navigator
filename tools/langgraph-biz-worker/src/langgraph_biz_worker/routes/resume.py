@@ -16,6 +16,11 @@ from pydantic import BaseModel, Field
 
 from ..auth import verify_token
 from ..runtime.file_frame_journal import FileFrameJournal
+from ..runtime.fsscript_bridge import (
+    FsscriptRunBridge,
+    FsscriptRunNotFound,
+    get_fsscript_bridge,
+)
 from ..runtime.skill_runtime import FrameNotFound, IllegalStateTransition, SkillRuntime
 
 logger = logging.getLogger(__name__)
@@ -46,13 +51,19 @@ class ResumeResponse(BaseModel):
 
 _runtime: SkillRuntime | None = None
 _journal: FileFrameJournal | None = None
+_fsscript_bridge: FsscriptRunBridge | None = None
 
 
-def configure(runtime: SkillRuntime, journal: FileFrameJournal) -> None:
+def configure(
+    runtime: SkillRuntime,
+    journal: FileFrameJournal,
+    fsscript_bridge: FsscriptRunBridge | None = None,
+) -> None:
     """Wire up the shared runtime and journal.  Called once at app startup."""
-    global _runtime, _journal
+    global _runtime, _journal, _fsscript_bridge
     _runtime = runtime
     _journal = journal
+    _fsscript_bridge = fsscript_bridge or get_fsscript_bridge()
 
 
 @router.post("/resume", response_model=ResumeResponse)
@@ -71,6 +82,24 @@ async def resume(request: ResumeRequest) -> ResumeResponse:
     # 1. Find the suspended frame from file journal
     frame = _journal.find_awaiting_approval(request.task_id)
     if frame is None:
+        if _fsscript_bridge is not None:
+            try:
+                result = _fsscript_bridge.resume_task(
+                    request.task_id,
+                    approval_result=request.approval_result,
+                    comment=request.comment,
+                )
+                return ResumeResponse(
+                    task_id=request.task_id,
+                    frame_id=result.get("script_run_id", ""),
+                    status=result.get("status", "RUNNING"),
+                    message=(
+                        f"FSScript run {result.get('script_run_id', '')} "
+                        f"resumed with result: {request.approval_result}"
+                    ),
+                )
+            except FsscriptRunNotFound:
+                pass
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No AWAITING_APPROVAL frame found for task {request.task_id}",

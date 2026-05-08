@@ -226,6 +226,53 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void createTask_usesDirectProviderRouteWhenModelConfigTargetsLangGraphBiz() {
+        TaskDispatchRequest request = TaskDispatchRequest.builder()
+                .workerId("worker-langgraph-1")
+                .directoryId("dir-langgraph-1")
+                .prompt("hi langgraph")
+                .model("biz-default")
+                .modelConfigId("cfg-langgraph")
+                .context(Map.of("language", "fsscript", "script", "return 1;"))
+                .build();
+        AgentResolveContext context = AgentResolveContext.builder()
+                .userId("user-1")
+                .tenantId("tenant-1")
+                .requestSource("UI")
+                .build();
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setWorkerBackend("LANGGRAPH_BIZ");
+
+        DispatchTaskDTO directTask = DispatchTaskDTO.builder()
+                .taskId("task-langgraph-1")
+                .providerType("langgraph-biz-worker")
+                .workerId("worker-langgraph-1")
+                .directoryId("dir-langgraph-1")
+                .model("biz-default")
+                .build();
+
+        when(llmModelManager.getModelConfig("cfg-langgraph")).thenReturn(Optional.of(modelConfig));
+        when(taskQueryProvider.getProviderType()).thenReturn("langgraph-biz-worker");
+        when(taskQueryProvider.createTaskDirect(any(), eq("user-1"), eq("tenant-1")))
+                .thenReturn(directTask);
+
+        DispatchTaskDTO result = facade.createTask(request, context);
+
+        assertEquals("task-langgraph-1", result.getTaskId());
+        assertEquals("langgraph-biz-worker", result.getProviderType());
+        verify(taskQueryProvider).createTaskDirect(
+                argThat(params -> "worker-langgraph-1".equals(params.get("workerId"))
+                        && "dir-langgraph-1".equals(params.get("directoryId"))
+                        && "biz-default".equals(params.get("model"))
+                        && "cfg-langgraph".equals(params.get("modelConfigId"))
+                        && Map.of("language", "fsscript", "script", "return 1;").equals(params.get("context"))),
+                eq("user-1"),
+                eq("tenant-1"));
+        verifyNoInteractions(agentResolver, bindingService, agent);
+    }
+
+    @Test
     void createTask_a2aRouteIncludesParentSessionIdFromCreatedSession() {
         TaskDispatchRequest request = TaskDispatchRequest.builder()
                 .sessionId("session-child-1")
@@ -1052,6 +1099,60 @@ class TaskDispatchFacadeTest {
     }
 
     @Test
+    void listWorkerSessions_skipsProviderWhenWorkerBelongsToAnotherBackend() {
+        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(claudeProvider, langgraphProvider), llmModelManager);
+
+        List<Map<String, Object>> sessions = List.of(Map.of("session_id", "lg-session-1"));
+        when(claudeProvider.listWorkerSessions("lg-worker-1", "user-1"))
+                .thenThrow(new IllegalArgumentException("Worker not found: lg-worker-1"));
+        when(langgraphProvider.listWorkerSessions("lg-worker-1", "user-1")).thenReturn(sessions);
+
+        List<Map<String, Object>> result = facade.listWorkerSessions("lg-worker-1", "user-1");
+
+        assertEquals(sessions, result);
+    }
+
+    @Test
+    void getWorkerSessionMessageCount_skipsProviderWhenWorkerBelongsToAnotherBackend() {
+        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(claudeProvider, langgraphProvider), llmModelManager);
+
+        Map<String, Object> count = Map.of("user_count", 1, "assistant_count", 1, "total", 2);
+        when(claudeProvider.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1"))
+                .thenThrow(new IllegalArgumentException("Worker not found"));
+        when(langgraphProvider.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1"))
+                .thenReturn(count);
+
+        Map<String, Object> result = facade.getWorkerSessionMessageCount("lg-worker-1", "session-1", "user-1");
+
+        assertEquals(count, result);
+    }
+
+    @Test
+    void getWorkerSessionMessages_skipsProviderWhenWorkerBelongsToAnotherBackend() {
+        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(claudeProvider, langgraphProvider), llmModelManager);
+
+        List<Map<String, Object>> messages = List.of(Map.of("role", "assistant", "content", "ok"));
+        when(claudeProvider.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50))
+                .thenThrow(new IllegalArgumentException("Worker not found"));
+        when(langgraphProvider.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50))
+                .thenReturn(messages);
+
+        List<Map<String, Object>> result =
+                facade.getWorkerSessionMessages("lg-worker-1", "session-1", "user-1", 0, 50);
+
+        assertEquals(messages, result);
+    }
+
+    @Test
     void syncWorkerSessions_delegatesToProvider() {
         Map<String, Object> syncResult = Map.of("synced", 5, "workerId", "worker-1");
         when(taskQueryProvider.syncWorkerSessions("worker-1", "user-1", "tenant-1")).thenReturn(syncResult);
@@ -1060,6 +1161,23 @@ class TaskDispatchFacadeTest {
 
         assertEquals(5, result.get("synced"));
         verify(taskQueryProvider).syncWorkerSessions("worker-1", "user-1", "tenant-1");
+    }
+
+    @Test
+    void syncWorkerSessions_skipsProviderWhenWorkerBelongsToAnotherBackend() {
+        TaskQueryProvider claudeProvider = mock(TaskQueryProvider.class);
+        TaskQueryProvider langgraphProvider = mock(TaskQueryProvider.class);
+        facade = new TaskDispatchFacade(agentResolver, bindingService, sessionRepository,
+                List.of(claudeProvider, langgraphProvider), llmModelManager);
+
+        Map<String, Object> syncResult = Map.of("synced", 0, "total", 1);
+        when(claudeProvider.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1"))
+                .thenThrow(new IllegalArgumentException("Worker not found"));
+        when(langgraphProvider.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1")).thenReturn(syncResult);
+
+        Map<String, Object> result = facade.syncWorkerSessions("lg-worker-1", "user-1", "tenant-1");
+
+        assertEquals(syncResult, result);
     }
 
     @Test

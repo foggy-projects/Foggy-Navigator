@@ -244,8 +244,8 @@ export function createChatState(): ChatState {
           // Internal sync events — consume silently, do not render
           break
         }
-        if (subtype === 'skill_approval_request') {
-          // Skill approval request from langgraph-biz-worker (Doc 31 §16.4)
+        if (subtype === 'approval_required' || subtype === 'skill_approval_request') {
+          // Skill/FSScript approval request from langgraph-biz-worker.
           messages.value.push({
             id: aip.messageId,
             type: aip.type,
