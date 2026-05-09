@@ -127,8 +127,9 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
 
             // 5. Resolve Body
             JsonNode bodyNode = adapterNode.path("body");
+            boolean hasObjectBodyMapping = !bodyNode.isMissingNode() && bodyNode.isObject();
             Map<String, Object> resolvedBody = new HashMap<>();
-            if (!bodyNode.isMissingNode() && bodyNode.isObject()) {
+            if (hasObjectBodyMapping) {
                 Iterator<Map.Entry<String, JsonNode>> fields = bodyNode.fields();
                 while (fields.hasNext()) {
                     Map.Entry<String, JsonNode> field = fields.next();
@@ -147,7 +148,7 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
                 throw new IllegalArgumentException("Unsupported REST method: " + methodStr);
             }
 
-            Object requestBody = (HttpMethod.GET.equals(method) || HttpMethod.DELETE.equals(method) || resolvedBody.isEmpty())
+            Object requestBody = (HttpMethod.GET.equals(method) || HttpMethod.DELETE.equals(method) || !hasObjectBodyMapping)
                     ? null
                     : resolvedBody;
             HttpEntity<Object> requestEntity = new HttpEntity<>(requestBody, httpHeaders);

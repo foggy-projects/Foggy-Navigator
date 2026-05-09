@@ -9,10 +9,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..auth import verify_token
 from ..config import settings
@@ -40,6 +41,12 @@ class SyncResponse(BaseModel):
     skills_found: list[str]
 
 
+class SkillResource(BaseModel):
+    path: str
+    content: str
+    sha256: str | None = None
+
+
 class MaterializeRequest(BaseModel):
     skill_id: str
     scope: str = "public"
@@ -49,6 +56,7 @@ class MaterializeRequest(BaseModel):
     display_name: str | None = None
     description: str | None = None
     markdown_body: str | None = None
+    resources: list[SkillResource] = Field(default_factory=list)
 
 
 @router.post("/materialize", dependencies=[Depends(verify_token)])
@@ -89,7 +97,10 @@ async def materialize_skill(req: MaterializeRequest) -> dict:
             target_dir = _skills_root / "public" / skill_id
         visibility = "public"
 
+    _validate_bundle_resources(req.resources)
     target_dir.mkdir(parents=True, exist_ok=True)
+    if target_dir.is_symlink():
+        raise HTTPException(status_code=400, detail="skill target directory must not be a symlink")
     
     manifest_name = req.name or skill_id
     display_name = req.display_name or req.name or skill_id
@@ -113,11 +124,83 @@ async def materialize_skill(req: MaterializeRequest) -> dict:
         
     skill_file = target_dir / "SKILL.md"
     skill_file.write_text(md_content, encoding="utf-8")
+
+    _replace_bundle_resources(target_dir, req.resources)
     
     if _on_sync_complete:
         _on_sync_complete()
         
     return {"status": "success", "path": str(skill_file), "client_app_id": client_app_id}
+
+
+def _replace_bundle_resources(target_dir: Path, resources: list[SkillResource]) -> None:
+    """Replace references/assets resources for an idempotent materialize."""
+    target_root = target_dir.resolve()
+    for child_name in ("references", "assets"):
+        child = target_dir / child_name
+        if child.is_symlink() or child.is_file():
+            child.unlink()
+        elif child.is_dir():
+            resolved = child.resolve()
+            if target_root not in [resolved, *resolved.parents]:
+                raise HTTPException(status_code=400, detail=f"unsafe resource directory: {child_name}")
+            shutil.rmtree(child)
+
+    seen: set[str] = set()
+    for resource in resources or []:
+        rel = _validate_resource_path(resource.path)
+        if rel in seen:
+            raise HTTPException(status_code=400, detail=f"duplicate resource path: {resource.path}")
+        seen.add(rel)
+        content_bytes = resource.content.encode("utf-8")
+        if resource.sha256:
+            actual = hashlib.sha256(content_bytes).hexdigest()
+            if actual.lower() != resource.sha256.lower():
+                raise HTTPException(status_code=400, detail=f"sha256 mismatch for resource: {resource.path}")
+        target = (target_dir / rel).resolve()
+        if target_root not in [target.parent, *target.parent.parents]:
+            raise HTTPException(status_code=400, detail=f"resource path escapes skill directory: {resource.path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content_bytes)
+
+
+_ALLOWED_RESOURCE_EXTENSIONS = {".md", ".txt", ".json", ".yaml", ".yml", ".fsscript"}
+
+
+def _validate_bundle_resources(resources: list[SkillResource]) -> None:
+    seen: set[str] = set()
+    for resource in resources or []:
+        rel = _validate_resource_path(resource.path)
+        if rel in seen:
+            raise HTTPException(status_code=400, detail=f"duplicate resource path: {resource.path}")
+        seen.add(rel)
+        if resource.sha256:
+            actual = hashlib.sha256(resource.content.encode("utf-8")).hexdigest()
+            if actual.lower() != resource.sha256.lower():
+                raise HTTPException(status_code=400, detail=f"sha256 mismatch for resource: {resource.path}")
+
+
+def _validate_resource_path(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    if (
+        not normalized
+        or normalized != path
+        or normalized.startswith("/")
+        or normalized.endswith("/")
+        or "//" in normalized
+    ):
+        raise HTTPException(status_code=400, detail=f"invalid resource path: {path}")
+    parts = normalized.split("/")
+    if parts[0] not in {"references", "assets"}:
+        raise HTTPException(status_code=400, detail="resource path must start with references/ or assets/")
+    if len(parts) < 2:
+        raise HTTPException(status_code=400, detail=f"invalid resource path: {path}")
+    for part in parts:
+        if part in {"", ".", ".."} or "/" in part or "\\" in part:
+            raise HTTPException(status_code=400, detail=f"invalid resource path segment: {part}")
+    if Path(parts[-1]).suffix not in _ALLOWED_RESOURCE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"unsupported resource file type: {path}")
+    return normalized
 
 
 @router.post("/sync", response_model=SyncResponse, dependencies=[Depends(verify_token)])

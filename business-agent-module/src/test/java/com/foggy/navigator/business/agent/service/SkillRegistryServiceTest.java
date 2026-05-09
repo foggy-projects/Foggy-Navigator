@@ -14,6 +14,7 @@ import com.foggy.navigator.business.agent.model.entity.SkillFunctionAllowlistEnt
 import com.foggy.navigator.business.agent.model.form.AddFunctionToSkillForm;
 import com.foggy.navigator.business.agent.model.form.CreateSkillForm;
 import com.foggy.navigator.business.agent.model.form.GrantSkillToClientAppForm;
+import com.foggy.navigator.business.agent.model.form.SkillResourceForm;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionRepository;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionVersionRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppSkillGrantRepository;
@@ -66,6 +67,10 @@ class SkillRegistryServiceTest {
         CreateSkillForm form = new CreateSkillForm();
         form.setSkillId("skill_01");
         form.setName("Test Skill");
+        SkillResourceForm resource = new SkillResourceForm();
+        resource.setPath("references/usage.md");
+        resource.setContent("Use this when needed.");
+        form.setResources(List.of(resource));
 
         when(skillRepository.findByTenantIdAndSkillId("tenant_1", "skill_01")).thenReturn(Optional.empty());
         when(skillRepository.save(any(SkillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -76,6 +81,10 @@ class SkillRegistryServiceTest {
         assertEquals("skill_01", dto.getSkillId());
         assertEquals("Test Skill", dto.getName());
         assertEquals("ENABLED", dto.getStatus());
+        verify(skillRepository).save(argThat(entity ->
+                entity.getResourcesJson() != null
+                        && entity.getResourcesJson().contains("references/usage.md")
+                        && entity.getResourcesJson().contains("Use this when needed.")));
     }
 
     @Test
@@ -151,6 +160,7 @@ class SkillRegistryServiceTest {
             skill.setName("TMS Skill");
             skill.setDescription("TMS public skill");
             skill.setMarkdownBody("Use this skill for TMS operations.");
+            skill.setResourcesJson("[{\"path\":\"references/usage.md\",\"content\":\"Use this reference.\"}]");
             skill.setStatus("ENABLED");
             when(skillRepository.findByTenantIdAndSkillId("tenant_1", "tms_skill")).thenReturn(Optional.of(skill));
 
@@ -180,6 +190,7 @@ class SkillRegistryServiceTest {
             assertTrue(bodyRef.get().contains("\"skill_id\":\"tms_skill\""));
             assertTrue(bodyRef.get().contains("\"name\":\"tms_skill\""));
             assertTrue(bodyRef.get().contains("\"display_name\":\"TMS Skill\""));
+            assertTrue(bodyRef.get().contains("\"resources\":[{\"path\":\"references/usage.md\",\"content\":\"Use this reference.\"}]"));
             assertTrue(bodyRef.get().contains("tms.order.submit@v1"));
             assertTrue(bodyRef.get().contains("Submit by orderIdentifier."));
         } finally {

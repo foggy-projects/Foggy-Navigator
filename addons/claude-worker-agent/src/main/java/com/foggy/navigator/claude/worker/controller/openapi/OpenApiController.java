@@ -544,8 +544,9 @@ public class OpenApiController {
         }
 
         context.putIfAbsent("clientAppId", clientAppCredential.getClientAppId());
-        context.putIfAbsent("skillId", skillId);
+        context.putIfAbsent("businessSkillId", skillId);
         context.putIfAbsent("credentialId", clientAppCredential.getCredentialId());
+        context.putIfAbsent("auto_inject_app_public_skills", true);
 
         String upstreamUserId = firstHeader(request,
                 "X-Upstream-User-Id",

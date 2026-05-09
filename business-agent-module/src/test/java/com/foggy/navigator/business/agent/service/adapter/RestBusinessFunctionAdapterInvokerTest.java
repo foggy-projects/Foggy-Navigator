@@ -277,6 +277,33 @@ class RestBusinessFunctionAdapterInvokerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void invoke_post_with_explicit_empty_body_mapping_sends_empty_json_object() {
+        context.setAdapterConfigJson("""
+            {
+              "type": "rest",
+              "method": "POST",
+              "upstream_ref": "tms",
+              "path": "/dataset/list_models",
+              "adapter": {
+                "body": {}
+              }
+            }
+            """);
+        when(environment.getProperty("foggy.navigator.business.agent.upstreams.tms.url")).thenReturn("http://internal-tms:8080");
+        when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(ResponseEntity.ok("{\"status\":\"ok\"}"));
+
+        invoker.invoke(context, "{}");
+
+        ArgumentCaptor<HttpEntity<Object>> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(eq("http://internal-tms:8080/dataset/list_models"), eq(HttpMethod.POST), entityCaptor.capture(), eq(String.class));
+        Map<String, Object> body = (Map<String, Object>) entityCaptor.getValue().getBody();
+        assertNotNull(body);
+        assertTrue(body.isEmpty());
+    }
+
+    @Test
     void invoke_without_token_header_config_does_not_resolve_or_inject_upstream_user_token() {
         context.setAdapterConfigJson("""
             {

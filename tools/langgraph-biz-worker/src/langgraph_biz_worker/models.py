@@ -18,6 +18,7 @@ class QueryRequest(BaseModel):
 
     prompt: str
     session_id: str | None = None
+    foggy_session_id: str | None = None
     model: str | None = None
     model_config_id: str | None = None
     context: dict[str, Any] | None = None
@@ -178,6 +179,7 @@ class SkillManifest(BaseModel):
     subgraph: str | None = None
     # Visibility: 'builtin' skills are internal/test-only and excluded from LLM routing prompt
     visibility: str = "public"  # "builtin" | "public" | "private"
+    client_app_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

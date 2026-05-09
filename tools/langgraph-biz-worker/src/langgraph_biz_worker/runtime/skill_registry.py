@@ -65,7 +65,11 @@ def _parse_skill_md(path: Path) -> dict[str, Any] | None:
     return data
 
 
-def _frontmatter_to_manifest(data: dict[str, Any], source_path: Path) -> SkillManifest | None:
+def _frontmatter_to_manifest(
+    data: dict[str, Any],
+    source_path: Path,
+    client_app_id: str | None = None,
+) -> SkillManifest | None:
     """Convert SKILL.md frontmatter to SkillManifest.
 
     Maps the open-standard field names (``metadata.*``, ``allowed-tools``)
@@ -94,6 +98,7 @@ def _frontmatter_to_manifest(data: dict[str, Any], source_path: Path) -> SkillMa
         business_rules=metadata.get("business-rules", {}),
         subgraph=metadata.get("subgraph"),
         visibility=metadata.get("visibility", data.get("visibility", "public")),
+        client_app_id=metadata.get("client_app_id", data.get("client_app_id", client_app_id)),
     )
 
 
@@ -148,7 +153,7 @@ class SkillRegistry:
         """Load public skills granted to a single client app."""
         client_app_id = _validate_path_segment(client_app_id, "client_app_id")
         app_dir = self._skills_root / "public" / "apps" / client_app_id
-        self._load_skill_md_dir(app_dir, f"public-app:{client_app_id}")
+        self._load_skill_md_dir(app_dir, f"public-app:{client_app_id}", client_app_id=client_app_id)
 
     def load_account_skills(self, account_id: str) -> None:
         """Load skills from an account's private directory (overwrites all lower layers)."""
@@ -157,7 +162,7 @@ class SkillRegistry:
         account_dir = self._data_root / "accounts" / account_id / "skills"
         self._load_skill_md_dir(account_dir, f"account:{account_id}")
 
-    def _load_skill_md_dir(self, base_dir: Path, scope: str) -> None:
+    def _load_skill_md_dir(self, base_dir: Path, scope: str, client_app_id: str | None = None) -> None:
         """Scan ``<base_dir>/<skill-name>/SKILL.md`` entries."""
         if not base_dir.is_dir():
             logger.debug("Skills directory not found (ok): %s", base_dir)
@@ -174,7 +179,7 @@ class SkillRegistry:
             if data is None:
                 continue
 
-            manifest = _frontmatter_to_manifest(data, skill_md)
+            manifest = _frontmatter_to_manifest(data, skill_md, client_app_id=client_app_id)
             if manifest is None:
                 continue
 
