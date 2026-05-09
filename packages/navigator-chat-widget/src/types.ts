@@ -4,10 +4,18 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: number
+  /** Navigator OpenAPI 消息类型 */
+  messageType?: OpenTaskMessageType
   /** 关联的任务 ID */
   taskId?: string
   /** 任务状态 */
   status?: TaskStatus
+  /** 是否为终态消息 */
+  terminal?: boolean
+  /** 终态状态 */
+  terminalStatus?: TerminalStatus | null
+  /** 是否为过程/调试消息 */
+  process?: boolean
   /** 耗时（毫秒） */
   durationMs?: number
   /** 费用（USD） */
@@ -19,17 +27,55 @@ export interface ChatMessage {
 /** 任务状态 */
 export type TaskStatus = 'SUBMITTED' | 'WORKING' | 'COMPLETED' | 'FAILED' | 'CANCELED' | 'INPUT_REQUIRED'
 
+/** Navigator OpenAPI 增量消息类型 */
+export type OpenTaskMessageType = 'USER' | 'TEXT' | 'TOOL_CALL' | 'TOOL_RESULT' | 'RESULT' | 'STATE' | 'ERROR'
+
+/** Navigator OpenAPI 终态状态 */
+export type TerminalStatus = 'COMPLETED' | 'FAILED' | string
+
+/** Navigator OpenAPI 任务增量消息 */
+export interface OpenTaskMessage {
+  id?: string
+  messageId?: string
+  type: OpenTaskMessageType
+  content?: unknown
+  terminal?: boolean
+  terminalStatus?: TerminalStatus | null
+  createdAt?: string
+  timestamp?: string | number
+  status?: TaskStatus | string
+  metadata?: Record<string, unknown>
+  [key: string]: unknown
+}
+
 /** Agent 任务（API 响应） */
 export interface AgentTask {
   taskId: string
   agentId: string
   status: TaskStatus
-  contextId: string
+  contextId: string | null
+  messages?: OpenTaskMessage[]
+  nextCursor?: string | null
+  hasMore?: boolean
+  terminal?: boolean
+  terminalStatus?: TerminalStatus | null
   result?: string
   errorMessage?: string
   durationMs?: number
   costUsd?: number
   createdAt?: string
+}
+
+/** Navigator OpenAPI 任务消息增量页 */
+export interface TaskMessagesPage {
+  taskId: string
+  contextId: string | null
+  status: TaskStatus | string
+  messages: OpenTaskMessage[]
+  nextCursor?: string | null
+  hasMore?: boolean
+  terminal?: boolean
+  terminalStatus?: TerminalStatus | null
 }
 
 /** Widget 配置 */

@@ -39,7 +39,11 @@
             </div>
           </div>
           <div v-else class="nc-content nc-content--system">
-            <el-alert :title="msg.content" :type="msg.error ? 'error' : 'info'" :closable="false" show-icon />
+            <details v-if="msg.process" class="nc-process">
+              <summary>{{ processLabel(msg) }}</summary>
+              <pre>{{ msg.content }}</pre>
+            </details>
+            <el-alert v-else :title="msg.content" :type="msg.error ? 'error' : 'info'" :closable="false" show-icon />
           </div>
         </div>
       </div>
@@ -117,6 +121,7 @@ import { useNavigatorChat } from '../composables/useNavigatorChat'
 import type {
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
+  ChatMessage,
   NavigatorChatConfig,
   TaskStatus,
 } from '../types'
@@ -224,6 +229,15 @@ function renderMarkdown(text: string): string {
   return md.render(text)
 }
 
+function processLabel(message: ChatMessage): string {
+  switch (message.messageType) {
+    case 'STATE': return '运行状态'
+    case 'TOOL_CALL': return '工具调用'
+    case 'TOOL_RESULT': return '工具结果'
+    default: return '过程消息'
+  }
+}
+
 function handleSend() {
   const content = inputText.value.trim()
   if (!content || chat.isLoading.value) return
@@ -266,7 +280,7 @@ watch(
   () => chat.messages.value,
   (msgs) => {
     const last = msgs[msgs.length - 1]
-    if (last?.role === 'assistant' && last.taskId) {
+    if (last?.role === 'assistant' && last.taskId && (last.terminal || last.messageType === 'RESULT')) {
       emit('reply', last.content, last.taskId)
     }
   },
@@ -386,6 +400,29 @@ watch(
 
 .nc-content--system {
   width: 100%;
+}
+
+.nc-process {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 6px;
+  background: var(--el-fill-color-blank, #fff);
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 12px;
+}
+
+.nc-process summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.nc-process pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Fira Code', Consolas, monospace;
+  font-size: 12px;
 }
 
 .nc-meta {

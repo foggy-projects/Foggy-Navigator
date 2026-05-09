@@ -1,6 +1,14 @@
 import { ref, computed, type Ref, type ComputedRef, onUnmounted } from 'vue'
 import { NavigatorApi } from '../api/navigatorApi'
-import type { ChatMessage, NavigatorChatConfig, TaskStatus } from '../types'
+import type {
+  AgentTask,
+  ChatMessage,
+  NavigatorChatConfig,
+  OpenTaskMessage,
+  TaskMessagesPage,
+  TaskStatus,
+  TerminalStatus,
+} from '../types'
 
 let _seq = 0
 function nextId(): string {
@@ -56,7 +64,9 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
 
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   let currentTaskId: string | null = null
+  let nextCursor: string | null = null
   let pollStartTime = 0
+  const seenOpenMessageIds = new Set<string>()
 
   const messages = computed(() =>
     [...rawMessages.value].sort((a, b) => a.timestamp - b.timestamp)
@@ -86,10 +96,17 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       currentTaskId = task.taskId
       contextId.value = task.contextId
       taskStatus.value = task.status
+      nextCursor = task.nextCursor ?? null
+      seenOpenMessageIds.clear()
+      ingestInitialTaskMessages(task)
 
       // 开始轮询
       pollStartTime = Date.now()
-      startPolling(task.taskId)
+      if (task.terminal) {
+        finishTask(task.taskId, task.terminalStatus ?? null, task.status)
+      } else {
+        startPolling(task.taskId)
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       error.value = msg
@@ -114,48 +131,19 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     if (currentTaskId !== taskId) return // 已切换到其他任务
 
     try {
-      const task = await api.getTask(taskId)
-      taskStatus.value = task.status
+      const page = await api.getTaskMessages(taskId, nextCursor, 50)
+      if (page.contextId) contextId.value = page.contextId
+      if (page.status) taskStatus.value = page.status as TaskStatus
+      ingestTaskMessages(page)
+      nextCursor = page.nextCursor ?? nextCursor
 
-      if (isTerminal(task.status)) {
-        // 任务完成
-        stopPolling()
-        isLoading.value = false
-        currentTaskId = null
-
-        if (task.status === 'COMPLETED' && task.result) {
-          rawMessages.value.push({
-            id: nextId(),
-            role: 'assistant',
-            content: task.result,
-            timestamp: Date.now(),
-            taskId: task.taskId,
-            status: task.status,
-            durationMs: task.durationMs ?? undefined,
-            costUsd: task.costUsd ?? undefined,
-          })
-        } else if (task.status === 'FAILED') {
-          const errMsg = task.errorMessage || '任务执行失败'
-          error.value = errMsg
-          rawMessages.value.push({
-            id: nextId(),
-            role: 'system',
-            content: errMsg,
-            timestamp: Date.now(),
-            taskId: task.taskId,
-            status: task.status,
-            error: errMsg,
-          })
-        } else if (task.status === 'CANCELED') {
-          rawMessages.value.push({
-            id: nextId(),
-            role: 'system',
-            content: '任务已取消',
-            timestamp: Date.now(),
-            taskId: task.taskId,
-            status: task.status,
-          })
-        }
+      const terminalMessage = page.messages.find((message) => message.terminal)
+      if (page.terminal || terminalMessage) {
+        finishTask(
+          taskId,
+          terminalMessage?.terminalStatus ?? page.terminalStatus ?? null,
+          page.status as TaskStatus
+        )
         return
       }
 
@@ -193,6 +181,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     isLoading.value = false
     taskStatus.value = 'CANCELED'
     currentTaskId = null
+    nextCursor = null
   }
 
   function clear() {
@@ -203,6 +192,8 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     contextId.value = null
     error.value = null
     currentTaskId = null
+    nextCursor = null
+    seenOpenMessageIds.clear()
   }
 
   function stopPolling() {
@@ -214,6 +205,143 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
 
   function isTerminal(status: TaskStatus): boolean {
     return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELED'
+  }
+
+  function ingestInitialTaskMessages(task: AgentTask) {
+    if (Array.isArray(task.messages) && task.messages.length > 0) {
+      ingestOpenMessages(task.messages, task.taskId, task.status)
+    }
+    if (task.terminal && !task.messages?.some((message) => message.terminal)) {
+      appendLegacyTerminalMessage(task)
+    }
+  }
+
+  function ingestTaskMessages(page: TaskMessagesPage) {
+    ingestOpenMessages(page.messages ?? [], page.taskId, page.status as TaskStatus)
+  }
+
+  function ingestOpenMessages(openMessages: OpenTaskMessage[], taskId: string, status?: TaskStatus) {
+    for (const message of openMessages) {
+      const id = openMessageId(taskId, message)
+      if (seenOpenMessageIds.has(id)) continue
+      seenOpenMessageIds.add(id)
+
+      const content = openMessageContent(message)
+      if (message.type === 'USER') {
+        continue
+      }
+      if ((message.type === 'TEXT' || message.type === 'RESULT') && content) {
+        rawMessages.value.push({
+          id,
+          role: 'assistant',
+          content,
+          timestamp: openMessageTimestamp(message),
+          taskId,
+          status,
+          messageType: message.type,
+          terminal: message.terminal,
+          terminalStatus: message.terminalStatus ?? null,
+        })
+      } else if (message.type === 'ERROR') {
+        const errMsg = content || '任务执行失败'
+        error.value = errMsg
+        rawMessages.value.push({
+          id,
+          role: 'system',
+          content: errMsg,
+          timestamp: openMessageTimestamp(message),
+          taskId,
+          status,
+          messageType: message.type,
+          terminal: message.terminal,
+          terminalStatus: message.terminalStatus ?? null,
+          error: errMsg,
+        })
+      } else if (message.type === 'STATE' || message.type === 'TOOL_CALL' || message.type === 'TOOL_RESULT') {
+        rawMessages.value.push({
+          id,
+          role: 'system',
+          content: content || JSON.stringify(message, null, 2),
+          timestamp: openMessageTimestamp(message),
+          taskId,
+          status,
+          messageType: message.type,
+          terminal: message.terminal,
+          terminalStatus: message.terminalStatus ?? null,
+          process: true,
+        })
+      }
+    }
+  }
+
+  function finishTask(taskId: string, terminalStatus: TerminalStatus | null, status?: TaskStatus) {
+    stopPolling()
+    isLoading.value = false
+    currentTaskId = null
+    nextCursor = null
+    if (terminalStatus === 'FAILED' || status === 'FAILED') {
+      const lastError = [...rawMessages.value].reverse().find((message) => message.taskId === taskId && message.error)
+      error.value = lastError?.content ?? '任务执行失败'
+    }
+    if (status && isTerminal(status)) {
+      taskStatus.value = status
+    } else if (terminalStatus === 'COMPLETED' || terminalStatus === 'FAILED') {
+      taskStatus.value = terminalStatus
+    }
+  }
+
+  function appendLegacyTerminalMessage(task: AgentTask) {
+    if (task.status === 'COMPLETED' && task.result) {
+      rawMessages.value.push({
+        id: nextId(),
+        role: 'assistant',
+        content: task.result,
+        timestamp: Date.now(),
+        taskId: task.taskId,
+        status: task.status,
+        terminal: true,
+        terminalStatus: task.terminalStatus ?? 'COMPLETED',
+        durationMs: task.durationMs ?? undefined,
+        costUsd: task.costUsd ?? undefined,
+      })
+    } else if (task.status === 'FAILED') {
+      const errMsg = task.errorMessage || '任务执行失败'
+      error.value = errMsg
+      rawMessages.value.push({
+        id: nextId(),
+        role: 'system',
+        content: errMsg,
+        timestamp: Date.now(),
+        taskId: task.taskId,
+        status: task.status,
+        terminal: true,
+        terminalStatus: task.terminalStatus ?? 'FAILED',
+        error: errMsg,
+      })
+    }
+  }
+
+  function openMessageId(taskId: string, message: OpenTaskMessage): string {
+    const id = message.id ?? message.messageId
+    if (id) return String(id)
+    return `${taskId}:${message.type}:${message.timestamp ?? message.createdAt ?? ''}:${openMessageContent(message)}`
+  }
+
+  function openMessageContent(message: OpenTaskMessage): string {
+    const content = message.content
+    if (typeof content === 'string') return content
+    if (content == null) return ''
+    return JSON.stringify(content, null, 2)
+  }
+
+  function openMessageTimestamp(message: OpenTaskMessage): number {
+    if (typeof message.timestamp === 'number') return message.timestamp
+    const value = message.timestamp ?? message.createdAt
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value)
+      if (!Number.isNaN(parsed)) return parsed
+    }
+    return Date.now()
   }
 
   return {

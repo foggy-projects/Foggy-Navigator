@@ -1,4 +1,4 @@
-import type { AgentTask, NavigatorChatConfig } from '../types'
+import type { AgentTask, NavigatorChatConfig, TaskMessagesPage } from '../types'
 
 /**
  * Navigator Open API 轻量客户端
@@ -27,6 +27,14 @@ export class NavigatorApi {
   /** 轮询任务状态 */
   async getTask(taskId: string): Promise<AgentTask> {
     return this.get(`/agents/${this.config.agentId}/tasks/${taskId}`)
+  }
+
+  /** 轮询任务增量消息 */
+  async getTaskMessages(taskId: string, cursor?: string | null, limit = 50): Promise<TaskMessagesPage> {
+    const params = new URLSearchParams()
+    if (cursor) params.set('cursor', cursor)
+    params.set('limit', String(limit))
+    return this.get(`/agents/${this.config.agentId}/tasks/${taskId}/messages?${params.toString()}`)
   }
 
   /** 取消任务 */
