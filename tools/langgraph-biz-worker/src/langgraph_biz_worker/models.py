@@ -62,6 +62,13 @@ class QueryEvent(BaseModel):
     skill_frame_id: str | None = None
     skill_id: str | None = None
 
+    # Tool execution tracking. Java relay and frontend use this to merge a
+    # tool_use event with the matching tool_result event.
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    function_id: str | None = None
+    args: dict[str, Any] | None = None
+
     # Result metadata (populated on type="result")
     duration_ms: int | None = None
 

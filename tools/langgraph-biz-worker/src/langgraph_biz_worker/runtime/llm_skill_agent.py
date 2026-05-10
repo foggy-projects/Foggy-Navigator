@@ -166,6 +166,10 @@ class LlmSkillAgent:
                 skill_frame_id=frame_id,
                 skill_id=manifest.id,
                 content=name,
+                tool_call_id=call.get("id"),
+                tool_name=name,
+                function_id=_tool_function_id(name, safe_args),
+                args=safe_args,
             )
         ]
         self._append_tool_call_message(frame_id, name, safe_args)
@@ -197,6 +201,10 @@ class LlmSkillAgent:
             skill_id=manifest.id,
             content=json.dumps(result, ensure_ascii=False),
             error=result.get("error"),
+            tool_call_id=call.get("id"),
+            tool_name=name,
+            function_id=_tool_function_id(name, safe_args, result),
+            args=safe_args,
         ))
 
         ret: dict[str, Any] = {"events": events, "tool_result": result}
@@ -978,6 +986,21 @@ def _safe_tool_call_args(args: dict[str, Any]) -> dict[str, Any]:
         if "token" in lowered or "secret" in lowered or "password" in lowered:
             safe_args[key] = "<redacted>"
     return _safe_content(safe_args)
+
+
+def _tool_function_id(
+    tool_name: str,
+    args: dict[str, Any],
+    result: dict[str, Any] | None = None,
+) -> str | None:
+    if tool_name == "invoke_business_function":
+        return args.get("function_id") or args.get("functionId")
+    if isinstance(result, dict):
+        nested_result = result.get("result")
+        if isinstance(nested_result, dict):
+            return nested_result.get("functionId") or nested_result.get("function_id")
+        return result.get("functionId") or result.get("function_id")
+    return None
 
 
 def _manifest_for_frame(runtime: SkillRuntime, frame: Any) -> SkillManifest | None:

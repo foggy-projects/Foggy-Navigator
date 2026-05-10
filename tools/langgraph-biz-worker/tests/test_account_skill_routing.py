@@ -186,7 +186,7 @@ def test_route_skill_auto_injects_only_client_app_public_skills(tmp_path, monkey
     assert "global_skill" not in system_prompt
 
 
-def test_llm_conversation_log_appends_by_session_id(tmp_path, monkeypatch):
+def test_llm_conversation_log_groups_tasks_by_session_directory(tmp_path, monkeypatch):
     skills_root = tmp_path / "skills"
     data_root = tmp_path / "data"
     registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
@@ -217,12 +217,20 @@ def test_llm_conversation_log_appends_by_session_id(tmp_path, monkeypatch):
             "skill_results": [],
         })
 
-    session_log = data_root / "logs" / "llm-conversations" / "session-123.jsonl"
-    assert session_log.exists()
-    assert not (data_root / "logs" / "llm-conversations" / "task-1.jsonl").exists()
-    entries = [json.loads(line) for line in session_log.read_text(encoding="utf-8").splitlines()]
-    assert {entry["task_id"] for entry in entries} == {"task-1", "task-2"}
-    assert {entry["session_id"] for entry in entries} == {"session-123"}
+    session_dir = data_root / "logs" / "llm-conversations" / "session-123"
+    files = sorted(session_dir.glob("*.jsonl"))
+
+    assert [p.name for p in files] == ["0001_task-1.jsonl", "0002_task-2.jsonl"]
+    assert not (data_root / "logs" / "llm-conversations" / "session-123.jsonl").exists()
+
+    first_entries = [json.loads(line) for line in files[0].read_text(encoding="utf-8").splitlines()]
+    second_entries = [json.loads(line) for line in files[1].read_text(encoding="utf-8").splitlines()]
+
+    assert first_entries[0]["event"] == "llm_request"
+    assert [message["role"] for message in first_entries[0]["messages"]] == ["system", "user"]
+    assert {entry["task_id"] for entry in first_entries} == {"task-1"}
+    assert {entry["task_id"] for entry in second_entries} == {"task-2"}
+    assert {entry["session_id"] for entry in first_entries + second_entries} == {"session-123"}
 
 
 # ---------------------------------------------------------------------------

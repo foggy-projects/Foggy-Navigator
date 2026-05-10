@@ -59,6 +59,7 @@ Navigator 提供两个前端组件包，分别面向不同集成深度：
 - 通过上游后端 BFF（Backend for Frontend）或平台公开的会话 API 与 Navigator 交互
 - 仅使用上游 BFF 签发的浏览器会话凭据进行身份标识，不直接持有 Navigator API Key
 - 在 BFF 层完成凭证注入和权限校验
+- 由 BFF 基于当前登录用户按需补齐 Navigator upstream-user grant，而不是让浏览器提交或缓存 grant/token
 
 ```text
 上游前端
@@ -277,6 +278,21 @@ async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) 
 `NavigatorChat` 默认采用 `ask -> poll task -> display result` 模式。TMS 初始接入建议显式传入 `pollInterval: 4000`，即浏览器轮询 TMS BFF，TMS BFF 再代理查询 Navigator task 状态。
 
 `NavigatorChat` 不会自动从普通轮询任务结果中推断 suspension。上游宿主应从自己的 BFF、SSE 或任务消息中解析出 `BusinessSuspensionDialogModel` 后传入 `currentSuspension`，再打开 `suspensionVisible`。
+
+### 1.1 BFF ask 前置动作
+
+上游 BFF 在代理 `ask` 前必须基于当前登录态执行服务端前置动作：
+
+```text
+resolve current user
+  -> upstreamUserId = stable TMS user/staff id
+  -> upstreamUserToken = current server-side TMS user token/session token
+  -> ensureUpstreamUserGrant(tenantId, clientAppId, upstreamUserId, upstreamUserToken)
+  -> exchange runtime credential for ClientApp access token
+  -> call Navigator ask with X-Client-App-Key, X-Client-App-Access-Token, X-Upstream-User-Id
+```
+
+`ensureUpstreamUserGrant` 必须是幂等 upsert：同一个 `tenantId + clientAppId + upstreamUserId` 重复调用应保持 `ENABLED`，并在 token 轮换时更新服务端保存的上游用户 token。BFF 不应在启动时枚举所有 TMS 用户批量授权，也不应把 token、ClientApp secret 或 access token 传给浏览器。
 
 ### 2. 编程式控制
 

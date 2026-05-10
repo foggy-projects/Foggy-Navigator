@@ -26,6 +26,17 @@ TMS 不作为 Biz Worker。TMS 只提供受控 HTTP API，Navigator 负责 Clien
 3. token 不进入 LLM prompt、tool schema、前端状态、Manifest header 或普通日志。
 4. 运单对 LLM 可见的唯一标识是 `orderIdentifier`，类型为 `string`。
 
+真实 TMS 用户不应在系统启动时全量预授权。TMS BFF 应在当前登录用户第一次发送 Agent 消息或创建 Business Task 前，按当前登录态执行幂等 `ensureUpstreamUserGrant`：
+
+```text
+current staff/session
+  -> stable upstreamUserId
+  -> current staff session token
+  -> grantUpstreamUserAccess(clientAppId, upstreamUserId, upstreamUserToken, ENABLED)
+```
+
+该动作只处理当前用户，可重复调用；Navigator `ask` 阶段仍保持 fail-closed，不会自动为未知 upstream user 创建授权。
+
 ## Maven 本地 SDK
 
 在 Navigator 工作区先安装 SDK：
@@ -175,6 +186,8 @@ taskForm.setSkillId("tms_skill");
 taskForm.setWorkerPoolId("langgraph-biz-pool");
 CreatedBusinessAgentTaskDTO task = client.businessAgent().createBusinessAgentTask(taskForm);
 ```
+
+生产 BFF 不需要为所有 TMS 用户预先执行上面的 `grantUpstreamUserAccess`。应将其封装为 `ensureUpstreamUserGrant(currentUser)`，在代理 Navigator `ask` 或创建 Business Task 前按需调用。若用户 session token 会轮换，`ensure` 应更新 grant 上的服务端 token；控制面 DTO 和日志仍不得返回 token 明文。
 
 ## 字段红线
 

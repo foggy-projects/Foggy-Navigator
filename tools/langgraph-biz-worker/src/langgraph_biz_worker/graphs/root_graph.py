@@ -62,13 +62,26 @@ def _safe_log_stem(value: str) -> str:
 
 
 def _conversation_log_file(data_root: str | Path, task_id: str, session_id: str | None) -> Path:
-    """Return the JSONL path for an LLM conversation.
+    """Return the JSONL path for a single LLM routing request.
 
-    Prefer session-scoped files so multiple tasks/turns in one conversation append
-    to the same audit log. Fall back to task_id for one-off calls without a session.
+    Logs are grouped by session directory, with one numbered file per task. This
+    keeps a multi-turn session ordered without making each task look like it
+    reused earlier system prompts.
     """
-    log_id = session_id or task_id
-    return Path(data_root) / "logs" / "llm-conversations" / f"{_safe_log_stem(log_id)}.jsonl"
+    session_stem = _safe_log_stem(session_id or "_no-session")
+    task_stem = _safe_log_stem(task_id)
+    log_dir = Path(data_root) / "logs" / "llm-conversations" / session_stem
+
+    for existing in sorted(log_dir.glob(f"*_{task_stem}.jsonl")):
+        return existing
+
+    max_index = 0
+    if log_dir.exists():
+        for existing in log_dir.glob("*.jsonl"):
+            prefix = existing.name.split("_", 1)[0]
+            if prefix.isdigit():
+                max_index = max(max_index, int(prefix))
+    return log_dir / f"{max_index + 1:04d}_{task_stem}.jsonl"
 
 
 def get_runtime() -> SkillRuntime:
@@ -283,13 +296,11 @@ If no skill matches, respond naturally to the user — you can answer questions,
             
             _append_log({
                 "ts": datetime.datetime.now().isoformat(),
-                "role": "system",
-                "content": sys_msg_content,
-            })
-            _append_log({
-                "ts": datetime.datetime.now().isoformat(),
-                "role": "user",
-                "content": human_msg.content,
+                "event": "llm_request",
+                "messages": [
+                    {"role": "system", "content": sys_msg_content},
+                    {"role": "user", "content": human_msg.content},
+                ],
                 "routable_skills": [s.id for s in routable_skills],
             })
             
@@ -311,7 +322,7 @@ If no skill matches, respond naturally to the user — you can answer questions,
                 # Log assistant response
                 _append_log({
                     "ts": datetime.datetime.now().isoformat(),
-                    "role": "assistant",
+                    "event": "llm_response",
                     "content": final_msg.content if final_msg else "",
                     "tool_calls": getattr(final_msg, "tool_calls", None),
                 })

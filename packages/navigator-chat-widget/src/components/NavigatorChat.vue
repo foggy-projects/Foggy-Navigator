@@ -32,14 +32,61 @@
           </div>
           <div v-else-if="msg.role === 'assistant'" class="nc-content nc-content--assistant">
             <!-- eslint-disable-next-line vue/no-v-html -->
-            <div v-html="renderMarkdown(msg.content)" />
+            <div v-if="msg.content" v-html="renderMarkdown(msg.content)" />
+            <div v-if="msg.actions?.length" class="nc-actions">
+              <el-button
+                v-for="action in msg.actions"
+                :key="action.id"
+                size="small"
+                type="primary"
+                plain
+                @click="handleAction(action)"
+              >
+                {{ action.label }}
+              </el-button>
+            </div>
             <div v-if="msg.durationMs || msg.costUsd" class="nc-meta">
               <span v-if="msg.durationMs">{{ (msg.durationMs / 1000).toFixed(1) }}s</span>
               <span v-if="msg.costUsd"> · ${{ msg.costUsd.toFixed(4) }}</span>
             </div>
           </div>
           <div v-else class="nc-content nc-content--system">
-            <details v-if="msg.process" class="nc-process">
+            <details v-if="msg.toolExecution" class="nc-process nc-tool-execution" open>
+              <summary>
+                <span class="nc-tool-title">
+                  <el-icon v-if="msg.toolExecution.status === 'running'" class="is-loading"><Loading /></el-icon>
+                  <span>工具调用 {{ msg.toolExecution.displayName }}</span>
+                </span>
+                <span :class="['nc-tool-status', `nc-tool-status--${msg.toolExecution.status}`]">
+                  {{ toolStatusLabel(msg.toolExecution.status) }}
+                </span>
+                <span v-if="msg.toolExecution.durationMs != null" class="nc-tool-duration">
+                  {{ (msg.toolExecution.durationMs / 1000).toFixed(1) }}s
+                </span>
+              </summary>
+              <div class="nc-tool-body">
+                <div class="nc-tool-summary">
+                  摘要：{{ msg.toolExecution.summary.join(', ') }}
+                </div>
+                <details class="nc-nested">
+                  <summary>参数</summary>
+                  <pre>{{ formatJson(msg.toolExecution.args) }}</pre>
+                </details>
+                <details class="nc-nested">
+                  <summary>结果</summary>
+                  <pre>{{ formatJson(msg.toolExecution.result ?? msg.toolExecution.error) }}</pre>
+                </details>
+                <details class="nc-nested">
+                  <summary>排障字段</summary>
+                  <pre>{{ formatJson(msg.toolExecution.trace) }}</pre>
+                </details>
+                <details class="nc-nested">
+                  <summary>原始 JSON</summary>
+                  <pre>{{ formatJson({ call: msg.toolExecution.rawCall, result: msg.toolExecution.rawResult }) }}</pre>
+                </details>
+              </div>
+            </details>
+            <details v-else-if="msg.process" class="nc-process">
               <summary>{{ processLabel(msg) }}</summary>
               <pre>{{ msg.content }}</pre>
             </details>
@@ -53,7 +100,7 @@
         <div class="nc-bubble">
           <div class="nc-thinking">
             <el-icon class="is-loading"><Loading /></el-icon>
-            <span>{{ thinkingText }}</span>
+            <span>{{ chat.progressText.value || thinkingText }}</span>
           </div>
         </div>
       </div>
@@ -122,8 +169,11 @@ import type {
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
   ChatMessage,
+  NavigatorAction,
   NavigatorChatConfig,
+  NavigatorChatMode,
   TaskStatus,
+  ToolExecutionBlock,
 } from '../types'
 import MarkdownIt from 'markdown-it'
 
@@ -131,7 +181,33 @@ const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
 
 const props = withDefaults(defineProps<{
   /** Navigator 配置 */
-  config: NavigatorChatConfig
+  config?: NavigatorChatConfig
+  /** Navigator Open API 基地址；未传 config 时可直接使用 */
+  baseUrl?: string
+  /** API Key（如果通过上游后端代理，则不需要） */
+  apiKey?: string
+  /** Agent ID；未传 config 时可直接使用 */
+  agentId?: string
+  /** 展示模式，默认 business */
+  mode?: NavigatorChatMode
+  /** 等价调试开关 */
+  debugMode?: boolean
+  /** 是否展示运行时事件 */
+  showRuntimeEvents?: boolean
+  /** 是否展示工具调用 */
+  showToolCalls?: boolean
+  /** 是否展示工具结果 */
+  showToolResults?: boolean
+  /** 轮询间隔，兼容 poll-interval-ms 写法 */
+  pollIntervalMs?: number
+  /** 轮询间隔，兼容原 config 字段 */
+  pollInterval?: number
+  /** 超时时间 */
+  timeout?: number
+  /** 最大交互轮数 */
+  maxTurns?: number
+  /** 自定义请求函数 */
+  fetch?: (url: string, init: RequestInit) => Promise<Response>
   /** 标题 */
   title?: string
   /** 高度 */
@@ -179,9 +255,31 @@ const emit = defineEmits<{
   'update:suspensionDialogVisible': [visible: boolean]
   /** 用户提交 suspension 决策，由宿主/BFF 转发给 Navigator Control Plane */
   suspensionDecision: [payload: BusinessSuspensionDecisionPayload]
+  /** 用户点击业务动作按钮或链接 */
+  action: [action: NavigatorAction]
 }>()
 
-const chat = useNavigatorChat(props.config)
+const resolvedConfig = computed<NavigatorChatConfig>(() => ({
+  ...(props.config ?? {
+    baseUrl: props.baseUrl ?? '',
+    agentId: props.agentId ?? '',
+  }),
+  ...(props.baseUrl ? { baseUrl: props.baseUrl } : {}),
+  ...(props.apiKey ? { apiKey: props.apiKey } : {}),
+  ...(props.agentId ? { agentId: props.agentId } : {}),
+  ...(props.pollIntervalMs != null ? { pollInterval: props.pollIntervalMs } : {}),
+  ...(props.pollInterval != null ? { pollInterval: props.pollInterval } : {}),
+  ...(props.timeout != null ? { timeout: props.timeout } : {}),
+  ...(props.maxTurns != null ? { maxTurns: props.maxTurns } : {}),
+  ...(props.fetch ? { fetch: props.fetch } : {}),
+  mode: props.mode ?? props.config?.mode ?? 'business',
+  debugMode: props.debugMode ?? props.config?.debugMode,
+  showRuntimeEvents: props.showRuntimeEvents ?? props.config?.showRuntimeEvents,
+  showToolCalls: props.showToolCalls ?? props.config?.showToolCalls,
+  showToolResults: props.showToolResults ?? props.config?.showToolResults,
+}))
+
+const chat = useNavigatorChat(resolvedConfig.value)
 const inputText = ref('')
 const messagesRef = ref<HTMLElement>()
 
@@ -238,6 +336,22 @@ function processLabel(message: ChatMessage): string {
   }
 }
 
+function toolStatusLabel(status: ToolExecutionBlock['status']): string {
+  switch (status) {
+    case 'running': return '执行中'
+    case 'success': return '成功'
+    case 'failed': return '失败'
+    case 'skipped': return '已跳过'
+    case 'cancelled': return '已取消'
+  }
+}
+
+function formatJson(value: unknown): string {
+  if (value == null || value === '') return '无'
+  if (typeof value === 'string') return value
+  return JSON.stringify(value, null, 2)
+}
+
 function handleSend() {
   const content = inputText.value.trim()
   if (!content || chat.isLoading.value) return
@@ -256,6 +370,10 @@ function updateSuspensionDialogVisible(visible: boolean) {
 
 function handleSuspensionDecision(payload: BusinessSuspensionDecisionPayload) {
   emit('suspensionDecision', payload)
+}
+
+function handleAction(action: NavigatorAction) {
+  emit('action', action)
 }
 
 // Auto-scroll to bottom when new messages arrive
@@ -398,6 +516,13 @@ watch(
   color: var(--el-color-primary, #409eff);
 }
 
+.nc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .nc-content--system {
   width: 100%;
 }
@@ -415,6 +540,71 @@ watch(
 .nc-process summary {
   cursor: pointer;
   user-select: none;
+}
+
+.nc-tool-execution summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nc-tool-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--el-text-color-regular, #606266);
+  font-weight: 600;
+}
+
+.nc-tool-status {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--el-fill-color-light, #f4f4f5);
+  color: var(--el-text-color-secondary, #909399);
+}
+
+.nc-tool-status--success {
+  background: var(--el-color-success-light-9, #f0f9eb);
+  color: var(--el-color-success, #67c23a);
+}
+
+.nc-tool-status--failed {
+  background: var(--el-color-danger-light-9, #fef0f0);
+  color: var(--el-color-danger, #f56c6c);
+}
+
+.nc-tool-status--running {
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  color: var(--el-color-primary, #409eff);
+}
+
+.nc-tool-duration {
+  flex-shrink: 0;
+  color: var(--el-text-color-placeholder, #a8abb2);
+}
+
+.nc-tool-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nc-tool-summary {
+  color: var(--el-text-color-regular, #606266);
+}
+
+.nc-nested {
+  border-top: 1px solid var(--el-border-color-extra-light, #f2f6fc);
+  padding-top: 6px;
+}
+
+.nc-nested summary {
+  font-weight: 500;
+  color: var(--el-text-color-secondary, #909399);
 }
 
 .nc-process pre {

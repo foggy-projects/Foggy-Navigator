@@ -18,6 +18,7 @@ import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -133,8 +134,7 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
                 Iterator<Map.Entry<String, JsonNode>> fields = bodyNode.fields();
                 while (fields.hasNext()) {
                     Map.Entry<String, JsonNode> field = fields.next();
-                    String resolved = SimpleJsonPathEvaluator.evaluate(field.getValue().asText(), rootEvalNode);
-                    resolvedBody.put(field.getKey(), resolved);
+                    resolvedBody.put(field.getKey(), resolveBodyValue(field.getValue().asText(), rootEvalNode));
                 }
             }
 
@@ -153,10 +153,25 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
                     : resolvedBody;
             HttpEntity<Object> requestEntity = new HttpEntity<>(requestBody, httpHeaders);
 
-            log.info("Executing REST adapter for function {} to {}", context.getFunction().getFunctionId(), url);
+            log.info(
+                    "Executing REST adapter request. functionId={}, method={}, url={}, headers={}, body={}",
+                    context.getFunction().getFunctionId(),
+                    method,
+                    url,
+                    sanitizeHeaders(httpHeaders),
+                    toJsonForLog(requestBody)
+            );
 
             // 6. Execute Request
             ResponseEntity<String> response = restTemplate.exchange(url, method, requestEntity, String.class);
+            log.info(
+                    "REST adapter response received. functionId={}, method={}, url={}, status={}, body={}",
+                    context.getFunction().getFunctionId(),
+                    method,
+                    url,
+                    response.getStatusCode(),
+                    response.getBody()
+            );
             if (!response.getStatusCode().is2xxSuccessful()) {
                 throw new IllegalArgumentException("Rest adapter execution failed with HTTP "
                         + response.getStatusCode() + ": " + response.getBody());
@@ -246,6 +261,61 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
     private void setIfPresent(HttpHeaders headers, String name, String value) {
         if (StringUtils.hasText(value)) {
             headers.set(name, value);
+        }
+    }
+
+    private Object resolveBodyValue(String template, JsonNode rootEvalNode) {
+        JsonNode resolvedNode = SimpleJsonPathEvaluator.evaluateNode(template, rootEvalNode);
+        if (resolvedNode == null) {
+            return StringUtils.hasText(template) && template.startsWith("$.") ? null : template;
+        }
+        return objectMapper.convertValue(resolvedNode, Object.class);
+    }
+
+    private Map<String, List<String>> sanitizeHeaders(HttpHeaders headers) {
+        Map<String, List<String>> sanitized = new HashMap<>();
+        headers.forEach((name, values) -> {
+            List<String> sanitizedValues = new ArrayList<>();
+            for (String value : values) {
+                sanitizedValues.add(isSensitiveHeader(name) ? maskSecret(value) : value);
+            }
+            sanitized.put(name, sanitizedValues);
+        });
+        return sanitized;
+    }
+
+    private boolean isSensitiveHeader(String name) {
+        if (!StringUtils.hasText(name)) {
+            return false;
+        }
+        String normalized = name.toLowerCase(Locale.ROOT);
+        return normalized.contains("authorization")
+                || normalized.contains("token")
+                || normalized.contains("secret")
+                || normalized.contains("api-key")
+                || normalized.contains("apikey")
+                || normalized.contains("cookie");
+    }
+
+    private String maskSecret(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        int length = value.length();
+        if (length <= 8) {
+            return "***";
+        }
+        return value.substring(0, 4) + "..." + value.substring(length - 4) + "(len=" + length + ")";
+    }
+
+    private String toJsonForLog(Object value) {
+        if (value == null) {
+            return "null";
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            return String.valueOf(value);
         }
     }
 }

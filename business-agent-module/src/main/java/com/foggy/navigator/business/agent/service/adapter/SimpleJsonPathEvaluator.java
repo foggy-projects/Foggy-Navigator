@@ -22,6 +22,27 @@ public class SimpleJsonPathEvaluator {
             return template; // Literal or empty
         }
 
+        JsonNode current = evaluateNode(template, rootNode);
+        if (current == null || current.isNull()) {
+            return null;
+        }
+
+        if (current.isValueNode()) {
+            return current.asText();
+        }
+
+        // Return JSON string for object/array nodes when a string context is required.
+        return current.toString();
+    }
+
+    /**
+     * Resolves a JSON path template to the original JsonNode. Literal templates return null.
+     */
+    public static JsonNode evaluateNode(String template, JsonNode rootNode) {
+        if (!StringUtils.hasText(template) || !template.startsWith("$.")) {
+            return null;
+        }
+
         String path = template.substring(2); // Remove "$."
         String[] parts = path.split("\\.");
 
@@ -36,12 +57,6 @@ public class SimpleJsonPathEvaluator {
         if (current == null || current.isNull()) {
             return null;
         }
-
-        if (current.isValueNode()) {
-            return current.asText();
-        }
-
-        // Return JSON string for object/array nodes
-        return current.toString();
+        return current;
     }
 }

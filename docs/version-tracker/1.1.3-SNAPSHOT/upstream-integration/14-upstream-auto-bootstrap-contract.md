@@ -34,6 +34,30 @@
 | 调 Worker Gateway | no | yes | 不允许上游直接调用 |
 | 真实 Worker invoke 验证 | no | yes | 联调窗口 |
 
+## Upstream User Grant 策略
+
+上游系统不应在启动或初始化时枚举系统内所有用户并批量创建 Navigator upstream-user grant。推荐策略是：
+
+1. bootstrap runner 只创建或复用应用级资源，例如 ClientApp、runtime credential、BusinessObject、Function、Skill、Function/Skill/Model grant。
+2. BFF 在当前登录用户第一次发起 Navigator Agent 对话或业务 task 前，按当前登录态执行一次 `ensureUpstreamUserGrant`。
+3. `ensureUpstreamUserGrant` 只处理当前用户，不枚举全量用户；它以 `tenantId + clientAppId + upstreamUserId` 为幂等键，调用 `grantUpstreamUserAccess` upsert 为 `ENABLED`。
+4. 如果业务函数需要调用上游 REST API，BFF 应同时提交当前用户可用的上游用户 token；该 token 只进入 Navigator 服务端 grant 存储，不进入前端、LLM、manifest、日志或返回 DTO。
+5. Navigator OpenAPI `ask` 阶段仍保持 fail-closed：缺少 upstream-user grant 时拒绝请求，不自动创建授权。
+
+推荐 BFF 流程：
+
+```text
+Browser sends message
+  -> Upstream BFF resolves current logged-in user
+  -> BFF derives upstreamUserId and current user token
+  -> BFF calls Navigator control plane ensureUpstreamUserGrant
+  -> BFF exchanges ClientApp runtime credential for short-lived access token
+  -> BFF calls Navigator OpenAPI ask with X-Upstream-User-Id
+  -> Browser polls BFF every 4s for task messages
+```
+
+该设计避免启动期全量预授权，同时不降低 Navigator 对 ClientApp/upstreamUser 绑定关系的校验强度。
+
 ## 文件拆分
 
 ### 非敏感 manifest
@@ -129,7 +153,7 @@ NavigatorClient client = NavigatorClient.builder()
 7. 导入 BusinessFunction manifest。
 8. 创建或复用 Skill。
 9. 添加 Skill Function allowlist。
-10. 授权 Function / Skill / upstream user / model config。
+10. 授权 Function / Skill / model config。upstream user grant 可只为联调种子用户执行；真实用户应由 BFF 在当前用户发起对话前按需 ensure。
 11. 创建 BusinessAgentTask。
 12. 输出非敏感报告。
 
