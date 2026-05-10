@@ -122,9 +122,6 @@ public class CodexTaskService implements TaskQueryProvider {
                     "codexThreadId");
             form.setCodexThreadId(codexThreadId);
         }
-        if (form.getCodexThreadId() == null || form.getCodexThreadId().isBlank()) {
-            throw new IllegalArgumentException("resume 操作必须指定 codexThreadId（需从 session 恢复）");
-        }
         if (sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("resume 操作必须指定 sessionId");
         }
@@ -133,6 +130,14 @@ public class CodexTaskService implements TaskQueryProvider {
         }
 
         workerManagementFacade.validateWorkerOwnership(userId, form.getWorkerId());
+
+        if (form.getCodexThreadId() == null || form.getCodexThreadId().isBlank()) {
+            // Platform-only rewind clears the native Codex thread. Continue by starting
+            // a new Codex thread while reusing the Navigator session.
+            validateExistingSession(userId, sessionId);
+            CodexTaskDTO task = createAndStartTask(userId, tenantId, form, sessionId);
+            return getTaskById(task.getTaskId()).orElseThrow();
+        }
 
         if (!taskRepository.existsByCodexThreadIdAndWorkerIdAndUserId(
                 form.getCodexThreadId(), form.getWorkerId(), userId)) {
@@ -947,6 +952,94 @@ public class CodexTaskService implements TaskQueryProvider {
         if (session == null || !userId.equals(session.getUserId())) {
             throw new IllegalArgumentException("Session not found or access denied: " + sessionId);
         }
+    }
+
+    @Override
+    @Transactional
+    public Object rewindTask(String taskId, String userId, Map<String, Object> params) {
+        CodexTaskEntity task = taskRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!userId.equals(task.getUserId())) {
+            throw new IllegalArgumentException("Task not found: " + taskId);
+        }
+        if ("RUNNING".equals(task.getStatus()) || "AWAITING_PERMISSION".equals(task.getStatus())) {
+            throw new IllegalStateException("Cannot rewind a running task");
+        }
+
+        String mode = params != null && params.get("mode") != null
+                ? params.get("mode").toString()
+                : "conversation_fork";
+        if (!"conversation_fork".equals(mode)) {
+            throw new UnsupportedOperationException("Codex only supports conversation rewind; file rewind is not supported");
+        }
+        if (task.getSessionId() == null || task.getSessionId().isBlank()) {
+            throw new IllegalArgumentException("Task has no Navigator session ID");
+        }
+
+        int turnIndex = extractTurnIndex(params);
+        String userPrompt = findUserPromptAtTurn(task.getSessionId(), turnIndex);
+        truncateSessionMessagesQuietly(task.getSessionId(), turnIndex);
+        clearCodexThreadId(task.getSessionId());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "rewound");
+        result.put("taskId", taskId);
+        result.put("userPrompt", userPrompt != null ? userPrompt : "");
+        result.put("turnIndex", turnIndex);
+        result.put("codexThreadId", null);
+        return result;
+    }
+
+    private int extractTurnIndex(Map<String, Object> params) {
+        if (params != null && params.get("turnIndex") instanceof Number n && n.intValue() > 0) {
+            return n.intValue();
+        }
+        return 1;
+    }
+
+    private String findUserPromptAtTurn(String sessionId, int turnIndex) {
+        if (sessionManager == null) {
+            return "";
+        }
+        try {
+            int userTurn = 0;
+            for (Message message : sessionManager.getAllMessages(sessionId)) {
+                if (message != null && message.getRole() == MessageRole.USER) {
+                    userTurn++;
+                    if (userTurn == turnIndex) {
+                        return message.getContent();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to find Codex rewind prompt for session {} turn {}: {}",
+                    sessionId, turnIndex, e.getMessage());
+        }
+        return "";
+    }
+
+    private void truncateSessionMessagesQuietly(String sessionId, int fromUserTurnIndex) {
+        if (sessionManager == null) {
+            return;
+        }
+        try {
+            int deleted = sessionManager.truncateMessagesFromTurn(sessionId, fromUserTurnIndex);
+            log.info("Codex platform conversation rewind: sessionId={}, turn={}, deletedMessages={}",
+                    sessionId, fromUserTurnIndex, deleted);
+        } catch (Exception e) {
+            log.warn("Failed to truncate Codex session {} from user turn {}: {}",
+                    sessionId, fromUserTurnIndex, e.getMessage());
+        }
+    }
+
+    private void clearCodexThreadId(String sessionId) {
+        if (sessionEntityRepository == null || sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        sessionEntityRepository.findById(sessionId).ifPresent(session -> {
+            session.setProviderStateJson(mergeJsonValue(session.getProviderStateJson(), "codexThreadId", null));
+            sessionEntityRepository.save(session);
+        });
     }
 
     private String resolveLogicalAgentId(@Nullable String requestedAgentId, @Nullable String existingSessionId) {

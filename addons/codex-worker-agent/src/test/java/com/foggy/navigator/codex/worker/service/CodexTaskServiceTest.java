@@ -401,6 +401,90 @@ class CodexTaskServiceTest {
     }
 
     @Test
+    void rewindTask_truncatesPlatformSessionAndClearsCodexThread() {
+        CodexTaskEntity entity = createTask(
+                "task-rewind", "session-1", "worker-1", "dir-1", "COMPLETED",
+                LocalDateTime.of(2026, 5, 10, 10, 0)
+        );
+        entity.setCodexThreadId("thread-1");
+        when(taskRepository.findByTaskId("task-rewind")).thenReturn(Optional.of(entity));
+        when(sessionManager.getAllMessages("session-1")).thenReturn(List.of(
+                Message.user("session-1", "first prompt"),
+                Message.assistant("session-1", "first answer"),
+                Message.user("session-1", "second prompt")
+        ));
+        when(sessionManager.truncateMessagesFromTurn("session-1", 2)).thenReturn(2);
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setProviderStateJson("{\"codexThreadId\":\"thread-1\",\"other\":\"keep\"}");
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(session));
+
+        Object result = service.rewindTask("task-rewind", "user-1", Map.of(
+                "mode", "conversation_fork",
+                "turnIndex", 2
+        ));
+
+        Map<?, ?> payload = assertInstanceOf(Map.class, result);
+        assertEquals("rewound", payload.get("status"));
+        assertEquals("second prompt", payload.get("userPrompt"));
+        assertEquals(2, payload.get("turnIndex"));
+        assertNull(payload.get("codexThreadId"));
+        verify(sessionManager).truncateMessagesFromTurn("session-1", 2);
+        verify(sessionEntityRepository).save(argThat((SessionEntity saved) ->
+                saved.getProviderStateJson() != null
+                        && !saved.getProviderStateJson().contains("codexThreadId")
+                        && saved.getProviderStateJson().contains("other")
+        ));
+    }
+
+    @Test
+    void rewindTask_rejectsCodexFileRewind() {
+        CodexTaskEntity entity = createTask(
+                "task-rewind-file", "session-1", "worker-1", "dir-1", "COMPLETED",
+                LocalDateTime.of(2026, 5, 10, 10, 0)
+        );
+        when(taskRepository.findByTaskId("task-rewind-file")).thenReturn(Optional.of(entity));
+
+        assertThrows(UnsupportedOperationException.class, () ->
+                service.rewindTask("task-rewind-file", "user-1", Map.of("mode", "file_rewind")));
+    }
+
+    @Test
+    void resumeTask_startsNewCodexThreadWhenSessionThreadWasClearedByRewind() {
+        CodexTaskEntity[] savedTask = new CodexTaskEntity[1];
+        when(taskRepository.save(any(CodexTaskEntity.class))).thenAnswer(invocation -> {
+            savedTask[0] = invocation.getArgument(0);
+            return savedTask[0];
+        });
+        when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> Optional.ofNullable(savedTask[0]));
+        when(sessionManager.getSession("session-1")).thenReturn(Session.builder()
+                .id("session-1")
+                .userId("user-1")
+                .build());
+        SessionEntity existingSession = new SessionEntity();
+        existingSession.setId("session-1");
+        existingSession.setUserId("user-1");
+        existingSession.setAgentId("agent-codex-1");
+        existingSession.setProviderType("codex-worker");
+        existingSession.setProviderStateJson(null);
+        when(sessionEntityRepository.findById("session-1")).thenReturn(Optional.of(existingSession));
+
+        DispatchTaskDTO result = service.resumeTask("user-1", "tenant-1", Map.of(
+                "workerId", "worker-1",
+                "sessionId", "session-1",
+                "prompt", "continue after rewind"
+        ));
+
+        assertNotNull(result.getTaskId());
+        assertNull(result.getCodexThreadId());
+        verify(eventPublisher).publishEvent(argThat((WorkerTaskStartEvent event) ->
+                "session-1".equals(event.getSessionId())
+                        && "continue after rewind".equals(event.getPrompt())
+                        && event.getProviderConfigString("codexThreadId") == null
+        ));
+    }
+
+    @Test
     void getTaskById_recoversLogicalAgentIdFromUnifiedSessionStore() {
         CodexTaskEntity entity = createTask(
                 "task-1", "session-1", "worker-1", "dir-1", "RUNNING",

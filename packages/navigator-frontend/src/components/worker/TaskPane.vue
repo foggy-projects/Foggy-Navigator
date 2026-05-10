@@ -263,7 +263,7 @@ function handleReconnect(taskId: string) {
   emit('reconnect', props.paneState.paneId, taskId)
 }
 
-// Rewind is a Claude Code checkpoint feature.
+// Message-level rewind is available for providers with platform conversation rewind.
 const rewindEnabled = computed(() => {
   return canEnableRewind(props.paneState.task.value)
 })
