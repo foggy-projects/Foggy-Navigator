@@ -1,5 +1,7 @@
 package com.foggy.navigator.business.agent.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.ClientAppSkillGrantDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillDTO;
@@ -14,6 +16,7 @@ import com.foggy.navigator.business.agent.model.entity.SkillFunctionAllowlistEnt
 import com.foggy.navigator.business.agent.model.form.AddFunctionToSkillForm;
 import com.foggy.navigator.business.agent.model.form.CreateSkillForm;
 import com.foggy.navigator.business.agent.model.form.GrantSkillToClientAppForm;
+import com.foggy.navigator.business.agent.model.form.SkillResourceForm;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionRepository;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionVersionRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppSkillGrantRepository;
@@ -24,6 +27,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
 import java.net.URI;
@@ -35,15 +39,19 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import static com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService.STATUS_DISABLED;
 import static com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService.STATUS_ENABLED;
-import org.springframework.util.Assert;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class SkillRegistryService {
+
+    private static final int MAX_SKILL_RESOURCES = 100;
+    private static final int MAX_SKILL_RESOURCE_BYTES = 1024 * 1024;
+    private static final Pattern SAFE_RESOURCE_SEGMENT = Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9._-]*$");
 
     private final SkillRepository skillRepository;
     private final SkillFunctionAllowlistRepository allowlistRepository;
@@ -82,6 +90,7 @@ public class SkillRegistryService {
         skill.setName(form.getName());
         skill.setDescription(form.getDescription());
         skill.setMarkdownBody(form.getMarkdownBody());
+        skill.setResourcesJson(serializeResources(form.getResources()));
         skill.setStatus(status);
         if (!StringUtils.hasText(skill.getCreatedBy())) {
             skill.setCreatedBy(actorUserId);
@@ -256,6 +265,7 @@ public class SkillRegistryService {
             payload.put("display_name", StringUtils.hasText(skill.getName()) ? skill.getName() : skill.getSkillId());
             payload.put("description", skill.getDescription());
             payload.put("markdown_body", buildMaterializedMarkdown(tenantId, skill));
+            payload.put("resources", parseResourcesJson(skill.getResourcesJson()));
             if (StringUtils.hasText(clientAppId)) {
                 payload.put("client_app_id", clientAppId);
             }
@@ -326,6 +336,68 @@ public class SkillRegistryService {
                     .ifPresent(function -> appendFunctionSummary(md, tenantId, function));
         }
         return md.toString();
+    }
+
+    private String serializeResources(List<SkillResourceForm> resources) {
+        if (resources == null || resources.isEmpty()) {
+            return null;
+        }
+        if (resources.size() > MAX_SKILL_RESOURCES) {
+            throw new IllegalArgumentException("too many skill resources");
+        }
+        for (SkillResourceForm resource : resources) {
+            validateResource(resource);
+        }
+        try {
+            return objectMapper.writeValueAsString(resources);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("invalid skill resources", e);
+        }
+    }
+
+    private List<Map<String, Object>> parseResourcesJson(String resourcesJson) {
+        if (!StringUtils.hasText(resourcesJson)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(resourcesJson, new TypeReference<List<Map<String, Object>>>() {});
+        } catch (Exception e) {
+            throw new IllegalStateException("Stored skill resourcesJson is invalid", e);
+        }
+    }
+
+    private void validateResource(SkillResourceForm resource) {
+        if (resource == null) {
+            throw new IllegalArgumentException("skill resource is required");
+        }
+        validateResourcePath(resource.getPath());
+        String content = resource.getContent();
+        if (content == null) {
+            throw new IllegalArgumentException("skill resource content is required: " + resource.getPath());
+        }
+        if (content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_SKILL_RESOURCE_BYTES) {
+            throw new IllegalArgumentException("skill resource is too large: " + resource.getPath());
+        }
+    }
+
+    private void validateResourcePath(String path) {
+        Assert.hasText(path, "skill resource path is required");
+        String normalized = path.replace('\\', '/');
+        if (!normalized.equals(path) || normalized.startsWith("/") || normalized.contains("//")
+                || normalized.contains("/./") || normalized.contains("/../")
+                || normalized.startsWith("./") || normalized.startsWith("../")
+                || normalized.endsWith("/")) {
+            throw new IllegalArgumentException("invalid skill resource path: " + path);
+        }
+        if (!(normalized.startsWith("references/") || normalized.startsWith("assets/"))) {
+            throw new IllegalArgumentException("skill resource path must start with references/ or assets/: " + path);
+        }
+        String[] segments = normalized.split("/");
+        for (String segment : segments) {
+            if (!SAFE_RESOURCE_SEGMENT.matcher(segment).matches()) {
+                throw new IllegalArgumentException("invalid skill resource path segment: " + segment);
+            }
+        }
     }
 
     private void appendFunctionSummary(StringBuilder md, String tenantId, BusinessFunctionEntity function) {

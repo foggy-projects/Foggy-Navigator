@@ -25,11 +25,17 @@ public class OpenSessionMessageDTO {
     /** 角色：user | assistant | tool | system */
     private String role;
 
-    /** 消息类型：USER | TEXT | TOOL_CALL | TOOL_RESULT | STATE | ERROR */
+    /** 消息类型：USER | TEXT | TOOL_CALL | TOOL_RESULT | RESULT | STATE | ERROR */
     private String type;
 
     /** 消息内容 */
     private String content;
+
+    /** 是否为任务终态消息 */
+    private Boolean terminal;
+
+    /** 终态状态：COMPLETED | FAILED */
+    private String terminalStatus;
 
     /** 扩展元数据 */
     private Map<String, Object> metadata;

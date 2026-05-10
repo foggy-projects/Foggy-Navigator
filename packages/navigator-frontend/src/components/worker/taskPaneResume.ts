@@ -1,5 +1,5 @@
 import type { ClaudeTask } from '@/types'
-import { isClaudeCodeTask } from '@/utils/workerBackend'
+import { inferTaskWorkerBackend } from '@/utils/workerBackend'
 
 export interface ContinuableTask {
   sessionId?: string | null
@@ -17,5 +17,15 @@ export function canShowContinuationInput(task?: ContinuableTask | null): boolean
 }
 
 export function canEnableRewind(task?: ClaudeTask | null): boolean {
-  return !!task?.claudeSessionId && isClaudeCodeTask(task) && task.status !== 'RUNNING' && task.status !== 'PENDING'
+  if (!task || task.status === 'RUNNING' || task.status === 'PENDING' || task.status === 'AWAITING_PERMISSION') {
+    return false
+  }
+  const backend = inferTaskWorkerBackend(task)
+  if (backend === 'CLAUDE_CODE') {
+    return !!task.claudeSessionId
+  }
+  if (backend === 'OPENAI_CODEX') {
+    return !!task.sessionId
+  }
+  return false
 }

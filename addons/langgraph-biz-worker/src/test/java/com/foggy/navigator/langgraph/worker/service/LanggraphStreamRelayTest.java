@@ -11,6 +11,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.codec.ServerSentEvent;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -125,6 +126,51 @@ class LanggraphStreamRelayTest {
                 "Need confirmation",
                 "{\"frame_id\":\"frame-1\"}"
         );
+    }
+
+    @Test
+    void toolUseAndResultEventsPublishToolMessages() throws Exception {
+        String taskId = "lgt-task-3";
+        String sessionId = "session-3";
+
+        String toolUse = """
+                {
+                  "type": "tool_use",
+                  "content": "tms.dataset.listModels",
+                  "skill_frame_id": "frm-1",
+                  "skill_id": "foggy-query-agent"
+                }
+                """;
+        String toolResult = """
+                {
+                  "type": "tool_result",
+                  "content": "{\\"ok\\":true,\\"count\\":19}",
+                  "skill_frame_id": "frm-1",
+                  "skill_id": "foggy-query-agent"
+                }
+                """;
+
+        invokeHandleEvent(ServerSentEvent.<String>builder().data(toolUse).build(), taskId, sessionId);
+        invokeHandleEvent(ServerSentEvent.<String>builder().data(toolResult).build(), taskId, sessionId);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher, org.mockito.Mockito.times(2)).publishEvent(captor.capture());
+        List<Object> events = captor.getAllValues();
+
+        AgentMessage start = assertInstanceOf(AgentMessage.class, events.get(0));
+        assertEquals(MessageType.TOOL_CALL_START, start.getType());
+        assertEquals(taskId, start.getTaskId());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> startPayload = (Map<String, Object>) start.getPayload();
+        assertEquals("tms.dataset.listModels", startPayload.get("toolName"));
+        assertEquals("foggy-query-agent", startPayload.get("skillId"));
+
+        AgentMessage result = assertInstanceOf(AgentMessage.class, events.get(1));
+        assertEquals(MessageType.TOOL_CALL_RESULT, result.getType());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resultPayload = (Map<String, Object>) result.getPayload();
+        assertEquals(true, resultPayload.get("success"));
+        assertEquals("tool_result", resultPayload.get("subtype"));
     }
 
     private void invokeHandleEvent(

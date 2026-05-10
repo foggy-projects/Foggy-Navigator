@@ -159,6 +159,71 @@ class TestWebhookEndpoint:
         assert resp.status_code == 403
 
 
+class TestMaterializeEndpoint:
+    async def test_materialize_writes_public_app_skill_bundle_resources(self, client, tmp_path):
+        from langgraph_biz_worker.routes import skills as skills_module
+        skills_root = tmp_path / "skills"
+        skills_module.configure(skills_root)
+
+        resp = await client.post("/api/v1/skills/materialize", json={
+            "skill_id": "foggy-query-agent",
+            "client_app_id": "app_01",
+            "name": "foggy-query-agent",
+            "markdown_body": "Use references for complex payloads.",
+            "resources": [
+                {
+                    "path": "references/functions/queryModel.md",
+                    "content": "# queryModel\nUse model and payload.",
+                },
+                {
+                    "path": "assets/schema.json",
+                    "content": "{\"type\":\"object\"}",
+                },
+            ],
+        })
+
+        assert resp.status_code == 200
+        target = skills_root / "public" / "apps" / "app_01" / "foggy-query-agent"
+        assert (target / "SKILL.md").is_file()
+        assert (target / "references" / "functions" / "queryModel.md").read_text(encoding="utf-8") == "# queryModel\nUse model and payload."
+        assert (target / "assets" / "schema.json").read_text(encoding="utf-8") == "{\"type\":\"object\"}"
+
+    async def test_materialize_replaces_stale_bundle_resources(self, client, tmp_path):
+        from langgraph_biz_worker.routes import skills as skills_module
+        skills_root = tmp_path / "skills"
+        target = skills_root / "public" / "apps" / "app_01" / "skill_01"
+        (target / "references").mkdir(parents=True)
+        (target / "references" / "old.md").write_text("old", encoding="utf-8")
+        skills_module.configure(skills_root)
+
+        resp = await client.post("/api/v1/skills/materialize", json={
+            "skill_id": "skill_01",
+            "client_app_id": "app_01",
+            "markdown_body": "fresh",
+            "resources": [
+                {"path": "references/new.md", "content": "new"},
+            ],
+        })
+
+        assert resp.status_code == 200
+        assert not (target / "references" / "old.md").exists()
+        assert (target / "references" / "new.md").read_text(encoding="utf-8") == "new"
+
+    async def test_materialize_rejects_resource_path_escape(self, client, tmp_path):
+        from langgraph_biz_worker.routes import skills as skills_module
+        skills_module.configure(tmp_path / "skills")
+
+        resp = await client.post("/api/v1/skills/materialize", json={
+            "skill_id": "skill_01",
+            "client_app_id": "app_01",
+            "resources": [
+                {"path": "../secret.md", "content": "nope"},
+            ],
+        })
+
+        assert resp.status_code == 400
+
+
 class TestAccountSkillLoading:
     """Test that SkillRegistry loads account-private skills."""
 

@@ -30,6 +30,9 @@ public class SkillEntity {
     @Column(columnDefinition = "LONGTEXT")
     private String markdownBody;
 
+    @Column(columnDefinition = "LONGTEXT")
+    private String resourcesJson;
+
     @Column(nullable = false, length = 64)
     private String status;
 

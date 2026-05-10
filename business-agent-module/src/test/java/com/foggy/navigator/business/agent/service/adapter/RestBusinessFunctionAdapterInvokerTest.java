@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -254,6 +255,57 @@ class RestBusinessFunctionAdapterInvokerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void invoke_body_mapping_preserves_nested_json_values() {
+        context.setAdapterConfigJson("""
+            {
+              "type": "rest",
+              "method": "POST",
+              "upstream_ref": "tms",
+              "path": "/x3-agent/dataset/query_model",
+              "adapter": {
+                "body": {
+                  "model": "$.input.model",
+                  "payload": "$.input.payload",
+                  "mode": "$.input.mode"
+                }
+              }
+            }
+            """);
+        when(environment.getProperty("foggy.navigator.business.agent.upstreams.tms.url")).thenReturn("http://internal-tms:8080");
+        when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(ResponseEntity.ok("{\"code\":200}"));
+
+        invoker.invoke(context, """
+            {
+              "model": "OrderSettlementQuery",
+              "payload": {
+                "columns": ["sum(rpValue)"],
+                "slice": [
+                  {"field": "openingTime", "op": "[)", "value": ["2026-02-01", "2026-03-01"]}
+                ],
+                "limit": 1
+              },
+              "mode": "execute"
+            }
+            """);
+
+        ArgumentCaptor<HttpEntity<Object>> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(eq("http://internal-tms:8080/x3-agent/dataset/query_model"), eq(HttpMethod.POST), entityCaptor.capture(), eq(String.class));
+
+        Map<String, Object> body = (Map<String, Object>) entityCaptor.getValue().getBody();
+        assertNotNull(body);
+        assertEquals("OrderSettlementQuery", body.get("model"));
+        assertEquals("execute", body.get("mode"));
+        assertTrue(body.get("payload") instanceof Map);
+
+        Map<String, Object> payload = (Map<String, Object>) body.get("payload");
+        assertTrue(payload.get("columns") instanceof List);
+        assertTrue(payload.get("slice") instanceof List);
+        assertEquals(1, payload.get("limit"));
+    }
+
+    @Test
     void invoke_injects_configured_upstream_user_token_header() {
         context.setAdapterConfigJson("""
             {
@@ -274,6 +326,33 @@ class RestBusinessFunctionAdapterInvokerTest {
         ArgumentCaptor<HttpEntity<Object>> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
         verify(restTemplate).exchange(eq("http://internal-tms:8080/api"), eq(HttpMethod.POST), entityCaptor.capture(), eq(String.class));
         assertEquals("tms-user-token", entityCaptor.getValue().getHeaders().getFirst("X-TMS-Agent-Token"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void invoke_post_with_explicit_empty_body_mapping_sends_empty_json_object() {
+        context.setAdapterConfigJson("""
+            {
+              "type": "rest",
+              "method": "POST",
+              "upstream_ref": "tms",
+              "path": "/dataset/list_models",
+              "adapter": {
+                "body": {}
+              }
+            }
+            """);
+        when(environment.getProperty("foggy.navigator.business.agent.upstreams.tms.url")).thenReturn("http://internal-tms:8080");
+        when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(ResponseEntity.ok("{\"status\":\"ok\"}"));
+
+        invoker.invoke(context, "{}");
+
+        ArgumentCaptor<HttpEntity<Object>> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(eq("http://internal-tms:8080/dataset/list_models"), eq(HttpMethod.POST), entityCaptor.capture(), eq(String.class));
+        Map<String, Object> body = (Map<String, Object>) entityCaptor.getValue().getBody();
+        assertNotNull(body);
+        assertTrue(body.isEmpty());
     }
 
     @Test

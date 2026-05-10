@@ -130,6 +130,11 @@ public class LanggraphStreamRelay {
                                 "skillFrameId", node.path("skill_frame_id").asText(""),
                                 "skillId", node.path("skill_id").asText("")));
 
+                case "tool_use" -> publishToolUse(sessionId, taskId, node);
+
+                case "tool_result", "skill_result_submit", "skill_result_reject" ->
+                        publishToolResult(sessionId, taskId, node, type);
+
                 case "result" -> {
                     String content = node.path("content").asText("");
                     String structuredOutput = node.has("structured_output") && !node.get("structured_output").isNull()
@@ -158,6 +163,81 @@ public class LanggraphStreamRelay {
 
         } catch (Exception e) {
             log.warn("Failed to process SSE event for task {}: {}", taskId, e.getMessage());
+        }
+    }
+
+    private void publishToolUse(String sessionId, String taskId, JsonNode node) {
+        String toolName = node.path("tool_name").asText(node.path("content").asText(""));
+        String toolCallId = node.path("tool_call_id").asText("");
+        String functionId = node.path("function_id").asText("");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("content", toolName);
+        payload.put("toolName", toolName);
+        if (!toolCallId.isBlank()) {
+            payload.put("toolCallId", toolCallId);
+        }
+        if (!functionId.isBlank()) {
+            payload.put("functionId", functionId);
+        }
+        if (node.has("args") && !node.get("args").isNull()) {
+            payload.put("args", toObject(node.get("args")));
+        }
+        payload.put("taskId", taskId);
+        payload.put("skillFrameId", node.path("skill_frame_id").asText(""));
+        payload.put("skillId", node.path("skill_id").asText(""));
+        publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
+    }
+
+    private void publishToolResult(String sessionId, String taskId, JsonNode node, String eventType) {
+        String content = node.path("content").asText("");
+        String toolName = node.path("tool_name").asText("");
+        String toolCallId = node.path("tool_call_id").asText("");
+        String functionId = node.path("function_id").asText("");
+        boolean success = !"skill_result_reject".equals(eventType)
+                && (node.path("error").isMissingNode() || node.path("error").asText("").isBlank());
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("content", content);
+        payload.put("subtype", eventType);
+        if (!toolName.isBlank()) {
+            payload.put("toolName", toolName);
+        }
+        if (!toolCallId.isBlank()) {
+            payload.put("toolCallId", toolCallId);
+        }
+        if (!functionId.isBlank()) {
+            payload.put("functionId", functionId);
+        }
+        if (node.has("args") && !node.get("args").isNull()) {
+            payload.put("args", toObject(node.get("args")));
+        }
+        payload.put("taskId", taskId);
+        payload.put("skillFrameId", node.path("skill_frame_id").asText(""));
+        payload.put("skillId", node.path("skill_id").asText(""));
+        payload.put("data", parseJsonOrText(content));
+        payload.put("success", success);
+        String error = node.path("error").asText("");
+        if (!error.isBlank()) {
+            payload.put("error", error);
+        }
+
+        publishMessage(sessionId,
+                success ? MessageType.TOOL_CALL_RESULT : MessageType.TOOL_CALL_ERROR,
+                payload);
+    }
+
+    private Object toObject(JsonNode node) {
+        return objectMapper.convertValue(node, Object.class);
+    }
+
+    private Object parseJsonOrText(String content) {
+        if (content == null || content.isBlank()) {
+            return content;
+        }
+        try {
+            return objectMapper.readValue(content, Object.class);
+        } catch (Exception ignored) {
+            return content;
         }
     }
 

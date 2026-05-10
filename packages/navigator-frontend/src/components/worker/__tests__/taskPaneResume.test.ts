@@ -44,4 +44,34 @@ describe('taskPaneResume', () => {
       updatedAt: '2026-05-01T00:00:00Z',
     })).toBe(true)
   })
+
+  it('enables platform conversation rewind for completed Codex tasks', () => {
+    expect(canEnableRewind({
+      taskId: 'task-codex-1',
+      sessionId: 'session-codex-1',
+      workerId: 'worker-1',
+      prompt: 'codex task',
+      status: 'COMPLETED',
+      providerType: 'codex-worker',
+      model: 'codex-deep',
+      codexThreadId: 'thread-1',
+      createdAt: '2026-05-01T00:00:00Z',
+      updatedAt: '2026-05-01T00:00:00Z',
+    })).toBe(true)
+  })
+
+  it('does not enable rewind while a Codex task is awaiting permission', () => {
+    expect(canEnableRewind({
+      taskId: 'task-codex-2',
+      sessionId: 'session-codex-2',
+      workerId: 'worker-1',
+      prompt: 'codex task',
+      status: 'AWAITING_PERMISSION',
+      providerType: 'codex-worker',
+      model: 'codex-deep',
+      codexThreadId: 'thread-2',
+      createdAt: '2026-05-01T00:00:00Z',
+      updatedAt: '2026-05-01T00:00:00Z',
+    })).toBe(false)
+  })
 })

@@ -3,11 +3,14 @@ export type {
   ChatMessage,
   TaskStatus,
   AgentTask,
+  NavigatorAction,
   NavigatorChatConfig,
+  NavigatorChatMode,
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
   BusinessSuspensionStatus,
   BusinessSuspensionType,
+  ToolExecutionBlock,
 } from './types'
 
 // Composable (headless — for custom UI)

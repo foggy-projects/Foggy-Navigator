@@ -1,8 +1,12 @@
 """Tests for Phase 3 — single Skill end-to-end via HTTP endpoint."""
 
 import json
+import time
 
 import pytest
+
+from langgraph_biz_worker.graphs import root_graph as root_module
+from langgraph_biz_worker.models import SkillManifest
 
 
 @pytest.mark.asyncio
@@ -78,6 +82,43 @@ async def test_result_has_evidence_in_summary(client):
     events = _parse_sse_events(resp.text)
     text_events = [e for e in events if e["type"] == "assistant_text"]
     assert any("evidence" in (e.get("content") or "").lower() for e in text_events)
+
+
+def test_close_skill_frame_uses_frame_summary_when_manifest_promotes_nothing():
+    runtime = root_module.get_runtime()
+    skill_id = "no_promote_summary_skill"
+    runtime.registry.register(SkillManifest(
+        id=skill_id,
+        name=skill_id,
+        description="Completed skill without promoted fields.",
+        output_schema={"type": "object"},
+        allowed_tools=[],
+        promote_to_parent=[],
+    ))
+    frame_id = runtime.invoke_skill(
+        task_id="task_no_promote_summary",
+        skill_id=skill_id,
+        skill_input={},
+    )
+    runtime.submit_result(
+        frame_id,
+        summary="用户可见的错误说明",
+        structured_output={"error": "UPSTREAM_ERROR", "message": "上游接口暂时不可用"},
+    )
+
+    result = root_module.close_skill_frame({
+        "task_id": "task_no_promote_summary",
+        "active_frame_id": frame_id,
+        "model": None,
+        "started_at": time.time(),
+    })
+    result_event = next(e for e in result["events"] if e.type == "result")
+
+    assert result_event.content == "用户可见的错误说明"
+    assert result_event.structured_output == {
+        "error": "UPSTREAM_ERROR",
+        "message": "上游接口暂时不可用",
+    }
 
 
 def _parse_sse_events(body: str) -> list[dict]:

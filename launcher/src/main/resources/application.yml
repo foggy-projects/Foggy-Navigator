@@ -102,6 +102,10 @@ foggy:
       agent:
         dev-sync-worker-url: ${BUSINESS_AGENT_DEV_SYNC_WORKER_URL:http://localhost:3061}
         dev-sync-worker-token: ${BUSINESS_AGENT_DEV_SYNC_WORKER_TOKEN:}
+        upstreams:
+          tms-x3-agent:
+            url: ${TMS_X3_AGENT_UPSTREAM_URL:http://localhost:12580}
+            user-token-header: ${TMS_X3_AGENT_USER_TOKEN_HEADER:X-TMS-Agent-Token}
 
   coding-agent:
     # OpenHands 配置

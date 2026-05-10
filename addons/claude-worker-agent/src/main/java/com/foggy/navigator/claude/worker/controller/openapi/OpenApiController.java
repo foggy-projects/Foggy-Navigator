@@ -544,8 +544,9 @@ public class OpenApiController {
         }
 
         context.putIfAbsent("clientAppId", clientAppCredential.getClientAppId());
-        context.putIfAbsent("skillId", skillId);
+        context.putIfAbsent("businessSkillId", skillId);
         context.putIfAbsent("credentialId", clientAppCredential.getCredentialId());
+        context.putIfAbsent("auto_inject_app_public_skills", true);
 
         String upstreamUserId = firstHeader(request,
                 "X-Upstream-User-Id",
@@ -1015,6 +1016,7 @@ public class OpenApiController {
 
         // 推断消息类型
         String type = inferMessageType(entity.getRole(), metadata);
+        String terminalStatus = inferTerminalStatus(metadata);
 
         // 过滤内部字段，避免泄露（不直接 mutate Jackson 反序列化的 Map）
         if (metadata != null) {
@@ -1029,6 +1031,8 @@ public class OpenApiController {
                 .role(entity.getRole() != null ? entity.getRole().toLowerCase() : null)
                 .type(type)
                 .content(entity.getContent())
+                .terminal(terminalStatus != null)
+                .terminalStatus(terminalStatus)
                 .metadata(metadata)
                 .createdAt(entity.getCreatedAt())
                 .build();
@@ -1049,6 +1053,7 @@ public class OpenApiController {
                     case "TEXT_COMPLETE" -> "TEXT";
                     case "TOOL_CALL_START" -> "TOOL_CALL";
                     case "TOOL_CALL_RESULT", "TOOL_CALL_ERROR" -> "TOOL_RESULT";
+                    case "TASK_COMPLETED" -> "RESULT";
                     case "STATE_SYNC" -> "STATE";
                     case "ERROR" -> "ERROR";
                     default -> "TEXT";
@@ -1056,6 +1061,24 @@ public class OpenApiController {
             }
         }
         return "TEXT";
+    }
+
+    /**
+     * 标记任务终态消息，供上游轮询 messages 时判断是否可停止。
+     */
+    private String inferTerminalStatus(Map<String, Object> metadata) {
+        if (metadata == null) {
+            return null;
+        }
+        Object rawType = metadata.get("type");
+        if (!(rawType instanceof String typeStr)) {
+            return null;
+        }
+        return switch (typeStr) {
+            case "TASK_COMPLETED" -> "COMPLETED";
+            case "ERROR" -> "FAILED";
+            default -> null;
+        };
     }
 
     /**

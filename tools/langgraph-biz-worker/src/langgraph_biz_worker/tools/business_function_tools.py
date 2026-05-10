@@ -37,6 +37,7 @@ def get_business_function_schema(
 ) -> dict[str, Any]:
     if not function_id:
         raise BusinessFunctionToolError("function_id is required")
+    function_id, version = _normalize_function_ref(function_id, version)
     path = f"/internal/worker-gateway/v1/business-functions/{parse.quote(function_id, safe='')}/schema"
     if version:
         path += "?" + parse.urlencode({"version": version})
@@ -52,6 +53,7 @@ def invoke_business_function(
 ) -> dict[str, Any]:
     if not function_id:
         raise BusinessFunctionToolError("function_id is required")
+    function_id, version = _normalize_function_ref(function_id, version)
     body: dict[str, Any] = {
         "version": version,
         "input": input_data or {},
@@ -60,6 +62,18 @@ def invoke_business_function(
         body["idempotencyKey"] = idempotency_key
     path = f"/internal/worker-gateway/v1/business-functions/{parse.quote(function_id, safe='')}/invoke"
     return _request_json("POST", path, task_scoped_token, body)
+
+
+def _normalize_function_ref(function_id: str, version: str | None) -> tuple[str, str | None]:
+    """Accept both split and compact business function refs.
+
+    Skill markdown often lists functions as ``domain.name@v1`` while gateway
+    APIs expect ``function_id=domain.name`` and ``version=v1`` separately.
+    """
+    if "@" not in function_id:
+        return function_id, version
+    base_function_id, inline_version = function_id.rsplit("@", 1)
+    return base_function_id, version or inline_version or None
 
 
 def _request_json(

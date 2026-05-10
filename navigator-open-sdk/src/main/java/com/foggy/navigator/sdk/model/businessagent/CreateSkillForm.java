@@ -2,6 +2,8 @@ package com.foggy.navigator.sdk.model.businessagent;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import java.util.List;
+
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class CreateSkillForm {
@@ -10,6 +12,7 @@ public class CreateSkillForm {
     private String description;
     private String status;
     private String markdownBody;
+    private List<SkillResourceForm> resources;
 
     public String getSkillId() { return skillId; }
     public void setSkillId(String skillId) { this.skillId = skillId; }
@@ -21,4 +24,6 @@ public class CreateSkillForm {
     public void setStatus(String status) { this.status = status; }
     public String getMarkdownBody() { return markdownBody; }
     public void setMarkdownBody(String markdownBody) { this.markdownBody = markdownBody; }
+    public List<SkillResourceForm> getResources() { return resources; }
+    public void setResources(List<SkillResourceForm> resources) { this.resources = resources; }
 }

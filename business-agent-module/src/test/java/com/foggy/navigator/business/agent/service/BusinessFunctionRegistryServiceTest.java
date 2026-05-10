@@ -127,11 +127,21 @@ class BusinessFunctionRegistryServiceTest {
     }
 
     @Test
-    void importManifest_duplicateVersion_rejected() {
-        when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "func_01")).thenReturn(Optional.of(new BusinessFunctionEntity()));
-        when(versionRepository.findByTenantIdAndFunctionIdAndVersion("tenant_1", "func_01", "v1")).thenReturn(Optional.of(new BusinessFunctionVersionEntity()));
+    void importManifest_duplicateVersion_updatesExistingVersion() {
+        BusinessFunctionVersionEntity existing = new BusinessFunctionVersionEntity();
+        existing.setAdapterConfigJson("old_adapter_config");
+        existing.setStatus(BusinessFunctionRegistryService.STATUS_DISABLED);
 
-        assertThrows(IllegalArgumentException.class, () -> registryService.importManifest("tenant_1", "user_1", importForm));
+        when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "func_01")).thenReturn(Optional.of(new BusinessFunctionEntity()));
+        when(versionRepository.findByTenantIdAndFunctionIdAndVersion("tenant_1", "func_01", "v1")).thenReturn(Optional.of(existing));
+
+        BusinessFunctionVersionEntity result = registryService.importManifest("tenant_1", "user_1", importForm);
+
+        assertSame(existing, result);
+        assertEquals("adapter_config", result.getAdapterConfigJson());
+        assertEquals("llm_summary", result.getLlmVisibleSummary());
+        assertEquals(BusinessFunctionRegistryService.STATUS_ENABLED, result.getStatus());
+        verify(versionRepository).save(existing);
     }
 
     @Test
@@ -195,7 +205,7 @@ class BusinessFunctionRegistryServiceTest {
     }
 
     @Test
-    void grantFunctionToClientApp_rejects_duplicate_grant() {
+    void grantFunctionToClientApp_duplicate_grant_updatesStatus() {
         when(clientAppService.requireActiveClientApp("tenant_1", "app_01")).thenReturn(new ClientAppEntity());
         BusinessFunctionEntity func = new BusinessFunctionEntity();
         func.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
@@ -203,10 +213,21 @@ class BusinessFunctionRegistryServiceTest {
         BusinessFunctionVersionEntity ver = new BusinessFunctionVersionEntity();
         ver.setStatus(BusinessFunctionRegistryService.STATUS_ENABLED);
         when(versionRepository.findByTenantIdAndFunctionIdAndVersion("tenant_1", "func_01", "v1")).thenReturn(Optional.of(ver));
+        ClientAppFunctionGrantEntity existing = new ClientAppFunctionGrantEntity();
+        existing.setGrantId("grant_01");
+        existing.setTenantId("tenant_1");
+        existing.setClientAppId("app_01");
+        existing.setFunctionId("func_01");
+        existing.setVersion("v1");
+        existing.setStatus(BusinessFunctionRegistryService.STATUS_DISABLED);
         when(grantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion("tenant_1", "app_01", "func_01", "v1"))
-                .thenReturn(Optional.of(new ClientAppFunctionGrantEntity()));
+                .thenReturn(Optional.of(existing));
+        when(grantRepository.save(existing)).thenReturn(existing);
 
-        assertThrows(IllegalArgumentException.class, () -> registryService.grantFunctionToClientApp("tenant_1", "app_01", "user_1", grantForm));
+        ClientAppFunctionGrantDTO result = registryService.grantFunctionToClientApp("tenant_1", "app_01", "user_1", grantForm);
+
+        assertEquals("grant_01", result.getGrantId());
+        assertEquals(BusinessFunctionRegistryService.STATUS_ENABLED, result.getStatus());
     }
 
     @Test

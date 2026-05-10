@@ -259,5 +259,114 @@ def test_llm_agent_uses_frame_manifest_snapshot_after_registry_reload():
 
     assert runtime.get_frame(frame_id).status == FrameStatus.COMPLETED
     assert events[-1].type == "skill_result_submit"
-    assert "mock_get_order" not in {t["function"]["name"] for t in model.bound_tools}
     assert "frozen manifest" in model.seen_messages[0][0].content
+
+
+def test_llm_agent_exposes_only_invoke_business_function_tool_without_skill_allowlist():
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="business_skill",
+        name="business_skill",
+        description="Uses business functions.",
+        output_schema={"type": "object"},
+        allowed_tools=["list_business_functions", "get_business_function_schema"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    frame_id = runtime.invoke_skill(
+        task_id="task_business_agent_001",
+        skill_id="business_skill",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_invoke",
+            "name": "invoke_business_function",
+            "args": {"function_id": "tms.dataset.listModels", "version": "v1", "input": {}},
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Reported gateway error to user.",
+                "structured_output": {"ok": False},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_business_agent_001",
+        frame_id=frame_id,
+        prompt="list models",
+    )
+
+    bound_tool_names = {t["function"]["name"] for t in model.bound_tools}
+    assert "list_business_functions" not in bound_tool_names
+    assert "get_business_function_schema" not in bound_tool_names
+    assert "invoke_business_function" in bound_tool_names
+    tool_result = next(e for e in events if e.type == "tool_result")
+    assert "MISSING_TOKEN" in tool_result.error
+    assert "Tool not allowed" not in tool_result.error
+    assert runtime.get_frame(frame_id).status == FrameStatus.COMPLETED
+
+
+def test_llm_agent_records_tool_call_args_for_debugging(monkeypatch):
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="business_skill",
+        name="business_skill",
+        description="Uses business functions.",
+        output_schema={"type": "object"},
+        allowed_tools=[],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    frame_id = runtime.invoke_skill(
+        task_id="task_business_agent_002",
+        skill_id="business_skill",
+        skill_input={},
+    )
+
+    def fake_invoke(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        return {"function_id": function_id, "version": version, "input": input_data}
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_invoke",
+            "name": "invoke_business_function",
+            "args": {
+                "function_id": "tms.dataset.listModels",
+                "version": "v1",
+                "input": {},
+                "access_token": "should-not-be-logged",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_business_agent_002",
+        frame_id=frame_id,
+        prompt="list models",
+        runtime_context={"task_scoped_token": "runtime-token"},
+    )
+
+    tool_call_messages = [
+        message for message in runtime.get_frame(frame_id).private_messages
+        if message["role"] == "tool_call"
+    ]
+    assert tool_call_messages[0]["content"]["name"] == "invoke_business_function"
+    assert tool_call_messages[0]["content"]["args"]["function_id"] == "tms.dataset.listModels"
+    assert tool_call_messages[0]["content"]["args"]["access_token"] == "<redacted>"

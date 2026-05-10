@@ -9,6 +9,7 @@ from __future__ import annotations
 import operator
 import time
 import json
+import re
 from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
@@ -54,6 +55,33 @@ _llm_skill_agent: LlmSkillAgent | None = (
     if _chat_model and settings.llm_execute_skills
     else None
 )
+
+
+def _safe_log_stem(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", value)
+
+
+def _conversation_log_file(data_root: str | Path, task_id: str, session_id: str | None) -> Path:
+    """Return the JSONL path for a single LLM routing request.
+
+    Logs are grouped by session directory, with one numbered file per task. This
+    keeps a multi-turn session ordered without making each task look like it
+    reused earlier system prompts.
+    """
+    session_stem = _safe_log_stem(session_id or "_no-session")
+    task_stem = _safe_log_stem(task_id)
+    log_dir = Path(data_root) / "logs" / "llm-conversations" / session_stem
+
+    for existing in sorted(log_dir.glob(f"*_{task_stem}.jsonl")):
+        return existing
+
+    max_index = 0
+    if log_dir.exists():
+        for existing in log_dir.glob("*.jsonl"):
+            prefix = existing.name.split("_", 1)[0]
+            if prefix.isdigit():
+                max_index = max(max_index, int(prefix))
+    return log_dir / f"{max_index + 1:04d}_{task_stem}.jsonl"
 
 
 def get_runtime() -> SkillRuntime:
@@ -186,6 +214,7 @@ def route_skill(state: RootState) -> dict:
             
             # 2. Process system public skills and user private skills
             auto_inject = context.get("auto_inject_public_skills", False)
+            auto_inject_app_public = context.get("auto_inject_app_public_skills", bool(client_app_id))
             all_skills = _skill_registry.list_skills()
             for s in all_skills:
                 # Deduplicate if already added via allowed_skills
@@ -201,8 +230,9 @@ def route_skill(state: RootState) -> dict:
                     routable_skills.append(s)
                     continue
                     
-                # Public skills are injected only if auto_inject_public_skills parameter is True
-                if vis == "public" and auto_inject:
+                # App-scoped public skills are safe to inject after Java resolves clientAppId.
+                app_scoped = bool(client_app_id) and getattr(s, "client_app_id", None) == client_app_id
+                if vis == "public" and (auto_inject or (auto_inject_app_public and app_scoped)):
                     routable_skills.append(s)
             
             invoke_tool = {
@@ -251,12 +281,14 @@ If no skill matches, respond naturally to the user — you can answer questions,
             
             # --- Conversation logging setup ---
             import datetime
-            _log_dir = Path(_data_root) / "logs" / "llm-conversations"
-            _log_dir.mkdir(parents=True, exist_ok=True)
-            _log_file = _log_dir / f"{task_id}.jsonl"
+            session_id = state.get("session_id")
+            _log_file = _conversation_log_file(_data_root, task_id, session_id)
+            _log_file.parent.mkdir(parents=True, exist_ok=True)
             
             def _append_log(entry: dict) -> None:
                 try:
+                    entry.setdefault("task_id", task_id)
+                    entry.setdefault("session_id", session_id)
                     with open(_log_file, "a", encoding="utf-8") as f:
                         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 except Exception:
@@ -264,15 +296,11 @@ If no skill matches, respond naturally to the user — you can answer questions,
             
             _append_log({
                 "ts": datetime.datetime.now().isoformat(),
-                "role": "system",
-                "content": sys_msg_content,
-            })
-            _append_log({
-                "ts": datetime.datetime.now().isoformat(),
-                "role": "user",
-                "content": human_msg.content,
-                "task_id": task_id,
-                "session_id": state.get("session_id"),
+                "event": "llm_request",
+                "messages": [
+                    {"role": "system", "content": sys_msg_content},
+                    {"role": "user", "content": human_msg.content},
+                ],
                 "routable_skills": [s.id for s in routable_skills],
             })
             
@@ -294,7 +322,7 @@ If no skill matches, respond naturally to the user — you can answer questions,
                 # Log assistant response
                 _append_log({
                     "ts": datetime.datetime.now().isoformat(),
-                    "role": "assistant",
+                    "event": "llm_response",
                     "content": final_msg.content if final_msg else "",
                     "tool_calls": getattr(final_msg, "tool_calls", None),
                 })
@@ -390,6 +418,10 @@ def run_skill(state: RootState) -> dict:
     task_id = state["task_id"]
     context = state.get("context") or {}
     account_id = state.get("user_id") or context.get("account_id") or context.get("accountId")
+    runtime_context = dict(state.get("runtime_context") or {})
+    client_app_id = context.get("client_app_id") or context.get("clientAppId")
+    if client_app_id:
+        runtime_context.setdefault("client_app_id", client_app_id)
 
     if _llm_skill_agent:
         return {
@@ -398,7 +430,7 @@ def run_skill(state: RootState) -> dict:
                 frame_id=frame_id,
                 prompt=state["prompt"],
                 account_id=account_id,
-                runtime_context=state.get("runtime_context"),
+                runtime_context=runtime_context,
             )
         }
 
@@ -446,8 +478,19 @@ def close_skill_frame(state: RootState) -> dict:
     skill_results: list[dict[str, Any]] = []
 
     if frame and frame.status == FrameStatus.COMPLETED:
+        frame_summary = frame.result_summary
+        frame_output = frame.output
         promoted = _runtime.close_frame(frame_id)
         skill_results.append(promoted)
+        result_summary = (
+            promoted.get("result_summary")
+            or frame_summary
+            or _summary_from_structured_output(frame_output)
+            or "Skill completed"
+        )
+        structured_output = promoted.get("structured_output")
+        if structured_output is None:
+            structured_output = frame_output
 
         events.append(QueryEvent(
             type="skill_frame_close",
@@ -458,10 +501,10 @@ def close_skill_frame(state: RootState) -> dict:
         ))
         events.append(QueryEvent(
             type="result",
-            content=promoted.get("result_summary", "Skill completed"),
+            content=result_summary,
             task_id=task_id,
             model=state.get("model"),
-            structured_output=promoted.get("structured_output"),
+            structured_output=structured_output,
             duration_ms=int((time.time() - state["started_at"]) * 1000),
         ))
     elif frame:
@@ -473,6 +516,18 @@ def close_skill_frame(state: RootState) -> dict:
         ))
 
     return {"events": events, "skill_results": skill_results, "active_frame_id": None}
+
+
+def _summary_from_structured_output(output: Any) -> str | None:
+    if not isinstance(output, dict):
+        return None
+    message = output.get("message")
+    if isinstance(message, str) and message.strip():
+        return message
+    error = output.get("error")
+    if isinstance(error, str) and error.strip():
+        return error
+    return None
 
 
 def should_run_skill(state: RootState) -> str:

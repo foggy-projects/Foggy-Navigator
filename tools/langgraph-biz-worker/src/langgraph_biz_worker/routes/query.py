@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -24,6 +25,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["query"], dependencies=[Depends(verify_token)])
 
 
+def _resolve_session_id(request: QueryRequest) -> str | None:
+    """Prefer Navigator's platform session id over provider-specific session ids."""
+    return request.foggy_session_id or request.session_id
+
+
 async def _event_generator(
     task_id: str,
     request: QueryRequest,
@@ -31,11 +37,12 @@ async def _event_generator(
     """Run the root graph and yield SSE events."""
     active_tasks.add(task_id)
     try:
+        session_id = _resolve_session_id(request)
         fsscript = extract_fsscript_script(request.context)
         if fsscript is not None:
             async for event in get_fsscript_bridge().stream_events(
                 task_id=task_id,
-                session_id=request.session_id,
+                session_id=session_id,
                 script=fsscript,
                 context=request.context,
                 user_id=request.user_id,
@@ -49,7 +56,7 @@ async def _event_generator(
 
         initial_state: RootState = {
             "task_id": task_id,
-            "session_id": request.session_id,
+            "session_id": session_id,
             "prompt": request.prompt,
             "model": request.model,
             "context": request.context,
@@ -62,7 +69,7 @@ async def _event_generator(
             "skill_results": [],
         }
 
-        result = root_graph.invoke(initial_state)
+        result = await asyncio.to_thread(root_graph.invoke, initial_state)
 
         for event in result.get("events", []):
             yield {

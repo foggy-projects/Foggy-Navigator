@@ -18,6 +18,7 @@ class QueryRequest(BaseModel):
 
     prompt: str
     session_id: str | None = None
+    foggy_session_id: str | None = None
     model: str | None = None
     model_config_id: str | None = None
     context: dict[str, Any] | None = None
@@ -60,6 +61,13 @@ class QueryEvent(BaseModel):
     # Skill frame tracking (Phase 2+)
     skill_frame_id: str | None = None
     skill_id: str | None = None
+
+    # Tool execution tracking. Java relay and frontend use this to merge a
+    # tool_use event with the matching tool_result event.
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    function_id: str | None = None
+    args: dict[str, Any] | None = None
 
     # Result metadata (populated on type="result")
     duration_ms: int | None = None
@@ -178,6 +186,7 @@ class SkillManifest(BaseModel):
     subgraph: str | None = None
     # Visibility: 'builtin' skills are internal/test-only and excluded from LLM routing prompt
     visibility: str = "public"  # "builtin" | "public" | "private"
+    client_app_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from langgraph_biz_worker.graphs import root_graph as root_module
@@ -9,6 +10,27 @@ from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
+
+
+class _FakeChunk:
+    content = "ok"
+    tool_calls = None
+
+    def __add__(self, other):
+        self.content += getattr(other, "content", "")
+        return self
+
+
+class _FakeChatModel:
+    def __init__(self):
+        self.messages = None
+
+    def bind_tools(self, tools):
+        return self
+
+    def stream(self, messages):
+        self.messages = messages
+        yield _FakeChunk()
 
 
 def _write_skill(path: Path, description: str) -> None:
@@ -117,6 +139,98 @@ def test_route_skill_loads_client_app_public_skill_and_snapshots_manifest(tmp_pa
 
     assert frame is not None
     assert frame.private_working_state["_skill_manifest"]["description"] == "tms app version"
+
+
+def test_route_skill_auto_injects_only_client_app_public_skills(tmp_path, monkeypatch):
+    skills_root = tmp_path / "skills"
+    data_root = tmp_path / "data"
+
+    _write_named_skill(skills_root / "public" / "global-skill", "global_skill", "Global Skill", "global version")
+    _write_named_skill(
+        skills_root / "public" / "apps" / "tms_app" / "app-skill",
+        "app_skill",
+        "App Skill",
+        "tms app version",
+    )
+
+    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
+    runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(tmp_path / "frames"),
+    )
+    fake_chat = _FakeChatModel()
+
+    monkeypatch.setattr(root_module, "_skill_registry", registry)
+    monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module, "_chat_model", fake_chat)
+    monkeypatch.setattr(root_module.settings, "llm_agentic_routing", True)
+    monkeypatch.setattr(root_module, "_data_root", str(data_root))
+
+    root_module.route_skill({
+        "task_id": "task-app-public-auto-inject",
+        "session_id": None,
+        "prompt": "what can you do",
+        "model": None,
+        "context": {"clientAppId": "tms_app"},
+        "user_id": None,
+        "tenant_id": None,
+        "events": [],
+        "started_at": 0.0,
+        "active_frame_id": None,
+        "skill_results": [],
+    })
+
+    system_prompt = fake_chat.messages[0].content
+    assert "- app_skill: tms app version" in system_prompt
+    assert "global_skill" not in system_prompt
+
+
+def test_llm_conversation_log_groups_tasks_by_session_directory(tmp_path, monkeypatch):
+    skills_root = tmp_path / "skills"
+    data_root = tmp_path / "data"
+    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
+    runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(tmp_path / "frames"),
+    )
+
+    monkeypatch.setattr(root_module, "_skill_registry", registry)
+    monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module, "_chat_model", _FakeChatModel())
+    monkeypatch.setattr(root_module.settings, "llm_agentic_routing", True)
+    monkeypatch.setattr(root_module, "_data_root", str(data_root))
+
+    for task_id, prompt in (("task-1", "first"), ("task-2", "second")):
+        root_module.route_skill({
+            "task_id": task_id,
+            "session_id": "session-123",
+            "prompt": prompt,
+            "model": None,
+            "context": {},
+            "user_id": None,
+            "tenant_id": None,
+            "events": [],
+            "started_at": 0.0,
+            "active_frame_id": None,
+            "skill_results": [],
+        })
+
+    session_dir = data_root / "logs" / "llm-conversations" / "session-123"
+    files = sorted(session_dir.glob("*.jsonl"))
+
+    assert [p.name for p in files] == ["0001_task-1.jsonl", "0002_task-2.jsonl"]
+    assert not (data_root / "logs" / "llm-conversations" / "session-123.jsonl").exists()
+
+    first_entries = [json.loads(line) for line in files[0].read_text(encoding="utf-8").splitlines()]
+    second_entries = [json.loads(line) for line in files[1].read_text(encoding="utf-8").splitlines()]
+
+    assert first_entries[0]["event"] == "llm_request"
+    assert [message["role"] for message in first_entries[0]["messages"]] == ["system", "user"]
+    assert {entry["task_id"] for entry in first_entries} == {"task-1"}
+    assert {entry["task_id"] for entry in second_entries} == {"task-2"}
+    assert {entry["session_id"] for entry in first_entries + second_entries} == {"session-123"}
 
 
 # ---------------------------------------------------------------------------

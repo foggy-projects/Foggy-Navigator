@@ -4,6 +4,9 @@ import json
 
 import pytest
 
+from langgraph_biz_worker.models import QueryRequest
+from langgraph_biz_worker.routes.query import _resolve_session_id
+
 
 @pytest.mark.asyncio
 async def test_query_returns_sse_events(client):
@@ -51,6 +54,16 @@ async def test_query_with_custom_task_id(client):
 
     for event in events:
         assert event["task_id"] == "custom-task-123"
+
+
+def test_query_prefers_foggy_session_id_for_platform_session():
+    request = QueryRequest(
+        prompt="test",
+        session_id="claude-provider-session",
+        foggy_session_id="navigator-session",
+    )
+
+    assert _resolve_session_id(request) == "navigator-session"
 
 
 @pytest.mark.asyncio
