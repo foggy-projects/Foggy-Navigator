@@ -262,6 +262,95 @@ def test_llm_agent_uses_frame_manifest_snapshot_after_registry_reload():
     assert "frozen manifest" in model.seen_messages[0][0].content
 
 
+def test_llm_agent_injects_runtime_time_context_into_user_prompt():
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="query_skill",
+        name="query_skill",
+        description="Query business data.",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    frame_id = runtime.invoke_skill(
+        task_id="task_time_context_001",
+        skill_id="query_skill",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_time_context_001",
+        frame_id=frame_id,
+        prompt="本月运费",
+        runtime_context={
+            "current_time": "2026-05-11T10:37:10+08:00",
+            "timezone": "Asia/Shanghai",
+        },
+    )
+
+    user_prompt = model.seen_messages[0][1].content
+    assert "Runtime context:" in user_prompt
+    assert "- current_time: 2026-05-11T10:37:10+08:00" in user_prompt
+    assert "- timezone: Asia/Shanghai" in user_prompt
+    assert "- business_date: 2026-05-11" in user_prompt
+    assert "- current_month_range: [2026-05-01, 2026-06-01)" in user_prompt
+    assert "Resolve relative dates such as 本月" in user_prompt
+
+
+def test_llm_agent_keeps_runtime_time_out_of_system_prompt():
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="query_skill",
+        name="query_skill",
+        description="Query business data.",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    frame_id = runtime.invoke_skill(
+        task_id="task_time_context_002",
+        skill_id="query_skill",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_time_context_002",
+        frame_id=frame_id,
+        prompt="本月运费",
+        runtime_context={
+            "current_time": "2026-05-11T10:37:10+08:00",
+            "timezone": "Asia/Shanghai",
+        },
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "current_time" not in system_prompt
+    assert "current_month_range" not in system_prompt
+    assert "2026-05-11T10:37:10+08:00" not in system_prompt
+
+
 def test_llm_agent_exposes_only_invoke_business_function_tool_without_skill_allowlist():
     registry = SkillRegistry()
     registry.register(SkillManifest(

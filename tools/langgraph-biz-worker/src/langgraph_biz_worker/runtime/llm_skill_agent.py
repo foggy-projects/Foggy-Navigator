@@ -87,7 +87,12 @@ class LlmSkillAgent:
 
         messages: list[Any] = [
             SystemMessage(content=self._build_system_prompt(manifest)),
-            HumanMessage(content=self._build_user_prompt(prompt, frame.input, manifest.id)),
+            HumanMessage(content=self._build_user_prompt(
+                prompt,
+                frame.input,
+                manifest.id,
+                runtime_context,
+            )),
         ]
         events: list[QueryEvent] = []
         model = self._bind_tools(self._model, manifest)
@@ -446,12 +451,19 @@ class LlmSkillAgent:
         return prompt
 
     @staticmethod
-    def _build_user_prompt(prompt: str, skill_input: dict[str, Any], skill_id: str) -> str:
-        return (
-            f"SKILL_AGENT_START {skill_id}\n"
-            f"User request: {prompt}\n"
-            f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}"
-        )
+    def _build_user_prompt(
+        prompt: str,
+        skill_input: dict[str, Any],
+        skill_id: str,
+        runtime_context: dict[str, Any] | None = None,
+    ) -> str:
+        parts = [
+            f"SKILL_AGENT_START {skill_id}",
+            _build_runtime_time_context_prompt(runtime_context),
+            f"User request: {prompt}",
+            f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}",
+        ]
+        return "\n".join(part for part in parts if part)
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +491,88 @@ def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None
         return None
     value = runtime_context.get("client_app_id") or runtime_context.get("clientAppId")
     return value if isinstance(value, str) and value else None
+
+
+
+def _build_runtime_time_context_prompt(runtime_context: dict[str, Any] | None) -> str:
+    time_context = _runtime_time_context(runtime_context)
+    return (
+        "Runtime context:\n"
+        f"- current_time: {time_context['current_time']}\n"
+        f"- timezone: {time_context['timezone']}\n"
+        f"- business_date: {time_context['business_date']}\n"
+        f"- current_month_range: [{time_context['current_month_start']}, {time_context['next_month_start']})\n"
+        "Rule: Resolve relative dates such as 本月, 今天, 昨日, 近7天 using this runtime context."
+    )
+
+
+def _runtime_time_context(runtime_context: dict[str, Any] | None) -> dict[str, str]:
+    context = runtime_context or {}
+    current_time = _runtime_context_str(context, "current_time", "currentTime")
+    timezone_name = _runtime_context_str(context, "timezone", "timeZone", "tz") or _local_timezone_name()
+
+    if current_time:
+        now = _parse_runtime_datetime(current_time) or datetime.datetime.now().astimezone()
+    else:
+        now = datetime.datetime.now().astimezone()
+        current_time = now.isoformat()
+
+    business_date = _runtime_context_str(context, "business_date", "businessDate")
+    if not business_date:
+        business_date = now.date().isoformat()
+
+    business_day = _parse_runtime_date(business_date) or now.date()
+    current_month_start, next_month_start = _month_range_for(business_day)
+
+    return {
+        "current_time": current_time,
+        "timezone": timezone_name,
+        "business_date": business_day.isoformat(),
+        "current_month_start": current_month_start.isoformat(),
+        "next_month_start": next_month_start.isoformat(),
+    }
+
+
+def _runtime_context_str(context: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _local_timezone_name() -> str:
+    tzinfo = datetime.datetime.now().astimezone().tzinfo
+    if tzinfo is None:
+        return "local"
+    return getattr(tzinfo, "key", None) or tzinfo.tzname(None) or str(tzinfo)
+
+
+def _parse_runtime_datetime(value: str) -> datetime.datetime | None:
+    try:
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        return datetime.datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _parse_runtime_date(value: str) -> datetime.date | None:
+    try:
+        return datetime.date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _month_range_for(day: datetime.date) -> tuple[datetime.date, datetime.date]:
+    current_month_start = day.replace(day=1)
+    if current_month_start.month == 12:
+        next_month_start = current_month_start.replace(
+            year=current_month_start.year + 1,
+            month=1,
+        )
+    else:
+        next_month_start = current_month_start.replace(month=current_month_start.month + 1)
+    return current_month_start, next_month_start
 
 
 def _looks_like_business_function_id(name: str) -> bool:
