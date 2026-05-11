@@ -71,6 +71,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         ArgumentCaptor<CreateLanggraphTaskForm> formCaptor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
         verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
         CreateLanggraphTaskForm form = formCaptor.getValue();
+        assertEquals("skill_01", form.getAgentId());
         assertEquals("worker_01", form.getWorkerId());
         assertEquals("session_01", form.getSessionId());
         assertEquals("model_01", form.getModelConfigId());

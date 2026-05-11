@@ -1,11 +1,14 @@
 """Tests for the POST /api/v1/query SSE endpoint."""
 
+import asyncio
 import json
+import threading
+from unittest.mock import patch
 
 import pytest
 
-from langgraph_biz_worker.models import QueryRequest
-from langgraph_biz_worker.routes.query import _resolve_session_id
+from langgraph_biz_worker.models import QueryEvent, QueryRequest
+from langgraph_biz_worker.routes.query import _event_generator, _resolve_session_id
 
 
 @pytest.mark.asyncio
@@ -64,6 +67,51 @@ def test_query_prefers_foggy_session_id_for_platform_session():
     )
 
     assert _resolve_session_id(request) == "navigator-session"
+
+
+@pytest.mark.asyncio
+async def test_query_generator_streams_tool_progress_before_graph_finishes():
+    release_graph = threading.Event()
+    graph_returned = threading.Event()
+    tool_event = QueryEvent(
+        type="tool_use",
+        task_id="progress-task-001",
+        skill_frame_id="frame-001",
+        skill_id="skill-001",
+        content="tms.dataset.listModels",
+        tool_call_id="call-001",
+        tool_name="tms.dataset.listModels",
+        function_id="tms.dataset.listModels",
+    )
+    result_event = QueryEvent(type="result", task_id="progress-task-001", content="done")
+
+    def invoke_with_progress(state):
+        state["runtime_context"]["_progress_event_sink"](tool_event)
+        assert release_graph.wait(timeout=2)
+        graph_returned.set()
+        return {"events": [tool_event, result_event]}
+
+    with patch("langgraph_biz_worker.routes.query.root_graph") as mock_graph:
+        mock_graph.invoke.side_effect = invoke_with_progress
+        generator = _event_generator(
+            "progress-task-001",
+            QueryRequest(prompt="stream tool progress"),
+        )
+        try:
+            first = await asyncio.wait_for(generator.__anext__(), timeout=1)
+            first_event = json.loads(first["data"])
+            assert first_event["type"] == "tool_use"
+            assert not graph_returned.is_set()
+        finally:
+            release_graph.set()
+
+        remaining = []
+        async for item in generator:
+            remaining.append(json.loads(item["data"]))
+
+    all_events = [first_event, *remaining]
+    assert [event["type"] for event in all_events].count("tool_use") == 1
+    assert any(event["type"] == "result" for event in all_events)
 
 
 @pytest.mark.asyncio

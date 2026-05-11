@@ -45,6 +45,7 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         }
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
+        form.setAgentId(request.getSkillId());
         form.setWorkerId(member.getWorkerId());
         form.setSessionId(request.getSessionId());
         form.setModelConfigId(request.getModelConfigId());

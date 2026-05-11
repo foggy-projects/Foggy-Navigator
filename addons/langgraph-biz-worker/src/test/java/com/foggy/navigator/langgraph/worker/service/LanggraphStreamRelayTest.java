@@ -4,10 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.session.event.SessionEventListener;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.codec.ServerSentEvent;
 
 import java.lang.reflect.Method;
@@ -16,25 +16,25 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class LanggraphStreamRelayTest {
 
     private LanggraphTaskService taskService;
-    private ApplicationEventPublisher eventPublisher;
+    private SessionEventListener sessionEventListener;
     private LanggraphStreamRelay relay;
 
     @BeforeEach
     void setUp() {
         taskService = mock(LanggraphTaskService.class);
-        eventPublisher = mock(ApplicationEventPublisher.class);
+        sessionEventListener = mock(SessionEventListener.class);
         relay = new LanggraphStreamRelay(
                 mock(LanggraphWorkerService.class),
                 taskService,
-                eventPublisher,
+                sessionEventListener,
                 new ObjectMapper()
         );
     }
@@ -79,9 +79,9 @@ class LanggraphStreamRelayTest {
                 "{\"script_run_id\":\"sr_001\",\"suspend_id\":\"sp_001\",\"reason\":\"order.close_apply.submit\"}"
         );
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(eventPublisher).publishEvent(captor.capture());
-        AgentMessage message = assertInstanceOf(AgentMessage.class, captor.getValue());
+        ArgumentCaptor<AgentMessage> captor = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener).handleMessage(captor.capture());
+        AgentMessage message = captor.getValue();
         assertEquals(MessageType.STATE_SYNC, message.getType());
         assertEquals(taskId, message.getTaskId());
 
@@ -153,11 +153,11 @@ class LanggraphStreamRelayTest {
         invokeHandleEvent(ServerSentEvent.<String>builder().data(toolUse).build(), taskId, sessionId);
         invokeHandleEvent(ServerSentEvent.<String>builder().data(toolResult).build(), taskId, sessionId);
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(eventPublisher, org.mockito.Mockito.times(2)).publishEvent(captor.capture());
-        List<Object> events = captor.getAllValues();
+        ArgumentCaptor<AgentMessage> captor = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener, times(2)).handleMessage(captor.capture());
+        List<AgentMessage> events = captor.getAllValues();
 
-        AgentMessage start = assertInstanceOf(AgentMessage.class, events.get(0));
+        AgentMessage start = events.get(0);
         assertEquals(MessageType.TOOL_CALL_START, start.getType());
         assertEquals(taskId, start.getTaskId());
         @SuppressWarnings("unchecked")
@@ -165,12 +165,40 @@ class LanggraphStreamRelayTest {
         assertEquals("tms.dataset.listModels", startPayload.get("toolName"));
         assertEquals("foggy-query-agent", startPayload.get("skillId"));
 
-        AgentMessage result = assertInstanceOf(AgentMessage.class, events.get(1));
+        AgentMessage result = events.get(1);
         assertEquals(MessageType.TOOL_CALL_RESULT, result.getType());
         @SuppressWarnings("unchecked")
         Map<String, Object> resultPayload = (Map<String, Object>) result.getPayload();
         assertEquals(true, resultPayload.get("success"));
         assertEquals("tool_result", resultPayload.get("subtype"));
+    }
+
+    @Test
+    void resultMessageIsHandledBeforeTaskIsCompleted() throws Exception {
+        String taskId = "lgt-task-4";
+        String sessionId = "session-4";
+        String data = """
+                {
+                  "type": "result",
+                  "content": "done",
+                  "duration_ms": 42,
+                  "structured_output": {"ok": true}
+                }
+                """;
+
+        invokeHandleEvent(ServerSentEvent.<String>builder().data(data).build(), taskId, sessionId);
+
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(sessionEventListener, taskService);
+        inOrder.verify(sessionEventListener).handleMessage(org.mockito.ArgumentMatchers.argThat(message ->
+                message.getType() == MessageType.TASK_COMPLETED
+                        && taskId.equals(message.getTaskId())
+        ));
+        inOrder.verify(taskService).completeTask(
+                taskId,
+                "done",
+                "{\"ok\":true}",
+                42L
+        );
     }
 
     private void invokeHandleEvent(

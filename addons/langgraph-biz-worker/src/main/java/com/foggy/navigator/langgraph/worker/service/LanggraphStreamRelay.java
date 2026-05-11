@@ -6,9 +6,9 @@ import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
+import com.foggy.navigator.session.event.SessionEventListener;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.scheduling.annotation.Async;
@@ -30,7 +30,7 @@ public class LanggraphStreamRelay {
 
     private final LanggraphWorkerService workerService;
     private final LanggraphTaskService taskService;
-    private final ApplicationEventPublisher eventPublisher;
+    private final SessionEventListener sessionEventListener;
     private final ObjectMapper objectMapper;
 
     private final ConcurrentHashMap<String, Disposable> activeStreams = new ConcurrentHashMap<>();
@@ -292,6 +292,6 @@ public class LanggraphStreamRelay {
         if (taskId instanceof String taskIdValue && !taskIdValue.isBlank()) {
             msg.setTaskId(taskIdValue);
         }
-        eventPublisher.publishEvent(msg);
+        sessionEventListener.handleMessage(msg);
     }
 }

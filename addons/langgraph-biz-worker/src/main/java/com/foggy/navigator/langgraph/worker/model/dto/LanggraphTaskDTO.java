@@ -15,6 +15,7 @@ public class LanggraphTaskDTO {
     private String taskId;
     private String sessionId;
     private String workerId;
+    private String agentId;
     private String userId;
     private String prompt;
     private String status;

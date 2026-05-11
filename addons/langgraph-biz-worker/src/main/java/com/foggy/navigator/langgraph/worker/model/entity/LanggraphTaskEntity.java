@@ -28,6 +28,9 @@ public class LanggraphTaskEntity {
     @Column(length = 64, nullable = false)
     private String workerId;
 
+    @Column(length = 64)
+    private String agentId;
+
     @Column(length = 64, nullable = false)
     private String userId;
 

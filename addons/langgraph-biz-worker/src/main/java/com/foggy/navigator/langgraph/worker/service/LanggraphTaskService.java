@@ -88,6 +88,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
     @Override
     public DispatchTaskDTO createTaskDirect(Map<String, Object> params, String userId, String tenantId) {
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
+        form.setAgentId((String) params.get("agentId"));
         form.setWorkerId((String) params.get("workerId"));
         form.setPrompt((String) params.get("prompt"));
         form.setDirectoryId((String) params.get("directoryId"));
@@ -187,11 +188,12 @@ public class LanggraphTaskService implements TaskQueryProvider {
     public LanggraphTaskDTO createTask(String userId, String tenantId, CreateLanggraphTaskForm form) {
         // 1. Create or reuse session
         String sessionId = form.getSessionId();
+        String agentId = resolveAgentId(form);
         if (sessionId == null || sessionManager.getSession(sessionId) == null) {
             sessionId = sessionManager.createSession(SessionCreateRequest.builder()
                     .userId(userId)
                     .tenantId(tenantId)
-                    .agentId(PROVIDER_TYPE)
+                    .agentId(agentId)
                     .providerType(PROVIDER_TYPE)
                     .taskName(truncate(form.getPrompt(), 100))
                     .build());
@@ -203,6 +205,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         entity.setTaskId(taskId);
         entity.setSessionId(sessionId);
         entity.setWorkerId(form.getWorkerId());
+        entity.setAgentId(agentId);
         entity.setUserId(userId);
         entity.setTenantId(tenantId);
         entity.setPrompt(form.getPrompt());
@@ -319,7 +322,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         sessionTask.setWorkerId(entity.getWorkerId());
         sessionTask.setUserId(entity.getUserId());
         sessionTask.setTenantId(entity.getTenantId());
-        sessionTask.setAgentId(PROVIDER_TYPE);
+        sessionTask.setAgentId(resolveAgentId(entity));
         sessionTask.setDirectoryId(entity.getDirectoryId());
         sessionTask.setPrompt(entity.getPrompt());
         sessionTask.setCwd(entity.getCwd());
@@ -342,8 +345,9 @@ public class LanggraphTaskService implements TaskQueryProvider {
         }
         sessionEntityRepository.findById(entity.getSessionId()).ifPresent(session -> {
             boolean changed = false;
-            if (!Objects.equals(session.getAgentId(), PROVIDER_TYPE)) {
-                session.setAgentId(PROVIDER_TYPE);
+            String agentId = resolveAgentId(entity);
+            if (!Objects.equals(session.getAgentId(), agentId)) {
+                session.setAgentId(agentId);
                 changed = true;
             }
             if (!Objects.equals(session.getProviderType(), PROVIDER_TYPE)) {
@@ -389,6 +393,18 @@ public class LanggraphTaskService implements TaskQueryProvider {
             log.warn("Failed to serialize langgraph task state: taskId={}", entity.getTaskId(), e);
             return null;
         }
+    }
+
+    private String resolveAgentId(CreateLanggraphTaskForm form) {
+        return form.getAgentId() == null || form.getAgentId().isBlank()
+                ? PROVIDER_TYPE
+                : form.getAgentId();
+    }
+
+    private String resolveAgentId(LanggraphTaskEntity entity) {
+        return entity.getAgentId() == null || entity.getAgentId().isBlank()
+                ? PROVIDER_TYPE
+                : entity.getAgentId();
     }
 
     // ── Approval lifecycle (Doc 31 §16.4: Java side manages audit) ─────
@@ -497,6 +513,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
                 .taskId(entity.getTaskId())
                 .sessionId(entity.getSessionId())
                 .workerId(entity.getWorkerId())
+                .agentId(resolveAgentId(entity))
                 .userId(entity.getUserId())
                 .providerType(PROVIDER_TYPE)
                 .prompt(entity.getPrompt())
@@ -519,6 +536,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
                 .taskId(entity.getTaskId())
                 .sessionId(entity.getSessionId())
                 .workerId(entity.getWorkerId())
+                .agentId(resolveAgentId(entity))
                 .userId(entity.getUserId())
                 .prompt(entity.getPrompt())
                 .status(entity.getStatus())

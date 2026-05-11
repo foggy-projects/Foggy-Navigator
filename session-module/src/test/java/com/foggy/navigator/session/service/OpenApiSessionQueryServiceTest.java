@@ -184,6 +184,25 @@ class OpenApiSessionQueryServiceTest {
     }
 
     @Test
+    void getTaskMessages_shouldReturnPersistedToolMessagesByTaskId() {
+        String taskId = "lgt-" + UUID.randomUUID().toString().substring(0, 8);
+
+        addMessage(sessionId, taskId, MessageRole.ASSISTANT, "tms.dataset.listModels",
+                Map.of("type", "TOOL_CALL_START", "taskId", taskId, "toolName", "tms.dataset.listModels"));
+        addMessage(sessionId, taskId, MessageRole.TOOL, "{\"ok\":true}",
+                Map.of("type", "TOOL_CALL_RESULT", "taskId", taskId, "toolName", "tms.dataset.listModels",
+                        "success", true));
+
+        List<SessionMessageEntity> messages = queryService.getTaskMessages(taskId, null, 50);
+
+        assertEquals(2, messages.size());
+        assertEquals(taskId, messages.get(0).getTaskId());
+        assertTrue(messages.get(0).getMetadata().contains("TOOL_CALL_START"));
+        assertEquals(taskId, messages.get(1).getTaskId());
+        assertTrue(messages.get(1).getMetadata().contains("TOOL_CALL_RESULT"));
+    }
+
+    @Test
     void getTaskMessages_cursorShouldReturnIncrementalMessages() {
         String taskId = "task-" + UUID.randomUUID().toString().substring(0, 8);
 
@@ -235,13 +254,19 @@ class OpenApiSessionQueryServiceTest {
     // ── 辅助方法 ──
 
     private String addMessage(String sessionId, String taskId, MessageRole role, String content) {
+        return addMessage(sessionId, taskId, role, content,
+                Map.of("type", role == MessageRole.USER ? "USER" : "TEXT_COMPLETE"));
+    }
+
+    private String addMessage(String sessionId, String taskId, MessageRole role, String content,
+                              Map<String, Object> metadata) {
         Message msg = Message.builder()
                 .id(UUID.randomUUID().toString())
                 .sessionId(sessionId)
                 .taskId(taskId)
                 .role(role)
                 .content(content)
-                .metadata(Map.of("type", role == MessageRole.USER ? "USER" : "TEXT_COMPLETE"))
+                .metadata(metadata)
                 .build();
         return sessionManager.addMessage(sessionId, msg);
     }

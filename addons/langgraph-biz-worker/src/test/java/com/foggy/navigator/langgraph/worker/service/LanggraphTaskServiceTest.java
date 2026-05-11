@@ -46,6 +46,7 @@ class LanggraphTaskServiceTest {
     private static final String TENANT_ID = "tenant-1";
     private static final String WORKER_ID = "worker-1";
     private static final String SESSION_ID = "session-001";
+    private static final String AGENT_ID = "tms-agent-v305";
 
     @BeforeEach
     void setUp() {
@@ -70,6 +71,7 @@ class LanggraphTaskServiceTest {
 
     private CreateLanggraphTaskForm makeForm() {
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
+        form.setAgentId(AGENT_ID);
         form.setWorkerId(WORKER_ID);
         form.setPrompt("分析异常订单");
         form.setSessionId(SESSION_ID);
@@ -103,6 +105,7 @@ class LanggraphTaskServiceTest {
             assertEquals(USER_ID, saved.getUserId());
             assertEquals(TENANT_ID, saved.getTenantId());
             assertEquals(WORKER_ID, saved.getWorkerId());
+            assertEquals(AGENT_ID, saved.getAgentId());
             assertNotNull(saved.getTaskId());
             assertTrue(saved.getTaskId().startsWith("lgt_"));
 
@@ -110,6 +113,7 @@ class LanggraphTaskServiceTest {
                     saved.getTaskId().equals(projection.getTaskId())
                             && SESSION_ID.equals(projection.getSessionId())
                             && WORKER_ID.equals(projection.getWorkerId())
+                            && AGENT_ID.equals(projection.getAgentId())
                             && "langgraph-biz-worker".equals(projection.getProviderType())
                             && "cfg-langgraph".equals(projection.getModelConfigId())
             ));

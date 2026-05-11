@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SCRUB_TEMPLATE = "[externalized: {artifact_id}, size={size}, summary={summary}]"
+_PROGRESS_EVENT_SINK_KEY = "_progress_event_sink"
 
 
 class LlmSkillAgent:
@@ -164,19 +165,19 @@ class LlmSkillAgent:
         name = call["name"]
         args = call["args"]
         safe_args = _safe_tool_call_args(args)
-        events: list[QueryEvent] = [
-            QueryEvent(
-                type="tool_use",
-                task_id=task_id,
-                skill_frame_id=frame_id,
-                skill_id=manifest.id,
-                content=name,
-                tool_call_id=call.get("id"),
-                tool_name=name,
-                function_id=_tool_function_id(name, safe_args),
-                args=safe_args,
-            )
-        ]
+        tool_use_event = QueryEvent(
+            type="tool_use",
+            task_id=task_id,
+            skill_frame_id=frame_id,
+            skill_id=manifest.id,
+            content=name,
+            tool_call_id=call.get("id"),
+            tool_name=name,
+            function_id=_tool_function_id(name, safe_args),
+            args=safe_args,
+        )
+        events: list[QueryEvent] = [tool_use_event]
+        _emit_progress_event(runtime_context, tool_use_event)
         self._append_tool_call_message(frame_id, name, safe_args)
         self._append_tool_audit(task_id, frame_id, manifest.id, name, safe_args, phase="request")
 
@@ -199,7 +200,7 @@ class LlmSkillAgent:
         if name == "submit_skill_result" and not result.get("ok"):
             event_type = "skill_result_reject"
 
-        events.append(QueryEvent(
+        result_event = QueryEvent(
             type=event_type,
             task_id=task_id,
             skill_frame_id=frame_id,
@@ -210,7 +211,9 @@ class LlmSkillAgent:
             tool_name=name,
             function_id=_tool_function_id(name, safe_args, result),
             args=safe_args,
-        ))
+        )
+        events.append(result_event)
+        _emit_progress_event(runtime_context, result_event)
 
         ret: dict[str, Any] = {"events": events, "tool_result": result}
 
@@ -493,7 +496,6 @@ def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None
     return value if isinstance(value, str) and value else None
 
 
-
 def _build_runtime_time_context_prompt(runtime_context: dict[str, Any] | None) -> str:
     time_context = _runtime_time_context(runtime_context)
     return (
@@ -573,6 +575,18 @@ def _month_range_for(day: datetime.date) -> tuple[datetime.date, datetime.date]:
     else:
         next_month_start = current_month_start.replace(month=current_month_start.month + 1)
     return current_month_start, next_month_start
+
+
+def _emit_progress_event(runtime_context: dict[str, Any] | None, event: QueryEvent) -> None:
+    if not runtime_context:
+        return
+    sink = runtime_context.get(_PROGRESS_EVENT_SINK_KEY)
+    if not callable(sink):
+        return
+    try:
+        sink(event)
+    except Exception:
+        logger.debug("Failed to emit progress event", exc_info=True)
 
 
 def _looks_like_business_function_id(name: str) -> bool:
