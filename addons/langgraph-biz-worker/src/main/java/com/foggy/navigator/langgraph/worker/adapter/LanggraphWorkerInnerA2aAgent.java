@@ -8,6 +8,7 @@ import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -47,8 +48,8 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setWorkerId(entity.getWorkerId());
         form.setPrompt(prompt);
         form.setDirectoryId(entity.getDefaultDirectoryId());
-        form.setModel((String) meta.get("model"));
-        form.setModelConfigId((String) meta.get("modelConfigId"));
+        form.setModel(firstText(meta.get("model"), entity.getDefaultModel()));
+        form.setModelConfigId(firstText(meta.get("modelConfigId"), entity.getDefaultModelConfigId()));
         form.setContextId(context.getContextId());
         form.setSessionId(context.getNavigatorSessionId());
         if (meta.get("context") instanceof Map<?, ?> ctx) {
@@ -66,6 +67,14 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         LanggraphTaskDTO task = taskService.createTask(
                 entity.getUserId(), entity.getTenantId(), form);
 
+        Map<String, Object> taskMetadata = new LinkedHashMap<>();
+        if (task.getSessionId() != null) {
+            taskMetadata.put("sessionId", task.getSessionId());
+        }
+        if (task.getWorkerId() != null) {
+            taskMetadata.put("workerId", task.getWorkerId());
+        }
+
         return A2aTask.builder()
                 .id(task.getTaskId())
                 .contextId(context.getContextId())
@@ -74,9 +83,7 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
                         .timestamp(Instant.now())
                         .build())
                 .history(List.of(message))
-                .metadata(Map.of(
-                        "sessionId", task.getSessionId(),
-                        "workerId", task.getWorkerId()))
+                .metadata(taskMetadata)
                 .build();
     }
 
@@ -129,5 +136,12 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             }
         }
         return "";
+    }
+
+    private String firstText(Object preferred, String fallback) {
+        if (preferred instanceof String value && !value.isBlank()) {
+            return value;
+        }
+        return fallback;
     }
 }

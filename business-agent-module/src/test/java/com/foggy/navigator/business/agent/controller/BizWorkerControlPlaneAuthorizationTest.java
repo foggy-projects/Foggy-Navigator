@@ -78,6 +78,12 @@ class BizWorkerControlPlaneAuthorizationTest {
     }
 
     @Test
+    void businessAgentBundleController_methods_requires_tenant_admin() throws NoSuchMethodException {
+        assertMethodRole(com.foggy.navigator.business.agent.controller.BusinessAgentBundleController.class.getMethod(
+                "syncAgentBundle", String.class, String.class, com.foggy.navigator.business.agent.model.form.SyncBusinessAgentBundleForm.class), "TENANT_ADMIN");
+    }
+
+    @Test
     void clientAppUserGrantController_methods_requires_tenant_admin() throws NoSuchMethodException {
         assertMethodRole(com.foggy.navigator.business.agent.controller.ClientAppUserGrantController.class.getMethod("grantUpstreamUserAccess", String.class, String.class, String.class, com.foggy.navigator.business.agent.model.form.GrantUpstreamUserForm.class), "TENANT_ADMIN");
         assertMethodRole(com.foggy.navigator.business.agent.controller.ClientAppUserGrantController.class.getMethod("updateUpstreamUserGrantStatus", String.class, String.class, String.class, String.class), "TENANT_ADMIN");

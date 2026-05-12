@@ -53,6 +53,9 @@ final class CliArguments {
         if (words.size() >= 2 && "skill".equals(words.get(0))) {
             return "skill " + words.get(1);
         }
+        if (words.size() >= 2 && "agent".equals(words.get(0))) {
+            return "agent " + words.get(1);
+        }
         return words.get(0);
     }
 

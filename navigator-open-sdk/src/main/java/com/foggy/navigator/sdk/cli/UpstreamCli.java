@@ -19,8 +19,10 @@ import com.foggy.navigator.sdk.model.TaskMessagesPage;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
+import com.foggy.navigator.sdk.model.businessagent.BusinessAgentBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.SyncBusinessAgentBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncSkillBundleForm;
 
 import java.io.PrintStream;
@@ -81,6 +83,7 @@ public class UpstreamCli {
             case "skill tree" -> skillTree(args);
             case "skill read" -> skillRead(args);
             case "skill sync" -> skillSync(args);
+            case "agent sync" -> agentSync(args);
             case "tms token issue-staff", "tms order create-self-pickup-sign-ready",
                     "tms order readiness" -> unsupportedTmsHelper();
             case "", "help" -> usage();
@@ -90,7 +93,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, agent sync");
         return 0;
     }
 
@@ -354,6 +357,43 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int agentSync(CliArguments args) throws Exception {
+        if (args.flag("help")) {
+            printAgentSyncUsage();
+            return 0;
+        }
+        String manifest = requiredOption(args, "manifest", "manifest path");
+        Path manifestPath = cwd.resolve(manifest).normalize();
+        if (!Files.isRegularFile(manifestPath)) {
+            throw new UpstreamCliException("manifest file not found: " + manifestPath);
+        }
+        String json = Files.readString(manifestPath, StandardCharsets.UTF_8);
+        SyncBusinessAgentBundleForm form = new ObjectMapper().readValue(json, SyncBusinessAgentBundleForm.class);
+        if (!hasText(form.getClientAppId())) {
+            form.setClientAppId(requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id"));
+        }
+        if (!hasText(form.getAgentId()) && !hasText(form.getAgentCode())) {
+            form.setAgentId(agentCode(args));
+        }
+        if (!hasText(form.getDefaultModelConfigId()) && hasText(modelConfigId(args))) {
+            form.setDefaultModelConfigId(modelConfigId(args));
+        }
+        BusinessAgentBundleDTO dto = businessAgentControlApi().syncBusinessAgentBundle(form);
+        printAgentBundle(dto);
+        return 0;
+    }
+
+    private void printAgentSyncUsage() {
+        out.println("Usage: navi upstream agent sync --manifest <agent-bundle.json> [options]");
+        out.println("Options:");
+        out.println("  --manifest <path>          Agent bundle manifest JSON.");
+        out.println("  --client-app-id <id>       Defaults to NAVI_CLIENT_APP_ID.");
+        out.println("  --agent-code <code>        Defaults to NAVI_AGENT_CODE when manifest omits agentId/agentCode.");
+        out.println("  --model-config-id <id>     Defaults to NAVI_MODEL_CONFIG_ID when manifest omits defaultModelConfigId.");
+        out.println("  --admin-token <token>      Control-plane credential, or set NAVI_ADMIN_TOKEN.");
+        out.println("  --admin-api-key <key>      Control-plane credential, or set NAVI_ADMIN_API_KEY.");
+    }
+
     private int unsupportedTmsHelper() {
         throw new UpstreamCliException("TMS test-only helper is not implemented in this CLI build; use env/profile tokens without printing secrets");
     }
@@ -448,6 +488,23 @@ public class UpstreamCli {
         if (dto != null && dto.getMaterializeResult() != null) {
             out.println("materializeStatus=" + valueOrEmpty(dto.getMaterializeResult().getStatus()));
             out.println("workerStatusCode=" + valueOrEmpty(dto.getMaterializeResult().getWorkerStatusCode()));
+        }
+    }
+
+    private void printAgentBundle(BusinessAgentBundleDTO dto) {
+        out.println("agent sync ok");
+        out.println("clientAppId=" + valueOrEmpty(dto != null ? dto.getClientAppId() : null));
+        out.println("agentId=" + valueOrEmpty(dto != null ? dto.getAgentId() : null));
+        out.println("skillId=" + valueOrEmpty(dto != null ? dto.getSkillId() : null));
+        out.println("agentType=" + valueOrEmpty(dto != null ? dto.getAgentType() : null));
+        out.println("workerId=" + valueOrEmpty(dto != null ? dto.getWorkerId() : null));
+        out.println("defaultModelConfigId=" + valueOrEmpty(dto != null ? dto.getDefaultModelConfigId() : null));
+        if (dto != null && dto.getSkillBundle() != null) {
+            out.println("skillStatus=" + valueOrEmpty(dto.getSkillBundle().getStatus()));
+            if (dto.getSkillBundle().getMaterializeResult() != null) {
+                out.println("materializeStatus=" + valueOrEmpty(dto.getSkillBundle().getMaterializeResult().getStatus()));
+                out.println("workerStatusCode=" + valueOrEmpty(dto.getSkillBundle().getMaterializeResult().getWorkerStatusCode()));
+            }
         }
     }
 

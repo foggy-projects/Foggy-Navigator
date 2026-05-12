@@ -510,6 +510,61 @@ class UpstreamCliTest {
     }
 
     @Test
+    void agentSyncHelpPrintsUsageWithoutManifest() {
+        int code = run(new String[]{"upstream", "agent", "sync", "--help"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertTrue(output.contains("Usage: navi upstream agent sync --manifest <agent-bundle.json>"));
+        assertTrue(output.contains("--admin-token <token>"));
+        assertNull(lastPath);
+    }
+
+    @Test
+    void agentSyncUsesControlPlaneCredentialManifestAndEnvDefaults() throws Exception {
+        responseOverride = """
+                {"code":0,"data":{
+                  "clientAppId":"app-env",
+                  "agentId":"agent-env",
+                  "skillId":"agent-env",
+                  "agentType":"LOCAL_LANGGRAPH_WORKER",
+                  "workerId":"worker-1",
+                  "defaultModelConfigId":"model-env",
+                  "skillBundle":{"status":"ENABLED"}
+                }}
+                """;
+        Path manifest = tempDir.resolve("agent-bundle.json");
+        Files.writeString(manifest, """
+                {
+                  "name":"Agent Env",
+                  "workerId":"worker-1",
+                  "markdownBody":"# Agent Env"
+                }
+                """, StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "agent", "sync",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--admin-token", "admin-secret",
+                "--manifest", manifest.getFileName().toString()}, env(
+                "NAVI_CLIENT_APP_ID", "app-env",
+                "NAVI_AGENT_CODE", "agent-env",
+                "NAVI_MODEL_CONFIG_ID", "model-env"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/agent-bundles/sync", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("Bearer admin-secret", lastAuthorizationHeader);
+        assertTrue(lastBody.contains("\"clientAppId\":\"app-env\""));
+        assertTrue(lastBody.contains("\"agentId\":\"agent-env\""));
+        assertTrue(lastBody.contains("\"defaultModelConfigId\":\"model-env\""));
+        assertTrue(output.contains("agent sync ok"));
+        assertTrue(output.contains("agentType=LOCAL_LANGGRAPH_WORKER"));
+        assertFalse(output.contains("admin-secret"));
+    }
+
+    @Test
     void skillSyncAccountPrivateUsesRuntimeHeaders() throws Exception {
         responseOverride = """
                 {"code":0,"data":{

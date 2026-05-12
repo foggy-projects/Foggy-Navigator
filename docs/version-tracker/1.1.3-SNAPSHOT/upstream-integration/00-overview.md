@@ -124,3 +124,4 @@ graph TB
 | [20-navigator-upstream-cli-readiness-and-skill-artifact.md](./20-navigator-upstream-cli-readiness-and-skill-artifact.md) | CLI agent readiness 与 skill artifact 浏览 | 上游 LLM coding agent / 上游后端 / skill owner |
 | [21-account-context-memory-file-design.md](./21-account-context-memory-file-design.md) | UserMemory、账号上下文文件与 accountId 私有 Skill 边界 | Navigator / worker / skill owner |
 | [22-skill-bundle-sync-design.md](./22-skill-bundle-sync-design.md) | 统一 ClientApp public 与 account private Skill Bundle 同步 | Navigator / 上游后端 / 上游 LLM coding agent |
+| [23-business-agent-bundle-registration-design.md](./23-business-agent-bundle-registration-design.md) | 正式业务 Agent 注册、Skill Bundle 同步与 ClientApp 授权一体化 | Navigator / 上游后端 / 上游 LLM coding agent |

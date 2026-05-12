@@ -305,6 +305,27 @@ public class BusinessAgentApiSmokeTest {
     }
 
     @Test
+    public void testSyncBusinessAgentBundle() {
+        SyncBusinessAgentBundleForm form = new SyncBusinessAgentBundleForm();
+        form.setClientAppId("app-456");
+        form.setAgentId("world-sim.bug-coordinator.decision.v1");
+        form.setName("World Sim");
+        form.setWorkerId("worker-001");
+        form.setDefaultModelConfigId("model-001");
+
+        responseOverride = "{\"agentId\":\"world-sim.bug-coordinator.decision.v1\", \"skillId\":\"world-sim.bug-coordinator.decision.v1\"}";
+        BusinessAgentBundleDTO result = client.businessAgent().syncBusinessAgentBundle(form);
+
+        assertNotNull(result);
+        assertEquals("world-sim.bug-coordinator.decision.v1", result.getAgentId());
+        assertEquals("/api/v1/business-agent/agent-bundles/sync", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"agentId\":\"world-sim.bug-coordinator.decision.v1\""));
+        assertTrue(lastBody.contains("\"workerId\":\"worker-001\""));
+        assertCommon();
+    }
+
+    @Test
     public void testResumeSuspension() {
         WorkerGatewayResumeForm form = new WorkerGatewayResumeForm();
 

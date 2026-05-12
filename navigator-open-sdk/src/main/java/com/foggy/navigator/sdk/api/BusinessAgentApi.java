@@ -87,6 +87,10 @@ public class BusinessAgentApi {
         return http.post("/api/v1/business-agent/skill-bundles/sync", form, new TypeReference<>() {});
     }
 
+    public BusinessAgentBundleDTO syncBusinessAgentBundle(SyncBusinessAgentBundleForm form) {
+        return http.post("/api/v1/business-agent/agent-bundles/sync", form, new TypeReference<>() {});
+    }
+
     // ===== Upstream User Grant =====
 
     public ClientAppUpstreamUserGrantDTO grantUpstreamUserAccess(String clientAppId, GrantUpstreamUserForm form) {
