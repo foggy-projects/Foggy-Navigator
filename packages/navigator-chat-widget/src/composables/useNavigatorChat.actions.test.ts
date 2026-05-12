@@ -26,7 +26,7 @@ describe('extractActions', () => {
     expect(actions).toHaveLength(1)
     expect(actions[0]).toMatchObject({
       type: 'OPEN_TMS_PAGE',
-      label: '打开开单工作台',
+      label: '打开页面',
     })
     expect(actions[0].payload).toEqual({
       type: 'OPEN_TMS_PAGE',
@@ -44,7 +44,7 @@ describe('extractActions', () => {
         summary: '已生成开单草稿',
         structuredOutput: {
           type: 'OPEN_TMS_PAGE',
-          label: '打开开单工作台',
+          pageLabel: '开单工作台',
           routeName: 'OrderWorkbench',
           query: { aiDraftId: 'afd_123' },
         },
@@ -60,7 +60,7 @@ describe('extractActions', () => {
     })
     expect(actions[0].payload).toEqual({
       type: 'OPEN_TMS_PAGE',
-      label: '打开开单工作台',
+      pageLabel: '开单工作台',
       routeName: 'OrderWorkbench',
       query: { aiDraftId: 'afd_123' },
     })
@@ -100,7 +100,7 @@ describe('extractActions', () => {
     }
     const second = {
       type: 'OPEN_TMS_PAGE',
-      label: '打开开单工作台',
+      label: '打开订单详情',
       routeName: 'OrderWorkbench',
       query: { aiDraftId: 'afd_2' },
     }

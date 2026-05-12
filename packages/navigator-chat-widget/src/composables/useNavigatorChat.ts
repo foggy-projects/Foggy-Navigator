@@ -1134,13 +1134,6 @@ function actionKey(action: NavigatorAction): string {
   return `${action.type}:${action.url ?? ''}:${action.label}:${stableStringify(action.payload)}`
 }
 
-const PAGE_LABELS: Record<string, string> = {
-  OrderWorkbench: '开单工作台',
-  OrderDetail: '订单详情页',
-  WaybillDetail: '运单详情页',
-  ShipmentDetail: '货物详情页',
-}
-
 function actionLabel(type: string, action?: Record<string, unknown>): string {
   const page = action ? pageLabel(action) : undefined
   if (/OPEN_TMS_PAGE|OPEN_.*PAGE/i.test(type) && page) return `打开${page}`
@@ -1156,13 +1149,9 @@ function pageLabel(action: Record<string, unknown>): string | undefined {
     action.pageTitle,
     action.routeLabel,
     action.routeTitle,
-    action.pageName,
-    action.routeName,
-    action.path
+    action.pageName
   )
   if (!value) return undefined
   const normalized = value.replace(/^[/#]+/, '')
-  if (PAGE_LABELS[normalized]) return PAGE_LABELS[normalized]
-  if (/[\u4e00-\u9fff]/.test(normalized)) return normalized
-  return `${normalized.replace(/([a-z0-9])([A-Z])/g, '$1 $2')}页面`
+  return normalized || undefined
 }

@@ -21,6 +21,7 @@ describe('useNavigatorChat business action UX', () => {
   it('moves tool-result actions onto the final assistant reply and finalizes open skill frames', async () => {
     const structuredOutput = {
       type: 'OPEN_TMS_PAGE',
+      label: '补齐开单草稿',
       routeName: 'OrderWorkbench',
       query: { aiDraftId: 'afd_xxx' },
     }
@@ -103,7 +104,7 @@ describe('useNavigatorChat business action UX', () => {
     })
     expect(actionMessages[0].actions?.[0]).toMatchObject({
       type: 'OPEN_TMS_PAGE',
-      label: '打开开单工作台',
+      label: '补齐开单草稿',
       payload: structuredOutput,
     })
 
