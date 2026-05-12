@@ -87,6 +87,10 @@ public class HttpHelper {
         return execute(buildRequest("PUT", path, body), type);
     }
 
+    public <T> T put(String path, Object body, Map<String, String> headers, TypeReference<T> type) {
+        return execute(buildRequest("PUT", path, body, true, headers), type);
+    }
+
     public void delete(String path) {
         execute(buildRequest("DELETE", path, null), new TypeReference<Void>() {});
     }

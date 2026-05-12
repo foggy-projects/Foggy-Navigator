@@ -183,6 +183,36 @@ public class AgentApi {
                 new TypeReference<>() {});
     }
 
+    public com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO listAccountContextFilesWithClientAppAccessToken(
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.get("/api/v1/open/accounts/me/context-files",
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
+    public com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO readAccountContextFileWithClientAppAccessToken(
+            String fileName,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.get("/api/v1/open/accounts/me/context-files/" + encode(fileName),
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
+    public com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO writeAccountPolicyWithClientAppAccessToken(
+            com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm form,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.put("/api/v1/open/accounts/me/context-files/ACCOUNT_POLICY.md",
+                form,
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
     private Map<String, String> clientAppHeaders(
             String clientAppKey,
             String clientAppAccessToken,

@@ -75,6 +75,24 @@
 | `GET` | `/api/v1/business-agent/tasks/{taskId}` | 查询 Task | `TENANT_ADMIN` |
 | `GET` | `/api/v1/business-agent/sessions/{sessionId}/tasks` | 查询 Session 下的 Task | `TENANT_ADMIN` |
 
+## OpenAPI Account Context Files
+
+| 方法 | 路径 | 用途 | 权限 |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/open/accounts/me/context-files` | 查询当前 upstream user 的三层账号上下文文件元数据 | ClientApp runtime access token + upstream user grant |
+| `GET` | `/api/v1/open/accounts/me/context-files/{fileName}` | 读取 `ACCOUNT_POLICY.md` / `AGENT.md` / `MEMORY.md` | ClientApp runtime access token + upstream user grant |
+| `PUT` | `/api/v1/open/accounts/me/context-files/ACCOUNT_POLICY.md` | 上游 BFF 写入受控账号策略，支持 `expectedSha256` | ClientApp runtime access token + upstream user grant |
+
+请求头：
+
+```http
+X-Client-App-Key: <clientAppKey>
+X-Client-App-Access-Token: <runtimeAccessToken>
+X-Upstream-User-Id: <upstreamUserId>
+```
+
+`accounts/me` 由 Navigator 根据 runtime token 与 `X-Upstream-User-Id` 校验，不接受 URL 中传任意 accountId。`AGENT.md` 和 `MEMORY.md` 首段只读；写入能力后续独立开放。响应不得包含物理路径、token、`adapterConfigJson` 或 `manifestJson`。
+
 ## Approval / Resume
 
 | 方法 | 路径 | 用途 | 权限 |

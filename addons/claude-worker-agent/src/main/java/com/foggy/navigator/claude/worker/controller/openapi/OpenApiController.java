@@ -7,13 +7,17 @@ import com.foggy.navigator.claude.worker.model.dto.*;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.*;
 import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
+import com.foggy.navigator.business.agent.model.dto.AccountContextFileDTO;
+import com.foggy.navigator.business.agent.model.dto.AccountContextFileTreeDTO;
 import com.foggy.navigator.business.agent.model.dto.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillBundleDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillArtifactSliceDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillArtifactTreeDTO;
+import com.foggy.navigator.business.agent.model.form.AccountContextFileWriteForm;
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
 import com.foggy.navigator.business.agent.model.form.SyncAccountSkillBundleForm;
+import com.foggy.navigator.business.agent.service.AccountContextFileService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.business.agent.service.SkillArtifactService;
@@ -81,6 +85,7 @@ public class OpenApiController {
     private final ObjectProvider<OpenApiAgentReadinessService> agentReadinessService;
     private final ObjectProvider<SkillArtifactService> skillArtifactService;
     private final ObjectProvider<SkillRegistryService> skillRegistryService;
+    private final ObjectProvider<AccountContextFileService> accountContextFileService;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -583,6 +588,56 @@ public class OpenApiController {
                 form));
     }
 
+    @GetMapping("/accounts/me/context-files")
+    public RX<AccountContextFileTreeDTO> listMyAccountContextFiles(HttpServletRequest request) {
+        AccountContextFileService service = accountContextFileService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("account context file service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.list(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId));
+    }
+
+    @GetMapping("/accounts/me/context-files/{fileName}")
+    public RX<AccountContextFileDTO> readMyAccountContextFile(
+            @PathVariable String fileName,
+            HttpServletRequest request) {
+        AccountContextFileService service = accountContextFileService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("account context file service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.read(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId,
+                fileName));
+    }
+
+    @PutMapping("/accounts/me/context-files/{fileName}")
+    public RX<AccountContextFileDTO> writeMyAccountContextFile(
+            @PathVariable String fileName,
+            @RequestBody AccountContextFileWriteForm form,
+            HttpServletRequest request) {
+        AccountContextFileService service = accountContextFileService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("account context file service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.writePolicy(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId,
+                fileName,
+                form));
+    }
+
     private ResolvedClientAppCredentialDTO resolveClientAppCredential(
             String skillId,
             HttpServletRequest request) {
@@ -637,6 +692,17 @@ public class OpenApiController {
             throw RX.throwB("client app access token is required");
         }
         return resolved;
+    }
+
+    private String requireUpstreamUserId(HttpServletRequest request) {
+        String upstreamUserId = firstHeader(request,
+                "X-Upstream-User-Id",
+                "X-Foggy-Upstream-User-Id",
+                "X-Client-Upstream-User-Id");
+        if (!StringUtils.hasText(upstreamUserId)) {
+            throw RX.throwB("upstream user id is required");
+        }
+        return upstreamUserId;
     }
 
     private void enrichBusinessRuntimeContext(

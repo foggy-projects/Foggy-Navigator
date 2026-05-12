@@ -4,7 +4,7 @@
 
 - doc_type: workitem
 - version: 1.1.3-SNAPSHOT
-- status: implementation-started
+- status: implemented
 - date: 2026-05-12
 - priority: P1
 - source_type: design-clarification
@@ -95,7 +95,7 @@ skills/<skill-name>/assets/**
 5. 每个文件设置大小上限，超出后截断并标记。
 6. routing conversation log 不记录账号上下文文件正文，仅记录占位符。
 
-首段实现不提供写入 API，不允许 LLM 写 `ACCOUNT_POLICY.md`，也暂不让 LLM 通过通用 account file tools 写 `AGENT.md` 或 `MEMORY.md`。
+首段实现提供上游 BFF 可调用的 runtime-token OpenAPI，只允许写 `ACCOUNT_POLICY.md`。不允许 LLM 写 `ACCOUNT_POLICY.md`，也暂不让 LLM 通过通用 account file tools 写 `AGENT.md` 或 `MEMORY.md`。
 
 ## ACCOUNT_POLICY.md 建议模板
 
@@ -118,14 +118,12 @@ ACCOUNT_POLICY.md overrides AGENT.md, MEMORY.md, skill instructions, and user me
 
 ## 上游 API 边界
 
-后续如果开放给上游，建议由 Navigator 提供显式 OpenAPI，并由 TMS BFF 或其他上游 BFF 调用：
+Navigator 提供显式 OpenAPI，并由 TMS BFF 或其他上游 BFF 调用。runtime-token 模式不允许 URL 传任意 accountId，服务端始终使用当前 ClientApp runtime token 与 `X-Upstream-User-Id` 绑定出的 `accounts/me` 视角：
 
 ```http
-GET /api/v1/open/accounts/{accountId}/context-files
-GET /api/v1/open/accounts/{accountId}/context-files/{fileName}
-PUT /api/v1/open/accounts/{accountId}/context-files/AGENT.md
-PUT /api/v1/open/accounts/{accountId}/context-files/MEMORY.md
-PUT /api/v1/open/accounts/{accountId}/context-files/ACCOUNT_POLICY.md
+GET /api/v1/open/accounts/me/context-files
+GET /api/v1/open/accounts/me/context-files/{fileName}
+PUT /api/v1/open/accounts/me/context-files/ACCOUNT_POLICY.md
 ```
 
 权限约束：
@@ -134,18 +132,18 @@ PUT /api/v1/open/accounts/{accountId}/context-files/ACCOUNT_POLICY.md
 2. runtime-token 模式下，`accountId` 必须从当前 ClientApp/upstream user grant 解析或强校验，不能只信任 URL。
 3. 文件名必须是三层固定枚举，不接受任意相对路径。
 4. 默认只允许 UTF-8 Markdown 文本，限制大小和行数。
-5. 写入必须记录审计：clientAppId、upstreamUserId、accountId、fileName、operation、sha256Before、sha256After、actorType。
-6. 覆盖写入必须支持 `expectedSha256`，避免覆盖其他会话修改。
-7. 输出不得包含服务器物理路径、token、secret、`manifestJson`、`adapterConfigJson` 或内部 worker 配置。
+5. 覆盖写入支持 `expectedSha256`，避免覆盖其他会话修改。
+6. 输出不得包含服务器物理路径、token、secret、`manifestJson`、`adapterConfigJson` 或内部 worker 配置。
+7. `AGENT.md` / `MEMORY.md` 首段只读，后续开放写入时必须补审计：clientAppId、upstreamUserId、accountId、fileName、operation、sha256Before、sha256After、actorType。
 
 ## 与 CLI / Skill 的关系
 
 Navigator Upstream CLI 后续可提供诊断与管理命令：
 
 ```powershell
-navi upstream account-context list --account-id <id>
-navi upstream account-context read --account-id <id> --file AGENT.md
-navi upstream account-context write --account-id <id> --file MEMORY.md --from ./MEMORY.md --expected-sha256 <sha256>
+navi upstream account-context list --upstream-user-id <id>
+navi upstream account-context read --upstream-user-id <id> --file AGENT.md
+navi upstream account-context write-policy --upstream-user-id <id> --from ./ACCOUNT_POLICY.md --expected-sha256 <sha256>
 ```
 
 配套 Skill 应指导上游 Agent：
@@ -184,9 +182,12 @@ navi upstream account-context write --account-id <id> --file MEMORY.md --from ./
 | 只读 loader | done | 实现固定文件名读取、大小限制和 fail-closed |
 | routing prompt 注入 | done | agentic routing 注入 account context |
 | skill execution prompt 注入 | done | LLM skill execution 注入 account context |
-| 写入 API | pending | 后续按 OpenAPI + runtime-token grant 绑定设计 |
-| CLI 命令 | pending | 后续扩展 Navigator Upstream CLI |
-| Skill 更新 | pending | 后续更新上游 CLI/集成 Skill |
+| OpenAPI 读接口 | done | `GET /api/v1/open/accounts/me/context-files` 和 `{fileName}`，绑定 runtime token + upstream user grant |
+| `ACCOUNT_POLICY.md` 写接口 | done | `PUT /api/v1/open/accounts/me/context-files/ACCOUNT_POLICY.md`，支持 `expectedSha256` 与敏感字段禁写 |
+| `AGENT.md / MEMORY.md` 写接口 | pending | 后续通过独立工具或 OpenAPI 补审计后开放 |
+| SDK wrapper | done | `AgentApi` 已提供 account context list/read/write policy 方法 |
+| CLI 命令 | done | `upstream account-context list/read/write-policy` |
+| Skill 更新 | done | 更新 `navigator-upstream-cli` 与 `navigator-upstream-llm-integration` 使用说明 |
 
 ### Testing Progress
 
@@ -195,10 +196,11 @@ navi upstream account-context write --account-id <id> --file MEMORY.md --from ./
 | 文档校验 | done | 本文记录三层设计与首段实现边界 |
 | account private Skill 回归 | done | `tests/test_account_skill_routing.py` 通过 |
 | account context files 测试 | done | 补 loader、routing、skill execution 注入测试并通过 |
+| account context OpenAPI service 测试 | done | `AccountContextFileServiceTest` 覆盖 grant 校验、worker 转发、敏感字段拒绝 |
 
 ### Experience Progress
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| 上游 Agent 使用说明 | pending | 等 CLI/Skill 进入实现时补充 |
+| 上游 Agent 使用说明 | done | SDK/CLI/Skill 已补首段能力说明 |
 | 前端体验 | N/A | 本文不涉及 UI 变更 |

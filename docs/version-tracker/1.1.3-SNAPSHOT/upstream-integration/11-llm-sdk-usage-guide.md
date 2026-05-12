@@ -60,8 +60,16 @@ Get-Content navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/NavigatorCl
 | 员工 provision | `client.employees()` |
 | 普通 Agent 任务、轮询、消息、会话 | `client.agents()` |
 | Business Agent 控制面 (ClientApp/Grant/Task/Approval等) | `client.businessAgent()` |
+| 账号上下文文件读写 | `client.agents().listAccountContextFilesWithClientAppAccessToken(...)`、`readAccountContextFileWithClientAppAccessToken(...)`、`writeAccountPolicyWithClientAppAccessToken(...)` |
 
 当前已全面支持 Business Agent，无需 REST 兜底。
+
+账号上下文文件说明：
+
+- `ACCOUNT_POLICY.md` / `AGENT.md` / `MEMORY.md` 按账号注入给 Worker。
+- SDK 只允许上游 BFF 通过 runtime access token 和 `upstreamUserId` 读取三层文件、写 `ACCOUNT_POLICY.md`。
+- `AGENT.md` / `MEMORY.md` 暂不提供 SDK 写入方法。
+- 不要把 token、secret、`task_scoped_token`、`adapterConfigJson`、`manifestJson` 写入这些文件。
 
 ## 本地 CLI 联调
 
