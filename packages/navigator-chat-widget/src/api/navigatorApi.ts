@@ -1,4 +1,12 @@
-import type { AgentTask, NavigatorChatConfig, TaskMessagesPage } from '../types'
+import type {
+  AgentTask,
+  NavigatorChatConfig,
+  NavigatorSendOptions,
+  PaginationOptions,
+  SessionListPage,
+  SessionMessagesPage,
+  TaskMessagesPage,
+} from '../types'
 
 /**
  * Navigator Open API 轻量客户端
@@ -17,10 +25,12 @@ export class NavigatorApi {
   }
 
   /** 发送任务 */
-  async ask(question: string, contextId?: string): Promise<AgentTask> {
+  async ask(question: string, contextId?: string, options: NavigatorSendOptions = {}): Promise<AgentTask> {
     const body: Record<string, unknown> = { question }
     if (contextId) body.contextId = contextId
     if (this.config.maxTurns) body.maxTurns = this.config.maxTurns
+    if (options.metadata && Object.keys(options.metadata).length > 0) body.metadata = options.metadata
+    if (options.clientContext && Object.keys(options.clientContext).length > 0) body.clientContext = options.clientContext
     return this.post(`/agents/${this.config.agentId}/ask`, body)
   }
 
@@ -45,6 +55,18 @@ export class NavigatorApi {
   /** 列出活跃任务 */
   async listActiveTasks(): Promise<AgentTask[]> {
     return this.get(`/agents/${this.config.agentId}/tasks`)
+  }
+
+  /** 获取历史会话列表 */
+  async listSessions(options: PaginationOptions = {}): Promise<SessionListPage> {
+    const params = this.paginationParams(options, 20)
+    return this.get(`/agents/${this.config.agentId}/sessions?${params.toString()}`)
+  }
+
+  /** 获取指定历史会话消息 */
+  async getSessionMessages(contextId: string, options: PaginationOptions = {}): Promise<SessionMessagesPage> {
+    const params = this.paginationParams(options, 50)
+    return this.get(`/agents/${this.config.agentId}/sessions/${encodeURIComponent(contextId)}/messages?${params.toString()}`)
   }
 
   // ===== HTTP helpers =====
@@ -79,6 +101,13 @@ export class NavigatorApi {
       h['X-API-Key'] = this.config.apiKey
     }
     return h
+  }
+
+  private paginationParams(options: PaginationOptions, defaultLimit: number): URLSearchParams {
+    const params = new URLSearchParams()
+    if (options.cursor) params.set('cursor', options.cursor)
+    params.set('limit', String(options.limit ?? defaultLimit))
+    return params
   }
 
   private async unwrap<T>(resp: Response): Promise<T> {

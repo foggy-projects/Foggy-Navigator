@@ -313,6 +313,36 @@ class UpstreamCliTest {
     }
 
     @Test
+    void askSendsClientContextJsonTopLevel() {
+        responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello",
+                "--context-id", "ctx-1",
+                "--client-context-json", "{\"upstreamConversationId\":\"tms-1\",\"bizObjectId\":\"SO-1\"}"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
+        assertEquals("u-1", lastUpstreamUserIdHeader);
+        assertTrue(lastBody.contains("\"contextId\":\"ctx-1\""));
+        assertTrue(lastBody.contains("\"clientContext\""));
+        assertTrue(lastBody.contains("\"upstreamConversationId\":\"tms-1\""));
+        assertTrue(lastBody.contains("\"bizObjectId\":\"SO-1\""));
+        assertTrue(output.contains("taskId=task-1"));
+        assertTrue(output.contains("contextId=ctx-1"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
     void messagesPollStopsOnTaskTerminalStatus() {
         responseOverride = "__MESSAGES_TERMINAL__";
 

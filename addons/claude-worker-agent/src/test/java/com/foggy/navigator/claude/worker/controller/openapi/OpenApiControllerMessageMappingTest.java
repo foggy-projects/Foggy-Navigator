@@ -1,7 +1,9 @@
 package com.foggy.navigator.claude.worker.controller.openapi;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
+import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.service.*;
@@ -16,6 +18,7 @@ import org.springframework.beans.factory.ObjectProvider;
 
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -59,6 +62,32 @@ class OpenApiControllerMessageMappingTest {
 
         assertEquals("TOOL_CALL", dto.getType());
         assertEquals(false, dto.getTerminal());
+    }
+
+    @Test
+    void sessionSummaryIncludesClientContext() throws Exception {
+        OpenApiController controller = newController();
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId("ctx-1");
+        entity.setContextAlias("alias-1");
+        entity.setNavigatorSessionId("session-1");
+        entity.setClientContextJson("{\"upstreamConversationId\":\"tms-1\"}");
+        entity.setCreatedAt(LocalDateTime.now());
+        entity.setLastAccessedAt(LocalDateTime.now());
+
+        Method method = OpenApiController.class.getDeclaredMethod(
+                "toSessionSummary",
+                AgentConversationContextEntity.class,
+                String.class,
+                Map.class
+        );
+        method.setAccessible(true);
+        OpenSessionSummaryDTO dto = (OpenSessionSummaryDTO) method.invoke(
+                controller, entity, "agent-1", Map.of("session-1", "task-1"));
+
+        assertEquals("ctx-1", dto.getContextId());
+        assertEquals("task-1", dto.getLatestTaskId());
+        assertEquals("tms-1", dto.getClientContext().get("upstreamConversationId"));
     }
 
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)

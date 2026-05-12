@@ -138,6 +138,38 @@ class OpenApiSessionQueryServiceTest {
         assertTrue(sessions.isEmpty());
     }
 
+    @Test
+    void listSessions_cursorShouldReturnNextPage() {
+        AgentConversationContextEntity older = new AgentConversationContextEntity();
+        older.setContextId("ctx-older-" + UUID.randomUUID().toString().substring(0, 8));
+        older.setAgentType("claude-worker");
+        older.setNavigatorSessionId("session-older");
+        older.setUserId(USER_ID);
+        older.setTargetAgentId(AGENT_ID);
+        older.setLastAccessedAt(LocalDateTime.now().minusDays(2));
+        contextRepository.save(older);
+
+        List<AgentConversationContextEntity> firstPage = queryService.listSessions(
+                USER_ID, AGENT_ID, null, 1);
+        assertFalse(firstPage.isEmpty());
+
+        List<AgentConversationContextEntity> secondPage = queryService.listSessions(
+                USER_ID, AGENT_ID, firstPage.get(0).getContextId(), 1);
+
+        assertFalse(secondPage.isEmpty());
+        assertNotEquals(firstPage.get(0).getContextId(), secondPage.get(0).getContextId());
+        assertTrue(secondPage.get(0).getLastAccessedAt().isBefore(firstPage.get(0).getLastAccessedAt()));
+    }
+
+    @Test
+    void updateClientContextJson_shouldPersistOpaqueJson() {
+        queryService.updateClientContextJson(contextId, USER_ID, AGENT_ID,
+                "{\"upstreamConversationId\":\"tms-1\"}");
+
+        AgentConversationContextEntity updated = contextRepository.findById(contextId).orElseThrow();
+        assertEquals("{\"upstreamConversationId\":\"tms-1\"}", updated.getClientContextJson());
+    }
+
     // ── 会话消息查询 ──
 
     @Test

@@ -162,6 +162,27 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 
 `ask` 只发送 runtime access token 和 `X-Upstream-User-Id`，不会发送 ClientApp secret。
 
+续聊与上游会话扩展数据：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream ask `
+  --upstream-user-id <id> `
+  --context-id <contextId> `
+  --message "继续分析这个订单" `
+  --client-context-json '{"upstreamConversationId":"tms-ai-10001","bizObjectType":"order","bizObjectId":"SO-10001"}'
+```
+
+也可以把 JSON 对象放到文件中：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream ask `
+  --upstream-user-id <id> `
+  --message "查询订单状态" `
+  --client-context-file .\navigator-client-context.json
+```
+
+`clientContext` 是 `POST /ask` 的顶层字段，只写入 Navigator 会话摘要，不进入 Worker metadata 或 LLM prompt。
+
 ### 5. 轮询 Task Messages
 
 ```powershell

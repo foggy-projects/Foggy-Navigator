@@ -2,6 +2,8 @@ package com.foggy.navigator.sdk.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import java.util.Map;
+
 /**
  * 会话摘要（会话列表条目）
  */
@@ -12,6 +14,7 @@ public class SessionSummary {
     private String title;
     private String status;
     private String latestTaskId;
+    private Map<String, Object> clientContext;
     private String createdAt;
     private String updatedAt;
 
@@ -25,6 +28,8 @@ public class SessionSummary {
     public void setStatus(String status) { this.status = status; }
     public String getLatestTaskId() { return latestTaskId; }
     public void setLatestTaskId(String latestTaskId) { this.latestTaskId = latestTaskId; }
+    public Map<String, Object> getClientContext() { return clientContext; }
+    public void setClientContext(Map<String, Object> clientContext) { this.clientContext = clientContext; }
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
     public String getUpdatedAt() { return updatedAt; }

@@ -1,5 +1,6 @@
 package com.foggy.navigator.sdk.cli;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.sdk.NavigatorClient;
 import com.foggy.navigator.sdk.api.AgentApi;
@@ -201,11 +202,13 @@ public class UpstreamCli {
         String agent = agentCode(args);
         String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
         String message = requiredOption(args, "message", "message");
+        Map<String, Object> clientContext = parseClientContext(args);
         AgentTask task = agentApi().askWithClientAppAccessToken(
                 agent,
                 message,
                 args.option("context-id"),
                 parseInteger(args.option("max-turns")),
+                clientContext,
                 clientAppKey(args),
                 clientAppAccessToken(args),
                 upstreamUserId);
@@ -427,6 +430,34 @@ public class UpstreamCli {
             return value;
         }
         return requiredOptionOrConfig(args, "agent", "NAVI_AGENT_CODE", "agent");
+    }
+
+    private Map<String, Object> parseClientContext(CliArguments args) {
+        String inlineJson = args.option("client-context-json");
+        String file = args.option("client-context-file");
+        if (hasText(inlineJson) && hasText(file)) {
+            throw new UpstreamCliException("Use only one of --client-context-json or --client-context-file");
+        }
+        String json = null;
+        if (hasText(inlineJson)) {
+            json = inlineJson;
+        } else if (hasText(file)) {
+            Path path = cwd.resolve(file).normalize();
+            try {
+                json = Files.readString(path, StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                throw new UpstreamCliException("Failed to read client context file: " + path);
+            }
+        }
+        if (!hasText(json)) {
+            return null;
+        }
+        try {
+            Map<String, Object> parsed = new ObjectMapper().readValue(json, new TypeReference<>() {});
+            return parsed != null && !parsed.isEmpty() ? parsed : null;
+        } catch (Exception e) {
+            throw new UpstreamCliException("clientContext must be a valid JSON object");
+        }
     }
 
     private void printTask(AgentTask task) {
