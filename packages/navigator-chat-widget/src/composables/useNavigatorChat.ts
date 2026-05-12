@@ -79,6 +79,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   const skillFramesById = new Map<string, SkillFrameBlock>()
   const skillFrameMessageIds = new Map<string, string>()
   const pendingToolCallIdsByTask = new Map<string, string[]>()
+  let pendingBusinessActions: NavigatorAction[] = []
   let toolSeq = 0
 
   const messages = computed(() =>
@@ -214,6 +215,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     skillFramesById.clear()
     skillFrameMessageIds.clear()
     pendingToolCallIdsByTask.clear()
+    pendingBusinessActions = []
   }
 
   function stopPolling() {
@@ -252,35 +254,25 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       if (message.type === 'USER') {
         continue
       }
-      if (actions.length > 0) {
-        rawMessages.value.push({
-          id: `${id}:actions`,
-          role: 'assistant',
-          content: businessActionIntro(actions),
-          timestamp: openMessageTimestamp(message),
-          taskId,
-          status,
-          messageType: message.type,
-          terminal: message.terminal,
-          terminalStatus: message.terminalStatus ?? null,
-          actions,
-        })
-      }
       if ((message.type === 'TEXT' || message.type === 'RESULT') && content) {
-        const businessContent = display.mode === 'business' ? stripRawJsonArtifact(content, actions) : sanitizeText(content)
-        if (!businessContent && actions.length > 0) {
+        const messageActions = mergeActions(pendingBusinessActions, actions)
+        pendingBusinessActions = []
+        const businessContent = display.mode === 'business' ? stripRawJsonArtifact(content, messageActions) : sanitizeText(content)
+        const visibleContent = businessContent || (messageActions.length > 0 ? businessActionIntro(messageActions) : '')
+        if (!visibleContent) {
           continue
         }
         rawMessages.value.push({
           id,
           role: 'assistant',
-          content: businessContent,
+          content: visibleContent,
           timestamp: openMessageTimestamp(message),
           taskId,
           status,
           messageType: message.type,
           terminal: message.terminal,
           terminalStatus: message.terminalStatus ?? null,
+          actions: messageActions.length > 0 ? messageActions : undefined,
         })
       } else if (message.type === 'ERROR') {
         const errMsg = display.mode === 'business'
@@ -327,15 +319,19 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           })
         }
       } else if (message.type === 'TOOL_CALL') {
+        if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在查询数据...'
         if (display.showToolCalls || display.showToolResults) {
           upsertToolExecution(taskId, message, 'call', id, status)
         }
       } else if (message.type === 'TOOL_RESULT') {
+        if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在生成回答...'
         if (display.showToolCalls || display.showToolResults) {
           upsertToolExecution(taskId, message, 'result', id, status)
         }
+      } else if (actions.length > 0) {
+        pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
       }
     }
   }
@@ -354,6 +350,8 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     } else if (terminalStatus === 'COMPLETED' || terminalStatus === 'FAILED') {
       taskStatus.value = terminalStatus
     }
+    finalizeOpenSkillFrames(terminalStatus, status)
+    flushPendingBusinessActions(taskId, status)
   }
 
   function appendLegacyTerminalMessage(task: AgentTask) {
@@ -676,6 +674,47 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   function touchMessages() {
     rawMessages.value = [...rawMessages.value]
   }
+
+  function finalizeOpenSkillFrames(terminalStatus: TerminalStatus | null, status?: TaskStatus) {
+    const terminalFailed = terminalStatus === 'FAILED' || status === 'FAILED' || status === 'CANCELED'
+    const frameStatus: SkillFrameBlock['status'] = terminalFailed ? 'failed' : 'success'
+    const closedAt = Date.now()
+    let changed = false
+    for (const frame of skillFramesById.values()) {
+      if (frame.status !== 'running') continue
+      frame.status = frameStatus
+      frame.closedAt = frame.closedAt ?? closedAt
+      if (frame.openedAt != null) {
+        frame.durationMs = Math.max(0, frame.closedAt - frame.openedAt)
+      }
+      changed = true
+    }
+    if (changed) touchMessages()
+  }
+
+  function flushPendingBusinessActions(taskId: string, status?: TaskStatus) {
+    if (pendingBusinessActions.length === 0) return
+    const actions = pendingBusinessActions
+    pendingBusinessActions = []
+    const target = [...rawMessages.value]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.taskId === taskId)
+    if (target) {
+      target.actions = mergeActions(target.actions ?? [], actions)
+      if (!target.content) target.content = businessActionIntro(target.actions)
+      touchMessages()
+      return
+    }
+    rawMessages.value.push({
+      id: nextId(),
+      role: 'assistant',
+      content: businessActionIntro(actions),
+      timestamp: Date.now(),
+      taskId,
+      status,
+      actions,
+    })
+  }
 }
 
 interface DisplayOptions {
@@ -968,7 +1007,7 @@ function stripRawJsonArtifact(content: string, actions: NavigatorAction[]): stri
 }
 
 function businessActionIntro(_actions: NavigatorAction[]): string {
-  return ''
+  return '可继续处理：'
 }
 
 function extractDisplayText(value: unknown): string {
@@ -984,54 +1023,146 @@ function extractDisplayText(value: unknown): string {
   ) ?? ''
 }
 
-function extractActions(message: OpenTaskMessage): NavigatorAction[] {
+export function extractActions(message: OpenTaskMessage): NavigatorAction[] {
+  const metadata = message.metadata
+  const result = parseMaybeJson(message.result)
+  const args = parseMaybeJson(message.args)
   const candidates = [
     parseMaybeJson(message.content),
-    message.metadata,
-    message.result,
+    args,
+    metadata,
+    metadata?.args,
+    result,
+    field(result, 'structured_output'),
+    field(result, 'structuredOutput'),
     normalizedPayload(message),
   ]
   const actions: NavigatorAction[] = []
   for (const candidate of candidates) collectActions(candidate, actions)
   const seen = new Set<string>()
   return actions.filter((action) => {
-    const key = `${action.type}:${action.url ?? ''}:${action.label}`
+    const key = actionKey(action)
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
 }
 
-function collectActions(value: unknown, actions: NavigatorAction[]) {
-  if (!value || typeof value !== 'object') return
-  if (Array.isArray(value)) {
-    for (const item of value) collectActions(item, actions)
+const ACTION_CONTAINER_KEYS = [
+  'actions',
+  'artifacts',
+  'artifact',
+  'data',
+  'result',
+  'structured_output',
+  'structuredOutput',
+  'output',
+  'payload',
+  'args',
+]
+
+function collectActions(value: unknown, actions: NavigatorAction[], seen = new WeakSet<object>()) {
+  const parsed = parseMaybeJson(value)
+  if (!parsed || typeof parsed !== 'object') return
+  if (seen.has(parsed)) return
+  seen.add(parsed)
+  if (Array.isArray(parsed)) {
+    for (const item of parsed) collectActions(item, actions, seen)
     return
   }
-  const obj = value as Record<string, unknown>
+  const obj = parsed as Record<string, unknown>
   const type = firstString(obj.type, obj.actionType, obj.action, obj.artifactType)
   if (type && isActionType(type)) {
     actions.push({
       id: firstString(obj.id, obj.actionId) ?? `action-${actions.length + 1}`,
       type,
-      label: firstString(obj.label, obj.title, obj.name) ?? actionLabel(type),
+      label: firstString(obj.label, obj.title, obj.name) ?? actionLabel(type, obj),
       url: firstString(obj.url, obj.href, obj.link, obj.path),
       payload: sanitizeValue(obj.payload ?? obj.params ?? obj),
       raw: sanitizeValue(obj),
     })
   }
-  for (const key of ['actions', 'artifacts', 'artifact', 'data', 'result']) {
-    collectActions(obj[key], actions)
+  for (const key of ACTION_CONTAINER_KEYS) {
+    collectActions(obj[key], actions, seen)
   }
+}
+
+function field(value: unknown, key: string): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return (value as Record<string, unknown>)[key]
+}
+
+function stableStringify(value: unknown): string {
+  try {
+    return JSON.stringify(stableValue(value)) ?? ''
+  } catch {
+    return String(value)
+  }
+}
+
+function stableValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (Array.isArray(value)) return value.map((item) => stableValue(item, seen))
+  if (!value || typeof value !== 'object') return value
+  if (seen.has(value)) return '[Circular]'
+  seen.add(value)
+  const sorted: Record<string, unknown> = {}
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    sorted[key] = stableValue((value as Record<string, unknown>)[key], seen)
+  }
+  return sorted
 }
 
 function isActionType(type: string): boolean {
   return /OPEN_TMS_PAGE|OPEN_.*PAGE|DOWNLOAD|REPORT|DETAIL|LINK/i.test(type)
 }
 
-function actionLabel(type: string): string {
+function mergeActions(...groups: NavigatorAction[][]): NavigatorAction[] {
+  const output: NavigatorAction[] = []
+  const seen = new Set<string>()
+  for (const group of groups) {
+    for (const action of group) {
+      const key = actionKey(action)
+      if (seen.has(key)) continue
+      seen.add(key)
+      output.push(action)
+    }
+  }
+  return output
+}
+
+function actionKey(action: NavigatorAction): string {
+  return `${action.type}:${action.url ?? ''}:${action.label}:${stableStringify(action.payload)}`
+}
+
+const PAGE_LABELS: Record<string, string> = {
+  OrderWorkbench: '开单工作台',
+  OrderDetail: '订单详情页',
+  WaybillDetail: '运单详情页',
+  ShipmentDetail: '货物详情页',
+}
+
+function actionLabel(type: string, action?: Record<string, unknown>): string {
+  const page = action ? pageLabel(action) : undefined
+  if (/OPEN_TMS_PAGE|OPEN_.*PAGE/i.test(type) && page) return `打开${page}`
   if (/DOWNLOAD/i.test(type)) return '下载文件'
   if (/REPORT/i.test(type)) return '查看报表'
   if (/DETAIL/i.test(type)) return '打开详情页'
   return '打开页面'
+}
+
+function pageLabel(action: Record<string, unknown>): string | undefined {
+  const value = firstString(
+    action.pageLabel,
+    action.pageTitle,
+    action.routeLabel,
+    action.routeTitle,
+    action.pageName,
+    action.routeName,
+    action.path
+  )
+  if (!value) return undefined
+  const normalized = value.replace(/^[/#]+/, '')
+  if (PAGE_LABELS[normalized]) return PAGE_LABELS[normalized]
+  if (/[\u4e00-\u9fff]/.test(normalized)) return normalized
+  return `${normalized.replace(/([a-z0-9])([A-Z])/g, '$1 $2')}页面`
 }
