@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
-from .routes import health, query, resume, skills
+from .routes import account_context, health, query, resume, skills
 
 logger = logging.getLogger("langgraph_biz_worker")
 
@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
     from pathlib import Path
     skills_root = Path(_DEFAULT_SKILLS_ROOT) if isinstance(_DEFAULT_SKILLS_ROOT, str) else _DEFAULT_SKILLS_ROOT
     skills.configure(skills_root, on_sync_complete=_skill_registry.load)
+    account_context.configure(skills_root.parent / "data")
 
     # Auto-sync public skills from GitLab on startup (Doc 34 §4.2)
     from .config import settings as _settings
@@ -71,6 +72,7 @@ app.include_router(health.router)
 app.include_router(query.router)
 app.include_router(resume.router)
 app.include_router(skills.router)
+app.include_router(account_context.router)
 
 
 def main() -> None:

@@ -17,6 +17,9 @@ import com.foggy.navigator.sdk.model.SkillArtifactFile;
 import com.foggy.navigator.sdk.model.SkillArtifactSlice;
 import com.foggy.navigator.sdk.model.SkillArtifactTree;
 import com.foggy.navigator.sdk.model.TaskMessagesPage;
+import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
+import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
+import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
@@ -82,6 +85,9 @@ public class UpstreamCli {
             case "skill tree" -> skillTree(args);
             case "skill read" -> skillRead(args);
             case "skill sync" -> skillSync(args);
+            case "account-context list" -> accountContextList(args);
+            case "account-context read" -> accountContextRead(args);
+            case "account-context write-policy" -> accountContextWritePolicy(args);
             case "tms token issue-staff", "tms order create-self-pickup-sign-ready",
                     "tms order readiness" -> unsupportedTmsHelper();
             case "", "help" -> usage();
@@ -91,7 +97,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, account-context list, account-context read, account-context write-policy");
         return 0;
     }
 
@@ -357,6 +363,59 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int accountContextList(CliArguments args) {
+        String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+        AccountContextFileTreeDTO tree = agentApi().listAccountContextFilesWithClientAppAccessToken(
+                clientAppKey(args),
+                clientAppAccessToken(args),
+                upstreamUserId);
+        out.println("accountId=" + valueOrEmpty(tree != null ? tree.getAccountId() : null));
+        if (tree != null && tree.getFiles() != null) {
+            for (AccountContextFileDTO file : tree.getFiles()) {
+                printAccountContextFileMetadata(file);
+            }
+        }
+        return 0;
+    }
+
+    private int accountContextRead(CliArguments args) {
+        String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+        String fileName = requiredOption(args, "file", "account context file");
+        AccountContextFileDTO file = agentApi().readAccountContextFileWithClientAppAccessToken(
+                fileName,
+                clientAppKey(args),
+                clientAppAccessToken(args),
+                upstreamUserId);
+        printAccountContextFileMetadata(file);
+        out.println("content:");
+        out.print(redact(valueOrEmpty(file != null ? file.getContent() : null)));
+        if (file == null || file.getContent() == null || !file.getContent().endsWith("\n")) {
+            out.println();
+        }
+        return 0;
+    }
+
+    private int accountContextWritePolicy(CliArguments args) throws Exception {
+        String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+        String source = requiredOption(args, "from", "source file");
+        Path sourcePath = cwd.resolve(source).normalize();
+        if (!Files.isRegularFile(sourcePath)) {
+            throw new UpstreamCliException("source file not found: " + sourcePath);
+        }
+
+        AccountContextFileWriteForm form = new AccountContextFileWriteForm();
+        form.setContent(Files.readString(sourcePath, StandardCharsets.UTF_8));
+        form.setExpectedSha256(args.option("expected-sha256"));
+        AccountContextFileDTO file = agentApi().writeAccountPolicyWithClientAppAccessToken(
+                form,
+                clientAppKey(args),
+                clientAppAccessToken(args),
+                upstreamUserId);
+        out.println("account-context write-policy ok");
+        printAccountContextFileMetadata(file);
+        return 0;
+    }
+
     private int unsupportedTmsHelper() {
         throw new UpstreamCliException("TMS test-only helper is not implemented in this CLI build; use env/profile tokens without printing secrets");
     }
@@ -480,6 +539,16 @@ public class UpstreamCli {
             out.println("materializeStatus=" + valueOrEmpty(dto.getMaterializeResult().getStatus()));
             out.println("workerStatusCode=" + valueOrEmpty(dto.getMaterializeResult().getWorkerStatusCode()));
         }
+    }
+
+    private void printAccountContextFileMetadata(AccountContextFileDTO file) {
+        out.println("file name=" + valueOrEmpty(file != null ? file.getFileName() : null)
+                + " exists=" + (file != null && file.isExists())
+                + " writable=" + (file != null && file.isWritable())
+                + " size=" + (file != null ? file.getSize() : 0)
+                + " lineCount=" + (file != null ? file.getLineCount() : 0)
+                + " truncated=" + (file != null && file.isTruncated())
+                + " sha256=" + valueOrEmpty(file != null ? file.getSha256() : null));
     }
 
     private String normalizeSkillBundleScope(String scope) {

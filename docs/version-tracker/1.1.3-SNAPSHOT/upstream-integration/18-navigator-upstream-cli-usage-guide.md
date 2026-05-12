@@ -32,6 +32,9 @@ verify-agent-grant
 skill tree
 skill read
 skill sync
+account-context list
+account-context read
+account-context write-policy
 ```
 
 TMS test-only helper 当前保持可选延期；如果命令不可用，CLI 会返回非敏感错误，不会打印 token。
@@ -132,7 +135,7 @@ NAVIGATOR_ADMIN_API_KEY -> NAVI_ADMIN_API_KEY
 
 输出会脱敏显示 access token，并把完整 `NAVI_CLIENT_APP_ACCESS_TOKEN` 写回当前项目的 gitignored `.navigator/upstream.env`。CLI 不会把完整 token 打印到终端。
 
-如果 `.navigator/upstream.env` 中已有 `NAVI_CLIENT_APP_KEY` 与 `NAVI_CLIENT_APP_SECRET`，`verify-agent-readiness`、`ask`、`messages`、`sessions`、`session-messages`、`skill tree`、`skill read`、`account-private skill sync` 会在内存中自动交换新的 runtime access token；因此常规 smoke 不必手工复制 token。`NAVI_CLIENT_APP_ACCESS_TOKEN` 主要用于缺少 secret 的环境或需要显式缓存 token 的场景。
+如果 `.navigator/upstream.env` 中已有 `NAVI_CLIENT_APP_KEY` 与 `NAVI_CLIENT_APP_SECRET`，`verify-agent-readiness`、`ask`、`messages`、`sessions`、`session-messages`、`skill tree`、`skill read`、`account-private skill sync`、`account-context list/read/write-policy` 会在内存中自动交换新的 runtime access token；因此常规 smoke 不必手工复制 token。`NAVI_CLIENT_APP_ACCESS_TOKEN` 主要用于缺少 secret 的环境或需要显式缓存 token 的场景。
 
 可选模型配置可放入 profile：
 
@@ -204,6 +207,16 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 .\tools\navigator-upstream\navi.ps1 upstream sessions
 .\tools\navigator-upstream\navi.ps1 upstream session-messages --context-id <contextId>
 ```
+
+### 7. 查询或维护账号上下文文件
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream account-context list --upstream-user-id <id>
+.\tools\navigator-upstream\navi.ps1 upstream account-context read --upstream-user-id <id> --file ACCOUNT_POLICY.md
+.\tools\navigator-upstream\navi.ps1 upstream account-context write-policy --upstream-user-id <id> --from .\ACCOUNT_POLICY.md --expected-sha256 <sha256>
+```
+
+`account-context` 命令使用 ClientApp runtime access token 和 `X-Upstream-User-Id`，Navigator 服务端校验当前 upstream user grant。首段只支持写 `ACCOUNT_POLICY.md`；`AGENT.md` / `MEMORY.md` 可以读取但不能通过 CLI 写入。
 
 ## 安全红线
 
