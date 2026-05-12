@@ -28,6 +28,7 @@ from ..tools.business_function_tools import (
     list_business_functions,
 )
 from .account_file_tools import AccountFileTools, FileToolError
+from .account_context_files import build_account_context_prompt
 from .artifact_store import ArtifactError, ArtifactStore
 from .public_skill_resource_tools import PublicSkillResourceTools
 from .skill_runtime import SkillRuntime
@@ -85,9 +86,14 @@ class LlmSkillAgent:
         client_app_id = _runtime_client_app_id(runtime_context)
         if self._data_root and client_app_id:
             public_resource_tools = PublicSkillResourceTools(Path(self._data_root).parent / "skills", client_app_id)
+        account_context_prompt = (
+            build_account_context_prompt(self._data_root, account_id)
+            if self._data_root and account_id
+            else ""
+        )
 
         messages: list[Any] = [
-            SystemMessage(content=self._build_system_prompt(manifest)),
+            SystemMessage(content=self._build_system_prompt(manifest, account_context_prompt)),
             HumanMessage(content=self._build_user_prompt(
                 prompt,
                 frame.input,
@@ -436,12 +442,14 @@ class LlmSkillAgent:
         return model.bind_tools(_tool_specs(manifest))
 
     @staticmethod
-    def _build_system_prompt(manifest: SkillManifest) -> str:
+    def _build_system_prompt(manifest: SkillManifest, account_context_prompt: str = "") -> str:
         prompt = (
             f"You are executing skill {manifest.id}.\n"
             f"Description: {manifest.description}\n"
             f"Output schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
         )
+        if account_context_prompt:
+            prompt += f"\n---\n{account_context_prompt}\n---\n\n"
         if manifest.markdown_body:
             prompt += f"\n---\nSkill Instructions:\n{manifest.markdown_body}\n---\n\n"
         

@@ -262,6 +262,57 @@ def test_llm_agent_uses_frame_manifest_snapshot_after_registry_reload():
     assert "frozen manifest" in model.seen_messages[0][0].content
 
 
+def test_llm_agent_injects_account_context_before_skill_instructions(tmp_path):
+    data_root = tmp_path / "data"
+    account_root = data_root / "accounts" / "acct-001"
+    account_root.mkdir(parents=True)
+    (account_root / "ACCOUNT_POLICY.md").write_text("policy rule", encoding="utf-8")
+    (account_root / "AGENT.md").write_text("agent rule", encoding="utf-8")
+    (account_root / "MEMORY.md").write_text("memory note", encoding="utf-8")
+
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="context_skill",
+        name="context_skill",
+        description="Uses account context.",
+        markdown_body="skill instruction",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    frame_id = runtime.invoke_skill(
+        task_id="task_context_agent_001",
+        skill_id="context_skill",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime, data_root=data_root).run(
+        task_id="task_context_agent_001",
+        frame_id=frame_id,
+        prompt="run",
+        account_id="acct-001",
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert system_prompt.index("### ACCOUNT_POLICY.md") < system_prompt.index("### AGENT.md")
+    assert system_prompt.index("### AGENT.md") < system_prompt.index("### MEMORY.md")
+    assert system_prompt.index("### MEMORY.md") < system_prompt.index("Skill Instructions:")
+    assert "policy rule" in system_prompt
+    assert "agent rule" in system_prompt
+    assert "memory note" in system_prompt
+
+
 def test_llm_agent_injects_runtime_time_context_into_user_prompt():
     registry = SkillRegistry()
     registry.register(SkillManifest(

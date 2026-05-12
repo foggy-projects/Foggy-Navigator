@@ -19,6 +19,7 @@ from ..config import settings
 from ..models import FrameStatus, QueryEvent, SkillManifest
 from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.frame_store import FrameStore
+from ..runtime.account_context_files import build_account_context_prompt
 from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model
 from ..runtime.llm_skill_agent import LlmSkillAgent
 from ..runtime.skill_registry import SkillRegistry
@@ -84,6 +85,35 @@ def _conversation_log_file(data_root: str | Path, task_id: str, session_id: str 
     return log_dir / f"{max_index + 1:04d}_{task_stem}.jsonl"
 
 
+def _runtime_time_context_for_log(runtime_context: dict[str, Any] | None) -> dict[str, str]:
+    """Whitelist dynamic time context for conversation logs without leaking tokens."""
+    context = runtime_context or {}
+    aliases = {
+        "current_time": ("current_time", "currentTime"),
+        "timezone": ("timezone", "timeZone", "tz"),
+        "business_date": ("business_date", "businessDate"),
+    }
+    safe_context: dict[str, str] = {}
+    for canonical_key, keys in aliases.items():
+        for key in keys:
+            value = context.get(key)
+            if isinstance(value, str) and value:
+                safe_context[canonical_key] = value
+                break
+    return safe_context
+
+
+def _account_id_from_state(state: RootState) -> str | None:
+    context = state.get("context") or {}
+    return (
+        context.get("account_id")
+        or context.get("accountId")
+        or context.get("upstream_user_id")
+        or context.get("upstreamUserId")
+        or state.get("user_id")
+    )
+
+
 def get_runtime() -> SkillRuntime:
     """Expose the shared runtime for testing and external access."""
     return _runtime
@@ -128,7 +158,7 @@ def route_skill(state: RootState) -> dict:
     """Determine which skill to invoke based on the query context."""
     task_id = state["task_id"]
     context = state.get("context") or {}
-    account_id = state.get("user_id") or context.get("account_id") or context.get("accountId")
+    account_id = _account_id_from_state(state)
     client_app_id = context.get("client_app_id") or context.get("clientAppId")
 
     try:
@@ -263,13 +293,25 @@ def route_skill(state: RootState) -> dict:
                 skills_section = f"Available Skills:\n{skills_summary}\n\nIf the user's request matches a skill, use the `invoke_business_skill` tool to delegate the work.\nProvide the `skill_id` and a detailed `instruction` based on the user's input."
             else:
                 skills_section = "No business skills are currently registered. Respond naturally to the user."
+
+            account_context_section = build_account_context_prompt(Path(_data_root), account_id)
             
             sys_msg_content = f"""You are an intelligent business assistant embedded in a business system.
 Your job is to chat with the user and automatically delegate tasks to specialized skills when appropriate.
 
+{account_context_section}
+
 {skills_section}
 
 If no skill matches, respond naturally to the user — you can answer questions, provide guidance, or have a general conversation."""
+            sys_msg_content_for_log = (
+                sys_msg_content.replace(
+                    account_context_section,
+                    "[account_context_files: omitted from conversation log]",
+                )
+                if account_context_section
+                else sys_msg_content
+            )
             
             sys_msg = SystemMessage(content=sys_msg_content)
             human_parts = [state["prompt"]]
@@ -298,9 +340,10 @@ If no skill matches, respond naturally to the user — you can answer questions,
                 "ts": datetime.datetime.now().isoformat(),
                 "event": "llm_request",
                 "messages": [
-                    {"role": "system", "content": sys_msg_content},
+                    {"role": "system", "content": sys_msg_content_for_log},
                     {"role": "user", "content": human_msg.content},
                 ],
+                "runtime_time_context": _runtime_time_context_for_log(state.get("runtime_context")),
                 "routable_skills": [s.id for s in routable_skills],
             })
             
@@ -417,7 +460,7 @@ def run_skill(state: RootState) -> dict:
 
     task_id = state["task_id"]
     context = state.get("context") or {}
-    account_id = state.get("user_id") or context.get("account_id") or context.get("accountId")
+    account_id = _account_id_from_state(state)
     runtime_context = dict(state.get("runtime_context") or {})
     client_app_id = context.get("client_app_id") or context.get("clientAppId")
     if client_app_id:

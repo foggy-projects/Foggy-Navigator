@@ -89,6 +89,9 @@ class OpenApiControllerMessageMappingTest {
                 mock(OpenApiSessionQueryService.class),
                 new ObjectMapper(),
                 mock(ObjectProvider.class),
+                mock(ObjectProvider.class),
+                mock(ObjectProvider.class),
+                mock(ObjectProvider.class),
                 mock(ObjectProvider.class)
         );
     }

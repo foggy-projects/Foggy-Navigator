@@ -47,6 +47,12 @@
   - [14-upstream-auto-bootstrap-contract.md](./upstream-integration/14-upstream-auto-bootstrap-contract.md) - 自动化契约 / 上游 LLM 通过 manifest + env + SDK runner 自动完成 Business Agent bootstrap
   - [15-upstream-suspension-dialog-component-contract.md](./upstream-integration/15-upstream-suspension-dialog-component-contract.md) - 前端组件契约 / 上游通过 `BusinessSuspensionDialog` 展示审批与通用暂停交互
   - [16-upstream-suspension-ui-bff-demo.md](./upstream-integration/16-upstream-suspension-ui-bff-demo.md) - 前端/BFF 示例 / 上游组合 `NavigatorChat`、`BusinessSuspensionDialog` 与 BFF decision 转发
+  - [17-navigator-upstream-cli-requirement.md](./upstream-integration/17-navigator-upstream-cli-requirement.md) - CLI 需求 / Navigator Upstream CLI 封装 runtime-token、ensure-grant、ask、message polling 与 TMS 联调 helper
+  - [18-navigator-upstream-cli-usage-guide.md](./upstream-integration/18-navigator-upstream-cli-usage-guide.md) - CLI 使用指南 / 上游 Agent 使用 Navigator Upstream CLI 完成本地联调、安全检查与消息轮询
+  - [19-navigator-upstream-cli-install-update.md](./upstream-integration/19-navigator-upstream-cli-install-update.md) - CLI 安装更新 / 远程发布、上游项目本地安装、项目配置隔离与自更新
+  - [20-navigator-upstream-cli-readiness-and-skill-artifact.md](./upstream-integration/20-navigator-upstream-cli-readiness-and-skill-artifact.md) - CLI 扩展需求 / 上游 Agent readiness 诊断与已授权 skill artifact 文件树和切片读取
+  - [21-account-context-memory-file-design.md](./upstream-integration/21-account-context-memory-file-design.md) - 设计澄清 / UserMemory、账号上下文文件、accountId 私有 Skill 与上游文件 API 边界
+  - [22-skill-bundle-sync-design.md](./upstream-integration/22-skill-bundle-sync-design.md) - 设计与实施 / 统一 ClientApp 公共 Skill 与 accountId 私有 Skill 的 Skill Bundle 同步模型
 
 ## Acceptance Status
 

@@ -118,3 +118,9 @@ graph TB
 | [14-upstream-auto-bootstrap-contract.md](./14-upstream-auto-bootstrap-contract.md) | 上游自动 bootstrap 契约 | 上游 LLM coding agent / 上游后端 |
 | [15-upstream-suspension-dialog-component-contract.md](./15-upstream-suspension-dialog-component-contract.md) | 上游 Suspension 对话框组件契约 | 上游前端 / 上游后端 |
 | [16-upstream-suspension-ui-bff-demo.md](./16-upstream-suspension-ui-bff-demo.md) | 上游 Suspension UI + BFF Demo | 上游前端 / 上游后端 |
+| [17-navigator-upstream-cli-requirement.md](./17-navigator-upstream-cli-requirement.md) | Navigator Upstream CLI 需求 | 上游 LLM coding agent / 上游后端 / 上游前端 |
+| [18-navigator-upstream-cli-usage-guide.md](./18-navigator-upstream-cli-usage-guide.md) | Navigator Upstream CLI 使用指南 | 上游 LLM coding agent / 上游后端 |
+| [19-navigator-upstream-cli-install-update.md](./19-navigator-upstream-cli-install-update.md) | Navigator Upstream CLI 安装更新 | 上游 LLM coding agent / 上游后端 / Navigator release owner |
+| [20-navigator-upstream-cli-readiness-and-skill-artifact.md](./20-navigator-upstream-cli-readiness-and-skill-artifact.md) | CLI agent readiness 与 skill artifact 浏览 | 上游 LLM coding agent / 上游后端 / skill owner |
+| [21-account-context-memory-file-design.md](./21-account-context-memory-file-design.md) | UserMemory、账号上下文文件与 accountId 私有 Skill 边界 | Navigator / worker / skill owner |
+| [22-skill-bundle-sync-design.md](./22-skill-bundle-sync-design.md) | 统一 ClientApp public 与 account private Skill Bundle 同步 | Navigator / 上游后端 / 上游 LLM coding agent |

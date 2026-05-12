@@ -361,6 +361,7 @@ class ClaudeTaskServiceAuthTest {
         WorkingDirectoryEntity dir = createWorkingDirectory(directoryId, "/test/path");
         dir.setDefaultAuthMode("API_KEY");
         dir.setDefaultAuthToken("encrypted-dir-key");
+        when(directoryService.getDirectoryEntity(USER_ID, directoryId)).thenReturn(dir);
         when(workingDirectoryRepository.findByDirectoryIdAndUserId(directoryId, USER_ID))
                 .thenReturn(Optional.of(dir));
 
@@ -397,6 +398,7 @@ class ClaudeTaskServiceAuthTest {
         dir.setDefaultModelConfigId(modelConfigId);
         dir.setDefaultAuthMode("API_KEY");
         dir.setDefaultAuthToken("encrypted-dir-key");
+        when(directoryService.getDirectoryEntity(USER_ID, directoryId)).thenReturn(dir);
         when(workingDirectoryRepository.findByDirectoryIdAndUserId(directoryId, USER_ID))
                 .thenReturn(Optional.of(dir));
 

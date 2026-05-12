@@ -46,15 +46,25 @@
   - 在 `_build_user_prompt()` 中追加动态 runtime context。
   - 新增运行时日期上下文构造逻辑。
   - 保持 `_build_system_prompt()` 不注入当前时间。
+- `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphBusinessAgentWorkerTaskLauncher.java`
+  - 创建 LangGraph Worker 任务时显式传入 `current_time`、`timezone`、`business_date`。
+  - 保持 `task_scoped_token` 仅在 `runtimeContext` 内传递，不进入业务 `context`。
+- `tools/langgraph-biz-worker/src/langgraph_biz_worker/graphs/root_graph.py`
+  - 在 `llm-conversations` 的 `llm_request` 事件中记录白名单后的 `runtime_time_context`。
+  - 日志不记录 `task_scoped_token` 等敏感 runtime 字段。
 - `tools/langgraph-biz-worker/tests/test_llm_skill_agent.py`
   - 补充 runtime context 注入的回归测试。
   - 补充 system prompt 不包含动态当前时间的缓存友好性测试。
+- `addons/langgraph-biz-worker/src/test/java/com/foggy/navigator/langgraph/worker/service/LanggraphBusinessAgentWorkerTaskLauncherTest.java`
+  - 补充 Java launcher runtime context 传递断言。
+- `tools/langgraph-biz-worker/tests/test_account_skill_routing.py`
+  - 补充 conversation log 中 `runtime_time_context` 的落盘与敏感字段过滤断言。
 
 ## 约束与非目标
 
 1. 本次不改根路由 system prompt。
 2. 本次不把所有相对时间解析完全下沉为确定性 DSL 预处理；该方向保留为后续增强。
-3. 本次不改变 Java Worker Gateway 或 `tms.dataset.queryModel` 的 API 契约。
+3. 本次不改变外部 API 契约或 `tms.dataset.queryModel` 的 API 契约。
 4. 本次不引入第三方日期解析库。
 
 ## 验收标准
@@ -75,6 +85,8 @@
 - [x] 定位缺失点：根路由日志与 `LlmSkillAgent` prompt 构造均缺少当前时间。
 - [x] 明确设计：动态时间放入 skill 执行层 user/runtime context，静态 system prompt 保持缓存友好。
 - [x] 完成 `llm_skill_agent.py` 实现。
+- [x] 完成 Java launcher 显式传入 runtime time context。
+- [x] 完成 `llm-conversations` 中 runtime time context 可观测性。
 - [x] 完成测试回补。
 
 ### Testing Progress
@@ -83,7 +95,11 @@
 - `tools/langgraph-biz-worker`: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_llm_skill_agent.py`
   - Result: `8 passed`
 - `tools/langgraph-biz-worker`: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests`
-  - Result: `327 passed, 6 skipped`
+  - Result: `328 passed, 6 skipped`
+- `addons/langgraph-biz-worker`: `mvn -pl addons/langgraph-biz-worker -am "-Dtest=LanggraphBusinessAgentWorkerTaskLauncherTest" "-DfailIfNoTests=false" "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  - Result: `Tests run: 4, Failures: 0, Errors: 0, Skipped: 0`
+- `tools/langgraph-biz-worker`: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_account_skill_routing.py tests/test_llm_skill_agent.py`
+  - Result: `15 passed`
 
 ### Experience Progress
 
@@ -93,9 +109,13 @@
 ## Execution Check-in
 
 - status: completed
-- completed_work: 已在 Biz Worker skill agent 用户消息中注入动态 Runtime context，包含 `current_time`、`timezone`、`business_date` 和 `current_month_range`；静态 system prompt 保持不含动态时间字段。
+- completed_work: 已在 Biz Worker skill agent 用户消息中注入动态 Runtime context，包含 `current_time`、`timezone`、`business_date` 和 `current_month_range`；Java launcher 已显式传入 `current_time`、`timezone`、`business_date`；`llm-conversations` 已记录白名单后的 `runtime_time_context`；静态 system prompt 保持不含动态时间字段。
 - touched_code_paths:
+  - `addons/langgraph-biz-worker/src/main/java/com/foggy/navigator/langgraph/worker/service/LanggraphBusinessAgentWorkerTaskLauncher.java`
+  - `addons/langgraph-biz-worker/src/test/java/com/foggy/navigator/langgraph/worker/service/LanggraphBusinessAgentWorkerTaskLauncherTest.java`
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/graphs/root_graph.py`
   - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_skill_agent.py`
+  - `tools/langgraph-biz-worker/tests/test_account_skill_routing.py`
   - `tools/langgraph-biz-worker/tests/test_llm_skill_agent.py`
   - `docs/version-tracker/1.1.3-SNAPSHOT/README.md`
   - `docs/version-tracker/1.1.3-SNAPSHOT/10-biz-worker-relative-time-runtime-context.md`
