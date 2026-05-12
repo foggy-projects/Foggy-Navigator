@@ -114,6 +114,39 @@ AgentTask task = client.agents().ask(agentId, "分析订单异常");
 AgentTask done = client.agents().pollUntilDone(agentId, task.getTaskId(), Duration.ofMinutes(5));
 ```
 
+ClientApp runtime token 场景可传 `clientContext`，用于上游保存自己的会话扩展数据：
+
+```java
+Map<String, Object> clientContext = Map.of(
+    "upstreamConversationId", "tms-ai-10001",
+    "bizObjectType", "order",
+    "bizObjectId", "SO-10001"
+);
+
+AgentTask task = client.agents().askWithClientAppAccessToken(
+    agentId,
+    "查询订单状态",
+    contextId,
+    null,
+    clientContext,
+    clientAppKey,
+    runtimeAccessToken,
+    upstreamUserId
+);
+```
+
+历史会话读取：
+
+```java
+SessionListPage sessions = client.agents().listSessionsWithClientAppAccessToken(
+    agentId, 20, null, clientAppKey, runtimeAccessToken, upstreamUserId);
+
+SessionMessagesPage messages = client.agents().getSessionMessagesWithClientAppAccessToken(
+    agentId, contextId, 50, null, clientAppKey, runtimeAccessToken, upstreamUserId);
+```
+
+`clientContext` 是顶层 `POST /ask` 字段，只在会话摘要中持久化和返回，不进入 Worker metadata 或 LLM prompt。
+
 ### 3. Business Agent 接入
 
 推荐直接使用 SDK 的 `client.businessAgent()` 进行 App 初始化和授权。例如：

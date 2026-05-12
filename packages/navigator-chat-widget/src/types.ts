@@ -140,6 +140,53 @@ export interface AgentTask {
   createdAt?: string
 }
 
+export interface NavigatorSendOptions {
+  /** Client App 透明会话上下文，仅保存到会话摘要 */
+  clientContext?: Record<string, unknown>
+  /** Agent 执行链路元数据 */
+  metadata?: Record<string, unknown>
+}
+
+export interface PaginationOptions {
+  cursor?: string | null
+  limit?: number
+}
+
+export interface SessionSummary {
+  contextId: string
+  agentId?: string
+  title?: string | null
+  status?: string
+  latestTaskId?: string | null
+  clientContext?: Record<string, unknown> | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface SessionMessage {
+  messageId: string
+  contextId?: string | null
+  taskId?: string | null
+  role?: string
+  type?: string
+  content?: unknown
+  metadata?: Record<string, unknown>
+  createdAt?: string
+}
+
+export interface SessionListPage {
+  sessions: SessionSummary[]
+  nextCursor?: string | null
+  hasMore?: boolean
+}
+
+export interface SessionMessagesPage {
+  contextId: string
+  messages: SessionMessage[]
+  nextCursor?: string | null
+  hasMore?: boolean
+}
+
 /** Navigator OpenAPI 任务消息增量页 */
 export interface TaskMessagesPage {
   taskId: string

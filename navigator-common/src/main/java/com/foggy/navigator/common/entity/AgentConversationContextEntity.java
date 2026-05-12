@@ -36,6 +36,11 @@ public class AgentConversationContextEntity {
     @Column(length = 64)
     private String navigatorSessionId;
 
+    /** Client App 提供的透明会话上下文 JSON，不注入 Agent 执行链路 */
+    @Lob
+    @Column(columnDefinition = "TEXT")
+    private String clientContextJson;
+
     @Column(length = 64, nullable = false)
     private String userId;
 

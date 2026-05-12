@@ -477,6 +477,7 @@ public class OpenApiController {
         // 构建 A2aMessage
         String contextId = (form.getContextId() != null && !form.getContextId().isBlank())
                 ? form.getContextId() : IdGenerator.shortId();
+        String clientContextJson = serializeClientContext(form.getClientContext());
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(messageContent)));
         message.setContextId(contextId);
         Map<String, Object> metadata = new java.util.HashMap<>();
@@ -501,6 +502,10 @@ public class OpenApiController {
         }
 
         A2aTask task = agent.sendTask(message);
+        if (clientContextJson != null) {
+            String userId = resolveAgentOwnerUserId(agentId, tenantId);
+            sessionQueryService.updateClientContextJson(contextId, userId, agentId, clientContextJson);
+        }
 
         log.info("Open API askAgent: agentId={}, taskId={}, tenantId={}", agentId, task.getId(), tenantId);
 
@@ -889,7 +894,7 @@ public class OpenApiController {
 
         int safeLimit = Math.min(Math.max(limit, 1), 100);
         List<AgentConversationContextEntity> contexts = sessionQueryService.listSessions(
-                userId, agentId, safeLimit);
+                userId, agentId, cursor, safeLimit);
 
         boolean hasMore = contexts.size() > safeLimit;
         List<AgentConversationContextEntity> page = hasMore ? contexts.subList(0, safeLimit) : contexts;
@@ -1243,9 +1248,33 @@ public class OpenApiController {
                 .title(ctx.getContextAlias())
                 .status("ACTIVE")
                 .latestTaskId(latestTaskId)
+                .clientContext(parseClientContext(ctx.getClientContextJson()))
                 .createdAt(ctx.getCreatedAt())
                 .updatedAt(ctx.getLastAccessedAt())
                 .build();
+    }
+
+    private String serializeClientContext(Map<String, Object> clientContext) {
+        if (clientContext == null || clientContext.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(clientContext);
+        } catch (Exception e) {
+            throw RX.throwB("clientContext must be a valid JSON object");
+        }
+    }
+
+    private Map<String, Object> parseClientContext(String clientContextJson) {
+        if (clientContextJson == null || clientContextJson.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(clientContextJson, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse clientContextJson from session summary: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**

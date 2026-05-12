@@ -4,7 +4,12 @@ import type {
   AgentTask,
   ChatMessage,
   NavigatorChatConfig,
+  NavigatorSendOptions,
   OpenTaskMessage,
+  PaginationOptions,
+  SessionListPage,
+  SessionMessage,
+  SessionMessagesPage,
   TaskMessagesPage,
   TaskStatus,
   TerminalStatus,
@@ -32,7 +37,13 @@ export interface UseNavigatorChat {
   /** 错误信息 */
   error: Ref<string | null>
   /** 发送消息 */
-  send: (content: string) => Promise<void>
+  send: (content: string, options?: NavigatorSendOptions) => Promise<void>
+  /** 获取历史会话列表 */
+  listSessions: (options?: PaginationOptions) => Promise<SessionListPage>
+  /** 获取历史会话消息 */
+  getSessionMessages: (contextId: string, options?: PaginationOptions) => Promise<SessionMessagesPage>
+  /** 加载历史会话并切换当前 contextId */
+  loadSession: (contextId: string, options?: PaginationOptions) => Promise<SessionMessagesPage>
   /** 取消当前任务 */
   cancel: () => Promise<void>
   /** 清空对话（重新开始新会话） */
@@ -90,7 +101,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     stopPolling()
   })
 
-  async function send(content: string): Promise<void> {
+  async function send(content: string, options: NavigatorSendOptions = {}): Promise<void> {
     if (isLoading.value) return
     error.value = null
 
@@ -107,7 +118,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     progressText.value = '正在理解问题...'
 
     try {
-      const task = await api.ask(content, contextId.value ?? undefined)
+      const task = await api.ask(content, contextId.value ?? undefined, options)
       currentTaskId = task.taskId
       contextId.value = task.contextId
       taskStatus.value = task.status
@@ -200,11 +211,44 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   }
 
   function clear() {
+    resetConversationState(true)
+  }
+
+  async function listSessions(options: PaginationOptions = {}): Promise<SessionListPage> {
+    return api.listSessions(options)
+  }
+
+  async function getSessionMessages(targetContextId: string, options: PaginationOptions = {}): Promise<SessionMessagesPage> {
+    return api.getSessionMessages(targetContextId, options)
+  }
+
+  async function loadSession(targetContextId: string, options: PaginationOptions = {}): Promise<SessionMessagesPage> {
     stopPolling()
+    resetConversationState(false)
+    contextId.value = targetContextId
+    isLoading.value = true
+    error.value = null
+    try {
+      const page = await api.getSessionMessages(targetContextId, options)
+      contextId.value = page.contextId ?? targetContextId
+      ingestOpenMessages(sessionMessagesToOpenMessages(page.messages ?? []), 'history', undefined, {
+        includeUserMessages: true,
+      })
+      return page
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      error.value = msg
+      throw e
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  function resetConversationState(clearContext: boolean) {
     rawMessages.value = []
     isLoading.value = false
     taskStatus.value = null
-    contextId.value = null
+    if (clearContext) contextId.value = null
     progressText.value = '正在理解问题...'
     error.value = null
     currentTaskId = null
@@ -242,9 +286,15 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     ingestOpenMessages(page.messages ?? [], page.taskId, page.status as TaskStatus)
   }
 
-  function ingestOpenMessages(openMessages: OpenTaskMessage[], taskId: string, status?: TaskStatus) {
+  function ingestOpenMessages(
+    openMessages: OpenTaskMessage[],
+    taskId: string,
+    status?: TaskStatus,
+    options: { includeUserMessages?: boolean } = {}
+  ) {
     for (const message of openMessages) {
-      const id = openMessageId(taskId, message)
+      const messageTaskId = firstString((message as { taskId?: unknown }).taskId, taskId) ?? taskId
+      const id = openMessageId(messageTaskId, message)
       if (seenOpenMessageIds.has(id)) continue
       seenOpenMessageIds.add(id)
 
@@ -252,6 +302,17 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       const sanitizedMessage = sanitizeValue(message) as OpenTaskMessage
       const actions = extractActions(sanitizedMessage)
       if (message.type === 'USER') {
+        if (options.includeUserMessages && content) {
+          rawMessages.value.push({
+            id,
+            role: 'user',
+            content: sanitizeText(content),
+            timestamp: openMessageTimestamp(message),
+            taskId: messageTaskId,
+            status,
+            messageType: message.type,
+          })
+        }
         continue
       }
       if ((message.type === 'TEXT' || message.type === 'RESULT') && content) {
@@ -267,7 +328,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           role: 'assistant',
           content: visibleContent,
           timestamp: openMessageTimestamp(message),
-          taskId,
+          taskId: messageTaskId,
           status,
           messageType: message.type,
           terminal: message.terminal,
@@ -284,7 +345,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           role: 'system',
           content: errMsg,
           timestamp: openMessageTimestamp(message),
-          taskId,
+          taskId: messageTaskId,
           status,
           messageType: message.type,
           terminal: message.terminal,
@@ -297,7 +358,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
         if (subtype === 'skill_frame_open' || subtype === 'skill_frame_close') {
           progressText.value = subtype === 'skill_frame_open' ? '正在执行技能...' : '技能执行完成'
           if (display.showRuntimeEvents || display.showToolCalls || display.showToolResults) {
-            upsertSkillFrame(taskId, message, subtype, id, status)
+            upsertSkillFrame(messageTaskId, message, subtype, id, status)
           }
           continue
         }
@@ -309,7 +370,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
             role: 'system',
             content: sanitizeText(content || stringifySafe(sanitizedMessage)),
             timestamp: openMessageTimestamp(message),
-            taskId,
+            taskId: messageTaskId,
             status,
             messageType: message.type,
             terminal: message.terminal,
@@ -322,13 +383,13 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
         if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在查询数据...'
         if (display.showToolCalls || display.showToolResults) {
-          upsertToolExecution(taskId, message, 'call', id, status)
+          upsertToolExecution(messageTaskId, message, 'call', id, status)
         }
       } else if (message.type === 'TOOL_RESULT') {
         if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在生成回答...'
         if (display.showToolCalls || display.showToolResults) {
-          upsertToolExecution(taskId, message, 'result', id, status)
+          upsertToolExecution(messageTaskId, message, 'result', id, status)
         }
       } else if (actions.length > 0) {
         pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
@@ -408,6 +469,36 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     return Date.now()
   }
 
+  function sessionMessagesToOpenMessages(messages: SessionMessage[]): OpenTaskMessage[] {
+    return messages.map((message) => ({
+      id: message.messageId,
+      messageId: message.messageId,
+      type: normalizeSessionMessageType(message),
+      content: message.content,
+      createdAt: message.createdAt,
+      timestamp: message.createdAt,
+      metadata: message.metadata,
+      taskId: message.taskId,
+    }))
+  }
+
+  function normalizeSessionMessageType(message: SessionMessage): OpenTaskMessage['type'] {
+    const rawType = firstString(message.type, message.metadata?.type)
+    const normalized = rawType?.toUpperCase()
+    if (normalized === 'USER') return 'USER'
+    if (normalized === 'TEXT' || normalized === 'TEXT_COMPLETE') return 'TEXT'
+    if (normalized === 'RESULT' || normalized === 'TASK_COMPLETED') return 'RESULT'
+    if (normalized === 'TOOL_CALL' || normalized === 'TOOL_CALL_START') return 'TOOL_CALL'
+    if (normalized === 'TOOL_RESULT' || normalized === 'TOOL_CALL_RESULT') return 'TOOL_RESULT'
+    if (normalized === 'STATE' || normalized === 'STATUS') return 'STATE'
+    if (normalized === 'ERROR') return 'ERROR'
+
+    const role = message.role?.toUpperCase()
+    if (role === 'USER') return 'USER'
+    if (role === 'TOOL') return 'TOOL_RESULT'
+    return 'TEXT'
+  }
+
   return {
     messages,
     isLoading,
@@ -416,6 +507,9 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     progressText,
     error,
     send,
+    listSessions,
+    getSessionMessages,
+    loadSession,
     cancel,
     clear,
   }
@@ -988,6 +1082,7 @@ function stateProgressText(content: string): string {
   if (lower.includes('generat') || lower.includes('answer') || lower.includes('回答')) return '正在生成回答...'
   return '正在处理...'
 }
+
 
 function sanitizeErrorSummary(content: string): string {
   const safe = sanitizeText(content)

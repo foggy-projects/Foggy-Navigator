@@ -29,6 +29,9 @@ public class OpenApiQueryForm {
     /** 扩展元数据 */
     private java.util.Map<String, Object> metadata;
 
+    /** Client App 透明会话上下文，仅用于会话摘要保存，不进入 Agent 执行链路 */
+    private java.util.Map<String, Object> clientContext;
+
     /**
      * 获取实际消息内容（优先 message，回退 question）
      */

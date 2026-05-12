@@ -291,6 +291,12 @@ defineExpose({
   chat,
   /** 编程式发送 */
   send: chat.send,
+  /** 获取历史会话列表 */
+  listSessions: chat.listSessions,
+  /** 获取历史会话消息 */
+  getSessionMessages: chat.getSessionMessages,
+  /** 加载历史会话并继续 contextId */
+  loadSession: chat.loadSession,
   /** 取消当前任务 */
   cancel: chat.cancel,
   /** 清空对话 */

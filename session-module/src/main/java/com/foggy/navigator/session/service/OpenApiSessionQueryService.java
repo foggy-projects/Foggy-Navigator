@@ -13,6 +13,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -45,9 +46,37 @@ public class OpenApiSessionQueryService {
      * @return 会话上下文列表
      */
     public List<AgentConversationContextEntity> listSessions(String userId, String agentId, int limit) {
+        return listSessions(userId, agentId, null, limit);
+    }
+
+    public List<AgentConversationContextEntity> listSessions(String userId, String agentId,
+                                                             String cursor, int limit) {
         Pageable pageable = PageRequest.of(0, limit + 1); // 多取一条判 hasMore
-        return contextRepository.findByUserIdAndTargetAgentIdOrderByLastAccessedAtDesc(
-                userId, agentId, pageable);
+        if (cursor == null || cursor.isBlank()) {
+            return contextRepository.findByUserIdAndTargetAgentIdOrderByLastAccessedAtDesc(
+                    userId, agentId, pageable);
+        }
+        LocalDateTime cursorTime = contextRepository.findByContextIdAndUserId(cursor, userId)
+                .filter(ctx -> agentId.equals(ctx.getTargetAgentId()))
+                .map(AgentConversationContextEntity::getLastAccessedAt)
+                .orElse(null);
+        if (cursorTime == null) {
+            return contextRepository.findByUserIdAndTargetAgentIdOrderByLastAccessedAtDesc(
+                    userId, agentId, pageable);
+        }
+        return contextRepository.findByUserIdAndTargetAgentIdAndLastAccessedAtBeforeOrderByLastAccessedAtDesc(
+                userId, agentId, cursorTime, pageable);
+    }
+
+    @Transactional
+    public void updateClientContextJson(String contextId, String userId, String agentId,
+                                        String clientContextJson) {
+        contextRepository.findByContextIdAndUserId(contextId, userId)
+                .filter(ctx -> agentId.equals(ctx.getTargetAgentId()))
+                .ifPresent(ctx -> {
+                    ctx.setClientContextJson(clientContextJson);
+                    contextRepository.save(ctx);
+                });
     }
 
     // ── 2. contextId 读模型 ──

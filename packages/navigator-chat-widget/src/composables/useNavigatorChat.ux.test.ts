@@ -18,6 +18,96 @@ function okResponse(data: unknown): Response {
 }
 
 describe('useNavigatorChat business action UX', () => {
+
+  it('loads historical messages and reuses contextId on the next send', async () => {
+    const requests: Array<{ url: string; method?: string; body?: unknown }> = []
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async (url, init) => {
+            requests.push({
+              url,
+              method: init.method,
+              body: init.body ? JSON.parse(String(init.body)) : undefined,
+            })
+            if (String(url).includes('/sessions/ctx-1/messages')) {
+              return okResponse({
+                contextId: 'ctx-1',
+                messages: [
+                  {
+                    messageId: 'hist-user',
+                    contextId: 'ctx-1',
+                    taskId: 'task-old',
+                    role: 'USER',
+                    type: 'USER',
+                    content: '历史问题',
+                    createdAt: '2026-05-12T10:00:00',
+                  },
+                  {
+                    messageId: 'hist-result',
+                    contextId: 'ctx-1',
+                    taskId: 'task-old',
+                    role: 'ASSISTANT',
+                    type: 'RESULT',
+                    content: '历史回答',
+                    createdAt: '2026-05-12T10:00:01',
+                  },
+                ],
+                nextCursor: 'hist-result',
+                hasMore: false,
+              })
+            }
+            return okResponse({
+              taskId: 'task-new',
+              agentId: 'agent-1',
+              status: 'COMPLETED',
+              contextId: 'ctx-1',
+              terminal: true,
+              terminalStatus: 'COMPLETED',
+              messages: [
+                {
+                  id: 'new-result',
+                  type: 'RESULT',
+                  content: '继续回答',
+                  timestamp: 2_000,
+                  terminal: true,
+                  terminalStatus: 'COMPLETED',
+                },
+              ],
+            })
+          },
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-1')
+    await nextTick()
+
+    expect(chat.contextId.value).toBe('ctx-1')
+    expect(chat.messages.value.map((message) => [message.role, message.content])).toEqual([
+      ['user', '历史问题'],
+      ['assistant', '历史回答'],
+    ])
+
+    await chat.send('继续问', {
+      clientContext: { upstreamConversationId: 'tms-1' },
+    })
+
+    const askRequest = requests.find((request) => request.url.includes('/ask'))
+    expect(askRequest?.body).toMatchObject({
+      question: '继续问',
+      contextId: 'ctx-1',
+      clientContext: { upstreamConversationId: 'tms-1' },
+    })
+  })
+
   it('moves tool-result actions onto the final assistant reply and finalizes open skill frames', async () => {
     const structuredOutput = {
       type: 'OPEN_TMS_PAGE',
