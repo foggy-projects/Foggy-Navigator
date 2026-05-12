@@ -98,6 +98,7 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
                   "type": "skill_frame_open",
                   "content": "open skill",
                   "skill_frame_id": "frame-101",
+                  "parent_frame_id": "frame-parent",
                   "skill_id": "skill-1"
                 }
                 """);
@@ -108,6 +109,7 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
                   "tool_call_id": "call-101",
                   "function_id": "fn-list-models",
                   "skill_frame_id": "frame-101",
+                  "parent_frame_id": "frame-parent",
                   "skill_id": "skill-1",
                   "args": {"namespace": "tms"}
                 }
@@ -120,6 +122,7 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
                   "tool_call_id": "call-101",
                   "function_id": "fn-list-models",
                   "skill_frame_id": "frame-101",
+                  "parent_frame_id": "frame-parent",
                   "skill_id": "skill-1"
                 }
                 """);
@@ -135,6 +138,10 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
                         .filter(message -> isToolCallStart(message) || isToolCallResult(message))
                         .allMatch(message -> message.getMetadata().contains("\"skillFrameId\":\"frame-101\"")),
                 "tool messages should retain skillFrameId for frame grouping");
+        assertTrue(runningIncrement.stream()
+                        .filter(message -> isToolCallStart(message) || isToolCallResult(message))
+                        .allMatch(message -> message.getMetadata().contains("\"parentFrameId\":\"frame-parent\"")),
+                "tool messages should retain parentFrameId for frame hierarchy");
 
         AtomicReference<List<SessionMessageEntity>> messagesAtComplete = new AtomicReference<>();
         doAnswer(invocation -> {
@@ -147,6 +154,7 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
                   "type": "skill_frame_close",
                   "content": "close skill",
                   "skill_frame_id": "frame-101",
+                  "parent_frame_id": "frame-parent",
                   "skill_id": "skill-1"
                 }
                 """);

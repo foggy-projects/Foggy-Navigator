@@ -8,6 +8,7 @@ import type {
   TaskMessagesPage,
   TaskStatus,
   TerminalStatus,
+  SkillFrameBlock,
   ToolExecutionBlock,
   NavigatorAction,
 } from '../types'
@@ -74,6 +75,9 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   let pollStartTime = 0
   const seenOpenMessageIds = new Set<string>()
   const toolExecutionMessageIds = new Map<string, string>()
+  const toolExecutionFrameIds = new Map<string, string>()
+  const skillFramesById = new Map<string, SkillFrameBlock>()
+  const skillFrameMessageIds = new Map<string, string>()
   const pendingToolCallIdsByTask = new Map<string, string[]>()
   let toolSeq = 0
 
@@ -206,6 +210,9 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     nextCursor = null
     seenOpenMessageIds.clear()
     toolExecutionMessageIds.clear()
+    toolExecutionFrameIds.clear()
+    skillFramesById.clear()
+    skillFrameMessageIds.clear()
     pendingToolCallIdsByTask.clear()
   }
 
@@ -293,6 +300,16 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           error: errMsg,
         })
       } else if (message.type === 'STATE') {
+        const payload = normalizedPayload(message)
+        const subtype = firstString(payload.subtype, payload.stateType, payload.state_type)
+        if (subtype === 'skill_frame_open' || subtype === 'skill_frame_close') {
+          progressText.value = subtype === 'skill_frame_open' ? '正在执行技能...' : '技能执行完成'
+          if (display.showRuntimeEvents || display.showToolCalls || display.showToolResults) {
+            upsertSkillFrame(taskId, message, subtype, id, status)
+          }
+          continue
+        }
+
         progressText.value = stateProgressText(content)
         if (display.showRuntimeEvents) {
           rawMessages.value.push({
@@ -419,6 +436,32 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     const existing = existingMessageId
       ? rawMessages.value.find((item) => item.id === existingMessageId)?.toolExecution
       : undefined
+    const frameId = resolveSkillFrameId(message, payload) ?? toolExecutionFrameIds.get(toolCallId)
+    if (frameId) {
+      const parentFrameId = firstString(payload.parentFrameId, payload.parent_frame_id)
+      const skillId = firstString(payload.skillId, payload.skill_id)
+      const frame = ensureSkillFrame(frameId, {
+        parentFrameId,
+        skillId,
+        timestamp,
+        raw: message,
+        content: openMessageContent(message),
+      })
+      attachSkillFrame(taskId, frame, `${taskId}:${frameId}`, timestamp, status, message)
+
+      const existingInFrame = frame.toolExecutions.find((item) => item.toolCallId === toolCallId)
+      const nextInFrame = mergeToolExecution(existingInFrame, toolCallId, message, payload, phase, timestamp)
+      const index = frame.toolExecutions.findIndex((item) => item.toolCallId === toolCallId)
+      if (index >= 0) frame.toolExecutions.splice(index, 1, nextInFrame)
+      else frame.toolExecutions.push(nextInFrame)
+      toolExecutionFrameIds.set(toolCallId, frameId)
+      if (existingMessageId) {
+        toolExecutionMessageIds.delete(toolCallId)
+        rawMessages.value = rawMessages.value.filter((item) => item.id !== existingMessageId)
+      }
+      touchMessages()
+      return
+    }
 
     const next = mergeToolExecution(existing, toolCallId, message, payload, phase, timestamp)
     if (existingMessageId) {
@@ -489,6 +532,150 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     }
     return generated
   }
+
+  function upsertSkillFrame(
+    taskId: string,
+    message: OpenTaskMessage,
+    subtype: 'skill_frame_open' | 'skill_frame_close',
+    messageId: string,
+    status?: TaskStatus
+  ) {
+    const timestamp = openMessageTimestamp(message)
+    const payload = normalizedPayload(message)
+    const frameId = firstString(payload.skillFrameId, payload.skill_frame_id, payload.frameId, payload.frame_id)
+    if (!frameId) return
+
+    const parentFrameId = firstString(payload.parentFrameId, payload.parent_frame_id)
+    const skillId = firstString(payload.skillId, payload.skill_id)
+    const frame = ensureSkillFrame(frameId, {
+      parentFrameId,
+      skillId,
+      timestamp,
+      raw: message,
+      content: openMessageContent(message),
+      phase: subtype === 'skill_frame_open' ? 'open' : 'close',
+    })
+
+    if (subtype === 'skill_frame_open') {
+      frame.status = 'running'
+      frame.openedAt = frame.openedAt ?? timestamp
+      frame.rawOpen = sanitizeValue(message)
+      frame.openContent = openMessageContent(message)
+    } else {
+      frame.status = firstString(payload.status)?.toLowerCase() === 'failed' ? 'failed' : 'success'
+      frame.closedAt = timestamp
+      frame.rawClose = sanitizeValue(message)
+      frame.closeContent = openMessageContent(message)
+      if (frame.openedAt != null) frame.durationMs = Math.max(0, timestamp - frame.openedAt)
+    }
+
+    frame.parentFrameId = parentFrameId ?? frame.parentFrameId
+    frame.skillId = skillId ?? frame.skillId
+    frame.displayName = skillFrameDisplayName(frame)
+    frame.trace = extractTrace(payload)
+
+    attachSkillFrame(taskId, frame, messageId, timestamp, status, message)
+    touchMessages()
+  }
+
+  function ensureSkillFrame(
+    frameId: string,
+    options: {
+      parentFrameId?: string
+      skillId?: string
+      timestamp?: number
+      raw?: OpenTaskMessage
+      content?: string
+      phase?: 'open' | 'close'
+    } = {}
+  ): SkillFrameBlock {
+    const existing = skillFramesById.get(frameId)
+    if (existing) {
+      existing.parentFrameId = options.parentFrameId ?? existing.parentFrameId
+      existing.skillId = options.skillId ?? existing.skillId
+      existing.displayName = skillFrameDisplayName(existing)
+      return existing
+    }
+
+    const frame: SkillFrameBlock = {
+      frameId,
+      parentFrameId: options.parentFrameId,
+      skillId: options.skillId,
+      displayName: options.skillId || frameId,
+      status: options.phase === 'close' ? 'success' : 'running',
+      openedAt: options.phase === 'open' ? options.timestamp : undefined,
+      closedAt: options.phase === 'close' ? options.timestamp : undefined,
+      openContent: options.phase === 'open' ? options.content : undefined,
+      closeContent: options.phase === 'close' ? options.content : undefined,
+      rawOpen: options.phase === 'open' ? sanitizeValue(options.raw) : undefined,
+      rawClose: options.phase === 'close' ? sanitizeValue(options.raw) : undefined,
+      toolExecutions: [],
+      children: [],
+      trace: {},
+    }
+    if (frame.openedAt != null && frame.closedAt != null) {
+      frame.durationMs = Math.max(0, frame.closedAt - frame.openedAt)
+    }
+    skillFramesById.set(frameId, frame)
+    return frame
+  }
+
+  function attachSkillFrame(
+    taskId: string,
+    frame: SkillFrameBlock,
+    messageId: string,
+    timestamp: number,
+    status?: TaskStatus,
+    message?: OpenTaskMessage
+  ) {
+    const parent = frame.parentFrameId ? skillFramesById.get(frame.parentFrameId) : undefined
+    if (parent && !parent.children.some((child) => child.frameId === frame.frameId)) {
+      parent.children.push(frame)
+      removeRootSkillFrameMessage(frame.frameId)
+      attachKnownChildFrames(frame)
+      return
+    }
+
+    attachKnownChildFrames(frame)
+    if (skillFrameMessageIds.has(frame.frameId)) return
+    const blockMessageId = `${messageId}:skill-frame`
+    skillFrameMessageIds.set(frame.frameId, blockMessageId)
+    rawMessages.value.push({
+      id: blockMessageId,
+      role: 'system',
+      content: skillFrameTitle(frame),
+      timestamp,
+      taskId,
+      status,
+      messageType: 'STATE',
+      terminal: message?.terminal,
+      terminalStatus: message?.terminalStatus ?? null,
+      process: true,
+      processKind: 'skill_frame',
+      skillFrame: frame,
+    })
+  }
+
+  function removeRootSkillFrameMessage(frameId: string) {
+    const rootMessageId = skillFrameMessageIds.get(frameId)
+    if (!rootMessageId) return
+    skillFrameMessageIds.delete(frameId)
+    rawMessages.value = rawMessages.value.filter((item) => item.id !== rootMessageId)
+  }
+
+  function attachKnownChildFrames(parent: SkillFrameBlock) {
+    for (const child of skillFramesById.values()) {
+      if (child.frameId === parent.frameId || child.parentFrameId !== parent.frameId) continue
+      if (!parent.children.some((item) => item.frameId === child.frameId)) {
+        parent.children.push(child)
+      }
+      removeRootSkillFrameMessage(child.frameId)
+    }
+  }
+
+  function touchMessages() {
+    rawMessages.value = [...rawMessages.value]
+  }
 }
 
 interface DisplayOptions {
@@ -496,6 +683,26 @@ interface DisplayOptions {
   showRuntimeEvents: boolean
   showToolCalls: boolean
   showToolResults: boolean
+}
+
+function resolveSkillFrameId(message: OpenTaskMessage, payload: Record<string, unknown>): string | undefined {
+  return firstString(
+    payload.skillFrameId,
+    payload.skill_frame_id,
+    payload.frameId,
+    payload.frame_id,
+    message.metadata?.skillFrameId,
+    message.metadata?.skill_frame_id
+  )
+}
+
+function skillFrameDisplayName(frame: SkillFrameBlock): string {
+  return frame.skillId || frame.frameId
+}
+
+function skillFrameTitle(frame: SkillFrameBlock): string {
+  const duration = frame.durationMs != null ? ` ${(frame.durationMs / 1000).toFixed(1)}s` : ''
+  return `技能 ${frame.displayName} ${frame.status === 'running' ? '执行中' : frame.status === 'success' ? '完成' : '失败'}${duration}`
 }
 
 function resolveDisplayOptions(config: NavigatorChatConfig): DisplayOptions {

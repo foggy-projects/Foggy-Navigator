@@ -138,6 +138,7 @@ class LanggraphStreamRelayTest {
                   "type": "tool_use",
                   "content": "tms.dataset.listModels",
                   "skill_frame_id": "frm-1",
+                  "parent_frame_id": "frm-parent",
                   "skill_id": "foggy-query-agent"
                 }
                 """;
@@ -146,6 +147,7 @@ class LanggraphStreamRelayTest {
                   "type": "tool_result",
                   "content": "{\\"ok\\":true,\\"count\\":19}",
                   "skill_frame_id": "frm-1",
+                  "parent_frame_id": "frm-parent",
                   "skill_id": "foggy-query-agent"
                 }
                 """;
@@ -163,6 +165,8 @@ class LanggraphStreamRelayTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> startPayload = (Map<String, Object>) start.getPayload();
         assertEquals("tms.dataset.listModels", startPayload.get("toolName"));
+        assertEquals("frm-1", startPayload.get("skillFrameId"));
+        assertEquals("frm-parent", startPayload.get("parentFrameId"));
         assertEquals("foggy-query-agent", startPayload.get("skillId"));
 
         AgentMessage result = events.get(1);
@@ -171,6 +175,8 @@ class LanggraphStreamRelayTest {
         Map<String, Object> resultPayload = (Map<String, Object>) result.getPayload();
         assertEquals(true, resultPayload.get("success"));
         assertEquals("tool_result", resultPayload.get("subtype"));
+        assertEquals("frm-1", resultPayload.get("skillFrameId"));
+        assertEquals("frm-parent", resultPayload.get("parentFrameId"));
     }
 
     @Test

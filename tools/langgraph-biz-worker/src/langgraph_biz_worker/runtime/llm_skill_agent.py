@@ -165,10 +165,13 @@ class LlmSkillAgent:
         name = call["name"]
         args = call["args"]
         safe_args = _safe_tool_call_args(args)
+        frame = self._runtime.get_frame(frame_id)
+        parent_frame_id = frame.parent_frame_id if frame else None
         tool_use_event = QueryEvent(
             type="tool_use",
             task_id=task_id,
             skill_frame_id=frame_id,
+            parent_frame_id=parent_frame_id,
             skill_id=manifest.id,
             content=name,
             tool_call_id=call.get("id"),
@@ -204,6 +207,7 @@ class LlmSkillAgent:
             type=event_type,
             task_id=task_id,
             skill_frame_id=frame_id,
+            parent_frame_id=parent_frame_id,
             skill_id=manifest.id,
             content=json.dumps(result, ensure_ascii=False),
             error=result.get("error"),

@@ -111,24 +111,13 @@ public class LanggraphStreamRelay {
                                 "taskId", taskId));
 
                 case "assistant_text" -> publishMessage(sessionId, MessageType.TEXT_COMPLETE,
-                        Map.of("content", node.path("content").asText(""),
-                                "taskId", taskId,
-                                "skillFrameId", node.path("skill_frame_id").asText(""),
-                                "skillId", node.path("skill_id").asText("")));
+                        buildSkillScopedPayload(node, taskId, null));
 
                 case "skill_frame_open" -> publishMessage(sessionId, MessageType.STATE_SYNC,
-                        Map.of("content", node.path("content").asText(""),
-                                "subtype", "skill_frame_open",
-                                "taskId", taskId,
-                                "skillFrameId", node.path("skill_frame_id").asText(""),
-                                "skillId", node.path("skill_id").asText("")));
+                        buildSkillScopedPayload(node, taskId, "skill_frame_open"));
 
                 case "skill_frame_close" -> publishMessage(sessionId, MessageType.STATE_SYNC,
-                        Map.of("content", node.path("content").asText(""),
-                                "subtype", "skill_frame_close",
-                                "taskId", taskId,
-                                "skillFrameId", node.path("skill_frame_id").asText(""),
-                                "skillId", node.path("skill_id").asText("")));
+                        buildSkillScopedPayload(node, taskId, "skill_frame_close"));
 
                 case "tool_use" -> publishToolUse(sessionId, taskId, node);
 
@@ -166,6 +155,19 @@ public class LanggraphStreamRelay {
         }
     }
 
+    private Map<String, Object> buildSkillScopedPayload(JsonNode node, String taskId, String subtype) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("content", node.path("content").asText(""));
+        if (subtype != null && !subtype.isBlank()) {
+            payload.put("subtype", subtype);
+        }
+        payload.put("taskId", taskId);
+        putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
+        putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
+        putTextIfPresent(payload, "skillId", node, "skill_id");
+        return payload;
+    }
+
     private void publishToolUse(String sessionId, String taskId, JsonNode node) {
         String toolName = node.path("tool_name").asText(node.path("content").asText(""));
         String toolCallId = node.path("tool_call_id").asText("");
@@ -183,8 +185,9 @@ public class LanggraphStreamRelay {
             payload.put("args", toObject(node.get("args")));
         }
         payload.put("taskId", taskId);
-        payload.put("skillFrameId", node.path("skill_frame_id").asText(""));
-        payload.put("skillId", node.path("skill_id").asText(""));
+        putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
+        putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
+        putTextIfPresent(payload, "skillId", node, "skill_id");
         publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
     }
 
@@ -212,8 +215,9 @@ public class LanggraphStreamRelay {
             payload.put("args", toObject(node.get("args")));
         }
         payload.put("taskId", taskId);
-        payload.put("skillFrameId", node.path("skill_frame_id").asText(""));
-        payload.put("skillId", node.path("skill_id").asText(""));
+        putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
+        putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
+        putTextIfPresent(payload, "skillId", node, "skill_id");
         payload.put("data", parseJsonOrText(content));
         payload.put("success", success);
         String error = node.path("error").asText("");
@@ -271,14 +275,26 @@ public class LanggraphStreamRelay {
         payload.put("subtype", eventType);
         payload.put("taskId", taskId);
         payload.put("approvalType", approvalType);
-        payload.put("skillFrameId", node.path("skill_frame_id").asText(""));
-        payload.put("skillId", node.path("skill_id").asText(""));
+        putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
+        putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
+        putTextIfPresent(payload, "skillId", node, "skill_id");
         payload.put("scriptRunId", node.path("script_run_id").asText(""));
         payload.put("suspendId", node.path("suspend_id").asText(""));
         payload.put("reason", node.path("reason").asText(""));
         payload.put("timeoutAt", node.path("timeout_at").asText(""));
 
         publishMessage(sessionId, MessageType.STATE_SYNC, payload);
+    }
+
+    private void putTextIfPresent(Map<String, Object> payload, String targetKey, JsonNode node, String sourceKey) {
+        JsonNode value = node.get(sourceKey);
+        if (value == null || value.isNull()) {
+            return;
+        }
+        String text = value.asText("");
+        if (!text.isBlank()) {
+            payload.put(targetKey, text);
+        }
     }
 
     private void handleStreamComplete(String taskId, String sessionId) {

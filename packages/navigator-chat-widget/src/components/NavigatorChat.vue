@@ -51,7 +51,8 @@
             </div>
           </div>
           <div v-else class="nc-content nc-content--system">
-            <details v-if="msg.toolExecution" class="nc-process nc-tool-execution" open>
+            <SkillFrameBlockView v-if="msg.skillFrame" :frame="msg.skillFrame" />
+            <details v-else-if="msg.toolExecution" class="nc-process nc-tool-execution" open>
               <summary>
                 <span class="nc-tool-title">
                   <el-icon v-if="msg.toolExecution.status === 'running'" class="is-loading"><Loading /></el-icon>
@@ -165,6 +166,7 @@ import { ElInput, ElButton, ElTag, ElEmpty, ElAlert, ElIcon } from 'element-plus
 import { Loading } from '@element-plus/icons-vue'
 import { BusinessSuspensionDialog } from '@foggy/chat'
 import { useNavigatorChat } from '../composables/useNavigatorChat'
+import SkillFrameBlockView from './SkillFrameBlockView.vue'
 import type {
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
@@ -328,6 +330,7 @@ function renderMarkdown(text: string): string {
 }
 
 function processLabel(message: ChatMessage): string {
+  if (message.processKind === 'skill_frame') return '技能执行'
   switch (message.messageType) {
     case 'STATE': return '运行状态'
     case 'TOOL_CALL': return '工具调用'

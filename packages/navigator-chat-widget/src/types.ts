@@ -17,9 +17,11 @@ export interface ChatMessage {
   /** 是否为过程/调试消息 */
   process?: boolean
   /** 过程消息展示类型 */
-  processKind?: 'state' | 'tool_execution' | 'raw'
+  processKind?: 'state' | 'tool_execution' | 'skill_frame' | 'raw'
   /** Debug 模式下聚合后的一次工具执行 */
   toolExecution?: ToolExecutionBlock
+  /** Debug 模式下聚合后的 Skill Frame */
+  skillFrame?: SkillFrameBlock
   /** 业务动作按钮或链接 */
   actions?: NavigatorAction[]
   /** 临时进度提示，任务结束后不保留 */
@@ -62,6 +64,25 @@ export interface ToolExecutionBlock {
   rawCall?: unknown
   rawResult?: unknown
   summary: string[]
+  trace: Record<string, unknown>
+}
+
+/** Debug 模式下的 Skill Frame 执行块 */
+export interface SkillFrameBlock {
+  frameId: string
+  parentFrameId?: string
+  skillId?: string
+  displayName: string
+  status: 'running' | 'success' | 'failed'
+  openedAt?: number
+  closedAt?: number
+  durationMs?: number
+  openContent?: string
+  closeContent?: string
+  rawOpen?: unknown
+  rawClose?: unknown
+  toolExecutions: ToolExecutionBlock[]
+  children: SkillFrameBlock[]
   trace: Record<string, unknown>
 }
 

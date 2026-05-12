@@ -10,6 +10,7 @@ export type {
   BusinessSuspensionDialogModel,
   BusinessSuspensionStatus,
   BusinessSuspensionType,
+  SkillFrameBlock,
   ToolExecutionBlock,
 } from './types'
 
