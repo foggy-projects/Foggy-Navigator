@@ -2641,7 +2641,7 @@ import { ref, triggerRef, computed, reactive, onMounted, onUnmounted, onActivate
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Back, Loading } from '@element-plus/icons-vue'
-import { useClaudeWorker } from '@/composables/useClaudeWorker'
+import { DEFAULT_TASK_PAGE_SIZE, useClaudeWorker } from '@/composables/useClaudeWorker'
 import { useCodingAgent } from '@/composables/useCodingAgent'
 import { useInputMemory } from '@/composables/useInputMemory'
 import { useFavoriteScripts, type FavoriteScript } from '@/composables/useFavoriteScripts'
@@ -3197,7 +3197,7 @@ const resyncingTaskId = ref('')
 // Directory task pagination (separate from global task pagination)
 const directoryTasks = ref<ClaudeTask[]>([])
 const dirTaskPage = ref(0)
-const dirTaskSize = ref(20)
+const dirTaskSize = ref(DEFAULT_TASK_PAGE_SIZE)
 const dirTaskTotal = ref(0)
 
 // --- Workspace context: panes + terminal per directory/worker ---
