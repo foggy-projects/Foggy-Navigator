@@ -56,6 +56,11 @@ final class CliArguments {
         if (words.size() >= 2 && "account-context".equals(words.get(0))) {
             return "account-context " + words.get(1);
         }
+        if (words.size() >= 2 && ("script".equals(words.get(0))
+                || "debug".equals(words.get(0))
+                || "model".equals(words.get(0)))) {
+            return words.get(0) + " " + words.get(1);
+        }
         return words.get(0);
     }
 

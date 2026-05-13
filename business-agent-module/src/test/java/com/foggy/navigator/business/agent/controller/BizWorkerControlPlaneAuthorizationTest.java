@@ -28,6 +28,15 @@ class BizWorkerControlPlaneAuthorizationTest {
     }
 
     @Test
+    void e2eModelConfigEnsure_requires_tenant_admin() throws NoSuchMethodException {
+        assertMethodRole(E2eModelConfigController.class.getMethod(
+                "ensure",
+                String.class,
+                com.foggy.navigator.business.agent.model.form.EnsureE2eModelConfigForm.class),
+                "TENANT_ADMIN");
+    }
+
+    @Test
     void workerIdentity_registration_requires_super_admin() throws NoSuchMethodException {
         Method method = BizWorkerPoolController.class
                 .getMethod("registerWorkerIdentity", com.foggy.navigator.business.agent.model.form.RegisterWorkerIdentityForm.class);

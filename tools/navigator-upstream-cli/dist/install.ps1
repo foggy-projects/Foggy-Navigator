@@ -90,6 +90,20 @@ if (-not (Test-Path $rootCmd)) {
         Copy-Item -LiteralPath $binCmd -Destination $rootCmd -Force
     }
 }
+$rootE2eWrapper = Join-Path $InstallDir "navi-e2e.ps1"
+if (-not (Test-Path $rootE2eWrapper)) {
+    $binE2eWrapper = Join-Path $InstallDir "bin\navi-e2e.ps1"
+    if (Test-Path $binE2eWrapper) {
+        Copy-Item -LiteralPath $binE2eWrapper -Destination $rootE2eWrapper -Force
+    }
+}
+$rootE2eCmd = Join-Path $InstallDir "navi-e2e.cmd"
+if (-not (Test-Path $rootE2eCmd)) {
+    $binE2eCmd = Join-Path $InstallDir "bin\navi-e2e.cmd"
+    if (Test-Path $binE2eCmd) {
+        Copy-Item -LiteralPath $binE2eCmd -Destination $rootE2eCmd -Force
+    }
+}
 
 $navigatorDir = Join-Path $projectRootResolved ".navigator"
 New-Item -ItemType Directory -Force -Path $navigatorDir | Out-Null
@@ -104,6 +118,7 @@ NAVI_CLIENT_APP_SECRET=
 NAVI_CLIENT_APP_ACCESS_TOKEN=
 NAVI_AGENT_CODE=
 NAVI_MODEL_CONFIG_ID=
+NAVI_E2E_MOCK_LLM_URL=http://localhost:8200
 NAVI_POLL_INTERVAL_SECONDS=4
 "@
 }
@@ -123,6 +138,8 @@ Write-Host ""
 Write-Host "Installed." -ForegroundColor Green
 Write-Host "  Config:  $profile"
 Write-Host "  Command: .\tools\navigator-upstream\navi.ps1 upstream config check"
+Write-Host "  E2E:     .\tools\navigator-upstream\navi-e2e.ps1 config check"
+Write-Host "  E2E model: .\tools\navigator-upstream\navi-e2e.ps1 model ensure --standard biz-worker --set-default --write-profile"
 if ($Upgrade) {
     Write-Host "  Upgrade complete." -ForegroundColor Green
 }

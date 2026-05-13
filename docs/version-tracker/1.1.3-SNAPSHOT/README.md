@@ -57,6 +57,7 @@
   - [24-chat-session-history-and-client-context.md](./upstream-integration/24-chat-session-history-and-client-context.md) - 需求与实现 / 会话历史、消息读取、继续会话与 clientContext 透明上下文
   - [25-tms-attachment-upload-on-submit-and-worker-pass-through.md](./upstream-integration/25-tms-attachment-upload-on-submit-and-worker-pass-through.md) - 需求与设计 / TMS 附件上传、ask 透传与 Worker 文件上下文
   - [26-upstream-user-identity-session-boundary-design.md](./upstream-integration/26-upstream-user-identity-session-boundary-design.md) - 架构澄清 / upstreamUserId 独立身份、accountId 上下文与 Business Agent 会话归属边界
+  - [27-e2e-scripted-test-model-design.md](./upstream-integration/27-e2e-scripted-test-model-design.md) - 需求与设计 / 标准 E2E Test Model、navi-e2e-cli 与多轮 tool-call loop scripted cursor
 
 ## Acceptance Status
 

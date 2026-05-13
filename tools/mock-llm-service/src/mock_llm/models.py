@@ -133,6 +133,41 @@ class ResponseRule(BaseModel):
     anthropic_stream: Optional[AnthropicStreamConfig] = None  # Anthropic 流式配置
 
 
+# ========== Scripted E2E 模型 ==========
+
+
+class ScriptedTurn(BaseModel):
+    cursor: str
+    response: MockResponseConfig
+
+
+class ScriptRegistration(BaseModel):
+    traceId: str
+    scenarioId: Optional[str] = None
+    expiresInSeconds: Optional[int] = 3600
+    turns: List[ScriptedTurn]
+
+
+class ScriptRegistrationResult(BaseModel):
+    traceId: str
+    scenarioId: Optional[str] = None
+    turns: int
+    expiresAt: Optional[float] = None
+
+
+class DebugRequestRecord(BaseModel):
+    traceId: str
+    scenarioId: Optional[str] = None
+    cursor: str
+    turnIndex: Optional[str] = None
+    model: str
+    requestHash: str
+    matched: bool
+    responseSummary: Dict[str, Any]
+    request: Dict[str, Any]
+    createdAt: float
+
+
 # ========== Anthropic Messages API 请求/响应模型 ==========
 
 

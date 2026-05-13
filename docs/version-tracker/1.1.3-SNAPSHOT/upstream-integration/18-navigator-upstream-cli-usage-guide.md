@@ -214,6 +214,44 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 
 `sessions` / `session-messages` 使用 `/api/v1/open/business-agent/sessions` 读模型，只返回当前 ClientApp + upstream user 归属的会话。`ask --context-id` 续聊也会在发任务前校验同一归属，不能复用其他 upstream user 的 `contextId`。
 
+## Deterministic E2E Test Model
+
+真实 LLM smoke 不应作为上游主回归 gate。上游自动化 E2E 应优先使用 Navigator 标准 E2E Test Model 与 scripted response，完整设计见 [27-e2e-scripted-test-model-design.md](./27-e2e-scripted-test-model-design.md)。
+
+推荐 scripted cursor 格式：
+
+```text
+next:${e2eTraceId}:${turnIndex}
+```
+
+示例：
+
+```text
+e2eTraceId=4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1
+next:4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1:001
+next:4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1:002
+```
+
+约定：
+
+1. 首轮 user message 放入 `e2eTraceId` 和 `next:${e2eTraceId}:001`。
+2. 每轮 mock LLM 返回的 tool call arguments 或 content 放入下一轮 cursor。
+3. `turnIndex` 从 `001` 开始递增，三位补零。
+4. 同一 `traceId + cursor` 默认幂等；Worker 重试时应返回同一 scripted response。
+5. E2E Test Model 的默认绑定只应修改 ClientApp model grant，不应修改租户默认 model config。
+
+已安装的 CLI 包含独立 E2E 入口：
+
+```powershell
+.\tools\navigator-upstream\navi-e2e.ps1 config check
+.\tools\navigator-upstream\navi-e2e.ps1 model ensure --standard biz-worker --set-default --write-profile
+.\tools\navigator-upstream\navi-e2e.ps1 script register --file .\.navigator\e2e-script.json
+.\tools\navigator-upstream\navi-e2e.ps1 debug requests --trace-id <e2eTraceId>
+.\tools\navigator-upstream\navi-e2e.ps1 script cleanup --trace-id <e2eTraceId>
+```
+
+`navi-e2e` 默认读取同一个 project-local `.navigator/upstream.env`，其中 `NAVI_E2E_MOCK_LLM_URL` 默认指向 `http://localhost:8200`，也可用 `--mock-url` 临时覆盖。`model ensure` 需要 `NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY`，只创建/更新当前 ClientApp 专属的标准 E2E model config 与 ClientApp model grant；`--write-profile` 只把 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
+
 ### 7. 查询或维护账号上下文文件
 
 ```powershell

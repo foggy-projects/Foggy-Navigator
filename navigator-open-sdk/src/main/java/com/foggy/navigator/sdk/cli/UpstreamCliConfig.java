@@ -36,6 +36,7 @@ final class UpstreamCliConfig {
         values.put("NAVI_CLIENT_APP_ID", "capp_2852124a-48f7-4098-9d5e-33eb736c4375");
         values.put("NAVI_AGENT_CODE", "tms-agent-v305");
         values.put("NAVI_POLL_INTERVAL_SECONDS", "4");
+        values.put("NAVI_E2E_MOCK_LLM_URL", "http://localhost:8200");
 
         Path profile = resolveProfilePath(args, env, cwd);
         if (profile != null && Files.exists(profile)) {
@@ -182,6 +183,7 @@ final class UpstreamCliConfig {
         putOption(values, args, "model-config-id", "NAVI_MODEL_CONFIG_ID");
         putOption(values, args, "agent", "NAVI_AGENT_CODE");
         putOption(values, args, "interval", "NAVI_POLL_INTERVAL_SECONDS");
+        putOption(values, args, "mock-url", "NAVI_E2E_MOCK_LLM_URL");
         putEnvOption(values, args, env, "client-app-secret-env", "NAVI_CLIENT_APP_SECRET");
         putEnvOption(values, args, env, "client-app-access-token-env", "NAVI_CLIENT_APP_ACCESS_TOKEN");
         putEnvOption(values, args, env, "admin-token-env", "NAVI_ADMIN_TOKEN");
@@ -302,7 +304,7 @@ final class UpstreamCliConfig {
     private static List<String> envKeys() {
         return List.of("NAVI_BASE_URL", "TMS_WEB_BASE_URL", "BASIC_BASE_URL", "NAVI_TENANT_ID",
                 "NAVI_CLIENT_APP_ID", "NAVI_CLIENT_APP_KEY", "NAVI_AGENT_CODE",
-                "NAVI_MODEL_CONFIG_ID", "NAVI_POLL_INTERVAL_SECONDS", "NAVI_CLIENT_APP_SECRET",
+                "NAVI_MODEL_CONFIG_ID", "NAVI_POLL_INTERVAL_SECONDS", "NAVI_E2E_MOCK_LLM_URL", "NAVI_CLIENT_APP_SECRET",
                 "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN", "NAVI_ADMIN_API_KEY",
                 "TMS_STAFF_SESSION_TOKEN", "NAVIGATOR_BASE_URL", "NAVIGATOR_TENANT_ID",
                 "CLIENT_APP_ID", "CLIENT_APP_KEY", "CLIENT_APP_SECRET",

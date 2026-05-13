@@ -55,8 +55,12 @@ Copy-Item -LiteralPath (Join-Path $SdkDir "target\navigator-open-sdk-$version.ja
 Copy-Item -Path (Join-Path $SdkDir "target\dependency\*.jar") -Destination (Join-Path $stageDir "lib") -Force
 Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi.ps1") -Destination (Join-Path $stageDir "navi.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi.cmd") -Destination (Join-Path $stageDir "navi.cmd") -Force
+Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi-e2e.ps1") -Destination (Join-Path $stageDir "navi-e2e.ps1") -Force
+Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi-e2e.cmd") -Destination (Join-Path $stageDir "navi-e2e.cmd") -Force
 Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi.ps1") -Destination (Join-Path $stageDir "bin\navi.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi.cmd") -Destination (Join-Path $stageDir "bin\navi.cmd") -Force
+Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi-e2e.ps1") -Destination (Join-Path $stageDir "bin\navi-e2e.ps1") -Force
+Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi-e2e.cmd") -Destination (Join-Path $stageDir "bin\navi-e2e.cmd") -Force
 Copy-Item -LiteralPath (Join-Path $ScriptDir "install.ps1") -Destination $stageDir -Force
 Write-Utf8NoBom -Path (Join-Path $stageDir "VERSION") -Content $version
 
