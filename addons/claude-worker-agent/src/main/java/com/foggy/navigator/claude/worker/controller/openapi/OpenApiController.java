@@ -10,6 +10,8 @@ import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
 import com.foggy.navigator.business.agent.model.dto.AccountContextFileDTO;
 import com.foggy.navigator.business.agent.model.dto.AccountContextFileTreeDTO;
 import com.foggy.navigator.business.agent.model.dto.ClientAppRuntimeAccessTokenDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionListDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionMessagesDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillBundleDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillArtifactSliceDTO;
@@ -18,6 +20,7 @@ import com.foggy.navigator.business.agent.model.form.AccountContextFileWriteForm
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
 import com.foggy.navigator.business.agent.model.form.SyncAccountSkillBundleForm;
 import com.foggy.navigator.business.agent.service.AccountContextFileService;
+import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.business.agent.service.SkillArtifactService;
@@ -86,6 +89,7 @@ public class OpenApiController {
     private final ObjectProvider<SkillArtifactService> skillArtifactService;
     private final ObjectProvider<SkillRegistryService> skillRegistryService;
     private final ObjectProvider<AccountContextFileService> accountContextFileService;
+    private final ObjectProvider<BusinessAgentSessionService> businessAgentSessionService;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -465,6 +469,10 @@ public class OpenApiController {
             HttpServletRequest request) {
         ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
         String tenantId = clientAppCredential.getTenantId();
+        String upstreamUserId = firstHeader(request,
+                "X-Upstream-User-Id",
+                "X-Foggy-Upstream-User-Id",
+                "X-Client-Upstream-User-Id");
 
         String messageContent = form.resolveMessage();
         if (messageContent == null || messageContent.isBlank()) {
@@ -510,10 +518,20 @@ public class OpenApiController {
         }
 
         A2aTask task = agent.sendTask(message);
+        String agentOwnerUserId = null;
         if (clientContextJson != null) {
-            String userId = resolveAgentOwnerUserId(agentId, tenantId);
-            sessionQueryService.updateClientContextJson(contextId, userId, agentId, clientContextJson);
+            agentOwnerUserId = resolveAgentOwnerUserId(agentId, tenantId);
+            sessionQueryService.updateClientContextJson(contextId, agentOwnerUserId, agentId, clientContextJson);
         }
+        bindBusinessAgentSessionIfPossible(
+                tenantId,
+                clientAppCredential.getClientAppId(),
+                upstreamUserId,
+                agentId,
+                contextId,
+                task,
+                clientContextJson,
+                agentOwnerUserId);
 
         log.info("Open API askAgent: agentId={}, taskId={}, tenantId={}", agentId, task.getId(), tenantId);
 
@@ -639,6 +657,46 @@ public class OpenApiController {
                 upstreamUserId,
                 fileName,
                 form));
+    }
+
+    @GetMapping("/business-agent/sessions")
+    public RX<BusinessAgentSessionListDTO> listMyBusinessAgentSessions(
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(required = false) String cursor,
+            HttpServletRequest request) {
+        BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("business agent session service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.listSessions(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId,
+                cursor,
+                limit));
+    }
+
+    @GetMapping("/business-agent/sessions/{contextId}/messages")
+    public RX<BusinessAgentSessionMessagesDTO> getMyBusinessAgentSessionMessages(
+            @PathVariable String contextId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "50") int limit,
+            HttpServletRequest request) {
+        BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("business agent session service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.getMessages(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId,
+                contextId,
+                cursor,
+                limit));
     }
 
     private ResolvedClientAppCredentialDTO resolveClientAppCredential(
@@ -787,6 +845,42 @@ public class OpenApiController {
         }
         runtimeContext.put("task_scoped_token", token);
         metadata.put("runtimeContext", runtimeContext);
+    }
+
+    private void bindBusinessAgentSessionIfPossible(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String agentId,
+            String contextId,
+            A2aTask task,
+            String clientContextJson,
+            String resolvedAgentOwnerUserId) {
+        if (!StringUtils.hasText(upstreamUserId)) {
+            return;
+        }
+        BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
+        if (service == null) {
+            return;
+        }
+        String agentOwnerUserId = StringUtils.hasText(resolvedAgentOwnerUserId)
+                ? resolvedAgentOwnerUserId
+                : resolveAgentOwnerUserId(agentId, tenantId);
+        String sessionId = sessionQueryService.resolveSessionId(contextId, agentOwnerUserId)
+                .orElse(null);
+        if (!StringUtils.hasText(sessionId)) {
+            log.debug("Skip binding business agent session because context has no navigator session yet: contextId={}", contextId);
+            return;
+        }
+        service.bindOpenApiSession(
+                tenantId,
+                clientAppId,
+                upstreamUserId,
+                contextId,
+                sessionId,
+                agentId,
+                task != null ? task.getId() : null,
+                clientContextJson);
     }
 
     private String firstHeader(HttpServletRequest request, String... names) {

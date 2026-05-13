@@ -125,7 +125,12 @@ class BusinessAgentE2ESampleTest {
         skillRegistryService = new SkillRegistryService(skillRepository, skillBundleRepository, allowlistRepository, skillGrantRepository, functionGrantRepository, functionRepository, versionRepository, clientAppService, userGrantService, objectMapper);
         bizWorkerPoolService = new BizWorkerPoolService(identityRepository, poolRepository, poolMemberRepository);
         clientAppUserGrantService = userGrantService;
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService, skillRegistryService, tokenRuntimeStore, java.util.List.of());
+        BusinessAgentSessionService businessAgentSessionService = mock(BusinessAgentSessionService.class);
+        BusinessAgentSessionDTO sessionDTO = new BusinessAgentSessionDTO();
+        sessionDTO.setContextId("ctx_stage6");
+        lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
+                .thenReturn(sessionDTO);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
         authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService, skillRegistryService, functionRegistryService);
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);
         com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker adapterInvoker = new com.foggy.navigator.business.agent.service.adapter.LocalEchoBusinessFunctionAdapterInvoker(objectMapper);

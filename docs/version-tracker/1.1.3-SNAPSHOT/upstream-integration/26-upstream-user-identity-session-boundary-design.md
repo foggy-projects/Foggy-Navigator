@@ -24,6 +24,22 @@ Navigator 上游接入已经形成两条身份线：
 
 ## 当前内部关系
 
+## 术语与观察视角
+
+本文中的 `upstream` 固定采用 **Navigator Java Control Plane 的观察视角**：调用 Navigator 的外部业务系统是 upstream system，其内部用户是 upstream user。
+
+术语约定：
+
+| Term | Stable Meaning | Not |
+| --- | --- | --- |
+| `ClientApp` | 注册到 Navigator 的外部业务应用身份 | 不是浏览器 client、OAuth client 或 Worker |
+| `upstreamUserId` | 某个 `tenantId + clientAppId` 下的外部业务用户标识 | 不是 Navigator `UserEntity.id`，不是 API Key owner |
+| `accountId` | ClientApp 内账号上下文标识，当前可由 `upstreamUserId` 解析 | 不是全局账号，不跨 ClientApp 唯一 |
+| `navigatorEffectiveUserId` | Navigator 内部执行身份，用于 Worker/session 兼容和审计 | 不是上游业务用户 |
+| `BusinessAgentSession` | 上游可见的 Business Agent 会话归属读模型 | 不是替代 `SessionEntity` 的全局会话主表 |
+
+后续代码、API、SDK、CLI 和测试应沿用上述命名，不新增 `externalUserId`、`clientUserId`、`businessUserId` 等平行别名。
+
 ### 身份与资源关系
 
 | 概念 | 当前含义 | 归属边界 | 是否等价 |
@@ -114,6 +130,7 @@ tenantId + clientAppId + sessionId
 - `SessionEntity` 继续服务 Navigator 内部会话、Worker 执行链路和现有 UI。
 - `BusinessAgentSessionEntity` 服务上游可见会话列表、历史消息访问权限校验、client context 摘要和后续 upstream 登录 Navi 的归属桥接。
 - 同一个底层 `sessionId` 只能在同一 `tenantId + clientAppId + upstreamUserId` 下暴露给上游用户。
+- `contextId` 由 Business Agent 会话读模型生成或持久化，不依赖 `AgentConversationContextEntity.contextId` 的内部用户视角；如需要兼容现有 OpenAPI context，必须通过 service 层做显式映射。
 
 ### 4. 读取消息必须校验 Business Agent 会话归属
 
@@ -260,6 +277,24 @@ code_inventory:
 
 ## Implementation Plan
 
+## 本轮实现边界
+
+本轮优先完成 Navigator 内部身份和会话归属基础能力，不一次性扩散到所有上游消费端。
+
+纳入本轮：
+
+1. `BusinessAgentSession` 读模型、归属校验和 task 创建/upsert。
+2. Business Agent scoped 的会话列表与消息读取服务/API。
+3. 必要的后端单元测试与回归测试。
+4. 文档 progress 回写。
+
+后续阶段：
+
+1. SDK wrapper。
+2. CLI `sessions/session-messages/ask --context-id` 调整。
+3. Skill 交付文档更新。
+4. Widget 或前端消费调整。
+
 ### Step 1 - Internal identity boundary
 
 - 固化本文身份关系。
@@ -300,6 +335,18 @@ code_inventory:
 | CLI/SDK | sessions/session-messages 不接受任意 `userId`，只使用当前 runtime token + upstream user |
 | regression | 普通 Navigator `SessionEntity.userId` 会话列表不受影响 |
 
+建议验证命令：
+
+```powershell
+mvn -pl business-agent-module,session-module -am test
+```
+
+如实现未改动 `session-module`，可收敛为：
+
+```powershell
+mvn -pl business-agent-module -am test
+```
+
 ## 验收标准
 
 1. 文档明确 `userId`、`upstreamUserId`、`accountId`、`navigatorEffectiveUserId` 的关系。
@@ -314,8 +361,17 @@ code_inventory:
 | --- | --- | --- |
 | 身份关系设计落档 | done | 本文新增 |
 | code inventory | done | 初版列出核心模块 |
-| BusinessAgentSession 读模型 | pending | 后续实现 |
-| upstream session API | pending | 后续实现 |
+| BusinessAgentSession 读模型 | done | `BusinessAgentSessionEntity`、repository、service 已新增；task 创建和 OpenAPI ask 已接入 upsert |
+| upstream session API | done | `GET /api/v1/open/business-agent/sessions` 与 `GET /api/v1/open/business-agent/sessions/{contextId}/messages` 已按 runtime token + upstream user grant 读取 |
 | SDK/CLI/Skill 更新 | pending | 后续实现 |
-| 测试覆盖 | pending | 后续实现 |
+| 测试覆盖 | partial | 定向测试通过；完整 `business-agent-module,session-module -am test` 当前被既有 JPA slice 配置问题阻断，见测试记录 |
 | 上游交付提示词 | pending | 能力稳定后再提供 |
+
+## Evaluation Notes
+
+- 2026-05-13 plan-evaluator review: passed after adding glossary, staged implementation boundary, `contextId` ownership clarification, and explicit test commands.
+- 2026-05-13 implementation: added upstream-scoped Business Agent session read model, message read service, task binding, and OpenAPI session endpoints.
+- 2026-05-13 test evidence:
+  - pass: `mvn -pl business-agent-module -am test "-Dtest=BusinessAgentSessionServiceTest,BusinessAgentTaskServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false"` (18 tests).
+  - pass: `mvn -pl addons/claude-worker-agent -am test "-Dtest=OpenApiControllerMessageMappingTest" "-Dsurefire.failIfNoSpecifiedTests=false"` (6 tests).
+  - blocked: `mvn -pl business-agent-module,session-module -am test` fails in `BusinessFunctionRuntimeAuditRepositoryTest` because `BusinessCodingAgentRepository` references `CodingAgentEntity`, which is not in that DataJpaTest managed entity set.

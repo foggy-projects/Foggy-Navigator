@@ -239,6 +239,7 @@ class OpenApiControllerMessageMappingTest {
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
+                mock(ObjectProvider.class),
                 mock(ObjectProvider.class)
         );
     }

@@ -152,7 +152,12 @@ class RestAdapterUpstreamE2ETest {
         SkillRegistryService skillRegistryService = new SkillRegistryService(skillRepository, skillBundleRepository, allowlistRepository, skillGrantRepository, functionGrantRepository, functionRepository, versionRepository, clientAppService, userGrantService1, objectMapper);
         BizWorkerPoolService bizWorkerPoolService = new BizWorkerPoolService(identityRepository, poolRepository, poolMemberRepository);
 
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, java.util.List.of());
+        BusinessAgentSessionService businessAgentSessionService = mock(BusinessAgentSessionService.class);
+        BusinessAgentSessionDTO sessionDTO = new BusinessAgentSessionDTO();
+        sessionDTO.setContextId("ctx_rest_e2e");
+        lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
+                .thenReturn(sessionDTO);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
         BusinessFunctionAuthorizationService authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService1, skillRegistryService, functionRegistryService);
 
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);

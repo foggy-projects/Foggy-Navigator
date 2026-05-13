@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 public class BusinessAgentTaskDTO {
     private String taskId;
     private String sessionId;
+    private String contextId;
     private String tenantId;
     private String clientAppId;
     private String upstreamUserId;
