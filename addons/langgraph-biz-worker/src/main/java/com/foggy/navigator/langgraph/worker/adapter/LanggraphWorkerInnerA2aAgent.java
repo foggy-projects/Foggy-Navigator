@@ -49,6 +49,7 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setDirectoryId(entity.getDefaultDirectoryId());
         form.setModel((String) meta.get("model"));
         form.setModelConfigId((String) meta.get("modelConfigId"));
+        form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setContextId(context.getContextId());
         form.setSessionId(context.getNavigatorSessionId());
         if (meta.get("context") instanceof Map<?, ?> ctx) {
@@ -120,6 +121,14 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         }
         
         return builder.build();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> attachmentsMeta(Object value) {
+        if (value instanceof List<?> list) {
+            return (List<Map<String, Object>>) list;
+        }
+        return null;
     }
 
     private String extractPrompt(A2aMessage message) {

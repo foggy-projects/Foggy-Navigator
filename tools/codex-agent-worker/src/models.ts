@@ -4,6 +4,8 @@ export interface ImageAttachment {
   mime_type?: string
 }
 
+export type NavigatorAttachment = Record<string, unknown>
+
 /**
  * Query request body
  */
@@ -14,6 +16,7 @@ export interface QueryRequest {
   model?: string
   max_turns?: number
   images?: ImageAttachment[] // Historical field name; payload may include non-image attachments too.
+  attachments?: NavigatorAttachment[] // URL-backed attachment metadata passed through from Navigator/TMS.
   api_key?: string     // Per-request OpenAI API key override
   base_url?: string    // Per-request OpenAI base URL override
   env_vars?: Record<string, string>  // Extra env vars (includes Codex CLI config like model_context_window)

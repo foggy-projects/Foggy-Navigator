@@ -76,6 +76,7 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setModel(model);
         form.setMaxTurns(maxTurns);
         form.setImages(images);
+        form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setModelConfigId(modelConfigId);
 
         // 多轮会话：从已解析上下文获取 codexThreadId（使 Worker 恢复 Codex session）
@@ -197,6 +198,14 @@ class CodexWorkerInnerA2aAgent implements InnerA2aAgent {
         }
         String text = value.toString();
         return text.isBlank() ? null : text;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> attachmentsMeta(Object value) {
+        if (value instanceof List<?> list) {
+            return (List<Map<String, Object>>) list;
+        }
+        return null;
     }
 
     private String imagesMeta(Object value) {

@@ -97,6 +97,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setContextId((String) params.get("contextId"));
         form.setSessionId((String) params.get("sessionId"));
+        form.setAttachments(attachmentsParam(params.get("attachments")));
         if (params.get("context") instanceof Map<?, ?> ctx) {
             @SuppressWarnings("unchecked")
             Map<String, Object> contextMap = (Map<String, Object>) ctx;
@@ -224,6 +225,9 @@ public class LanggraphTaskService implements TaskQueryProvider {
         }
         if (form.getRuntimeContext() != null && !form.getRuntimeContext().isEmpty()) {
             providerConfig.put("runtimeContext", form.getRuntimeContext());
+        }
+        if (form.getAttachments() != null && !form.getAttachments().isEmpty()) {
+            providerConfig.put("attachments", form.getAttachments());
         }
         putIfNotBlank(providerConfig, "modelConfigId", form.getModelConfigId());
 
@@ -562,6 +566,14 @@ public class LanggraphTaskService implements TaskQueryProvider {
         if (value != null && !value.isBlank()) {
             target.put(key, value);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> attachmentsParam(Object value) {
+        if (value instanceof List<?> list) {
+            return (List<Map<String, Object>>) list;
+        }
+        return null;
     }
 
     private static String firstNotBlank(String... values) {

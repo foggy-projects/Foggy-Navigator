@@ -109,6 +109,8 @@ public class WorkerStreamRelay {
             String claudeSessionId = event.getProviderConfigString("claudeSessionId");
             String agentTeamsJson = event.getProviderConfigString("agentTeamsJson");
             String images = event.getProviderConfigString("images");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> attachments = event.getProviderConfigValue("attachments");
             String authToken = event.getProviderConfigString("authToken");
             String baseUrl = event.getProviderConfigString("baseUrl");
             String permissionMode = event.getProviderConfigString("permissionMode");
@@ -137,7 +139,7 @@ public class WorkerStreamRelay {
 
             Flux<ServerSentEvent<String>> sseFlux = client.streamQuery(event.getPrompt(), event.getCwd(),
                     claudeSessionId, event.getModel(), event.getMaxTurns(),
-                    agentTeamsJson, images,
+                    agentTeamsJson, images, attachments,
                     event.getApiKey(), authToken, baseUrl,
                     permissionMode, navigatorApiKey, navigatorApiBase,
                     event.getTaskId(), event.getSessionId(),

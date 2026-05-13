@@ -69,6 +69,27 @@ def test_query_prefers_foggy_session_id_for_platform_session():
     assert _resolve_session_id(request) == "navigator-session"
 
 
+def test_query_request_accepts_url_attachment_metadata():
+    request = QueryRequest(
+        prompt="describe",
+        attachments=[
+            {
+                "name": "pod-photo.png",
+                "url": "https://tms.example.com/files/pod-photo.png",
+                "kind": "image",
+            }
+        ],
+    )
+
+    assert request.attachments == [
+        {
+            "name": "pod-photo.png",
+            "url": "https://tms.example.com/files/pod-photo.png",
+            "kind": "image",
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_query_generator_streams_tool_progress_before_graph_finishes():
     release_graph = threading.Event()

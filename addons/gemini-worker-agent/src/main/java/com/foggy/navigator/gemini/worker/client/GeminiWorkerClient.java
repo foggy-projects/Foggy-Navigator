@@ -55,7 +55,8 @@ public class GeminiWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd,
                                                      String geminiSessionId, String model,
                                                      Integer maxTurns, String apiKey,
-                                                     String baseUrl, Map<String, String> envVars) {
+                                                     String baseUrl, Map<String, String> envVars,
+                                                     List<Map<String, Object>> attachments) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("prompt", prompt);
         if (cwd != null) body.put("cwd", cwd);
@@ -65,6 +66,7 @@ public class GeminiWorkerClient {
         if (apiKey != null) body.put("api_key", apiKey);
         if (baseUrl != null) body.put("base_url", baseUrl);
         if (envVars != null && !envVars.isEmpty()) body.put("env_vars", envVars);
+        if (attachments != null && !attachments.isEmpty()) body.put("attachments", attachments);
 
         return webClient.post()
                 .uri("/api/v1/query")

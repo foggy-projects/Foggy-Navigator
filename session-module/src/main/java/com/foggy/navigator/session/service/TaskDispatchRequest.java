@@ -56,6 +56,9 @@ public class TaskDispatchRequest {
     /** 图片附件（Base64 列表） */
     private List<String> images;
 
+    /** 上游已上传附件元数据和 URL */
+    private List<Map<String, Object>> attachments;
+
     /** Agent Teams 配置 ID */
     private String agentTeamsConfigId;
 

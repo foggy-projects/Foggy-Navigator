@@ -61,6 +61,7 @@ class GeminiWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setDirectoryId(stringMeta(meta, "directoryId") != null ? stringMeta(meta, "directoryId") : entity.getDefaultDirectoryId());
         form.setModel(stringMeta(meta, "model"));
         form.setModelConfigId(stringMeta(meta, "modelConfigId"));
+        form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setGeminiSessionId(context.getAgentSessionRef());
         form.setSessionId(context.getNavigatorSessionId());
         if (meta.get("maxTurns") instanceof Number number) {
@@ -156,5 +157,13 @@ class GeminiWorkerInnerA2aAgent implements InnerA2aAgent {
         }
         String text = value.toString();
         return text.isBlank() ? null : text;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> attachmentsMeta(Object value) {
+        if (value instanceof List<?> list) {
+            return (List<Map<String, Object>>) list;
+        }
+        return null;
     }
 }

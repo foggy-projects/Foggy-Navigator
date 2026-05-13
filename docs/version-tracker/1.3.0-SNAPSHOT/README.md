@@ -13,3 +13,4 @@
 - [07-project-shared-milestone-storage-design.md](./07-project-shared-milestone-storage-design.md)
 - [08-new-worker-integration-guide-and-retrospective.md](./08-new-worker-integration-guide-and-retrospective.md)
 - [09-history-session-page-size-bug.md](./09-history-session-page-size-bug.md)
+- [10-session-auth-model-config-binding-plan.md](./10-session-auth-model-config-binding-plan.md)

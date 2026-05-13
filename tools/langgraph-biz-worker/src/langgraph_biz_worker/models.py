@@ -24,6 +24,7 @@ class QueryRequest(BaseModel):
     context: dict[str, Any] | None = None
     # Hidden runtime data from Navigator Java. Never include this in LLM prompts.
     runtime_context: dict[str, Any] | None = None
+    attachments: list[dict[str, Any]] | None = None
 
     # Tracking IDs forwarded by Java side
     task_id: str | None = Field(None, alias="taskId")

@@ -67,11 +67,13 @@ class TestQueryRequest:
             foggy_task_id="20260306-001",
             foggy_session_id="sess-001",
             extra_env_vars={"FOO": "bar"},
+            attachments=[{"name": "pod-photo.png", "url": "https://tms.example.com/files/pod-photo.png"}],
         )
         assert req.prompt == "Fix the bug"
         assert req.max_turns == 10
         assert req.disallowed_tools == ["Bash", "Task"]
         assert req.extra_env_vars == {"FOO": "bar"}
+        assert req.attachments == [{"name": "pod-photo.png", "url": "https://tms.example.com/files/pod-photo.png"}]
 
     def test_missing_prompt_raises(self):
         with pytest.raises(ValidationError):

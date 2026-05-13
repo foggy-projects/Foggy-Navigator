@@ -492,6 +492,9 @@ public class OpenApiController {
         }
         metadata.remove("runtimeContext");
         metadata.remove("runtime_context");
+        if (form.getAttachments() != null && !form.getAttachments().isEmpty()) {
+            metadata.put("attachments", form.getAttachments());
+        }
         if (form.getMaxTurns() != null) {
             metadata.put("maxTurns", form.getMaxTurns());
         }

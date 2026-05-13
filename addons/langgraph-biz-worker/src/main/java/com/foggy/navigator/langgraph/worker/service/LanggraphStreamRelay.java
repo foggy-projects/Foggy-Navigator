@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -63,6 +64,8 @@ public class LanggraphStreamRelay {
             Map<String, Object> context = (Map<String, Object>) event.getProviderConfig().get("context");
             @SuppressWarnings("unchecked")
             Map<String, Object> runtimeContext = (Map<String, Object>) event.getProviderConfig().get("runtimeContext");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> attachments = event.getProviderConfigValue("attachments");
             String modelConfigId = event.getProviderConfigString("modelConfigId");
 
             Disposable subscription = client.streamQuery(
@@ -74,7 +77,8 @@ public class LanggraphStreamRelay {
                     taskId,
                     sessionId,
                     event.getUserId(),
-                    event.getTenantId()
+                    event.getTenantId(),
+                    attachments
             ).doOnNext(sse -> handleEvent(sse, taskId, sessionId))
               .doOnError(e -> handleStreamError(e, taskId, sessionId))
               .doOnComplete(() -> handleStreamComplete(taskId, sessionId))

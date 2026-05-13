@@ -42,6 +42,9 @@ class QueryRequest(BaseModel):
     images: list[ImageAttachment] | None = Field(
         None, description="Base64-encoded images to save to cwd before query"
     )
+    attachments: list[dict[str, Any]] | None = Field(
+        None, description="URL-backed attachment metadata passed through from Navigator/TMS"
+    )
     # Per-request auth overrides (from bound conversation config)
     api_key: str | None = Field(None, description="Per-request Anthropic API key override")
     auth_token: str | None = Field(None, description="Per-request Anthropic auth token override")

@@ -1,8 +1,15 @@
 package com.foggy.navigator.claude.worker.controller.openapi;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
+import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
+import com.foggy.navigator.claude.worker.model.form.OpenApiQueryForm;
+import com.foggy.navigator.common.dto.a2a.A2aMessage;
+import com.foggy.navigator.common.dto.a2a.A2aTask;
+import com.foggy.navigator.common.dto.a2a.A2aTaskState;
+import com.foggy.navigator.common.dto.a2a.A2aTaskStatus;
 import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
@@ -12,19 +19,30 @@ import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.service.OpenApiSessionQueryService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
+import com.foggy.navigator.spi.agent.A2aAgent;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
 import com.foggy.navigator.business.agent.service.AccountContextFileService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class OpenApiControllerMessageMappingTest {
 
@@ -102,6 +120,78 @@ class OpenApiControllerMessageMappingTest {
         assertEquals("tms-1", dto.getClientContext().get("upstreamConversationId"));
     }
 
+    @Test
+    void askAgent_topLevelAttachmentsOverrideMetadataAttachments() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver);
+
+        Map<String, Object> metadataAttachment = new LinkedHashMap<>();
+        metadataAttachment.put("name", "old.png");
+        metadataAttachment.put("url", "https://tms.example.com/old.png");
+        Map<String, Object> topLevelAttachment = new LinkedHashMap<>();
+        topLevelAttachment.put("name", "pod-photo.png");
+        topLevelAttachment.put("url", "https://tms.example.com/pod-photo.png");
+        List<Map<String, Object>> topLevelAttachments = List.of(topLevelAttachment);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("结合附件分析表单");
+        form.setContextId("ctx-1");
+        form.setMetadata(Map.of("attachments", List.of(metadataAttachment), "modelConfigId", "cfg-1"));
+        form.setAttachments(topLevelAttachments);
+
+        when(credentialResolver.resolveAccessTokenForSkill(
+                nullable(String.class), nullable(String.class), eq("agent-1")))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, mock(HttpServletRequest.class));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        assertSame(topLevelAttachments, captor.getValue().getMetadata().get("attachments"));
+    }
+
+    @Test
+    void askAgent_metadataAttachmentsRemainWhenTopLevelAttachmentsAbsent() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver);
+
+        Map<String, Object> metadataAttachment = new LinkedHashMap<>();
+        metadataAttachment.put("name", "metadata-only.png");
+        metadataAttachment.put("url", "https://tms.example.com/metadata-only.png");
+        List<Map<String, Object>> metadataAttachments = List.of(metadataAttachment);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("结合附件分析表单");
+        form.setContextId("ctx-1");
+        form.setMetadata(Map.of("attachments", metadataAttachments));
+
+        when(credentialResolver.resolveAccessTokenForSkill(
+                nullable(String.class), nullable(String.class), eq("agent-1")))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, mock(HttpServletRequest.class));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        assertSame(metadataAttachments, captor.getValue().getMetadata().get("attachments"));
+    }
+
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)
             throws Exception {
         Method method = OpenApiController.class.getDeclaredMethod(
@@ -121,6 +211,15 @@ class OpenApiControllerMessageMappingTest {
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private OpenApiController newController() {
+        return newController(mock(UnifiedAgentResolver.class), null);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(
+            UnifiedAgentResolver agentResolver,
+            ClientAppRuntimeCredentialResolver credentialResolver) {
+        ObjectProvider<ClientAppRuntimeCredentialResolver> credentialProvider = mock(ObjectProvider.class);
+        when(credentialProvider.getIfAvailable()).thenReturn(credentialResolver);
         return new OpenApiController(
                 mock(OpenApiProvisioningService.class),
                 mock(ClaudeWorkerService.class),
@@ -130,17 +229,25 @@ class OpenApiControllerMessageMappingTest {
                 mock(CodingAgentRepository.class),
                 mock(WorkingDirectoryRepository.class),
                 mock(WorkerHealthChecker.class),
-                mock(UnifiedAgentResolver.class),
+                agentResolver,
                 mock(TaskDispatchFacade.class),
                 mock(TaskStateReconciler.class),
                 mock(OpenApiSessionQueryService.class),
                 new ObjectMapper(),
-                mock(ObjectProvider.class),
+                credentialProvider,
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class)
         );
+    }
+
+    private ResolvedClientAppCredentialDTO credential() {
+        return ResolvedClientAppCredentialDTO.builder()
+                .credentialId("cred-1")
+                .tenantId("tenant-1")
+                .clientAppId("app-1")
+                .build();
     }
 }

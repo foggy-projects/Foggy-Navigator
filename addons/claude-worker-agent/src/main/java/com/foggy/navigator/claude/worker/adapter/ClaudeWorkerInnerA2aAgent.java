@@ -78,6 +78,7 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setModelConfigId((String) meta.get("modelConfigId"));
         form.setPermissionMode((String) meta.get("permissionMode"));
         form.setImages((String) meta.get("images"));
+        form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setAgentTeamsJson((String) meta.get("agentTeamsJson"));
         form.setAgentTeamsConfigId((String) meta.get("agentTeamsConfigId"));
         if (meta.get("maxTurns") instanceof Number n) {
@@ -244,6 +245,14 @@ class ClaudeWorkerInnerA2aAgent implements InnerA2aAgent {
         }
         String text = value.toString();
         return text.isBlank() ? null : text;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> attachmentsMeta(Object value) {
+        if (value instanceof List<?> list) {
+            return (List<Map<String, Object>>) list;
+        }
+        return null;
     }
 
     private String extractPrompt(A2aMessage message) {

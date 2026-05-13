@@ -76,6 +76,7 @@ public class CodexWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd,
                                                       String codexThreadId, String model,
                                                       Integer maxTurns, String images,
+                                                      List<Map<String, Object>> attachments,
                                                       String apiKey, String baseUrl,
                                                       java.util.Map<String, String> envVars) {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -91,6 +92,9 @@ public class CodexWorkerClient {
             } catch (Exception e) {
                 log.warn("Failed to parse images JSON, skipping: {}", e.getMessage());
             }
+        }
+        if (attachments != null && !attachments.isEmpty()) {
+            body.put("attachments", attachments);
         }
         if (apiKey != null) body.put("api_key", apiKey);
         if (baseUrl != null) body.put("base_url", baseUrl);
