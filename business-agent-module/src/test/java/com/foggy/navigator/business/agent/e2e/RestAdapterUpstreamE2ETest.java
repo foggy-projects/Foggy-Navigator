@@ -65,6 +65,7 @@ class RestAdapterUpstreamE2ETest {
     @Mock ClientAppRepository clientAppRepository;
     @Mock ClientAppProvisioningCredentialRepository provisioningCredentialRepository;
     @Mock ClientAppRuntimeCredentialRepository runtimeCredentialRepository;
+    @Mock ClientAppControlCredentialRepository controlCredentialRepository;
     @Mock ClientAppModelConfigGrantRepository modelGrantRepository;
     @Mock ClientAppUpstreamUserGrantRepository userGrantRepository;
     @Mock SkillRepository skillRepository;
@@ -144,7 +145,8 @@ class RestAdapterUpstreamE2ETest {
         ObjectMapper objectMapper = new ObjectMapper();
         tokenRuntimeStore = new BusinessAgentTaskScopedTokenRuntimeStore();
 
-        ClientAppService clientAppService = new ClientAppService(clientAppRepository, provisioningCredentialRepository, runtimeCredentialRepository);
+        ClientAppService clientAppService = new ClientAppService(clientAppRepository, provisioningCredentialRepository,
+                runtimeCredentialRepository, controlCredentialRepository);
         ClientAppModelConfigGrantService modelGrantService = new ClientAppModelConfigGrantService(modelGrantRepository, clientAppService, llmModelManager);
         ClientAppUserGrantService userGrantService1 = new ClientAppUserGrantService(userGrantRepository, clientAppService);
         BusinessObjectService businessObjectService = new BusinessObjectService(businessObjectRepository);

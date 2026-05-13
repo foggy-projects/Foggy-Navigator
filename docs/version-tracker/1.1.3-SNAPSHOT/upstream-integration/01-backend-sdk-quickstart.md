@@ -191,7 +191,14 @@ userGrant.setUpstreamUserToken(tmsUserToken);
 userGrant.setStatus("ENABLED");
 client.businessAgent().grantUpstreamUserAccess(app.getClientAppId(), userGrant);
 
-// 导入函数清单并授权
+// 导入函数清单并授权。
+// 正式上游交付可使用 ClientApp-scoped control key，不需要租户级 admin key。
+NavigatorClient controlClient = NavigatorClient.builder()
+        .baseUrl(navigatorBaseUrl)
+        .tenantId(tenantId)
+        .controlApiKey(naviControlApiKey)
+        .build();
+
 ImportBusinessFunctionManifestForm functionManifest = new ImportBusinessFunctionManifestForm();
 functionManifest.setFunctionId("tms.create_order");
 functionManifest.setVersion("1.0.0");
@@ -199,13 +206,13 @@ functionManifest.setDomain("tms");
 functionManifest.setName("Create Order");
 functionManifest.setRiskLevel("MEDIUM");
 functionManifest.setManifestJson(manifestJson);
-client.businessAgent().importBusinessFunctionManifest(functionManifest);
+controlClient.businessAgent().importBusinessFunctionManifest(functionManifest);
 
 GrantBusinessFunctionForm functionGrant = new GrantBusinessFunctionForm();
 functionGrant.setFunctionId("tms.create_order");
 functionGrant.setVersion("1.0.0");
 functionGrant.setStatus("ENABLED");
-client.businessAgent().grantFunctionToClientApp(app.getClientAppId(), functionGrant);
+controlClient.businessAgent().grantFunctionToClientApp(app.getClientAppId(), functionGrant);
 
 // 创建 Business Task
 CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();

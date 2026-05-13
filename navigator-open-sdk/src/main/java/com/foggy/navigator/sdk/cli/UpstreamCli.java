@@ -2,7 +2,6 @@ package com.foggy.navigator.sdk.cli;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.foggy.navigator.sdk.NavigatorClient;
 import com.foggy.navigator.sdk.api.AgentApi;
 import com.foggy.navigator.sdk.api.BusinessAgentApi;
 import com.foggy.navigator.sdk.internal.HttpHelper;
@@ -20,11 +19,13 @@ import com.foggy.navigator.sdk.model.TaskMessagesPage;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
+import com.foggy.navigator.sdk.model.businessagent.BusinessAgentBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.SyncBusinessAgentBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncSkillBundleForm;
 
 import java.io.PrintStream;
@@ -85,6 +86,7 @@ public class UpstreamCli {
             case "skill tree" -> skillTree(args);
             case "skill read" -> skillRead(args);
             case "skill sync" -> skillSync(args);
+            case "agent sync" -> agentSync(args);
             case "account-context list" -> accountContextList(args);
             case "account-context read" -> accountContextRead(args);
             case "account-context write-policy" -> accountContextWritePolicy(args);
@@ -97,7 +99,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, agent sync, account-context list, account-context read, account-context write-policy");
         return 0;
     }
 
@@ -143,29 +145,16 @@ public class UpstreamCli {
     private int ensureGrant(CliArguments args) {
         String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
         String upstreamUserId = upstreamUserId(args);
-        String upstreamUserToken = config.required("TMS_STAFF_SESSION_TOKEN", "upstream user token");
-        String adminToken = config.get("NAVI_ADMIN_TOKEN");
-        String adminApiKey = config.get("NAVI_ADMIN_API_KEY");
-        if (!hasText(adminToken) && !hasText(adminApiKey)) {
-            throw new UpstreamCliException("admin/provisioning credential is required (NAVI_ADMIN_TOKEN or NAVI_ADMIN_API_KEY)");
-        }
+        String upstreamUserToken = config.get("NAVI_UPSTREAM_USER_TOKEN");
 
         GrantUpstreamUserForm form = new GrantUpstreamUserForm();
         form.setUpstreamUserId(upstreamUserId);
-        form.setUpstreamUserToken(upstreamUserToken);
+        if (hasText(upstreamUserToken)) {
+            form.setUpstreamUserToken(upstreamUserToken);
+        }
         form.setStatus("ENABLED");
 
-        NavigatorClient.Builder builder = NavigatorClient.builder()
-                .baseUrl(config.required("NAVI_BASE_URL", "Navigator base URL"))
-                .tenantId(config.required("NAVI_TENANT_ID", "tenant id"))
-                .timeout(Duration.ofSeconds(30));
-        if (hasText(adminToken)) {
-            builder.adminToken(adminToken);
-        } else {
-            builder.apiKey(adminApiKey);
-        }
-        ClientAppUpstreamUserGrantDTO grant = builder.build()
-                .businessAgent()
+        ClientAppUpstreamUserGrantDTO grant = businessAgentControlApi()
                 .grantUpstreamUserAccess(clientAppId, form);
         out.println("ensure-grant ok");
         out.println("clientAppId=" + valueOrEmpty(grant.getClientAppId()));
@@ -361,6 +350,23 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int agentSync(CliArguments args) throws Exception {
+        String manifest = requiredOption(args, "manifest", "manifest path");
+        Path manifestPath = cwd.resolve(manifest).normalize();
+        if (!Files.isRegularFile(manifestPath)) {
+            throw new UpstreamCliException("manifest file not found: " + manifestPath);
+        }
+        String json = Files.readString(manifestPath, StandardCharsets.UTF_8);
+        SyncBusinessAgentBundleForm form = new ObjectMapper().readValue(json, SyncBusinessAgentBundleForm.class);
+        if (!hasText(form.getClientAppId())) {
+            form.setClientAppId(requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id"));
+        }
+
+        BusinessAgentBundleDTO dto = businessAgentControlApi().syncBusinessAgentBundle(form);
+        printBusinessAgentBundle(dto);
+        return 0;
+    }
+
     private int accountContextList(CliArguments args) {
         String upstreamUserId = upstreamUserId(args);
         AccountContextFileTreeDTO tree = agentApi().listAccountContextFilesWithClientAppAccessToken(
@@ -423,16 +429,18 @@ public class UpstreamCli {
     }
 
     private BusinessAgentApi businessAgentControlApi() {
+        String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
         String adminToken = config.get("NAVI_ADMIN_TOKEN");
         String adminApiKey = config.get("NAVI_ADMIN_API_KEY");
-        if (!hasText(adminToken) && !hasText(adminApiKey)) {
-            throw new UpstreamCliException("admin/provisioning credential is required (NAVI_ADMIN_TOKEN or NAVI_ADMIN_API_KEY)");
+        if (!hasText(controlApiKey) && !hasText(adminToken) && !hasText(adminApiKey)) {
+            throw new UpstreamCliException("control-plane credential is required (NAVI_CONTROL_API_KEY; admin fallback: NAVI_ADMIN_TOKEN or NAVI_ADMIN_API_KEY)");
         }
         return new BusinessAgentApi(new HttpHelper(
                 config.required("NAVI_BASE_URL", "Navigator base URL"),
                 adminApiKey,
                 adminToken,
                 config.get("NAVI_TENANT_ID"),
+                controlApiKey,
                 Duration.ofSeconds(30)));
     }
 
@@ -548,6 +556,21 @@ public class UpstreamCli {
         if (dto != null && dto.getMaterializeResult() != null) {
             out.println("materializeStatus=" + valueOrEmpty(dto.getMaterializeResult().getStatus()));
             out.println("workerStatusCode=" + valueOrEmpty(dto.getMaterializeResult().getWorkerStatusCode()));
+        }
+    }
+
+    private void printBusinessAgentBundle(BusinessAgentBundleDTO dto) {
+        out.println("agent sync ok");
+        out.println("clientAppId=" + valueOrEmpty(dto != null ? dto.getClientAppId() : null));
+        out.println("agentId=" + valueOrEmpty(dto != null ? dto.getAgentId() : null));
+        out.println("skillId=" + valueOrEmpty(dto != null ? dto.getSkillId() : null));
+        out.println("workerId=" + valueOrEmpty(dto != null ? dto.getWorkerId() : null));
+        out.println("defaultModelConfigId=" + valueOrEmpty(dto != null ? dto.getDefaultModelConfigId() : null));
+        if (dto != null && dto.getSkillBundle() != null) {
+            out.println("skillBundleStatus=" + valueOrEmpty(dto.getSkillBundle().getStatus()));
+            if (dto.getSkillBundle().getMaterializeResult() != null) {
+                out.println("skillBundleMaterializeStatus=" + valueOrEmpty(dto.getSkillBundle().getMaterializeResult().getStatus()));
+            }
         }
     }
 

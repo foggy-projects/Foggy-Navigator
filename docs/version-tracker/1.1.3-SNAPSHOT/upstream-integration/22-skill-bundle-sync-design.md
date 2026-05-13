@@ -164,7 +164,7 @@ navi upstream skill sync --scope client-app-public --manifest .navigator/skill-b
 navi upstream skill sync --scope account-private --manifest .navigator/account-skill.json --upstream-user-id <id>
 ```
 
-`client-app-public` 使用 `NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY`；`account-private` 使用项目本地 `.navigator/upstream.env` 中的 runtime credential，并自动交换 runtime access token。
+`client-app-public` 使用 `NAVI_CONTROL_API_KEY`，并由服务端强制绑定到该 credential 的 `clientAppId`；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback。`account-private` 使用项目本地 `.navigator/upstream.env` 中的 runtime credential，并自动交换 runtime access token。
 
 ## 函数权限边界
 

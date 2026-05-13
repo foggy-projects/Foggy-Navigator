@@ -178,7 +178,8 @@ final class UpstreamCliConfig {
         putOption(values, args, "client-app-access-token", "NAVI_CLIENT_APP_ACCESS_TOKEN");
         putOption(values, args, "admin-token", "NAVI_ADMIN_TOKEN");
         putOption(values, args, "admin-api-key", "NAVI_ADMIN_API_KEY");
-        putOption(values, args, "upstream-user-token", "TMS_STAFF_SESSION_TOKEN");
+        putOption(values, args, "control-api-key", "NAVI_CONTROL_API_KEY");
+        putOption(values, args, "upstream-user-token", "NAVI_UPSTREAM_USER_TOKEN");
         putOption(values, args, "upstream-user-id", "NAVI_UPSTREAM_USER_ID");
         putOption(values, args, "model-config-id", "NAVI_MODEL_CONFIG_ID");
         putOption(values, args, "agent", "NAVI_AGENT_CODE");
@@ -188,7 +189,8 @@ final class UpstreamCliConfig {
         putEnvOption(values, args, env, "client-app-access-token-env", "NAVI_CLIENT_APP_ACCESS_TOKEN");
         putEnvOption(values, args, env, "admin-token-env", "NAVI_ADMIN_TOKEN");
         putEnvOption(values, args, env, "admin-api-key-env", "NAVI_ADMIN_API_KEY");
-        putEnvOption(values, args, env, "upstream-user-token-env", "TMS_STAFF_SESSION_TOKEN");
+        putEnvOption(values, args, env, "control-api-key-env", "NAVI_CONTROL_API_KEY");
+        putEnvOption(values, args, env, "upstream-user-token-env", "NAVI_UPSTREAM_USER_TOKEN");
     }
 
     private static void applyAliases(Map<String, String> values) {
@@ -200,6 +202,8 @@ final class UpstreamCliConfig {
         putAlias(values, "CLIENT_APP_RUNTIME_TOKEN", "NAVI_CLIENT_APP_ACCESS_TOKEN");
         putAlias(values, "NAVIGATOR_ADMIN_TOKEN", "NAVI_ADMIN_TOKEN");
         putAlias(values, "NAVIGATOR_ADMIN_API_KEY", "NAVI_ADMIN_API_KEY");
+        putAlias(values, "NAVIGATOR_CONTROL_API_KEY", "NAVI_CONTROL_API_KEY");
+        putAlias(values, "TMS_STAFF_SESSION_TOKEN", "NAVI_UPSTREAM_USER_TOKEN");
         putAlias(values, "UPSTREAM_USER_ID", "NAVI_UPSTREAM_USER_ID");
     }
 
@@ -305,18 +309,18 @@ final class UpstreamCliConfig {
         return List.of("NAVI_BASE_URL", "TMS_WEB_BASE_URL", "BASIC_BASE_URL", "NAVI_TENANT_ID",
                 "NAVI_CLIENT_APP_ID", "NAVI_CLIENT_APP_KEY", "NAVI_AGENT_CODE",
                 "NAVI_MODEL_CONFIG_ID", "NAVI_POLL_INTERVAL_SECONDS", "NAVI_E2E_MOCK_LLM_URL", "NAVI_CLIENT_APP_SECRET",
-                "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN", "NAVI_ADMIN_API_KEY",
-                "TMS_STAFF_SESSION_TOKEN", "NAVIGATOR_BASE_URL", "NAVIGATOR_TENANT_ID",
+                "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN", "NAVI_ADMIN_API_KEY", "NAVI_CONTROL_API_KEY",
+                "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "NAVIGATOR_BASE_URL", "NAVIGATOR_TENANT_ID",
                 "CLIENT_APP_ID", "CLIENT_APP_KEY", "CLIENT_APP_SECRET",
                 "CLIENT_APP_RUNTIME_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY",
-                "NAVI_UPSTREAM_PROFILE");
+                "NAVIGATOR_CONTROL_API_KEY", "NAVI_UPSTREAM_PROFILE");
     }
 
     private static List<String> sensitiveKeys() {
         return List.of("NAVI_CLIENT_APP_SECRET", "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN",
-                "NAVI_ADMIN_API_KEY", "TMS_STAFF_SESSION_TOKEN", "CLIENT_APP_KEY",
+                "NAVI_ADMIN_API_KEY", "NAVI_CONTROL_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "CLIENT_APP_KEY",
                 "NAVI_CLIENT_APP_KEY", "CLIENT_APP_SECRET", "CLIENT_APP_RUNTIME_TOKEN",
-                "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY");
+                "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_CONTROL_API_KEY");
     }
 
     private static boolean isSensitiveKey(String key) {

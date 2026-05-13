@@ -129,7 +129,7 @@ E2E 回归使用独立 wrapper，仍读取同一个 project-local `.navigator/up
 .\tools\navigator-upstream\navi-e2e.ps1 script cleanup --trace-id <e2eTraceId>
 ```
 
-`model ensure` 需要 `.navigator/upstream.env` 中存在 `NAVI_CLIENT_APP_ID`，并提供 `NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY`。它只维护当前 ClientApp 的标准 E2E model grant；不会修改租户默认模型。
+`model ensure` 需要 `.navigator/upstream.env` 中存在 `NAVI_CLIENT_APP_ID`，并提供 `NAVI_CONTROL_API_KEY`。它只维护当前 ClientApp 的标准 E2E model grant；不会修改租户默认模型。`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback。
 
 ## 更新
 

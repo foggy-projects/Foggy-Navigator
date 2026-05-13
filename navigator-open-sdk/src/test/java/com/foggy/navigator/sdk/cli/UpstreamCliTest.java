@@ -31,6 +31,7 @@ class UpstreamCliTest {
     private static String lastClientAppKeyHeader;
     private static String lastClientAppSecretHeader;
     private static String lastClientAppAccessTokenHeader;
+    private static String lastClientAppControlKeyHeader;
     private static String lastUpstreamUserIdHeader;
     private static String responseOverride;
     private static List<String> requestPaths;
@@ -54,6 +55,7 @@ class UpstreamCliTest {
             lastClientAppKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Key");
             lastClientAppSecretHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Secret");
             lastClientAppAccessTokenHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Access-Token");
+            lastClientAppControlKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Control-Key");
             lastUpstreamUserIdHeader = exchange.getRequestHeaders().getFirst("X-Upstream-User-Id");
 
             String response;
@@ -105,6 +107,7 @@ class UpstreamCliTest {
         lastClientAppKeyHeader = null;
         lastClientAppSecretHeader = null;
         lastClientAppAccessTokenHeader = null;
+        lastClientAppControlKeyHeader = null;
         lastUpstreamUserIdHeader = null;
         requestPaths = new ArrayList<>();
         responseOverride = "{\"code\":0,\"data\":{}}";
@@ -290,26 +293,69 @@ class UpstreamCliTest {
     }
 
     @Test
-    void ensureGrantRequiresAdminCredentialAndDoesNotPrintTokens() {
+    void ensureGrantUsesControlPlaneCredentialAndDoesNotPrintTokens() {
         responseOverride = "{\"clientAppId\":\"app-1\",\"upstreamUserId\":\"u-1\",\"status\":\"ENABLED\"}";
-        Map<String, String> env = env("ADMIN_ENV", "admin-token-secret", "TMS_ENV", "staff-token-secret");
+        Map<String, String> env = env("CONTROL_ENV", "control-key-secret", "USER_TOKEN_ENV", "staff-token-secret");
 
         int code = run(new String[]{"upstream", "ensure-grant",
                 "--base-url", baseUrl(),
                 "--tenant-id", "tenant-1",
                 "--client-app-id", "app-1",
                 "--upstream-user-id", "u-1",
-                "--admin-token-env", "ADMIN_ENV",
-                "--upstream-user-token-env", "TMS_ENV"}, env);
+                "--control-api-key-env", "CONTROL_ENV",
+                "--upstream-user-token-env", "USER_TOKEN_ENV"}, env);
 
         String output = stdout.toString(StandardCharsets.UTF_8);
         assertEquals(0, code);
-        assertEquals("Bearer admin-token-secret", lastAuthorizationHeader);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
         assertEquals("/api/v1/business-agent/client-apps/app-1/upstream-users", lastPath);
         assertTrue(lastBody.contains("\"upstreamUserToken\":\"staff-token-secret\""));
-        assertFalse(output.contains("admin-token-secret"));
+        assertFalse(output.contains("control-key-secret"));
         assertFalse(output.contains("staff-token-secret"));
         assertTrue(output.contains("ensure-grant ok"));
+    }
+
+    @Test
+    void ensureGrantAllowsMissingUpstreamUserToken() {
+        responseOverride = "{\"clientAppId\":\"app-1\",\"upstreamUserId\":\"u-1\",\"status\":\"ENABLED\"}";
+        Map<String, String> env = env("NAVI_CONTROL_API_KEY", "control-key-secret");
+
+        int code = run(new String[]{"upstream", "ensure-grant",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--client-app-id", "app-1",
+                "--upstream-user-id", "u-1"}, env);
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/upstream-users", lastPath);
+        assertTrue(lastBody.contains("\"upstreamUserId\":\"u-1\""));
+        assertFalse(output.contains("control-key-secret"));
+        assertTrue(output.contains("ensure-grant ok"));
+    }
+
+    @Test
+    void ensureGrantAcceptsLegacyTmsStaffTokenAlias() {
+        responseOverride = "{\"clientAppId\":\"app-1\",\"upstreamUserId\":\"u-1\",\"status\":\"ENABLED\"}";
+        Map<String, String> env = env(
+                "NAVI_CONTROL_API_KEY", "control-key-secret",
+                "TMS_STAFF_SESSION_TOKEN", "legacy-staff-token-secret");
+
+        int code = run(new String[]{"upstream", "ensure-grant",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--client-app-id", "app-1",
+                "--upstream-user-id", "u-1"}, env);
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"upstreamUserToken\":\"legacy-staff-token-secret\""));
+        assertFalse(output.contains("control-key-secret"));
+        assertFalse(output.contains("legacy-staff-token-secret"));
     }
 
     @Test
@@ -576,7 +622,7 @@ class UpstreamCliTest {
         int code = run(new String[]{"upstream", "skill", "sync",
                 "--base-url", baseUrl(),
                 "--tenant-id", "tenant-1",
-                "--admin-token", "admin-secret",
+                "--control-api-key", "control-key-secret",
                 "--client-app-id", "app-1",
                 "--scope", "client-app-public",
                 "--manifest", manifest.getFileName().toString()}, Map.of());
@@ -585,12 +631,58 @@ class UpstreamCliTest {
         assertEquals(0, code);
         assertEquals("/api/v1/business-agent/skill-bundles/sync", lastPath);
         assertEquals("POST", lastMethod);
-        assertEquals("Bearer admin-secret", lastAuthorizationHeader);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
         assertTrue(lastBody.contains("\"clientAppId\":\"app-1\""));
         assertTrue(lastBody.contains("\"scope\":\"CLIENT_APP_PUBLIC\""));
         assertTrue(output.contains("skill sync ok"));
         assertTrue(output.contains("scope=CLIENT_APP_PUBLIC"));
-        assertFalse(output.contains("admin-secret"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void agentSyncUsesControlPlaneCredentialAndManifest() throws Exception {
+        responseOverride = """
+                {"code":0,"data":{
+                  "tenantId":"tenant-1",
+                  "clientAppId":"app-1",
+                  "agentId":"agent-1",
+                  "skillId":"agent-1",
+                  "workerId":"worker-1",
+                  "defaultModelConfigId":"model-1",
+                  "skillBundle":{"status":"ENABLED"}
+                }}
+                """;
+        Path manifest = tempDir.resolve("agent-bundle.json");
+        Files.writeString(manifest, """
+                {
+                  "agentId":"agent-1",
+                  "name":"Agent One",
+                  "workerId":"worker-1",
+                  "defaultModelConfigId":"model-1",
+                  "markdownBody":"# Agent One"
+                }
+                """, StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "agent", "sync",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--manifest", manifest.getFileName().toString()}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/agent-bundles/sync", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"clientAppId\":\"app-1\""));
+        assertTrue(lastBody.contains("\"workerId\":\"worker-1\""));
+        assertTrue(output.contains("agent sync ok"));
+        assertTrue(output.contains("agentId=agent-1"));
+        assertTrue(output.contains("skillBundleStatus=ENABLED"));
+        assertFalse(output.contains("control-key-secret"));
     }
 
     @Test

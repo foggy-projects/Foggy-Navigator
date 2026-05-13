@@ -28,6 +28,7 @@ public class BusinessAgentApiSmokeTest {
     private static String lastClientAppKeyHeader;
     private static String lastClientAppSecretHeader;
     private static String lastClientAppAccessTokenHeader;
+    private static String lastClientAppControlKeyHeader;
     private static String lastUpstreamUserIdHeader;
     private static String lastBody;
     private static String responseOverride;
@@ -46,6 +47,7 @@ public class BusinessAgentApiSmokeTest {
             lastClientAppKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Key");
             lastClientAppSecretHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Secret");
             lastClientAppAccessTokenHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Access-Token");
+            lastClientAppControlKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Control-Key");
             lastUpstreamUserIdHeader = exchange.getRequestHeaders().getFirst("X-Upstream-User-Id");
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 
@@ -82,6 +84,7 @@ public class BusinessAgentApiSmokeTest {
         lastClientAppKeyHeader = null;
         lastClientAppSecretHeader = null;
         lastClientAppAccessTokenHeader = null;
+        lastClientAppControlKeyHeader = null;
         lastUpstreamUserIdHeader = null;
         lastBody = null;
         responseOverride = "{\"code\":0, \"data\":{}}";
@@ -123,6 +126,26 @@ public class BusinessAgentApiSmokeTest {
 
         assertNull(lastAuthHeader, "X-API-Key must not be present for bearer auth");
         assertEquals("Bearer tenant-admin-jwt", lastAuthorizationHeader);
+    }
+
+    @Test
+    public void testControlApiKeyAuthHeader() {
+        NavigatorClient controlClient = NavigatorClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .tenantId("tenant-1")
+                .controlApiKey("control-key-secret")
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        responseOverride = "[]";
+        List<ClientAppDTO> apps = controlClient.businessAgent().listClientApps();
+
+        assertNotNull(apps);
+        assertEquals("/api/v1/client-apps", lastPath);
+        assertEquals("GET", lastMethod);
+        assertNull(lastAuthHeader, "X-API-Key must not be present for control key auth");
+        assertNull(lastAuthorizationHeader, "Authorization must not be present for control key auth");
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
     }
 
     @Test

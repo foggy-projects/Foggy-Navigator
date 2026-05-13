@@ -116,6 +116,7 @@ public class NavigatorClient {
         private String baseUrl;
         private String apiKey;
         private String bearerToken;
+        private String controlApiKey;
         private String tenantId;
         private Duration timeout;
 
@@ -154,6 +155,18 @@ public class NavigatorClient {
             return bearerToken(adminToken);
         }
 
+        /**
+         * ClientApp-scoped control-plane key.
+         * <p>
+         * This is intended for upstream-owned setup such as agent bundle sync,
+         * function import/grant for the bound ClientApp, upstream-user grants,
+         * and E2E model ensure. It is not a tenant-wide admin credential.
+         */
+        public Builder controlApiKey(String controlApiKey) {
+            this.controlApiKey = controlApiKey;
+            return this;
+        }
+
         public Builder tenantId(String tenantId) {
             this.tenantId = tenantId;
             return this;
@@ -173,10 +186,11 @@ public class NavigatorClient {
             }
             boolean hasApiKey = apiKey != null && !apiKey.isBlank();
             boolean hasBearerToken = bearerToken != null && !bearerToken.isBlank();
-            if (!hasApiKey && !hasBearerToken) {
-                throw new IllegalArgumentException("apiKey or bearerToken is required");
+            boolean hasControlApiKey = controlApiKey != null && !controlApiKey.isBlank();
+            if (!hasApiKey && !hasBearerToken && !hasControlApiKey) {
+                throw new IllegalArgumentException("apiKey, bearerToken, or controlApiKey is required");
             }
-            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, bearerToken, tenantId, timeout));
+            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, bearerToken, tenantId, controlApiKey, timeout));
         }
     }
 }

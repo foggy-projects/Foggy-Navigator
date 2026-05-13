@@ -60,11 +60,13 @@ POST /api/v1/business-agent/agent-bundles/sync
 约定：
 
 - `agentId` 是上游 `.navigator/upstream.env` 中的 `NAVI_AGENT_CODE`。
+- 当前 `agentId` 继承 `CodingAgentEntity.agentId` 路由模型，按 Navigator 实例全局唯一，不是租户内唯一。上游交付应使用项目级命名空间，如 `tms-x3-agent-v305`、`world-sim.bug-coordinator.decision.v1`；如同一 Navigator 实例承载多个交付租户且需要并行同名版本，应在 agentId 中加入环境或租户后缀。
 - `skillId` 默认等于 `agentId`，让 readiness、skill file API 与 ask route 使用同一个标识。
 - Agent 运行时复用现有 `CodingAgentEntity + LanggraphWorkerAgentProvider`，`agentType=LOCAL_LANGGRAPH_WORKER`。
 - Skill 交付复用 `SkillRegistryService.syncSkillBundle(... CLIENT_APP_PUBLIC ...)`，不新增第二套 Skill/Grant 权限模型。
 - `defaultModelConfigId` 必须已授权给当前 ClientApp，且 backend 为 `LANGGRAPH_BIZ`。
 - `workerId` 指向实际执行 OpenAPI ask 的 LangGraph worker。
+- `functions` 是 Skill allowlist 引用，不承载完整 Function Manifest。同步 agent 前，上游应先用 SDK 导入 Business Function Manifest，并把这些 function grant 到当前 ClientApp；该步骤可使用 `NAVI_CONTROL_API_KEY`，不需要租户级 admin。
 
 ## CLI 与 SDK
 
@@ -74,13 +76,27 @@ SDK 增加：
 client.businessAgent().syncBusinessAgentBundle(form);
 ```
 
+上游函数同步链路使用同一个 ClientApp-scoped control credential：
+
+```java
+NavigatorClient client = NavigatorClient.builder()
+    .baseUrl(navigatorBaseUrl)
+    .tenantId(tenantId)
+    .controlApiKey(naviControlApiKey)
+    .build();
+
+client.businessAgent().importBusinessFunctionManifest(functionManifest);
+client.businessAgent().grantFunctionToClientApp(clientAppId, functionGrant);
+client.businessAgent().syncBusinessAgentBundle(agentBundle);
+```
+
 CLI 增加：
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream agent sync --manifest .\agent-bundle.json
 ```
 
-该命令需要 `NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY`，用于 Navigator 侧正式注册与授权；普通上游调用 ask/readiness 仍只使用 project-local runtime profile。
+该命令优先使用 `NAVI_CONTROL_API_KEY`，即 ClientApp-scoped 控制面凭证；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部管理员 fallback。普通上游调用 ask/readiness 仍只使用 project-local runtime profile。
 
 ## 验收标准
 

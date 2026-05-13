@@ -5,8 +5,10 @@ import com.foggy.navigator.business.agent.model.dto.IssuedCredentialDTO;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppProvisioningCredentialEntity;
 import com.foggy.navigator.business.agent.model.form.CreateClientAppForm;
+import com.foggy.navigator.business.agent.model.form.IssueControlCredentialForm;
 import com.foggy.navigator.business.agent.model.form.IssueProvisioningCredentialForm;
 import com.foggy.navigator.business.agent.model.form.IssueRuntimeCredentialForm;
+import com.foggy.navigator.business.agent.repository.ClientAppControlCredentialRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppProvisioningCredentialRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRuntimeCredentialRepository;
@@ -25,6 +27,7 @@ class ClientAppServiceTest {
     private ClientAppRepository clientAppRepository;
     private ClientAppProvisioningCredentialRepository provisioningRepository;
     private ClientAppRuntimeCredentialRepository runtimeCredentialRepository;
+    private ClientAppControlCredentialRepository controlCredentialRepository;
     private ClientAppService service;
 
     @BeforeEach
@@ -32,11 +35,14 @@ class ClientAppServiceTest {
         clientAppRepository = mock(ClientAppRepository.class);
         provisioningRepository = mock(ClientAppProvisioningCredentialRepository.class);
         runtimeCredentialRepository = mock(ClientAppRuntimeCredentialRepository.class);
-        service = new ClientAppService(clientAppRepository, provisioningRepository, runtimeCredentialRepository);
+        controlCredentialRepository = mock(ClientAppControlCredentialRepository.class);
+        service = new ClientAppService(clientAppRepository, provisioningRepository, runtimeCredentialRepository,
+                controlCredentialRepository);
 
         when(clientAppRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(provisioningRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(runtimeCredentialRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(controlCredentialRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
     }
 
     @Test
@@ -124,6 +130,26 @@ class ClientAppServiceTest {
 
         assertThrows(IllegalStateException.class,
                 () -> service.issueRuntimeCredential("tenant-1", "capp-1", new IssueRuntimeCredentialForm()));
+    }
+
+    @Test
+    void issueControlCredential_requires_active_owned_app_and_returns_controlApiKey() {
+        ClientAppEntity app = activeApp("tenant-1", "capp-1");
+        when(clientAppRepository.findByClientAppIdAndTenantId("capp-1", "tenant-1")).thenReturn(Optional.of(app));
+        IssueControlCredentialForm form = new IssueControlCredentialForm();
+        form.setScopes(java.util.List.of(ClientAppControlCredentialService.SCOPE_AGENT_BUNDLE_SYNC));
+
+        IssuedCredentialDTO dto = service.issueControlCredential("tenant-1", "admin-1", "capp-1", form);
+
+        assertEquals("capp-1", dto.getClientAppId());
+        assertNotNull(dto.getControlApiKey());
+        assertTrue(dto.getControlApiKey().startsWith("cac_"));
+        assertTrue(dto.getScopes().contains(ClientAppControlCredentialService.SCOPE_AGENT_BUNDLE_SYNC));
+        verify(controlCredentialRepository).save(argThat(entity ->
+                "capp-1".equals(entity.getClientAppId())
+                        && "tenant-1".equals(entity.getTenantId())
+                        && entity.getControlKeyHash() != null
+                        && entity.getScopes().contains(ClientAppControlCredentialService.SCOPE_AGENT_BUNDLE_SYNC)));
     }
 
     @Test

@@ -59,6 +59,7 @@ class BusinessAgentE2ESampleTest {
     @Mock ClientAppRepository clientAppRepository;
     @Mock ClientAppProvisioningCredentialRepository provisioningCredentialRepository;
     @Mock ClientAppRuntimeCredentialRepository runtimeCredentialRepository;
+    @Mock ClientAppControlCredentialRepository controlCredentialRepository;
     @Mock ClientAppModelConfigGrantRepository modelGrantRepository;
     @Mock ClientAppUpstreamUserGrantRepository userGrantRepository;
     @Mock SkillRepository skillRepository;
@@ -117,7 +118,8 @@ class BusinessAgentE2ESampleTest {
     @BeforeEach
     void wireServices() {
         tokenRuntimeStore = new BusinessAgentTaskScopedTokenRuntimeStore();
-        clientAppService = new ClientAppService(clientAppRepository, provisioningCredentialRepository, runtimeCredentialRepository);
+        clientAppService = new ClientAppService(clientAppRepository, provisioningCredentialRepository,
+                runtimeCredentialRepository, controlCredentialRepository);
         modelGrantService = new ClientAppModelConfigGrantService(modelGrantRepository, clientAppService, llmModelManager);
         userGrantService = new ClientAppUserGrantService(userGrantRepository, clientAppService);
         businessObjectService = new BusinessObjectService(businessObjectRepository);

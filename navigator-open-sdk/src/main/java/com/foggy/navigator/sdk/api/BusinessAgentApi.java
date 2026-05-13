@@ -36,6 +36,10 @@ public class BusinessAgentApi {
         return http.post("/api/v1/client-apps/" + clientAppId + "/runtime-credentials", form, new TypeReference<>() {});
     }
 
+    public IssuedCredentialDTO issueControlCredential(String clientAppId, IssueControlCredentialForm form) {
+        return http.post("/api/v1/client-apps/" + clientAppId + "/control-credentials", form, new TypeReference<>() {});
+    }
+
     public ClientAppRuntimeAccessTokenDTO exchangeRuntimeAccessToken(String appKey, String appSecret) {
         return http.post("/api/v1/open/client-apps/runtime-token", null, Map.of(
                 "X-Client-App-Key", appKey,
@@ -67,6 +71,12 @@ public class BusinessAgentApi {
 
     public E2eModelConfigEnsureResultDTO ensureE2eModelConfig(String clientAppId, EnsureE2eModelConfigForm form) {
         return http.post("/api/v1/business-agent/client-apps/" + clientAppId + "/e2e-model-config/ensure", form, new TypeReference<>() {});
+    }
+
+    // ===== Business Agent Bundle =====
+
+    public BusinessAgentBundleDTO syncBusinessAgentBundle(SyncBusinessAgentBundleForm form) {
+        return http.post("/api/v1/business-agent/agent-bundles/sync", form, new TypeReference<>() {});
     }
 
     // ===== Skill =====

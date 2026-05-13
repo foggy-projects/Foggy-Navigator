@@ -255,7 +255,7 @@ response = scriptTurn.response
 
 ## 权限与安全
 
-1. `navi-e2e` 使用 ClientApp-scoped 控制面凭证或受控 E2E provisioning 能力，不要求上游持有全局 admin token。
+1. `navi-e2e` 使用 `NAVI_CONTROL_API_KEY` 这种 ClientApp-scoped 控制面凭证，不要求上游持有全局 admin token。
 2. E2E model grant 只绑定到当前 ClientApp，不修改租户默认模型。
 3. script 注册必须带 TTL，避免测试数据无限增长。
 4. `traceId` 必须足够随机，推荐 UUID v4。

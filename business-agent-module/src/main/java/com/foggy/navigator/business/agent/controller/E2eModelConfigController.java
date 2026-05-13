@@ -1,10 +1,11 @@
 package com.foggy.navigator.business.agent.controller;
 
 import com.foggy.navigator.business.agent.model.dto.E2eModelConfigEnsureResultDTO;
+import com.foggy.navigator.business.agent.model.dto.ClientAppControlPlanePrincipal;
 import com.foggy.navigator.business.agent.model.form.EnsureE2eModelConfigForm;
+import com.foggy.navigator.business.agent.service.ClientAppControlCredentialService;
 import com.foggy.navigator.business.agent.service.E2eModelConfigEnsureService;
-import com.foggy.navigator.common.annotation.RequireAuth;
-import com.foggy.navigator.common.context.UserContext;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -14,11 +15,14 @@ import org.springframework.web.bind.annotation.*;
 public class E2eModelConfigController {
 
     private final E2eModelConfigEnsureService service;
+    private final ClientAppControlCredentialService controlCredentialService;
 
-    @RequireAuth(roles = "TENANT_ADMIN")
     @PostMapping("/ensure")
-    public E2eModelConfigEnsureResultDTO ensure(@PathVariable String clientAppId,
+    public E2eModelConfigEnsureResultDTO ensure(HttpServletRequest request,
+                                                @PathVariable String clientAppId,
                                                 @RequestBody EnsureE2eModelConfigForm form) {
-        return service.ensure(UserContext.getCurrentTenantId(), UserContext.getCurrentUserId(), clientAppId, form);
+        ClientAppControlPlanePrincipal principal = controlCredentialService.requireAccess(
+                request, ClientAppControlCredentialService.SCOPE_E2E_MODEL_ENSURE, clientAppId);
+        return service.ensure(principal.getTenantId(), principal.getActorUserId(), clientAppId, form);
     }
 }

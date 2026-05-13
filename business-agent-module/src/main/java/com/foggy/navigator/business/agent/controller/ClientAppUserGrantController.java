@@ -1,9 +1,11 @@
 package com.foggy.navigator.business.agent.controller;
 
+import com.foggy.navigator.business.agent.model.dto.ClientAppControlPlanePrincipal;
 import com.foggy.navigator.business.agent.model.dto.ClientAppUpstreamUserGrantDTO;
 import com.foggy.navigator.business.agent.model.form.GrantUpstreamUserForm;
+import com.foggy.navigator.business.agent.service.ClientAppControlCredentialService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
-import com.foggy.navigator.common.annotation.RequireAuth;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,24 +15,28 @@ import org.springframework.web.bind.annotation.*;
 public class ClientAppUserGrantController {
 
     private final ClientAppUserGrantService clientAppUserGrantService;
+    private final ClientAppControlCredentialService controlCredentialService;
 
-    @RequireAuth(roles = "TENANT_ADMIN")
     @PostMapping
     public ClientAppUpstreamUserGrantDTO grantUpstreamUserAccess(
-            @RequestAttribute("tenantId") String tenantId,
-            @RequestAttribute("userId") String actorUserId,
+            HttpServletRequest request,
             @PathVariable String clientAppId,
             @RequestBody GrantUpstreamUserForm form) {
-        return clientAppUserGrantService.grantUpstreamUserAccess(tenantId, clientAppId, actorUserId, form);
+        ClientAppControlPlanePrincipal principal = controlCredentialService.requireAccess(
+                request, ClientAppControlCredentialService.SCOPE_UPSTREAM_USER_GRANT, clientAppId);
+        return clientAppUserGrantService.grantUpstreamUserAccess(
+                principal.getTenantId(), clientAppId, principal.getActorUserId(), form);
     }
 
-    @RequireAuth(roles = "TENANT_ADMIN")
     @PutMapping("/{upstreamUserId}/status")
     public ClientAppUpstreamUserGrantDTO updateUpstreamUserGrantStatus(
-            @RequestAttribute("tenantId") String tenantId,
+            HttpServletRequest request,
             @PathVariable String clientAppId,
             @PathVariable String upstreamUserId,
             @RequestParam String status) {
-        return clientAppUserGrantService.updateUpstreamUserGrantStatus(tenantId, clientAppId, upstreamUserId, status);
+        ClientAppControlPlanePrincipal principal = controlCredentialService.requireAccess(
+                request, ClientAppControlCredentialService.SCOPE_UPSTREAM_USER_GRANT, clientAppId);
+        return clientAppUserGrantService.updateUpstreamUserGrantStatus(
+                principal.getTenantId(), clientAppId, upstreamUserId, status);
     }
 }

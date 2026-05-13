@@ -2,12 +2,15 @@ package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.ClientAppDTO;
 import com.foggy.navigator.business.agent.model.dto.IssuedCredentialDTO;
+import com.foggy.navigator.business.agent.model.entity.ClientAppControlCredentialEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppProvisioningCredentialEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppRuntimeCredentialEntity;
 import com.foggy.navigator.business.agent.model.form.CreateClientAppForm;
+import com.foggy.navigator.business.agent.model.form.IssueControlCredentialForm;
 import com.foggy.navigator.business.agent.model.form.IssueProvisioningCredentialForm;
 import com.foggy.navigator.business.agent.model.form.IssueRuntimeCredentialForm;
+import com.foggy.navigator.business.agent.repository.ClientAppControlCredentialRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppProvisioningCredentialRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppRuntimeCredentialRepository;
@@ -17,7 +20,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -32,6 +37,7 @@ public class ClientAppService {
     private final ClientAppRepository clientAppRepository;
     private final ClientAppProvisioningCredentialRepository provisioningCredentialRepository;
     private final ClientAppRuntimeCredentialRepository runtimeCredentialRepository;
+    private final ClientAppControlCredentialRepository controlCredentialRepository;
 
     @Transactional
     public IssuedCredentialDTO issueProvisioningCredential(String currentTenantId, String issuedByUserId,
@@ -134,6 +140,36 @@ public class ClientAppService {
         return dto;
     }
 
+    @Transactional
+    public IssuedCredentialDTO issueControlCredential(String tenantId, String issuedByUserId, String clientAppId,
+                                                      IssueControlCredentialForm form) {
+        ClientAppEntity app = requireActiveClientApp(tenantId, clientAppId);
+        String controlApiKey = SecretTokenSupport.randomToken("cac_");
+        Set<String> scopes = normalizeScopes(form == null ? null : form.getScopes());
+
+        ClientAppControlCredentialEntity entity = new ClientAppControlCredentialEntity();
+        entity.setCredentialId("cacc_" + UUID.randomUUID());
+        entity.setClientAppId(app.getClientAppId());
+        entity.setTenantId(app.getTenantId());
+        entity.setControlKeyHash(SecretTokenSupport.sha256(controlApiKey));
+        entity.setIssuedByUserId(issuedByUserId);
+        entity.setEffectiveUserId(form == null ? null : form.getEffectiveUserId());
+        entity.setDescription(form == null ? null : form.getDescription());
+        entity.setScopes(ClientAppControlCredentialService.serializeScopes(scopes));
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setExpiresAt(form == null ? null : form.getExpiresAt());
+        controlCredentialRepository.save(entity);
+
+        IssuedCredentialDTO dto = new IssuedCredentialDTO();
+        dto.setCredentialId(entity.getCredentialId());
+        dto.setClientAppId(entity.getClientAppId());
+        dto.setTenantId(entity.getTenantId());
+        dto.setControlApiKey(controlApiKey);
+        dto.setScopes(scopes);
+        dto.setExpiresAt(entity.getExpiresAt());
+        return dto;
+    }
+
     @Transactional(readOnly = true)
     public List<ClientAppDTO> listClientApps(String tenantId) {
         requireText(tenantId, "tenantId is required");
@@ -180,6 +216,19 @@ public class ClientAppService {
         if (credential.getUsedCount() >= credential.getMaxUses()) {
             throw new IllegalArgumentException("provisioning credential used up");
         }
+    }
+
+    private Set<String> normalizeScopes(List<String> scopes) {
+        if (scopes == null || scopes.isEmpty()) {
+            return ClientAppControlCredentialService.defaultScopes();
+        }
+        Set<String> normalized = new LinkedHashSet<>();
+        for (String scope : scopes) {
+            if (StringUtils.hasText(scope)) {
+                normalized.add(scope.trim().replace('-', '_').toUpperCase());
+            }
+        }
+        return normalized.isEmpty() ? ClientAppControlCredentialService.defaultScopes() : normalized;
     }
 
     private void requireText(String value, String message) {
