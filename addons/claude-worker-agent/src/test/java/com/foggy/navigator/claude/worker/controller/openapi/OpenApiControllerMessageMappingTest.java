@@ -13,6 +13,7 @@ import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.service.OpenApiSessionQueryService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
 import com.foggy.navigator.spi.claude.ClaudeWorkerFacade;
+import com.foggy.navigator.business.agent.service.AccountContextFileService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
@@ -117,6 +118,7 @@ class OpenApiControllerMessageMappingTest {
                 mock(TaskStateReconciler.class),
                 mock(OpenApiSessionQueryService.class),
                 new ObjectMapper(),
+                mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
