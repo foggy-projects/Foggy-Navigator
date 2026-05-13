@@ -142,7 +142,7 @@ public class UpstreamCli {
 
     private int ensureGrant(CliArguments args) {
         String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
-        String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+        String upstreamUserId = upstreamUserId(args);
         String upstreamUserToken = config.required("TMS_STAFF_SESSION_TOKEN", "upstream user token");
         String adminToken = config.get("NAVI_ADMIN_TOKEN");
         String adminApiKey = config.get("NAVI_ADMIN_API_KEY");
@@ -176,7 +176,7 @@ public class UpstreamCli {
 
     private int verifyAgentReadiness(CliArguments args) {
         String agent = agentCode(args);
-        String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+        String upstreamUserId = upstreamUserId(args);
         AgentReadiness readiness = agentApi().verifyReadinessWithClientAppAccessToken(
                 agent,
                 upstreamUserId,
@@ -206,7 +206,7 @@ public class UpstreamCli {
 
     private int ask(CliArguments args) {
         String agent = agentCode(args);
-        String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+        String upstreamUserId = upstreamUserId(args);
         String message = requiredOption(args, "message", "message");
         Map<String, Object> clientContext = parseClientContext(args);
         AgentTask task = agentApi().askWithClientAppAccessToken(
@@ -225,7 +225,7 @@ public class UpstreamCli {
     private int messages(CliArguments args) throws InterruptedException {
         String agent = agentCode(args);
         String taskId = requiredOption(args, "task-id", "task id");
-        String upstreamUserId = args.option("upstream-user-id");
+        String upstreamUserId = optionalUpstreamUserId(args);
         int limit = parseInteger(args.option("limit"), 50);
         String cursor = args.option("cursor");
         int timeoutSeconds = parseInteger(args.option("timeout-seconds"), 600);
@@ -251,10 +251,9 @@ public class UpstreamCli {
     }
 
     private int sessions(CliArguments args) {
-        String agent = agentCode(args);
-        SessionListPage page = agentApi().listSessionsWithClientAppAccessToken(
-                agent, parseInteger(args.option("limit"), 20), args.option("cursor"),
-                clientAppKey(args), clientAppAccessToken(args), args.option("upstream-user-id"));
+        SessionListPage page = agentApi().listBusinessAgentSessionsWithClientAppAccessToken(
+                parseInteger(args.option("limit"), 20), args.option("cursor"),
+                clientAppKey(args), clientAppAccessToken(args), upstreamUserId(args));
         if (page.getSessions() != null) {
             for (SessionSummary session : page.getSessions()) {
                 out.println("session contextId=" + valueOrEmpty(session.getContextId())
@@ -269,11 +268,10 @@ public class UpstreamCli {
     }
 
     private int sessionMessages(CliArguments args) {
-        String agent = agentCode(args);
         String contextId = requiredOption(args, "context-id", "context id");
-        SessionMessagesPage page = agentApi().getSessionMessagesWithClientAppAccessToken(
-                agent, contextId, parseInteger(args.option("limit"), 50), args.option("cursor"),
-                clientAppKey(args), clientAppAccessToken(args), args.option("upstream-user-id"));
+        SessionMessagesPage page = agentApi().getBusinessAgentSessionMessagesWithClientAppAccessToken(
+                contextId, parseInteger(args.option("limit"), 50), args.option("cursor"),
+                clientAppKey(args), clientAppAccessToken(args), upstreamUserId(args));
         printMessages(page.getMessages());
         out.println("nextCursor=" + valueOrEmpty(page.getNextCursor()));
         return 0;
@@ -345,7 +343,7 @@ public class UpstreamCli {
         String normalizedScope = normalizeSkillBundleScope(scope);
         if ("ACCOUNT_PRIVATE".equals(normalizedScope)) {
             SyncAccountSkillBundleForm form = mapper.readValue(json, SyncAccountSkillBundleForm.class);
-            String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+            String upstreamUserId = upstreamUserId(args);
             dto = agentApi().syncMyAccountSkillBundleWithClientAppAccessToken(
                     form,
                     clientAppKey(args),
@@ -364,7 +362,7 @@ public class UpstreamCli {
     }
 
     private int accountContextList(CliArguments args) {
-        String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+        String upstreamUserId = upstreamUserId(args);
         AccountContextFileTreeDTO tree = agentApi().listAccountContextFilesWithClientAppAccessToken(
                 clientAppKey(args),
                 clientAppAccessToken(args),
@@ -379,7 +377,7 @@ public class UpstreamCli {
     }
 
     private int accountContextRead(CliArguments args) {
-        String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+        String upstreamUserId = upstreamUserId(args);
         String fileName = requiredOption(args, "file", "account context file");
         AccountContextFileDTO file = agentApi().readAccountContextFileWithClientAppAccessToken(
                 fileName,
@@ -396,7 +394,7 @@ public class UpstreamCli {
     }
 
     private int accountContextWritePolicy(CliArguments args) throws Exception {
-        String upstreamUserId = requiredOption(args, "upstream-user-id", "upstream user id");
+        String upstreamUserId = upstreamUserId(args);
         String source = requiredOption(args, "from", "source file");
         Path sourcePath = cwd.resolve(source).normalize();
         if (!Files.isRegularFile(sourcePath)) {
@@ -489,6 +487,18 @@ public class UpstreamCli {
             return value;
         }
         return requiredOptionOrConfig(args, "agent", "NAVI_AGENT_CODE", "agent");
+    }
+
+    private String upstreamUserId(CliArguments args) {
+        return requiredOptionOrConfig(args, "upstream-user-id", "NAVI_UPSTREAM_USER_ID", "upstream user id");
+    }
+
+    private String optionalUpstreamUserId(CliArguments args) {
+        String value = args.option("upstream-user-id");
+        if (hasText(value)) {
+            return value;
+        }
+        return config.get("NAVI_UPSTREAM_USER_ID");
     }
 
     private Map<String, Object> parseClientContext(CliArguments args) {

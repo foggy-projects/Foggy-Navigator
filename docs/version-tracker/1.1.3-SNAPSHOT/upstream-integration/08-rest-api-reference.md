@@ -100,7 +100,7 @@ X-Upstream-User-Id: <upstreamUserId>
 | `GET` | `/api/v1/open/business-agent/sessions` | 查询当前 upstream user 的 Business Agent 会话列表 | ClientApp runtime access token + upstream user grant |
 | `GET` | `/api/v1/open/business-agent/sessions/{contextId}/messages` | 读取当前 upstream user 指定会话的消息 | ClientApp runtime access token + upstream user grant |
 
-请求头同 Account Context Files。服务端按 `tenantId + clientAppId + upstreamUserId + contextId` 校验归属，不接受任意 `userId` 查询参数。
+请求头同 Account Context Files。服务端按 `tenantId + clientAppId + upstreamUserId + contextId` 校验归属，不接受任意 `userId` 查询参数。`POST /api/v1/open/agents/{agentId}/ask` 传入已有 `contextId` 时也执行同一归属预校验，校验失败时不会派发任务。
 
 ## Approval / Resume
 

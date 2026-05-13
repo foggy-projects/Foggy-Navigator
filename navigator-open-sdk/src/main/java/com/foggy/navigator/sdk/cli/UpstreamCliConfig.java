@@ -178,6 +178,7 @@ final class UpstreamCliConfig {
         putOption(values, args, "admin-token", "NAVI_ADMIN_TOKEN");
         putOption(values, args, "admin-api-key", "NAVI_ADMIN_API_KEY");
         putOption(values, args, "upstream-user-token", "TMS_STAFF_SESSION_TOKEN");
+        putOption(values, args, "upstream-user-id", "NAVI_UPSTREAM_USER_ID");
         putOption(values, args, "model-config-id", "NAVI_MODEL_CONFIG_ID");
         putOption(values, args, "agent", "NAVI_AGENT_CODE");
         putOption(values, args, "interval", "NAVI_POLL_INTERVAL_SECONDS");
@@ -197,6 +198,7 @@ final class UpstreamCliConfig {
         putAlias(values, "CLIENT_APP_RUNTIME_TOKEN", "NAVI_CLIENT_APP_ACCESS_TOKEN");
         putAlias(values, "NAVIGATOR_ADMIN_TOKEN", "NAVI_ADMIN_TOKEN");
         putAlias(values, "NAVIGATOR_ADMIN_API_KEY", "NAVI_ADMIN_API_KEY");
+        putAlias(values, "UPSTREAM_USER_ID", "NAVI_UPSTREAM_USER_ID");
     }
 
     private static void putAlias(Map<String, String> values, String source, String target) {

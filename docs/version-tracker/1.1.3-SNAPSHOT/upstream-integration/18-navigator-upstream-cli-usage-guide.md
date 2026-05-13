@@ -98,6 +98,7 @@ CLIENT_APP_SECRET -> NAVI_CLIENT_APP_SECRET
 CLIENT_APP_RUNTIME_TOKEN -> NAVI_CLIENT_APP_ACCESS_TOKEN
 NAVIGATOR_ADMIN_TOKEN -> NAVI_ADMIN_TOKEN
 NAVIGATOR_ADMIN_API_KEY -> NAVI_ADMIN_API_KEY
+UPSTREAM_USER_ID -> NAVI_UPSTREAM_USER_ID
 ```
 
 ## Profile 安全
@@ -140,8 +141,11 @@ NAVIGATOR_ADMIN_API_KEY -> NAVI_ADMIN_API_KEY
 可选模型配置可放入 profile：
 
 ```properties
+NAVI_UPSTREAM_USER_ID=<upstreamUserId>
 NAVI_MODEL_CONFIG_ID=<modelConfigId>
 ```
+
+常规命令可从 profile 读取 `NAVI_UPSTREAM_USER_ID`；只有诊断切换用户时才需要显式传 `--upstream-user-id`。
 
 命令行 `--model-config-id` 优先级高于 profile/env 中的 `NAVI_MODEL_CONFIG_ID`。
 
@@ -207,6 +211,8 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 .\tools\navigator-upstream\navi.ps1 upstream sessions
 .\tools\navigator-upstream\navi.ps1 upstream session-messages --context-id <contextId>
 ```
+
+`sessions` / `session-messages` 使用 `/api/v1/open/business-agent/sessions` 读模型，只返回当前 ClientApp + upstream user 归属的会话。`ask --context-id` 续聊也会在发任务前校验同一归属，不能复用其他 upstream user 的 `contextId`。
 
 ### 7. 查询或维护账号上下文文件
 

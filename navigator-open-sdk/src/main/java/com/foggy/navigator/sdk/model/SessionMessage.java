@@ -1,6 +1,8 @@
 package com.foggy.navigator.sdk.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.Map;
 
 /**
@@ -8,6 +10,8 @@ import java.util.Map;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class SessionMessage {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     private String messageId;
     private String contextId;
     private String taskId;
@@ -36,7 +40,20 @@ public class SessionMessage {
     public String getTerminalStatus() { return terminalStatus; }
     public void setTerminalStatus(String terminalStatus) { this.terminalStatus = terminalStatus; }
     public Map<String, Object> getMetadata() { return metadata; }
-    public void setMetadata(Map<String, Object> metadata) { this.metadata = metadata; }
+    @SuppressWarnings("unchecked")
+    public void setMetadata(Object metadata) {
+        if (metadata instanceof Map<?, ?> map) {
+            this.metadata = (Map<String, Object>) map;
+            return;
+        }
+        if (metadata instanceof String text && !text.isBlank()) {
+            try {
+                this.metadata = OBJECT_MAPPER.readValue(text, new TypeReference<>() {});
+            } catch (Exception ignored) {
+                this.metadata = null;
+            }
+        }
+    }
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
 

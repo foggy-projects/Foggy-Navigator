@@ -479,6 +479,16 @@ public class OpenApiController {
             return RX.failB("message is required");
         }
 
+        // 构建 A2aMessage
+        boolean requestedContextId = form.getContextId() != null && !form.getContextId().isBlank();
+        String contextId = requestedContextId ? form.getContextId() : IdGenerator.shortId();
+        validateBusinessAgentContextOwnershipIfNeeded(
+                tenantId,
+                clientAppCredential.getClientAppId(),
+                upstreamUserId,
+                contextId,
+                requestedContextId);
+
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId)
                 .modelConfigId(form.getMetadata() != null ? (String) form.getMetadata().get("modelConfigId") : null)
@@ -487,9 +497,6 @@ public class OpenApiController {
         A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
 
-        // 构建 A2aMessage
-        String contextId = (form.getContextId() != null && !form.getContextId().isBlank())
-                ? form.getContextId() : IdGenerator.shortId();
         String clientContextJson = serializeClientContext(form.getClientContext());
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(messageContent)));
         message.setContextId(contextId);
@@ -764,6 +771,25 @@ public class OpenApiController {
             throw RX.throwB("upstream user id is required");
         }
         return upstreamUserId;
+    }
+
+    private void validateBusinessAgentContextOwnershipIfNeeded(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String contextId,
+            boolean requestedContextId) {
+        if (!requestedContextId) {
+            return;
+        }
+        if (!StringUtils.hasText(upstreamUserId)) {
+            throw RX.throwB("upstream user id is required when contextId is provided");
+        }
+        BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
+        if (service == null) {
+            throw RX.throwB("business agent session service is not available");
+        }
+        service.getSession(tenantId, clientAppId, upstreamUserId, contextId);
     }
 
     private void enrichBusinessRuntimeContext(

@@ -364,6 +364,60 @@ class UpstreamCliTest {
     }
 
     @Test
+    void sessionsUseBusinessAgentEndpointAndProfileUpstreamUserId() throws Exception {
+        responseOverride = """
+                {"code":0,"data":{
+                  "sessions":[{"contextId":"ctx-1","status":"ACTIVE","latestTaskId":"task-1","agentId":"agent-1"}],
+                  "hasMore":false
+                }}
+                """;
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Files.writeString(profileDir.resolve("upstream.env"), "NAVI_UPSTREAM_USER_ID=u-1\n", StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "sessions",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--limit", "10"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/business-agent/sessions?limit=10", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("u-1", lastUpstreamUserIdHeader);
+        assertTrue(output.contains("session contextId=ctx-1"));
+        assertFalse(output.contains("cat-runtime-secret"));
+    }
+
+    @Test
+    void sessionMessagesUseBusinessAgentEndpointAndParseStringMetadata() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "contextId":"ctx-1",
+                  "messages":[{"messageId":"m-1","contextId":"ctx-1","role":"ASSISTANT","content":"done","metadata":"{\\"type\\":\\"TEXT_COMPLETE\\"}"}],
+                  "hasMore":false
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "session-messages",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--upstream-user-id", "u-1",
+                "--context-id", "ctx-1",
+                "--limit", "5"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/business-agent/sessions/ctx-1/messages?limit=5", lastPath);
+        assertEquals("u-1", lastUpstreamUserIdHeader);
+        assertTrue(output.contains("message id=m-1"));
+        assertTrue(output.contains("content=done"));
+    }
+
+    @Test
     void verifyAgentReadinessPrintsChecksAndUsesClientAppRuntimeHeaders() {
         responseOverride = """
                 {"code":0,"data":{

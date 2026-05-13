@@ -363,15 +363,20 @@ mvn -pl business-agent-module -am test
 | code inventory | done | 初版列出核心模块 |
 | BusinessAgentSession 读模型 | done | `BusinessAgentSessionEntity`、repository、service 已新增；task 创建和 OpenAPI ask 已接入 upsert |
 | upstream session API | done | `GET /api/v1/open/business-agent/sessions` 与 `GET /api/v1/open/business-agent/sessions/{contextId}/messages` 已按 runtime token + upstream user grant 读取 |
-| SDK/CLI/Skill 更新 | pending | 后续实现 |
-| 测试覆盖 | partial | 定向测试通过；完整 `business-agent-module,session-module -am test` 当前被既有 JPA slice 配置问题阻断，见测试记录 |
+| ask(contextId) 归属预校验 | done | 传入 `contextId` 时先按 `tenantId + clientAppId + upstreamUserId + contextId` 校验，失败则不派发任务 |
+| SDK/CLI/Skill 更新 | done | SDK 新增 Business Agent session 读模型 wrapper；CLI `sessions/session-messages` 改走新 endpoint；skill 与使用文档已更新 |
+| 测试覆盖 | done | 改动面模块回归通过，见测试记录 |
+| CLI 打包发布 | done | OBS latest 指向 `1.0.0-SNAPSHOT`，SHA256 `a69fa9bca2bc530a5d2e6e619884d9675ed3ecbf8c806c270c6ebcdc1ce88004` |
 | 上游交付提示词 | pending | 能力稳定后再提供 |
 
 ## Evaluation Notes
 
 - 2026-05-13 plan-evaluator review: passed after adding glossary, staged implementation boundary, `contextId` ownership clarification, and explicit test commands.
 - 2026-05-13 implementation: added upstream-scoped Business Agent session read model, message read service, task binding, and OpenAPI session endpoints.
+- 2026-05-13 implementation follow-up: added fail-closed `ask(contextId)` ownership precheck, SDK/CLI business session wrappers, `NAVI_UPSTREAM_USER_ID` profile support, and upstream CLI skill/session docs.
+- 2026-05-13 release: packaged and uploaded Navigator Upstream CLI `1.0.0-SNAPSHOT`; remote install remains `irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/install.ps1 | iex`.
 - 2026-05-13 test evidence:
   - pass: `mvn -pl business-agent-module -am test "-Dtest=BusinessAgentSessionServiceTest,BusinessAgentTaskServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false"` (18 tests).
-  - pass: `mvn -pl addons/claude-worker-agent -am test "-Dtest=OpenApiControllerMessageMappingTest" "-Dsurefire.failIfNoSpecifiedTests=false"` (6 tests).
-  - blocked: `mvn -pl business-agent-module,session-module -am test` fails in `BusinessFunctionRuntimeAuditRepositoryTest` because `BusinessCodingAgentRepository` references `CodingAgentEntity`, which is not in that DataJpaTest managed entity set.
+  - pass: `mvn -pl addons/claude-worker-agent -am clean test "-Dtest=OpenApiControllerMessageMappingTest" "-Dsurefire.failIfNoSpecifiedTests=false"` (9 tests).
+  - pass: `mvn -pl navigator-open-sdk clean test "-Dtest=UpstreamCliTest,BusinessAgentApiSmokeTest"` (37 tests).
+  - pass: `mvn -pl business-agent-module,session-module,addons/claude-worker-agent,navigator-open-sdk -am test` (278 tests).

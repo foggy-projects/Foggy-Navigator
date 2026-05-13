@@ -223,6 +223,48 @@ public class BusinessAgentApiSmokeTest {
     }
 
     @Test
+    public void testListBusinessAgentSessionsWithClientAppAccessToken() {
+        responseOverride = "{\"sessions\":[{\"contextId\":\"ctx-1\",\"status\":\"ACTIVE\",\"latestTaskId\":\"task-1\"}],\"hasMore\":false}";
+
+        var page = client.agents().listBusinessAgentSessionsWithClientAppAccessToken(
+                20,
+                null,
+                "cak-test",
+                "cat-runtime",
+                "tms-user-001");
+
+        assertNotNull(page);
+        assertEquals("/api/v1/open/business-agent/sessions?limit=20", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cat-runtime", lastClientAppAccessTokenHeader);
+        assertEquals("tms-user-001", lastUpstreamUserIdHeader);
+        assertEquals("ctx-1", page.getSessions().get(0).getContextId());
+        assertCommon();
+    }
+
+    @Test
+    public void testGetBusinessAgentSessionMessagesWithClientAppAccessToken() {
+        responseOverride = "{\"contextId\":\"ctx-1\",\"messages\":[{\"messageId\":\"m-1\",\"role\":\"ASSISTANT\",\"content\":\"done\",\"metadata\":\"{\\\"type\\\":\\\"TEXT_COMPLETE\\\"}\"}],\"hasMore\":false}";
+
+        var page = client.agents().getBusinessAgentSessionMessagesWithClientAppAccessToken(
+                "ctx-1",
+                50,
+                null,
+                "cak-test",
+                "cat-runtime",
+                "tms-user-001");
+
+        assertNotNull(page);
+        assertEquals("/api/v1/open/business-agent/sessions/ctx-1/messages?limit=50", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("tms-user-001", lastUpstreamUserIdHeader);
+        assertEquals("m-1", page.getMessages().get(0).getMessageId());
+        assertEquals("TEXT_COMPLETE", page.getMessages().get(0).getMetadata().get("type"));
+        assertCommon();
+    }
+
+    @Test
     public void testCreateSkill() {
         CreateSkillForm form = new CreateSkillForm();
         form.setName("test-skill");

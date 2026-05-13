@@ -146,13 +146,15 @@ AgentTask result2 = client.agents().askAndWait(
 ```java
 // 获取会话列表
 SessionListPage sessions = client.agents()
-    .listSessions(agentId, 10, null);
+    .listBusinessAgentSessionsWithClientAppAccessToken(
+        10, null, clientAppKey, runtimeAccessToken, upstreamUserId);
 
 // 获取会话完整消息
 String sessionCursor = null;
 do {
     SessionMessagesPage page = client.agents()
-        .getSessionMessages(agentId, contextId, 50, sessionCursor);
+        .getBusinessAgentSessionMessagesWithClientAppAccessToken(
+            contextId, 50, sessionCursor, clientAppKey, runtimeAccessToken, upstreamUserId);
     for (SessionMessage msg : page.getMessages()) {
         System.out.println(msg.getRole() + ": " + msg.getContent());
     }
@@ -160,6 +162,8 @@ do {
     if (!page.isHasMore()) break;
 } while (true);
 ```
+
+Business Agent 会话读模型按当前 ClientApp runtime token 与 `upstreamUserId` 校验归属，不通过任意 `userId` 查询历史会话。
 
 ## Business Agent 能力
 

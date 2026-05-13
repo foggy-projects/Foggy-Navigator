@@ -371,6 +371,18 @@ public class AgentApi {
                 new TypeReference<>() {});
     }
 
+    public SessionListPage listBusinessAgentSessionsWithClientAppAccessToken(
+            int limit,
+            String cursor,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        StringBuilder path = new StringBuilder("/api/v1/open/business-agent/sessions?limit=" + limit);
+        if (cursor != null) path.append("&cursor=").append(encode(cursor));
+        return http.get(path.toString(), clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
     // ===== 会话消息 =====
 
     /**
@@ -402,6 +414,20 @@ public class AgentApi {
         StringBuilder path = new StringBuilder(
                 "/api/v1/open/agents/" + agentId + "/sessions/" + contextId + "/messages?limit=" + limit);
         if (cursor != null) path.append("&cursor=").append(cursor);
+        return http.get(path.toString(), clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
+    public SessionMessagesPage getBusinessAgentSessionMessagesWithClientAppAccessToken(
+            String contextId,
+            int limit,
+            String cursor,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        StringBuilder path = new StringBuilder(
+                "/api/v1/open/business-agent/sessions/" + encode(contextId) + "/messages?limit=" + limit);
+        if (cursor != null) path.append("&cursor=").append(encode(cursor));
         return http.get(path.toString(), clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
                 new TypeReference<>() {});
     }
