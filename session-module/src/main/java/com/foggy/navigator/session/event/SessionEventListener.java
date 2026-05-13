@@ -29,6 +29,14 @@ public class SessionEventListener {
     @Async("sessionEventExecutor")
     @EventListener
     public void onAgentMessage(AgentMessage message) {
+        handleMessage(message);
+    }
+
+    /**
+     * Synchronous entry point for relays that need message persistence to be
+     * visible before they advance task status.
+     */
+    public void handleMessage(AgentMessage message) {
         String sessionId = message.getSessionId();
         log.debug("Received AgentMessage: sessionId={}, type={}, agentId={}",
                 sessionId, message.getType(), message.getAgentId());

@@ -68,6 +68,7 @@ class RestAdapterUpstreamE2ETest {
     @Mock ClientAppModelConfigGrantRepository modelGrantRepository;
     @Mock ClientAppUpstreamUserGrantRepository userGrantRepository;
     @Mock SkillRepository skillRepository;
+    @Mock SkillBundleRepository skillBundleRepository;
     @Mock SkillFunctionAllowlistRepository allowlistRepository;
     @Mock ClientAppSkillGrantRepository skillGrantRepository;
     @Mock BusinessFunctionRepository functionRepository;
@@ -148,7 +149,7 @@ class RestAdapterUpstreamE2ETest {
         ClientAppUserGrantService userGrantService1 = new ClientAppUserGrantService(userGrantRepository, clientAppService);
         BusinessObjectService businessObjectService = new BusinessObjectService(businessObjectRepository);
         BusinessFunctionRegistryService functionRegistryService = new BusinessFunctionRegistryService(functionRepository, versionRepository, functionGrantRepository, clientAppService, businessObjectService);
-        SkillRegistryService skillRegistryService = new SkillRegistryService(skillRepository, allowlistRepository, skillGrantRepository, functionRepository, versionRepository, clientAppService, objectMapper);
+        SkillRegistryService skillRegistryService = new SkillRegistryService(skillRepository, skillBundleRepository, allowlistRepository, skillGrantRepository, functionGrantRepository, functionRepository, versionRepository, clientAppService, userGrantService1, objectMapper);
         BizWorkerPoolService bizWorkerPoolService = new BizWorkerPoolService(identityRepository, poolRepository, poolMemberRepository);
 
         taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, java.util.List.of());

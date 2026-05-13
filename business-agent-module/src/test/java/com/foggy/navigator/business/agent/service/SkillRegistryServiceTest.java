@@ -8,16 +8,23 @@ import com.foggy.navigator.business.agent.model.dto.SkillMaterializeResultDTO;
 import com.foggy.navigator.business.agent.model.entity.BusinessFunctionEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessFunctionVersionEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
+import com.foggy.navigator.business.agent.model.entity.ClientAppFunctionGrantEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppSkillGrantEntity;
+import com.foggy.navigator.business.agent.model.entity.SkillBundleEntity;
 import com.foggy.navigator.business.agent.model.entity.SkillEntity;
 import com.foggy.navigator.business.agent.model.entity.SkillFunctionAllowlistEntity;
 import com.foggy.navigator.business.agent.model.form.AddFunctionToSkillForm;
 import com.foggy.navigator.business.agent.model.form.CreateSkillForm;
 import com.foggy.navigator.business.agent.model.form.GrantSkillToClientAppForm;
+import com.foggy.navigator.business.agent.model.form.SkillBundleFunctionForm;
 import com.foggy.navigator.business.agent.model.form.SkillResourceForm;
+import com.foggy.navigator.business.agent.model.form.SyncAccountSkillBundleForm;
+import com.foggy.navigator.business.agent.model.form.SyncSkillBundleForm;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionRepository;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionVersionRepository;
+import com.foggy.navigator.business.agent.repository.ClientAppFunctionGrantRepository;
 import com.foggy.navigator.business.agent.repository.ClientAppSkillGrantRepository;
+import com.foggy.navigator.business.agent.repository.SkillBundleRepository;
 import com.foggy.navigator.business.agent.repository.SkillFunctionAllowlistRepository;
 import com.foggy.navigator.business.agent.repository.SkillRepository;
 import com.sun.net.httpserver.HttpServer;
@@ -47,15 +54,21 @@ class SkillRegistryServiceTest {
     @Mock
     private SkillRepository skillRepository;
     @Mock
+    private SkillBundleRepository skillBundleRepository;
+    @Mock
     private SkillFunctionAllowlistRepository allowlistRepository;
     @Mock
     private ClientAppSkillGrantRepository grantRepository;
+    @Mock
+    private ClientAppFunctionGrantRepository functionGrantRepository;
     @Mock
     private BusinessFunctionRepository functionRepository;
     @Mock
     private BusinessFunctionVersionRepository versionRepository;
     @Mock
     private ClientAppService clientAppService;
+    @Mock
+    private ClientAppUserGrantService userGrantService;
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -300,6 +313,116 @@ class SkillRegistryServiceTest {
             assertNotNull(bodyRef.get());
             assertTrue(bodyRef.get().contains("\"skill_id\":\"tms_skill\""));
             assertTrue(bodyRef.get().contains("\"client_app_id\":\"tms_app\""));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void syncSkillBundle_publicMaterializesAndBackfillsLegacyIndexes() throws Exception {
+        AtomicReference<String> bodyRef = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/api/v1/skills/materialize", exchange -> {
+            bodyRef.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = "{\"status\":\"success\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response);
+            }
+        });
+        server.start();
+        try {
+            ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "http://localhost:" + server.getAddress().getPort());
+
+            SyncSkillBundleForm form = new SyncSkillBundleForm();
+            form.setClientAppId("tms_app");
+            form.setScope("client-app-public");
+            form.setSkillId("tms_skill");
+            form.setName("TMS Skill");
+            form.setMarkdownBody("Use this skill for TMS.");
+            form.setMaterialize(true);
+            SkillBundleFunctionForm functionForm = new SkillBundleFunctionForm();
+            functionForm.setFunctionId("tms.order.submit");
+            form.setFunctions(List.of(functionForm));
+
+            when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+            BusinessFunctionEntity function = new BusinessFunctionEntity();
+            function.setFunctionId("tms.order.submit");
+            function.setName("Submit Order");
+            function.setStatus("ENABLED");
+            when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "tms.order.submit")).thenReturn(Optional.of(function));
+            ClientAppFunctionGrantEntity functionGrant = new ClientAppFunctionGrantEntity();
+            functionGrant.setFunctionId("tms.order.submit");
+            functionGrant.setStatus("ENABLED");
+            when(functionGrantRepository.findByTenantIdAndClientAppId("tenant_1", "tms_app")).thenReturn(List.of(functionGrant));
+            when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                    "tenant_1", "tms_app", "CLIENT_APP_PUBLIC", "", "tms_skill")).thenReturn(Optional.empty());
+            when(skillBundleRepository.save(any(SkillBundleEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(skillRepository.findByTenantIdAndSkillId("tenant_1", "tms_skill")).thenReturn(Optional.empty());
+            when(skillRepository.save(any(SkillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "tms_skill")).thenReturn(Optional.empty());
+            when(grantRepository.save(any(ClientAppSkillGrantEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(allowlistRepository.findByTenantIdAndSkillIdAndFunctionId("tenant_1", "tms_skill", "tms.order.submit")).thenReturn(Optional.empty());
+            when(allowlistRepository.save(any(SkillFunctionAllowlistEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            var dto = skillRegistryService.syncSkillBundle("tenant_1", "user_1", form);
+
+            assertEquals("CLIENT_APP_PUBLIC", dto.getScope());
+            assertEquals("MATERIALIZED", dto.getMaterializeResult().getStatus());
+            assertNotNull(bodyRef.get());
+            assertTrue(bodyRef.get().contains("\"scope\":\"public\""));
+            assertTrue(bodyRef.get().contains("\"client_app_id\":\"tms_app\""));
+            assertTrue(bodyRef.get().contains("tms.order.submit"));
+            verify(skillRepository).save(any(SkillEntity.class));
+            verify(grantRepository).save(any(ClientAppSkillGrantEntity.class));
+            verify(allowlistRepository).save(any(SkillFunctionAllowlistEntity.class));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void syncMyAccountSkillBundle_materializesAccountScope() throws Exception {
+        AtomicReference<String> bodyRef = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/api/v1/skills/materialize", exchange -> {
+            bodyRef.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = "{\"status\":\"success\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response);
+            }
+        });
+        server.start();
+        try {
+            ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "http://localhost:" + server.getAddress().getPort());
+
+            SyncAccountSkillBundleForm form = new SyncAccountSkillBundleForm();
+            form.setSkillId("personal_skill");
+            form.setName("Personal Skill");
+            form.setMarkdownBody("Use this only for this account.");
+            form.setMaterialize(true);
+
+            when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+            when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                    "tenant_1", "tms_app", "ACCOUNT_PRIVATE", "staff_1", "personal_skill")).thenReturn(Optional.empty());
+            when(skillBundleRepository.save(any(SkillBundleEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(skillRepository.findByTenantIdAndSkillId("tenant_1", "personal_skill")).thenReturn(Optional.empty());
+            when(skillRepository.save(any(SkillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "personal_skill")).thenReturn(Optional.empty());
+            when(grantRepository.save(any(ClientAppSkillGrantEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            var dto = skillRegistryService.syncMyAccountSkillBundle("tenant_1", "tms_app", "staff_1", form);
+
+            assertEquals("ACCOUNT_PRIVATE", dto.getScope());
+            assertEquals("staff_1", dto.getAccountId());
+            assertEquals("MATERIALIZED", dto.getMaterializeResult().getStatus());
+            assertNotNull(bodyRef.get());
+            assertTrue(bodyRef.get().contains("\"scope\":\"account\""));
+            assertTrue(bodyRef.get().contains("\"account_id\":\"staff_1\""));
+            verify(userGrantService).checkUpstreamUserAccess("tenant_1", "tms_app", "staff_1");
         } finally {
             server.stop(0);
         }

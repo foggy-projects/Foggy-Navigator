@@ -18,6 +18,7 @@
 3. **REST 仅作协议排障或扩展兜底**：Business Agent 控制面优先使用 `client.businessAgent()`；只有 SDK 未覆盖的新扩展或排查协议问题时才参考 [08-rest-api-reference.md](./08-rest-api-reference.md)。
 4. **不得暴露内部凭据**：任何 token、secret、`task_scoped_token`、`adapterConfigJson`、`manifestJson` 都不能写入前端代码、LLM prompt、日志、测试快照或业务库明文字段。
 5. **Worker Gateway 是内部 API**：上游前端和上游后端都不要直接调用 `/internal/worker-gateway/v1/**`。
+6. **本地联调优先使用 CLI**：优先使用项目本地安装的 Navigator Upstream CLI 完成 runtime-token、ensure-grant、ask 和 messages polling，不要先手写 curl。安装和更新见 [19-navigator-upstream-cli-install-update.md](./19-navigator-upstream-cli-install-update.md)。
 
 ## 本机安装 SDK
 
@@ -59,8 +60,39 @@ Get-Content navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/NavigatorCl
 | 员工 provision | `client.employees()` |
 | 普通 Agent 任务、轮询、消息、会话 | `client.agents()` |
 | Business Agent 控制面 (ClientApp/Grant/Task/Approval等) | `client.businessAgent()` |
+| 账号上下文文件读写 | `client.agents().listAccountContextFilesWithClientAppAccessToken(...)`、`readAccountContextFileWithClientAppAccessToken(...)`、`writeAccountPolicyWithClientAppAccessToken(...)` |
 
 当前已全面支持 Business Agent，无需 REST 兜底。
+
+账号上下文文件说明：
+
+- `ACCOUNT_POLICY.md` / `AGENT.md` / `MEMORY.md` 按账号注入给 Worker。
+- SDK 只允许上游 BFF 通过 runtime access token 和 `upstreamUserId` 读取三层文件、写 `ACCOUNT_POLICY.md`。
+- `AGENT.md` / `MEMORY.md` 暂不提供 SDK 写入方法。
+- 不要把 token、secret、`task_scoped_token`、`adapterConfigJson`、`manifestJson` 写入这些文件。
+
+## 本地 CLI 联调
+
+上游项目先安装 CLI：
+
+- [19-navigator-upstream-cli-install-update.md](./19-navigator-upstream-cli-install-update.md)
+
+安装后在上游项目根目录运行配置检查：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream config check
+```
+
+最小链路：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream runtime-token
+.\tools\navigator-upstream\navi.ps1 upstream ensure-grant --upstream-user-id <id>
+.\tools\navigator-upstream\navi.ps1 upstream ask --upstream-user-id <id> --message "..."
+.\tools\navigator-upstream\navi.ps1 upstream messages --task-id <taskId> --poll --interval 4
+```
+
+真实 token/secret 只能来自上游项目本地 gitignored `.navigator/upstream.env` 或服务端 secret store。详见 [18-navigator-upstream-cli-usage-guide.md](./18-navigator-upstream-cli-usage-guide.md)。
 
 ## 后端接入流程
 
@@ -89,6 +121,39 @@ NavigatorClient client = NavigatorClient.builder()
 AgentTask task = client.agents().ask(agentId, "分析订单异常");
 AgentTask done = client.agents().pollUntilDone(agentId, task.getTaskId(), Duration.ofMinutes(5));
 ```
+
+ClientApp runtime token 场景可传 `clientContext`，用于上游保存自己的会话扩展数据：
+
+```java
+Map<String, Object> clientContext = Map.of(
+    "upstreamConversationId", "tms-ai-10001",
+    "bizObjectType", "order",
+    "bizObjectId", "SO-10001"
+);
+
+AgentTask task = client.agents().askWithClientAppAccessToken(
+    agentId,
+    "查询订单状态",
+    contextId,
+    null,
+    clientContext,
+    clientAppKey,
+    runtimeAccessToken,
+    upstreamUserId
+);
+```
+
+历史会话读取：
+
+```java
+SessionListPage sessions = client.agents().listSessionsWithClientAppAccessToken(
+    agentId, 20, null, clientAppKey, runtimeAccessToken, upstreamUserId);
+
+SessionMessagesPage messages = client.agents().getSessionMessagesWithClientAppAccessToken(
+    agentId, contextId, 50, null, clientAppKey, runtimeAccessToken, upstreamUserId);
+```
+
+`clientContext` 是顶层 `POST /ask` 字段，只在会话摘要中持久化和返回，不进入 Worker metadata 或 LLM prompt。
 
 ### 3. Business Agent 接入
 

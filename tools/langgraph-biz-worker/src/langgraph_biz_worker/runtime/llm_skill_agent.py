@@ -28,6 +28,7 @@ from ..tools.business_function_tools import (
     list_business_functions,
 )
 from .account_file_tools import AccountFileTools, FileToolError
+from .account_context_files import build_account_context_prompt
 from .artifact_store import ArtifactError, ArtifactStore
 from .public_skill_resource_tools import PublicSkillResourceTools
 from .skill_runtime import SkillRuntime
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SCRUB_TEMPLATE = "[externalized: {artifact_id}, size={size}, summary={summary}]"
+_PROGRESS_EVENT_SINK_KEY = "_progress_event_sink"
 
 
 class LlmSkillAgent:
@@ -84,10 +86,20 @@ class LlmSkillAgent:
         client_app_id = _runtime_client_app_id(runtime_context)
         if self._data_root and client_app_id:
             public_resource_tools = PublicSkillResourceTools(Path(self._data_root).parent / "skills", client_app_id)
+        account_context_prompt = (
+            build_account_context_prompt(self._data_root, account_id)
+            if self._data_root and account_id
+            else ""
+        )
 
         messages: list[Any] = [
-            SystemMessage(content=self._build_system_prompt(manifest)),
-            HumanMessage(content=self._build_user_prompt(prompt, frame.input, manifest.id)),
+            SystemMessage(content=self._build_system_prompt(manifest, account_context_prompt)),
+            HumanMessage(content=self._build_user_prompt(
+                prompt,
+                frame.input,
+                manifest.id,
+                runtime_context,
+            )),
         ]
         events: list[QueryEvent] = []
         model = self._bind_tools(self._model, manifest)
@@ -159,19 +171,22 @@ class LlmSkillAgent:
         name = call["name"]
         args = call["args"]
         safe_args = _safe_tool_call_args(args)
-        events: list[QueryEvent] = [
-            QueryEvent(
-                type="tool_use",
-                task_id=task_id,
-                skill_frame_id=frame_id,
-                skill_id=manifest.id,
-                content=name,
-                tool_call_id=call.get("id"),
-                tool_name=name,
-                function_id=_tool_function_id(name, safe_args),
-                args=safe_args,
-            )
-        ]
+        frame = self._runtime.get_frame(frame_id)
+        parent_frame_id = frame.parent_frame_id if frame else None
+        tool_use_event = QueryEvent(
+            type="tool_use",
+            task_id=task_id,
+            skill_frame_id=frame_id,
+            parent_frame_id=parent_frame_id,
+            skill_id=manifest.id,
+            content=name,
+            tool_call_id=call.get("id"),
+            tool_name=name,
+            function_id=_tool_function_id(name, safe_args),
+            args=safe_args,
+        )
+        events: list[QueryEvent] = [tool_use_event]
+        _emit_progress_event(runtime_context, tool_use_event)
         self._append_tool_call_message(frame_id, name, safe_args)
         self._append_tool_audit(task_id, frame_id, manifest.id, name, safe_args, phase="request")
 
@@ -194,10 +209,11 @@ class LlmSkillAgent:
         if name == "submit_skill_result" and not result.get("ok"):
             event_type = "skill_result_reject"
 
-        events.append(QueryEvent(
+        result_event = QueryEvent(
             type=event_type,
             task_id=task_id,
             skill_frame_id=frame_id,
+            parent_frame_id=parent_frame_id,
             skill_id=manifest.id,
             content=json.dumps(result, ensure_ascii=False),
             error=result.get("error"),
@@ -205,7 +221,9 @@ class LlmSkillAgent:
             tool_name=name,
             function_id=_tool_function_id(name, safe_args, result),
             args=safe_args,
-        ))
+        )
+        events.append(result_event)
+        _emit_progress_event(runtime_context, result_event)
 
         ret: dict[str, Any] = {"events": events, "tool_result": result}
 
@@ -424,12 +442,14 @@ class LlmSkillAgent:
         return model.bind_tools(_tool_specs(manifest))
 
     @staticmethod
-    def _build_system_prompt(manifest: SkillManifest) -> str:
+    def _build_system_prompt(manifest: SkillManifest, account_context_prompt: str = "") -> str:
         prompt = (
             f"You are executing skill {manifest.id}.\n"
             f"Description: {manifest.description}\n"
             f"Output schema: {json.dumps(manifest.output_schema, ensure_ascii=False)}\n"
         )
+        if account_context_prompt:
+            prompt += f"\n---\n{account_context_prompt}\n---\n\n"
         if manifest.markdown_body:
             prompt += f"\n---\nSkill Instructions:\n{manifest.markdown_body}\n---\n\n"
         
@@ -446,12 +466,19 @@ class LlmSkillAgent:
         return prompt
 
     @staticmethod
-    def _build_user_prompt(prompt: str, skill_input: dict[str, Any], skill_id: str) -> str:
-        return (
-            f"SKILL_AGENT_START {skill_id}\n"
-            f"User request: {prompt}\n"
-            f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}"
-        )
+    def _build_user_prompt(
+        prompt: str,
+        skill_input: dict[str, Any],
+        skill_id: str,
+        runtime_context: dict[str, Any] | None = None,
+    ) -> str:
+        parts = [
+            f"SKILL_AGENT_START {skill_id}",
+            _build_runtime_time_context_prompt(runtime_context),
+            f"User request: {prompt}",
+            f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}",
+        ]
+        return "\n".join(part for part in parts if part)
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +506,99 @@ def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None
         return None
     value = runtime_context.get("client_app_id") or runtime_context.get("clientAppId")
     return value if isinstance(value, str) and value else None
+
+
+def _build_runtime_time_context_prompt(runtime_context: dict[str, Any] | None) -> str:
+    time_context = _runtime_time_context(runtime_context)
+    return (
+        "Runtime context:\n"
+        f"- current_time: {time_context['current_time']}\n"
+        f"- timezone: {time_context['timezone']}\n"
+        f"- business_date: {time_context['business_date']}\n"
+        f"- current_month_range: [{time_context['current_month_start']}, {time_context['next_month_start']})\n"
+        "Rule: Resolve relative dates such as 本月, 今天, 昨日, 近7天 using this runtime context."
+    )
+
+
+def _runtime_time_context(runtime_context: dict[str, Any] | None) -> dict[str, str]:
+    context = runtime_context or {}
+    current_time = _runtime_context_str(context, "current_time", "currentTime")
+    timezone_name = _runtime_context_str(context, "timezone", "timeZone", "tz") or _local_timezone_name()
+
+    if current_time:
+        now = _parse_runtime_datetime(current_time) or datetime.datetime.now().astimezone()
+    else:
+        now = datetime.datetime.now().astimezone()
+        current_time = now.isoformat()
+
+    business_date = _runtime_context_str(context, "business_date", "businessDate")
+    if not business_date:
+        business_date = now.date().isoformat()
+
+    business_day = _parse_runtime_date(business_date) or now.date()
+    current_month_start, next_month_start = _month_range_for(business_day)
+
+    return {
+        "current_time": current_time,
+        "timezone": timezone_name,
+        "business_date": business_day.isoformat(),
+        "current_month_start": current_month_start.isoformat(),
+        "next_month_start": next_month_start.isoformat(),
+    }
+
+
+def _runtime_context_str(context: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _local_timezone_name() -> str:
+    tzinfo = datetime.datetime.now().astimezone().tzinfo
+    if tzinfo is None:
+        return "local"
+    return getattr(tzinfo, "key", None) or tzinfo.tzname(None) or str(tzinfo)
+
+
+def _parse_runtime_datetime(value: str) -> datetime.datetime | None:
+    try:
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        return datetime.datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _parse_runtime_date(value: str) -> datetime.date | None:
+    try:
+        return datetime.date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _month_range_for(day: datetime.date) -> tuple[datetime.date, datetime.date]:
+    current_month_start = day.replace(day=1)
+    if current_month_start.month == 12:
+        next_month_start = current_month_start.replace(
+            year=current_month_start.year + 1,
+            month=1,
+        )
+    else:
+        next_month_start = current_month_start.replace(month=current_month_start.month + 1)
+    return current_month_start, next_month_start
+
+
+def _emit_progress_event(runtime_context: dict[str, Any] | None, event: QueryEvent) -> None:
+    if not runtime_context:
+        return
+    sink = runtime_context.get(_PROGRESS_EVENT_SINK_KEY)
+    if not callable(sink):
+        return
+    try:
+        sink(event)
+    except Exception:
+        logger.debug("Failed to emit progress event", exc_info=True)
 
 
 def _looks_like_business_function_id(name: str) -> bool:

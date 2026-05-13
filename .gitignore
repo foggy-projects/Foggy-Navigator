@@ -65,6 +65,8 @@ bin/
 !tools/claude-agent-worker/dist/bin/
 !tools/claude-code-proxy/dist/bin/
 !tools/codex-agent-worker/release/bin/
+!tools/navigator-upstream-cli/dist/bin/
+!tools/navigator-upstream-cli/dist/bin/*
 
 # NetBeans
 /nbproject/private/
@@ -105,6 +107,7 @@ pnpm-lock.yaml
 dist/
 !tools/claude-agent-worker/dist/
 !tools/claude-code-proxy/dist/
+!tools/navigator-upstream-cli/dist/
 build/
 .next/
 .nuxt/
@@ -118,6 +121,8 @@ build/
 .env.test.local
 .env.production.local
 !.env.example
+.navi-upstream.env
+.navigator/upstream.env
 
 # Configuration files with sensitive data
 **/application-docker.yml
@@ -143,6 +148,8 @@ tools/codex-agent-worker/release/staging/
 !tools/gemini-agent-worker/release/bin/*
 tools/gemini-agent-worker/release/output/
 tools/gemini-agent-worker/release/staging/
+tools/navigator-upstream-cli/dist/output/
+tools/navigator-upstream-cli/dist/staging/
 
 # Docker
 docker-compose.override.yml

@@ -7,6 +7,8 @@ import com.foggy.navigator.sdk.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -82,7 +84,16 @@ public class AgentApi {
      */
     public AgentTask ask(String agentId, String question, String contextId, Integer maxTurns,
                          String systemPrompt, String firstMsg) {
-        Map<String, Object> body = buildAskBody(question, contextId, maxTurns, systemPrompt, firstMsg);
+        Map<String, Object> body = buildAskBody(question, contextId, maxTurns, systemPrompt, firstMsg, null);
+        return http.post("/api/v1/open/agents/" + agentId + "/ask",
+                body, new TypeReference<>() {});
+    }
+
+    public AgentTask ask(String agentId, String question, String contextId, Integer maxTurns,
+                         String systemPrompt, String firstMsg,
+                         Map<String, Object> clientContext) {
+        Map<String, Object> body = buildAskBody(question, contextId, maxTurns,
+                systemPrompt, firstMsg, clientContext);
         return http.post("/api/v1/open/agents/" + agentId + "/ask",
                 body, new TypeReference<>() {});
     }
@@ -95,7 +106,20 @@ public class AgentApi {
             String clientAppKey,
             String clientAppAccessToken,
             String upstreamUserId) {
-        Map<String, Object> body = buildAskBody(question, contextId, maxTurns, null, null);
+        return askWithClientAppAccessToken(agentId, question, contextId, maxTurns,
+                null, clientAppKey, clientAppAccessToken, upstreamUserId);
+    }
+
+    public AgentTask askWithClientAppAccessToken(
+            String agentId,
+            String question,
+            String contextId,
+            Integer maxTurns,
+            Map<String, Object> clientContext,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        Map<String, Object> body = buildAskBody(question, contextId, maxTurns, null, null, clientContext);
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("X-Client-App-Key", clientAppKey);
         headers.put("X-Client-App-Access-Token", clientAppAccessToken);
@@ -104,8 +128,111 @@ public class AgentApi {
                 body, headers, new TypeReference<>() {});
     }
 
+    public AgentReadiness verifyReadinessWithClientAppAccessToken(
+            String agentId,
+            String upstreamUserId,
+            String modelConfigId,
+            String clientAppKey,
+            String clientAppAccessToken) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("upstreamUserId", upstreamUserId);
+        if (modelConfigId != null && !modelConfigId.isBlank()) {
+            body.put("modelConfigId", modelConfigId);
+        }
+        body.put("context", Map.of("skillId", agentId));
+        return http.post("/api/v1/open/agents/" + agentId + "/preflight",
+                body,
+                clientAppHeaders(clientAppKey, clientAppAccessToken, null),
+                new TypeReference<>() {});
+    }
+
+    public SkillArtifactTree getSkillArtifactTreeWithClientAppAccessToken(
+            String skillId,
+            String clientAppKey,
+            String clientAppAccessToken) {
+        return http.get("/api/v1/open/skills/" + skillId + "/files/tree",
+                clientAppHeaders(clientAppKey, clientAppAccessToken, null),
+                new TypeReference<>() {});
+    }
+
+    public SkillArtifactSlice readSkillArtifactSliceWithClientAppAccessToken(
+            String skillId,
+            String path,
+            int startLine,
+            int startColumn,
+            int maxChars,
+            String clientAppKey,
+            String clientAppAccessToken) {
+        String query = "?path=" + encode(path)
+                + "&startLine=" + startLine
+                + "&startColumn=" + startColumn
+                + "&maxChars=" + maxChars;
+        return http.get("/api/v1/open/skills/" + skillId + "/files/slice" + query,
+                clientAppHeaders(clientAppKey, clientAppAccessToken, null),
+                new TypeReference<>() {});
+    }
+
+    public com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO syncMyAccountSkillBundleWithClientAppAccessToken(
+            com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm form,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.post("/api/v1/open/accounts/me/skill-bundles/sync",
+                form,
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
+    public com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO listAccountContextFilesWithClientAppAccessToken(
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.get("/api/v1/open/accounts/me/context-files",
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
+    public com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO readAccountContextFileWithClientAppAccessToken(
+            String fileName,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.get("/api/v1/open/accounts/me/context-files/" + encode(fileName),
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
+    public com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO writeAccountPolicyWithClientAppAccessToken(
+            com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm form,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.put("/api/v1/open/accounts/me/context-files/ACCOUNT_POLICY.md",
+                form,
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
+    private Map<String, String> clientAppHeaders(
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("X-Client-App-Key", clientAppKey);
+        headers.put("X-Client-App-Access-Token", clientAppAccessToken);
+        if (upstreamUserId != null && !upstreamUserId.isBlank()) {
+            headers.put("X-Upstream-User-Id", upstreamUserId);
+        }
+        return headers;
+    }
+
+    private String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
     private Map<String, Object> buildAskBody(String question, String contextId, Integer maxTurns,
-                                             String systemPrompt, String firstMsg) {
+                                             String systemPrompt, String firstMsg,
+                                             Map<String, Object> clientContext) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("message", question);    // 合同字段
         body.put("question", question);   // 兼容字段
@@ -113,6 +240,7 @@ public class AgentApi {
         if (maxTurns != null) body.put("maxTurns", maxTurns);
         if (systemPrompt != null) body.put("systemPrompt", systemPrompt);
         if (firstMsg != null) body.put("firstMsg", firstMsg);
+        if (clientContext != null && !clientContext.isEmpty()) body.put("clientContext", clientContext);
         return body;
     }
 
@@ -121,6 +249,17 @@ public class AgentApi {
      */
     public AgentTask getTask(String agentId, String taskId) {
         return http.get("/api/v1/open/agents/" + agentId + "/tasks/" + taskId,
+                new TypeReference<>() {});
+    }
+
+    public AgentTask getTaskWithClientAppAccessToken(
+            String agentId,
+            String taskId,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.get("/api/v1/open/agents/" + agentId + "/tasks/" + taskId,
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
                 new TypeReference<>() {});
     }
 
@@ -219,6 +358,19 @@ public class AgentApi {
         return http.get(path.toString(), new TypeReference<>() {});
     }
 
+    public SessionListPage listSessionsWithClientAppAccessToken(
+            String agentId,
+            int limit,
+            String cursor,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        StringBuilder path = new StringBuilder("/api/v1/open/agents/" + agentId + "/sessions?limit=" + limit);
+        if (cursor != null) path.append("&cursor=").append(cursor);
+        return http.get(path.toString(), clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
     // ===== 会话消息 =====
 
     /**
@@ -239,6 +391,21 @@ public class AgentApi {
         return http.get(path.toString(), new TypeReference<>() {});
     }
 
+    public SessionMessagesPage getSessionMessagesWithClientAppAccessToken(
+            String agentId,
+            String contextId,
+            int limit,
+            String cursor,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        StringBuilder path = new StringBuilder(
+                "/api/v1/open/agents/" + agentId + "/sessions/" + contextId + "/messages?limit=" + limit);
+        if (cursor != null) path.append("&cursor=").append(cursor);
+        return http.get(path.toString(), clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
+    }
+
     // ===== 任务增量消息 =====
 
     /**
@@ -257,6 +424,21 @@ public class AgentApi {
                 "/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/messages?limit=" + limit);
         if (cursor != null) path.append("&cursor=").append(cursor);
         return http.get(path.toString(), new TypeReference<>() {});
+    }
+
+    public TaskMessagesPage getTaskMessagesWithClientAppAccessToken(
+            String agentId,
+            String taskId,
+            int limit,
+            String cursor,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        StringBuilder path = new StringBuilder(
+                "/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/messages?limit=" + limit);
+        if (cursor != null) path.append("&cursor=").append(cursor);
+        return http.get(path.toString(), clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<>() {});
     }
 
     /**

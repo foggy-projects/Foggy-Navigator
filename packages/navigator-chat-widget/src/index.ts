@@ -3,6 +3,12 @@ export type {
   ChatMessage,
   TaskStatus,
   AgentTask,
+  NavigatorSendOptions,
+  PaginationOptions,
+  SessionListPage,
+  SessionMessage,
+  SessionMessagesPage,
+  SessionSummary,
   NavigatorAction,
   NavigatorChatConfig,
   NavigatorChatMode,
@@ -10,6 +16,7 @@ export type {
   BusinessSuspensionDialogModel,
   BusinessSuspensionStatus,
   BusinessSuspensionType,
+  SkillFrameBlock,
   ToolExecutionBlock,
 } from './types'
 

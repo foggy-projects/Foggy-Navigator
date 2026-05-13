@@ -3,6 +3,8 @@ package com.foggy.navigator.sdk.model.businessagent;
 public class SkillMaterializeResultDTO {
     private String skillId;
     private String scope;
+    private String clientAppId;
+    private String accountId;
     private String status;
     private String workerUrl;
     private Integer workerStatusCode;
@@ -22,6 +24,22 @@ public class SkillMaterializeResultDTO {
 
     public void setScope(String scope) {
         this.scope = scope;
+    }
+
+    public String getClientAppId() {
+        return clientAppId;
+    }
+
+    public void setClientAppId(String clientAppId) {
+        this.clientAppId = clientAppId;
+    }
+
+    public String getAccountId() {
+        return accountId;
+    }
+
+    public void setAccountId(String accountId) {
+        this.accountId = accountId;
     }
 
     public String getStatus() {

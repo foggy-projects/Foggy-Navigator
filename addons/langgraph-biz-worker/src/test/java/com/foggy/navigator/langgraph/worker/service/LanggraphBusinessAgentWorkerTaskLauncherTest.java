@@ -15,6 +15,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -71,14 +73,21 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         ArgumentCaptor<CreateLanggraphTaskForm> formCaptor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
         verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
         CreateLanggraphTaskForm form = formCaptor.getValue();
+        assertEquals("skill_01", form.getAgentId());
         assertEquals("worker_01", form.getWorkerId());
         assertEquals("session_01", form.getSessionId());
         assertEquals("model_01", form.getModelConfigId());
         assertEquals("bt_01", form.getContext().get("businessTaskId"));
         assertEquals("app_01", form.getContext().get("clientAppId"));
         assertEquals("user_01", form.getContext().get("upstreamUserId"));
+        assertEquals("user_01", form.getContext().get("accountId"));
+        assertEquals("user_01", form.getContext().get("account_id"));
         assertFalse(form.getContext().containsKey("task_scoped_token"));
-        assertEquals(Map.of("task_scoped_token", "rt_token"), form.getRuntimeContext());
+        Map<String, Object> runtimeContext = form.getRuntimeContext();
+        assertEquals("rt_token", runtimeContext.get("task_scoped_token"));
+        assertDoesNotThrow(() -> OffsetDateTime.parse((String) runtimeContext.get("current_time")));
+        assertDoesNotThrow(() -> LocalDate.parse((String) runtimeContext.get("business_date")));
+        assertTrue(((String) runtimeContext.get("timezone")).length() > 0);
     }
 
     @Test

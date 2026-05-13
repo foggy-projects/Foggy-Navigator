@@ -138,6 +138,38 @@ class OpenApiSessionQueryServiceTest {
         assertTrue(sessions.isEmpty());
     }
 
+    @Test
+    void listSessions_cursorShouldReturnNextPage() {
+        AgentConversationContextEntity older = new AgentConversationContextEntity();
+        older.setContextId("ctx-older-" + UUID.randomUUID().toString().substring(0, 8));
+        older.setAgentType("claude-worker");
+        older.setNavigatorSessionId("session-older");
+        older.setUserId(USER_ID);
+        older.setTargetAgentId(AGENT_ID);
+        older.setLastAccessedAt(LocalDateTime.now().minusDays(2));
+        contextRepository.save(older);
+
+        List<AgentConversationContextEntity> firstPage = queryService.listSessions(
+                USER_ID, AGENT_ID, null, 1);
+        assertFalse(firstPage.isEmpty());
+
+        List<AgentConversationContextEntity> secondPage = queryService.listSessions(
+                USER_ID, AGENT_ID, firstPage.get(0).getContextId(), 1);
+
+        assertFalse(secondPage.isEmpty());
+        assertNotEquals(firstPage.get(0).getContextId(), secondPage.get(0).getContextId());
+        assertTrue(secondPage.get(0).getLastAccessedAt().isBefore(firstPage.get(0).getLastAccessedAt()));
+    }
+
+    @Test
+    void updateClientContextJson_shouldPersistOpaqueJson() {
+        queryService.updateClientContextJson(contextId, USER_ID, AGENT_ID,
+                "{\"upstreamConversationId\":\"tms-1\"}");
+
+        AgentConversationContextEntity updated = contextRepository.findById(contextId).orElseThrow();
+        assertEquals("{\"upstreamConversationId\":\"tms-1\"}", updated.getClientContextJson());
+    }
+
     // ── 会话消息查询 ──
 
     @Test
@@ -181,6 +213,25 @@ class OpenApiSessionQueryServiceTest {
         assertEquals(2, task1Messages.size());
         assertEquals("Task1 msg1", task1Messages.get(0).getContent());
         assertEquals("Task1 msg2", task1Messages.get(1).getContent());
+    }
+
+    @Test
+    void getTaskMessages_shouldReturnPersistedToolMessagesByTaskId() {
+        String taskId = "lgt-" + UUID.randomUUID().toString().substring(0, 8);
+
+        addMessage(sessionId, taskId, MessageRole.ASSISTANT, "tms.dataset.listModels",
+                Map.of("type", "TOOL_CALL_START", "taskId", taskId, "toolName", "tms.dataset.listModels"));
+        addMessage(sessionId, taskId, MessageRole.TOOL, "{\"ok\":true}",
+                Map.of("type", "TOOL_CALL_RESULT", "taskId", taskId, "toolName", "tms.dataset.listModels",
+                        "success", true));
+
+        List<SessionMessageEntity> messages = queryService.getTaskMessages(taskId, null, 50);
+
+        assertEquals(2, messages.size());
+        assertEquals(taskId, messages.get(0).getTaskId());
+        assertTrue(messages.get(0).getMetadata().contains("TOOL_CALL_START"));
+        assertEquals(taskId, messages.get(1).getTaskId());
+        assertTrue(messages.get(1).getMetadata().contains("TOOL_CALL_RESULT"));
     }
 
     @Test
@@ -235,13 +286,19 @@ class OpenApiSessionQueryServiceTest {
     // ── 辅助方法 ──
 
     private String addMessage(String sessionId, String taskId, MessageRole role, String content) {
+        return addMessage(sessionId, taskId, role, content,
+                Map.of("type", role == MessageRole.USER ? "USER" : "TEXT_COMPLETE"));
+    }
+
+    private String addMessage(String sessionId, String taskId, MessageRole role, String content,
+                              Map<String, Object> metadata) {
         Message msg = Message.builder()
                 .id(UUID.randomUUID().toString())
                 .sessionId(sessionId)
                 .taskId(taskId)
                 .role(role)
                 .content(content)
-                .metadata(Map.of("type", role == MessageRole.USER ? "USER" : "TEXT_COMPLETE"))
+                .metadata(metadata)
                 .build();
         return sessionManager.addMessage(sessionId, msg);
     }

@@ -7,6 +7,7 @@ import logging
 import asyncio
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
@@ -23,6 +24,8 @@ import time
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["query"], dependencies=[Depends(verify_token)])
+
+_PROGRESS_EVENT_SINK_KEY = "_progress_event_sink"
 
 
 def _resolve_session_id(request: QueryRequest) -> str | None:
@@ -54,13 +57,23 @@ async def _event_generator(
                 }
             return
 
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        emitted_keys: set[str] = set()
+        loop = asyncio.get_running_loop()
+
+        def enqueue_progress_event(event: QueryEvent) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        runtime_context = dict(request.runtime_context or {})
+        runtime_context[_PROGRESS_EVENT_SINK_KEY] = enqueue_progress_event
+
         initial_state: RootState = {
             "task_id": task_id,
             "session_id": session_id,
             "prompt": request.prompt,
             "model": request.model,
             "context": request.context,
-            "runtime_context": request.runtime_context,
+            "runtime_context": runtime_context,
             "user_id": request.user_id,
             "tenant_id": request.tenant_id,
             "events": [],
@@ -69,13 +82,33 @@ async def _event_generator(
             "skill_results": [],
         }
 
-        result = await asyncio.to_thread(root_graph.invoke, initial_state)
+        def run_graph() -> None:
+            try:
+                result = root_graph.invoke(initial_state)
+                for event in result.get("events", []):
+                    enqueue_progress_event(event)
+            except Exception as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
 
-        for event in result.get("events", []):
+        graph_task = asyncio.create_task(asyncio.to_thread(run_graph))
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            event_key = item.model_dump_json()
+            if event_key in emitted_keys:
+                continue
+            emitted_keys.add(event_key)
             yield {
                 "event": "message",
-                "data": event.model_dump_json(),
+                "data": item.model_dump_json(),
             }
+        await graph_task
 
     except Exception as exc:
         logger.exception("Error processing query %s", task_id)

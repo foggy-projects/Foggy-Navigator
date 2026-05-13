@@ -98,6 +98,43 @@ def test_route_skill_loads_account_private_skill_and_snapshots_manifest(tmp_path
     assert frame.private_working_state["_skill_manifest"]["description"] == "account version"
 
 
+def test_route_skill_prefers_upstream_user_context_over_task_owner(tmp_path, monkeypatch):
+    skills_root = tmp_path / "skills"
+    data_root = tmp_path / "data"
+
+    _write_skill(skills_root / "builtin" / "exception-triage", "builtin version")
+    _write_skill(data_root / "accounts" / "upstream-001" / "skills" / "exception-triage", "upstream version")
+
+    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
+    runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(tmp_path / "frames"),
+    )
+
+    monkeypatch.setattr(root_module, "_skill_registry", registry)
+    monkeypatch.setattr(root_module, "_runtime", runtime)
+
+    result = root_module.route_skill({
+        "task_id": "task-upstream-skill",
+        "session_id": None,
+        "prompt": "handle exception",
+        "model": None,
+        "context": {"skill": "exception_triage", "upstreamUserId": "upstream-001"},
+        "user_id": "navigator-actor",
+        "tenant_id": None,
+        "events": [],
+        "started_at": 0.0,
+        "active_frame_id": None,
+        "skill_results": [],
+    })
+
+    frame = runtime.get_frame(result["active_frame_id"])
+
+    assert frame is not None
+    assert frame.private_working_state["_skill_manifest"]["description"] == "upstream version"
+
+
 def test_route_skill_loads_client_app_public_skill_and_snapshots_manifest(tmp_path, monkeypatch):
     skills_root = tmp_path / "skills"
     data_root = tmp_path / "data"
@@ -186,6 +223,59 @@ def test_route_skill_auto_injects_only_client_app_public_skills(tmp_path, monkey
     assert "global_skill" not in system_prompt
 
 
+def test_route_skill_injects_account_context_for_agentic_routing(tmp_path, monkeypatch):
+    skills_root = tmp_path / "skills"
+    data_root = tmp_path / "data"
+    account_root = data_root / "accounts" / "user-001"
+    account_root.mkdir(parents=True)
+    (account_root / "ACCOUNT_POLICY.md").write_text("routing policy", encoding="utf-8")
+    (account_root / "AGENT.md").write_text("routing agent", encoding="utf-8")
+    (account_root / "MEMORY.md").write_text("routing memory", encoding="utf-8")
+
+    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
+    runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(tmp_path / "frames"),
+    )
+    fake_chat = _FakeChatModel()
+
+    monkeypatch.setattr(root_module, "_skill_registry", registry)
+    monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module, "_chat_model", fake_chat)
+    monkeypatch.setattr(root_module.settings, "llm_agentic_routing", True)
+    monkeypatch.setattr(root_module, "_data_root", str(data_root))
+
+    root_module.route_skill({
+        "task_id": "task-account-context-routing",
+        "session_id": "session-account-context",
+        "prompt": "what should I do",
+        "model": None,
+        "context": {},
+        "user_id": "user-001",
+        "tenant_id": None,
+        "events": [],
+        "started_at": 0.0,
+        "active_frame_id": None,
+        "skill_results": [],
+    })
+
+    system_prompt = fake_chat.messages[0].content
+    assert system_prompt.index("### ACCOUNT_POLICY.md") < system_prompt.index("### AGENT.md")
+    assert system_prompt.index("### AGENT.md") < system_prompt.index("### MEMORY.md")
+    assert "routing policy" in system_prompt
+    assert "routing agent" in system_prompt
+    assert "routing memory" in system_prompt
+
+    log_file = data_root / "logs" / "llm-conversations" / "session-account-context" / "0001_task-account-context-routing.jsonl"
+    request_entry = json.loads(log_file.read_text(encoding="utf-8").splitlines()[0])
+    logged_system_prompt = request_entry["messages"][0]["content"]
+    assert "[account_context_files: omitted from conversation log]" in logged_system_prompt
+    assert "routing policy" not in logged_system_prompt
+    assert "routing agent" not in logged_system_prompt
+    assert "routing memory" not in logged_system_prompt
+
+
 def test_llm_conversation_log_groups_tasks_by_session_directory(tmp_path, monkeypatch):
     skills_root = tmp_path / "skills"
     data_root = tmp_path / "data"
@@ -209,6 +299,12 @@ def test_llm_conversation_log_groups_tasks_by_session_directory(tmp_path, monkey
             "prompt": prompt,
             "model": None,
             "context": {},
+            "runtime_context": {
+                "current_time": "2026-05-11T10:37:10+08:00",
+                "timezone": "Asia/Shanghai",
+                "business_date": "2026-05-11",
+                "task_scoped_token": "secret-token",
+            },
             "user_id": None,
             "tenant_id": None,
             "events": [],
@@ -228,6 +324,12 @@ def test_llm_conversation_log_groups_tasks_by_session_directory(tmp_path, monkey
 
     assert first_entries[0]["event"] == "llm_request"
     assert [message["role"] for message in first_entries[0]["messages"]] == ["system", "user"]
+    assert first_entries[0]["runtime_time_context"] == {
+        "current_time": "2026-05-11T10:37:10+08:00",
+        "timezone": "Asia/Shanghai",
+        "business_date": "2026-05-11",
+    }
+    assert "task_scoped_token" not in first_entries[0]["runtime_time_context"]
     assert {entry["task_id"] for entry in first_entries} == {"task-1"}
     assert {entry["task_id"] for entry in second_entries} == {"task-2"}
     assert {entry["session_id"] for entry in first_entries + second_entries} == {"session-123"}

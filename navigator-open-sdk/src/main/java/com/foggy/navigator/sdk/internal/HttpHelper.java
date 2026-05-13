@@ -71,6 +71,10 @@ public class HttpHelper {
         return execute(buildRequest("GET", path, null), type);
     }
 
+    public <T> T get(String path, Map<String, String> headers, TypeReference<T> type) {
+        return execute(buildRequest("GET", path, null, true, headers), type);
+    }
+
     public <T> T post(String path, Object body, TypeReference<T> type) {
         return execute(buildRequest("POST", path, body), type);
     }
@@ -81,6 +85,10 @@ public class HttpHelper {
 
     public <T> T put(String path, Object body, TypeReference<T> type) {
         return execute(buildRequest("PUT", path, body), type);
+    }
+
+    public <T> T put(String path, Object body, Map<String, String> headers, TypeReference<T> type) {
+        return execute(buildRequest("PUT", path, body, true, headers), type);
     }
 
     public void delete(String path) {

@@ -60,6 +60,7 @@ class QueryEvent(BaseModel):
 
     # Skill frame tracking (Phase 2+)
     skill_frame_id: str | None = None
+    parent_frame_id: str | None = None
     skill_id: str | None = None
 
     # Tool execution tracking. Java relay and frontend use this to merge a

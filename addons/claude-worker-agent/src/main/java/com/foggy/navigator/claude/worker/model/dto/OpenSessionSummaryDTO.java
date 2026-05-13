@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 /**
  * Open API 会话摘要 DTO — 会话列表条目
@@ -26,6 +27,9 @@ public class OpenSessionSummaryDTO {
 
     /** 最近一次任务 ID */
     private String latestTaskId;
+
+    /** Client App 透明会话上下文 */
+    private Map<String, Object> clientContext;
 
     /** 创建时间 */
     private LocalDateTime createdAt;

@@ -14,6 +14,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -45,6 +48,7 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         }
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
+        form.setAgentId(request.getSkillId());
         form.setWorkerId(member.getWorkerId());
         form.setSessionId(request.getSessionId());
         form.setModelConfigId(request.getModelConfigId());
@@ -52,9 +56,7 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
                 + " for skill " + request.getSkillId()
                 + ". Use the business function tools when user intent requires controlled business execution.");
         form.setContext(buildContext(request));
-        if (StringUtils.hasText(request.getTaskScopedToken())) {
-            form.setRuntimeContext(Map.of("task_scoped_token", request.getTaskScopedToken()));
-        }
+        form.setRuntimeContext(buildRuntimeContext(request));
 
         LanggraphTaskDTO workerTask = taskService.createTask(request.getActorUserId(), request.getTenantId(), form);
         return BusinessAgentWorkerTaskLaunchResult.builder()
@@ -70,6 +72,8 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         context.put("businessTaskId", request.getBusinessTaskId());
         context.put("clientAppId", request.getClientAppId());
         context.put("upstreamUserId", request.getUpstreamUserId());
+        context.put("accountId", request.getUpstreamUserId());
+        context.put("account_id", request.getUpstreamUserId());
         context.put("skillId", request.getSkillId());
         context.put("workerPoolId", request.getWorkerPoolId());
         context.put("workerBackend", request.getWorkerBackend());
@@ -77,5 +81,18 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
             context.put("skill_markdown", request.getMarkdownBody());
         }
         return context;
+    }
+
+    private Map<String, Object> buildRuntimeContext(BusinessAgentWorkerTaskLaunchRequest request) {
+        ZoneId zoneId = ZoneId.systemDefault();
+        ZonedDateTime now = ZonedDateTime.now(zoneId);
+        Map<String, Object> runtimeContext = new LinkedHashMap<>();
+        if (StringUtils.hasText(request.getTaskScopedToken())) {
+            runtimeContext.put("task_scoped_token", request.getTaskScopedToken());
+        }
+        runtimeContext.put("current_time", now.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+        runtimeContext.put("timezone", zoneId.getId());
+        runtimeContext.put("business_date", now.toLocalDate().toString());
+        return runtimeContext;
     }
 }

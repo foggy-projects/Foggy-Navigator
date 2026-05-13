@@ -6,10 +6,22 @@ import com.foggy.navigator.claude.worker.client.ClaudeWorkerClient;
 import com.foggy.navigator.claude.worker.model.dto.*;
 import com.foggy.navigator.claude.worker.model.entity.ClaudeWorkerEntity;
 import com.foggy.navigator.claude.worker.model.form.*;
+import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
+import com.foggy.navigator.business.agent.model.dto.AccountContextFileDTO;
+import com.foggy.navigator.business.agent.model.dto.AccountContextFileTreeDTO;
 import com.foggy.navigator.business.agent.model.dto.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
+import com.foggy.navigator.business.agent.model.dto.SkillBundleDTO;
+import com.foggy.navigator.business.agent.model.dto.SkillArtifactSliceDTO;
+import com.foggy.navigator.business.agent.model.dto.SkillArtifactTreeDTO;
+import com.foggy.navigator.business.agent.model.form.AccountContextFileWriteForm;
+import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
+import com.foggy.navigator.business.agent.model.form.SyncAccountSkillBundleForm;
+import com.foggy.navigator.business.agent.service.AccountContextFileService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
+import com.foggy.navigator.business.agent.service.SkillArtifactService;
+import com.foggy.navigator.business.agent.service.SkillRegistryService;
 import com.foggy.navigator.claude.worker.repository.CodingAgentRepository;
 import com.foggy.navigator.claude.worker.repository.ClaudeWorkerRepository;
 import com.foggy.navigator.common.repository.WorkingDirectoryRepository;
@@ -70,6 +82,10 @@ public class OpenApiController {
     private final ObjectMapper objectMapper;
     private final ObjectProvider<ClientAppRuntimeCredentialResolver> clientAppCredentialResolver;
     private final ObjectProvider<BusinessAgentTaskService> businessAgentTaskService;
+    private final ObjectProvider<OpenApiAgentReadinessService> agentReadinessService;
+    private final ObjectProvider<SkillArtifactService> skillArtifactService;
+    private final ObjectProvider<SkillRegistryService> skillRegistryService;
+    private final ObjectProvider<AccountContextFileService> accountContextFileService;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -418,9 +434,7 @@ public class OpenApiController {
      * 后续 ask 请求只应携带 X-Client-App-Key + X-Client-App-Access-Token。
      */
     @PostMapping("/client-apps/runtime-token")
-    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
     public RX<ClientAppRuntimeAccessTokenDTO> issueClientAppRuntimeToken(HttpServletRequest request) {
-        String tenantId = UserContext.getCurrentTenantId();
         ClientAppRuntimeCredentialResolver resolver = clientAppCredentialResolver.getIfAvailable();
         if (resolver == null) {
             return RX.failB("client app runtime credential resolver is not available");
@@ -434,7 +448,7 @@ public class OpenApiController {
                 "X-Client-App-Secret",
                 "X-App-Secret",
                 "X-Foggy-App-Secret");
-        return RX.ok(resolver.issueAccessToken(tenantId, appKey, appSecret));
+        return RX.ok(resolver.issueAccessToken(appKey, appSecret));
     }
 
     /**
@@ -445,14 +459,12 @@ public class OpenApiController {
      * 后续传入相同 contextId 可恢复 Claude 会话上下文。
      */
     @PostMapping("/agents/{agentId}/ask")
-    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
     public RX<OpenApiTaskDTO> askAgent(
             @PathVariable String agentId,
             @RequestBody OpenApiQueryForm form,
             HttpServletRequest request) {
-        String tenantId = UserContext.getCurrentTenantId();
-        ResolvedClientAppCredentialDTO clientAppCredential = resolveClientAppCredential(
-                tenantId, agentId, request);
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        String tenantId = clientAppCredential.getTenantId();
 
         String messageContent = form.resolveMessage();
         if (messageContent == null || messageContent.isBlank()) {
@@ -470,6 +482,7 @@ public class OpenApiController {
         // 构建 A2aMessage
         String contextId = (form.getContextId() != null && !form.getContextId().isBlank())
                 ? form.getContextId() : IdGenerator.shortId();
+        String clientContextJson = serializeClientContext(form.getClientContext());
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(messageContent)));
         message.setContextId(contextId);
         Map<String, Object> metadata = new java.util.HashMap<>();
@@ -494,14 +507,138 @@ public class OpenApiController {
         }
 
         A2aTask task = agent.sendTask(message);
+        if (clientContextJson != null) {
+            String userId = resolveAgentOwnerUserId(agentId, tenantId);
+            sessionQueryService.updateClientContextJson(contextId, userId, agentId, clientContextJson);
+        }
 
         log.info("Open API askAgent: agentId={}, taskId={}, tenantId={}", agentId, task.getId(), tenantId);
 
         return RX.ok(toOpenApiTaskDTO(task, agentId));
     }
 
+    @PostMapping("/agents/{agentId}/preflight")
+    public RX<AgentReadinessDTO> preflightAgent(
+            @PathVariable String agentId,
+            @RequestBody(required = false) AgentReadinessPreflightForm form,
+            HttpServletRequest request) {
+        OpenApiAgentReadinessService service = agentReadinessService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("agent readiness service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        return RX.ok(service.verify(agentId, form, credential, resolveBaseUrl(request)));
+    }
+
+    @GetMapping("/skills/{skillId}/files/tree")
+    public RX<SkillArtifactTreeDTO> getSkillArtifactTree(
+            @PathVariable String skillId,
+            HttpServletRequest request) {
+        SkillArtifactService service = skillArtifactService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("skill artifact service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppAccess(skillId, request);
+        return RX.ok(service.tree(credential.getTenantId(), credential.getClientAppId(), skillId));
+    }
+
+    @GetMapping("/skills/{skillId}/files/slice")
+    public RX<SkillArtifactSliceDTO> getSkillArtifactSlice(
+            @PathVariable String skillId,
+            @RequestParam String path,
+            @RequestParam(required = false) Integer startLine,
+            @RequestParam(required = false) Integer startColumn,
+            @RequestParam(required = false) Integer maxChars,
+            HttpServletRequest request) {
+        SkillArtifactService service = skillArtifactService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("skill artifact service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppAccess(skillId, request);
+        return RX.ok(service.slice(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                skillId,
+                path,
+                startLine,
+                startColumn,
+                maxChars));
+    }
+
+    @PostMapping("/accounts/me/skill-bundles/sync")
+    public RX<SkillBundleDTO> syncMyAccountSkillBundle(
+            @RequestBody SyncAccountSkillBundleForm form,
+            HttpServletRequest request) {
+        SkillRegistryService service = skillRegistryService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("skill registry service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = firstHeader(request,
+                "X-Upstream-User-Id",
+                "X-Foggy-Upstream-User-Id",
+                "X-Client-Upstream-User-Id");
+        if (!StringUtils.hasText(upstreamUserId)) {
+            return RX.failB("upstream user id is required");
+        }
+        return RX.ok(service.syncMyAccountSkillBundle(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId,
+                form));
+    }
+
+    @GetMapping("/accounts/me/context-files")
+    public RX<AccountContextFileTreeDTO> listMyAccountContextFiles(HttpServletRequest request) {
+        AccountContextFileService service = accountContextFileService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("account context file service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.list(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId));
+    }
+
+    @GetMapping("/accounts/me/context-files/{fileName}")
+    public RX<AccountContextFileDTO> readMyAccountContextFile(
+            @PathVariable String fileName,
+            HttpServletRequest request) {
+        AccountContextFileService service = accountContextFileService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("account context file service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.read(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId,
+                fileName));
+    }
+
+    @PutMapping("/accounts/me/context-files/{fileName}")
+    public RX<AccountContextFileDTO> writeMyAccountContextFile(
+            @PathVariable String fileName,
+            @RequestBody AccountContextFileWriteForm form,
+            HttpServletRequest request) {
+        AccountContextFileService service = accountContextFileService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("account context file service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.writePolicy(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId,
+                fileName,
+                form));
+    }
+
     private ResolvedClientAppCredentialDTO resolveClientAppCredential(
-            String tenantId,
             String skillId,
             HttpServletRequest request) {
         ClientAppRuntimeCredentialResolver resolver = clientAppCredentialResolver.getIfAvailable();
@@ -518,8 +655,54 @@ public class OpenApiController {
                 "X-App-Access-Token",
                 "X-Foggy-App-Access-Token");
 
-        return resolver.resolveAccessTokenForSkill(tenantId, appKey, accessToken, skillId)
+        return resolver.resolveAccessTokenForSkill(appKey, accessToken, skillId)
                 .orElse(null);
+    }
+
+    private ResolvedClientAppCredentialDTO resolveClientAppRuntimeToken(HttpServletRequest request) {
+        ClientAppRuntimeCredentialResolver resolver = clientAppCredentialResolver.getIfAvailable();
+        if (resolver == null || request == null) {
+            return null;
+        }
+
+        String appKey = firstHeader(request,
+                "X-Client-App-Key",
+                "X-App-Key",
+                "X-Foggy-App-Key");
+        String accessToken = firstHeader(request,
+                "X-Client-App-Access-Token",
+                "X-App-Access-Token",
+                "X-Foggy-App-Access-Token");
+
+        return resolver.resolveAccessToken(appKey, accessToken)
+                .orElse(null);
+    }
+
+    private ResolvedClientAppCredentialDTO requireClientAppAccess(String skillId, HttpServletRequest request) {
+        ResolvedClientAppCredentialDTO resolved = resolveClientAppCredential(skillId, request);
+        if (resolved == null) {
+            throw RX.throwB("client app access token is required");
+        }
+        return resolved;
+    }
+
+    private ResolvedClientAppCredentialDTO requireClientAppRuntimeToken(HttpServletRequest request) {
+        ResolvedClientAppCredentialDTO resolved = resolveClientAppRuntimeToken(request);
+        if (resolved == null) {
+            throw RX.throwB("client app access token is required");
+        }
+        return resolved;
+    }
+
+    private String requireUpstreamUserId(HttpServletRequest request) {
+        String upstreamUserId = firstHeader(request,
+                "X-Upstream-User-Id",
+                "X-Foggy-Upstream-User-Id",
+                "X-Client-Upstream-User-Id");
+        if (!StringUtils.hasText(upstreamUserId)) {
+            throw RX.throwB("upstream user id is required");
+        }
+        return upstreamUserId;
     }
 
     private void enrichBusinessRuntimeContext(
@@ -556,7 +739,7 @@ public class OpenApiController {
             context.putIfAbsent("upstreamUserId", upstreamUserId);
             issueBusinessRuntimeToken(
                     tenantId,
-                    UserContext.getCurrentUserId(),
+                    clientAppCredential.getClientAppId(),
                     metadata,
                     clientAppCredential.getClientAppId(),
                     upstreamUserId,
@@ -616,17 +799,36 @@ public class OpenApiController {
         return null;
     }
 
+    private String resolveBaseUrl(HttpServletRequest request) {
+        if (request == null) {
+            return null;
+        }
+        String forwardedProto = firstHeader(request, "X-Forwarded-Proto");
+        String forwardedHost = firstHeader(request, "X-Forwarded-Host");
+        if (StringUtils.hasText(forwardedProto) && StringUtils.hasText(forwardedHost)) {
+            return forwardedProto + "://" + forwardedHost;
+        }
+        StringBuilder base = new StringBuilder();
+        base.append(request.getScheme()).append("://").append(request.getServerName());
+        int port = request.getServerPort();
+        if (port > 0 && port != 80 && port != 443) {
+            base.append(":").append(port);
+        }
+        return base.toString();
+    }
+
     /**
      * 轮询 Agent 任务状态
      * <p>
      * COMPLETED 时包含执行结果、耗时和费用信息。
      */
     @GetMapping("/agents/{agentId}/tasks/{taskId}")
-    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
     public RX<OpenApiTaskDTO> getTaskStatus(
             @PathVariable String agentId,
-            @PathVariable String taskId) {
-        String tenantId = UserContext.getCurrentTenantId();
+            @PathVariable String taskId,
+            HttpServletRequest request) {
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        String tenantId = clientAppCredential.getTenantId();
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId).requestSource("OPEN_API").build();
         A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
@@ -699,18 +901,22 @@ public class OpenApiController {
      * 只返回该 taskId 对应的消息，按时间升序。
      */
     @GetMapping("/agents/{agentId}/tasks/{taskId}/messages")
-    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
     public RX<OpenTaskMessagesResponse> getTaskMessages(
             @PathVariable String agentId,
             @PathVariable String taskId,
             @RequestParam(required = false) String cursor,
-            @RequestParam(defaultValue = "50") int limit) {
-        String tenantId = UserContext.getCurrentTenantId();
+            @RequestParam(defaultValue = "50") int limit,
+            HttpServletRequest request) {
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        String tenantId = clientAppCredential.getTenantId();
         resolveOpenApiAgent(agentId, tenantId);
 
         // 验证 task 存在并获取 contextId
         SessionTaskEntity taskEntity = sessionQueryService.findTask(taskId)
                 .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
+        if (!tenantId.equals(taskEntity.getTenantId()) || !agentId.equals(taskEntity.getAgentId())) {
+            throw RX.throwB("Task not found: " + taskId);
+        }
 
         // 获取 contextId（从 task 的 sessionId 反查 context）
         String contextId = resolveContextIdFromSession(taskEntity.getSessionId());
@@ -742,18 +948,19 @@ public class OpenApiController {
      * 获取会话上下文列表
      */
     @GetMapping("/agents/{agentId}/sessions")
-    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
     public RX<OpenSessionListResponse> listAgentSessions(
             @PathVariable String agentId,
             @RequestParam(defaultValue = "20") int limit,
-            @RequestParam(required = false) String cursor) {
-        String userId = UserContext.getCurrentUserId();
-        String tenantId = UserContext.getCurrentTenantId();
+            @RequestParam(required = false) String cursor,
+            HttpServletRequest request) {
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        String tenantId = clientAppCredential.getTenantId();
+        String userId = resolveAgentOwnerUserId(agentId, tenantId);
         resolveOpenApiAgent(agentId, tenantId);
 
         int safeLimit = Math.min(Math.max(limit, 1), 100);
         List<AgentConversationContextEntity> contexts = sessionQueryService.listSessions(
-                userId, agentId, safeLimit);
+                userId, agentId, cursor, safeLimit);
 
         boolean hasMore = contexts.size() > safeLimit;
         List<AgentConversationContextEntity> page = hasMore ? contexts.subList(0, safeLimit) : contexts;
@@ -782,14 +989,15 @@ public class OpenApiController {
      * 获取指定会话上下文下的消息列表
      */
     @GetMapping("/agents/{agentId}/sessions/{contextId}/messages")
-    @RequireAuth(roles = {"TENANT_ADMIN", "DEVELOPER"})
     public RX<OpenSessionMessagesResponse> getSessionMessages(
             @PathVariable String agentId,
             @PathVariable String contextId,
             @RequestParam(required = false) String cursor,
-            @RequestParam(defaultValue = "50") int limit) {
-        String userId = UserContext.getCurrentUserId();
-        String tenantId = UserContext.getCurrentTenantId();
+            @RequestParam(defaultValue = "50") int limit,
+            HttpServletRequest request) {
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        String tenantId = clientAppCredential.getTenantId();
+        String userId = resolveAgentOwnerUserId(agentId, tenantId);
         resolveOpenApiAgent(agentId, tenantId);
 
         // 解析 contextId → sessionId
@@ -881,6 +1089,13 @@ public class OpenApiController {
     private A2aAgent resolveOpenApiAgent(String agentId, String tenantId) {
         return agentResolver.resolveAgent(agentId, AgentResolveContext.builder()
                         .tenantId(tenantId).requestSource("OPEN_API").build())
+                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+    }
+
+    private String resolveAgentOwnerUserId(String agentId, String tenantId) {
+        return codingAgentRepository.findByAgentId(agentId)
+                .filter(entity -> tenantId.equals(entity.getTenantId()))
+                .map(CodingAgentEntity::getUserId)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
     }
 
@@ -1099,9 +1314,33 @@ public class OpenApiController {
                 .title(ctx.getContextAlias())
                 .status("ACTIVE")
                 .latestTaskId(latestTaskId)
+                .clientContext(parseClientContext(ctx.getClientContextJson()))
                 .createdAt(ctx.getCreatedAt())
                 .updatedAt(ctx.getLastAccessedAt())
                 .build();
+    }
+
+    private String serializeClientContext(Map<String, Object> clientContext) {
+        if (clientContext == null || clientContext.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(clientContext);
+        } catch (Exception e) {
+            throw RX.throwB("clientContext must be a valid JSON object");
+        }
+    }
+
+    private Map<String, Object> parseClientContext(String clientContextJson) {
+        if (clientContextJson == null || clientContextJson.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(clientContextJson, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse clientContextJson from session summary: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**

@@ -30,6 +30,10 @@ async def test_child_skill_frame_appears_in_events(client):
     assert len(parent_closes) == 1
     assert len(child_opens) == 1
     assert len(child_closes) == 1
+    assert parent_opens[0].get("parent_frame_id") is None
+    assert parent_closes[0].get("parent_frame_id") is None
+    assert child_opens[0].get("parent_frame_id") == parent_opens[0]["skill_frame_id"]
+    assert child_closes[0].get("parent_frame_id") == parent_opens[0]["skill_frame_id"]
 
     # Child evidence_collect should open after parent and close before parent closes
     all_frame_events = [e for e in events if e["type"] in ("skill_frame_open", "skill_frame_close")]

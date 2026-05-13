@@ -2,7 +2,9 @@
 
 import pytest
 
+from langgraph_biz_worker.models import QueryEvent
 from langgraph_biz_worker.models import SkillManifest
+from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
@@ -49,6 +51,31 @@ def _make_runtime() -> SkillRuntime:
     registry = SkillRegistry()
     registry.register(SkillManifest(id="exception_triage", name="Triage"))
     return SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+
+
+def test_llm_skill_agent_emits_progress_events_during_tool_call():
+    runtime = _make_runtime()
+    manifest = SkillManifest(
+        id="exception_triage",
+        name="Triage",
+        allowed_tools=["mock_get_order"],
+    )
+    frame_id = runtime.invoke_skill("task-1", manifest.id, {"order_id": "ORD-001"})
+    emitted: list[QueryEvent] = []
+    agent = LlmSkillAgent(chat_model=object(), runtime=runtime)
+
+    result = agent._execute_tool_call(
+        "task-1",
+        frame_id,
+        manifest,
+        {"id": "call-1", "name": "mock_get_order", "args": {"order_id": "ORD-001"}},
+        runtime_context={"_progress_event_sink": emitted.append},
+    )
+
+    assert [event.type for event in emitted] == ["tool_use", "tool_result"]
+    assert [event.type for event in result["events"]] == ["tool_use", "tool_result"]
+    assert emitted[0].tool_call_id == "call-1"
+    assert emitted[1].tool_name == "mock_get_order"
 
 
 class TestAnalyzeFunction:

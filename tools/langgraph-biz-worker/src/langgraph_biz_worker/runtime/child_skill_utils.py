@@ -33,6 +33,7 @@ def run_child_skill(
             type="skill_frame_open",
             task_id=task_id,
             skill_frame_id=child_frame_id,
+            parent_frame_id=parent_frame_id,
             skill_id=child_skill_id,
             content=f"Opening child frame: {child_skill_id}",
         ),
@@ -56,6 +57,7 @@ def run_child_skill(
             type="skill_frame_close",
             task_id=task_id,
             skill_frame_id=child_frame_id,
+            parent_frame_id=parent_frame_id,
             skill_id=child_skill_id,
             content=f"Closed child frame: {child_skill_id}",
         ))

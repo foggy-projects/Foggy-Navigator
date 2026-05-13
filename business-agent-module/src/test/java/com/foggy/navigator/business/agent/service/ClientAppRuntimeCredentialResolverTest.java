@@ -116,6 +116,20 @@ class ClientAppRuntimeCredentialResolverTest {
     }
 
     @Test
+    void issueAccessTokenWithoutTenantDerivesTenantFromCredential() {
+        ClientAppRuntimeCredentialEntity credential = credential("tenant_1", "tms_app", "app_secret");
+        when(credentialRepository.findByAppKey("app_key")).thenReturn(Optional.of(credential));
+        when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+        when(accessTokenRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ClientAppRuntimeAccessTokenDTO dto = resolver.issueAccessToken("app_key", "app_secret");
+
+        assertEquals("tenant_1", dto.getTenantId());
+        assertEquals("tms_app", dto.getClientAppId());
+        verify(clientAppService).requireActiveClientApp("tenant_1", "tms_app");
+    }
+
+    @Test
     void resolveAccessTokenForSkill_validatesTokenAppAndSkillGrant() {
         ClientAppRuntimeAccessTokenEntity token = accessToken(
                 "tenant_1", "tms_app", "cred_1", "app_key", "access_token");
@@ -130,6 +144,24 @@ class ClientAppRuntimeCredentialResolverTest {
         assertEquals("tms_app", resolved.getClientAppId());
         assertEquals("tenant_1", resolved.getTenantId());
         assertEquals("cred_1", resolved.getCredentialId());
+        verify(skillRegistryService).checkClientAppSkillAccess(
+                "tenant_1", "tms_app", "tms-agent-v305");
+    }
+
+    @Test
+    void resolveAccessTokenForSkillWithoutTenantDerivesTenantFromToken() {
+        ClientAppRuntimeAccessTokenEntity token = accessToken(
+                "tenant_1", "tms_app", "cred_1", "app_key", "access_token");
+        when(accessTokenRepository.findByTokenHash(SecretTokenSupport.sha256("access_token")))
+                .thenReturn(Optional.of(token));
+        when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+
+        ResolvedClientAppCredentialDTO resolved = resolver
+                .resolveAccessTokenForSkill("app_key", "access_token", "tms-agent-v305")
+                .orElseThrow();
+
+        assertEquals("tenant_1", resolved.getTenantId());
+        assertEquals("tms_app", resolved.getClientAppId());
         verify(skillRegistryService).checkClientAppSkillAccess(
                 "tenant_1", "tms_app", "tms-agent-v305");
     }

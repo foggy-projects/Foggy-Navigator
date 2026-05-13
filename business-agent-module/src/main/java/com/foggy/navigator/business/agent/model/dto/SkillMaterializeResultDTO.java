@@ -7,6 +7,7 @@ public class SkillMaterializeResultDTO {
     private String skillId;
     private String scope;
     private String clientAppId;
+    private String accountId;
     private String status;
     private String workerUrl;
     private Integer workerStatusCode;

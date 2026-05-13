@@ -100,6 +100,35 @@ class TestThreeLevelNesting:
         av_idx = frame_opens.index("address_verify")
         assert av_idx > oec_idx
 
+    async def test_frame_events_carry_parent_frame_id(self, client):
+        """Nested frame open/close events should expose their direct parent frame ID."""
+        resp = await client.post("/api/v1/query", json={
+            "prompt": "三层嵌套测试",
+            "taskId": "nest3_parent_001",
+            "context": {"order_id": "ORD-NEST3"},
+        })
+        events = _parse_sse_events(resp.text)
+
+        opens = [e for e in events if e.type == "skill_frame_open"]
+        closes = [e for e in events if e.type == "skill_frame_close"]
+        open_by_skill = {e.skill_id: e for e in opens}
+        close_by_skill = {e.skill_id: e for e in closes}
+
+        root = open_by_skill["exception_triage"]
+        evidence = open_by_skill["order_evidence_collect"]
+        address = open_by_skill["address_verify"]
+        rule = open_by_skill["rule_check"]
+
+        assert root.parent_frame_id is None
+        assert evidence.parent_frame_id == root.skill_frame_id
+        assert rule.parent_frame_id == root.skill_frame_id
+        assert address.parent_frame_id == evidence.skill_frame_id
+
+        assert close_by_skill["exception_triage"].parent_frame_id is None
+        assert close_by_skill["order_evidence_collect"].parent_frame_id == root.skill_frame_id
+        assert close_by_skill["rule_check"].parent_frame_id == root.skill_frame_id
+        assert close_by_skill["address_verify"].parent_frame_id == evidence.skill_frame_id
+
     async def test_at_least_4_frames_total(self, client):
         """Should have at least 4 frame open events:
         exception_triage, order_evidence_collect, address_verify, rule_check."""

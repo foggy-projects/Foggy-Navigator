@@ -71,6 +71,24 @@ public class ClientAppRuntimeCredentialResolver {
     }
 
     @Transactional
+    public ClientAppRuntimeAccessTokenDTO issueAccessToken(String appKey, String appSecret) {
+        return issueAccessToken(appKey, appSecret, DEFAULT_ACCESS_TOKEN_TTL);
+    }
+
+    @Transactional
+    public ClientAppRuntimeAccessTokenDTO issueAccessToken(
+            String appKey,
+            String appSecret,
+            Duration requestedTtl) {
+        requireText(appKey, "client app key is required");
+        requireText(appSecret, "client app secret is required");
+
+        ClientAppRuntimeCredentialEntity credential = runtimeCredentialRepository.findByAppKey(appKey)
+                .orElseThrow(() -> new IllegalArgumentException("invalid client app credential"));
+        return issueAccessToken(credential.getTenantId(), appKey, appSecret, requestedTtl);
+    }
+
+    @Transactional
     public ClientAppRuntimeAccessTokenDTO issueAccessToken(
             String tenantId,
             String appKey,
@@ -152,6 +170,35 @@ public class ClientAppRuntimeCredentialResolver {
                     skillId);
         }
         return resolved;
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<ResolvedClientAppCredentialDTO> resolveAccessTokenForSkill(
+            String appKey,
+            String accessToken,
+            String skillId) {
+        Optional<ResolvedClientAppCredentialDTO> resolved = resolveAccessToken(appKey, accessToken);
+        if (resolved.isPresent() && StringUtils.hasText(skillId)) {
+            skillRegistryService.checkClientAppSkillAccess(
+                    resolved.get().getTenantId(),
+                    resolved.get().getClientAppId(),
+                    skillId);
+        }
+        return resolved;
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<ResolvedClientAppCredentialDTO> resolveAccessToken(String appKey, String accessToken) {
+        if (!StringUtils.hasText(appKey) && !StringUtils.hasText(accessToken)) {
+            return Optional.empty();
+        }
+        requireText(appKey, "client app key is required");
+        requireText(accessToken, "client app access token is required");
+
+        ClientAppRuntimeAccessTokenEntity token = accessTokenRepository
+                .findByTokenHash(SecretTokenSupport.sha256(accessToken))
+                .orElseThrow(() -> new IllegalArgumentException("invalid client app access token"));
+        return resolveAccessToken(token.getTenantId(), appKey, accessToken);
     }
 
     private void validateCredential(String tenantId, ClientAppRuntimeCredentialEntity credential, String appSecret) {

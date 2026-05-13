@@ -4,10 +4,16 @@ import type {
   AgentTask,
   ChatMessage,
   NavigatorChatConfig,
+  NavigatorSendOptions,
   OpenTaskMessage,
+  PaginationOptions,
+  SessionListPage,
+  SessionMessage,
+  SessionMessagesPage,
   TaskMessagesPage,
   TaskStatus,
   TerminalStatus,
+  SkillFrameBlock,
   ToolExecutionBlock,
   NavigatorAction,
 } from '../types'
@@ -31,7 +37,13 @@ export interface UseNavigatorChat {
   /** 错误信息 */
   error: Ref<string | null>
   /** 发送消息 */
-  send: (content: string) => Promise<void>
+  send: (content: string, options?: NavigatorSendOptions) => Promise<void>
+  /** 获取历史会话列表 */
+  listSessions: (options?: PaginationOptions) => Promise<SessionListPage>
+  /** 获取历史会话消息 */
+  getSessionMessages: (contextId: string, options?: PaginationOptions) => Promise<SessionMessagesPage>
+  /** 加载历史会话并切换当前 contextId */
+  loadSession: (contextId: string, options?: PaginationOptions) => Promise<SessionMessagesPage>
   /** 取消当前任务 */
   cancel: () => Promise<void>
   /** 清空对话（重新开始新会话） */
@@ -74,7 +86,11 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   let pollStartTime = 0
   const seenOpenMessageIds = new Set<string>()
   const toolExecutionMessageIds = new Map<string, string>()
+  const toolExecutionFrameIds = new Map<string, string>()
+  const skillFramesById = new Map<string, SkillFrameBlock>()
+  const skillFrameMessageIds = new Map<string, string>()
   const pendingToolCallIdsByTask = new Map<string, string[]>()
+  let pendingBusinessActions: NavigatorAction[] = []
   let toolSeq = 0
 
   const messages = computed(() =>
@@ -85,7 +101,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     stopPolling()
   })
 
-  async function send(content: string): Promise<void> {
+  async function send(content: string, options: NavigatorSendOptions = {}): Promise<void> {
     if (isLoading.value) return
     error.value = null
 
@@ -102,7 +118,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     progressText.value = '正在理解问题...'
 
     try {
-      const task = await api.ask(content, contextId.value ?? undefined)
+      const task = await api.ask(content, contextId.value ?? undefined, options)
       currentTaskId = task.taskId
       contextId.value = task.contextId
       taskStatus.value = task.status
@@ -195,18 +211,55 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   }
 
   function clear() {
+    resetConversationState(true)
+  }
+
+  async function listSessions(options: PaginationOptions = {}): Promise<SessionListPage> {
+    return api.listSessions(options)
+  }
+
+  async function getSessionMessages(targetContextId: string, options: PaginationOptions = {}): Promise<SessionMessagesPage> {
+    return api.getSessionMessages(targetContextId, options)
+  }
+
+  async function loadSession(targetContextId: string, options: PaginationOptions = {}): Promise<SessionMessagesPage> {
     stopPolling()
+    resetConversationState(false)
+    contextId.value = targetContextId
+    isLoading.value = true
+    error.value = null
+    try {
+      const page = await api.getSessionMessages(targetContextId, options)
+      contextId.value = page.contextId ?? targetContextId
+      ingestOpenMessages(sessionMessagesToOpenMessages(page.messages ?? []), 'history', undefined, {
+        includeUserMessages: true,
+      })
+      return page
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      error.value = msg
+      throw e
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  function resetConversationState(clearContext: boolean) {
     rawMessages.value = []
     isLoading.value = false
     taskStatus.value = null
-    contextId.value = null
+    if (clearContext) contextId.value = null
     progressText.value = '正在理解问题...'
     error.value = null
     currentTaskId = null
     nextCursor = null
     seenOpenMessageIds.clear()
     toolExecutionMessageIds.clear()
+    toolExecutionFrameIds.clear()
+    skillFramesById.clear()
+    skillFrameMessageIds.clear()
     pendingToolCallIdsByTask.clear()
+    pendingBusinessActions = []
   }
 
   function stopPolling() {
@@ -233,9 +286,15 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     ingestOpenMessages(page.messages ?? [], page.taskId, page.status as TaskStatus)
   }
 
-  function ingestOpenMessages(openMessages: OpenTaskMessage[], taskId: string, status?: TaskStatus) {
+  function ingestOpenMessages(
+    openMessages: OpenTaskMessage[],
+    taskId: string,
+    status?: TaskStatus,
+    options: { includeUserMessages?: boolean } = {}
+  ) {
     for (const message of openMessages) {
-      const id = openMessageId(taskId, message)
+      const messageTaskId = firstString((message as { taskId?: unknown }).taskId, taskId) ?? taskId
+      const id = openMessageId(messageTaskId, message)
       if (seenOpenMessageIds.has(id)) continue
       seenOpenMessageIds.add(id)
 
@@ -243,37 +302,38 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       const sanitizedMessage = sanitizeValue(message) as OpenTaskMessage
       const actions = extractActions(sanitizedMessage)
       if (message.type === 'USER') {
+        if (options.includeUserMessages && content) {
+          rawMessages.value.push({
+            id,
+            role: 'user',
+            content: sanitizeText(content),
+            timestamp: openMessageTimestamp(message),
+            taskId: messageTaskId,
+            status,
+            messageType: message.type,
+          })
+        }
         continue
       }
-      if (actions.length > 0) {
-        rawMessages.value.push({
-          id: `${id}:actions`,
-          role: 'assistant',
-          content: businessActionIntro(actions),
-          timestamp: openMessageTimestamp(message),
-          taskId,
-          status,
-          messageType: message.type,
-          terminal: message.terminal,
-          terminalStatus: message.terminalStatus ?? null,
-          actions,
-        })
-      }
       if ((message.type === 'TEXT' || message.type === 'RESULT') && content) {
-        const businessContent = display.mode === 'business' ? stripRawJsonArtifact(content, actions) : sanitizeText(content)
-        if (!businessContent && actions.length > 0) {
+        const messageActions = mergeActions(pendingBusinessActions, actions)
+        pendingBusinessActions = []
+        const businessContent = display.mode === 'business' ? stripRawJsonArtifact(content, messageActions) : sanitizeText(content)
+        const visibleContent = businessContent || (messageActions.length > 0 ? businessActionIntro(messageActions) : '')
+        if (!visibleContent) {
           continue
         }
         rawMessages.value.push({
           id,
           role: 'assistant',
-          content: businessContent,
+          content: visibleContent,
           timestamp: openMessageTimestamp(message),
-          taskId,
+          taskId: messageTaskId,
           status,
           messageType: message.type,
           terminal: message.terminal,
           terminalStatus: message.terminalStatus ?? null,
+          actions: messageActions.length > 0 ? messageActions : undefined,
         })
       } else if (message.type === 'ERROR') {
         const errMsg = display.mode === 'business'
@@ -285,7 +345,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           role: 'system',
           content: errMsg,
           timestamp: openMessageTimestamp(message),
-          taskId,
+          taskId: messageTaskId,
           status,
           messageType: message.type,
           terminal: message.terminal,
@@ -293,6 +353,16 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           error: errMsg,
         })
       } else if (message.type === 'STATE') {
+        const payload = normalizedPayload(message)
+        const subtype = firstString(payload.subtype, payload.stateType, payload.state_type)
+        if (subtype === 'skill_frame_open' || subtype === 'skill_frame_close') {
+          progressText.value = subtype === 'skill_frame_open' ? '正在执行技能...' : '技能执行完成'
+          if (display.showRuntimeEvents || display.showToolCalls || display.showToolResults) {
+            upsertSkillFrame(messageTaskId, message, subtype, id, status)
+          }
+          continue
+        }
+
         progressText.value = stateProgressText(content)
         if (display.showRuntimeEvents) {
           rawMessages.value.push({
@@ -300,7 +370,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
             role: 'system',
             content: sanitizeText(content || stringifySafe(sanitizedMessage)),
             timestamp: openMessageTimestamp(message),
-            taskId,
+            taskId: messageTaskId,
             status,
             messageType: message.type,
             terminal: message.terminal,
@@ -310,15 +380,19 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           })
         }
       } else if (message.type === 'TOOL_CALL') {
+        if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在查询数据...'
         if (display.showToolCalls || display.showToolResults) {
-          upsertToolExecution(taskId, message, 'call', id, status)
+          upsertToolExecution(messageTaskId, message, 'call', id, status)
         }
       } else if (message.type === 'TOOL_RESULT') {
+        if (actions.length > 0) pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
         progressText.value = '正在生成回答...'
         if (display.showToolCalls || display.showToolResults) {
-          upsertToolExecution(taskId, message, 'result', id, status)
+          upsertToolExecution(messageTaskId, message, 'result', id, status)
         }
+      } else if (actions.length > 0) {
+        pendingBusinessActions = mergeActions(pendingBusinessActions, actions)
       }
     }
   }
@@ -337,6 +411,8 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     } else if (terminalStatus === 'COMPLETED' || terminalStatus === 'FAILED') {
       taskStatus.value = terminalStatus
     }
+    finalizeOpenSkillFrames(terminalStatus, status)
+    flushPendingBusinessActions(taskId, status)
   }
 
   function appendLegacyTerminalMessage(task: AgentTask) {
@@ -393,6 +469,36 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     return Date.now()
   }
 
+  function sessionMessagesToOpenMessages(messages: SessionMessage[]): OpenTaskMessage[] {
+    return messages.map((message) => ({
+      id: message.messageId,
+      messageId: message.messageId,
+      type: normalizeSessionMessageType(message),
+      content: message.content,
+      createdAt: message.createdAt,
+      timestamp: message.createdAt,
+      metadata: message.metadata,
+      taskId: message.taskId,
+    }))
+  }
+
+  function normalizeSessionMessageType(message: SessionMessage): OpenTaskMessage['type'] {
+    const rawType = firstString(message.type, message.metadata?.type)
+    const normalized = rawType?.toUpperCase()
+    if (normalized === 'USER') return 'USER'
+    if (normalized === 'TEXT' || normalized === 'TEXT_COMPLETE') return 'TEXT'
+    if (normalized === 'RESULT' || normalized === 'TASK_COMPLETED') return 'RESULT'
+    if (normalized === 'TOOL_CALL' || normalized === 'TOOL_CALL_START') return 'TOOL_CALL'
+    if (normalized === 'TOOL_RESULT' || normalized === 'TOOL_CALL_RESULT') return 'TOOL_RESULT'
+    if (normalized === 'STATE' || normalized === 'STATUS') return 'STATE'
+    if (normalized === 'ERROR') return 'ERROR'
+
+    const role = message.role?.toUpperCase()
+    if (role === 'USER') return 'USER'
+    if (role === 'TOOL') return 'TOOL_RESULT'
+    return 'TEXT'
+  }
+
   return {
     messages,
     isLoading,
@@ -401,6 +507,9 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     progressText,
     error,
     send,
+    listSessions,
+    getSessionMessages,
+    loadSession,
     cancel,
     clear,
   }
@@ -419,6 +528,32 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     const existing = existingMessageId
       ? rawMessages.value.find((item) => item.id === existingMessageId)?.toolExecution
       : undefined
+    const frameId = resolveSkillFrameId(message, payload) ?? toolExecutionFrameIds.get(toolCallId)
+    if (frameId) {
+      const parentFrameId = firstString(payload.parentFrameId, payload.parent_frame_id)
+      const skillId = firstString(payload.skillId, payload.skill_id)
+      const frame = ensureSkillFrame(frameId, {
+        parentFrameId,
+        skillId,
+        timestamp,
+        raw: message,
+        content: openMessageContent(message),
+      })
+      attachSkillFrame(taskId, frame, `${taskId}:${frameId}`, timestamp, status, message)
+
+      const existingInFrame = frame.toolExecutions.find((item) => item.toolCallId === toolCallId)
+      const nextInFrame = mergeToolExecution(existingInFrame, toolCallId, message, payload, phase, timestamp)
+      const index = frame.toolExecutions.findIndex((item) => item.toolCallId === toolCallId)
+      if (index >= 0) frame.toolExecutions.splice(index, 1, nextInFrame)
+      else frame.toolExecutions.push(nextInFrame)
+      toolExecutionFrameIds.set(toolCallId, frameId)
+      if (existingMessageId) {
+        toolExecutionMessageIds.delete(toolCallId)
+        rawMessages.value = rawMessages.value.filter((item) => item.id !== existingMessageId)
+      }
+      touchMessages()
+      return
+    }
 
     const next = mergeToolExecution(existing, toolCallId, message, payload, phase, timestamp)
     if (existingMessageId) {
@@ -489,6 +624,191 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     }
     return generated
   }
+
+  function upsertSkillFrame(
+    taskId: string,
+    message: OpenTaskMessage,
+    subtype: 'skill_frame_open' | 'skill_frame_close',
+    messageId: string,
+    status?: TaskStatus
+  ) {
+    const timestamp = openMessageTimestamp(message)
+    const payload = normalizedPayload(message)
+    const frameId = firstString(payload.skillFrameId, payload.skill_frame_id, payload.frameId, payload.frame_id)
+    if (!frameId) return
+
+    const parentFrameId = firstString(payload.parentFrameId, payload.parent_frame_id)
+    const skillId = firstString(payload.skillId, payload.skill_id)
+    const frame = ensureSkillFrame(frameId, {
+      parentFrameId,
+      skillId,
+      timestamp,
+      raw: message,
+      content: openMessageContent(message),
+      phase: subtype === 'skill_frame_open' ? 'open' : 'close',
+    })
+
+    if (subtype === 'skill_frame_open') {
+      frame.status = 'running'
+      frame.openedAt = frame.openedAt ?? timestamp
+      frame.rawOpen = sanitizeValue(message)
+      frame.openContent = openMessageContent(message)
+    } else {
+      frame.status = firstString(payload.status)?.toLowerCase() === 'failed' ? 'failed' : 'success'
+      frame.closedAt = timestamp
+      frame.rawClose = sanitizeValue(message)
+      frame.closeContent = openMessageContent(message)
+      if (frame.openedAt != null) frame.durationMs = Math.max(0, timestamp - frame.openedAt)
+    }
+
+    frame.parentFrameId = parentFrameId ?? frame.parentFrameId
+    frame.skillId = skillId ?? frame.skillId
+    frame.displayName = skillFrameDisplayName(frame)
+    frame.trace = extractTrace(payload)
+
+    attachSkillFrame(taskId, frame, messageId, timestamp, status, message)
+    touchMessages()
+  }
+
+  function ensureSkillFrame(
+    frameId: string,
+    options: {
+      parentFrameId?: string
+      skillId?: string
+      timestamp?: number
+      raw?: OpenTaskMessage
+      content?: string
+      phase?: 'open' | 'close'
+    } = {}
+  ): SkillFrameBlock {
+    const existing = skillFramesById.get(frameId)
+    if (existing) {
+      existing.parentFrameId = options.parentFrameId ?? existing.parentFrameId
+      existing.skillId = options.skillId ?? existing.skillId
+      existing.displayName = skillFrameDisplayName(existing)
+      return existing
+    }
+
+    const frame: SkillFrameBlock = {
+      frameId,
+      parentFrameId: options.parentFrameId,
+      skillId: options.skillId,
+      displayName: options.skillId || frameId,
+      status: options.phase === 'close' ? 'success' : 'running',
+      openedAt: options.phase === 'open' ? options.timestamp : undefined,
+      closedAt: options.phase === 'close' ? options.timestamp : undefined,
+      openContent: options.phase === 'open' ? options.content : undefined,
+      closeContent: options.phase === 'close' ? options.content : undefined,
+      rawOpen: options.phase === 'open' ? sanitizeValue(options.raw) : undefined,
+      rawClose: options.phase === 'close' ? sanitizeValue(options.raw) : undefined,
+      toolExecutions: [],
+      children: [],
+      trace: {},
+    }
+    if (frame.openedAt != null && frame.closedAt != null) {
+      frame.durationMs = Math.max(0, frame.closedAt - frame.openedAt)
+    }
+    skillFramesById.set(frameId, frame)
+    return frame
+  }
+
+  function attachSkillFrame(
+    taskId: string,
+    frame: SkillFrameBlock,
+    messageId: string,
+    timestamp: number,
+    status?: TaskStatus,
+    message?: OpenTaskMessage
+  ) {
+    const parent = frame.parentFrameId ? skillFramesById.get(frame.parentFrameId) : undefined
+    if (parent && !parent.children.some((child) => child.frameId === frame.frameId)) {
+      parent.children.push(frame)
+      removeRootSkillFrameMessage(frame.frameId)
+      attachKnownChildFrames(frame)
+      return
+    }
+
+    attachKnownChildFrames(frame)
+    if (skillFrameMessageIds.has(frame.frameId)) return
+    const blockMessageId = `${messageId}:skill-frame`
+    skillFrameMessageIds.set(frame.frameId, blockMessageId)
+    rawMessages.value.push({
+      id: blockMessageId,
+      role: 'system',
+      content: skillFrameTitle(frame),
+      timestamp,
+      taskId,
+      status,
+      messageType: 'STATE',
+      terminal: message?.terminal,
+      terminalStatus: message?.terminalStatus ?? null,
+      process: true,
+      processKind: 'skill_frame',
+      skillFrame: frame,
+    })
+  }
+
+  function removeRootSkillFrameMessage(frameId: string) {
+    const rootMessageId = skillFrameMessageIds.get(frameId)
+    if (!rootMessageId) return
+    skillFrameMessageIds.delete(frameId)
+    rawMessages.value = rawMessages.value.filter((item) => item.id !== rootMessageId)
+  }
+
+  function attachKnownChildFrames(parent: SkillFrameBlock) {
+    for (const child of skillFramesById.values()) {
+      if (child.frameId === parent.frameId || child.parentFrameId !== parent.frameId) continue
+      if (!parent.children.some((item) => item.frameId === child.frameId)) {
+        parent.children.push(child)
+      }
+      removeRootSkillFrameMessage(child.frameId)
+    }
+  }
+
+  function touchMessages() {
+    rawMessages.value = [...rawMessages.value]
+  }
+
+  function finalizeOpenSkillFrames(terminalStatus: TerminalStatus | null, status?: TaskStatus) {
+    const terminalFailed = terminalStatus === 'FAILED' || status === 'FAILED' || status === 'CANCELED'
+    const frameStatus: SkillFrameBlock['status'] = terminalFailed ? 'failed' : 'success'
+    const closedAt = Date.now()
+    let changed = false
+    for (const frame of skillFramesById.values()) {
+      if (frame.status !== 'running') continue
+      frame.status = frameStatus
+      frame.closedAt = frame.closedAt ?? closedAt
+      if (frame.openedAt != null) {
+        frame.durationMs = Math.max(0, frame.closedAt - frame.openedAt)
+      }
+      changed = true
+    }
+    if (changed) touchMessages()
+  }
+
+  function flushPendingBusinessActions(taskId: string, status?: TaskStatus) {
+    if (pendingBusinessActions.length === 0) return
+    const actions = pendingBusinessActions
+    pendingBusinessActions = []
+    const target = [...rawMessages.value]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.taskId === taskId)
+    if (target) {
+      target.actions = mergeActions(target.actions ?? [], actions)
+      if (!target.content) target.content = businessActionIntro(target.actions)
+      touchMessages()
+      return
+    }
+    rawMessages.value.push({
+      id: nextId(),
+      role: 'assistant',
+      content: businessActionIntro(actions),
+      timestamp: Date.now(),
+      taskId,
+      status,
+      actions,
+    })
+  }
 }
 
 interface DisplayOptions {
@@ -496,6 +816,26 @@ interface DisplayOptions {
   showRuntimeEvents: boolean
   showToolCalls: boolean
   showToolResults: boolean
+}
+
+function resolveSkillFrameId(message: OpenTaskMessage, payload: Record<string, unknown>): string | undefined {
+  return firstString(
+    payload.skillFrameId,
+    payload.skill_frame_id,
+    payload.frameId,
+    payload.frame_id,
+    message.metadata?.skillFrameId,
+    message.metadata?.skill_frame_id
+  )
+}
+
+function skillFrameDisplayName(frame: SkillFrameBlock): string {
+  return frame.skillId || frame.frameId
+}
+
+function skillFrameTitle(frame: SkillFrameBlock): string {
+  const duration = frame.durationMs != null ? ` ${(frame.durationMs / 1000).toFixed(1)}s` : ''
+  return `技能 ${frame.displayName} ${frame.status === 'running' ? '执行中' : frame.status === 'success' ? '完成' : '失败'}${duration}`
 }
 
 function resolveDisplayOptions(config: NavigatorChatConfig): DisplayOptions {
@@ -743,6 +1083,7 @@ function stateProgressText(content: string): string {
   return '正在处理...'
 }
 
+
 function sanitizeErrorSummary(content: string): string {
   const safe = sanitizeText(content)
   if (/exception|stack|trace|invoke_business_function|submit_skill_result|task_scoped_token/i.test(safe)) {
@@ -761,7 +1102,7 @@ function stripRawJsonArtifact(content: string, actions: NavigatorAction[]): stri
 }
 
 function businessActionIntro(_actions: NavigatorAction[]): string {
-  return ''
+  return '可继续处理：'
 }
 
 function extractDisplayText(value: unknown): string {
@@ -777,54 +1118,135 @@ function extractDisplayText(value: unknown): string {
   ) ?? ''
 }
 
-function extractActions(message: OpenTaskMessage): NavigatorAction[] {
+export function extractActions(message: OpenTaskMessage): NavigatorAction[] {
+  const metadata = message.metadata
+  const result = parseMaybeJson(message.result)
+  const args = parseMaybeJson(message.args)
   const candidates = [
     parseMaybeJson(message.content),
-    message.metadata,
-    message.result,
+    args,
+    metadata,
+    metadata?.args,
+    result,
+    field(result, 'structured_output'),
+    field(result, 'structuredOutput'),
     normalizedPayload(message),
   ]
   const actions: NavigatorAction[] = []
   for (const candidate of candidates) collectActions(candidate, actions)
   const seen = new Set<string>()
   return actions.filter((action) => {
-    const key = `${action.type}:${action.url ?? ''}:${action.label}`
+    const key = actionKey(action)
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
 }
 
-function collectActions(value: unknown, actions: NavigatorAction[]) {
-  if (!value || typeof value !== 'object') return
-  if (Array.isArray(value)) {
-    for (const item of value) collectActions(item, actions)
+const ACTION_CONTAINER_KEYS = [
+  'actions',
+  'artifacts',
+  'artifact',
+  'data',
+  'result',
+  'structured_output',
+  'structuredOutput',
+  'output',
+  'payload',
+  'args',
+]
+
+function collectActions(value: unknown, actions: NavigatorAction[], seen = new WeakSet<object>()) {
+  const parsed = parseMaybeJson(value)
+  if (!parsed || typeof parsed !== 'object') return
+  if (seen.has(parsed)) return
+  seen.add(parsed)
+  if (Array.isArray(parsed)) {
+    for (const item of parsed) collectActions(item, actions, seen)
     return
   }
-  const obj = value as Record<string, unknown>
+  const obj = parsed as Record<string, unknown>
   const type = firstString(obj.type, obj.actionType, obj.action, obj.artifactType)
   if (type && isActionType(type)) {
     actions.push({
       id: firstString(obj.id, obj.actionId) ?? `action-${actions.length + 1}`,
       type,
-      label: firstString(obj.label, obj.title, obj.name) ?? actionLabel(type),
+      label: firstString(obj.label, obj.title, obj.name) ?? actionLabel(type, obj),
       url: firstString(obj.url, obj.href, obj.link, obj.path),
       payload: sanitizeValue(obj.payload ?? obj.params ?? obj),
       raw: sanitizeValue(obj),
     })
   }
-  for (const key of ['actions', 'artifacts', 'artifact', 'data', 'result']) {
-    collectActions(obj[key], actions)
+  for (const key of ACTION_CONTAINER_KEYS) {
+    collectActions(obj[key], actions, seen)
   }
+}
+
+function field(value: unknown, key: string): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return (value as Record<string, unknown>)[key]
+}
+
+function stableStringify(value: unknown): string {
+  try {
+    return JSON.stringify(stableValue(value)) ?? ''
+  } catch {
+    return String(value)
+  }
+}
+
+function stableValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (Array.isArray(value)) return value.map((item) => stableValue(item, seen))
+  if (!value || typeof value !== 'object') return value
+  if (seen.has(value)) return '[Circular]'
+  seen.add(value)
+  const sorted: Record<string, unknown> = {}
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    sorted[key] = stableValue((value as Record<string, unknown>)[key], seen)
+  }
+  return sorted
 }
 
 function isActionType(type: string): boolean {
   return /OPEN_TMS_PAGE|OPEN_.*PAGE|DOWNLOAD|REPORT|DETAIL|LINK/i.test(type)
 }
 
-function actionLabel(type: string): string {
+function mergeActions(...groups: NavigatorAction[][]): NavigatorAction[] {
+  const output: NavigatorAction[] = []
+  const seen = new Set<string>()
+  for (const group of groups) {
+    for (const action of group) {
+      const key = actionKey(action)
+      if (seen.has(key)) continue
+      seen.add(key)
+      output.push(action)
+    }
+  }
+  return output
+}
+
+function actionKey(action: NavigatorAction): string {
+  return `${action.type}:${action.url ?? ''}:${action.label}:${stableStringify(action.payload)}`
+}
+
+function actionLabel(type: string, action?: Record<string, unknown>): string {
+  const page = action ? pageLabel(action) : undefined
+  if (/OPEN_TMS_PAGE|OPEN_.*PAGE/i.test(type) && page) return `打开${page}`
   if (/DOWNLOAD/i.test(type)) return '下载文件'
   if (/REPORT/i.test(type)) return '查看报表'
   if (/DETAIL/i.test(type)) return '打开详情页'
   return '打开页面'
+}
+
+function pageLabel(action: Record<string, unknown>): string | undefined {
+  const value = firstString(
+    action.pageLabel,
+    action.pageTitle,
+    action.routeLabel,
+    action.routeTitle,
+    action.pageName
+  )
+  if (!value) return undefined
+  const normalized = value.replace(/^[/#]+/, '')
+  return normalized || undefined
 }
