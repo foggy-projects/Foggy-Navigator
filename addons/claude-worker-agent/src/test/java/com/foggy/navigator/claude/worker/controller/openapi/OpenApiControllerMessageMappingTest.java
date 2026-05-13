@@ -22,6 +22,7 @@ import java.time.LocalDateTime;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
@@ -66,6 +67,16 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void terminalStatusCanBeDerivedFromCompletedTaskStatus() throws Exception {
+        OpenApiController controller = newController();
+
+        assertEquals("COMPLETED", terminalStatusFromTaskStatus(controller, "COMPLETED"));
+        assertEquals("FAILED", terminalStatusFromTaskStatus(controller, "FAILED"));
+        assertEquals("CANCELLED", terminalStatusFromTaskStatus(controller, "CANCELLED"));
+        assertNull(terminalStatusFromTaskStatus(controller, "RUNNING"));
+    }
+
+    @Test
     void sessionSummaryIncludesClientContext() throws Exception {
         OpenApiController controller = newController();
         AgentConversationContextEntity entity = new AgentConversationContextEntity();
@@ -100,6 +111,12 @@ class OpenApiControllerMessageMappingTest {
         );
         method.setAccessible(true);
         return (OpenSessionMessageDTO) method.invoke(controller, entity, "ctx-1");
+    }
+
+    private String terminalStatusFromTaskStatus(OpenApiController controller, String status) throws Exception {
+        Method method = OpenApiController.class.getDeclaredMethod("terminalStatusFromTaskStatus", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(controller, status);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

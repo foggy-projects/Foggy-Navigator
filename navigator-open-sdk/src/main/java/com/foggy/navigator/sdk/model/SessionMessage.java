@@ -14,6 +14,8 @@ public class SessionMessage {
     private String role;
     private String type;
     private String content;
+    private Boolean terminal;
+    private String terminalStatus;
     private Map<String, Object> metadata;
     private String createdAt;
 
@@ -29,6 +31,10 @@ public class SessionMessage {
     public void setType(String type) { this.type = type; }
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }
+    public Boolean getTerminal() { return terminal; }
+    public void setTerminal(Boolean terminal) { this.terminal = terminal; }
+    public String getTerminalStatus() { return terminalStatus; }
+    public void setTerminalStatus(String terminalStatus) { this.terminalStatus = terminalStatus; }
     public Map<String, Object> getMetadata() { return metadata; }
     public void setMetadata(Map<String, Object> metadata) { this.metadata = metadata; }
     public String getCreatedAt() { return createdAt; }

@@ -933,10 +933,16 @@ public class OpenApiController {
                 .map(m -> toOpenSessionMessageDTO(m, contextId))
                 .toList();
 
+        String status = mapTaskStatus(taskEntity.getStatus());
+        String terminalStatus = terminalStatusFromTaskStatus(status);
+
         return RX.ok(OpenTaskMessagesResponse.builder()
                 .taskId(taskId)
                 .contextId(contextId)
                 .messages(dtos)
+                .status(status)
+                .terminal(terminalStatus != null)
+                .terminalStatus(terminalStatus)
                 .nextCursor(nextCursor)
                 .hasMore(hasMore)
                 .build());
@@ -1292,6 +1298,18 @@ public class OpenApiController {
         return switch (typeStr) {
             case "TASK_COMPLETED" -> "COMPLETED";
             case "ERROR" -> "FAILED";
+            default -> null;
+        };
+    }
+
+    private String terminalStatusFromTaskStatus(String status) {
+        if (status == null) {
+            return null;
+        }
+        return switch (status) {
+            case "COMPLETED" -> "COMPLETED";
+            case "FAILED" -> "FAILED";
+            case "CANCELLED", "CANCELED" -> "CANCELLED";
             default -> null;
         };
     }
