@@ -335,6 +335,7 @@ response = scriptTurn.response
 | Mock LLM unit tests | pass | `PYTHONPATH=src pytest`，22 passed |
 | CLI unit tests | pass | `mvn -pl navigator-open-sdk test`，42 passed，覆盖 config/script/debug/cleanup/model ensure |
 | Business Agent unit tests | pass | `mvn -pl business-agent-module test`，229 passed |
+| Java-side upstream BizWorker E2E | pass | `mvn -pl addons/langgraph-biz-worker -am -Dtest=BusinessAgentLanggraphLaunchE2ETest "-Dsurefire.failIfNoSpecifiedTests=false" -DfailIfNoTests=false test`；`mvn -pl addons/langgraph-biz-worker -am test`，覆盖 Business Agent task -> LangGraph task -> `WorkerTaskStartEvent` runtimeContext |
 | CLI package test | pass | `tools\navigator-upstream-cli\dist\package.ps1` 成功，ZIP 内包含 root/bin 双位置 `navi-e2e.ps1` |
 | CLI OBS release | pass | `tools\navigator-upstream-cli\dist\upload.ps1 -Version 1.0.0-SNAPSHOT -AllowSameVersion` 成功；remote `latest.json` SHA256=`4bb52a63e039d68348edd1e8b366a0340295e0012ff746c8a9010bc962d26c5c` |
 | Navigator integration tests | pending | ClientApp model grant、ask 使用 E2E modelConfigId |

@@ -8,6 +8,7 @@ import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -47,8 +48,8 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setWorkerId(entity.getWorkerId());
         form.setPrompt(prompt);
         form.setDirectoryId(entity.getDefaultDirectoryId());
-        form.setModel((String) meta.get("model"));
-        form.setModelConfigId((String) meta.get("modelConfigId"));
+        form.setModel(firstText(meta.get("model"), entity.getDefaultModel()));
+        form.setModelConfigId(firstText(meta.get("modelConfigId"), entity.getDefaultModelConfigId()));
         form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setContextId(context.getContextId());
         form.setSessionId(context.getNavigatorSessionId());
@@ -75,9 +76,7 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
                         .timestamp(Instant.now())
                         .build())
                 .history(List.of(message))
-                .metadata(Map.of(
-                        "sessionId", task.getSessionId(),
-                        "workerId", task.getWorkerId()))
+                .metadata(taskMetadata(task))
                 .build();
     }
 
@@ -138,5 +137,23 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             }
         }
         return "";
+    }
+
+    private String firstText(Object preferred, String fallback) {
+        if (preferred instanceof String value && !value.isBlank()) {
+            return value;
+        }
+        return fallback;
+    }
+
+    private Map<String, Object> taskMetadata(LanggraphTaskDTO task) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (task.getSessionId() != null) {
+            metadata.put("sessionId", task.getSessionId());
+        }
+        if (task.getWorkerId() != null) {
+            metadata.put("workerId", task.getWorkerId());
+        }
+        return metadata;
     }
 }
