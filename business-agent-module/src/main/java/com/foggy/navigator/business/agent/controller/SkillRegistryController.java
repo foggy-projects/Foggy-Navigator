@@ -3,10 +3,12 @@ package com.foggy.navigator.business.agent.controller;
 import com.foggy.navigator.business.agent.model.dto.ClientAppSkillGrantDTO;
 import com.foggy.navigator.business.agent.model.dto.ClientAppControlPlanePrincipal;
 import com.foggy.navigator.business.agent.model.dto.SkillBundleDTO;
+import com.foggy.navigator.business.agent.model.dto.SkillClearResultDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillFunctionAllowlistDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillMaterializeResultDTO;
 import com.foggy.navigator.business.agent.model.form.AddFunctionToSkillForm;
+import com.foggy.navigator.business.agent.model.form.ClearSkillBundleForm;
 import com.foggy.navigator.business.agent.model.form.CreateSkillForm;
 import com.foggy.navigator.business.agent.model.form.GrantSkillToClientAppForm;
 import com.foggy.navigator.business.agent.model.form.SyncSkillBundleForm;
@@ -82,5 +84,43 @@ public class SkillRegistryController {
             form.setAccountId(null);
         }
         return skillRegistryService.syncSkillBundle(principal.getTenantId(), principal.getActorUserId(), form);
+    }
+
+    @PostMapping("/skill-bundles/clear-public")
+    public SkillClearResultDTO clearPublicSkillBundles(
+            HttpServletRequest request,
+            @RequestBody ClearSkillBundleForm form) {
+        if (form == null) {
+            throw new IllegalArgumentException("form is required");
+        }
+        ClientAppControlPlanePrincipal principal = controlCredentialService.requireAccess(
+                request, ClientAppControlCredentialService.SCOPE_SKILL_BUNDLE_SYNC, form.getClientAppId());
+        bindClientAppForControlCredential(principal, form);
+        form.setAccountId(null);
+        return skillRegistryService.clearPublicSkillBundles(principal.getTenantId(), principal.getActorUserId(), form);
+    }
+
+    @PostMapping("/skill-bundles/clear-account")
+    public SkillClearResultDTO clearAccountSkillBundles(
+            HttpServletRequest request,
+            @RequestBody ClearSkillBundleForm form) {
+        if (form == null) {
+            throw new IllegalArgumentException("form is required");
+        }
+        ClientAppControlPlanePrincipal principal = controlCredentialService.requireAccess(
+                request, ClientAppControlCredentialService.SCOPE_SKILL_BUNDLE_SYNC, form.getClientAppId());
+        bindClientAppForControlCredential(principal, form);
+        return skillRegistryService.clearAccountSkillBundles(principal.getTenantId(), principal.getActorUserId(), form);
+    }
+
+    private void bindClientAppForControlCredential(ClientAppControlPlanePrincipal principal, ClearSkillBundleForm form) {
+        if (principal.isAdmin()) {
+            return;
+        }
+        if (!StringUtils.hasText(form.getClientAppId())) {
+            form.setClientAppId(principal.getClientAppId());
+        } else if (!form.getClientAppId().equals(principal.getClientAppId())) {
+            throw new SecurityException("control-plane credential clientAppId mismatch");
+        }
     }
 }

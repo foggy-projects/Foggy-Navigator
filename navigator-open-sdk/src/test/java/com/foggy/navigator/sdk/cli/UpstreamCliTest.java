@@ -743,6 +743,107 @@ class UpstreamCliTest {
         assertFalse(output.contains("cat-runtime-secret"));
     }
 
+    @Test
+    void skillClearPublicUsesControlPlaneCredentialAndDryRun() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "scope":"CLIENT_APP_PUBLIC",
+                  "clientAppId":"app-1",
+                  "dryRun":true,
+                  "executed":false,
+                  "skillIds":["old-skill"],
+                  "matchedSkillCount":1,
+                  "skillBundleCount":1,
+                  "legacySkillCount":1,
+                  "clientAppSkillGrantCount":1,
+                  "skillFunctionAllowlistCount":2,
+                  "materializedBundleCount":1,
+                  "cacheCount":0,
+                  "workerClearStatus":"SKIPPED_DRY_RUN"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "skill", "clear-public",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--skill-id", "old-skill",
+                "--dry-run"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/skill-bundles/clear-public", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"clientAppId\":\"app-1\""));
+        assertTrue(lastBody.contains("\"skillId\":\"old-skill\""));
+        assertTrue(lastBody.contains("\"dryRun\":true"));
+        assertTrue(output.contains("skill clear-public ok"));
+        assertTrue(output.contains("matchedSkillCount=1"));
+        assertTrue(output.contains("matchedSkillId=old-skill"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void skillClearAccountRequiresYesWhenNotDryRun() {
+        int code = run(new String[]{"upstream", "skill", "clear-account",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--account-id", "staff-1",
+                "--skill-id", "old-skill"}, Map.of());
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("requires --dry-run or --yes"));
+        assertNull(lastPath);
+    }
+
+    @Test
+    void skillClearAccountUsesControlPlaneCredentialAndYes() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "scope":"ACCOUNT_PRIVATE",
+                  "clientAppId":"app-1",
+                  "accountId":"staff-1",
+                  "skillId":"old-skill",
+                  "dryRun":false,
+                  "executed":true,
+                  "skillIds":["old-skill"],
+                  "matchedSkillCount":1,
+                  "skillBundleCount":1,
+                  "legacySkillCount":0,
+                  "clientAppSkillGrantCount":0,
+                  "skillFunctionAllowlistCount":0,
+                  "materializedBundleCount":1,
+                  "cacheCount":0,
+                  "workerClearStatus":"CLEARED",
+                  "workerStatusCode":200
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "skill", "clear-account",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--account-id", "staff-1",
+                "--skill-id", "old-skill",
+                "--yes"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/skill-bundles/clear-account", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"accountId\":\"staff-1\""));
+        assertTrue(lastBody.contains("\"dryRun\":false"));
+        assertTrue(output.contains("skill clear-account ok"));
+        assertTrue(output.contains("executed=true"));
+        assertTrue(output.contains("workerClearStatus=CLEARED"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
     private int run(String[] args, Map<String, String> env) {
         return new UpstreamCli(
                 new PrintStream(stdout, true, StandardCharsets.UTF_8),

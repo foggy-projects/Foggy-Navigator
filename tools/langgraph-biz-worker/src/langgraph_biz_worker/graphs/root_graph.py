@@ -122,6 +122,13 @@ def _prompt_with_attachment_context(prompt: str, attachments: list[dict[str, Any
     return f"{prompt}\n\n{attachment_context}"
 
 
+def _skill_agent_prompt(prompt: str, context: dict[str, Any]) -> str:
+    instruction = context.get("skill_instruction")
+    if isinstance(instruction, str) and instruction.strip():
+        return instruction.strip()
+    return prompt
+
+
 def _build_attachment_context_prompt(attachments: list[dict[str, Any]] | None) -> str:
     if not attachments:
         return ""
@@ -573,11 +580,12 @@ def run_skill(state: RootState) -> dict:
 
     llm_skill_agent = _llm_skill_agent_for_state(state)
     if llm_skill_agent:
+        skill_prompt = _skill_agent_prompt(state["prompt"], context)
         return {
             "events": llm_skill_agent.run(
                 task_id=task_id,
                 frame_id=frame_id,
-                prompt=_prompt_with_attachment_context(state["prompt"], state.get("attachments")),
+                prompt=_prompt_with_attachment_context(skill_prompt, state.get("attachments")),
                 account_id=account_id,
                 runtime_context=runtime_context,
             )

@@ -15,15 +15,15 @@ describe('conversationConfig api', () => {
     vi.clearAllMocks()
   })
 
-  it('listConversationConfigs joins session ids in query params', async () => {
+  it('listConversationConfigs sends session ids in post body', async () => {
     const response = { data: [{ sessionId: 'session-1' }] }
-    mockClient.get.mockResolvedValue(response)
+    mockClient.post.mockResolvedValue(response)
     const { listConversationConfigs } = await import('../conversationConfig')
 
     const result = await listConversationConfigs(['session-1', 'session-2'])
 
-    expect(mockClient.get).toHaveBeenCalledWith('/sessions/configs', {
-      params: { sessionIds: 'session-1,session-2' },
+    expect(mockClient.post).toHaveBeenCalledWith('/sessions/configs', {
+      sessionIds: ['session-1', 'session-2'],
     })
     expect(result).toEqual(response.data)
   })

@@ -1,5 +1,4 @@
 import asyncio
-import json
 import time
 import uuid
 from typing import AsyncGenerator, List, Optional
@@ -11,6 +10,7 @@ from ..models import (
     DeltaToolCallFunction,
     StreamConfig,
 )
+from ..tool_calls import normalize_tool_call
 
 
 async def generate_sse_stream(
@@ -67,12 +67,11 @@ async def generate_sse_stream(
     # 如果有 tool_calls，流式发送
     if tool_calls:
         for i, tc in enumerate(tool_calls):
+            normalized = normalize_tool_call(tc, i)
             # 发送 tool_call 开始（包含 id、type、name）
-            tc_id = tc.get("id", f"call_{uuid.uuid4().hex[:8]}")
-            func_name = tc["function"]["name"]
-            func_args = tc["function"]["arguments"]
-            if isinstance(func_args, dict):
-                func_args = json.dumps(func_args)
+            tc_id = normalized["id"]
+            func_name = normalized["function"]["name"]
+            func_args = normalized["function"]["arguments"]
 
             yield _format_chunk(
                 ChatCompletionChunk(

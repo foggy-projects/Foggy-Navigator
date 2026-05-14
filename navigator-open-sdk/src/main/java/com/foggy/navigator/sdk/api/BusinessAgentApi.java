@@ -101,6 +101,14 @@ public class BusinessAgentApi {
         return http.post("/api/v1/business-agent/skill-bundles/sync", form, new TypeReference<>() {});
     }
 
+    public SkillClearResultDTO clearPublicSkillBundles(ClearSkillBundleForm form) {
+        return http.post("/api/v1/business-agent/skill-bundles/clear-public", form, new TypeReference<>() {});
+    }
+
+    public SkillClearResultDTO clearAccountSkillBundles(ClearSkillBundleForm form) {
+        return http.post("/api/v1/business-agent/skill-bundles/clear-account", form, new TypeReference<>() {});
+    }
+
     // ===== Upstream User Grant =====
 
     public ClientAppUpstreamUserGrantDTO grantUpstreamUserAccess(String clientAppId, GrantUpstreamUserForm form) {

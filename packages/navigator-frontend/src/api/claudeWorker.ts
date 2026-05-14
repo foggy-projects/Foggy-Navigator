@@ -596,8 +596,9 @@ export async function updateConversationAuth(
 export async function listConversationConfigs(
   sessionIds: string[],
 ): Promise<ConversationConfig[]> {
-  const rx = (await client.get('/sessions/configs', {
-    params: { sessionIds: sessionIds.join(',') },
+  if (sessionIds.length === 0) return []
+  const rx = (await client.post('/sessions/configs', {
+    sessionIds,
   })) as unknown as RX<ConversationConfig[]>
   return rx.data
 }

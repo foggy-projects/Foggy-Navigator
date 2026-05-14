@@ -59,6 +59,14 @@ class MaterializeRequest(BaseModel):
     resources: list[SkillResource] = Field(default_factory=list)
 
 
+class ClearRequest(BaseModel):
+    scope: str = "public"
+    skill_id: str | None = None
+    account_id: str | None = None
+    client_app_id: str | None = None
+    dry_run: bool = False
+
+
 @router.post("/materialize", dependencies=[Depends(verify_token)])
 async def materialize_skill(req: MaterializeRequest) -> dict:
     """Materialize a dynamically registered skill to the local filesystem."""
@@ -131,6 +139,71 @@ async def materialize_skill(req: MaterializeRequest) -> dict:
         _on_sync_complete()
         
     return {"status": "success", "path": str(skill_file), "client_app_id": client_app_id}
+
+
+@router.post("/clear", dependencies=[Depends(verify_token)])
+async def clear_skill(req: ClearRequest) -> dict:
+    """Remove dynamically materialized skill directories from the local filesystem."""
+    if not _skills_root:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Skills route not configured",
+        )
+
+    from ..runtime.skill_registry import _validate_path_segment
+
+    if req.scope == "account":
+        if not req.account_id:
+            raise HTTPException(status_code=400, detail="account_id required for account scope")
+        from ..runtime.skill_registry import _validate_account_id
+        try:
+            account_id = _validate_account_id(req.account_id)
+            skill_id = _validate_path_segment(req.skill_id, "skill_id") if req.skill_id else None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        target_dir = _skills_root.parent / "data" / "accounts" / account_id / "skills"
+    else:
+        try:
+            client_app_id = _validate_path_segment(req.client_app_id, "client_app_id") if req.client_app_id else None
+            skill_id = _validate_path_segment(req.skill_id, "skill_id") if req.skill_id else None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        target_dir = _skills_root / "public" / "apps" / client_app_id if client_app_id else _skills_root / "public"
+
+    if skill_id:
+        target_dir = target_dir / skill_id
+
+    root = (_skills_root.parent if req.scope == "account" else _skills_root).resolve()
+    resolved = target_dir.resolve()
+    if root not in [resolved, *resolved.parents]:
+        raise HTTPException(status_code=400, detail="skill clear target escapes skills root")
+    if target_dir.is_symlink():
+        raise HTTPException(status_code=400, detail="skill clear target must not be a symlink")
+
+    exists = target_dir.exists()
+    deleted_count = _count_skill_dirs(target_dir, bool(skill_id)) if exists else 0
+    if exists and not req.dry_run:
+        if target_dir.is_file():
+            target_dir.unlink()
+        else:
+            shutil.rmtree(target_dir)
+        if _on_sync_complete:
+            _on_sync_complete()
+
+    return {
+        "status": "dry-run" if req.dry_run else "cleared",
+        "target": str(target_dir),
+        "exists": exists,
+        "deleted_count": deleted_count,
+    }
+
+
+def _count_skill_dirs(target_dir: Path, target_is_skill: bool) -> int:
+    if target_is_skill:
+        return 1 if (target_dir / "SKILL.md").exists() else 0
+    if not target_dir.is_dir():
+        return 0
+    return sum(1 for child in target_dir.iterdir() if child.is_dir() and (child / "SKILL.md").exists())
 
 
 def _replace_bundle_resources(target_dir: Path, resources: list[SkillResource]) -> None:

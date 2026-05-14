@@ -1,4 +1,3 @@
-import json
 import time
 import uuid
 from fastapi import APIRouter
@@ -17,6 +16,7 @@ from ..store.yaml_store import YamlResponseStore
 from ..store.script_store import ScriptMatch, ScriptStore
 from ..strategies.keyword import KeywordMatchStrategy
 from ..stream.sse import generate_sse_stream
+from ..tool_calls import normalize_tool_call
 
 router = APIRouter()
 
@@ -58,8 +58,15 @@ async def chat_completions(request: ChatCompletionRequest):
     # 流式响应
     if request.stream:
         stream_config = rule.stream if rule and rule.stream else StreamConfig()
-        tool_calls = _response_tool_calls(script_match, rule)
-        _record_debug_request(script_match, request, {"stream": True, "toolCalls": bool(tool_calls)})
+        tool_calls = _normalized_tool_calls(script_match, rule)
+        _record_debug_request(
+            script_match,
+            request,
+            {
+                "stream": True,
+                "toolCalls": [tc["function"]["name"] for tc in tool_calls],
+            },
+        )
         return StreamingResponse(
             generate_sse_stream(content, request.model, stream_config, tool_calls),
             media_type="text/event-stream",
@@ -75,7 +82,7 @@ async def chat_completions(request: ChatCompletionRequest):
     response_message = ChatMessage(role="assistant", content=content)
     finish_reason = "stop"
 
-    configured_tool_calls = _response_tool_calls(script_match, rule)
+    configured_tool_calls = _normalized_tool_calls(script_match, rule)
     # 如果规则配置了 tool_calls，添加到响应中
     if configured_tool_calls:
         tool_calls = []
@@ -86,9 +93,7 @@ async def chat_completions(request: ChatCompletionRequest):
                     type=tc.get("type", "function"),
                     function=FunctionCall(
                         name=tc["function"]["name"],
-                        arguments=json.dumps(tc["function"]["arguments"])
-                        if isinstance(tc["function"]["arguments"], dict)
-                        else tc["function"]["arguments"],
+                        arguments=tc["function"]["arguments"],
                     ),
                 )
             )
@@ -137,6 +142,12 @@ def _response_tool_calls(script_match: ScriptMatch, rule):
     if script_match:
         return script_match.response.tool_calls
     return rule.response.tool_calls if rule and rule.response.tool_calls else None
+
+
+def _normalized_tool_calls(script_match: ScriptMatch, rule):
+    tool_calls = _response_tool_calls(script_match, rule) or []
+    seed = script_match.cursor if script_match else None
+    return [normalize_tool_call(tc, i, seed) for i, tc in enumerate(tool_calls)]
 
 
 def _completion_id(script_match: ScriptMatch) -> str:

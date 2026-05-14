@@ -2,6 +2,7 @@ package com.foggy.navigator.business.agent.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.ClientAppSkillGrantDTO;
+import com.foggy.navigator.business.agent.model.dto.SkillClearResultDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillFunctionAllowlistDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillMaterializeResultDTO;
@@ -14,6 +15,7 @@ import com.foggy.navigator.business.agent.model.entity.SkillBundleEntity;
 import com.foggy.navigator.business.agent.model.entity.SkillEntity;
 import com.foggy.navigator.business.agent.model.entity.SkillFunctionAllowlistEntity;
 import com.foggy.navigator.business.agent.model.form.AddFunctionToSkillForm;
+import com.foggy.navigator.business.agent.model.form.ClearSkillBundleForm;
 import com.foggy.navigator.business.agent.model.form.CreateSkillForm;
 import com.foggy.navigator.business.agent.model.form.GrantSkillToClientAppForm;
 import com.foggy.navigator.business.agent.model.form.SkillBundleFunctionForm;
@@ -426,5 +428,107 @@ class SkillRegistryServiceTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void clearPublicSkillBundles_dryRunReportsMatchesWithoutDeleting() {
+        ClearSkillBundleForm form = new ClearSkillBundleForm();
+        form.setClientAppId("tms_app");
+        form.setSkillId("old_skill");
+        form.setDryRun(true);
+
+        SkillBundleEntity bundle = new SkillBundleEntity();
+        bundle.setTenantId("tenant_1");
+        bundle.setClientAppId("tms_app");
+        bundle.setScope("CLIENT_APP_PUBLIC");
+        bundle.setAccountId("");
+        bundle.setSkillId("old_skill");
+        when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndSkillId(
+                "tenant_1", "tms_app", "CLIENT_APP_PUBLIC", "old_skill")).thenReturn(List.of(bundle));
+        when(skillBundleRepository.findByTenantIdAndSkillId("tenant_1", "old_skill")).thenReturn(List.of(bundle));
+
+        ClientAppSkillGrantEntity grant = new ClientAppSkillGrantEntity();
+        grant.setSkillId("old_skill");
+        when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "old_skill"))
+                .thenReturn(Optional.of(grant));
+
+        SkillFunctionAllowlistEntity allow = new SkillFunctionAllowlistEntity();
+        allow.setSkillId("old_skill");
+        when(allowlistRepository.findByTenantIdAndSkillId("tenant_1", "old_skill")).thenReturn(List.of(allow));
+
+        SkillClearResultDTO result = skillRegistryService.clearPublicSkillBundles("tenant_1", "user_1", form);
+
+        assertTrue(result.isDryRun());
+        assertFalse(result.isExecuted());
+        assertEquals(1, result.getMatchedSkillCount());
+        assertEquals(1, result.getSkillBundleCount());
+        assertEquals(1, result.getClientAppSkillGrantCount());
+        assertEquals(1, result.getSkillFunctionAllowlistCount());
+        assertEquals("SKIPPED_DRY_RUN", result.getWorkerClearStatus());
+        verify(skillBundleRepository, never()).deleteAll(any());
+        verify(skillRepository, never()).delete(any());
+    }
+
+    @Test
+    void clearPublicSkillBundles_zeroMatchReturnsSummaryWithoutDeleting() {
+        ClearSkillBundleForm form = new ClearSkillBundleForm();
+        form.setClientAppId("tms_app");
+        form.setSkillId("missing_skill");
+        form.setDryRun(false);
+
+        when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndSkillId(
+                "tenant_1", "tms_app", "CLIENT_APP_PUBLIC", "missing_skill")).thenReturn(List.of());
+
+        SkillClearResultDTO result = skillRegistryService.clearPublicSkillBundles("tenant_1", "user_1", form);
+
+        assertFalse(result.isDryRun());
+        assertTrue(result.isExecuted());
+        assertEquals(0, result.getMatchedSkillCount());
+        assertEquals(0, result.getSkillBundleCount());
+        assertEquals("ZERO_MATCH", result.getWorkerClearStatus());
+        verify(skillBundleRepository, never()).deleteAll(any());
+        verify(skillRepository, never()).delete(any());
+    }
+
+    @Test
+    void clearAccountSkillBundles_deletesBundleAndLegacyIndexesWhenLastBundle() {
+        ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "");
+
+        ClearSkillBundleForm form = new ClearSkillBundleForm();
+        form.setClientAppId("tms_app");
+        form.setAccountId("staff_1");
+        form.setSkillId("old_skill");
+        form.setDryRun(false);
+
+        SkillBundleEntity bundle = new SkillBundleEntity();
+        bundle.setTenantId("tenant_1");
+        bundle.setClientAppId("tms_app");
+        bundle.setScope("ACCOUNT_PRIVATE");
+        bundle.setAccountId("staff_1");
+        bundle.setSkillId("old_skill");
+        when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                "tenant_1", "tms_app", "ACCOUNT_PRIVATE", "staff_1", "old_skill")).thenReturn(Optional.of(bundle));
+        when(skillBundleRepository.findByTenantIdAndSkillId("tenant_1", "old_skill")).thenReturn(List.of(bundle));
+
+        SkillEntity skill = new SkillEntity();
+        skill.setSkillId("old_skill");
+        when(skillRepository.findByTenantIdAndSkillId("tenant_1", "old_skill")).thenReturn(Optional.of(skill));
+
+        ClientAppSkillGrantEntity grant = new ClientAppSkillGrantEntity();
+        grant.setSkillId("old_skill");
+        when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "old_skill"))
+                .thenReturn(Optional.of(grant));
+        when(allowlistRepository.findByTenantIdAndSkillId("tenant_1", "old_skill")).thenReturn(List.of());
+
+        SkillClearResultDTO result = skillRegistryService.clearAccountSkillBundles("tenant_1", "user_1", form);
+
+        assertFalse(result.isDryRun());
+        assertTrue(result.isExecuted());
+        assertEquals(1, result.getSkillBundleCount());
+        assertEquals(1, result.getLegacySkillCount());
+        assertEquals("SKIPPED", result.getWorkerClearStatus());
+        verify(skillBundleRepository).deleteAll(List.of(bundle));
+        verify(grantRepository).delete(grant);
+        verify(skillRepository).delete(skill);
     }
 }

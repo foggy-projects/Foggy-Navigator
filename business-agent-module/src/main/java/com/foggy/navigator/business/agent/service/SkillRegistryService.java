@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.ClientAppSkillGrantDTO;
+import com.foggy.navigator.business.agent.model.dto.SkillClearResultDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillBundleDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillFunctionAllowlistDTO;
@@ -17,6 +18,7 @@ import com.foggy.navigator.business.agent.model.entity.SkillBundleEntity;
 import com.foggy.navigator.business.agent.model.entity.SkillEntity;
 import com.foggy.navigator.business.agent.model.entity.SkillFunctionAllowlistEntity;
 import com.foggy.navigator.business.agent.model.form.AddFunctionToSkillForm;
+import com.foggy.navigator.business.agent.model.form.ClearSkillBundleForm;
 import com.foggy.navigator.business.agent.model.form.CreateSkillForm;
 import com.foggy.navigator.business.agent.model.form.GrantSkillToClientAppForm;
 import com.foggy.navigator.business.agent.model.form.SkillBundleFunctionForm;
@@ -43,10 +45,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -302,6 +306,177 @@ public class SkillRegistryService {
         full.setFunctions(form.getFunctions());
         full.setMaterialize(form.getMaterialize());
         return syncSkillBundle(tenantId, upstreamUserId, full);
+    }
+
+    @Transactional
+    public SkillClearResultDTO clearPublicSkillBundles(String tenantId, String actorUserId, ClearSkillBundleForm form) {
+        Assert.hasText(tenantId, "tenantId is required");
+        Assert.hasText(actorUserId, "actorUserId is required");
+        if (form == null) {
+            throw new IllegalArgumentException("form is required");
+        }
+        Assert.hasText(form.getClientAppId(), "clientAppId is required");
+
+        List<SkillBundleEntity> bundles = StringUtils.hasText(form.getSkillId())
+                ? skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndSkillId(
+                        tenantId, form.getClientAppId(), SCOPE_CLIENT_APP_PUBLIC, form.getSkillId())
+                : skillBundleRepository.findByTenantIdAndClientAppIdAndScope(
+                        tenantId, form.getClientAppId(), SCOPE_CLIENT_APP_PUBLIC);
+        return clearSkillBundles(tenantId, form, SCOPE_CLIENT_APP_PUBLIC, bundles);
+    }
+
+    @Transactional
+    public SkillClearResultDTO clearAccountSkillBundles(String tenantId, String actorUserId, ClearSkillBundleForm form) {
+        Assert.hasText(tenantId, "tenantId is required");
+        Assert.hasText(actorUserId, "actorUserId is required");
+        if (form == null) {
+            throw new IllegalArgumentException("form is required");
+        }
+        Assert.hasText(form.getClientAppId(), "clientAppId is required");
+        Assert.hasText(form.getAccountId(), "accountId is required");
+
+        List<SkillBundleEntity> bundles;
+        if (StringUtils.hasText(form.getSkillId())) {
+            bundles = skillBundleRepository
+                    .findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                            tenantId,
+                            form.getClientAppId(),
+                            SCOPE_ACCOUNT_PRIVATE,
+                            form.getAccountId(),
+                            form.getSkillId())
+                    .map(List::of)
+                    .orElseGet(List::of);
+        } else {
+            bundles = skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountId(
+                    tenantId, form.getClientAppId(), SCOPE_ACCOUNT_PRIVATE, form.getAccountId());
+        }
+        return clearSkillBundles(tenantId, form, SCOPE_ACCOUNT_PRIVATE, bundles);
+    }
+
+    private SkillClearResultDTO clearSkillBundles(
+            String tenantId,
+            ClearSkillBundleForm form,
+            String scope,
+            List<SkillBundleEntity> bundles) {
+        List<SkillBundleEntity> matchedBundles = bundles == null ? List.of() : bundles;
+        boolean dryRun = Boolean.TRUE.equals(form.getDryRun());
+        Set<String> matchedSkillIds = new LinkedHashSet<>();
+        matchedBundles.forEach(bundle -> matchedSkillIds.add(bundle.getSkillId()));
+
+        Set<String> legacySkillIds = new LinkedHashSet<>();
+        int grantCount = 0;
+        int allowlistCount = 0;
+        for (String skillId : matchedSkillIds) {
+            if (shouldClearLegacySkill(tenantId, skillId, matchedBundles)) {
+                legacySkillIds.add(skillId);
+                grantCount += countList(grantRepository.findByTenantIdAndClientAppIdAndSkillId(
+                        tenantId, form.getClientAppId(), skillId).map(List::of).orElseGet(List::of));
+                allowlistCount += countList(allowlistRepository.findByTenantIdAndSkillId(tenantId, skillId));
+            }
+        }
+
+        SkillClearResultDTO result = new SkillClearResultDTO();
+        result.setScope(scope);
+        result.setClientAppId(form.getClientAppId());
+        result.setAccountId(form.getAccountId());
+        result.setSkillId(form.getSkillId());
+        result.setDryRun(dryRun);
+        result.setExecuted(!dryRun);
+        result.setSkillIds(List.copyOf(matchedSkillIds));
+        result.setMatchedSkillCount(matchedSkillIds.size());
+        result.setSkillBundleCount(matchedBundles.size());
+        result.setLegacySkillCount(legacySkillIds.size());
+        result.setClientAppSkillGrantCount(grantCount);
+        result.setSkillFunctionAllowlistCount(allowlistCount);
+        result.setMaterializedBundleCount(matchedBundles.size());
+        result.setCacheCount(0);
+
+        if (dryRun || matchedBundles.isEmpty()) {
+            result.setWorkerClearStatus(dryRun ? "SKIPPED_DRY_RUN" : "ZERO_MATCH");
+            return result;
+        }
+
+        skillBundleRepository.deleteAll(matchedBundles);
+        for (String skillId : legacySkillIds) {
+            grantRepository.findByTenantIdAndClientAppIdAndSkillId(tenantId, form.getClientAppId(), skillId)
+                    .ifPresent(grantRepository::delete);
+            List<SkillFunctionAllowlistEntity> allowlist = allowlistRepository.findByTenantIdAndSkillId(tenantId, skillId);
+            if (allowlist != null && !allowlist.isEmpty()) {
+                allowlistRepository.deleteAll(allowlist);
+            }
+            skillRepository.findByTenantIdAndSkillId(tenantId, skillId)
+                    .ifPresent(skillRepository::delete);
+        }
+
+        WorkerClearOutcome workerOutcome = clearMaterializedWorkerSkills(scope, form);
+        result.setWorkerClearStatus(workerOutcome.status());
+        result.setWorkerStatusCode(workerOutcome.statusCode());
+        result.setWorkerResponse(workerOutcome.response());
+        return result;
+    }
+
+    private boolean shouldClearLegacySkill(String tenantId, String skillId, List<SkillBundleEntity> matchedBundles) {
+        Set<String> matchedKeys = new LinkedHashSet<>();
+        matchedBundles.stream()
+                .filter(bundle -> skillId.equals(bundle.getSkillId()))
+                .map(this::bundleKey)
+                .forEach(matchedKeys::add);
+        List<SkillBundleEntity> allForSkill = skillBundleRepository.findByTenantIdAndSkillId(tenantId, skillId);
+        if (allForSkill == null || allForSkill.isEmpty()) {
+            return true;
+        }
+        return allForSkill.stream().map(this::bundleKey).allMatch(matchedKeys::contains);
+    }
+
+    private String bundleKey(SkillBundleEntity bundle) {
+        return bundle.getClientAppId() + "|" + bundle.getScope() + "|"
+                + bundle.getAccountId() + "|" + bundle.getSkillId();
+    }
+
+    private int countList(List<?> values) {
+        return values == null ? 0 : values.size();
+    }
+
+    private WorkerClearOutcome clearMaterializedWorkerSkills(String scope, ClearSkillBundleForm form) {
+        if (!StringUtils.hasText(devSyncWorkerUrl)) {
+            return new WorkerClearOutcome("SKIPPED", null, "dev-sync-worker-url is not configured");
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("scope", SCOPE_ACCOUNT_PRIVATE.equals(scope) ? "account" : "public");
+            payload.put("client_app_id", form.getClientAppId());
+            payload.put("account_id", form.getAccountId());
+            payload.put("skill_id", form.getSkillId());
+
+            String json = objectMapper.writeValueAsString(payload);
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(devSyncWorkerUrl + "/api/v1/skills/clear"))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(json));
+
+            if (StringUtils.hasText(devSyncWorkerToken)) {
+                requestBuilder.header("Authorization", "Bearer " + devSyncWorkerToken);
+            }
+
+            HttpResponse<String> response = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(3))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .build()
+                    .send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
+
+            String status = response.statusCode() >= 200 && response.statusCode() < 300 ? "CLEARED" : "FAILED";
+            return new WorkerClearOutcome(status, response.statusCode(), response.body());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new WorkerClearOutcome("FAILED", null, "Worker skill clear interrupted");
+        } catch (Exception e) {
+            return new WorkerClearOutcome("FAILED", null, e.getMessage());
+        }
+    }
+
+    private record WorkerClearOutcome(String status, Integer statusCode, String response) {
     }
 
     @Transactional(readOnly = true)

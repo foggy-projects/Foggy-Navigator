@@ -95,15 +95,12 @@ curl -X POST http://localhost:8200/__e2e/scripts \
     {
       "cursor": "next:e2e-uuid-001:001",
       "response": {
-        "content": "",
         "tool_calls": [
           {
-            "function": {
-              "name": "tms.order.createOpeningDraft",
-              "arguments": {
-                "e2eTraceId": "e2e-uuid-001",
-                "next": "next:e2e-uuid-001:002"
-              }
+            "name": "tms.order.createOpeningDraft",
+            "args": {
+              "e2eTraceId": "e2e-uuid-001",
+              "next": "next:e2e-uuid-001:002"
             }
           }
         ]
@@ -112,6 +109,11 @@ curl -X POST http://localhost:8200/__e2e/scripts \
   ]
 }
 ```
+
+`response.content` 可省略，适用于 tool-only turn。`tool_calls` 同时支持两种写法：
+
+- LangChain 风格：`name` + `args`
+- OpenAI 风格：`function.name` + `function.arguments`
 
 调试请求：
 

@@ -17,8 +17,8 @@ export async function listConversationConfigs(
   sessionIds: string[],
 ): Promise<ConversationConfig[]> {
   if (sessionIds.length === 0) return []
-  const rx = (await client.get('/sessions/configs', {
-    params: { sessionIds: sessionIds.join(',') },
+  const rx = (await client.post('/sessions/configs', {
+    sessionIds,
   })) as unknown as RX<ConversationConfig[]>
   return rx.data
 }
