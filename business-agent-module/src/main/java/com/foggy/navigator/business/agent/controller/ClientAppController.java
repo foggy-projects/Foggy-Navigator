@@ -3,6 +3,7 @@ package com.foggy.navigator.business.agent.controller;
 import com.foggy.navigator.business.agent.model.dto.ClientAppDTO;
 import com.foggy.navigator.business.agent.model.dto.IssuedCredentialDTO;
 import com.foggy.navigator.business.agent.model.form.CreateClientAppForm;
+import com.foggy.navigator.business.agent.model.form.IssueControlCredentialForm;
 import com.foggy.navigator.business.agent.model.form.IssueRuntimeCredentialForm;
 import com.foggy.navigator.business.agent.model.form.UpdateStatusForm;
 import com.foggy.navigator.business.agent.service.ClientAppService;
@@ -38,6 +39,13 @@ public class ClientAppController {
                                                           @RequestBody IssueRuntimeCredentialForm form) {
         return RX.ok(clientAppService.issueRuntimeCredential(
                 UserContext.getCurrentTenantId(), clientAppId, form));
+    }
+
+    @PostMapping("/{clientAppId}/control-credentials")
+    public RX<IssuedCredentialDTO> issueControlCredential(@PathVariable String clientAppId,
+                                                          @RequestBody IssueControlCredentialForm form) {
+        return RX.ok(clientAppService.issueControlCredential(
+                UserContext.getCurrentTenantId(), UserContext.getCurrentUserId(), clientAppId, form));
     }
 
     @PutMapping("/{clientAppId}/status")

@@ -13,6 +13,7 @@ import reactor.netty.http.client.HttpClient;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -57,10 +58,12 @@ public class LanggraphWorkerClient {
             Map<String, Object> runtimeContext,
             String model,
             String modelConfigId,
+            Map<String, Object> llmConfig,
             String taskId,
             String sessionId,
             String userId,
-            String tenantId
+            String tenantId,
+            List<Map<String, Object>> attachments
     ) {
         Map<String, Object> body = new HashMap<>();
         body.put("prompt", prompt);
@@ -68,10 +71,12 @@ public class LanggraphWorkerClient {
         if (runtimeContext != null) body.put("runtime_context", runtimeContext);
         if (model != null) body.put("model", model);
         if (modelConfigId != null) body.put("model_config_id", modelConfigId);
+        if (llmConfig != null && !llmConfig.isEmpty()) body.put("llm_config", llmConfig);
         if (taskId != null) body.put("taskId", taskId);
         if (sessionId != null) body.put("session_id", sessionId);
         if (userId != null) body.put("userId", userId);
         if (tenantId != null) body.put("tenantId", tenantId);
+        if (attachments != null && !attachments.isEmpty()) body.put("attachments", attachments);
 
         return webClient.post()
                 .uri("/api/v1/query")

@@ -82,6 +82,37 @@ def create_chat_model(settings: Settings) -> BaseChatModel | None:
         return None
 
 
+def create_chat_model_from_config(config: dict[str, Any] | None) -> BaseChatModel | None:
+    """Create a per-request chat model from Navigator-resolved model config."""
+    if not config:
+        return None
+
+    provider = _text(config.get("provider")).lower()
+    if not provider:
+        return None
+
+    try:
+        temperature = float(config.get("temperature", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        temperature = 0.0
+
+    request_settings = Settings(
+        llm_provider=provider,
+        llm_api_key=_text(config.get("api_key")),
+        llm_base_url=_text(config.get("base_url")),
+        llm_model=_text(config.get("model")),
+        llm_temperature=temperature,
+    )
+    return create_chat_model(request_settings)
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return text
+
+
 class LlmSkillRouter:
     """Routes user prompts to the best matching Skill using an LLM."""
 

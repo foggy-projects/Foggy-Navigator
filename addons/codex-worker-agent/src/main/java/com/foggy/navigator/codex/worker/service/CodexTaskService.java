@@ -109,6 +109,7 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setImages((String) params.get("images"));
+        form.setAttachments(attachmentsParam(params.get("attachments")));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
         }
@@ -224,6 +225,9 @@ public class CodexTaskService implements TaskQueryProvider {
         Map<String, Object> providerConfig = new LinkedHashMap<>();
         putIfNotBlank(providerConfig, "codexThreadId", form.getCodexThreadId());
         putIfNotBlank(providerConfig, "images", form.getImages());
+        if (form.getAttachments() != null && !form.getAttachments().isEmpty()) {
+            providerConfig.put("attachments", form.getAttachments());
+        }
         putIfNotBlank(providerConfig, "baseUrl", auth.baseUrl);
         if (auth.envVars != null && !auth.envVars.isEmpty()) {
             providerConfig.put("extraEnvVars", auth.envVars);
@@ -480,6 +484,7 @@ public class CodexTaskService implements TaskQueryProvider {
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setImages((String) params.get("images"));
+        form.setAttachments(attachmentsParam(params.get("attachments")));
         form.setCodexThreadId((String) params.get("codexThreadId"));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
@@ -923,6 +928,14 @@ public class CodexTaskService implements TaskQueryProvider {
         if (value != null && !value.isBlank()) {
             target.put(key, value);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> attachmentsParam(Object value) {
+        if (value instanceof List<?> list) {
+            return (List<Map<String, Object>>) list;
+        }
+        return null;
     }
 
     private String firstNonBlank(String... values) {

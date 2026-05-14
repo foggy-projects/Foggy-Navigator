@@ -139,3 +139,250 @@ async def test_langgraph_biz_worker_skill_tool_call_sequence(client):
     assert third.status_code == 200
     third_call = third.json()["choices"][0]["message"]["tool_calls"][0]
     assert third_call["function"]["name"] == "submit_skill_result"
+
+
+@pytest.mark.anyio
+async def test_scripted_cursor_tool_call_and_debug_requests(client):
+    """测试 E2E script 可按首轮 cursor 返回 tool call 并记录 debug request。"""
+    trace_id = "e2e-script-001"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    register = await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "scenarioId": "tms-create-order",
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:001",
+                    "response": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "tms.order.createOpeningDraft",
+                                    "arguments": {
+                                        "e2eTraceId": trace_id,
+                                        "next": f"next:{trace_id}:002",
+                                    },
+                                }
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+    assert register.status_code == 200
+    assert register.json()["turns"] == 1
+
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-biz-worker-v1",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"create order e2eTraceId={trace_id} next:{trace_id}:001",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    message = data["choices"][0]["message"]
+    assert data["id"].startswith("chatcmpl-")
+    assert data["choices"][0]["finish_reason"] == "tool_calls"
+    assert message["tool_calls"][0]["function"]["name"] == "tms.order.createOpeningDraft"
+    assert f"next:{trace_id}:002" in message["tool_calls"][0]["function"]["arguments"]
+
+    debug = await client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert len(records) == 1
+    assert records[0]["cursor"] == f"next:{trace_id}:001"
+    assert records[0]["scenarioId"] == "tms-create-order"
+    assert records[0]["responseSummary"]["toolCalls"] == ["tms.order.createOpeningDraft"]
+
+
+@pytest.mark.anyio
+async def test_scripted_cursor_advances_from_assistant_tool_call_arguments(client):
+    """测试后续轮次可从 assistant tool_calls arguments 中解析 cursor。"""
+    trace_id = "e2e-script-002"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:002",
+                    "response": {
+                        "content": "{\"summary\":\"done\"}",
+                    },
+                }
+            ],
+        },
+    )
+
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-biz-worker-v1",
+            "messages": [
+                {"role": "user", "content": f"start next:{trace_id}:001"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "mock_tool",
+                                "arguments": f"{{\"next\":\"next:{trace_id}:002\"}}",
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "{\"ok\":true}"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["choices"][0]["finish_reason"] == "stop"
+    assert data["choices"][0]["message"]["content"] == "{\"summary\":\"done\"}"
+
+
+@pytest.mark.anyio
+async def test_scripted_cursor_advances_from_latest_tool_message_content(client):
+    """测试 tool result content 中的 cursor 优先驱动下一轮。"""
+    trace_id = "e2e-script-002b"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:003",
+                    "response": {
+                        "content": "{\"summary\":\"tool-result-cursor\"}",
+                    },
+                }
+            ],
+        },
+    )
+
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-biz-worker-v1",
+            "messages": [
+                {"role": "user", "content": f"start next:{trace_id}:001"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "mock_tool",
+                                "arguments": f"{{\"next\":\"next:{trace_id}:002\"}}",
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": f"{{\"ok\":true,\"next\":\"next:{trace_id}:003\"}}",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "{\"summary\":\"tool-result-cursor\"}"
+
+
+@pytest.mark.anyio
+async def test_scripted_cursor_idempotent_for_duplicate_request(client):
+    """测试相同 trace/cursor/request 重复调用返回稳定 completion/tool_call id。"""
+    trace_id = "e2e-script-003"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:001",
+                    "response": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "mock_tool",
+                                    "arguments": {"next": f"next:{trace_id}:002"},
+                                }
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+    payload = {
+        "model": "navigator-e2e-biz-worker-v1",
+        "messages": [{"role": "user", "content": f"start next:{trace_id}:001"}],
+    }
+
+    first = await client.post("/v1/chat/completions", json=payload)
+    second = await client.post("/v1/chat/completions", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_data = first.json()
+    second_data = second.json()
+    assert first_data["id"] == second_data["id"]
+    assert (
+        first_data["choices"][0]["message"]["tool_calls"][0]["id"]
+        == second_data["choices"][0]["message"]["tool_calls"][0]["id"]
+    )
+
+
+@pytest.mark.anyio
+async def test_scripted_cursor_trace_isolation(client):
+    """测试不同 traceId 的相同 turnIndex 不串场。"""
+    trace_a = "e2e-script-004a"
+    trace_b = "e2e-script-004b"
+    await client.delete(f"/__e2e/scripts/{trace_a}")
+    await client.delete(f"/__e2e/scripts/{trace_b}")
+    for trace_id, content in [(trace_a, "response-a"), (trace_b, "response-b")]:
+        await client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {"content": content},
+                    }
+                ],
+            },
+        )
+
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-biz-worker-v1",
+            "messages": [{"role": "user", "content": f"start next:{trace_b}:001"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "response-b"

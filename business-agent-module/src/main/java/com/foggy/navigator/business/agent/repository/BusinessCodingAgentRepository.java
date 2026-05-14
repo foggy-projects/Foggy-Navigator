@@ -8,5 +8,5 @@ import java.util.Optional;
 
 @Repository
 public interface BusinessCodingAgentRepository extends JpaRepository<CodingAgentEntity, Long> {
-    Optional<CodingAgentEntity> findByAgentId(String agentId);
+    Optional<CodingAgentEntity> findByAgentIdAndTenantId(String agentId, String tenantId);
 }

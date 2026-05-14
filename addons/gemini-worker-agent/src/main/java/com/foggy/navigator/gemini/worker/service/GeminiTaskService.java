@@ -98,6 +98,7 @@ public class GeminiTaskService implements TaskQueryProvider {
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setGeminiSessionId((String) params.get("geminiSessionId"));
         form.setSessionId((String) params.get("sessionId"));
+        form.setAttachments(attachmentsParam(params.get("attachments")));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
         }
@@ -116,6 +117,7 @@ public class GeminiTaskService implements TaskQueryProvider {
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setSessionId((String) params.get("sessionId"));
+        form.setAttachments(attachmentsParam(params.get("attachments")));
         if (params.get("maxTurns") instanceof Number n) {
             form.setMaxTurns(n.intValue());
         }
@@ -190,6 +192,9 @@ public class GeminiTaskService implements TaskQueryProvider {
         Map<String, Object> providerConfig = new LinkedHashMap<>();
         putIfNotBlank(providerConfig, "geminiSessionId", form.getGeminiSessionId());
         putIfNotBlank(providerConfig, "baseUrl", auth.baseUrl());
+        if (form.getAttachments() != null && !form.getAttachments().isEmpty()) {
+            providerConfig.put("attachments", form.getAttachments());
+        }
         if (auth.envVars() != null && !auth.envVars().isEmpty()) {
             providerConfig.put("extraEnvVars", auth.envVars());
         }
@@ -710,6 +715,14 @@ public class GeminiTaskService implements TaskQueryProvider {
         if (value != null && !value.isBlank()) {
             target.put(key, value);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> attachmentsParam(Object value) {
+        if (value instanceof List<?> list) {
+            return (List<Map<String, Object>>) list;
+        }
+        return null;
     }
 
     private static void applyIfPresent(String value, Consumer<String> setter) {

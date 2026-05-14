@@ -12,6 +12,7 @@ import json
 import re
 from pathlib import Path
 from typing import Annotated, Any, TypedDict
+from urllib.parse import urlsplit, urlunsplit
 
 from langgraph.graph import END, StateGraph
 
@@ -20,7 +21,7 @@ from ..models import FrameStatus, QueryEvent, SkillManifest
 from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.frame_store import FrameStore
 from ..runtime.account_context_files import build_account_context_prompt
-from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model
+from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model, create_chat_model_from_config
 from ..runtime.llm_skill_agent import LlmSkillAgent
 from ..runtime.skill_registry import SkillRegistry
 from ..runtime.skill_runtime import SkillRuntime
@@ -114,6 +115,101 @@ def _account_id_from_state(state: RootState) -> str | None:
     )
 
 
+def _prompt_with_attachment_context(prompt: str, attachments: list[dict[str, Any]] | None) -> str:
+    attachment_context = _build_attachment_context_prompt(attachments)
+    if not attachment_context:
+        return prompt
+    return f"{prompt}\n\n{attachment_context}"
+
+
+def _build_attachment_context_prompt(attachments: list[dict[str, Any]] | None) -> str:
+    if not attachments:
+        return ""
+    safe_attachments = [_safe_attachment_summary(item) for item in attachments if isinstance(item, dict)]
+    if not safe_attachments:
+        return ""
+    return "Attachments provided by upstream system:\n" + json.dumps(
+        safe_attachments,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _safe_attachment_summary(item: dict[str, Any]) -> dict[str, Any]:
+    aliases = {
+        "id": ("id", "attachmentId", "attachment_id"),
+        "name": ("name", "fileName", "filename"),
+        "mimeType": ("mimeType", "mime_type", "contentType", "content_type"),
+        "size": ("size", "sizeBytes", "size_bytes"),
+        "kind": ("kind", "type"),
+        "provider": ("provider",),
+        "url": ("url", "href"),
+    }
+    summary: dict[str, Any] = {}
+    for output_key, keys in aliases.items():
+        for key in keys:
+            value = item.get(key)
+            if value is not None and value != "":
+                summary[output_key] = _safe_attachment_value(output_key, value)
+                break
+
+    metadata = item.get("metadata")
+    if isinstance(metadata, dict):
+        safe_metadata = {
+            str(key): _truncate_text(str(value), 240)
+            for key, value in metadata.items()
+            if (
+                isinstance(value, (str, int, float, bool))
+                and value is not None
+                and not _is_sensitive_key(str(key))
+            )
+        }
+        if safe_metadata:
+            summary["metadata"] = safe_metadata
+    return summary
+
+
+def _is_sensitive_key(key: str) -> bool:
+    normalized = key.replace("-", "_").lower()
+    return any(part in normalized for part in ("token", "secret", "password", "credential", "api_key", "apikey"))
+
+
+def _safe_attachment_value(key: str, value: Any) -> Any:
+    if key == "size" and isinstance(value, (int, float)):
+        return value
+    text = str(value)
+    if key == "url":
+        try:
+            parts = urlsplit(text)
+            text = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+        except ValueError:
+            pass
+    return _truncate_text(text, 500)
+
+
+def _truncate_text(value: str, max_len: int) -> str:
+    return value if len(value) <= max_len else value[:max_len] + "...[truncated]"
+
+
+def _chat_model_for_state(state: RootState):
+    llm_config = state.get("llm_config")
+    if llm_config:
+        return create_chat_model_from_config(llm_config)
+    return _chat_model
+
+
+def _llm_skill_agent_for_state(state: RootState) -> LlmSkillAgent | None:
+    llm_config = state.get("llm_config")
+    if not llm_config:
+        return _llm_skill_agent
+    if not settings.llm_execute_skills:
+        return None
+    chat_model = create_chat_model_from_config(llm_config)
+    if not chat_model:
+        return None
+    return LlmSkillAgent(chat_model, _runtime, settings.llm_skill_max_iterations, data_root=Path(_data_root))
+
+
 def get_runtime() -> SkillRuntime:
     """Expose the shared runtime for testing and external access."""
     return _runtime
@@ -136,8 +232,11 @@ class RootState(TypedDict):
     session_id: str | None
     prompt: str
     model: str | None
+    model_config_id: str | None
+    llm_config: dict[str, Any] | None
     context: dict[str, Any] | None
     runtime_context: dict[str, Any] | None
+    attachments: list[dict[str, Any]] | None
     user_id: str | None
     tenant_id: str | None
     # Annotated with operator.add so each node's events are *appended*
@@ -180,6 +279,11 @@ def route_skill(state: RootState) -> dict:
     # 2. LLM routing (if enabled)
     # 3. Rule-based fallback (backward compat)
     skill_id = None
+    chat_model = _chat_model_for_state(state)
+    prompt_with_attachments = _prompt_with_attachment_context(
+        state["prompt"],
+        state.get("attachments"),
+    )
 
     # Priority 0: dynamic markdown injection
     markdown_body = context.get("skill_markdown")
@@ -206,7 +310,7 @@ def route_skill(state: RootState) -> dict:
             skill_id = "exception_triage"
 
     # Priority 3: Agentic LLM routing (only if no prior priority matched)
-    if not skill_id and _chat_model:
+    if not skill_id and chat_model:
         if getattr(settings, "llm_agentic_routing", False):
             from langchain_core.messages import HumanMessage, SystemMessage
             
@@ -314,12 +418,12 @@ If no skill matches, respond naturally to the user — you can answer questions,
             )
             
             sys_msg = SystemMessage(content=sys_msg_content)
-            human_parts = [state["prompt"]]
+            human_parts = [prompt_with_attachments]
             if context:
                 human_parts.append(f"\nContext: {json.dumps(context, ensure_ascii=False)}")
             human_msg = HumanMessage(content="\n".join(human_parts))
 
-            llm_with_tools = _chat_model.bind_tools(tools)
+            llm_with_tools = chat_model.bind_tools(tools)
             
             # --- Conversation logging setup ---
             import datetime
@@ -406,8 +510,9 @@ If no skill matches, respond naturally to the user — you can answer questions,
                 })
         else:
             # Standalone routing (Legacy)
-            if _llm_router:
-                llm_choice = _llm_router.route(state["prompt"], context, _skill_registry.list_skills())
+            llm_router = LlmSkillRouter(chat_model)
+            if llm_router:
+                llm_choice = llm_router.route(prompt_with_attachments, context, _skill_registry.list_skills())
                 if llm_choice and _skill_registry.get_manifest(llm_choice):
                     skill_id = llm_choice
 
@@ -466,12 +571,13 @@ def run_skill(state: RootState) -> dict:
     if client_app_id:
         runtime_context.setdefault("client_app_id", client_app_id)
 
-    if _llm_skill_agent:
+    llm_skill_agent = _llm_skill_agent_for_state(state)
+    if llm_skill_agent:
         return {
-            "events": _llm_skill_agent.run(
+            "events": llm_skill_agent.run(
                 task_id=task_id,
                 frame_id=frame_id,
-                prompt=state["prompt"],
+                prompt=_prompt_with_attachment_context(state["prompt"], state.get("attachments")),
                 account_id=account_id,
                 runtime_context=runtime_context,
             )

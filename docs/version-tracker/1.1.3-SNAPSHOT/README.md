@@ -53,6 +53,15 @@
   - [20-navigator-upstream-cli-readiness-and-skill-artifact.md](./upstream-integration/20-navigator-upstream-cli-readiness-and-skill-artifact.md) - CLI 扩展需求 / 上游 Agent readiness 诊断与已授权 skill artifact 文件树和切片读取
   - [21-account-context-memory-file-design.md](./upstream-integration/21-account-context-memory-file-design.md) - 设计澄清 / UserMemory、账号上下文文件、accountId 私有 Skill 与上游文件 API 边界
   - [22-skill-bundle-sync-design.md](./upstream-integration/22-skill-bundle-sync-design.md) - 设计与实施 / 统一 ClientApp 公共 Skill 与 accountId 私有 Skill 的 Skill Bundle 同步模型
+  - [23-business-agent-bundle-registration-design.md](./upstream-integration/23-business-agent-bundle-registration-design.md) - 设计与实施 / Business Agent Bundle 正式注册、Skill 授权与 readiness 闭环
+  - [24-chat-session-history-and-client-context.md](./upstream-integration/24-chat-session-history-and-client-context.md) - 需求与实现 / 会话历史、消息读取、继续会话与 clientContext 透明上下文
+  - [25-tms-attachment-upload-on-submit-and-worker-pass-through.md](./upstream-integration/25-tms-attachment-upload-on-submit-and-worker-pass-through.md) - 需求与设计 / TMS 附件上传、ask 透传与 Worker 文件上下文
+  - [26-upstream-user-identity-session-boundary-design.md](./upstream-integration/26-upstream-user-identity-session-boundary-design.md) - 架构澄清 / upstreamUserId 独立身份、accountId 上下文与 Business Agent 会话归属边界
+  - [27-e2e-scripted-test-model-design.md](./upstream-integration/27-e2e-scripted-test-model-design.md) - 需求与设计 / 标准 E2E Test Model、navi-e2e-cli 与多轮 tool-call loop scripted cursor
+  - [28-client-app-control-credential-delivery.md](./upstream-integration/28-client-app-control-credential-delivery.md) - 设计与实施 / ClientApp-scoped 控制面凭证、CLI `NAVI_CONTROL_API_KEY` 与上游交付新方案
+  - [29-deterministic-e2e-routing-bug.md](./upstream-integration/29-deterministic-e2e-routing-bug.md) - 缺陷复现与修复 / deterministic E2E mock model 路由与 CLI script register 问题
+  - [30-tms-e2e-agent-tenant-scope-bug.md](./upstream-integration/30-tms-e2e-agent-tenant-scope-bug.md) - 缺陷复现与修复 / TMS E2E Agent tenant scope 与 CLI body missing 问题
+  - [31-openapi-model-config-and-attachment-e2e-bug.md](./upstream-integration/31-openapi-model-config-and-attachment-e2e-bug.md) - 缺陷复现与修复 / OpenAPI ask modelConfigId 合同与附件 E2E 透传问题
 
 ## Acceptance Status
 

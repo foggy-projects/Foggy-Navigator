@@ -8,6 +8,7 @@ import * as unifiedTaskApi from '@/api/unifiedTask'
 import * as sessionApi from '@/api/session'
 import * as platformApi from '@/api/platform'
 import * as codingAgentApi from '@/api/codingAgent'
+import { DEFAULT_TASK_PAGE_SIZE } from '@/composables/useClaudeWorker'
 import type { ClaudeTask, ClaudeWorker, LlmModelConfig, WorkingDirectory } from '@/types'
 
 // Mock APIs
@@ -461,7 +462,12 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
       await flushPromises()
 
       // Verify: should call unified API to load tasks
-      expect(unifiedTaskApi.listTasksByDirectoryPagedUnified).toHaveBeenCalled()
+      expect(unifiedTaskApi.listTasksByDirectoryPagedUnified).toHaveBeenCalledWith(
+        'dir-1',
+        0,
+        DEFAULT_TASK_PAGE_SIZE,
+        'AWAITING_REPLY,PROCESSING',
+      )
 
       // Verify: directoryTasks should include resumed task
       expect(vm.directoryTasks).toHaveLength(2)

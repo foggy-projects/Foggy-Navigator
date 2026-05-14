@@ -14,6 +14,7 @@ import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -61,7 +62,7 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson) {
-        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null, null, null, null, null);
+        return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -75,7 +76,7 @@ public class ClaudeWorkerClient {
                                                        String navigatorApiKey,
                                                        String foggyTaskId, String foggySessionId) {
         return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, images,
-                apiKey, authToken, baseUrl, permissionMode, navigatorApiKey, null, foggyTaskId, foggySessionId, null);
+                null, apiKey, authToken, baseUrl, permissionMode, navigatorApiKey, null, foggyTaskId, foggySessionId, null);
     }
 
     /**
@@ -90,7 +91,7 @@ public class ClaudeWorkerClient {
                                                        String foggyTaskId, String foggySessionId,
                                                        Map<String, String> extraEnvVars) {
         return streamQuery(prompt, cwd, sessionId, model, maxTurns, agentTeamsJson, images,
-                apiKey, authToken, baseUrl, permissionMode, navigatorApiKey, null, foggyTaskId, foggySessionId, extraEnvVars);
+                null, apiKey, authToken, baseUrl, permissionMode, navigatorApiKey, null, foggyTaskId, foggySessionId, extraEnvVars);
     }
 
     /**
@@ -99,6 +100,7 @@ public class ClaudeWorkerClient {
     public Flux<ServerSentEvent<String>> streamQuery(String prompt, String cwd, String sessionId,
                                                        String model, Integer maxTurns,
                                                        String agentTeamsJson, String images,
+                                                       List<Map<String, Object>> attachments,
                                                        String apiKey, String authToken, String baseUrl,
                                                        String permissionMode,
                                                        String navigatorApiKey,
@@ -132,6 +134,9 @@ public class ClaudeWorkerClient {
             } catch (Exception e) {
                 log.warn("Failed to parse images JSON, skipping: {}", e.getMessage());
             }
+        }
+        if (attachments != null && !attachments.isEmpty()) {
+            body.put("attachments", attachments);
         }
         // Per-request auth overrides
         if (apiKey != null) {

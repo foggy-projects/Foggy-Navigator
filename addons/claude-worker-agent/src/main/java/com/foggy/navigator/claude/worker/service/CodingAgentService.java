@@ -319,6 +319,7 @@ public class CodingAgentService {
                 .workerName(workerName)
                 .defaultDirectoryId(entity.getDefaultDirectoryId())
                 .skills(entity.getSkills())
+                .agentProfile(entity.getAgentProfile())
                 .defaultBranch(entity.getDefaultBranch())
                 .projectSummary(entity.getProjectSummary())
                 .defaultModelConfigId(entity.getDefaultModelConfigId())

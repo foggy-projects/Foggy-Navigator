@@ -61,3 +61,21 @@ test('validateQueryRequest accepts image attachments', () => {
     { name: 'screen.png', data: 'YmFzZTY0', mime_type: 'image/png' },
   ])
 })
+
+test('validateQueryRequest accepts URL attachment metadata', () => {
+  const attachments = [
+    {
+      name: 'pod-photo.png',
+      url: 'https://tms.example.com/files/pod-photo.png',
+      kind: 'image',
+    },
+  ]
+  const result = validateQueryRequest({
+    prompt: 'describe',
+    attachments,
+  })
+
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.value.attachments, attachments)
+})

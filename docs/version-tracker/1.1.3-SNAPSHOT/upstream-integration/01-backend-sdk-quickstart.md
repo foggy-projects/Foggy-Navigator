@@ -146,13 +146,15 @@ AgentTask result2 = client.agents().askAndWait(
 ```java
 // 获取会话列表
 SessionListPage sessions = client.agents()
-    .listSessions(agentId, 10, null);
+    .listBusinessAgentSessionsWithClientAppAccessToken(
+        10, null, clientAppKey, runtimeAccessToken, upstreamUserId);
 
 // 获取会话完整消息
 String sessionCursor = null;
 do {
     SessionMessagesPage page = client.agents()
-        .getSessionMessages(agentId, contextId, 50, sessionCursor);
+        .getBusinessAgentSessionMessagesWithClientAppAccessToken(
+            contextId, 50, sessionCursor, clientAppKey, runtimeAccessToken, upstreamUserId);
     for (SessionMessage msg : page.getMessages()) {
         System.out.println(msg.getRole() + ": " + msg.getContent());
     }
@@ -160,6 +162,8 @@ do {
     if (!page.isHasMore()) break;
 } while (true);
 ```
+
+Business Agent 会话读模型按当前 ClientApp runtime token 与 `upstreamUserId` 校验归属，不通过任意 `userId` 查询历史会话。
 
 ## Business Agent 能力
 
@@ -187,7 +191,14 @@ userGrant.setUpstreamUserToken(tmsUserToken);
 userGrant.setStatus("ENABLED");
 client.businessAgent().grantUpstreamUserAccess(app.getClientAppId(), userGrant);
 
-// 导入函数清单并授权
+// 导入函数清单并授权。
+// 正式上游交付可使用 ClientApp-scoped control key，不需要租户级 admin key。
+NavigatorClient controlClient = NavigatorClient.builder()
+        .baseUrl(navigatorBaseUrl)
+        .tenantId(tenantId)
+        .controlApiKey(naviControlApiKey)
+        .build();
+
 ImportBusinessFunctionManifestForm functionManifest = new ImportBusinessFunctionManifestForm();
 functionManifest.setFunctionId("tms.create_order");
 functionManifest.setVersion("1.0.0");
@@ -195,13 +206,13 @@ functionManifest.setDomain("tms");
 functionManifest.setName("Create Order");
 functionManifest.setRiskLevel("MEDIUM");
 functionManifest.setManifestJson(manifestJson);
-client.businessAgent().importBusinessFunctionManifest(functionManifest);
+controlClient.businessAgent().importBusinessFunctionManifest(functionManifest);
 
 GrantBusinessFunctionForm functionGrant = new GrantBusinessFunctionForm();
 functionGrant.setFunctionId("tms.create_order");
 functionGrant.setVersion("1.0.0");
 functionGrant.setStatus("ENABLED");
-client.businessAgent().grantFunctionToClientApp(app.getClientAppId(), functionGrant);
+controlClient.businessAgent().grantFunctionToClientApp(app.getClientAppId(), functionGrant);
 
 // 创建 Business Task
 CreateBusinessAgentTaskForm taskForm = new CreateBusinessAgentTaskForm();

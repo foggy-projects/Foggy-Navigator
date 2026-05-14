@@ -2,6 +2,9 @@ package com.foggy.navigator.claude.worker.model.form;
 
 import lombok.Data;
 
+import java.util.List;
+import java.util.Map;
+
 /**
  * 恢复任务表单
  */
@@ -24,6 +27,8 @@ public class ResumeTaskForm {
     private String agentTeamsConfigId;
     /** Base64-encoded image attachments JSON: [{name, data, mime_type}] */
     private String images;
+    /** 上游已上传附件元数据和 URL */
+    private List<Map<String, Object>> attachments;
     /** Permission mode: bypassPermissions | acceptEdits | default */
     private String permissionMode;
     /** 平台 LLM 模型配置 ID，用于从平台配置中获取 apiKey + baseUrl */

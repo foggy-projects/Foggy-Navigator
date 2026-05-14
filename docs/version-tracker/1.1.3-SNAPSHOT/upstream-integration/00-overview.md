@@ -124,3 +124,12 @@ graph TB
 | [20-navigator-upstream-cli-readiness-and-skill-artifact.md](./20-navigator-upstream-cli-readiness-and-skill-artifact.md) | CLI agent readiness 与 skill artifact 浏览 | 上游 LLM coding agent / 上游后端 / skill owner |
 | [21-account-context-memory-file-design.md](./21-account-context-memory-file-design.md) | UserMemory、账号上下文文件与 accountId 私有 Skill 边界 | Navigator / worker / skill owner |
 | [22-skill-bundle-sync-design.md](./22-skill-bundle-sync-design.md) | 统一 ClientApp public 与 account private Skill Bundle 同步 | Navigator / 上游后端 / 上游 LLM coding agent |
+| [23-business-agent-bundle-registration-design.md](./23-business-agent-bundle-registration-design.md) | Business Agent Bundle 正式注册与授权 | Navigator / 上游后端 / 上游 LLM coding agent |
+| [24-chat-session-history-and-client-context.md](./24-chat-session-history-and-client-context.md) | 会话历史、消息读取与 clientContext | Navigator / 上游前端 / 上游后端 |
+| [25-tms-attachment-upload-on-submit-and-worker-pass-through.md](./25-tms-attachment-upload-on-submit-and-worker-pass-through.md) | TMS 附件上传与 Worker 透传 | Navigator / TMS / worker |
+| [26-upstream-user-identity-session-boundary-design.md](./26-upstream-user-identity-session-boundary-design.md) | upstreamUserId 独立身份与 Business Agent 会话归属边界 | Navigator / 上游后端 / 上游 LLM coding agent |
+| [27-e2e-scripted-test-model-design.md](./27-e2e-scripted-test-model-design.md) | 标准 E2E Test Model、navi-e2e-cli 与 scripted cursor | Navigator / 上游 E2E / 上游 LLM coding agent |
+| [28-client-app-control-credential-delivery.md](./28-client-app-control-credential-delivery.md) | ClientApp-scoped 控制面凭证与 `NAVI_CONTROL_API_KEY` 交付方案 | Navigator / 上游后端 / 上游 LLM coding agent |
+| [29-deterministic-e2e-routing-bug.md](./29-deterministic-e2e-routing-bug.md) | deterministic E2E mock model 路由缺陷复现与修复 | Navigator / worker / 上游 E2E |
+| [30-tms-e2e-agent-tenant-scope-bug.md](./30-tms-e2e-agent-tenant-scope-bug.md) | TMS E2E Agent tenant scope 与 CLI body missing 缺陷复现与修复 | Navigator / worker / 上游 E2E |
+| [31-openapi-model-config-and-attachment-e2e-bug.md](./31-openapi-model-config-and-attachment-e2e-bug.md) | OpenAPI ask modelConfigId 合同与附件 E2E 透传缺陷复现与修复 | Navigator / worker / 上游 E2E |

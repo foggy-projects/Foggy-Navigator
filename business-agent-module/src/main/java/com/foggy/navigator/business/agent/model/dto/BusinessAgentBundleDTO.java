@@ -15,6 +15,7 @@ public class BusinessAgentBundleDTO {
     private String description;
     private String agentType;
     private String workerId;
+    private String agentProfile;
     private String defaultModelConfigId;
     private String defaultModel;
     private LocalDateTime createdAt;
@@ -35,6 +36,7 @@ public class BusinessAgentBundleDTO {
         dto.setDescription(entity.getDescription());
         dto.setAgentType(entity.getAgentType());
         dto.setWorkerId(entity.getWorkerId());
+        dto.setAgentProfile(entity.getAgentProfile());
         dto.setDefaultModelConfigId(entity.getDefaultModelConfigId());
         dto.setDefaultModel(entity.getDefaultModel());
         dto.setCreatedAt(entity.getCreatedAt());

@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.session.event.SessionEventListener;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -25,17 +27,20 @@ class LanggraphStreamRelayTest {
 
     private LanggraphTaskService taskService;
     private SessionEventListener sessionEventListener;
+    private LlmModelManager llmModelManager;
     private LanggraphStreamRelay relay;
 
     @BeforeEach
     void setUp() {
         taskService = mock(LanggraphTaskService.class);
         sessionEventListener = mock(SessionEventListener.class);
+        llmModelManager = mock(LlmModelManager.class);
         relay = new LanggraphStreamRelay(
                 mock(LanggraphWorkerService.class),
                 taskService,
                 sessionEventListener,
-                new ObjectMapper()
+                new ObjectMapper(),
+                llmModelManager
         );
     }
 
@@ -207,6 +212,26 @@ class LanggraphStreamRelayTest {
         );
     }
 
+    @Test
+    void resolveLlmConfigBuildsWorkerRequestConfigFromModelConfig() throws Exception {
+        LlmModelConfigDTO model = new LlmModelConfigDTO();
+        model.setId("cfg-e2e");
+        model.setBaseUrl("http://mock-llm:8000");
+        model.setModelName("navigator-e2e-scripted");
+        model.setEnvVars(Map.of("NAVI_LLM_PROVIDER", "openai"));
+        when(llmModelManager.getModelConfig("cfg-e2e")).thenReturn(Optional.of(model));
+        when(llmModelManager.getDecryptedApiKey("cfg-e2e")).thenReturn("mock-key");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> config = (Map<String, Object>) invokeResolveLlmConfig("cfg-e2e", "worker-1");
+
+        assertEquals("cfg-e2e", config.get("model_config_id"));
+        assertEquals("openai", config.get("provider"));
+        assertEquals("http://mock-llm:8000", config.get("base_url"));
+        assertEquals("navigator-e2e-scripted", config.get("model"));
+        assertEquals("mock-key", config.get("api_key"));
+    }
+
     private void invokeHandleEvent(
             ServerSentEvent<String> event,
             String taskId,
@@ -220,5 +245,15 @@ class LanggraphStreamRelayTest {
         );
         method.setAccessible(true);
         method.invoke(relay, event, taskId, sessionId);
+    }
+
+    private Object invokeResolveLlmConfig(String modelConfigId, String workerId) throws Exception {
+        Method method = LanggraphStreamRelay.class.getDeclaredMethod(
+                "resolveLlmConfig",
+                String.class,
+                String.class
+        );
+        method.setAccessible(true);
+        return method.invoke(relay, modelConfigId, workerId);
     }
 }

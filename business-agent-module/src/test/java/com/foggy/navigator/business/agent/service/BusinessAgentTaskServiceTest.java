@@ -1,6 +1,7 @@
 package com.foggy.navigator.business.agent.service;
 
 import com.foggy.navigator.business.agent.model.dto.CreatedBusinessAgentTaskDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionDTO;
 import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
@@ -51,6 +52,8 @@ class BusinessAgentTaskServiceTest {
     @Mock
     private BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
     @Mock
+    private BusinessAgentSessionService businessAgentSessionService;
+    @Mock
     private BusinessAgentWorkerTaskLauncher workerTaskLauncher;
 
     @InjectMocks
@@ -67,6 +70,12 @@ class BusinessAgentTaskServiceTest {
         form.setSkillId("skill_01");
         form.setUpstreamUserId("user_01");
         lenient().when(tokenRepository.save(any(BusinessTaskScopedTokenEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
+                .thenAnswer(invocation -> {
+                    BusinessAgentSessionDTO dto = new BusinessAgentSessionDTO();
+                    dto.setContextId("ctx_01");
+                    return dto;
+                });
     }
 
     @Test
@@ -121,6 +130,7 @@ class BusinessAgentTaskServiceTest {
                 userGrantService,
                 skillRegistryService,
                 tokenRuntimeStore,
+                businessAgentSessionService,
                 List.of(workerTaskLauncher));
 
         BizWorkerPoolEntity pool = new BizWorkerPoolEntity();

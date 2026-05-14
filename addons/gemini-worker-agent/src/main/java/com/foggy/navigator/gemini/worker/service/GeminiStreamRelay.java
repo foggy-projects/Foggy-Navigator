@@ -23,6 +23,7 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -58,6 +59,8 @@ public class GeminiStreamRelay {
             GeminiWorkerClient client = getGeminiClient(event.getWorkerId());
             AtomicReference<String> detectedModel = new AtomicReference<>();
             AtomicReference<String> detectedSessionId = new AtomicReference<>(event.getProviderConfigString("geminiSessionId"));
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> attachments = event.getProviderConfigValue("attachments");
             Flux<ServerSentEvent<String>> sseFlux = client.streamQuery(
                     event.getPrompt(),
                     event.getCwd(),
@@ -66,7 +69,8 @@ public class GeminiStreamRelay {
                     event.getMaxTurns(),
                     event.getApiKey(),
                     event.getProviderConfigString("baseUrl"),
-                    getExtraEnvVars(event));
+                    getExtraEnvVars(event),
+                    attachments);
             Disposable disposable = sseFlux.subscribe(
                     sse -> handleSseEvent(sse, taskId, event.getSessionId(), detectedModel, detectedSessionId),
                     error -> {

@@ -6,15 +6,18 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * 编程 Agent 注册中心
- * Agent 是独立于 Worker/目录的逻辑实体，代表一个可接收任务的"编程 Agent"。
- * 对齐 A2A 协议的 Agent Card 概念。
+ * Agent 注册中心。
+ *
+ * <p>历史类名保留为 CodingAgentEntity，但该表已经承载通用 A2A Agent 注册行。
+ * 工作目录型编程 Agent、上游业务 Agent 等差异通过 agentType 与 agentProfile 区分。</p>
  */
 @Data
 @Entity
 @Table(name = "coding_agents", indexes = {
     @Index(name = "idx_ca_user_id", columnList = "userId"),
     @Index(name = "idx_ca_worker_id", columnList = "workerId")
+}, uniqueConstraints = {
+    @UniqueConstraint(name = "uk_ca_tenant_agent_id", columnNames = {"tenantId", "agentId"})
 })
 public class CodingAgentEntity {
 
@@ -22,7 +25,7 @@ public class CodingAgentEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(length = 64, nullable = false, unique = true)
+    @Column(length = 64, nullable = false)
     private String agentId;
 
     @Column(length = 64, nullable = false)
@@ -62,6 +65,10 @@ public class CodingAgentEntity {
     /** JSON array of skill objects (A2A skills) */
     @Column(columnDefinition = "TEXT")
     private String skills;
+
+    /** JSON object for domain-specific classification and routing metadata. */
+    @Column(name = "agent_profile", columnDefinition = "TEXT")
+    private String agentProfile;
 
     /** 默认 LLM 模型配置 ID（可选，用于定时任务等无显式指定场景） */
     @Column(length = 64)

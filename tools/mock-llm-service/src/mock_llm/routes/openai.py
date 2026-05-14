@@ -14,6 +14,7 @@ from ..models import (
     StreamConfig,
 )
 from ..store.yaml_store import YamlResponseStore
+from ..store.script_store import ScriptMatch, ScriptStore
 from ..strategies.keyword import KeywordMatchStrategy
 from ..stream.sse import generate_sse_stream
 
@@ -22,12 +23,14 @@ router = APIRouter()
 # 全局存储和策略（由 main.py 注入）
 response_store: YamlResponseStore = None
 match_strategy: KeywordMatchStrategy = None
+script_store: ScriptStore = None
 
 
-def init_router(store: YamlResponseStore, strategy: KeywordMatchStrategy):
-    global response_store, match_strategy
+def init_router(store: YamlResponseStore, strategy: KeywordMatchStrategy, scripts: ScriptStore = None):
+    global response_store, match_strategy, script_store
     response_store = store
     match_strategy = strategy
+    script_store = scripts
 
 
 @router.post("/v1/chat/completions")
@@ -40,10 +43,14 @@ async def chat_completions(request: ChatCompletionRequest):
     - 流式响应（stream=true）
     - 关键词匹配
     """
-    # 匹配响应规则
-    rule = match_strategy.match(request.messages, response_store.get_rules())
+    script_match = script_store.match(request.model, request.messages) if script_store else None
 
-    if rule is None:
+    # 匹配响应规则
+    rule = None if script_match else match_strategy.match(request.messages, response_store.get_rules())
+
+    if script_match:
+        content = script_match.response.content
+    elif rule is None:
         content = "Mock LLM: No matching response rule found."
     else:
         content = rule.response.content
@@ -51,7 +58,8 @@ async def chat_completions(request: ChatCompletionRequest):
     # 流式响应
     if request.stream:
         stream_config = rule.stream if rule and rule.stream else StreamConfig()
-        tool_calls = rule.response.tool_calls if rule and rule.response.tool_calls else None
+        tool_calls = _response_tool_calls(script_match, rule)
+        _record_debug_request(script_match, request, {"stream": True, "toolCalls": bool(tool_calls)})
         return StreamingResponse(
             generate_sse_stream(content, request.model, stream_config, tool_calls),
             media_type="text/event-stream",
@@ -67,13 +75,14 @@ async def chat_completions(request: ChatCompletionRequest):
     response_message = ChatMessage(role="assistant", content=content)
     finish_reason = "stop"
 
+    configured_tool_calls = _response_tool_calls(script_match, rule)
     # 如果规则配置了 tool_calls，添加到响应中
-    if rule and rule.response.tool_calls:
+    if configured_tool_calls:
         tool_calls = []
-        for i, tc in enumerate(rule.response.tool_calls):
+        for i, tc in enumerate(configured_tool_calls):
             tool_calls.append(
                 ToolCall(
-                    id=tc.get("id", f"call_{uuid.uuid4().hex[:8]}"),
+                    id=tc.get("id") or _deterministic_tool_call_id(script_match, i, tc),
                     type=tc.get("type", "function"),
                     function=FunctionCall(
                         name=tc["function"]["name"],
@@ -88,8 +97,8 @@ async def chat_completions(request: ChatCompletionRequest):
         )
         finish_reason = "tool_calls"
 
-    return ChatCompletionResponse(
-        id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+    response = ChatCompletionResponse(
+        id=_completion_id(script_match),
         created=int(time.time()),
         model=request.model,
         choices=[
@@ -105,8 +114,53 @@ async def chat_completions(request: ChatCompletionRequest):
             total_tokens=_estimate_tokens(request.messages) + len(content) // 4,
         ),
     )
+    _record_debug_request(
+        script_match,
+        request,
+        {
+            "finishReason": finish_reason,
+            "contentLength": len(content or ""),
+            "toolCalls": [
+                tc.function.name for tc in (response_message.tool_calls or [])
+            ],
+        },
+    )
+    return response
 
 
 def _estimate_tokens(messages: list) -> int:
     """估算 token 数量"""
-    return sum(len(m.content) // 4 for m in messages)
+    return sum(len(m.content or "") // 4 for m in messages)
+
+
+def _response_tool_calls(script_match: ScriptMatch, rule):
+    if script_match:
+        return script_match.response.tool_calls
+    return rule.response.tool_calls if rule and rule.response.tool_calls else None
+
+
+def _completion_id(script_match: ScriptMatch) -> str:
+    if script_match:
+        return f"chatcmpl-{script_match.request_hash[:12]}"
+    return f"chatcmpl-{uuid.uuid4().hex[:8]}"
+
+
+def _deterministic_tool_call_id(script_match: ScriptMatch, index: int, tool_call: dict) -> str:
+    if not script_match:
+        return f"call_{uuid.uuid4().hex[:8]}"
+    name = tool_call.get("function", {}).get("name", "tool")
+    seed = f"{script_match.cursor}|{index}|{name}"
+    import hashlib
+
+    return f"call_{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _record_debug_request(script_match: ScriptMatch, request: ChatCompletionRequest, response_summary: dict) -> None:
+    if not script_match or not script_store:
+        return
+    script_store.record_request(
+        script_match,
+        request.model,
+        request.model_dump(mode="json", exclude_none=True),
+        response_summary,
+    )

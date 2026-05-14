@@ -153,6 +153,20 @@ SessionMessagesPage messages = client.agents().getSessionMessagesWithClientAppAc
     agentId, contextId, 50, null, clientAppKey, runtimeAccessToken, upstreamUserId);
 ```
 
+新集成优先使用 upstream-scoped Business Agent 会话读模型：
+
+```java
+SessionListPage sessions = client.agents()
+    .listBusinessAgentSessionsWithClientAppAccessToken(
+        20, null, clientAppKey, runtimeAccessToken, upstreamUserId);
+
+SessionMessagesPage messages = client.agents()
+    .getBusinessAgentSessionMessagesWithClientAppAccessToken(
+        contextId, 50, null, clientAppKey, runtimeAccessToken, upstreamUserId);
+```
+
+该读模型按 `tenantId + clientAppId + upstreamUserId + contextId` 校验归属；`ask --context-id` 续聊同样会在派发任务前校验归属。
+
 `clientContext` 是顶层 `POST /ask` 字段，只在会话摘要中持久化和返回，不进入 Worker metadata 或 LLM prompt。
 
 ### 3. Business Agent 接入

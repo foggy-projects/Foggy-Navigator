@@ -2,6 +2,9 @@ package com.foggy.navigator.claude.worker.model.form;
 
 import lombok.Data;
 
+import java.util.List;
+import java.util.Map;
+
 /**
  * Open API Agent 查询表单
  */
@@ -20,6 +23,9 @@ public class OpenApiQueryForm {
     /** 最大交互轮数（可选，默认 3） */
     private Integer maxTurns;
 
+    /** 本次 ask 使用的模型配置 ID（可选；优先于 metadata.modelConfigId） */
+    private String modelConfigId;
+
     /** 原生系统提示词，仅对支持该能力的 Agent 生效 */
     private String systemPrompt;
 
@@ -27,10 +33,13 @@ public class OpenApiQueryForm {
     private String firstMsg;
 
     /** 扩展元数据 */
-    private java.util.Map<String, Object> metadata;
+    private Map<String, Object> metadata;
 
     /** Client App 透明会话上下文，仅用于会话摘要保存，不进入 Agent 执行链路 */
-    private java.util.Map<String, Object> clientContext;
+    private Map<String, Object> clientContext;
+
+    /** 上游已上传附件元数据和 URL；不转换为旧 images 字段 */
+    private List<Map<String, Object>> attachments;
 
     /**
      * 获取实际消息内容（优先 message，回退 question）

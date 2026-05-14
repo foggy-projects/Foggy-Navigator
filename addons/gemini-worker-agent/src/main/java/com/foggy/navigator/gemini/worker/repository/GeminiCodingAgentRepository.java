@@ -14,6 +14,8 @@ public interface GeminiCodingAgentRepository extends JpaRepository<CodingAgentEn
 
     Optional<CodingAgentEntity> findByAgentId(String agentId);
 
+    Optional<CodingAgentEntity> findByAgentIdAndTenantId(String agentId, String tenantId);
+
     List<CodingAgentEntity> findByUserIdOrderByCreatedAtDesc(String userId);
 
     List<CodingAgentEntity> findByTenantIdOrderByCreatedAtDesc(String tenantId);

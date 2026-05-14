@@ -11,6 +11,7 @@ from langgraph_biz_worker.runtime.llm_skill_router import (
     LlmSkillRouter,
     _build_skills_json,
     create_chat_model,
+    create_chat_model_from_config,
 )
 
 
@@ -136,6 +137,22 @@ class TestCreateChatModel:
         result = create_chat_model(s)
         assert result is not None
         mock_cls.assert_called_once()
+
+    @patch("langchain_openai.ChatOpenAI")
+    def test_request_config_openai_provider(self, mock_cls):
+        result = create_chat_model_from_config({
+            "provider": "openai",
+            "api_key": "sk-test",
+            "base_url": "http://mock-llm:8000",
+            "model": "navigator-e2e-scripted",
+        })
+
+        assert result is not None
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["api_key"] == "sk-test"
+        assert kwargs["base_url"] == "http://mock-llm:8000"
+        assert kwargs["model"] == "navigator-e2e-scripted"
 
 
 class TestRouteSkillIntegration:

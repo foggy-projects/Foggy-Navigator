@@ -68,3 +68,59 @@ match:
 ```
 
 `responses/scenarios/langgraph-biz-worker-skill.yaml` 提供了 LangGraph Biz Worker 的完整 Skill 测试场景：选择 `exception_triage`，调用业务工具，并通过 `submit_skill_result` 交卷。
+
+## Scripted E2E Cursor
+
+上游自动化 E2E 可注册短生命周期 scripted response，使用稳定 cursor 驱动多轮 tool-call loop：
+
+```text
+next:${e2eTraceId}:${turnIndex}
+```
+
+注册脚本：
+
+```bash
+curl -X POST http://localhost:8200/__e2e/scripts \
+  -H "Content-Type: application/json" \
+  -d @script.json
+```
+
+最小脚本：
+
+```json
+{
+  "traceId": "e2e-uuid-001",
+  "scenarioId": "tms-create-order",
+  "turns": [
+    {
+      "cursor": "next:e2e-uuid-001:001",
+      "response": {
+        "content": "",
+        "tool_calls": [
+          {
+            "function": {
+              "name": "tms.order.createOpeningDraft",
+              "arguments": {
+                "e2eTraceId": "e2e-uuid-001",
+                "next": "next:e2e-uuid-001:002"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+调试请求：
+
+```bash
+curl "http://localhost:8200/__debug/requests?traceId=e2e-uuid-001"
+```
+
+清理脚本与调试记录：
+
+```bash
+curl -X DELETE http://localhost:8200/__e2e/scripts/e2e-uuid-001
+```

@@ -244,17 +244,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 .userId(userId).prompt(form.getPrompt()).cwd(cwd)
                 .model(effectiveModel).maxTurns(form.getMaxTurns())
                 .apiKey(authParams[0]).providerType(AGENT_ID)
-                .providerConfig(Map.of(
-                        "claudeSessionId", form.getClaudeSessionId() != null ? form.getClaudeSessionId() : "",
-                        "agentTeamsJson", agentTeamsJson != null ? agentTeamsJson : "",
-                        "images", form.getImages() != null ? form.getImages() : "",
-                        "authToken", authParams[1] != null ? authParams[1] : "",
-                        "baseUrl", authParams[2] != null ? authParams[2] : "",
-                        "permissionMode", form.getPermissionMode() != null ? form.getPermissionMode() : "",
-                        "navigatorApiKey", navigatorApiKey != null ? navigatorApiKey : "",
-                        "navigatorApiBase", navigatorApiBase != null ? navigatorApiBase : "",
-                        "extraEnvVars", extraEnvVars != null ? (Object) extraEnvVars : ""
-                )).build());
+                .providerConfig(buildWorkerProviderConfig(
+                        form.getClaudeSessionId(), agentTeamsJson, form.getImages(), form.getAttachments(),
+                        authParams[1], authParams[2], form.getPermissionMode(),
+                        navigatorApiKey, navigatorApiBase, extraEnvVars))
+                .build());
 
         return toDTO(entity);
     }
@@ -410,17 +404,11 @@ public class ClaudeTaskService implements TaskQueryProvider {
                 .userId(userId).prompt(form.getPrompt()).cwd(cwd)
                 .model(effectiveModel).maxTurns(form.getMaxTurns())
                 .apiKey(authParams[0]).providerType(AGENT_ID)
-                .providerConfig(Map.of(
-                        "claudeSessionId", form.getClaudeSessionId() != null ? form.getClaudeSessionId() : "",
-                        "agentTeamsJson", agentTeamsJson != null ? agentTeamsJson : "",
-                        "images", form.getImages() != null ? form.getImages() : "",
-                        "authToken", authParams[1] != null ? authParams[1] : "",
-                        "baseUrl", authParams[2] != null ? authParams[2] : "",
-                        "permissionMode", form.getPermissionMode() != null ? form.getPermissionMode() : "",
-                        "navigatorApiKey", navigatorApiKey != null ? navigatorApiKey : "",
-                        "navigatorApiBase", navigatorApiBase != null ? navigatorApiBase : "",
-                        "extraEnvVars", extraEnvVars != null ? (Object) extraEnvVars : ""
-                )).build());
+                .providerConfig(buildWorkerProviderConfig(
+                        form.getClaudeSessionId(), agentTeamsJson, form.getImages(), form.getAttachments(),
+                        authParams[1], authParams[2], form.getPermissionMode(),
+                        navigatorApiKey, navigatorApiBase, extraEnvVars))
+                .build());
 
         return toDTO(entity);
     }
@@ -2496,6 +2484,41 @@ public class ClaudeTaskService implements TaskQueryProvider {
         }
     }
 
+    private Map<String, Object> buildWorkerProviderConfig(
+            String claudeSessionId,
+            String agentTeamsJson,
+            String images,
+            List<Map<String, Object>> attachments,
+            String authToken,
+            String baseUrl,
+            String permissionMode,
+            String navigatorApiKey,
+            String navigatorApiBase,
+            Map<String, String> extraEnvVars) {
+        Map<String, Object> providerConfig = new LinkedHashMap<>();
+        providerConfig.put("claudeSessionId", claudeSessionId != null ? claudeSessionId : "");
+        providerConfig.put("agentTeamsJson", agentTeamsJson != null ? agentTeamsJson : "");
+        providerConfig.put("images", images != null ? images : "");
+        if (attachments != null && !attachments.isEmpty()) {
+            providerConfig.put("attachments", attachments);
+        }
+        providerConfig.put("authToken", authToken != null ? authToken : "");
+        providerConfig.put("baseUrl", baseUrl != null ? baseUrl : "");
+        providerConfig.put("permissionMode", permissionMode != null ? permissionMode : "");
+        providerConfig.put("navigatorApiKey", navigatorApiKey != null ? navigatorApiKey : "");
+        providerConfig.put("navigatorApiBase", navigatorApiBase != null ? navigatorApiBase : "");
+        providerConfig.put("extraEnvVars", extraEnvVars != null ? extraEnvVars : "");
+        return providerConfig;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> attachmentsParam(Object value) {
+        if (value instanceof List<?> list) {
+            return (List<Map<String, Object>>) list;
+        }
+        return null;
+    }
+
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (value != null && !value.isBlank()) {
@@ -2701,6 +2724,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setPermissionMode((String) params.get("permissionMode"));
         form.setImages((String) params.get("images"));
+        form.setAttachments(attachmentsParam(params.get("attachments")));
         form.setAgentTeamsJson((String) params.get("agentTeamsJson"));
         form.setAgentTeamsConfigId((String) params.get("agentTeamsConfigId"));
         if (params.get("maxTurns") instanceof Number n) {
@@ -2854,6 +2878,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
         form.setModelConfigId((String) params.get("modelConfigId"));
         form.setPermissionMode((String) params.get("permissionMode"));
         form.setImages((String) params.get("images"));
+        form.setAttachments(attachmentsParam(params.get("attachments")));
         form.setAgentTeamsJson((String) params.get("agentTeamsJson"));
         form.setAgentTeamsConfigId((String) params.get("agentTeamsConfigId"));
         if (params.get("maxTurns") instanceof Number n) {
@@ -2883,6 +2908,7 @@ public class ClaudeTaskService implements TaskQueryProvider {
             createForm.setModelConfigId(form.getModelConfigId());
             createForm.setPermissionMode(form.getPermissionMode());
             createForm.setImages(form.getImages());
+            createForm.setAttachments(form.getAttachments());
             createForm.setMaxTurns(form.getMaxTurns());
             createForm.setAgentTeamsJson(form.getAgentTeamsJson());
             createForm.setAgentTeamsConfigId(form.getAgentTeamsConfigId());

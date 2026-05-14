@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -28,6 +29,7 @@ public class BusinessAgentApiSmokeTest {
     private static String lastClientAppKeyHeader;
     private static String lastClientAppSecretHeader;
     private static String lastClientAppAccessTokenHeader;
+    private static String lastClientAppControlKeyHeader;
     private static String lastUpstreamUserIdHeader;
     private static String lastBody;
     private static String responseOverride;
@@ -46,6 +48,7 @@ public class BusinessAgentApiSmokeTest {
             lastClientAppKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Key");
             lastClientAppSecretHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Secret");
             lastClientAppAccessTokenHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Access-Token");
+            lastClientAppControlKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Control-Key");
             lastUpstreamUserIdHeader = exchange.getRequestHeaders().getFirst("X-Upstream-User-Id");
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 
@@ -82,6 +85,7 @@ public class BusinessAgentApiSmokeTest {
         lastClientAppKeyHeader = null;
         lastClientAppSecretHeader = null;
         lastClientAppAccessTokenHeader = null;
+        lastClientAppControlKeyHeader = null;
         lastUpstreamUserIdHeader = null;
         lastBody = null;
         responseOverride = "{\"code\":0, \"data\":{}}";
@@ -123,6 +127,26 @@ public class BusinessAgentApiSmokeTest {
 
         assertNull(lastAuthHeader, "X-API-Key must not be present for bearer auth");
         assertEquals("Bearer tenant-admin-jwt", lastAuthorizationHeader);
+    }
+
+    @Test
+    public void testControlApiKeyAuthHeader() {
+        NavigatorClient controlClient = NavigatorClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .tenantId("tenant-1")
+                .controlApiKey("control-key-secret")
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        responseOverride = "[]";
+        List<ClientAppDTO> apps = controlClient.businessAgent().listClientApps();
+
+        assertNotNull(apps);
+        assertEquals("/api/v1/client-apps", lastPath);
+        assertEquals("GET", lastMethod);
+        assertNull(lastAuthHeader, "X-API-Key must not be present for control key auth");
+        assertNull(lastAuthorizationHeader, "Authorization must not be present for control key auth");
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
     }
 
     @Test
@@ -219,6 +243,69 @@ public class BusinessAgentApiSmokeTest {
         assertTrue(lastBody.contains("\"message\":\"提交运单\""));
         assertTrue(lastBody.contains("\"contextId\":\"ctx-1\""));
         assertFalse(lastBody.contains("cas-secret"));
+        assertCommon();
+    }
+
+    @Test
+    public void testAskWithClientAppAccessTokenSendsModelConfigId() {
+        responseOverride = "{\"taskId\":\"task-openapi\",\"status\":\"SUBMITTED\"}";
+        var task = client.agents().askWithClientAppAccessToken(
+                "tms_skill",
+                "提交运单",
+                "ctx-1",
+                3,
+                Map.of(),
+                "cfg-e2e",
+                "cak-test",
+                "cat-runtime",
+                "tms-user-001");
+
+        assertNotNull(task);
+        assertEquals("/api/v1/open/agents/tms_skill/ask", lastPath);
+        assertTrue(lastBody.contains("\"modelConfigId\":\"cfg-e2e\""));
+        assertTrue(lastBody.contains("\"metadata\""));
+        assertCommon();
+    }
+
+    @Test
+    public void testListBusinessAgentSessionsWithClientAppAccessToken() {
+        responseOverride = "{\"sessions\":[{\"contextId\":\"ctx-1\",\"status\":\"ACTIVE\",\"latestTaskId\":\"task-1\"}],\"hasMore\":false}";
+
+        var page = client.agents().listBusinessAgentSessionsWithClientAppAccessToken(
+                20,
+                null,
+                "cak-test",
+                "cat-runtime",
+                "tms-user-001");
+
+        assertNotNull(page);
+        assertEquals("/api/v1/open/business-agent/sessions?limit=20", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("cak-test", lastClientAppKeyHeader);
+        assertEquals("cat-runtime", lastClientAppAccessTokenHeader);
+        assertEquals("tms-user-001", lastUpstreamUserIdHeader);
+        assertEquals("ctx-1", page.getSessions().get(0).getContextId());
+        assertCommon();
+    }
+
+    @Test
+    public void testGetBusinessAgentSessionMessagesWithClientAppAccessToken() {
+        responseOverride = "{\"contextId\":\"ctx-1\",\"messages\":[{\"messageId\":\"m-1\",\"role\":\"ASSISTANT\",\"content\":\"done\",\"metadata\":\"{\\\"type\\\":\\\"TEXT_COMPLETE\\\"}\"}],\"hasMore\":false}";
+
+        var page = client.agents().getBusinessAgentSessionMessagesWithClientAppAccessToken(
+                "ctx-1",
+                50,
+                null,
+                "cak-test",
+                "cat-runtime",
+                "tms-user-001");
+
+        assertNotNull(page);
+        assertEquals("/api/v1/open/business-agent/sessions/ctx-1/messages?limit=50", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("tms-user-001", lastUpstreamUserIdHeader);
+        assertEquals("m-1", page.getMessages().get(0).getMessageId());
+        assertEquals("TEXT_COMPLETE", page.getMessages().get(0).getMetadata().get("type"));
         assertCommon();
     }
 

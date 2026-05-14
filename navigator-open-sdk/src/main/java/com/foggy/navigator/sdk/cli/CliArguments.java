@@ -53,8 +53,16 @@ final class CliArguments {
         if (words.size() >= 2 && "skill".equals(words.get(0))) {
             return "skill " + words.get(1);
         }
+        if (words.size() >= 2 && "agent".equals(words.get(0))) {
+            return "agent " + words.get(1);
+        }
         if (words.size() >= 2 && "account-context".equals(words.get(0))) {
             return "account-context " + words.get(1);
+        }
+        if (words.size() >= 2 && ("script".equals(words.get(0))
+                || "debug".equals(words.get(0))
+                || "model".equals(words.get(0)))) {
+            return words.get(0) + " " + words.get(1);
         }
         return words.get(0);
     }

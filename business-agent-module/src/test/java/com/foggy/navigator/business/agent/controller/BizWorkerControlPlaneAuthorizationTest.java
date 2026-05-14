@@ -23,8 +23,18 @@ class BizWorkerControlPlaneAuthorizationTest {
     }
 
     @Test
-    void modelConfigGrantController_requires_tenant_admin() {
-        assertClassRole(ClientAppModelConfigGrantController.class, "TENANT_ADMIN");
+    void modelConfigGrantController_uses_client_app_control_plane_guard() {
+        assertNull(ClientAppModelConfigGrantController.class.getAnnotation(RequireAuth.class));
+    }
+
+    @Test
+    void e2eModelConfigEnsure_uses_client_app_control_plane_guard() throws NoSuchMethodException {
+        Method method = E2eModelConfigController.class.getMethod(
+                "ensure",
+                jakarta.servlet.http.HttpServletRequest.class,
+                String.class,
+                com.foggy.navigator.business.agent.model.form.EnsureE2eModelConfigForm.class);
+        assertNull(method.getAnnotation(RequireAuth.class));
     }
 
     @Test
@@ -62,11 +72,21 @@ class BizWorkerControlPlaneAuthorizationTest {
     }
 
     @Test
-    void businessFunctionRegistryController_methods_requires_tenant_admin() throws NoSuchMethodException {
-        assertMethodRole(com.foggy.navigator.business.agent.controller.BusinessFunctionRegistryController.class.getMethod("importManifest", String.class, String.class, com.foggy.navigator.business.agent.model.form.ImportBusinessFunctionManifestForm.class), "TENANT_ADMIN");
-        assertMethodRole(com.foggy.navigator.business.agent.controller.BusinessFunctionRegistryController.class.getMethod("grantFunctionToClientApp", String.class, String.class, String.class, com.foggy.navigator.business.agent.model.form.GrantBusinessFunctionForm.class), "TENANT_ADMIN");
-        assertMethodRole(com.foggy.navigator.business.agent.controller.BusinessFunctionRegistryController.class.getMethod("updateGrantStatus", String.class, String.class, String.class, String.class), "TENANT_ADMIN");
-        assertMethodRole(com.foggy.navigator.business.agent.controller.BusinessFunctionRegistryController.class.getMethod("listClientAppVisibleFunctionSummaries", String.class, String.class), "TENANT_ADMIN");
+    void businessFunctionRegistryController_uses_client_app_control_plane_guard() throws NoSuchMethodException {
+        assertNull(com.foggy.navigator.business.agent.controller.BusinessFunctionRegistryController.class
+                .getMethod("importManifest", jakarta.servlet.http.HttpServletRequest.class,
+                        com.foggy.navigator.business.agent.model.form.ImportBusinessFunctionManifestForm.class)
+                .getAnnotation(RequireAuth.class));
+        assertNull(com.foggy.navigator.business.agent.controller.BusinessFunctionRegistryController.class
+                .getMethod("grantFunctionToClientApp", jakarta.servlet.http.HttpServletRequest.class, String.class,
+                        com.foggy.navigator.business.agent.model.form.GrantBusinessFunctionForm.class)
+                .getAnnotation(RequireAuth.class));
+        assertNull(com.foggy.navigator.business.agent.controller.BusinessFunctionRegistryController.class
+                .getMethod("updateGrantStatus", jakarta.servlet.http.HttpServletRequest.class, String.class, String.class, String.class)
+                .getAnnotation(RequireAuth.class));
+        assertNull(com.foggy.navigator.business.agent.controller.BusinessFunctionRegistryController.class
+                .getMethod("listClientAppVisibleFunctionSummaries", jakarta.servlet.http.HttpServletRequest.class, String.class)
+                .getAnnotation(RequireAuth.class));
     }
 
     @Test
@@ -79,8 +99,13 @@ class BizWorkerControlPlaneAuthorizationTest {
 
     @Test
     void clientAppUserGrantController_methods_requires_tenant_admin() throws NoSuchMethodException {
-        assertMethodRole(com.foggy.navigator.business.agent.controller.ClientAppUserGrantController.class.getMethod("grantUpstreamUserAccess", String.class, String.class, String.class, com.foggy.navigator.business.agent.model.form.GrantUpstreamUserForm.class), "TENANT_ADMIN");
-        assertMethodRole(com.foggy.navigator.business.agent.controller.ClientAppUserGrantController.class.getMethod("updateUpstreamUserGrantStatus", String.class, String.class, String.class, String.class), "TENANT_ADMIN");
+        assertNull(com.foggy.navigator.business.agent.controller.ClientAppUserGrantController.class
+                .getMethod("grantUpstreamUserAccess", jakarta.servlet.http.HttpServletRequest.class, String.class,
+                        com.foggy.navigator.business.agent.model.form.GrantUpstreamUserForm.class)
+                .getAnnotation(RequireAuth.class));
+        assertNull(com.foggy.navigator.business.agent.controller.ClientAppUserGrantController.class
+                .getMethod("updateUpstreamUserGrantStatus", jakarta.servlet.http.HttpServletRequest.class, String.class, String.class, String.class)
+                .getAnnotation(RequireAuth.class));
     }
 
     @Test

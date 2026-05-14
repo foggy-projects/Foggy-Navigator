@@ -343,14 +343,18 @@ worktree 可在任务执行过程中由后台自动创建、选择、回收。
 
 ## 对现有模型的影响
 
-### 1. `CodingAgentEntity` 的语义要收口到“项目 Agent”
+### 1. `CodingAgentEntity` 的语义要收口到“通用 Agent 注册行”
 
-当前 `CodingAgentEntity` 已经是独立 Agent 实体，这是对的。
+当前 `CodingAgentEntity` 已经是独立 Agent 实体，这是对的。类名里的 `Coding` 是历史命名，长期语义应升格为通用 Agent 注册行：
+
+- 工作目录型编程 Agent：通常有 `defaultDirectoryId`、`defaultBranch`、`projectSummary`。
+- 上游业务 Agent：通常没有工作目录，通过 `agentProfile` 标注 `domain=BUSINESS_AGENT`、`kind=CLIENT_APP_RUNTIME_AGENT` 等业务路由元数据。
 
 但后续它的语义需要更明确：
 
 - `workerId`：执行宿主
 - `defaultDirectoryId`：项目主目录
+- `agentProfile`：领域分类与扩展元数据 JSON
 - `name/description/projectSummary`：项目 Agent 的对外描述
 
 也就是说，`defaultDirectoryId` 更应该被理解为：

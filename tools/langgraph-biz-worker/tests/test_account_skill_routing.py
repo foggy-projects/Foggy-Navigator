@@ -223,6 +223,54 @@ def test_route_skill_auto_injects_only_client_app_public_skills(tmp_path, monkey
     assert "global_skill" not in system_prompt
 
 
+def test_route_skill_uses_request_llm_config_for_agentic_routing(tmp_path, monkeypatch):
+    skills_root = tmp_path / "skills"
+    data_root = tmp_path / "data"
+
+    registry = SkillRegistry(skills_root=skills_root, data_root=data_root)
+    runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(tmp_path / "frames"),
+    )
+    fake_chat = _FakeChatModel()
+    seen_configs = []
+
+    def fake_create_chat_model(config):
+        seen_configs.append(config)
+        return fake_chat
+
+    monkeypatch.setattr(root_module, "_skill_registry", registry)
+    monkeypatch.setattr(root_module, "_runtime", runtime)
+    monkeypatch.setattr(root_module, "_chat_model", None)
+    monkeypatch.setattr(root_module, "create_chat_model_from_config", fake_create_chat_model)
+    monkeypatch.setattr(root_module.settings, "llm_agentic_routing", True)
+    monkeypatch.setattr(root_module, "_data_root", str(data_root))
+
+    root_module.route_skill({
+        "task_id": "task-request-llm-config",
+        "session_id": None,
+        "prompt": "say hello",
+        "model": None,
+        "llm_config": {
+            "provider": "openai",
+            "base_url": "http://mock-llm:8000",
+            "model": "navigator-e2e-scripted",
+            "api_key": "mock-key",
+        },
+        "context": {},
+        "user_id": None,
+        "tenant_id": None,
+        "events": [],
+        "started_at": 0.0,
+        "active_frame_id": None,
+        "skill_results": [],
+    })
+
+    assert seen_configs[0]["base_url"] == "http://mock-llm:8000"
+    assert fake_chat.messages is not None
+
+
 def test_route_skill_injects_account_context_for_agentic_routing(tmp_path, monkeypatch):
     skills_root = tmp_path / "skills"
     data_root = tmp_path / "data"

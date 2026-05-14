@@ -36,6 +36,7 @@ public class BusinessAgentTaskService {
     private final ClientAppUserGrantService userGrantService;
     private final SkillRegistryService skillRegistryService;
     private final BusinessAgentTaskScopedTokenRuntimeStore tokenRuntimeStore;
+    private final BusinessAgentSessionService businessAgentSessionService;
     private final List<BusinessAgentWorkerTaskLauncher> workerTaskLaunchers;
 
     @Transactional
@@ -119,6 +120,10 @@ public class BusinessAgentTaskService {
         token = tokenRepository.save(token);
         tokenRuntimeStore.registerToken(tenantId, task.getSessionId(), task.getTaskId(), plainToken, expiresAt);
 
+        String contextId = businessAgentSessionService
+                .bindTask(task, form.getContextId(), form.getClientContextJson())
+                .getContextId();
+
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
                 tenantId, actorUserId, task, workerPool, plainToken);
         if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
@@ -137,6 +142,7 @@ public class BusinessAgentTaskService {
         BusinessAgentTaskDTO baseDto = BusinessAgentTaskDTO.fromEntity(task);
         dto.setTaskId(baseDto.getTaskId());
         dto.setSessionId(baseDto.getSessionId());
+        dto.setContextId(contextId);
         dto.setTenantId(baseDto.getTenantId());
         dto.setClientAppId(baseDto.getClientAppId());
         dto.setUpstreamUserId(baseDto.getUpstreamUserId());

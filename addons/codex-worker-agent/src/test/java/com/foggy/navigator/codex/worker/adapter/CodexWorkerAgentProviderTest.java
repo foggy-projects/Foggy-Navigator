@@ -19,6 +19,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -112,7 +114,7 @@ class CodexWorkerAgentProviderTest {
     void resolveAgent_openApiContext_usesTenantResolution() {
         CodingAgentEntity codexEntity = codexAgent("agent-codex", "user-1", "codex-bot");
         codexEntity.setTenantId("tenant-1");
-        when(agentRepository.findByAgentId("agent-codex")).thenReturn(Optional.of(codexEntity));
+        when(agentRepository.findByAgentIdAndTenantId("agent-codex", "tenant-1")).thenReturn(Optional.of(codexEntity));
 
         Optional<A2aAgent> result = provider.resolveAgent("agent-codex", AgentResolveContext.builder()
                 .tenantId("tenant-1")
@@ -120,6 +122,8 @@ class CodexWorkerAgentProviderTest {
                 .build());
 
         assertTrue(result.isPresent());
+        verify(agentRepository).findByAgentIdAndTenantId("agent-codex", "tenant-1");
+        verify(agentRepository, never()).findByAgentId("agent-codex");
     }
 
     @Test

@@ -10,7 +10,8 @@ import org.springframework.context.annotation.ComponentScan;
  */
 @AutoConfiguration
 @ComponentScan(basePackages = {
-    "com.foggy.navigator.common.security"
+    "com.foggy.navigator.common.security",
+    "com.foggy.navigator.common.migration"
 })
 @EntityScan(basePackages = {
     "com.foggy.navigator.common.entity"

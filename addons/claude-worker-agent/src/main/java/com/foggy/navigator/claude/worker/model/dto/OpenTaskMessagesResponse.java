@@ -21,6 +21,15 @@ public class OpenTaskMessagesResponse {
     /** 消息列表（按时间升序） */
     private List<OpenSessionMessageDTO> messages;
 
+    /** 当前任务状态 */
+    private String status;
+
+    /** 任务是否已进入终态 */
+    private boolean terminal;
+
+    /** 终态状态：COMPLETED | FAILED | CANCELLED */
+    private String terminalStatus;
+
     /** 下一页游标（为 null 表示无更多数据） */
     private String nextCursor;
 

@@ -10,6 +10,8 @@ public interface CodingAgentRepository extends JpaRepository<CodingAgentEntity, 
 
     Optional<CodingAgentEntity> findByAgentId(String agentId);
 
+    Optional<CodingAgentEntity> findByAgentIdAndTenantId(String agentId, String tenantId);
+
     Optional<CodingAgentEntity> findByAgentIdAndUserId(String agentId, String userId);
 
     Optional<CodingAgentEntity> findByNameAndUserId(String name, String userId);

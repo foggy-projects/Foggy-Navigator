@@ -3,7 +3,7 @@
 - doc_type: requirement-design-implementation-plan
 - source_issue: https://github.com/foggy-projects/Foggy-Navigator/issues/108#issuecomment-4432502004
 - version: 1.1.3-SNAPSHOT
-- status: implemented-verification-partial
+- status: implemented-verification-pass-doc-followups
 - date: 2026-05-13
 - priority: P1
 - owner_scope: navigator-chat-widget | navigator-frontend | claude-worker-agent-openapi | session-module | worker-agents | upstream-tms-bff
@@ -231,13 +231,13 @@ OpenApiQueryForm.attachments
 
 ### 单元测试
 
-- [ ] OpenAPI：顶层 `attachments` 被写入 A2A metadata。
-- [ ] OpenAPI：仅传 `metadata.attachments` 时仍能透传。
-- [ ] OpenAPI：顶层和 metadata 同时存在时顶层优先。
+- [x] OpenAPI：顶层 `attachments` 被写入 A2A metadata。
+- [x] OpenAPI：仅传 `metadata.attachments` 时仍能透传。
+- [x] OpenAPI：顶层和 metadata 同时存在时顶层优先。
 - [ ] Session dispatch：`images` 仍为旧字符串逻辑。
 - [x] Session dispatch：`attachments` 作为独立字段透传。
 - [ ] Worker adapters：各 Worker 从 A2A metadata 读取 `attachments`。
-- [ ] Worker clients：HTTP body 包含 `attachments` 数组。
+- [x] Worker clients：HTTP body 包含 `attachments` 数组。
 - [ ] Widget：选择文件不触发 upload hook。
 - [x] Widget：send 时触发 upload hook 后再 ask。
 - [ ] Widget：上传失败不调用 ask。
@@ -282,7 +282,8 @@ OpenApiQueryForm.attachments
 - [x] Stage B 开发完成。
 - [x] Stage C 开发完成（选择与粘贴已实现，拖拽交互后续可单独补齐）。
 - [ ] Stage D 文档同步完成。
-- [ ] 测试与验收完成。
+- [x] 测试补强完成。
+- [ ] 文档同步与最终验收完成。
 
 ## 实施记录
 
@@ -290,14 +291,18 @@ OpenApiQueryForm.attachments
 - 2026-05-13：完成 Session dispatch 到 Claude、Codex、Gemini、LangGraph Biz Worker 的 `attachments` 透传。
 - 2026-05-13：完成 Worker HTTP body 的 `attachments` 数组透传，旧 `images` 字段继续保留。
 - 2026-05-13：完成 `@foggy/navigator-chat-widget` upload-on-submit：发送前上传、失败阻断 ask、成功后把附件元数据放入顶层 `attachments`。
-- 2026-05-13：补充 Session dispatch 与 Codex worker 请求校验回归测试。
+- 2026-05-13：补充 Session dispatch、OpenAPI ask、Claude/Codex/Gemini/LangGraph Java Worker client 请求体回归测试。
+- 2026-05-13：补充 Codex/Gemini TS Worker 请求校验，以及 Claude/LangGraph Python Worker 请求模型校验。
 
 ## 验证记录
 
-- [x] `mvn -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am -DskipTests compile`
+- [x] `mvn -pl session-module,addons/claude-worker-agent,addons/codex-worker-agent,addons/gemini-worker-agent,addons/langgraph-biz-worker -am "-Dtest=TaskDispatchFacadeTest,OpenApiControllerMessageMappingTest,ClaudeWorkerClientTest,CodexWorkerClientTest,CodexWorkerFacadeImplTest,GeminiWorkerClientTest,LanggraphWorkerClientTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 - [x] `pnpm --dir packages/navigator-chat-widget test src/composables/useNavigatorChat.ux.test.ts`
 - [x] `pnpm --dir packages/navigator-chat-widget build`
-- [x] `pnpm --dir tools/codex-agent-worker test tests/query-validation.test.ts`
+- [x] `pnpm --dir tools/codex-agent-worker test`
 - [x] `pnpm --dir tools/codex-agent-worker typecheck`
+- [x] `pnpm --dir tools/gemini-agent-worker exec node --import tsx --test tests/**/*.test.ts`
 - [x] `pnpm --dir tools/gemini-agent-worker typecheck`
-- [ ] `mvn -pl session-module -Dtest=TaskDispatchFacadeTest test`：当前被同模块既有测试编译错误阻断，`OpenApiSessionQueryServiceTest` 引用了实体上不存在的 `getClientContextJson()`。
+- [x] `$env:PYTHONPATH='tools/claude-agent-worker/src'; python -m pytest tools/claude-agent-worker/tests/test_models.py -q`
+- [x] `$env:PYTHONPATH='tools/langgraph-biz-worker/src'; python -c "from langgraph_biz_worker.models import QueryRequest; a=[{'name':'pod-photo.png','url':'https://tms.example.com/files/pod-photo.png','kind':'image'}]; r=QueryRequest(prompt='describe', attachments=a); assert r.attachments == a"`
+- [ ] `$env:PYTHONPATH='tools/langgraph-biz-worker/src'; python -m pytest tools/langgraph-biz-worker/tests/test_query.py -q`：本地环境缺少 `langgraph` Python 依赖，pytest conftest 加载应用时阻断；已用模型级脚本验证 `QueryRequest.attachments`。

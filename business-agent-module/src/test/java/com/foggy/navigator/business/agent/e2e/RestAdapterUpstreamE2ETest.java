@@ -65,6 +65,7 @@ class RestAdapterUpstreamE2ETest {
     @Mock ClientAppRepository clientAppRepository;
     @Mock ClientAppProvisioningCredentialRepository provisioningCredentialRepository;
     @Mock ClientAppRuntimeCredentialRepository runtimeCredentialRepository;
+    @Mock ClientAppControlCredentialRepository controlCredentialRepository;
     @Mock ClientAppModelConfigGrantRepository modelGrantRepository;
     @Mock ClientAppUpstreamUserGrantRepository userGrantRepository;
     @Mock SkillRepository skillRepository;
@@ -144,7 +145,8 @@ class RestAdapterUpstreamE2ETest {
         ObjectMapper objectMapper = new ObjectMapper();
         tokenRuntimeStore = new BusinessAgentTaskScopedTokenRuntimeStore();
 
-        ClientAppService clientAppService = new ClientAppService(clientAppRepository, provisioningCredentialRepository, runtimeCredentialRepository);
+        ClientAppService clientAppService = new ClientAppService(clientAppRepository, provisioningCredentialRepository,
+                runtimeCredentialRepository, controlCredentialRepository);
         ClientAppModelConfigGrantService modelGrantService = new ClientAppModelConfigGrantService(modelGrantRepository, clientAppService, llmModelManager);
         ClientAppUserGrantService userGrantService1 = new ClientAppUserGrantService(userGrantRepository, clientAppService);
         BusinessObjectService businessObjectService = new BusinessObjectService(businessObjectRepository);
@@ -152,7 +154,12 @@ class RestAdapterUpstreamE2ETest {
         SkillRegistryService skillRegistryService = new SkillRegistryService(skillRepository, skillBundleRepository, allowlistRepository, skillGrantRepository, functionGrantRepository, functionRepository, versionRepository, clientAppService, userGrantService1, objectMapper);
         BizWorkerPoolService bizWorkerPoolService = new BizWorkerPoolService(identityRepository, poolRepository, poolMemberRepository);
 
-        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, java.util.List.of());
+        BusinessAgentSessionService businessAgentSessionService = mock(BusinessAgentSessionService.class);
+        BusinessAgentSessionDTO sessionDTO = new BusinessAgentSessionDTO();
+        sessionDTO.setContextId("ctx_rest_e2e");
+        lenient().when(businessAgentSessionService.bindTask(any(BusinessAgentTaskEntity.class), any(), any()))
+                .thenReturn(sessionDTO);
+        taskService = new BusinessAgentTaskService(taskRepository, tokenRepository, clientAppService, bizWorkerPoolService, modelGrantService, userGrantService1, skillRegistryService, tokenRuntimeStore, businessAgentSessionService, java.util.List.of());
         BusinessFunctionAuthorizationService authorizationService = new BusinessFunctionAuthorizationService(clientAppService, userGrantService1, skillRegistryService, functionRegistryService);
 
         auditService = new BusinessFunctionRuntimeAuditService(auditRepository);

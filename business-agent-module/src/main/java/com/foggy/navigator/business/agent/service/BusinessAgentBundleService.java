@@ -38,19 +38,17 @@ public class BusinessAgentBundleService {
         }
 
         Assert.hasText(form.getClientAppId(), "clientAppId is required");
+        String clientAppId = form.getClientAppId().trim();
         String agentId = resolveAgentId(form);
         String skillId = StringUtils.hasText(form.getSkillId()) ? form.getSkillId().trim() : agentId;
         Assert.hasText(form.getName(), "name is required");
         Assert.hasText(form.getWorkerId(), "workerId is required");
 
-        clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
-        String defaultModelConfigId = normalizeDefaultModelConfigId(tenantId, form.getClientAppId(), form.getDefaultModelConfigId());
+        clientAppService.requireActiveClientApp(tenantId, clientAppId);
+        String defaultModelConfigId = normalizeDefaultModelConfigId(tenantId, clientAppId, form.getDefaultModelConfigId());
 
-        CodingAgentEntity entity = agentRepository.findByAgentId(agentId)
+        CodingAgentEntity entity = agentRepository.findByAgentIdAndTenantId(agentId, tenantId)
                 .orElseGet(CodingAgentEntity::new);
-        if (StringUtils.hasText(entity.getTenantId()) && !tenantId.equals(entity.getTenantId())) {
-            throw new IllegalArgumentException("agentId already exists in another tenant: " + agentId);
-        }
 
         entity.setAgentId(agentId);
         entity.setUserId(actorUserId);
@@ -62,19 +60,21 @@ public class BusinessAgentBundleService {
         entity.setDefaultModelConfigId(defaultModelConfigId);
         entity.setDefaultModel(blankToNull(form.getDefaultModel()));
         entity.setSkills(buildSkillSummary(skillId, form.getName(), form.getDescription()));
+        entity.setAgentProfile(buildBusinessAgentProfile(clientAppId, skillId));
         CodingAgentEntity saved = agentRepository.save(entity);
 
-        SkillBundleDTO skillBundle = syncPublicSkillBundle(tenantId, actorUserId, form, skillId);
-        return BusinessAgentBundleDTO.fromEntity(saved, form.getClientAppId(), skillId, skillBundle);
+        SkillBundleDTO skillBundle = syncPublicSkillBundle(tenantId, actorUserId, form, clientAppId, skillId);
+        return BusinessAgentBundleDTO.fromEntity(saved, clientAppId, skillId, skillBundle);
     }
 
     private SkillBundleDTO syncPublicSkillBundle(
             String tenantId,
             String actorUserId,
             SyncBusinessAgentBundleForm form,
+            String clientAppId,
             String skillId) {
         SyncSkillBundleForm skillForm = new SyncSkillBundleForm();
-        skillForm.setClientAppId(form.getClientAppId());
+        skillForm.setClientAppId(clientAppId);
         skillForm.setScope(SkillRegistryService.SCOPE_CLIENT_APP_PUBLIC);
         skillForm.setSkillId(skillId);
         skillForm.setName(form.getName());
@@ -109,6 +109,21 @@ public class BusinessAgentBundleService {
             )));
         } catch (JsonProcessingException e) {
             throw new IllegalArgumentException("invalid agent skill summary", e);
+        }
+    }
+
+    private String buildBusinessAgentProfile(String clientAppId, String skillId) {
+        try {
+            return objectMapper.writeValueAsString(Map.of(
+                    "domain", "BUSINESS_AGENT",
+                    "kind", "CLIENT_APP_RUNTIME_AGENT",
+                    "source", "BUSINESS_AGENT_BUNDLE",
+                    "clientAppId", clientAppId,
+                    "skillId", skillId,
+                    "a2aRoute", true
+            ));
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("invalid business agent profile", e);
         }
     }
 

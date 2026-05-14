@@ -37,6 +37,7 @@ public class HttpHelper {
     private final String baseUrl;
     private final String apiKey;
     private final String bearerToken;
+    private final String clientAppControlKey;
     private final String tenantId;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -47,9 +48,15 @@ public class HttpHelper {
     }
 
     public HttpHelper(String baseUrl, String apiKey, String bearerToken, String tenantId, Duration timeout) {
+        this(baseUrl, apiKey, bearerToken, tenantId, null, timeout);
+    }
+
+    public HttpHelper(String baseUrl, String apiKey, String bearerToken, String tenantId,
+                      String clientAppControlKey, Duration timeout) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.apiKey = apiKey;
         this.bearerToken = bearerToken;
+        this.clientAppControlKey = clientAppControlKey;
         this.tenantId = tenantId;
         this.timeout = timeout != null ? timeout : Duration.ofSeconds(30);
         this.httpClient = HttpClient.newBuilder()
@@ -131,6 +138,9 @@ public class HttpHelper {
             }
             if (bearerToken != null && !bearerToken.isBlank()) {
                 builder.header("Authorization", normalizeBearerToken(bearerToken));
+            }
+            if (clientAppControlKey != null && !clientAppControlKey.isBlank()) {
+                builder.header("X-Client-App-Control-Key", clientAppControlKey);
             }
             if (tenantId != null && !tenantId.isBlank()) {
                 builder.header("X-Tenant-Id", tenantId);

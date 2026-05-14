@@ -1,4 +1,4 @@
-import type { ImageAttachment, QueryRequest } from '../models.js'
+import type { ImageAttachment, NavigatorAttachment, QueryRequest } from '../models.js'
 
 const MAX_PROMPT_LENGTH = 200_000
 const MAX_PATH_LENGTH = 4_096
@@ -7,6 +7,7 @@ const MAX_SESSION_ID_LENGTH = 256
 const MAX_API_KEY_LENGTH = 512
 const MAX_IMAGE_NAME_LENGTH = 255
 const MAX_IMAGE_COUNT = 20
+const MAX_ATTACHMENT_COUNT = 20
 const VALID_REASONING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'extra-high'])
 
 type ValidationSuccess = {
@@ -77,6 +78,26 @@ function validateImages(value: unknown): ImageAttachment[] | ValidationFailure |
   return normalized
 }
 
+function validateAttachments(value: unknown): NavigatorAttachment[] | ValidationFailure | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) {
+    return { ok: false, error: 'attachments must be an array' }
+  }
+  if (value.length > MAX_ATTACHMENT_COUNT) {
+    return { ok: false, error: 'too many attachments' }
+  }
+
+  const normalized: NavigatorAttachment[] = []
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return { ok: false, error: `attachments[${index}] must be an object` }
+    }
+    normalized.push({ ...(item as Record<string, unknown>) })
+  }
+
+  return normalized
+}
+
 export function validateModelString(value: string): true | string {
   const parts = value.split(':')
   if (parts.length > 2) return 'model format must be "<model>" or "<model>:<reasoning_level>"'
@@ -139,6 +160,9 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
   const images = validateImages(body.images)
   if (images && !Array.isArray(images)) return images
 
+  const attachments = validateAttachments(body.attachments)
+  if (attachments && !Array.isArray(attachments)) return attachments
+
   const value: QueryRequest = { prompt }
 
   if (cwd !== undefined) {
@@ -155,6 +179,9 @@ export function validateQueryRequest(input: unknown): QueryValidationResult {
   }
   if (images !== undefined) {
     value.images = images
+  }
+  if (attachments !== undefined) {
+    value.attachments = attachments
   }
   if (apiKey !== undefined) {
     value.api_key = apiKey

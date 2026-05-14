@@ -4,6 +4,8 @@ export interface ImageAttachment {
   mime_type?: string
 }
 
+export type NavigatorAttachment = Record<string, unknown>
+
 export interface QueryRequest {
   prompt: string
   cwd?: string
@@ -12,6 +14,7 @@ export interface QueryRequest {
   model_alias?: string
   max_turns?: number
   images?: ImageAttachment[]
+  attachments?: NavigatorAttachment[]
   api_key?: string
   base_url?: string
   env_vars?: Record<string, string>

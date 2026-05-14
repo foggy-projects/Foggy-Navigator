@@ -68,8 +68,7 @@ public class LanggraphWorkerAgentProvider implements A2aAgentProvider {
     @Override
     public Optional<A2aAgent> resolveAgent(String agentId, AgentResolveContext context) {
         if (context.getTenantId() != null && "OPEN_API".equals(context.getRequestSource())) {
-            return agentRepository.findByAgentId(agentId)
-                    .filter(entity -> context.getTenantId().equals(entity.getTenantId()))
+            return agentRepository.findByAgentIdAndTenantId(agentId, context.getTenantId())
                     .filter(this::isManagedAgent)
                     .map(this::toA2aAgent);
         }

@@ -135,7 +135,7 @@ public class CodexWorkerFacadeImpl implements CodexWorkerFacade {
             String effectiveModel = model != null ? model : codexConfig.getModel();
 
             SyncQueryAccumulator state = client.streamQuery(
-                            prompt, cwd, codexThreadId, effectiveModel, maxTurns, null, apiKey, null, null)
+                            prompt, cwd, codexThreadId, effectiveModel, maxTurns, null, null, apiKey, null, null)
                     .reduce(new SyncQueryAccumulator(codexThreadId), (acc, sse) -> {
                         consumeSyncEvent(acc, sse);
                         return acc;

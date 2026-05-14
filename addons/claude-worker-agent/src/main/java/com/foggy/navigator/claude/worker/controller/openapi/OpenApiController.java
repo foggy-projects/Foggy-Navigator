@@ -10,6 +10,8 @@ import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
 import com.foggy.navigator.business.agent.model.dto.AccountContextFileDTO;
 import com.foggy.navigator.business.agent.model.dto.AccountContextFileTreeDTO;
 import com.foggy.navigator.business.agent.model.dto.ClientAppRuntimeAccessTokenDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionListDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionMessagesDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillBundleDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillArtifactSliceDTO;
@@ -18,6 +20,7 @@ import com.foggy.navigator.business.agent.model.form.AccountContextFileWriteForm
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
 import com.foggy.navigator.business.agent.model.form.SyncAccountSkillBundleForm;
 import com.foggy.navigator.business.agent.service.AccountContextFileService;
+import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
 import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.business.agent.service.SkillArtifactService;
@@ -86,6 +89,7 @@ public class OpenApiController {
     private final ObjectProvider<SkillArtifactService> skillArtifactService;
     private final ObjectProvider<SkillRegistryService> skillRegistryService;
     private final ObjectProvider<AccountContextFileService> accountContextFileService;
+    private final ObjectProvider<BusinessAgentSessionService> businessAgentSessionService;
 
     // ===== 1. 自助注册（无需认证） =====
 
@@ -465,23 +469,35 @@ public class OpenApiController {
             HttpServletRequest request) {
         ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
         String tenantId = clientAppCredential.getTenantId();
+        String upstreamUserId = firstHeader(request,
+                "X-Upstream-User-Id",
+                "X-Foggy-Upstream-User-Id",
+                "X-Client-Upstream-User-Id");
 
         String messageContent = form.resolveMessage();
         if (messageContent == null || messageContent.isBlank()) {
             return RX.failB("message is required");
         }
 
+        // 构建 A2aMessage
+        boolean requestedContextId = form.getContextId() != null && !form.getContextId().isBlank();
+        String contextId = requestedContextId ? form.getContextId() : IdGenerator.shortId();
+        validateBusinessAgentContextOwnershipIfNeeded(
+                tenantId,
+                clientAppCredential.getClientAppId(),
+                upstreamUserId,
+                contextId,
+                requestedContextId);
+
+        String modelConfigId = resolveModelConfigId(form);
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId)
-                .modelConfigId(form.getMetadata() != null ? (String) form.getMetadata().get("modelConfigId") : null)
+                .modelConfigId(modelConfigId)
                 .requestSource("OPEN_API")
                 .build();
         A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
 
-        // 构建 A2aMessage
-        String contextId = (form.getContextId() != null && !form.getContextId().isBlank())
-                ? form.getContextId() : IdGenerator.shortId();
         String clientContextJson = serializeClientContext(form.getClientContext());
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(messageContent)));
         message.setContextId(contextId);
@@ -490,8 +506,14 @@ public class OpenApiController {
         if (form.getMetadata() != null && !form.getMetadata().isEmpty()) {
             metadata.putAll(form.getMetadata());
         }
+        if (StringUtils.hasText(modelConfigId)) {
+            metadata.put("modelConfigId", modelConfigId);
+        }
         metadata.remove("runtimeContext");
         metadata.remove("runtime_context");
+        if (form.getAttachments() != null && !form.getAttachments().isEmpty()) {
+            metadata.put("attachments", form.getAttachments());
+        }
         if (form.getMaxTurns() != null) {
             metadata.put("maxTurns", form.getMaxTurns());
         }
@@ -507,14 +529,35 @@ public class OpenApiController {
         }
 
         A2aTask task = agent.sendTask(message);
+        String agentOwnerUserId = null;
         if (clientContextJson != null) {
-            String userId = resolveAgentOwnerUserId(agentId, tenantId);
-            sessionQueryService.updateClientContextJson(contextId, userId, agentId, clientContextJson);
+            agentOwnerUserId = resolveAgentOwnerUserId(agentId, tenantId);
+            sessionQueryService.updateClientContextJson(contextId, agentOwnerUserId, agentId, clientContextJson);
         }
+        bindBusinessAgentSessionIfPossible(
+                tenantId,
+                clientAppCredential.getClientAppId(),
+                upstreamUserId,
+                agentId,
+                contextId,
+                task,
+                clientContextJson,
+                agentOwnerUserId);
 
         log.info("Open API askAgent: agentId={}, taskId={}, tenantId={}", agentId, task.getId(), tenantId);
 
         return RX.ok(toOpenApiTaskDTO(task, agentId));
+    }
+
+    private String resolveModelConfigId(OpenApiQueryForm form) {
+        if (form == null) {
+            return null;
+        }
+        if (StringUtils.hasText(form.getModelConfigId())) {
+            return form.getModelConfigId();
+        }
+        Object value = form.getMetadata() != null ? form.getMetadata().get("modelConfigId") : null;
+        return value instanceof String text && StringUtils.hasText(text) ? text : null;
     }
 
     @PostMapping("/agents/{agentId}/preflight")
@@ -638,6 +681,46 @@ public class OpenApiController {
                 form));
     }
 
+    @GetMapping("/business-agent/sessions")
+    public RX<BusinessAgentSessionListDTO> listMyBusinessAgentSessions(
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(required = false) String cursor,
+            HttpServletRequest request) {
+        BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("business agent session service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.listSessions(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId,
+                cursor,
+                limit));
+    }
+
+    @GetMapping("/business-agent/sessions/{contextId}/messages")
+    public RX<BusinessAgentSessionMessagesDTO> getMyBusinessAgentSessionMessages(
+            @PathVariable String contextId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "50") int limit,
+            HttpServletRequest request) {
+        BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
+        if (service == null) {
+            return RX.failB("business agent session service is not available");
+        }
+        ResolvedClientAppCredentialDTO credential = requireClientAppRuntimeToken(request);
+        String upstreamUserId = requireUpstreamUserId(request);
+        return RX.ok(service.getMessages(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                upstreamUserId,
+                contextId,
+                cursor,
+                limit));
+    }
+
     private ResolvedClientAppCredentialDTO resolveClientAppCredential(
             String skillId,
             HttpServletRequest request) {
@@ -703,6 +786,25 @@ public class OpenApiController {
             throw RX.throwB("upstream user id is required");
         }
         return upstreamUserId;
+    }
+
+    private void validateBusinessAgentContextOwnershipIfNeeded(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String contextId,
+            boolean requestedContextId) {
+        if (!requestedContextId) {
+            return;
+        }
+        if (!StringUtils.hasText(upstreamUserId)) {
+            throw RX.throwB("upstream user id is required when contextId is provided");
+        }
+        BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
+        if (service == null) {
+            throw RX.throwB("business agent session service is not available");
+        }
+        service.getSession(tenantId, clientAppId, upstreamUserId, contextId);
     }
 
     private void enrichBusinessRuntimeContext(
@@ -784,6 +886,42 @@ public class OpenApiController {
         }
         runtimeContext.put("task_scoped_token", token);
         metadata.put("runtimeContext", runtimeContext);
+    }
+
+    private void bindBusinessAgentSessionIfPossible(
+            String tenantId,
+            String clientAppId,
+            String upstreamUserId,
+            String agentId,
+            String contextId,
+            A2aTask task,
+            String clientContextJson,
+            String resolvedAgentOwnerUserId) {
+        if (!StringUtils.hasText(upstreamUserId)) {
+            return;
+        }
+        BusinessAgentSessionService service = businessAgentSessionService.getIfAvailable();
+        if (service == null) {
+            return;
+        }
+        String agentOwnerUserId = StringUtils.hasText(resolvedAgentOwnerUserId)
+                ? resolvedAgentOwnerUserId
+                : resolveAgentOwnerUserId(agentId, tenantId);
+        String sessionId = sessionQueryService.resolveSessionId(contextId, agentOwnerUserId)
+                .orElse(null);
+        if (!StringUtils.hasText(sessionId)) {
+            log.debug("Skip binding business agent session because context has no navigator session yet: contextId={}", contextId);
+            return;
+        }
+        service.bindOpenApiSession(
+                tenantId,
+                clientAppId,
+                upstreamUserId,
+                contextId,
+                sessionId,
+                agentId,
+                task != null ? task.getId() : null,
+                clientContextJson);
     }
 
     private String firstHeader(HttpServletRequest request, String... names) {
@@ -875,8 +1013,7 @@ public class OpenApiController {
         String tenantId = UserContext.getCurrentTenantId();
 
         // 获取 Agent 实体以读取 userId
-        CodingAgentEntity agentEntity = codingAgentRepository.findByAgentId(agentId)
-                .filter(entity -> tenantId.equals(entity.getTenantId()))
+        CodingAgentEntity agentEntity = codingAgentRepository.findByAgentIdAndTenantId(agentId, tenantId)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
 
         List<OpenApiTaskDTO> result = taskDispatchFacade.listActiveTasks(agentEntity.getUserId()).stream()
@@ -933,10 +1070,16 @@ public class OpenApiController {
                 .map(m -> toOpenSessionMessageDTO(m, contextId))
                 .toList();
 
+        String status = mapTaskStatus(taskEntity.getStatus());
+        String terminalStatus = terminalStatusFromTaskStatus(status);
+
         return RX.ok(OpenTaskMessagesResponse.builder()
                 .taskId(taskId)
                 .contextId(contextId)
                 .messages(dtos)
+                .status(status)
+                .terminal(terminalStatus != null)
+                .terminalStatus(terminalStatus)
                 .nextCursor(nextCursor)
                 .hasMore(hasMore)
                 .build());
@@ -1093,8 +1236,7 @@ public class OpenApiController {
     }
 
     private String resolveAgentOwnerUserId(String agentId, String tenantId) {
-        return codingAgentRepository.findByAgentId(agentId)
-                .filter(entity -> tenantId.equals(entity.getTenantId()))
+        return codingAgentRepository.findByAgentIdAndTenantId(agentId, tenantId)
                 .map(CodingAgentEntity::getUserId)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
     }
@@ -1292,6 +1434,18 @@ public class OpenApiController {
         return switch (typeStr) {
             case "TASK_COMPLETED" -> "COMPLETED";
             case "ERROR" -> "FAILED";
+            default -> null;
+        };
+    }
+
+    private String terminalStatusFromTaskStatus(String status) {
+        if (status == null) {
+            return null;
+        }
+        return switch (status) {
+            case "COMPLETED" -> "COMPLETED";
+            case "FAILED" -> "FAILED";
+            case "CANCELLED", "CANCELED" -> "CANCELLED";
             default -> null;
         };
     }

@@ -82,9 +82,11 @@ NAVI_POLL_INTERVAL_SECONDS=4
 ```properties
 NAVI_CLIENT_APP_SECRET=
 NAVI_CLIENT_APP_ACCESS_TOKEN=
-NAVI_ADMIN_TOKEN=
-NAVI_ADMIN_API_KEY=
-TMS_STAFF_SESSION_TOKEN=
+NAVI_CONTROL_API_KEY=
+NAVI_UPSTREAM_USER_TOKEN=
+# NAVI_ADMIN_TOKEN=        # Navigator maintainer fallback only
+# NAVI_ADMIN_API_KEY=      # Navigator maintainer fallback only
+# TMS_STAFF_SESSION_TOKEN= # legacy TMS sandbox alias for NAVI_UPSTREAM_USER_TOKEN
 ```
 
 为了兼容本机 sandbox runbook，CLI 也会把以下 profile/env 字段映射到 `NAVI_*` 标准字段：
@@ -98,6 +100,9 @@ CLIENT_APP_SECRET -> NAVI_CLIENT_APP_SECRET
 CLIENT_APP_RUNTIME_TOKEN -> NAVI_CLIENT_APP_ACCESS_TOKEN
 NAVIGATOR_ADMIN_TOKEN -> NAVI_ADMIN_TOKEN
 NAVIGATOR_ADMIN_API_KEY -> NAVI_ADMIN_API_KEY
+NAVIGATOR_CONTROL_API_KEY -> NAVI_CONTROL_API_KEY
+TMS_STAFF_SESSION_TOKEN -> NAVI_UPSTREAM_USER_TOKEN
+UPSTREAM_USER_ID -> NAVI_UPSTREAM_USER_ID
 ```
 
 ## Profile 安全
@@ -140,8 +145,11 @@ NAVIGATOR_ADMIN_API_KEY -> NAVI_ADMIN_API_KEY
 可选模型配置可放入 profile：
 
 ```properties
+NAVI_UPSTREAM_USER_ID=<upstreamUserId>
 NAVI_MODEL_CONFIG_ID=<modelConfigId>
 ```
+
+常规命令可从 profile 读取 `NAVI_UPSTREAM_USER_ID`；只有诊断切换用户时才需要显式传 `--upstream-user-id`。
 
 命令行 `--model-config-id` 优先级高于 profile/env 中的 `NAVI_MODEL_CONFIG_ID`。
 
@@ -153,7 +161,8 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 
 约束：
 
-- `ensure-grant` 必须使用 `NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 这类控制面凭据。
+- `ensure-grant` 必须使用 `NAVI_CONTROL_API_KEY` 这类 ClientApp-scoped 控制面凭据；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback。
+- `NAVI_UPSTREAM_USER_TOKEN` 是可选项；如果上游 Worker 需要回调上游系统，可放入当前上游用户 token；如果只是 SIM/E2E 或纯 Navi 会话授权，可省略。
 - 不允许使用 ClientApp runtime access token 做授权。
 - 只处理当前指定 `upstreamUserId`，不得枚举或批量授权上游全部用户。
 
@@ -207,6 +216,46 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 .\tools\navigator-upstream\navi.ps1 upstream sessions
 .\tools\navigator-upstream\navi.ps1 upstream session-messages --context-id <contextId>
 ```
+
+`sessions` / `session-messages` 使用 `/api/v1/open/business-agent/sessions` 读模型，只返回当前 ClientApp + upstream user 归属的会话。`ask --context-id` 续聊也会在发任务前校验同一归属，不能复用其他 upstream user 的 `contextId`。
+
+## Deterministic E2E Test Model
+
+真实 LLM smoke 不应作为上游主回归 gate。上游自动化 E2E 应优先使用 Navigator 标准 E2E Test Model 与 scripted response，完整设计见 [27-e2e-scripted-test-model-design.md](./27-e2e-scripted-test-model-design.md)。
+
+推荐 scripted cursor 格式：
+
+```text
+next:${e2eTraceId}:${turnIndex}
+```
+
+示例：
+
+```text
+e2eTraceId=4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1
+next:4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1:001
+next:4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1:002
+```
+
+约定：
+
+1. 首轮 user message 放入 `e2eTraceId` 和 `next:${e2eTraceId}:001`。
+2. 每轮 mock LLM 返回的 tool call arguments 或 content 放入下一轮 cursor。
+3. `turnIndex` 从 `001` 开始递增，三位补零。
+4. 同一 `traceId + cursor` 默认幂等；Worker 重试时应返回同一 scripted response。
+5. E2E Test Model 的默认绑定只应修改 ClientApp model grant，不应修改租户默认 model config。
+
+已安装的 CLI 包含独立 E2E 入口：
+
+```powershell
+.\tools\navigator-upstream\navi-e2e.ps1 config check
+.\tools\navigator-upstream\navi-e2e.ps1 model ensure --standard biz-worker --set-default --write-profile
+.\tools\navigator-upstream\navi-e2e.ps1 script register --file .\.navigator\e2e-script.json
+.\tools\navigator-upstream\navi-e2e.ps1 debug requests --trace-id <e2eTraceId>
+.\tools\navigator-upstream\navi-e2e.ps1 script cleanup --trace-id <e2eTraceId>
+```
+
+`navi-e2e` 默认读取同一个 project-local `.navigator/upstream.env`，其中 `NAVI_E2E_MOCK_LLM_URL` 默认指向 `http://localhost:8200`，也可用 `--mock-url` 临时覆盖。`model ensure` 需要 `NAVI_CONTROL_API_KEY`，只创建/更新当前 ClientApp 专属的标准 E2E model config 与 ClientApp model grant；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback；`--write-profile` 只把 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
 
 ### 7. 查询或维护账号上下文文件
 

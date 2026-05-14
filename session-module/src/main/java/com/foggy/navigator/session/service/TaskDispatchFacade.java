@@ -1413,6 +1413,9 @@ public class TaskDispatchFacade {
         if (request.getImages() != null && !request.getImages().isEmpty()) {
             params.put("images", String.join(",", request.getImages()));
         }
+        if (request.getAttachments() != null && !request.getAttachments().isEmpty()) {
+            params.put("attachments", request.getAttachments());
+        }
         return params;
     }
 

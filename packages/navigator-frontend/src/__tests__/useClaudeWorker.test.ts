@@ -42,7 +42,7 @@ vi.mock('@/api/unifiedTask', () => ({
 import * as api from '@/api/claudeWorker'
 import * as langgraphApi from '@/api/langgraphWorker'
 import * as unifiedTaskApi from '@/api/unifiedTask'
-import { useClaudeWorker } from '@/composables/useClaudeWorker'
+import { DEFAULT_TASK_PAGE_SIZE, useClaudeWorker } from '@/composables/useClaudeWorker'
 import type { ClaudeWorker, ClaudeTask, WorkingDirectory } from '@/types'
 
 const mockApi = vi.mocked(api)
@@ -98,7 +98,7 @@ describe('useClaudeWorker', () => {
     directories.value = []
     loading.value = false
     taskPage.value = 0
-    taskSize.value = 20
+    taskSize.value = DEFAULT_TASK_PAGE_SIZE
     taskTotal.value = 0
   })
 
@@ -151,13 +151,13 @@ describe('useClaudeWorker', () => {
       mockUnifiedTaskApi.listTasksPagedUnified.mockResolvedValue({
         content: [makeTask()],
         totalSessions: 50,
-        page: 0, size: 20,
+        page: 0, size: DEFAULT_TASK_PAGE_SIZE,
       })
 
       const { loadTasks, tasks, taskTotal } = useClaudeWorker()
       await loadTasks()
 
-      expect(mockUnifiedTaskApi.listTasksPagedUnified).toHaveBeenCalledWith(0, 20, undefined)
+      expect(mockUnifiedTaskApi.listTasksPagedUnified).toHaveBeenCalledWith(0, DEFAULT_TASK_PAGE_SIZE, undefined)
       expect(tasks.value).toHaveLength(1)
       expect(taskTotal.value).toBe(50)
     })

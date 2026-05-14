@@ -21,6 +21,8 @@ upstream-project/
     navigator-upstream/
       navi.ps1
       navi.cmd
+      navi-e2e.ps1
+      navi-e2e.cmd
       lib/
       VERSION
       RELEASE_URL
@@ -59,6 +61,7 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 ```powershell
 .\tools\navigator-upstream\navi.ps1 version
 .\tools\navigator-upstream\navi.ps1 upstream config check
+.\tools\navigator-upstream\navi-e2e.ps1 config check
 ```
 
 ## 本地 Archive 安装
@@ -89,6 +92,7 @@ NAVI_CLIENT_APP_SECRET=<clientAppSecret>
 NAVI_CLIENT_APP_ACCESS_TOKEN=
 NAVI_AGENT_CODE=<agentId>
 NAVI_MODEL_CONFIG_ID=<modelConfigId>
+NAVI_E2E_MOCK_LLM_URL=http://localhost:8200
 NAVI_POLL_INTERVAL_SECONDS=4
 ```
 
@@ -114,6 +118,18 @@ NAVI_POLL_INTERVAL_SECONDS=4
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream config check --profile .\temp\another-upstream.env
 ```
+
+E2E 回归使用独立 wrapper，仍读取同一个 project-local `.navigator/upstream.env`：
+
+```powershell
+.\tools\navigator-upstream\navi-e2e.ps1 config check
+.\tools\navigator-upstream\navi-e2e.ps1 model ensure --standard biz-worker --set-default --write-profile
+.\tools\navigator-upstream\navi-e2e.ps1 script register --file .\.navigator\e2e-script.json
+.\tools\navigator-upstream\navi-e2e.ps1 debug requests --trace-id <e2eTraceId>
+.\tools\navigator-upstream\navi-e2e.ps1 script cleanup --trace-id <e2eTraceId>
+```
+
+`model ensure` 需要 `.navigator/upstream.env` 中存在 `NAVI_CLIENT_APP_ID`，并提供 `NAVI_CONTROL_API_KEY`。它只维护当前 ClientApp 的标准 E2E model grant；不会修改租户默认模型。`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback。
 
 ## 更新
 

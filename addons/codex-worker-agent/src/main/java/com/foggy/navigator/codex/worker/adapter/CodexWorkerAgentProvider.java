@@ -108,8 +108,7 @@ public class CodexWorkerAgentProvider implements A2aAgentProvider {
     }
 
     public Optional<A2aAgent> resolveAgentByTenant(String agentId, String tenantId) {
-        return agentRepository.findByAgentId(agentId)
-                .filter(entity -> tenantId.equals(entity.getTenantId()))
+        return agentRepository.findByAgentIdAndTenantId(agentId, tenantId)
                 .filter(this::isManagedAgent)
                 .map(entity -> toA2aAgent(entity, entity.getUserId()));
     }
