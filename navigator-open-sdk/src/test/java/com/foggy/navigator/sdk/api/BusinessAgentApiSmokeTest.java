@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -242,6 +243,27 @@ public class BusinessAgentApiSmokeTest {
         assertTrue(lastBody.contains("\"message\":\"提交运单\""));
         assertTrue(lastBody.contains("\"contextId\":\"ctx-1\""));
         assertFalse(lastBody.contains("cas-secret"));
+        assertCommon();
+    }
+
+    @Test
+    public void testAskWithClientAppAccessTokenSendsModelConfigId() {
+        responseOverride = "{\"taskId\":\"task-openapi\",\"status\":\"SUBMITTED\"}";
+        var task = client.agents().askWithClientAppAccessToken(
+                "tms_skill",
+                "提交运单",
+                "ctx-1",
+                3,
+                Map.of(),
+                "cfg-e2e",
+                "cak-test",
+                "cat-runtime",
+                "tms-user-001");
+
+        assertNotNull(task);
+        assertEquals("/api/v1/open/agents/tms_skill/ask", lastPath);
+        assertTrue(lastBody.contains("\"modelConfigId\":\"cfg-e2e\""));
+        assertTrue(lastBody.contains("\"metadata\""));
         assertCommon();
     }
 

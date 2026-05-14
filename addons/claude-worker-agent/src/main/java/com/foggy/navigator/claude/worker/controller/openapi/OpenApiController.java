@@ -489,9 +489,10 @@ public class OpenApiController {
                 contextId,
                 requestedContextId);
 
+        String modelConfigId = resolveModelConfigId(form);
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId)
-                .modelConfigId(form.getMetadata() != null ? (String) form.getMetadata().get("modelConfigId") : null)
+                .modelConfigId(modelConfigId)
                 .requestSource("OPEN_API")
                 .build();
         A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
@@ -504,6 +505,9 @@ public class OpenApiController {
         // 合并用户传入的扩展元数据
         if (form.getMetadata() != null && !form.getMetadata().isEmpty()) {
             metadata.putAll(form.getMetadata());
+        }
+        if (StringUtils.hasText(modelConfigId)) {
+            metadata.put("modelConfigId", modelConfigId);
         }
         metadata.remove("runtimeContext");
         metadata.remove("runtime_context");
@@ -543,6 +547,17 @@ public class OpenApiController {
         log.info("Open API askAgent: agentId={}, taskId={}, tenantId={}", agentId, task.getId(), tenantId);
 
         return RX.ok(toOpenApiTaskDTO(task, agentId));
+    }
+
+    private String resolveModelConfigId(OpenApiQueryForm form) {
+        if (form == null) {
+            return null;
+        }
+        if (StringUtils.hasText(form.getModelConfigId())) {
+            return form.getModelConfigId();
+        }
+        Object value = form.getMetadata() != null ? form.getMetadata().get("modelConfigId") : null;
+        return value instanceof String text && StringUtils.hasText(text) ? text : null;
     }
 
     @PostMapping("/agents/{agentId}/preflight")

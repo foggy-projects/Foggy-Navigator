@@ -204,6 +204,7 @@ public class UpstreamCli {
                 args.option("context-id"),
                 parseInteger(args.option("max-turns")),
                 clientContext,
+                modelConfigId(args),
                 clientAppKey(args),
                 clientAppAccessToken(args),
                 upstreamUserId);

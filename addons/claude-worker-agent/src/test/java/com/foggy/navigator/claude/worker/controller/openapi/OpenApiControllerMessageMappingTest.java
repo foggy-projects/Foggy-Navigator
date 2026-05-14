@@ -42,6 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.never;
@@ -193,6 +194,36 @@ class OpenApiControllerMessageMappingTest {
         var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
         verify(agent).sendTask(captor.capture());
         assertSame(metadataAttachments, captor.getValue().getMetadata().get("attachments"));
+    }
+
+    @Test
+    void askAgent_topLevelModelConfigIdOverridesMetadataAndIsForwarded() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("run deterministic test");
+        form.setModelConfigId("cfg-top-level");
+        form.setMetadata(Map.of("modelConfigId", "cfg-metadata"));
+
+        when(credentialResolver.resolveAccessTokenForSkill(
+                nullable(String.class), nullable(String.class), eq("agent-1")))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), argThat(ctx ->
+                "cfg-top-level".equals(ctx.getModelConfigId())))).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, mock(HttpServletRequest.class));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        assertEquals("cfg-top-level", captor.getValue().getMetadata().get("modelConfigId"));
     }
 
     @Test

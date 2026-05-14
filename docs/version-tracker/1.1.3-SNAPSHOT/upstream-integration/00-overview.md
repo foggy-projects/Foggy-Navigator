@@ -132,3 +132,4 @@ graph TB
 | [28-client-app-control-credential-delivery.md](./28-client-app-control-credential-delivery.md) | ClientApp-scoped 控制面凭证与 `NAVI_CONTROL_API_KEY` 交付方案 | Navigator / 上游后端 / 上游 LLM coding agent |
 | [29-deterministic-e2e-routing-bug.md](./29-deterministic-e2e-routing-bug.md) | deterministic E2E mock model 路由缺陷复现与修复 | Navigator / worker / 上游 E2E |
 | [30-tms-e2e-agent-tenant-scope-bug.md](./30-tms-e2e-agent-tenant-scope-bug.md) | TMS E2E Agent tenant scope 与 CLI body missing 缺陷复现与修复 | Navigator / worker / 上游 E2E |
+| [31-openapi-model-config-and-attachment-e2e-bug.md](./31-openapi-model-config-and-attachment-e2e-bug.md) | OpenAPI ask modelConfigId 合同与附件 E2E 透传缺陷复现与修复 | Navigator / worker / 上游 E2E |

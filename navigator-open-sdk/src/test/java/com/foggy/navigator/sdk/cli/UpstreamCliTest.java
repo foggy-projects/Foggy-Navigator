@@ -389,6 +389,24 @@ class UpstreamCliTest {
     }
 
     @Test
+    void askSendsModelConfigIdFromEnvInTopLevelAndMetadata() {
+        responseOverride = "{\"code\":0,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUBMITTED\",\"contextId\":\"ctx-1\"}}";
+
+        int code = run(new String[]{"upstream", "ask",
+                "--base-url", baseUrl(),
+                "--client-app-key", "cak-test",
+                "--client-app-access-token", "cat-runtime-secret",
+                "--agent", "agent-1",
+                "--upstream-user-id", "u-1",
+                "--message", "hello"}, env("NAVI_MODEL_CONFIG_ID", "model-e2e"));
+
+        assertEquals(0, code);
+        assertEquals("/api/v1/open/agents/agent-1/ask", lastPath);
+        assertTrue(lastBody.contains("\"modelConfigId\":\"model-e2e\""));
+        assertTrue(lastBody.contains("\"metadata\""));
+    }
+
+    @Test
     void messagesPollStopsOnTaskTerminalStatus() {
         responseOverride = "__MESSAGES_TERMINAL__";
 

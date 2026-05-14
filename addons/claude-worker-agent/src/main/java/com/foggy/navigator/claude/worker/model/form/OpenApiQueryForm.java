@@ -23,6 +23,9 @@ public class OpenApiQueryForm {
     /** 最大交互轮数（可选，默认 3） */
     private Integer maxTurns;
 
+    /** 本次 ask 使用的模型配置 ID（可选；优先于 metadata.modelConfigId） */
+    private String modelConfigId;
+
     /** 原生系统提示词，仅对支持该能力的 Agent 生效 */
     private String systemPrompt;
 

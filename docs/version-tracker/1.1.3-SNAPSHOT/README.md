@@ -61,6 +61,7 @@
   - [28-client-app-control-credential-delivery.md](./upstream-integration/28-client-app-control-credential-delivery.md) - 设计与实施 / ClientApp-scoped 控制面凭证、CLI `NAVI_CONTROL_API_KEY` 与上游交付新方案
   - [29-deterministic-e2e-routing-bug.md](./upstream-integration/29-deterministic-e2e-routing-bug.md) - 缺陷复现与修复 / deterministic E2E mock model 路由与 CLI script register 问题
   - [30-tms-e2e-agent-tenant-scope-bug.md](./upstream-integration/30-tms-e2e-agent-tenant-scope-bug.md) - 缺陷复现与修复 / TMS E2E Agent tenant scope 与 CLI body missing 问题
+  - [31-openapi-model-config-and-attachment-e2e-bug.md](./upstream-integration/31-openapi-model-config-and-attachment-e2e-bug.md) - 缺陷复现与修复 / OpenAPI ask modelConfigId 合同与附件 E2E 透传问题
 
 ## Acceptance Status
 

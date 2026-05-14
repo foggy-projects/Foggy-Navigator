@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from langgraph_biz_worker.models import QueryEvent, QueryRequest
+from langgraph_biz_worker.graphs.root_graph import _build_attachment_context_prompt
 from langgraph_biz_worker.routes.query import _event_generator, _resolve_session_id
 
 
@@ -90,6 +91,33 @@ def test_query_request_accepts_url_attachment_metadata():
     ]
 
 
+def test_attachment_context_prompt_sanitizes_url_and_keeps_metadata():
+    prompt = _build_attachment_context_prompt([
+        {
+            "id": "att-1",
+            "name": "pod-photo.png",
+            "mimeType": "image/png",
+            "size": 12345,
+            "kind": "image",
+            "url": "https://tms.example.com/files/pod-photo.png?token=secret",
+            "metadata": {
+                "traceId": "att-20260513-001",
+                "accessToken": "secret",
+                "token": {"nested": "ignored"},
+            },
+        }
+    ])
+
+    assert "pod-photo.png" in prompt
+    assert "image/png" in prompt
+    assert "att-20260513-001" in prompt
+    assert "https://tms.example.com/files/pod-photo.png" in prompt
+    assert "token=secret" not in prompt
+    assert "accessToken" not in prompt
+    assert "secret" not in prompt
+    assert "nested" not in prompt
+
+
 @pytest.mark.asyncio
 async def test_query_generator_streams_tool_progress_before_graph_finishes():
     release_graph = threading.Event()
@@ -133,6 +161,44 @@ async def test_query_generator_streams_tool_progress_before_graph_finishes():
     all_events = [first_event, *remaining]
     assert [event["type"] for event in all_events].count("tool_use") == 1
     assert any(event["type"] == "result" for event in all_events)
+
+
+@pytest.mark.asyncio
+async def test_query_generator_preserves_model_config_id_and_attachments_in_state():
+    captured_state = {}
+
+    attachments = [
+        {
+            "id": "att-1",
+            "name": "pod-photo.png",
+            "mimeType": "image/png",
+            "size": 12345,
+            "kind": "image",
+            "url": "https://tms.example.com/pod-photo.png",
+        }
+    ]
+
+    def invoke_and_capture(state):
+        captured_state.update(state)
+        return {"events": [QueryEvent(type="result", task_id="task-attachments", content="done")]}
+
+    with patch("langgraph_biz_worker.routes.query.root_graph") as mock_graph:
+        mock_graph.invoke.side_effect = invoke_and_capture
+        generator = _event_generator(
+            "task-attachments",
+            QueryRequest(
+                prompt="describe attachment",
+                model_config_id="cfg-e2e",
+                attachments=attachments,
+            ),
+        )
+        events = []
+        async for item in generator:
+            events.append(json.loads(item["data"]))
+
+    assert events[-1]["type"] == "result"
+    assert captured_state["model_config_id"] == "cfg-e2e"
+    assert captured_state["attachments"] == attachments
 
 
 @pytest.mark.asyncio
