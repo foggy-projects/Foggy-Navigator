@@ -67,3 +67,49 @@ install=irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream
 ```
 
 交付注意：server 侧修复需要 Navi 服务重启后执行启动期兼容迁移，删除旧的 `coding_agents.agentId` 单列唯一索引并创建 `tenantId + agentId` 复合唯一索引。完成部署后，TMS 再重新安装 CLI、执行 `agent sync`、`verify-agent-readiness` 和 deterministic E2E。
+
+## Follow-up：迁移未加载修复
+
+2026-05-14 TMS 继续复测时发现 `/api/v1/business-agent/agent-bundles/sync` 仍返回 HTTP 500。服务端异常为：
+
+```text
+Duplicate entry 'tms-x3-agent-v305' for key 'coding_agents.UKeddxfpd32ms7ipwct7muv5m9j'
+```
+
+根因是 `CodingAgentTenantScopeMigration` 已实现，但 `CommonAutoConfiguration` 只扫描了 `com.foggy.navigator.common.security`，没有扫描 `com.foggy.navigator.common.migration`，导致服务启动时兼容迁移未执行，旧的 `coding_agents.agent_id` 单列唯一索引仍保留。
+
+本次补充：
+
+- `CommonAutoConfiguration` 增加 `com.foggy.navigator.common.migration` component scan。
+- `navigator-common` 增加自动配置扫描回归测试，防止迁移包再次脱离自动配置。
+
+本地重启 `start-launcher.ps1` 后验证：
+
+```text
+coding_agents.UKeddxfpd32ms7ipwct7muv5m9j removed
+uk_ca_tenant_agent_id(tenant_id, agent_id) exists
+```
+
+TMS workspace 复测：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream agent sync --manifest .navigator\agent-bundle.json
+.\tools\navigator-upstream\navi.ps1 upstream verify-agent-readiness
+```
+
+结果：
+
+```text
+agent sync ok
+agentId=tms-x3-agent-v305
+clientAppId=capp_9a878af4-aba5-4c26-a876-9b29b58751fb
+
+verify-agent-readiness OK
+agentCode=tms-x3-agent-v305
+requestedModelConfigId=17124893-0150-4018-987d-23e0391c85a9
+effectiveModelConfigId=17124893-0150-4018-987d-23e0391c85a9
+AGENT_REGISTERED=OK
+CLIENT_APP_SKILL_GRANT=OK
+UPSTREAM_USER_GRANT=OK
+MODEL_CONFIG_GRANT=OK
+```
