@@ -160,9 +160,9 @@ async function mockApi(page: Page) {
     }
 
     if (path === '/sessions/configs') {
-      const sessionIds = (url.searchParams.get('sessionIds') || '')
-        .split(',')
-        .filter(Boolean)
+      const sessionIds = request.method() === 'POST'
+        ? ((request.postDataJSON() as { sessionIds?: string[] } | null)?.sessionIds || [])
+        : (url.searchParams.get('sessionIds') || '').split(',').filter(Boolean)
       await fulfill(
         route,
         sessionIds.map((sessionId) => ({

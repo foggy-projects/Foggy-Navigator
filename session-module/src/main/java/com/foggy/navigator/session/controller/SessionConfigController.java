@@ -54,11 +54,26 @@ public class SessionConfigController {
     }
 
     @GetMapping("/configs")
-    public RX<List<SessionConfigDTO>> listConfigs(@RequestParam String sessionIds) {
-        List<String> ids = Arrays.stream(sessionIds.split(","))
+    public RX<List<SessionConfigDTO>> listConfigs(@RequestParam(required = false) String sessionIds) {
+        return listConfigsByIds(Arrays.stream((sessionIds != null ? sessionIds : "").split(","))
                 .map(String::trim)
                 .filter(id -> !id.isEmpty())
-                .toList();
+                .toList());
+    }
+
+    @PostMapping("/configs")
+    public RX<List<SessionConfigDTO>> listConfigsByPost(@RequestBody(required = false) ListConfigsForm form) {
+        return listConfigsByIds(form != null ? form.getSessionIds() : null);
+    }
+
+    private RX<List<SessionConfigDTO>> listConfigsByIds(List<String> sessionIds) {
+        List<String> ids = sessionIds != null ? sessionIds.stream()
+                .map(id -> id != null ? id.trim() : "")
+                .filter(id -> !id.isEmpty())
+                .toList() : List.of();
+        if (ids.isEmpty()) {
+            return RX.ok(List.of());
+        }
         return RX.ok(sessionMetadataService.listBySessionIds(UserContext.getCurrentUserId(), ids));
     }
 
@@ -132,5 +147,10 @@ public class SessionConfigController {
         private String baseUrl;
         private Boolean skipExisting;
         private String modelConfigId;
+    }
+
+    @Data
+    public static class ListConfigsForm {
+        private List<String> sessionIds;
     }
 }
