@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from httpx import AsyncClient, ASGITransport
 from mock_llm.main import app
@@ -203,6 +205,78 @@ async def test_scripted_cursor_tool_call_and_debug_requests(client):
     assert records[0]["cursor"] == f"next:{trace_id}:001"
     assert records[0]["scenarioId"] == "tms-create-order"
     assert records[0]["responseSummary"]["toolCalls"] == ["tms.order.createOpeningDraft"]
+
+
+@pytest.mark.anyio
+async def test_scripted_stream_accepts_langchain_style_tool_call(client):
+    """测试 streaming scripted response 支持 name/args 形式的 tool call。"""
+    trace_id = "e2e-script-stream-tool-001"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    register = await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "scenarioId": "tms-tool-loop",
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:001",
+                    "response": {
+                        "tool_calls": [
+                            {
+                                "name": "invoke_business_skill",
+                                "args": {
+                                    "skill_id": "foggy-query-agent",
+                                    "instruction": f"query and continue next:{trace_id}:002",
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+    assert register.status_code == 200
+
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-scripted",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"run e2eTraceId={trace_id} next:{trace_id}:001",
+                }
+            ],
+            "stream": True,
+        },
+    ) as response:
+        assert response.status_code == 200
+        body = await response.aread()
+
+    text = body.decode("utf-8")
+    assert "invoke_business_skill" in text
+    assert '"finish_reason":"tool_calls"' in text
+    assert "data: [DONE]" in text
+    argument_chunks = []
+    for event in text.split("\n\n"):
+        if not event.startswith("data: {"):
+            continue
+        data = json.loads(event.removeprefix("data: "))
+        tool_calls = data["choices"][0]["delta"].get("tool_calls") or []
+        for tool_call in tool_calls:
+            function = tool_call.get("function") or {}
+            if "arguments" in function:
+                argument_chunks.append(function["arguments"])
+    arguments = "".join(argument_chunks)
+    assert "foggy-query-agent" in arguments
+    assert f"next:{trace_id}:002" in arguments
+
+    debug = await client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert len(records) == 1
+    assert records[0]["responseSummary"]["toolCalls"] == ["invoke_business_skill"]
 
 
 @pytest.mark.anyio
