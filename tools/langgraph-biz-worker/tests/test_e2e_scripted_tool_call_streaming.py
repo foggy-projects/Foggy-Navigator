@@ -155,7 +155,14 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
 
     assert response.status_code == 200
     events = _parse_worker_sse(response.text)
-    assert [event.type for event in events].count("skill_frame_open") == 1
+    event_types = [event.type for event in events]
+    assert event_types.count("skill_frame_open") == 1
+    assert "tool_result" not in event_types
+    assert not any(event.tool_name == "invoke_business_skill" for event in events)
+    assert not any(
+        "Unknown tool: invoke_business_skill" in (event.content or "")
+        for event in events
+    )
     assert any(event.type == "skill_result_submit" for event in events)
     result = next(event for event in events if event.type == "result")
     assert result.content == "TMS Navigator deterministic tool loop ok"
@@ -166,9 +173,7 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
     assert debug.status_code == 200
     records = debug.json()
     cursors = [record["cursor"] for record in records]
-    assert cursors[0] == f"next:{trace_id}:001"
-    assert cursors[-1] == f"next:{trace_id}:002"
-    assert f"next:{trace_id}:002" in cursors
+    assert cursors == [f"next:{trace_id}:001", f"next:{trace_id}:002"]
     first_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:001")
     second_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:002")
     assert first_turn["responseSummary"]["toolCalls"] == ["invoke_business_skill"]

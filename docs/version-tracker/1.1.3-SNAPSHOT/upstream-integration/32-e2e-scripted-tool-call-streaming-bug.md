@@ -66,6 +66,30 @@ mock LLM streaming 分支原先只识别 OpenAI 风格 `function.name/function.a
 - `LlmSkillAgent` 第二轮命中 cursor `002` 并通过 `submit_skill_result` 完成 Frame。
 - mock debug requests 至少包含 `001` 与 `002` 两轮记录。
 
+## 追加修复：根路由工具噪声事件
+
+TMS 后续验证发现 scripted tool-call loop 已完成，但 messages 中仍出现一条非阻塞噪声事件：
+
+```text
+role=tool type=TOOL_RESULT content={"ok": false, "error": "Unknown tool: invoke_business_skill"}
+```
+
+判断：`invoke_business_skill` 是 Root Graph 的路由委派工具，不是 Skill Agent 内部可执行的业务工具。这条事件不应对上游用户可见；更合适的修复点是 root routing 到 skill execution 的交接阶段，而不是只在 messages API 层过滤。
+
+根因：Root Graph 已经从首轮 tool call 中提取 `skill_instruction`，但进入 `LlmSkillAgent` 时仍使用原始用户 prompt。deterministic E2E 的原始 prompt 中包含首轮 cursor `next:<traceId>:001`，导致 Skill Agent 再次命中首轮脚本，把 `invoke_business_skill` 当普通工具执行并产生 `Unknown tool`，随后才进入第二轮 `submit_skill_result`。
+
+修复：
+
+- `run_skill` 调用 `LlmSkillAgent` 时优先使用 `context.skill_instruction` 作为 Skill Agent prompt。
+- 仅当没有有效 `skill_instruction` 时回退原始用户 prompt。
+- attachment context 仍追加到最终 Skill Agent prompt，保持附件能力不变。
+
+回归断言：
+
+- Worker 事件流不再出现 `tool_result` 噪声。
+- 不再出现 `Unknown tool: invoke_business_skill`。
+- mock debug request cursor 严格为 `001 -> 002`，不重复首轮 cursor。
+
 验证命令：
 
 ```powershell
@@ -78,4 +102,10 @@ python -m pytest tests/test_openai_api.py -q
 cd tools/langgraph-biz-worker
 $env:PYTHONPATH='src'
 .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -q
+```
+
+```powershell
+cd tools/langgraph-biz-worker
+$env:PYTHONPATH='src'
+.\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py tests/test_llm_skill_agent.py -q
 ```
