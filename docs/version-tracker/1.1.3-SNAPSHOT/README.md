@@ -59,6 +59,7 @@
   - [26-upstream-user-identity-session-boundary-design.md](./upstream-integration/26-upstream-user-identity-session-boundary-design.md) - 架构澄清 / upstreamUserId 独立身份、accountId 上下文与 Business Agent 会话归属边界
   - [27-e2e-scripted-test-model-design.md](./upstream-integration/27-e2e-scripted-test-model-design.md) - 需求与设计 / 标准 E2E Test Model、navi-e2e-cli 与多轮 tool-call loop scripted cursor
   - [28-client-app-control-credential-delivery.md](./upstream-integration/28-client-app-control-credential-delivery.md) - 设计与实施 / ClientApp-scoped 控制面凭证、CLI `NAVI_CONTROL_API_KEY` 与上游交付新方案
+  - [29-deterministic-e2e-routing-bug.md](./upstream-integration/29-deterministic-e2e-routing-bug.md) - 缺陷复现与修复 / deterministic E2E mock model 路由与 CLI script register 问题
 
 ## Acceptance Status
 

@@ -50,8 +50,10 @@ class E2eModelConfigEnsureServiceTest {
         assertEquals("Navigator E2E Test Model - capp-1", modelForm.getName());
         assertEquals("http://localhost:8200", modelForm.getBaseUrl());
         assertEquals("navigator-e2e-scripted", modelForm.getModelName());
+        assertEquals("navigator-e2e-test-key", modelForm.getApiKey());
         assertEquals("LANGGRAPH_BIZ", modelForm.getWorkerBackend());
         assertEquals(LlmModelCategory.GENERAL, modelForm.getCategory());
+        assertEquals("openai", modelForm.getEnvVars().get("NAVI_LLM_PROVIDER"));
         assertFalse(modelForm.getIsDefault());
 
         ArgumentCaptor<GrantModelConfigForm> grantCaptor = ArgumentCaptor.forClass(GrantModelConfigForm.class);
@@ -129,6 +131,7 @@ class E2eModelConfigEnsureServiceTest {
         dto.setWorkerBackend("LANGGRAPH_BIZ");
         dto.setCategory(LlmModelCategory.GENERAL);
         dto.setIsDefault(false);
+        dto.setHasApiKey(true);
         return dto;
     }
 

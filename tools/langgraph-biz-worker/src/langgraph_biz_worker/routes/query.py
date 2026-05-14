@@ -72,6 +72,7 @@ async def _event_generator(
             "session_id": session_id,
             "prompt": request.prompt,
             "model": request.model,
+            "llm_config": request.llm_config,
             "context": request.context,
             "runtime_context": runtime_context,
             "user_id": request.user_id,

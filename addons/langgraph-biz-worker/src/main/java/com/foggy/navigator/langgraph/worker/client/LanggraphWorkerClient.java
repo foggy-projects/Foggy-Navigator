@@ -58,6 +58,7 @@ public class LanggraphWorkerClient {
             Map<String, Object> runtimeContext,
             String model,
             String modelConfigId,
+            Map<String, Object> llmConfig,
             String taskId,
             String sessionId,
             String userId,
@@ -70,6 +71,7 @@ public class LanggraphWorkerClient {
         if (runtimeContext != null) body.put("runtime_context", runtimeContext);
         if (model != null) body.put("model", model);
         if (modelConfigId != null) body.put("model_config_id", modelConfigId);
+        if (llmConfig != null && !llmConfig.isEmpty()) body.put("llm_config", llmConfig);
         if (taskId != null) body.put("taskId", taskId);
         if (sessionId != null) body.put("session_id", sessionId);
         if (userId != null) body.put("userId", userId);

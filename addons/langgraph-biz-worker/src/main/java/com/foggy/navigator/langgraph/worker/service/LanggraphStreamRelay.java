@@ -5,14 +5,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
 import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
+import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.session.event.SessionEventListener;
+import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import reactor.core.Disposable;
 
 import java.util.LinkedHashMap;
@@ -33,6 +36,7 @@ public class LanggraphStreamRelay {
     private final LanggraphTaskService taskService;
     private final SessionEventListener sessionEventListener;
     private final ObjectMapper objectMapper;
+    private final LlmModelManager llmModelManager;
 
     private final ConcurrentHashMap<String, Disposable> activeStreams = new ConcurrentHashMap<>();
 
@@ -67,6 +71,7 @@ public class LanggraphStreamRelay {
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> attachments = event.getProviderConfigValue("attachments");
             String modelConfigId = event.getProviderConfigString("modelConfigId");
+            Map<String, Object> llmConfig = resolveLlmConfig(modelConfigId, workerId);
 
             Disposable subscription = client.streamQuery(
                     event.getPrompt(),
@@ -74,6 +79,7 @@ public class LanggraphStreamRelay {
                     runtimeContext,
                     event.getModel(),
                     modelConfigId,
+                    llmConfig,
                     taskId,
                     sessionId,
                     event.getUserId(),
@@ -97,6 +103,46 @@ public class LanggraphStreamRelay {
                     Map.of("content", "Failed to connect to LangGraph worker: " + e.getMessage(),
                             "taskId", taskId));
         }
+    }
+
+    private Map<String, Object> resolveLlmConfig(String modelConfigId, String workerId) {
+        if (!StringUtils.hasText(modelConfigId)) {
+            return null;
+        }
+        llmModelManager.validateModelAccessForWorker(modelConfigId, workerId);
+        LlmModelConfigDTO model = llmModelManager.getModelConfig(modelConfigId)
+                .orElseThrow(() -> new IllegalArgumentException("Model config not found: " + modelConfigId));
+
+        Map<String, Object> config = new LinkedHashMap<>();
+        config.put("model_config_id", modelConfigId);
+        putTextIfPresent(config, "provider", resolveProvider(model));
+        putTextIfPresent(config, "base_url", model.getBaseUrl());
+        putTextIfPresent(config, "model", model.getModelName());
+        String apiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
+        putTextIfPresent(config, "api_key", apiKey);
+        if (model.getEnvVars() != null && !model.getEnvVars().isEmpty()) {
+            config.put("env_vars", model.getEnvVars());
+        }
+        return config;
+    }
+
+    private String resolveProvider(LlmModelConfigDTO model) {
+        Map<String, String> envVars = model.getEnvVars();
+        if (envVars != null) {
+            String configured = firstText(
+                    envVars.get("NAVI_LLM_PROVIDER"),
+                    envVars.get("BIZ_WORKER_LLM_PROVIDER"),
+                    envVars.get("provider")
+            );
+            if (configured != null) {
+                return configured;
+            }
+        }
+        String modelName = model.getModelName();
+        if (modelName != null && modelName.toLowerCase().startsWith("claude")) {
+            return "anthropic";
+        }
+        return "openai";
     }
 
     private void handleEvent(ServerSentEvent<String> sse, String taskId, String sessionId) {
@@ -247,6 +293,21 @@ public class LanggraphStreamRelay {
         } catch (Exception ignored) {
             return content;
         }
+    }
+
+    private static void putTextIfPresent(Map<String, Object> payload, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            payload.put(key, value);
+        }
+    }
+
+    private static String firstText(String... values) {
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     private void handleStreamError(Throwable error, String taskId, String sessionId) {

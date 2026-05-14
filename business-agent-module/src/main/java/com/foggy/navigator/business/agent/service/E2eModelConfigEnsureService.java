@@ -116,12 +116,14 @@ public class E2eModelConfigEnsureService {
         modelForm.setCategory(LlmModelCategory.GENERAL);
         modelForm.setBaseUrl(mockBaseUrl);
         modelForm.setModelName(MODEL_NAME);
+        modelForm.setApiKey("navigator-e2e-test-key");
         modelForm.setIsDefault(false);
         modelForm.setScope(ModelAccessScope.GLOBAL);
         modelForm.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
         modelForm.setAvailableModels(List.of(MODEL_NAME));
         modelForm.setEnvVars(Map.of(
                 "NAVI_E2E_SCRIPTED", "true",
+                "NAVI_LLM_PROVIDER", "openai",
                 "NAVI_E2E_STANDARD", standard
         ));
         return modelForm;
@@ -132,6 +134,7 @@ public class E2eModelConfigEnsureService {
                 || model.getCategory() != LlmModelCategory.GENERAL
                 || !MODEL_NAME.equals(model.getModelName())
                 || !ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND.equals(model.getWorkerBackend())
+                || !Boolean.TRUE.equals(model.getHasApiKey())
                 || Boolean.TRUE.equals(model.getIsDefault());
     }
 

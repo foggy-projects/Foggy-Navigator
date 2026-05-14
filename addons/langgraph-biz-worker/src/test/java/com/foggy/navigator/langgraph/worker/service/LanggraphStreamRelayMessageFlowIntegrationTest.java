@@ -60,6 +60,9 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private LlmModelManager llmModelManager;
+
     private LanggraphTaskService taskService;
     private LanggraphStreamRelay relay;
     private String sessionId;
@@ -72,7 +75,8 @@ class LanggraphStreamRelayMessageFlowIntegrationTest {
                 mock(LanggraphWorkerService.class),
                 taskService,
                 sessionEventListener,
-                objectMapper
+                objectMapper,
+                llmModelManager
         );
         taskId = "lgt-" + UUID.randomUUID().toString().substring(0, 8);
         sessionId = sessionManager.createSession(SessionCreateRequest.builder()

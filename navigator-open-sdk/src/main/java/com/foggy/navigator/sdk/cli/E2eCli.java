@@ -1,6 +1,7 @@
 package com.foggy.navigator.sdk.cli;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.foggy.navigator.sdk.api.BusinessAgentApi;
@@ -95,7 +96,8 @@ public class E2eCli {
 
     private int scriptRegister(CliArguments args) throws Exception {
         Path file = resolveRequiredPath(args.option("file"), "script file");
-        String body = Files.readString(file, StandardCharsets.UTF_8);
+        JsonNode script = objectMapper.readTree(file.toFile());
+        String body = objectMapper.writeValueAsString(script);
         Map<String, Object> result = execute("POST", "/__e2e/scripts", body);
         out.println("script register ok");
         out.println("traceId=" + valueOrEmpty(result.get("traceId")));

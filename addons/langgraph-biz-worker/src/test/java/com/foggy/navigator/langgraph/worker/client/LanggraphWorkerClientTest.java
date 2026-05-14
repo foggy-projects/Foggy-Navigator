@@ -34,6 +34,12 @@ class LanggraphWorkerClientTest {
                     Map.of("formId", "tms-1"),
                     "gemini-2.5-pro",
                     "model-config-1",
+                    Map.of(
+                            "provider", "openai",
+                            "base_url", "http://mock-llm",
+                            "model", "navigator-e2e-scripted",
+                            "api_key", "test-key"
+                    ),
                     "task-1",
                     "session-1",
                     "user-1",
@@ -44,6 +50,10 @@ class LanggraphWorkerClientTest {
             Map<String, Object> body = objectMapper.readValue(server.body(),
                     new TypeReference<>() {});
             assertEquals(attachments, body.get("attachments"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> llmConfig = (Map<String, Object>) body.get("llm_config");
+            assertEquals("http://mock-llm", llmConfig.get("base_url"));
+            assertEquals("navigator-e2e-scripted", llmConfig.get("model"));
         }
     }
 

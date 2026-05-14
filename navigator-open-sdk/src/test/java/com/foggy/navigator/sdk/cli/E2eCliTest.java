@@ -137,10 +137,35 @@ class E2eCliTest {
         assertEquals(0, code);
         assertEquals("POST", lastMethod);
         assertEquals("/__e2e/scripts", lastPath);
-        assertTrue(lastBody.contains("\"traceId\": \"e2e-uuid-001\""));
+        assertTrue(lastBody.contains("\"traceId\" : \"e2e-uuid-001\""));
         assertTrue(output.contains("script register ok"));
         assertTrue(output.contains("traceId=e2e-uuid-001"));
         assertTrue(output.contains("turns=2"));
+    }
+
+    @Test
+    void scriptRegisterNormalizesJsonFileBeforePosting() throws Exception {
+        Path script = tempDir.resolve("script-with-bom.json");
+        Files.write(script, ("\uFEFF" + """
+                {
+                  "traceId": "e2e-uuid-001",
+                  "turns": [
+                    {"cursor": "next:e2e-uuid-001:001", "response": {"content": "ok"}}
+                  ]
+                }
+                """).getBytes(StandardCharsets.UTF_8));
+
+        int code = run(new String[]{
+                "script", "register",
+                "--file", script.toString(),
+                "--mock-url", "http://127.0.0.1:" + port
+        });
+
+        assertEquals(0, code);
+        assertEquals("POST", lastMethod);
+        assertEquals("/__e2e/scripts", lastPath);
+        assertTrue(lastBody.startsWith("{"), "posted body should be canonical JSON without BOM");
+        assertTrue(lastBody.contains("\"traceId\" : \"e2e-uuid-001\""));
     }
 
     @Test
