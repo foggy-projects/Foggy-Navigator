@@ -92,6 +92,16 @@ sha256=1a288efc8321dab78eedee478f84f64dbe8a2783d268603a5d41a58920127d43
 install=irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/install.ps1 | iex
 ```
 
+## Follow-up：E2E Mock Base URL
+
+2026-05-14 TMS 在本地验证中确认：标准 E2E model config 若写入 `base_url=http://localhost:8200`，OpenAI client 会请求 `/chat/completions`，mock LLM 返回 404；写入 `base_url=http://localhost:8200/v1` 后，请求路径为 `/v1/chat/completions`，scripted cursor 能命中。
+
+本次修复将 `navi-e2e model ensure --standard biz-worker` 的服务端 `mockBaseUrl` 规范化为 OpenAI-compatible base URL：
+
+- 输入 `http://localhost:8200` 或 `http://localhost:8200/` 时，model config 保存为 `http://localhost:8200/v1`。
+- 输入已带 `/v1` 的 URL 时，只去除末尾 `/`，不重复追加。
+- 已存在但缺少 `/v1` 的 E2E model config 会在下一次 `model ensure` 时被更新。
+
 ## Progress Tracking
 
 ### Development Progress
@@ -102,6 +112,7 @@ install=irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream
   - `navigator-open-sdk/src/main/java/com/foggy/navigator/sdk/cli/UpstreamCli.java`
   - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java`
   - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/model/form/OpenApiQueryForm.java`
+  - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/E2eModelConfigEnsureService.java`
   - `tools/langgraph-biz-worker/src/langgraph_biz_worker/routes/query.py`
   - `tools/langgraph-biz-worker/src/langgraph_biz_worker/graphs/root_graph.py`
 

@@ -1013,8 +1013,7 @@ public class OpenApiController {
         String tenantId = UserContext.getCurrentTenantId();
 
         // 获取 Agent 实体以读取 userId
-        CodingAgentEntity agentEntity = codingAgentRepository.findByAgentId(agentId)
-                .filter(entity -> tenantId.equals(entity.getTenantId()))
+        CodingAgentEntity agentEntity = codingAgentRepository.findByAgentIdAndTenantId(agentId, tenantId)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
 
         List<OpenApiTaskDTO> result = taskDispatchFacade.listActiveTasks(agentEntity.getUserId()).stream()
@@ -1237,8 +1236,7 @@ public class OpenApiController {
     }
 
     private String resolveAgentOwnerUserId(String agentId, String tenantId) {
-        return codingAgentRepository.findByAgentId(agentId)
-                .filter(entity -> tenantId.equals(entity.getTenantId()))
+        return codingAgentRepository.findByAgentIdAndTenantId(agentId, tenantId)
                 .map(CodingAgentEntity::getUserId)
                 .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
     }

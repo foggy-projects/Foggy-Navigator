@@ -113,3 +113,30 @@ CLIENT_APP_SKILL_GRANT=OK
 UPSTREAM_USER_GRANT=OK
 MODEL_CONFIG_GRANT=OK
 ```
+
+## Follow-up：OpenAPI/Provider 仍有全局 Agent 查询
+
+2026-05-14 TMS 在 `28680b90` 基础上继续验证 deterministic attachments E2E，确认 `agent sync` 与 readiness 已恢复，但 OpenAPI ask 创建 task 后仍出现 HTTP 500。服务端异常为：
+
+```text
+IncorrectResultSizeDataAccessException: Query did not return a unique result: 2 results were returned
+... CodingAgentRepository.findByAgentId
+... OpenApiController.resolveAgentOwnerUserId
+```
+
+原因是旧全局唯一索引删除后，跨 tenant 同名 `agent_id` 已是合法状态；因此任何有 tenant 上下文的 OpenAPI/runtime 路径都不能再调用 `findByAgentId(agentId)` 后在 Java 内存中过滤 tenant，否则 Spring Data 会先因多行结果抛异常。
+
+本次正式修复：
+
+- `OpenApiController.listAgentTasks` 和 `resolveAgentOwnerUserId` 改为 `findByAgentIdAndTenantId(agentId, tenantId)`。
+- `ClaudeWorkerAgentProvider`、`CodexWorkerAgentProvider`、`GeminiWorkerAgentProvider` 的 `OPEN_API` tenant 分支改为 tenant-scoped repository lookup。
+- 对 Claude/Codex/Gemini provider 与 OpenAPI context resume 路径补充回归测试，断言 tenant 分支不会调用全局 `findByAgentId`。
+
+TMS 本地验证补丁已证明修复后可通过 attachments deterministic E2E：
+
+```text
+taskId=lgt_ff6d6a88a6814f3c
+result=ATTACHMENT_E2E_OK
+mock debug matched=true
+model=navigator-e2e-scripted
+```

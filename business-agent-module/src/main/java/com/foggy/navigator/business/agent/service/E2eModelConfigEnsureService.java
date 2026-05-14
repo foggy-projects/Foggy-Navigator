@@ -162,6 +162,9 @@ public class E2eModelConfigEnsureService {
         while (normalized.endsWith("/")) {
             normalized = normalized.substring(0, normalized.length() - 1);
         }
+        if (!normalized.endsWith("/v1")) {
+            normalized = normalized + "/v1";
+        }
         return normalized;
     }
 

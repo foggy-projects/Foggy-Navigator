@@ -129,7 +129,7 @@ class ClaudeWorkerAgentProviderTest {
         void resolveAgent_openApiContext_usesResolveByTenant() {
             CodingAgentEntity entity = claudeAgent("agent-1", "user-1");
             entity.setTenantId("tenant-1");
-            when(agentRepository.findByAgentId("agent-1")).thenReturn(Optional.of(entity));
+            when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1")).thenReturn(Optional.of(entity));
 
             AgentResolveContext ctx = AgentResolveContext.builder()
                     .tenantId("tenant-1").requestSource("OPEN_API").build();
@@ -137,18 +137,21 @@ class ClaudeWorkerAgentProviderTest {
             Optional<A2aAgent> result = provider.resolveAgent("agent-1", ctx);
 
             assertTrue(result.isPresent());
-            verify(agentRepository).findByAgentId("agent-1");
+            verify(agentRepository).findByAgentIdAndTenantId("agent-1", "tenant-1");
+            verify(agentRepository, never()).findByAgentId("agent-1");
         }
 
         @Test
-        void resolveAgentByTenant_wrongTenant_returnsEmpty() {
+        void resolveAgentByTenant_missingInTenant_returnsEmptyWithoutGlobalLookup() {
             CodingAgentEntity entity = claudeAgent("agent-1", "user-1");
             entity.setTenantId("tenant-A");
-            when(agentRepository.findByAgentId("agent-1")).thenReturn(Optional.of(entity));
+            when(agentRepository.findByAgentIdAndTenantId("agent-1", "tenant-B")).thenReturn(Optional.empty());
 
             Optional<A2aAgent> result = provider.resolveAgentByTenant("agent-1", "tenant-B");
 
             assertTrue(result.isEmpty());
+            verify(agentRepository).findByAgentIdAndTenantId("agent-1", "tenant-B");
+            verify(agentRepository, never()).findByAgentId("agent-1");
         }
 
         @Test

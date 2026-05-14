@@ -48,7 +48,7 @@ class E2eModelConfigEnsureServiceTest {
         verify(llmModelManager).saveModelConfig(eq("tenant-1"), modelCaptor.capture());
         LlmModelConfigForm modelForm = modelCaptor.getValue();
         assertEquals("Navigator E2E Test Model - capp-1", modelForm.getName());
-        assertEquals("http://localhost:8200", modelForm.getBaseUrl());
+        assertEquals("http://localhost:8200/v1", modelForm.getBaseUrl());
         assertEquals("navigator-e2e-scripted", modelForm.getModelName());
         assertEquals("navigator-e2e-test-key", modelForm.getApiKey());
         assertEquals("LANGGRAPH_BIZ", modelForm.getWorkerBackend());
@@ -69,7 +69,7 @@ class E2eModelConfigEnsureServiceTest {
 
     @Test
     void ensure_reuses_existing_model_and_existing_grant() {
-        when(llmModelManager.listModelConfigs("tenant-1")).thenReturn(List.of(model("cfg-existing", "http://localhost:8200")));
+        when(llmModelManager.listModelConfigs("tenant-1")).thenReturn(List.of(model("cfg-existing", "http://localhost:8200/v1")));
         when(grantService.listGrants("tenant-1", "capp-1"))
                 .thenReturn(List.of(grant(8L, "cfg-existing", true, ClientAppModelConfigGrantService.STATUS_ENABLED)));
 
@@ -86,8 +86,35 @@ class E2eModelConfigEnsureServiceTest {
     }
 
     @Test
+    void ensure_accepts_mockBaseUrl_already_endingWithOpenAiV1() {
+        E2eModelConfigEnsureResultDTO result = service.ensure(
+                "tenant-1", "admin-1", "capp-1", form("http://localhost:8200/v1/", true));
+
+        ArgumentCaptor<LlmModelConfigForm> modelCaptor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
+        verify(llmModelManager).saveModelConfig(eq("tenant-1"), modelCaptor.capture());
+        assertEquals("http://localhost:8200/v1", modelCaptor.getValue().getBaseUrl());
+        assertEquals("http://localhost:8200/v1", result.getMockBaseUrl());
+    }
+
+    @Test
+    void ensure_updates_existing_clientApp_model_when_mockUrl_missingOpenAiV1Path() {
+        when(llmModelManager.listModelConfigs("tenant-1")).thenReturn(List.of(model("cfg-existing", "http://localhost:8200")));
+        when(grantService.listGrants("tenant-1", "capp-1"))
+                .thenReturn(List.of(grant(8L, "cfg-existing", true, ClientAppModelConfigGrantService.STATUS_ENABLED)));
+
+        E2eModelConfigEnsureResultDTO result = service.ensure(
+                "tenant-1", "admin-1", "capp-1", form("http://localhost:8200", true));
+
+        ArgumentCaptor<LlmModelConfigForm> modelCaptor = ArgumentCaptor.forClass(LlmModelConfigForm.class);
+        verify(llmModelManager).updateModelConfig(eq("cfg-existing"), modelCaptor.capture());
+        assertEquals("http://localhost:8200/v1", modelCaptor.getValue().getBaseUrl());
+        assertEquals("http://localhost:8200/v1", result.getMockBaseUrl());
+        assertTrue(result.isModelUpdated());
+    }
+
+    @Test
     void ensure_updates_existing_clientApp_model_when_mockUrl_changes() {
-        when(llmModelManager.listModelConfigs("tenant-1")).thenReturn(List.of(model("cfg-existing", "http://old:8200")));
+        when(llmModelManager.listModelConfigs("tenant-1")).thenReturn(List.of(model("cfg-existing", "http://old:8200/v1")));
         when(grantService.listGrants("tenant-1", "capp-1"))
                 .thenReturn(List.of(grant(8L, "cfg-existing", false, ClientAppModelConfigGrantService.STATUS_ENABLED)));
         when(grantService.setDefault("tenant-1", "capp-1", 8L))

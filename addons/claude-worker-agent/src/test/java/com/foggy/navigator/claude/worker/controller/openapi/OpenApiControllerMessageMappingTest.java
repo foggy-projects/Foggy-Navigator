@@ -315,7 +315,7 @@ class OpenApiControllerMessageMappingTest {
         agentEntity.setAgentId("agent-1");
         agentEntity.setTenantId("tenant-1");
         agentEntity.setUserId("owner-1");
-        when(codingAgentRepository.findByAgentId("agent-1")).thenReturn(Optional.of(agentEntity));
+        when(codingAgentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1")).thenReturn(Optional.of(agentEntity));
         when(sessionQueryService.resolveSessionId("ctx-1", "owner-1")).thenReturn(Optional.empty());
         when(agent.sendTask(any())).thenReturn(A2aTask.builder()
                 .id("task-1")
@@ -327,6 +327,8 @@ class OpenApiControllerMessageMappingTest {
 
         var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
         verify(agent).sendTask(captor.capture());
+        verify(codingAgentRepository).findByAgentIdAndTenantId("agent-1", "tenant-1");
+        verify(codingAgentRepository, never()).findByAgentId("agent-1");
         assertEquals("ctx-1", captor.getValue().getContextId());
     }
 
