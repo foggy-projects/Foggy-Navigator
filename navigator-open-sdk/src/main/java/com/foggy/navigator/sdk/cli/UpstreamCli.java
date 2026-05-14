@@ -20,9 +20,11 @@ import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
 import com.foggy.navigator.sdk.model.businessagent.BusinessAgentBundleDTO;
+import com.foggy.navigator.sdk.model.businessagent.ClearSkillBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
+import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncBusinessAgentBundleForm;
@@ -86,6 +88,8 @@ public class UpstreamCli {
             case "skill tree" -> skillTree(args);
             case "skill read" -> skillRead(args);
             case "skill sync" -> skillSync(args);
+            case "skill clear-public" -> skillClearPublic(args);
+            case "skill clear-account" -> skillClearAccount(args);
             case "agent sync" -> agentSync(args);
             case "account-context list" -> accountContextList(args);
             case "account-context read" -> accountContextRead(args);
@@ -99,7 +103,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, agent sync, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, account-context list, account-context read, account-context write-policy");
         return 0;
     }
 
@@ -351,6 +355,35 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int skillClearPublic(CliArguments args) {
+        ClearSkillBundleForm form = buildSkillClearForm(args, false);
+        SkillClearResultDTO result = businessAgentControlApi().clearPublicSkillBundles(form);
+        printSkillClearResult("skill clear-public", result);
+        return 0;
+    }
+
+    private int skillClearAccount(CliArguments args) {
+        ClearSkillBundleForm form = buildSkillClearForm(args, true);
+        SkillClearResultDTO result = businessAgentControlApi().clearAccountSkillBundles(form);
+        printSkillClearResult("skill clear-account", result);
+        return 0;
+    }
+
+    private ClearSkillBundleForm buildSkillClearForm(CliArguments args, boolean accountScope) {
+        boolean dryRun = args.flag("dry-run");
+        if (!dryRun && !args.flag("yes")) {
+            throw new UpstreamCliException("skill clear requires --dry-run or --yes");
+        }
+        ClearSkillBundleForm form = new ClearSkillBundleForm();
+        form.setClientAppId(requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id"));
+        form.setSkillId(args.option("skill-id"));
+        form.setDryRun(dryRun);
+        if (accountScope) {
+            form.setAccountId(requiredOption(args, "account-id", "account id"));
+        }
+        return form;
+    }
+
     private int agentSync(CliArguments args) throws Exception {
         String manifest = requiredOption(args, "manifest", "manifest path");
         Path manifestPath = cwd.resolve(manifest).normalize();
@@ -571,6 +604,30 @@ public class UpstreamCli {
             out.println("skillBundleStatus=" + valueOrEmpty(dto.getSkillBundle().getStatus()));
             if (dto.getSkillBundle().getMaterializeResult() != null) {
                 out.println("skillBundleMaterializeStatus=" + valueOrEmpty(dto.getSkillBundle().getMaterializeResult().getStatus()));
+            }
+        }
+    }
+
+    private void printSkillClearResult(String command, SkillClearResultDTO dto) {
+        out.println(command + " ok");
+        out.println("scope=" + valueOrEmpty(dto != null ? dto.getScope() : null));
+        out.println("clientAppId=" + valueOrEmpty(dto != null ? dto.getClientAppId() : null));
+        out.println("accountId=" + valueOrEmpty(dto != null ? dto.getAccountId() : null));
+        out.println("skillId=" + valueOrEmpty(dto != null ? dto.getSkillId() : null));
+        out.println("dryRun=" + (dto != null && dto.isDryRun()));
+        out.println("executed=" + (dto != null && dto.isExecuted()));
+        out.println("matchedSkillCount=" + (dto != null ? dto.getMatchedSkillCount() : 0));
+        out.println("skillBundleCount=" + (dto != null ? dto.getSkillBundleCount() : 0));
+        out.println("legacySkillCount=" + (dto != null ? dto.getLegacySkillCount() : 0));
+        out.println("clientAppSkillGrantCount=" + (dto != null ? dto.getClientAppSkillGrantCount() : 0));
+        out.println("skillFunctionAllowlistCount=" + (dto != null ? dto.getSkillFunctionAllowlistCount() : 0));
+        out.println("materializedBundleCount=" + (dto != null ? dto.getMaterializedBundleCount() : 0));
+        out.println("cacheCount=" + (dto != null ? dto.getCacheCount() : 0));
+        out.println("workerClearStatus=" + valueOrEmpty(dto != null ? dto.getWorkerClearStatus() : null));
+        out.println("workerStatusCode=" + valueOrEmpty(dto != null ? dto.getWorkerStatusCode() : null));
+        if (dto != null && dto.getSkillIds() != null) {
+            for (String skillId : dto.getSkillIds()) {
+                out.println("matchedSkillId=" + valueOrEmpty(skillId));
             }
         }
     }
