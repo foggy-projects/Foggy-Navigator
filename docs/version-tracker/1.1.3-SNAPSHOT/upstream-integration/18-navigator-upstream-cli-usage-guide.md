@@ -229,10 +229,38 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 .\tools\navigator-upstream\navi.ps1 upstream model set-default --model-config-id <modelConfigId> --write-profile
 ```
 
+如果上游项目有自己的 LLM key，可以先放到当前 shell 的环境变量，再创建当前 ClientApp 自有模型：
+
+```powershell
+$env:NAVI_LLM_API_KEY="<llm-api-key>"
+.\tools\navigator-upstream\navi.ps1 upstream model create `
+  --name "tms-owned-gpt" `
+  --model-base-url "https://llm.example/v1" `
+  --model-name "gpt-4.1-mini" `
+  --provider openai `
+  --api-key-env NAVI_LLM_API_KEY `
+  --set-default `
+  --write-profile
+```
+
 也可以直接用 grant id 设置默认模型：
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream model set-default --grant-id <grantId>
+```
+
+维护自有模型：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream model update `
+  --model-config-id <modelConfigId> `
+  --model-base-url "https://llm.example/v1" `
+  --model-name "gpt-4.1-mini"
+
+$env:NAVI_LLM_API_KEY="<new-llm-api-key>"
+.\tools\navigator-upstream\navi.ps1 upstream model rotate-key `
+  --model-config-id <modelConfigId> `
+  --api-key-env NAVI_LLM_API_KEY
 ```
 
 约定：
@@ -240,8 +268,12 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 1. `model grants` 列出当前 `NAVI_CLIENT_APP_ID` 下已授权的模型、状态和默认标记。
 2. `model grant` 为当前 ClientApp 授权已有 `modelConfigId`；`--set-default` 同时设为默认。
 3. `model set-default --model-config-id` 会先查当前 ClientApp 的 grant，再设置默认。
-4. `--write-profile` 只把最终 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
-5. `NAVI_MODEL_CONFIG_ID` 是上游项目本地默认模型，不代表租户全局默认模型。
+4. `model create` 创建 `LANGGRAPH_BIZ` 模型配置，并以 `CLIENT_APP_OWNED` grant 绑定到当前 ClientApp。
+5. `model update` / `model rotate-key` 只允许维护 `CLIENT_APP_OWNED` 自有模型，不能修改管理员授权的共享模型。
+6. `--model-base-url` 是上游 LLM/OpenAI-compatible 地址；`--base-url` 仍然是 Navi 服务地址。
+7. `--api-key-env` 从环境变量读取 LLM key，避免 key 进入命令历史或 CLI 输出。
+8. `--write-profile` 只把最终 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
+9. `NAVI_MODEL_CONFIG_ID` 是上游项目本地默认模型，不代表租户全局默认模型。
 
 ## Deterministic E2E Test Model
 

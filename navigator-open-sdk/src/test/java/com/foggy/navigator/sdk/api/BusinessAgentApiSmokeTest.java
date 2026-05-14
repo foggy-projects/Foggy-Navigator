@@ -354,6 +354,42 @@ public class BusinessAgentApiSmokeTest {
     }
 
     @Test
+    public void testCreateClientAppModelConfig() {
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        form.setName("Upstream GPT");
+        form.setBaseUrl("https://llm.example/v1");
+        form.setModelName("gpt-test");
+        form.setApiKey("llm-secret");
+        form.setSetDefault(true);
+
+        responseOverride = "{\"modelConfigId\":\"cfg-owned\", \"grantScope\":\"CLIENT_APP_OWNED\"}";
+        ClientAppModelConfigGrantDTO grant = client.businessAgent().createClientAppModelConfig("app-123", form);
+        assertNotNull(grant);
+        assertEquals("cfg-owned", grant.getModelConfigId());
+        assertEquals("/api/v1/client-apps/app-123/model-configs", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"baseUrl\":\"https://llm.example/v1\""));
+        assertTrue(lastBody.contains("\"apiKey\":\"llm-secret\""));
+        assertCommon();
+    }
+
+    @Test
+    public void testRotateClientAppModelConfigKey() {
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setApiKey("new-secret");
+
+        responseOverride = "{\"modelConfigId\":\"cfg-owned\", \"grantScope\":\"CLIENT_APP_OWNED\"}";
+        ClientAppModelConfigGrantDTO grant = client.businessAgent()
+                .rotateClientAppModelConfigKey("app-123", "cfg-owned", form);
+        assertNotNull(grant);
+        assertEquals("cfg-owned", grant.getModelConfigId());
+        assertEquals("/api/v1/client-apps/app-123/model-configs/cfg-owned/key", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertTrue(lastBody.contains("\"apiKey\":\"new-secret\""));
+        assertCommon();
+    }
+
+    @Test
     public void testGrantUpstreamUserAccess_withServerSideToken() {
         GrantUpstreamUserForm form = new GrantUpstreamUserForm();
         form.setUpstreamUserId("tms-user-001");

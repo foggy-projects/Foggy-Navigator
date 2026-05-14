@@ -30,6 +30,7 @@ public class ClientAppControlCredentialService {
     public static final String SCOPE_E2E_MODEL_ENSURE = "E2E_MODEL_ENSURE";
     public static final String SCOPE_UPSTREAM_USER_GRANT = "UPSTREAM_USER_GRANT";
     public static final String SCOPE_MODEL_CONFIG_GRANT_MANAGE = "MODEL_CONFIG_GRANT_MANAGE";
+    public static final String SCOPE_MODEL_CONFIG_MANAGE = "MODEL_CONFIG_MANAGE";
 
     private final ClientAppControlCredentialRepository controlCredentialRepository;
 
@@ -90,6 +91,10 @@ public class ClientAppControlCredentialService {
         if (scopes.contains(SCOPE_ALL) || scopes.contains(requiredScope)) {
             return true;
         }
+        if (SCOPE_MODEL_CONFIG_MANAGE.equals(requiredScope)
+                && scopes.contains(SCOPE_MODEL_CONFIG_GRANT_MANAGE)) {
+            return true;
+        }
         // Compatibility for credentials issued before function-specific scopes were introduced.
         return (SCOPE_FUNCTION_MANIFEST_IMPORT.equals(requiredScope) || SCOPE_FUNCTION_GRANT_MANAGE.equals(requiredScope))
                 && scopes.contains(SCOPE_AGENT_BUNDLE_SYNC);
@@ -103,7 +108,8 @@ public class ClientAppControlCredentialService {
                 SCOPE_FUNCTION_GRANT_MANAGE,
                 SCOPE_E2E_MODEL_ENSURE,
                 SCOPE_UPSTREAM_USER_GRANT,
-                SCOPE_MODEL_CONFIG_GRANT_MANAGE);
+                SCOPE_MODEL_CONFIG_GRANT_MANAGE,
+                SCOPE_MODEL_CONFIG_MANAGE);
     }
 
     public static String serializeScopes(Set<String> scopes) {

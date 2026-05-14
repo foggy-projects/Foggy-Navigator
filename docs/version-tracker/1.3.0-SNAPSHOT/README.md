@@ -15,4 +15,4 @@
 - [09-history-session-page-size-bug.md](./09-history-session-page-size-bug.md)
 - [10-session-auth-model-config-binding-plan.md](./10-session-auth-model-config-binding-plan.md)
 - [11-navigator-upstream-cli-skill-clear-command.md](./11-navigator-upstream-cli-skill-clear-command.md)
-- [12-navigator-upstream-cli-model-grant-command.md](./12-navigator-upstream-cli-model-grant-command.md)
+- [12-navigator-upstream-cli-model-grant-command.md](./12-navigator-upstream-cli-model-grant-command.md) - upstream model grant + ClientApp-owned model create/update/rotate-key

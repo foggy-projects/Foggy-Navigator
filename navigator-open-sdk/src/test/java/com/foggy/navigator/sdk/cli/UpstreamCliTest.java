@@ -982,6 +982,84 @@ class UpstreamCliTest {
         assertFalse(output.contains("control-key-secret"));
     }
 
+    @Test
+    void modelCreateUsesControlCredentialAndApiKeyEnv() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":41,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-owned",
+                  "modelConfigName":"Upstream GPT",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP_OWNED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "create",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--name", "Upstream GPT",
+                "--model-base-url", "https://llm.example/v1",
+                "--model-name", "gpt-test",
+                "--provider", "openai",
+                "--api-key-env", "UPSTREAM_LLM_KEY",
+                "--set-default"}, env("UPSTREAM_LLM_KEY", "llm-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"name\":\"Upstream GPT\""));
+        assertTrue(lastBody.contains("\"baseUrl\":\"https://llm.example/v1\""));
+        assertTrue(lastBody.contains("\"modelName\":\"gpt-test\""));
+        assertTrue(lastBody.contains("\"apiKey\":\"llm-secret\""));
+        assertTrue(lastBody.contains("\"NAVI_LLM_PROVIDER\":\"openai\""));
+        assertTrue(lastBody.contains("\"setDefault\":true"));
+        assertTrue(output.contains("model create ok"));
+        assertTrue(output.contains("modelConfigId=model-owned"));
+        assertFalse(output.contains("control-key-secret"));
+        assertFalse(output.contains("llm-secret"));
+    }
+
+    @Test
+    void modelRotateKeyUsesApiKeyEnvWithoutPrintingSecret() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":42,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-owned",
+                  "modelConfigName":"Upstream GPT",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP_OWNED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "rotate-key",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--model-config-id", "model-owned",
+                "--api-key-env", "UPSTREAM_LLM_KEY"}, env("UPSTREAM_LLM_KEY", "new-llm-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs/model-owned/key", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"apiKey\":\"new-llm-secret\""));
+        assertTrue(output.contains("model rotate-key ok"));
+        assertFalse(output.contains("control-key-secret"));
+        assertFalse(output.contains("new-llm-secret"));
+    }
+
     private int run(String[] args, Map<String, String> env) {
         return new UpstreamCli(
                 new PrintStream(stdout, true, StandardCharsets.UTF_8),

@@ -190,6 +190,7 @@ final class UpstreamCliConfig {
         putEnvOption(values, args, env, "admin-token-env", "NAVI_ADMIN_TOKEN");
         putEnvOption(values, args, env, "admin-api-key-env", "NAVI_ADMIN_API_KEY");
         putEnvOption(values, args, env, "control-api-key-env", "NAVI_CONTROL_API_KEY");
+        putEnvOption(values, args, env, "api-key-env", "NAVI_LLM_API_KEY");
         putEnvOption(values, args, env, "upstream-user-token-env", "NAVI_UPSTREAM_USER_TOKEN");
     }
 
@@ -310,7 +311,7 @@ final class UpstreamCliConfig {
                 "NAVI_CLIENT_APP_ID", "NAVI_CLIENT_APP_KEY", "NAVI_AGENT_CODE",
                 "NAVI_MODEL_CONFIG_ID", "NAVI_POLL_INTERVAL_SECONDS", "NAVI_E2E_MOCK_LLM_URL", "NAVI_CLIENT_APP_SECRET",
                 "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN", "NAVI_ADMIN_API_KEY", "NAVI_CONTROL_API_KEY",
-                "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "NAVIGATOR_BASE_URL", "NAVIGATOR_TENANT_ID",
+                "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "NAVIGATOR_BASE_URL", "NAVIGATOR_TENANT_ID",
                 "CLIENT_APP_ID", "CLIENT_APP_KEY", "CLIENT_APP_SECRET",
                 "CLIENT_APP_RUNTIME_TOKEN", "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY",
                 "NAVIGATOR_CONTROL_API_KEY", "NAVI_UPSTREAM_PROFILE");
@@ -318,7 +319,7 @@ final class UpstreamCliConfig {
 
     private static List<String> sensitiveKeys() {
         return List.of("NAVI_CLIENT_APP_SECRET", "NAVI_CLIENT_APP_ACCESS_TOKEN", "NAVI_ADMIN_TOKEN",
-                "NAVI_ADMIN_API_KEY", "NAVI_CONTROL_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "CLIENT_APP_KEY",
+                "NAVI_ADMIN_API_KEY", "NAVI_CONTROL_API_KEY", "NAVI_LLM_API_KEY", "NAVI_UPSTREAM_USER_TOKEN", "TMS_STAFF_SESSION_TOKEN", "CLIENT_APP_KEY",
                 "NAVI_CLIENT_APP_KEY", "CLIENT_APP_SECRET", "CLIENT_APP_RUNTIME_TOKEN",
                 "NAVIGATOR_ADMIN_TOKEN", "NAVIGATOR_ADMIN_API_KEY", "NAVIGATOR_CONTROL_API_KEY");
     }

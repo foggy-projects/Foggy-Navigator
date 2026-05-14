@@ -97,6 +97,9 @@ GET  /api/v1/client-apps/{clientAppId}/model-config-grants
 POST /api/v1/client-apps/{clientAppId}/model-config-grants
 PUT  /api/v1/client-apps/{clientAppId}/model-config-grants/{grantId}/status
 PUT  /api/v1/client-apps/{clientAppId}/model-config-grants/{grantId}/default
+POST /api/v1/client-apps/{clientAppId}/model-configs
+PUT  /api/v1/client-apps/{clientAppId}/model-configs/{modelConfigId}
+PUT  /api/v1/client-apps/{clientAppId}/model-configs/{modelConfigId}/key
 POST /api/v1/business-agent/client-apps/{clientAppId}/e2e-model-config/ensure
 ```
 
@@ -141,10 +144,17 @@ NAVI_ADMIN_API_KEY=<internal-only>
 .\tools\navigator-upstream\navi.ps1 upstream model grants
 .\tools\navigator-upstream\navi.ps1 upstream model grant --model-config-id <modelConfigId> --set-default --write-profile
 .\tools\navigator-upstream\navi.ps1 upstream model set-default --model-config-id <modelConfigId> --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream model create --name <name> --model-base-url <llmBaseUrl> --model-name <modelName> --api-key-env NAVI_LLM_API_KEY --set-default --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream model update --model-config-id <modelConfigId> --model-base-url <llmBaseUrl> --model-name <modelName>
+.\tools\navigator-upstream\navi.ps1 upstream model rotate-key --model-config-id <modelConfigId> --api-key-env NAVI_LLM_API_KEY
 .\tools\navigator-upstream\navi-e2e.ps1 model ensure --standard biz-worker --set-default --write-profile
 ```
 
-`ensure-grant` 只要求 `NAVI_CONTROL_API_KEY` 与 `upstreamUserId`。`model` 命令组只维护当前 ClientApp 的 model config grant 与本地 `NAVI_MODEL_CONFIG_ID`，不修改租户默认模型。`NAVI_UPSTREAM_USER_TOKEN` 可选：需要 Worker 代表当前上游用户回调上游系统时再提供；SIM/E2E 或纯 Navi 会话授权可先省略。`TMS_STAFF_SESSION_TOKEN` 仅保留为 TMS sandbox 旧别名。
+`ensure-grant` 只要求 `NAVI_CONTROL_API_KEY` 与 `upstreamUserId`。`model` 命令组只维护当前 ClientApp 的 model config grant 与本地 `NAVI_MODEL_CONFIG_ID`，不修改租户默认模型。`model create` 创建的模型会以 `CLIENT_APP_OWNED` grant 绑定到当前 ClientApp；`model update` 和 `model rotate-key` 只能维护这种自有模型，不能修改管理员预置后授权的共享模型。`--api-key-env` 从环境变量读取上游自有 LLM key，避免 key 进入命令历史或 CLI 输出。
+
+注意：`--base-url` 是 Navigator 服务地址；上游 LLM/OpenAI-compatible 地址使用 `--model-base-url`。
+
+`NAVI_UPSTREAM_USER_TOKEN` 可选：需要 Worker 代表当前上游用户回调上游系统时再提供；SIM/E2E 或纯 Navi 会话授权可先省略。`TMS_STAFF_SESSION_TOKEN` 仅保留为 TMS sandbox 旧别名。
 
 上游不应把 `NAVI_CONTROL_API_KEY` 写入源码、文档、issue、日志或截图，只能放在项目本地 gitignored `.navigator/upstream.env`。
 
@@ -159,5 +169,5 @@ NAVI_ADMIN_API_KEY=<internal-only>
 | Function import/grant control key support | completed | SDK 使用 `controlApiKey(...)` |
 | SDK/CLI header support | completed | `NAVI_CONTROL_API_KEY` |
 | CLI `upstream agent sync` | completed | manifest driven, uses control key |
-| CLI `upstream model` | completed | `grants` / `grant` / `set-default` |
+| CLI `upstream model` | completed | `grants` / `grant` / `set-default` / `create` / `update` / `rotate-key` |
 | Tests | completed | service boundary + module tests |

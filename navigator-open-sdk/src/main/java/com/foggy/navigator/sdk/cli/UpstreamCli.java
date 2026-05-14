@@ -21,11 +21,13 @@ import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
 import com.foggy.navigator.sdk.model.businessagent.BusinessAgentBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClearSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.GrantModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
+import com.foggy.navigator.sdk.model.businessagent.RotateModelConfigKeyForm;
 import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
@@ -37,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -96,6 +99,9 @@ public class UpstreamCli {
             case "model grants" -> modelGrants(args);
             case "model grant" -> modelGrant(args);
             case "model set-default" -> modelSetDefault(args);
+            case "model create" -> modelCreate(args);
+            case "model update" -> modelUpdate(args);
+            case "model rotate-key" -> modelRotateKey(args);
             case "account-context list" -> accountContextList(args);
             case "account-context read" -> accountContextRead(args);
             case "account-context write-policy" -> accountContextWritePolicy(args);
@@ -108,7 +114,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, model grants, model grant, model set-default, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, model grants, model grant, model set-default, model create, model update, model rotate-key, account-context list, account-context read, account-context write-policy");
         return 0;
     }
 
@@ -484,6 +490,106 @@ public class UpstreamCli {
             }
         }
         throw new UpstreamCliException("model config grant not found for modelConfigId: " + modelConfigId);
+    }
+
+    private int modelCreate(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        ClientAppModelConfigForm form = buildModelConfigForm(args, true);
+        form.setSetDefault(args.flag("set-default") || args.flag("default"));
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi().createClientAppModelConfig(clientAppId, form);
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", modelConfigIdFromGrant(grant));
+        }
+        out.println("model create ok");
+        printModelConfigGrant("modelGrant", grant);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private int modelUpdate(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        ClientAppModelConfigForm form = buildModelConfigForm(args, false);
+        form.setSetDefault(args.flag("set-default") || args.flag("default"));
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi()
+                .updateClientAppModelConfig(clientAppId, modelConfigId, form);
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", modelConfigIdFromGrantOrFallback(grant, modelConfigId));
+        }
+        out.println("model update ok");
+        printModelConfigGrant("modelGrant", grant);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private int modelRotateKey(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi()
+                .rotateClientAppModelConfigKey(clientAppId, modelConfigId, form);
+        out.println("model rotate-key ok");
+        printModelConfigGrant("modelGrant", grant);
+        return 0;
+    }
+
+    private ClientAppModelConfigForm buildModelConfigForm(CliArguments args, boolean create) {
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        form.setName(create ? requiredOption(args, "name", "model name") : args.option("name"));
+        form.setBaseUrl(create ? requiredOption(args, "model-base-url", "LLM model base URL") : args.option("model-base-url"));
+        form.setModelName(create ? requiredOption(args, "model-name", "LLM model name") : args.option("model-name"));
+        form.setCategory(args.option("category"));
+        String provider = args.option("provider");
+        if (hasText(provider)) {
+            form.setEnvVars(Map.of("NAVI_LLM_PROVIDER", provider));
+        }
+        String availableModels = args.option("available-models");
+        if (hasText(availableModels)) {
+            form.setAvailableModels(parseCsv(availableModels));
+        }
+        if (create) {
+            form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
+        }
+        return form;
+    }
+
+    private String modelConfigIdFromGrant(ClientAppModelConfigGrantDTO grant) {
+        String modelConfigId = grant != null ? grant.getModelConfigId() : null;
+        if (!hasText(modelConfigId)) {
+            throw new UpstreamCliException("model create response did not include modelConfigId");
+        }
+        return modelConfigId;
+    }
+
+    private String modelConfigIdFromGrantOrFallback(ClientAppModelConfigGrantDTO grant, String fallback) {
+        String modelConfigId = grant != null ? grant.getModelConfigId() : null;
+        return hasText(modelConfigId) ? modelConfigId : fallback;
+    }
+
+    private List<String> parseCsv(String value) {
+        List<String> list = new ArrayList<>();
+        for (String item : value.split(",")) {
+            if (hasText(item)) {
+                list.add(item.trim());
+            }
+        }
+        return list;
     }
 
     private int accountContextList(CliArguments args) {

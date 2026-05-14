@@ -69,6 +69,20 @@ public class BusinessAgentApi {
         return http.put("/api/v1/client-apps/" + clientAppId + "/model-config-grants/" + grantId + "/default", null, new TypeReference<>() {});
     }
 
+    public ClientAppModelConfigGrantDTO createClientAppModelConfig(String clientAppId, ClientAppModelConfigForm form) {
+        return http.post("/api/v1/client-apps/" + clientAppId + "/model-configs", form, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO updateClientAppModelConfig(String clientAppId, String modelConfigId,
+                                                                   ClientAppModelConfigForm form) {
+        return http.put("/api/v1/client-apps/" + clientAppId + "/model-configs/" + modelConfigId, form, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO rotateClientAppModelConfigKey(String clientAppId, String modelConfigId,
+                                                                      RotateModelConfigKeyForm form) {
+        return http.put("/api/v1/client-apps/" + clientAppId + "/model-configs/" + modelConfigId + "/key", form, new TypeReference<>() {});
+    }
+
     public E2eModelConfigEnsureResultDTO ensureE2eModelConfig(String clientAppId, EnsureE2eModelConfigForm form) {
         return http.post("/api/v1/business-agent/client-apps/" + clientAppId + "/e2e-model-config/ensure", form, new TypeReference<>() {});
     }
