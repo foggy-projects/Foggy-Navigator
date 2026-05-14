@@ -25,6 +25,7 @@ public class CodingAgentTenantScopeMigration {
 
     private static final String TABLE = "coding_agents";
     private static final String COMPOSITE_INDEX = "uk_ca_tenant_agent_id";
+    private static final String AGENT_PROFILE_COLUMN = "agent_profile";
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -45,6 +46,8 @@ public class CodingAgentTenantScopeMigration {
             if (!tableExists()) {
                 return;
             }
+
+            ensureAgentProfileColumn();
 
             String agentColumn = findColumn("agent_id", "agentId");
             String tenantColumn = findColumn("tenant_id", "tenantId");
@@ -83,6 +86,14 @@ public class CodingAgentTenantScopeMigration {
             }
         }
         return null;
+    }
+
+    private void ensureAgentProfileColumn() {
+        if (StringUtils.hasText(findColumn(AGENT_PROFILE_COLUMN))) {
+            return;
+        }
+        jdbcTemplate.execute("ALTER TABLE `" + TABLE + "` ADD COLUMN `" + AGENT_PROFILE_COLUMN + "` TEXT NULL");
+        log.info("Added coding_agents agent profile column: {}", AGENT_PROFILE_COLUMN);
     }
 
     private void dropSingleColumnUniqueAgentIndexes(String agentColumn) {

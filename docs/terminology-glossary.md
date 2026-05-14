@@ -33,24 +33,27 @@
 - 不要把 Worker 直接等同于 Session
 - 不要把 Worker 直接等同于某个具体 Agent
 
-### 2.2 项目 Agent
+### 2.2 通用 Agent / 项目 Agent
 
 推荐定义：
-绑定到某个项目、目录或执行上下文的 Agent 实体，面向具体执行。
+Navigator 中可被 A2A 路由发现和调用的稳定 Agent 实体。它可以是绑定项目/目录的编程 Agent，也可以是上游 ClientApp 注册的业务运行 Agent。
 
 当前常见表现：
 
 - 代码中的 `CodingAgentEntity`
 - 前端里某些与目录或项目绑定的 Agent 记录
+- 上游集成中的业务 Agent，例如 `tms-x3-agent-v305`
 
 推荐用法：
 
+- “通用 Agent”
 - “项目 Agent”
+- “业务 Agent”
 - “目录绑定的 Agent”
 
 说明：
 
-“项目 Agent”是更适合产品文档的说法；如果需要落到代码，可补充 `CodingAgentEntity`。
+`CodingAgentEntity` 是历史类名；当前更准确的实现语义是“通用 Agent 注册行”。具体 Agent 类型通过 `agentType` 与 `agentProfile` JSON 区分。
 
 ### 2.3 Coding Agent
 
@@ -60,7 +63,7 @@
 当前对应关系：
 
 - `addons/coding-agent`
-- `CodingAgentEntity`
+- `CodingAgentEntity`（历史命名，已承载通用 Agent 注册语义）
 
 推荐用法：
 

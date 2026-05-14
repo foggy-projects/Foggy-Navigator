@@ -83,6 +83,10 @@ class BusinessAgentBundleServiceTest {
         assertEquals("worker_01", agent.getWorkerId());
         assertEquals("LOCAL_LANGGRAPH_WORKER", agent.getAgentType());
         assertTrue(agent.getSkills().contains("world-sim.bug-coordinator.decision.v1"));
+        assertTrue(agent.getAgentProfile().contains("\"domain\":\"BUSINESS_AGENT\""));
+        assertTrue(agent.getAgentProfile().contains("\"clientAppId\":\"app_01\""));
+        assertTrue(agent.getAgentProfile().contains("\"skillId\":\"world-sim.bug-coordinator.decision.v1\""));
+        assertEquals(agent.getAgentProfile(), result.getAgentProfile());
 
         ArgumentCaptor<SyncSkillBundleForm> skillCaptor = ArgumentCaptor.forClass(SyncSkillBundleForm.class);
         verify(skillRegistryService).syncSkillBundle(eq("tenant_01"), eq("admin_01"), skillCaptor.capture());

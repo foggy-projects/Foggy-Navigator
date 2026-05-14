@@ -20,6 +20,7 @@ public class CodingAgentDTO {
     private String workerName;
     private String defaultDirectoryId;
     private String skills;
+    private String agentProfile;
     private String defaultBranch;
     private String projectSummary;
     private String defaultModelConfigId;

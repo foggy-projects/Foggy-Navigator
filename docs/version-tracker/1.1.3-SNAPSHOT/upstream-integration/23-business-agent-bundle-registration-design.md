@@ -60,9 +60,9 @@ POST /api/v1/business-agent/agent-bundles/sync
 约定：
 
 - `agentId` 是上游 `.navigator/upstream.env` 中的 `NAVI_AGENT_CODE`。
-- 当前 `agentId` 继承 `CodingAgentEntity.agentId` 路由模型，按 Navigator 实例全局唯一，不是租户内唯一。上游交付应使用项目级命名空间，如 `tms-x3-agent-v305`、`world-sim.bug-coordinator.decision.v1`；如同一 Navigator 实例承载多个交付租户且需要并行同名版本，应在 agentId 中加入环境或租户后缀。
+- `agentId` 的数据库唯一边界为 `tenantId + agentId`。不同租户可注册同名逻辑 Agent；同一租户内仍应使用项目级命名空间，如 `tms-x3-agent-v305`、`world-sim.bug-coordinator.decision.v1`。
 - `skillId` 默认等于 `agentId`，让 readiness、skill file API 与 ask route 使用同一个标识。
-- Agent 运行时复用现有 `CodingAgentEntity + LanggraphWorkerAgentProvider`，`agentType=LOCAL_LANGGRAPH_WORKER`。
+- Agent 运行时复用现有 `CodingAgentEntity + LanggraphWorkerAgentProvider`，`agentType=LOCAL_LANGGRAPH_WORKER`。`CodingAgentEntity` 是历史类名，当前按通用 Agent 注册行使用；业务 Agent 会写入 `agent_profile` JSON，例如 `domain=BUSINESS_AGENT`、`kind=CLIENT_APP_RUNTIME_AGENT`、`clientAppId` 与 `skillId`。
 - Skill 交付复用 `SkillRegistryService.syncSkillBundle(... CLIENT_APP_PUBLIC ...)`，不新增第二套 Skill/Grant 权限模型。
 - `defaultModelConfigId` 必须已授权给当前 ClientApp，且 backend 为 `LANGGRAPH_BIZ`。
 - `workerId` 指向实际执行 OpenAPI ask 的 LangGraph worker。
