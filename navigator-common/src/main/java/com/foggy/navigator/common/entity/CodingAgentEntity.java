@@ -15,6 +15,8 @@ import java.time.LocalDateTime;
 @Table(name = "coding_agents", indexes = {
     @Index(name = "idx_ca_user_id", columnList = "userId"),
     @Index(name = "idx_ca_worker_id", columnList = "workerId")
+}, uniqueConstraints = {
+    @UniqueConstraint(name = "uk_ca_tenant_agent_id", columnNames = {"tenantId", "agentId"})
 })
 public class CodingAgentEntity {
 
@@ -22,7 +24,7 @@ public class CodingAgentEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(length = 64, nullable = false, unique = true)
+    @Column(length = 64, nullable = false)
     private String agentId;
 
     @Column(length = 64, nullable = false)

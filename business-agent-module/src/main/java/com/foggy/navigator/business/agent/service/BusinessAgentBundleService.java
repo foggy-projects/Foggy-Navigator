@@ -46,11 +46,8 @@ public class BusinessAgentBundleService {
         clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
         String defaultModelConfigId = normalizeDefaultModelConfigId(tenantId, form.getClientAppId(), form.getDefaultModelConfigId());
 
-        CodingAgentEntity entity = agentRepository.findByAgentId(agentId)
+        CodingAgentEntity entity = agentRepository.findByAgentIdAndTenantId(agentId, tenantId)
                 .orElseGet(CodingAgentEntity::new);
-        if (StringUtils.hasText(entity.getTenantId()) && !tenantId.equals(entity.getTenantId())) {
-            throw new IllegalArgumentException("agentId already exists in another tenant: " + agentId);
-        }
 
         entity.setAgentId(agentId);
         entity.setUserId(actorUserId);

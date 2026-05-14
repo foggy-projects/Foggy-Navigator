@@ -10,11 +10,11 @@ import com.foggy.navigator.sdk.model.businessagent.E2eModelConfigEnsureResultDTO
 import com.foggy.navigator.sdk.model.businessagent.EnsureE2eModelConfigForm;
 
 import java.io.PrintStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,9 +28,6 @@ public class E2eCli {
     private final Path cwd;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .enable(SerializationFeature.INDENT_OUTPUT);
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .build();
     private UpstreamCliConfig config;
 
     public E2eCli(PrintStream out, PrintStream err, Path cwd) {
@@ -170,26 +167,43 @@ public class E2eCli {
     }
 
     private Object executeAny(String method, String path, String body) throws Exception {
-        HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(URI.create(trimTrailingSlash(mockUrl()) + path))
-                .timeout(Duration.ofSeconds(30))
-                .header("Accept", "application/json");
+        HttpURLConnection connection = (HttpURLConnection) URI.create(trimTrailingSlash(mockUrl()) + path)
+                .toURL()
+                .openConnection();
+        connection.setConnectTimeout(10_000);
+        connection.setReadTimeout(30_000);
+        connection.setRequestMethod(method);
+        connection.setRequestProperty("Accept", "application/json");
         if (body != null) {
-            builder.header("Content-Type", "application/json");
-            builder.method(method, HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
-        } else {
-            builder.method(method, HttpRequest.BodyPublishers.noBody());
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            connection.setDoOutput(true);
+            connection.setFixedLengthStreamingMode(bytes.length);
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            try (OutputStream os = connection.getOutputStream()) {
+                os.write(bytes);
+            }
         }
-        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() >= 400) {
-            throw new UpstreamCliException("Mock LLM request failed: HTTP " + response.statusCode()
-                    + " " + response.body());
+
+        int status = connection.getResponseCode();
+        String responseBody = readResponseBody(connection, status);
+        if (status >= 400) {
+            throw new UpstreamCliException("Mock LLM request failed: HTTP " + status
+                    + " " + responseBody);
         }
-        String responseBody = response.body();
         if (responseBody == null || responseBody.isBlank()) {
             return Map.of();
         }
         return objectMapper.readValue(responseBody, new TypeReference<Object>() {});
+    }
+
+    private String readResponseBody(HttpURLConnection connection, int status) throws Exception {
+        InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        if (stream == null) {
+            return "";
+        }
+        try (stream) {
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 
     private Path resolveRequiredPath(String path, String description) {

@@ -1,0 +1,69 @@
+---
+doc_type: bug-regression
+version: 1.1.3-SNAPSHOT
+status: implemented
+date: 2026-05-14
+source: tms-upstream-validation
+severity: major
+scope: navigator-upstream-cli | business-agent-module | langgraph-biz-worker | navigator-common
+---
+
+# TMS E2E Agent Tenant Scope Bug
+
+## 背景
+
+TMS 复测 Navigator deterministic E2E 时，授权链路显示 Skill、upstream user、model grant 均已可见，但 `verify-agent-readiness` 的 `AGENT_REGISTERED` 失败，真实 `ask` 返回 `Agent not found: tms-x3-agent-v305`。
+
+同时，TMS 重新执行 `upstream agent sync` 时返回：
+
+```text
+agentId already exists in another tenant: tms-x3-agent-v305
+```
+
+这说明 Skill Registry 已经按 `tenantId + ClientApp` 隔离，而 Agent Registry 仍把 `coding_agents.agentId` 当成全局唯一资源，导致同一个上游项目在不同交付租户中无法注册相同逻辑 Agent。
+
+TMS 还反馈 `navi-e2e script register --file` 对 mock LLM 仍出现 HTTP 422 body missing；同一 JSON 直接 POST 可成功。该问题需要让 CLI 对 mock service 使用更保守的固定长度 HTTP/1.1 body 写入，避免中间层或 Java HTTP 客户端行为差异。
+
+## 预期行为
+
+1. Business Agent Bundle 的 `agentId` 在 Open API 路径上应由当前 `tenantId` 解析，允许不同 tenant 使用相同逻辑 `agentId`。
+2. `agent sync` 应只更新当前 tenant 下的 Agent，不应被其他 tenant 的同名 Agent 阻塞。
+3. LangGraph Agent Provider 在 Open API 场景应使用 `agentId + tenantId` 精确解析。
+4. CLI `script register --file` 应向 mock LLM 服务发送带固定 `Content-Length` 的 JSON body。
+
+## 修复清单
+
+- [x] `coding_agents.agentId` 从全局唯一调整为 `tenantId + agentId` 唯一。
+- [x] 增加 MySQL 启动期兼容迁移，删除旧的单列 `agentId` 唯一索引并创建 `uk_ca_tenant_agent_id`。
+- [x] Business Agent Bundle sync 改为按 `agentId + tenantId` 查找/更新 Agent。
+- [x] LangGraph Open API Agent 解析改为按 `agentId + tenantId` 查询。
+- [x] `navi-e2e` mock service 调用从 Java `HttpClient` 改为固定长度 `HttpURLConnection` JSON body。
+- [x] 补充 Agent tenant scope 与 CLI request body 回归测试。
+
+## 验收标准
+
+- TMS 重新安装 CLI 后，`navi-e2e script register --file` 不再返回 body missing。
+- TMS 在当前 tenant 下重新执行 `upstream agent sync`，不再被其他 tenant 的同名 `agentId` 阻塞。
+- `verify-agent-readiness --agent-code tms-x3-agent-v305 --model-config-id <e2eModelConfigId>` 的 `AGENT_REGISTERED` 为 OK。
+- 使用 E2E model 发起 ask 后，mock LLM `debug requests` 能看到 scripted cursor 命中记录。
+
+## 验证记录
+
+2026-05-14 已完成 Navi 侧回归验证：
+
+```bash
+mvn -pl navigator-open-sdk,business-agent-module,addons/langgraph-biz-worker -am "-Dtest=E2eCliTest,BusinessAgentBundleServiceTest,LanggraphWorkerAgentProviderTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+mvn -pl business-agent-module,addons/langgraph-biz-worker,navigator-open-sdk -am test
+```
+
+结果均为 `BUILD SUCCESS`。
+
+Navigator Upstream CLI 已重新打包并上传 OBS：
+
+```text
+version=1.0.0-SNAPSHOT
+sha256=156e38cb1495d4b47142df840b1ccde63d924f87db6a758a1a282a1c43e326fd
+install=irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/install.ps1 | iex
+```
+
+交付注意：server 侧修复需要 Navi 服务重启后执行启动期兼容迁移，删除旧的 `coding_agents.agentId` 单列唯一索引并创建 `tenantId + agentId` 复合唯一索引。完成部署后，TMS 再重新安装 CLI、执行 `agent sync`、`verify-agent-readiness` 和 deterministic E2E。

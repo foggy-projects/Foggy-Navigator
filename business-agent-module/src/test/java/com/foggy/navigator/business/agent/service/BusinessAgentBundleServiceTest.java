@@ -56,7 +56,7 @@ class BusinessAgentBundleServiceTest {
 
         when(modelConfigGrantService.resolveEffectiveModelConfigId("tenant_01", "app_01", "model_01"))
                 .thenReturn("model_01");
-        when(agentRepository.findByAgentId(form.getAgentId())).thenReturn(Optional.empty());
+        when(agentRepository.findByAgentIdAndTenantId(form.getAgentId(), "tenant_01")).thenReturn(Optional.empty());
         when(agentRepository.save(any(CodingAgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
         when(skillRegistryService.syncSkillBundle(eq("tenant_01"), eq("admin_01"), any(SyncSkillBundleForm.class)))
                 .thenAnswer(inv -> {
@@ -94,7 +94,7 @@ class BusinessAgentBundleServiceTest {
     }
 
     @Test
-    void syncAgentBundle_rejectsAgentIdFromAnotherTenant() {
+    void syncAgentBundle_allowsSameAgentIdInDifferentTenants() {
         SyncBusinessAgentBundleForm form = new SyncBusinessAgentBundleForm();
         form.setClientAppId("app_01");
         form.setAgentCode("agent_01");
@@ -107,11 +107,23 @@ class BusinessAgentBundleServiceTest {
 
         when(modelConfigGrantService.resolveEffectiveModelConfigId("tenant_01", "app_01", null))
                 .thenReturn("model_01");
-        when(agentRepository.findByAgentId("agent_01")).thenReturn(Optional.of(existing));
+        when(agentRepository.findByAgentIdAndTenantId("agent_01", "tenant_01")).thenReturn(Optional.empty());
+        when(agentRepository.save(any(CodingAgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(skillRegistryService.syncSkillBundle(eq("tenant_01"), eq("admin_01"), any(SyncSkillBundleForm.class)))
+                .thenAnswer(inv -> {
+                    SyncSkillBundleForm skillForm = inv.getArgument(2);
+                    SkillBundleDTO dto = new SkillBundleDTO();
+                    dto.setClientAppId(skillForm.getClientAppId());
+                    dto.setSkillId(skillForm.getSkillId());
+                    dto.setStatus("ENABLED");
+                    return dto;
+                });
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> service.syncAgentBundle("tenant_01", "admin_01", form));
-        assertTrue(ex.getMessage().contains("another tenant"));
-        verify(agentRepository, never()).save(any());
+        var result = service.syncAgentBundle("tenant_01", "admin_01", form);
+
+        assertEquals("agent_01", result.getAgentId());
+        ArgumentCaptor<CodingAgentEntity> agentCaptor = ArgumentCaptor.forClass(CodingAgentEntity.class);
+        verify(agentRepository).save(agentCaptor.capture());
+        assertEquals("tenant_01", agentCaptor.getValue().getTenantId());
     }
 }

@@ -27,6 +27,7 @@ class E2eCliTest {
     private static String lastBody;
     private static String lastApiKey;
     private static String lastTenantId;
+    private static String lastContentLength;
 
     @TempDir
     Path tempDir;
@@ -44,6 +45,7 @@ class E2eCliTest {
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             lastApiKey = exchange.getRequestHeaders().getFirst("X-API-Key");
             lastTenantId = exchange.getRequestHeaders().getFirst("X-Tenant-Id");
+            lastContentLength = exchange.getRequestHeaders().getFirst("Content-Length");
 
             String response;
             if (lastPath.startsWith("/api/v1/business-agent/client-apps/capp-1/e2e-model-config/ensure")
@@ -99,6 +101,7 @@ class E2eCliTest {
         lastBody = null;
         lastApiKey = null;
         lastTenantId = null;
+        lastContentLength = null;
         stdout = new ByteArrayOutputStream();
         stderr = new ByteArrayOutputStream();
     }
@@ -137,6 +140,7 @@ class E2eCliTest {
         assertEquals(0, code);
         assertEquals("POST", lastMethod);
         assertEquals("/__e2e/scripts", lastPath);
+        assertTrue(Integer.parseInt(lastContentLength) > 0);
         assertTrue(lastBody.contains("\"traceId\" : \"e2e-uuid-001\""));
         assertTrue(output.contains("script register ok"));
         assertTrue(output.contains("traceId=e2e-uuid-001"));
