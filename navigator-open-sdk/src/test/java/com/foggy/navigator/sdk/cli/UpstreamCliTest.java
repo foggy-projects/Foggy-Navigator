@@ -78,6 +78,34 @@ class UpstreamCliTest {
                           ]
                         }}
                         """;
+            } else if ("__MODEL_GRANTS_THEN_DEFAULT__".equals(responseOverride)) {
+                response = lastPath.endsWith("/default")
+                        ? """
+                        {"code":0,"data":{
+                          "id":31,
+                          "clientAppId":"app-1",
+                          "modelConfigId":"model-target",
+                          "modelConfigName":"Target Model",
+                          "workerBackend":"LANGGRAPH_BIZ",
+                          "status":"ENABLED",
+                          "isDefault":true,
+                          "grantScope":"CLIENT_APP"
+                        }}
+                        """
+                        : """
+                        {"code":0,"data":[
+                          {
+                            "id":31,
+                            "clientAppId":"app-1",
+                            "modelConfigId":"model-target",
+                            "modelConfigName":"Target Model",
+                            "workerBackend":"LANGGRAPH_BIZ",
+                            "status":"ENABLED",
+                            "isDefault":false,
+                            "grantScope":"CLIENT_APP"
+                          }
+                        ]}
+                        """;
             } else {
                 response = responseOverride != null ? responseOverride : "{\"code\":0,\"data\":{}}";
             }
@@ -841,6 +869,116 @@ class UpstreamCliTest {
         assertTrue(output.contains("skill clear-account ok"));
         assertTrue(output.contains("executed=true"));
         assertTrue(output.contains("workerClearStatus=CLEARED"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelGrantsListsClientAppModelGrantsWithControlCredential() {
+        responseOverride = """
+                {"code":0,"data":[
+                  {
+                    "id":11,
+                    "clientAppId":"app-1",
+                    "modelConfigId":"model-live",
+                    "modelConfigName":"Live Model",
+                    "workerBackend":"LANGGRAPH_BIZ",
+                    "status":"ENABLED",
+                    "isDefault":true,
+                    "grantScope":"CLIENT_APP"
+                  },
+                  {
+                    "id":12,
+                    "clientAppId":"app-1",
+                    "modelConfigId":"model-e2e",
+                    "modelConfigName":"E2E Model",
+                    "workerBackend":"LANGGRAPH_BIZ",
+                    "status":"ENABLED",
+                    "isDefault":false,
+                    "grantScope":"CLIENT_APP"
+                  }
+                ]}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "grants",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-config-grants", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(output.contains("modelGrantCount=2"));
+        assertTrue(output.contains("modelConfigId=model-live"));
+        assertTrue(output.contains("default=true"));
+        assertTrue(output.contains("modelConfigId=model-e2e"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelGrantUsesControlCredentialAndCanWriteProfile() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path profile = profileDir.resolve("upstream.env");
+        Files.writeString(profile, "NAVI_BASE_URL=" + baseUrl() + "\nNAVI_CLIENT_APP_ID=app-1\n", StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":21,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-live",
+                  "modelConfigName":"Live Model",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "grant",
+                "--control-api-key", "control-key-secret",
+                "--model-config-id", "model-live",
+                "--set-default",
+                "--grant-scope", "CLIENT_APP",
+                "--write-profile"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profileContent = Files.readString(profile, StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-config-grants", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"modelConfigId\":\"model-live\""));
+        assertTrue(lastBody.contains("\"isDefault\":true"));
+        assertTrue(lastBody.contains("\"grantScope\":\"CLIENT_APP\""));
+        assertTrue(output.contains("model grant ok"));
+        assertTrue(output.contains("modelConfigId=model-live"));
+        assertTrue(output.contains("stored=NAVI_MODEL_CONFIG_ID"));
+        assertTrue(profileContent.contains("NAVI_MODEL_CONFIG_ID=model-live"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelSetDefaultCanResolveGrantIdByModelConfigId() {
+        responseOverride = "__MODEL_GRANTS_THEN_DEFAULT__";
+
+        int code = run(new String[]{"upstream", "model", "set-default",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--model-config-id", "model-target"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals(List.of(
+                "/api/v1/client-apps/app-1/model-config-grants",
+                "/api/v1/client-apps/app-1/model-config-grants/31/default"
+        ), requestPaths);
+        assertEquals("PUT", lastMethod);
+        assertTrue(output.contains("model set-default ok"));
         assertFalse(output.contains("control-key-secret"));
     }
 

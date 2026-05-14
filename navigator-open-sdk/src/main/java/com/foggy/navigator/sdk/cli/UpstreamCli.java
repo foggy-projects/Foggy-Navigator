@@ -21,8 +21,10 @@ import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
 import com.foggy.navigator.sdk.model.businessagent.BusinessAgentBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClearSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
+import com.foggy.navigator.sdk.model.businessagent.GrantModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
 import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
@@ -91,6 +93,9 @@ public class UpstreamCli {
             case "skill clear-public" -> skillClearPublic(args);
             case "skill clear-account" -> skillClearAccount(args);
             case "agent sync" -> agentSync(args);
+            case "model grants" -> modelGrants(args);
+            case "model grant" -> modelGrant(args);
+            case "model set-default" -> modelSetDefault(args);
             case "account-context list" -> accountContextList(args);
             case "account-context read" -> accountContextRead(args);
             case "account-context write-policy" -> accountContextWritePolicy(args);
@@ -103,7 +108,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, model grants, model grant, model set-default, account-context list, account-context read, account-context write-policy");
         return 0;
     }
 
@@ -401,6 +406,86 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int modelGrants(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<ClientAppModelConfigGrantDTO> grants = businessAgentControlApi().listModelConfigGrants(clientAppId);
+        out.println("modelGrantCount=" + (grants != null ? grants.size() : 0));
+        if (grants != null) {
+            for (ClientAppModelConfigGrantDTO grant : grants) {
+                printModelConfigGrant("modelGrant", grant);
+            }
+        }
+        return 0;
+    }
+
+    private int modelGrant(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        GrantModelConfigForm form = new GrantModelConfigForm();
+        form.setModelConfigId(modelConfigId);
+        form.setIsDefault(args.flag("set-default") || args.flag("default"));
+        form.setGrantScope(args.option("grant-scope"));
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi().grantModelConfig(clientAppId, form);
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", valueOrEmpty(grant != null && hasText(grant.getModelConfigId())
+                    ? grant.getModelConfigId()
+                    : modelConfigId));
+        }
+        out.println("model grant ok");
+        printModelConfigGrant("modelGrant", grant);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private int modelSetDefault(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        Long grantId = resolveModelGrantId(args, clientAppId);
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi().setDefaultModelConfigGrant(clientAppId, grantId);
+        if (args.flag("write-profile")) {
+            String modelConfigId = grant != null && hasText(grant.getModelConfigId())
+                    ? grant.getModelConfigId()
+                    : args.option("model-config-id");
+            if (!hasText(modelConfigId)) {
+                throw new UpstreamCliException("model set-default response did not include modelConfigId; use --model-config-id with --write-profile");
+            }
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", modelConfigId);
+        }
+        out.println("model set-default ok");
+        printModelConfigGrant("modelGrant", grant);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private Long resolveModelGrantId(CliArguments args, String clientAppId) {
+        String grantId = args.option("grant-id");
+        if (hasText(grantId)) {
+            return parseLong(grantId, "grant id");
+        }
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id or grant id");
+        List<ClientAppModelConfigGrantDTO> grants = businessAgentControlApi().listModelConfigGrants(clientAppId);
+        if (grants != null) {
+            for (ClientAppModelConfigGrantDTO grant : grants) {
+                if (modelConfigId.equals(grant.getModelConfigId())) {
+                    return grant.getId();
+                }
+            }
+        }
+        throw new UpstreamCliException("model config grant not found for modelConfigId: " + modelConfigId);
+    }
+
     private int accountContextList(CliArguments args) {
         String upstreamUserId = upstreamUserId(args);
         AccountContextFileTreeDTO tree = agentApi().listAccountContextFilesWithClientAppAccessToken(
@@ -632,6 +717,18 @@ public class UpstreamCli {
         }
     }
 
+    private void printModelConfigGrant(String prefix, ClientAppModelConfigGrantDTO grant) {
+        out.println(prefix
+                + " id=" + valueOrEmpty(grant != null ? grant.getId() : null)
+                + " clientAppId=" + valueOrEmpty(grant != null ? grant.getClientAppId() : null)
+                + " modelConfigId=" + valueOrEmpty(grant != null ? grant.getModelConfigId() : null)
+                + " name=" + valueOrEmpty(grant != null ? grant.getModelConfigName() : null)
+                + " backend=" + valueOrEmpty(grant != null ? grant.getWorkerBackend() : null)
+                + " status=" + valueOrEmpty(grant != null ? grant.getStatus() : null)
+                + " default=" + (grant != null && Boolean.TRUE.equals(grant.getIsDefault()))
+                + " scope=" + valueOrEmpty(grant != null ? grant.getGrantScope() : null));
+    }
+
     private void printAccountContextFileMetadata(AccountContextFileDTO file) {
         out.println("file name=" + valueOrEmpty(file != null ? file.getFileName() : null)
                 + " exists=" + (file != null && file.isExists())
@@ -701,6 +798,14 @@ public class UpstreamCli {
             return Integer.parseInt(value);
         } catch (NumberFormatException e) {
             throw new UpstreamCliException("Expected integer but got: " + value);
+        }
+    }
+
+    private long parseLong(String value, String description) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            throw new UpstreamCliException("Expected numeric " + description + " but got: " + value);
         }
     }
 

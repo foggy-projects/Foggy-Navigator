@@ -138,10 +138,13 @@ NAVI_ADMIN_API_KEY=<internal-only>
 .\tools\navigator-upstream\navi.ps1 upstream ensure-grant --upstream-user-id <id>
 .\tools\navigator-upstream\navi.ps1 upstream agent sync --manifest .\.navigator\agent-bundle.json
 .\tools\navigator-upstream\navi.ps1 upstream skill sync --scope client-app-public --manifest .\.navigator\skill-bundle.json
+.\tools\navigator-upstream\navi.ps1 upstream model grants
+.\tools\navigator-upstream\navi.ps1 upstream model grant --model-config-id <modelConfigId> --set-default --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream model set-default --model-config-id <modelConfigId> --write-profile
 .\tools\navigator-upstream\navi-e2e.ps1 model ensure --standard biz-worker --set-default --write-profile
 ```
 
-`ensure-grant` 只要求 `NAVI_CONTROL_API_KEY` 与 `upstreamUserId`。`NAVI_UPSTREAM_USER_TOKEN` 可选：需要 Worker 代表当前上游用户回调上游系统时再提供；SIM/E2E 或纯 Navi 会话授权可先省略。`TMS_STAFF_SESSION_TOKEN` 仅保留为 TMS sandbox 旧别名。
+`ensure-grant` 只要求 `NAVI_CONTROL_API_KEY` 与 `upstreamUserId`。`model` 命令组只维护当前 ClientApp 的 model config grant 与本地 `NAVI_MODEL_CONFIG_ID`，不修改租户默认模型。`NAVI_UPSTREAM_USER_TOKEN` 可选：需要 Worker 代表当前上游用户回调上游系统时再提供；SIM/E2E 或纯 Navi 会话授权可先省略。`TMS_STAFF_SESSION_TOKEN` 仅保留为 TMS sandbox 旧别名。
 
 上游不应把 `NAVI_CONTROL_API_KEY` 写入源码、文档、issue、日志或截图，只能放在项目本地 gitignored `.navigator/upstream.env`。
 
@@ -156,4 +159,5 @@ NAVI_ADMIN_API_KEY=<internal-only>
 | Function import/grant control key support | completed | SDK 使用 `controlApiKey(...)` |
 | SDK/CLI header support | completed | `NAVI_CONTROL_API_KEY` |
 | CLI `upstream agent sync` | completed | manifest driven, uses control key |
+| CLI `upstream model` | completed | `grants` / `grant` / `set-default` |
 | Tests | completed | service boundary + module tests |

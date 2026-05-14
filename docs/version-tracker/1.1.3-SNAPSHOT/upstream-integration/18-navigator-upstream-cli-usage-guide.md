@@ -219,6 +219,30 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 
 `sessions` / `session-messages` 使用 `/api/v1/open/business-agent/sessions` 读模型，只返回当前 ClientApp + upstream user 归属的会话。`ask --context-id` 续聊也会在发任务前校验同一归属，不能复用其他 upstream user 的 `contextId`。
 
+### 7. 维护 ClientApp 模型授权
+
+正式业务模型由 `navi upstream model` 命令组维护，使用 ClientApp-scoped `NAVI_CONTROL_API_KEY`，不会要求上游持有全局 admin token。
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream model grants
+.\tools\navigator-upstream\navi.ps1 upstream model grant --model-config-id <modelConfigId> --set-default --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream model set-default --model-config-id <modelConfigId> --write-profile
+```
+
+也可以直接用 grant id 设置默认模型：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream model set-default --grant-id <grantId>
+```
+
+约定：
+
+1. `model grants` 列出当前 `NAVI_CLIENT_APP_ID` 下已授权的模型、状态和默认标记。
+2. `model grant` 为当前 ClientApp 授权已有 `modelConfigId`；`--set-default` 同时设为默认。
+3. `model set-default --model-config-id` 会先查当前 ClientApp 的 grant，再设置默认。
+4. `--write-profile` 只把最终 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
+5. `NAVI_MODEL_CONFIG_ID` 是上游项目本地默认模型，不代表租户全局默认模型。
+
 ## Deterministic E2E Test Model
 
 真实 LLM smoke 不应作为上游主回归 gate。上游自动化 E2E 应优先使用 Navigator 标准 E2E Test Model 与 scripted response，完整设计见 [27-e2e-scripted-test-model-design.md](./27-e2e-scripted-test-model-design.md)。
@@ -257,7 +281,7 @@ next:4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1:002
 
 `navi-e2e` 默认读取同一个 project-local `.navigator/upstream.env`，其中 `NAVI_E2E_MOCK_LLM_URL` 默认指向 `http://localhost:8200`，也可用 `--mock-url` 临时覆盖。`model ensure` 需要 `NAVI_CONTROL_API_KEY`，只创建/更新当前 ClientApp 专属的标准 E2E model config 与 ClientApp model grant；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback；`--write-profile` 只把 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
 
-### 7. 查询或维护账号上下文文件
+### 8. 查询或维护账号上下文文件
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream account-context list --upstream-user-id <id>
