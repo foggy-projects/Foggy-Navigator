@@ -1,0 +1,112 @@
+name: foggy-navigator
+
+services:
+  navigator-backend:
+    image: ${NAVIGATOR_BACKEND_IMAGE}
+    container_name: foggy-navigator-backend
+    restart: unless-stopped
+    ports:
+      - "8112:8112"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev-kvm-x3}
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-foggy-navigator-rabbitmq}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USER: ${RABBITMQ_USER:-foggy}
+      RABBITMQ_PASS: ${RABBITMQ_PASS}
+      NAVIGATOR_API_EXTERNAL_URL: ${NAVIGATOR_API_EXTERNAL_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      SYSTEM_ROOT_USERNAME: ${SYSTEM_ROOT_USERNAME:-root}
+      SYSTEM_ROOT_PASSWORD: ${SYSTEM_ROOT_PASSWORD}
+      SYSTEM_ROOT_EMAIL: ${SYSTEM_ROOT_EMAIL:-root@foggy.local}
+      NAVIGATOR_CREDENTIAL_KEY: ${NAVIGATOR_CREDENTIAL_KEY}
+      NAVIGATOR_CREDENTIAL_SALT: ${NAVIGATOR_CREDENTIAL_SALT}
+      TMS_X3_AGENT_UPSTREAM_URL: ${TMS_X3_AGENT_UPSTREAM_URL:-}
+      TMS_X3_AGENT_USER_TOKEN_HEADER: ${TMS_X3_AGENT_USER_TOKEN_HEADER:-X-TMS-Agent-Token}
+    networks:
+      - foggy-navigator-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8112/actuator/health | grep -q 'UP'"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 45s
+
+  navigator-frontend:
+    image: ${NAVIGATOR_FRONTEND_IMAGE}
+    container_name: foggy-navigator-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - navigator-backend
+    networks:
+      - foggy-navigator-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  mysql:
+    image: mysql:8.0
+    container_name: foggy-navigator-mysql
+    profiles: ["local-infra"]
+    restart: unless-stopped
+    ports:
+      - "13309:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-coding_agent}
+      MYSQL_USER: ${MYSQL_USER:-foggy}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: ${TZ:-Asia/Shanghai}
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_connections=1000
+    volumes:
+      - navigator_mysql_data:/var/lib/mysql
+    networks:
+      - foggy-navigator-network
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: foggy-navigator-rabbitmq
+    profiles: ["local-infra"]
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-foggy}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - navigator_rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - foggy-navigator-network
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  navigator_mysql_data:
+    name: foggy-navigator-mysql-data
+  navigator_rabbitmq_data:
+    name: foggy-navigator-rabbitmq-data
+networks:
+  foggy-navigator-network:
+    name: foggy-navigator-network
+    external: true

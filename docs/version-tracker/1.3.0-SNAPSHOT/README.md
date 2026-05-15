@@ -16,3 +16,6 @@
 - [10-session-auth-model-config-binding-plan.md](./10-session-auth-model-config-binding-plan.md)
 - [11-navigator-upstream-cli-skill-clear-command.md](./11-navigator-upstream-cli-skill-clear-command.md)
 - [12-navigator-upstream-cli-model-grant-command.md](./12-navigator-upstream-cli-model-grant-command.md) - upstream model grant + ClientApp-owned model create/update/rotate-key
+- [13-biz-worker-root-skill-context-design.md](./13-biz-worker-root-skill-context-design.md) - BizWorker root skill、业务函数虚拟 frame、上下文穿透与暂停授权设计
+- [quality/biz-worker-root-skill-implementation-quality.md](./quality/biz-worker-root-skill-implementation-quality.md)
+- [coverage/biz-worker-root-skill-coverage-audit.md](./coverage/biz-worker-root-skill-coverage-audit.md)

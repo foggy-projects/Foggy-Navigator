@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib.sh"
+
+REMOTE_RELEASE_KIT_DIR="${REMOTE_RELEASE_KIT_DIR:-$REMOTE_APP_DIR/release-kit}"
+TARGET_TAG="${1:-}"
+
+bash "$SCRIPT_DIR/10-sync-release-kit.sh"
+if [ -n "$TARGET_TAG" ]; then
+  ssh_cmd "bash $(remote_quote "$REMOTE_RELEASE_KIT_DIR/remote/rollback-by-image.sh") $(remote_quote "$TARGET_TAG")"
+else
+  ssh_cmd "bash $(remote_quote "$REMOTE_RELEASE_KIT_DIR/remote/rollback-by-image.sh")"
+fi

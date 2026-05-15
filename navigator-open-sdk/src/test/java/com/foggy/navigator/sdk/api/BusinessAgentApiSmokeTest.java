@@ -313,14 +313,17 @@ public class BusinessAgentApiSmokeTest {
     public void testCreateSkill() {
         CreateSkillForm form = new CreateSkillForm();
         form.setName("test-skill");
+        form.setContextVisibility("summary");
 
-        responseOverride = "{\"skillId\":\"skill-123\", \"name\":\"test-skill\"}"; // naked object
+        responseOverride = "{\"skillId\":\"skill-123\", \"name\":\"test-skill\", \"contextVisibility\":\"summary\"}"; // naked object
         SkillDTO skill = client.businessAgent().createSkill(form);
         assertNotNull(skill);
         assertEquals("skill-123", skill.getSkillId());
+        assertEquals("summary", skill.getContextVisibility());
         assertEquals("/api/v1/business-agent/skills", lastPath);
         assertEquals("POST", lastMethod);
         assertTrue(lastBody.contains("\"name\":\"test-skill\""));
+        assertTrue(lastBody.contains("\"contextVisibility\":\"summary\""));
         assertCommon();
     }
 

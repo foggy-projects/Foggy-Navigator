@@ -11,5 +11,6 @@ public class CreateSkillForm {
     private String description;
     private String status;
     private String markdownBody;
+    private String contextVisibility;
     private List<SkillResourceForm> resources;
 }

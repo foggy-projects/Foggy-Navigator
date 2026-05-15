@@ -98,6 +98,10 @@ def _frontmatter_to_manifest(
         business_rules=metadata.get("business-rules", {}),
         subgraph=metadata.get("subgraph"),
         visibility=metadata.get("visibility", data.get("visibility", "public")),
+        context_visibility=metadata.get(
+            "context-visibility",
+            metadata.get("context_visibility", data.get("context_visibility", "isolated")),
+        ),
         client_app_id=metadata.get("client_app_id", data.get("client_app_id", client_app_id)),
     )
 

@@ -49,6 +49,8 @@ _journal = FileFrameJournal(_data_root)
 
 _runtime = SkillRuntime(frame_store=_frame_store, skill_registry=_skill_registry, journal=_journal)
 
+ROOT_SKILL_ID = "system.root"
+
 # LLM-based Skill Router (None if llm_provider is empty → rule-based fallback)
 _chat_model = create_chat_model(settings)
 _llm_router: LlmSkillRouter | None = LlmSkillRouter(_chat_model) if _chat_model else None
@@ -127,6 +129,57 @@ def _skill_agent_prompt(prompt: str, context: dict[str, Any]) -> str:
     if isinstance(instruction, str) and instruction.strip():
         return instruction.strip()
     return prompt
+
+
+def _system_root_manifest() -> SkillManifest:
+    return SkillManifest(
+        id=ROOT_SKILL_ID,
+        name=ROOT_SKILL_ID,
+        description="System root business skill for task-level orchestration.",
+        markdown_body=(
+            "You are the system root skill for this business task. "
+            "Handle the user's request directly when possible. "
+            "Use invoke_business_function for authorized business functions when the "
+            "needed function is described in the available context or skill material. "
+            "Use invoke_business_skill to delegate bounded work to a specialized child skill. "
+            "When the current user turn is ready to answer, call submit_skill_result. "
+            "This root skill is persistent; submit_skill_result ends the current turn, "
+            "not the root skill frame."
+        ),
+        allowed_tools=["invoke_business_function", "invoke_business_skill", "submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output", "artifact_refs", "evidence_refs"],
+        visibility="builtin",
+        context_visibility="passthrough",
+    )
+
+
+def _ensure_system_root_skill() -> None:
+    _skill_registry.register(_system_root_manifest())
+
+
+def _should_use_system_root_skill(state: RootState) -> bool:
+    if not settings.llm_execute_skills:
+        return False
+    return _chat_model_for_state(state) is not None
+
+
+def _get_or_create_system_root_frame(task_id: str, context: dict[str, Any]) -> tuple[str, bool]:
+    """Return the persistent root frame for this task, restoring it if needed."""
+    for frame in _runtime.get_frames_by_task(task_id):
+        if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
+            return frame.frame_id, False
+
+    for frame in _journal.load_by_task(task_id):
+        if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
+            _runtime.restore_frame(frame)
+            return frame.frame_id, False
+
+    frame_id = _runtime.invoke_skill(
+        task_id=task_id,
+        skill_id=ROOT_SKILL_ID,
+        skill_input=context,
+    )
+    return frame_id, True
 
 
 def _build_attachment_context_prompt(attachments: list[dict[str, Any]] | None) -> str:
@@ -271,6 +324,7 @@ def route_skill(state: RootState) -> dict:
         _skill_registry.load(account_id=account_id, client_app_id=client_app_id)
     except ValueError:
         _skill_registry.load()
+    _ensure_system_root_skill()
 
     events = [
         QueryEvent(
@@ -279,6 +333,21 @@ def route_skill(state: RootState) -> dict:
             task_id=task_id,
         ),
     ]
+
+    if _should_use_system_root_skill(state):
+        frame_id, created = _get_or_create_system_root_frame(task_id, context)
+        events.append(QueryEvent(
+            type="skill_frame_open",
+            task_id=task_id,
+            skill_frame_id=frame_id,
+            skill_id=ROOT_SKILL_ID,
+            content=(
+                f"Opening frame for skill: {ROOT_SKILL_ID}"
+                if created
+                else f"Reusing frame for skill: {ROOT_SKILL_ID}"
+            ),
+        ))
+        return {"events": events, "active_frame_id": frame_id}
 
     # Three-level routing priority:
     # 0. Dynamic skill injection via markdown
@@ -588,6 +657,7 @@ def run_skill(state: RootState) -> dict:
                 prompt=_prompt_with_attachment_context(skill_prompt, state.get("attachments")),
                 account_id=account_id,
                 runtime_context=runtime_context,
+                persistent_frame=frame.skill_id == ROOT_SKILL_ID,
             )
         }
 
@@ -664,6 +734,19 @@ def close_skill_frame(state: RootState) -> dict:
             structured_output=structured_output,
             duration_ms=int((time.time() - state["started_at"]) * 1000),
         ))
+    elif frame and frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING and frame.result_summary:
+        events.append(QueryEvent(
+            type="result",
+            content=frame.result_summary,
+            task_id=task_id,
+            model=state.get("model"),
+            structured_output=frame.output,
+            duration_ms=int((time.time() - state["started_at"]) * 1000),
+        ))
+    elif frame and frame.status == FrameStatus.AWAITING_APPROVAL:
+        # The approval_required event has already been emitted by the runtime
+        # tool handler. Do not turn a deliberate suspension into an error.
+        pass
     elif frame:
         events.append(QueryEvent(
             type="error",

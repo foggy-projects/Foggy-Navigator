@@ -11,6 +11,7 @@ public class SkillDTO {
     private String name;
     private String description;
     private String status;
+    private String contextVisibility;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -24,6 +25,8 @@ public class SkillDTO {
     public void setDescription(String description) { this.description = description; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getContextVisibility() { return contextVisibility; }
+    public void setContextVisibility(String contextVisibility) { this.contextVisibility = contextVisibility; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

@@ -61,7 +61,7 @@ class WorkerGatewayServiceTest {
     }
 
     @Test
-    void listFunctions_success_filters_by_token_skill_and_app() {
+    void listFunctions_success_returns_client_app_visible_functions_without_allowlist_filter() {
         when(taskService.resolveTaskScopedToken("valid_token")).thenReturn(tokenDTO);
 
         BusinessFunctionSummaryDTO f1 = new BusinessFunctionSummaryDTO();
@@ -77,18 +77,16 @@ class WorkerGatewayServiceTest {
         when(functionRegistryService.listClientAppVisibleFunctionSummaries("tenant1", "app1"))
                 .thenReturn(Arrays.asList(f1, f2));
 
-        // Let's say skill1 only has access to f1
-        doNothing().when(skillRegistryService).checkSkillFunctionAccess("tenant1", "skill1", "f1");
-        doThrow(new IllegalStateException("Not allowlisted")).when(skillRegistryService).checkSkillFunctionAccess("tenant1", "skill1", "f2");
-
         WorkerGatewayFunctionListDTO result = workerGatewayService.listBusinessFunctions("valid_token", null, null);
 
         assertNotNull(result);
-        assertEquals(1, result.getFunctions().size());
+        assertEquals(2, result.getFunctions().size());
         assertEquals("f1", result.getFunctions().get(0).getFunctionId());
+        assertEquals("f2", result.getFunctions().get(1).getFunctionId());
 
         verify(userGrantService).checkUpstreamUserAccess("tenant1", "app1", "user1");
         verify(skillRegistryService).checkClientAppSkillAccess("tenant1", "app1", "skill1");
+        verify(skillRegistryService, never()).checkSkillFunctionAccess(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -146,10 +144,8 @@ class WorkerGatewayServiceTest {
     }
 
     @Test
-    void listFunctions_does_not_expose_unallowlisted_function() {
-        // Handled within listFunctions_success_filters_by_token_skill_and_app,
-        // which verifies f2 is filtered out due to checkSkillFunctionAccess throwing Exception.
-        listFunctions_success_filters_by_token_skill_and_app();
+    void listFunctions_does_expose_client_app_granted_function_even_when_unallowlisted() {
+        listFunctions_success_returns_client_app_visible_functions_without_allowlist_filter();
     }
 
     @Test

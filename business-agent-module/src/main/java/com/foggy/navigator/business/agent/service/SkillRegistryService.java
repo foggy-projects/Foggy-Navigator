@@ -68,6 +68,9 @@ public class SkillRegistryService {
     private static final int MAX_SKILL_RESOURCES = 100;
     private static final int MAX_SKILL_RESOURCE_BYTES = 1024 * 1024;
     private static final Pattern SAFE_RESOURCE_SEGMENT = Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9._-]*$");
+    private static final String CONTEXT_VISIBILITY_ISOLATED = "isolated";
+    private static final String CONTEXT_VISIBILITY_SUMMARY = "summary";
+    private static final String CONTEXT_VISIBILITY_PASSTHROUGH = "passthrough";
 
     private final SkillRepository skillRepository;
     private final SkillBundleRepository skillBundleRepository;
@@ -109,6 +112,7 @@ public class SkillRegistryService {
         skill.setName(form.getName());
         skill.setDescription(form.getDescription());
         skill.setMarkdownBody(form.getMarkdownBody());
+        skill.setContextVisibility(normalizeContextVisibility(form.getContextVisibility()));
         skill.setResourcesJson(serializeResources(form.getResources()));
         skill.setStatus(status);
         if (!StringUtils.hasText(skill.getCreatedBy())) {
@@ -260,6 +264,7 @@ public class SkillRegistryService {
         bundle.setName(form.getName());
         bundle.setDescription(form.getDescription());
         bundle.setMarkdownBody(form.getMarkdownBody());
+        bundle.setContextVisibility(normalizeContextVisibility(form.getContextVisibility()));
         bundle.setResourcesJson(serializeResources(form.getResources()));
         bundle.setFunctionsJson(serializeFunctions(form.getFunctions()));
         bundle.setStatus(status);
@@ -302,6 +307,7 @@ public class SkillRegistryService {
         full.setDescription(form.getDescription());
         full.setStatus(form.getStatus());
         full.setMarkdownBody(form.getMarkdownBody());
+        full.setContextVisibility(form.getContextVisibility());
         full.setResources(form.getResources());
         full.setFunctions(form.getFunctions());
         full.setMaterialize(form.getMaterialize());
@@ -552,6 +558,7 @@ public class SkillRegistryService {
             payload.put("name", skill.getSkillId());
             payload.put("display_name", StringUtils.hasText(skill.getName()) ? skill.getName() : skill.getSkillId());
             payload.put("description", skill.getDescription());
+            payload.put("context_visibility", normalizeContextVisibility(skill.getContextVisibility()));
             payload.put("markdown_body", buildMaterializedMarkdown(tenantId, skill));
             payload.put("resources", parseResourcesJson(skill.getResourcesJson()));
             if (StringUtils.hasText(clientAppId)) {
@@ -623,6 +630,7 @@ public class SkillRegistryService {
             payload.put("name", bundle.getSkillId());
             payload.put("display_name", StringUtils.hasText(bundle.getName()) ? bundle.getName() : bundle.getSkillId());
             payload.put("description", bundle.getDescription());
+            payload.put("context_visibility", normalizeContextVisibility(bundle.getContextVisibility()));
             payload.put("markdown_body", buildMaterializedMarkdown(tenantId, bundle));
             payload.put("resources", parseResourcesJson(bundle.getResourcesJson()));
             payload.put("client_app_id", bundle.getClientAppId());
@@ -733,6 +741,7 @@ public class SkillRegistryService {
         skill.setName(bundle.getName());
         skill.setDescription(bundle.getDescription());
         skill.setMarkdownBody(bundle.getMarkdownBody());
+        skill.setContextVisibility(normalizeContextVisibility(bundle.getContextVisibility()));
         skill.setResourcesJson(bundle.getResourcesJson());
         skill.setStatus(bundle.getStatus());
         if (!StringUtils.hasText(skill.getCreatedBy())) {
@@ -874,6 +883,19 @@ public class SkillRegistryService {
             throw new IllegalArgumentException("invalid status");
         }
         return value;
+    }
+
+    private String normalizeContextVisibility(String contextVisibility) {
+        String value = StringUtils.hasText(contextVisibility)
+                ? contextVisibility.trim().replace('_', '-').toLowerCase()
+                : CONTEXT_VISIBILITY_ISOLATED;
+        if (CONTEXT_VISIBILITY_ISOLATED.equals(value) || CONTEXT_VISIBILITY_SUMMARY.equals(value)) {
+            return value;
+        }
+        if (CONTEXT_VISIBILITY_PASSTHROUGH.equals(value)) {
+            return CONTEXT_VISIBILITY_ISOLATED;
+        }
+        throw new IllegalArgumentException("invalid contextVisibility");
     }
 
     private String serializeResources(List<SkillResourceForm> resources) {

@@ -661,6 +661,7 @@ class UpstreamCliTest {
                 {
                   "skillId":"agent-1",
                   "name":"Agent One",
+                  "contextVisibility":"summary",
                   "markdownBody":"# Agent One"
                 }
                 """, StandardCharsets.UTF_8);
@@ -681,6 +682,7 @@ class UpstreamCliTest {
         assertEquals("control-key-secret", lastClientAppControlKeyHeader);
         assertTrue(lastBody.contains("\"clientAppId\":\"app-1\""));
         assertTrue(lastBody.contains("\"scope\":\"CLIENT_APP_PUBLIC\""));
+        assertTrue(lastBody.contains("\"contextVisibility\":\"summary\""));
         assertTrue(output.contains("skill sync ok"));
         assertTrue(output.contains("scope=CLIENT_APP_PUBLIC"));
         assertFalse(output.contains("control-key-secret"));
@@ -706,6 +708,7 @@ class UpstreamCliTest {
                   "name":"Agent One",
                   "workerId":"worker-1",
                   "defaultModelConfigId":"model-1",
+                  "contextVisibility":"summary",
                   "markdownBody":"# Agent One"
                 }
                 """, StandardCharsets.UTF_8);
@@ -725,9 +728,109 @@ class UpstreamCliTest {
         assertEquals("control-key-secret", lastClientAppControlKeyHeader);
         assertTrue(lastBody.contains("\"clientAppId\":\"app-1\""));
         assertTrue(lastBody.contains("\"workerId\":\"worker-1\""));
+        assertTrue(lastBody.contains("\"contextVisibility\":\"summary\""));
         assertTrue(output.contains("agent sync ok"));
         assertTrue(output.contains("agentId=agent-1"));
         assertTrue(output.contains("skillBundleStatus=ENABLED"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void functionImportUsesControlPlaneCredentialAndManifest() throws Exception {
+        responseOverride = "{\"code\":0,\"data\":{}}";
+        Path manifest = tempDir.resolve("function-manifest.json");
+        Files.writeString(manifest, """
+                {
+                  "functionId":"order.close.apply",
+                  "version":"v1",
+                  "domain":"tms",
+                  "name":"Apply close order",
+                  "riskLevel":"HIGH",
+                  "approvalRequired":true,
+                  "inputSchemaJson":"{}"
+                }
+                """, StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "function", "import",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--manifest", manifest.getFileName().toString()}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/functions/import", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"functionId\":\"order.close.apply\""));
+        assertTrue(output.contains("function import ok"));
+        assertTrue(output.contains("functionId=order.close.apply"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void functionGrantUsesClientAppScopedControlCredential() throws Exception {
+        responseOverride = """
+                {"code":0,"data":{
+                  "grantId":"fg-1",
+                  "clientAppId":"app-1",
+                  "functionId":"order.close.apply",
+                  "version":"v1",
+                  "status":"ENABLED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "function", "grant",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--function-id", "order.close.apply",
+                "--version", "v1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/function-grants", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"functionId\":\"order.close.apply\""));
+        assertTrue(lastBody.contains("\"version\":\"v1\""));
+        assertTrue(output.contains("function grant ok"));
+        assertTrue(output.contains("grantId=fg-1"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void functionVisibleListsGrantedFunctions() throws Exception {
+        responseOverride = """
+                {"code":0,"data":[
+                  {
+                    "functionId":"order.close.apply",
+                    "version":"v1",
+                    "domain":"tms",
+                    "name":"Apply close order",
+                    "riskLevel":"HIGH",
+                    "approvalRequired":true,
+                    "idempotencyRequired":true
+                  }
+                ]}
+                """;
+
+        int code = run(new String[]{"upstream", "function", "visible",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/visible-functions", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(output.contains("functionVisibleCount=1"));
+        assertTrue(output.contains("functionId=order.close.apply"));
+        assertTrue(output.contains("approvalRequired=true"));
         assertFalse(output.contains("control-key-secret"));
     }
 
@@ -747,6 +850,7 @@ class UpstreamCliTest {
                 {
                   "skillId":"personal-agent",
                   "name":"Personal Agent",
+                  "contextVisibility":"summary",
                   "markdownBody":"# Personal Agent"
                 }
                 """, StandardCharsets.UTF_8);
@@ -767,6 +871,7 @@ class UpstreamCliTest {
         assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
         assertEquals("staff-1", lastUpstreamUserIdHeader);
         assertFalse(lastBody.contains("accountId"));
+        assertTrue(lastBody.contains("\"contextVisibility\":\"summary\""));
         assertTrue(output.contains("accountId=staff-1"));
         assertFalse(output.contains("cat-runtime-secret"));
     }

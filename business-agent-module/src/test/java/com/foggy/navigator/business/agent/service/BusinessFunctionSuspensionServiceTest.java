@@ -1,5 +1,7 @@
 package com.foggy.navigator.business.agent.service;
 
+import com.foggy.navigator.agent.framework.protocol.AgentMessage;
+import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
 import com.foggy.navigator.business.agent.event.BusinessSuspensionResumeDecisionEvent;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionDTO;
@@ -24,6 +26,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.ApplicationEvent;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -497,6 +500,97 @@ class BusinessFunctionSuspensionServiceTest {
         assertEquals("app1", contextCaptor.getValue().getClientAppId());
         assertEquals("user1", contextCaptor.getValue().getUpstreamUserId());
         verify(auditService).recordInvokeSuccess(any(BusinessTaskScopedTokenDTO.class), eq("f1"), eq("v1"), eq("sus_1"), any(), anyLong());
+
+        AgentMessage message = captureBusinessExecutionResultMessage();
+        assertEquals("worker_session1", message.getSessionId());
+        assertEquals("business-agent", message.getAgentId());
+        assertEquals("lgt_1", message.getTaskId());
+        assertEquals(MessageType.TEXT_COMPLETE, message.getType());
+        assertTrue(message.getPayload() instanceof Map);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals("business_function_result_message", payload.get("subtype"));
+        assertEquals("业务函数执行完成。", payload.get("content"));
+        assertEquals("SUCCESS", payload.get("status"));
+        assertEquals("COMPLETED", payload.get("executionStatus"));
+        assertEquals("sus_1", payload.get("suspendId"));
+        assertEquals("f1", payload.get("functionId"));
+        assertEquals("v1", payload.get("version"));
+        assertEquals("task1", payload.get("businessTaskId"));
+        assertEquals("session1", payload.get("businessSessionId"));
+        assertEquals("lgt_1", payload.get("workerTaskId"));
+        assertEquals("worker_session1", payload.get("workerSessionId"));
+        assertEquals("200", payload.get("outputCode"));
+        assertEquals(true, payload.get("hasOutputData"));
+    }
+
+    @Test
+    void executeApprovedSuspension_failure_publishesBusinessExecutionResultMessage() {
+        BusinessFunctionSuspensionEntity entity = new BusinessFunctionSuspensionEntity();
+        entity.setSuspendId("sus_1");
+        entity.setTaskId("task1");
+        entity.setWorkerTaskId("lgt_1");
+        entity.setWorkerSessionId("worker_session1");
+        entity.setSessionId("session1");
+        entity.setTenantId("tenant1");
+        entity.setClientAppId("app1");
+        entity.setUpstreamUserId("user1");
+        entity.setSkillId("skill1");
+        entity.setFunctionId("f1");
+        entity.setVersion("v1");
+        entity.setInputJson("{\"key\":\"value\"}");
+        entity.setStatus("RESUME_DISPATCHED");
+
+        when(repository.findBySuspendId("sus_1")).thenReturn(Optional.of(entity));
+        when(repository.save(any(BusinessFunctionSuspensionEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BusinessFunctionRuntimeContextDTO context = new BusinessFunctionRuntimeContextDTO();
+        BusinessFunctionDTO function = new BusinessFunctionDTO();
+        function.setFunctionId("f1");
+        function.setApprovalRequired(true);
+        context.setFunction(function);
+        BusinessFunctionVersionDTO version = new BusinessFunctionVersionDTO();
+        version.setVersion("v1");
+        context.setVersionData(version);
+
+        when(authorizationService.resolveExecutableBusinessFunction("tenant1", "app1", "user1", "skill1", "f1", "v1"))
+                .thenReturn(context);
+        when(adapterInvoker.invoke(any(BusinessFunctionRuntimeContextDTO.class), eq("{\"key\":\"value\"}")))
+                .thenReturn(BusinessFunctionAdapterResult.error("余额不足"));
+
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("lgt_1")
+                .sessionId("worker_session1")
+                .businessSessionId("session1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .tenantId("tenant1")
+                .clientAppId("app1")
+                .upstreamUserId("user1")
+                .functionId("f1")
+                .inputHash(computeSha256Hex("{\"key\":\"value\"}"))
+                .build();
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> suspensionService.executeApprovedSuspension(event));
+        assertEquals("余额不足", ex.getMessage());
+        assertEquals("EXECUTE_FAILED", entity.getStatus());
+        assertEquals("FAILED", entity.getBusinessExecutionStatus());
+        verify(auditService).recordInvokeFailed(any(BusinessTaskScopedTokenDTO.class), eq("f1"), eq("v1"), eq("sus_1"), eq("ADAPTER_ERROR"), eq("余额不足"), anyLong());
+
+        AgentMessage message = captureBusinessExecutionResultMessage();
+        assertEquals("worker_session1", message.getSessionId());
+        assertEquals("lgt_1", message.getTaskId());
+        assertEquals(MessageType.TEXT_COMPLETE, message.getType());
+        assertTrue(message.getPayload() instanceof Map);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals("business_function_result_message", payload.get("subtype"));
+        assertEquals("业务函数执行失败：余额不足", payload.get("content"));
+        assertEquals("FAILED", payload.get("status"));
+        assertEquals("FAILED", payload.get("executionStatus"));
+        assertEquals("余额不足", payload.get("errorMessage"));
     }
 
     @Test
@@ -655,5 +749,17 @@ class BusinessFunctionSuspensionServiceTest {
                 .map(BusinessSuspensionResumeDecisionEvent.class::cast)
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("BusinessSuspensionResumeDecisionEvent not published"));
+    }
+
+    private AgentMessage captureBusinessExecutionResultMessage() {
+        ArgumentCaptor<Object> objectCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher, atLeastOnce()).publishEvent(objectCaptor.capture());
+        return objectCaptor.getAllValues().stream()
+                .filter(AgentMessage.class::isInstance)
+                .map(AgentMessage.class::cast)
+                .filter(message -> message.getPayload() instanceof Map
+                        && "business_function_result_message".equals(((Map<?, ?>) message.getPayload()).get("subtype")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("business_function_result_message not published"));
     }
 }

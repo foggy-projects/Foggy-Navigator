@@ -1,12 +1,16 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
+import com.foggy.navigator.agent.framework.protocol.AgentMessage;
+import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
+import com.foggy.navigator.session.event.SessionEventListener;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -17,8 +21,11 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -33,6 +40,9 @@ class LanggraphWorkerResumeEventListenerTest {
 
     @Mock
     private LanggraphWorkerClient workerClient;
+
+    @Mock
+    private SessionEventListener sessionEventListener;
 
     @InjectMocks
     private LanggraphWorkerResumeEventListener listener;
@@ -190,6 +200,53 @@ class LanggraphWorkerResumeEventListenerTest {
         listener.handleWorkerGatewayResumeEvent(event);
 
         verify(workerClient).resumeTask("t_1", "approved", "OK");
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_publishesResumeMessageWhenWorkerReturnsContent() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("lgt_1")
+                .sessionId("worker_session_1")
+                .businessSessionId("business_session_1")
+                .suspendId("sus_1")
+                .approvalResult("approved")
+                .comment("OK")
+                .tenantId("tenant_1")
+                .build();
+
+        LanggraphTaskEntity task = buildTask("lgt_1", "worker_session_1", "w_1", "tenant_1");
+        when(taskRepository.findByTaskId("lgt_1")).thenReturn(Optional.of(task));
+
+        LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+        when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
+        when(workerService.createClient(worker)).thenReturn(workerClient);
+        when(workerClient.resumeTask("lgt_1", "approved", "OK"))
+                .thenReturn(Mono.just(Map.of(
+                        "resume_message", Map.of(
+                                "content", "审批已通过，已继续提交关单申请。",
+                                "source", "function_input.approved"
+                        )
+                )));
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        ArgumentCaptor<AgentMessage> captor = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener).handleMessage(captor.capture());
+
+        AgentMessage message = captor.getValue();
+        assertEquals("worker_session_1", message.getSessionId());
+        assertEquals(LanggraphTaskService.PROVIDER_TYPE, message.getAgentId());
+        assertEquals(MessageType.TEXT_COMPLETE, message.getType());
+        assertEquals("lgt_1", message.getTaskId());
+
+        Map<?, ?> payload = assertInstanceOf(Map.class, message.getPayload());
+        assertEquals("审批已通过，已继续提交关单申请。", payload.get("content"));
+        assertEquals("function_input.approved", payload.get("source"));
+        assertEquals("post_approval_message", payload.get("subtype"));
+        assertEquals("lgt_1", payload.get("taskId"));
+        assertEquals("sus_1", payload.get("suspendId"));
+        assertEquals("approved", payload.get("approvalResult"));
     }
 
     @Test

@@ -1,9 +1,12 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
+import com.foggy.navigator.agent.framework.protocol.AgentMessage;
+import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
+import com.foggy.navigator.session.event.SessionEventListener;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -11,6 +14,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -39,6 +44,7 @@ public class LanggraphWorkerResumeEventListener {
 
     private final LanggraphTaskRepository taskRepository;
     private final LanggraphWorkerService workerService;
+    private final SessionEventListener sessionEventListener;
 
     @EventListener
     public void handleWorkerGatewayResumeEvent(WorkerGatewayResumeEvent event) {
@@ -94,6 +100,7 @@ public class LanggraphWorkerResumeEventListener {
                 .doOnSuccess(resp -> {
                     log.info("Successfully dispatched worker conversation resume notification: taskId={}, workerId={}",
                             event.getTaskId(), workerId);
+                    publishResumeMessageIfPresent(task, event, resp);
                 })
                 .doOnError(e -> {
                     log.error("Failed to dispatch worker conversation resume notification: taskId={}, workerId={}",
@@ -104,6 +111,47 @@ public class LanggraphWorkerResumeEventListener {
                     }
                 })
                 .subscribe(ignored -> { }, e -> { });
+    }
+
+    @SuppressWarnings("unchecked")
+    private void publishResumeMessageIfPresent(
+            LanggraphTaskEntity task,
+            WorkerGatewayResumeEvent event,
+            Map<String, Object> response
+    ) {
+        if (response == null) {
+            return;
+        }
+        Object rawMessage = response.get("resume_message");
+        if (!(rawMessage instanceof Map<?, ?> rawMap)) {
+            return;
+        }
+        Map<String, Object> resumeMessage = new LinkedHashMap<>();
+        rawMap.forEach((key, value) -> {
+            if (key != null) {
+                resumeMessage.put(String.valueOf(key), value);
+            }
+        });
+        Object content = resumeMessage.get("content");
+        if (!(content instanceof String contentText) || contentText.isBlank()) {
+            return;
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>(resumeMessage);
+        payload.put("content", contentText);
+        payload.put("taskId", event.getTaskId());
+        payload.put("suspendId", event.getSuspendId());
+        payload.put("approvalResult", event.getApprovalResult());
+        payload.put("subtype", "post_approval_message");
+
+        AgentMessage message = AgentMessage.of(
+                task.getSessionId(),
+                LanggraphTaskService.PROVIDER_TYPE,
+                MessageType.TEXT_COMPLETE,
+                payload
+        );
+        message.setTaskId(event.getTaskId());
+        sessionEventListener.handleMessage(message);
     }
 
     private boolean isWorkerResumeFrameNotFound(Throwable error) {

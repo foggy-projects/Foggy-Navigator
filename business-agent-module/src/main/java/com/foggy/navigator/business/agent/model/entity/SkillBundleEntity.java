@@ -42,6 +42,9 @@ public class SkillBundleEntity {
     @Column(columnDefinition = "LONGTEXT")
     private String markdownBody;
 
+    @Column(nullable = false, length = 32)
+    private String contextVisibility = "isolated";
+
     @Column(columnDefinition = "LONGTEXT")
     private String resourcesJson;
 

@@ -13,6 +13,7 @@ public class SyncSkillBundleForm {
     private String name;
     private String description;
     private String status;
+    private String contextVisibility;
     private String markdownBody;
     private List<SkillResourceForm> resources;
     private List<SkillBundleFunctionForm> functions;
@@ -32,6 +33,8 @@ public class SyncSkillBundleForm {
     public void setDescription(String description) { this.description = description; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getContextVisibility() { return contextVisibility; }
+    public void setContextVisibility(String contextVisibility) { this.contextVisibility = contextVisibility; }
     public String getMarkdownBody() { return markdownBody; }
     public void setMarkdownBody(String markdownBody) { this.markdownBody = markdownBody; }
     public List<SkillResourceForm> getResources() { return resources; }

@@ -32,6 +32,41 @@ Write-Host "=== Navigator Upstream CLI Packager ===" -ForegroundColor Cyan
 Write-Host "Version: $version"
 Write-Host "Repo:    $RepoRoot"
 
+$buildTimeUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$gitCommit = ""
+$gitBranch = ""
+$gitDirty = $false
+try {
+    $gitCommit = (& git -C $RepoRoot rev-parse HEAD 2>$null).Trim()
+    $gitBranch = (& git -C $RepoRoot rev-parse --abbrev-ref HEAD 2>$null).Trim()
+    $gitDirty = [bool]((& git -C $RepoRoot status --porcelain 2>$null) -join "")
+}
+catch {
+    $gitCommit = ""
+    $gitBranch = ""
+    $gitDirty = $false
+}
+$features = @(
+    "config-check",
+    "runtime-token",
+    "agent-readiness",
+    "ask",
+    "messages",
+    "sessions",
+    "skill-artifact-read",
+    "skill-sync",
+    "skill-clear",
+    "agent-sync",
+    "function-import",
+    "function-grant",
+    "function-grant-status",
+    "function-visible",
+    "model-grant",
+    "model-owned-config",
+    "account-context",
+    "deterministic-e2e"
+)
+
 Push-Location $RepoRoot
 try {
     mvn -q -pl navigator-open-sdk -DskipTests package dependency:copy-dependencies "-DincludeScope=runtime" "-DoutputDirectory=target/dependency"
@@ -63,9 +98,19 @@ Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi-e2e.ps1") -Destination (J
 Copy-Item -LiteralPath (Join-Path $ScriptDir "bin\navi-e2e.cmd") -Destination (Join-Path $stageDir "bin\navi-e2e.cmd") -Force
 Copy-Item -LiteralPath (Join-Path $ScriptDir "install.ps1") -Destination $stageDir -Force
 Write-Utf8NoBom -Path (Join-Path $stageDir "VERSION") -Content $version
+$buildInfo = [ordered]@{
+    version = $version
+    buildTimeUtc = $buildTimeUtc
+    gitCommit = $gitCommit
+    gitBranch = $gitBranch
+    gitDirty = $gitDirty
+    features = $features
+} | ConvertTo-Json -Depth 5
+Write-Utf8NoBom -Path (Join-Path $stageDir "BUILD_INFO.json") -Content $buildInfo
 
 $outputDir = Join-Path $ScriptDir "output"
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+Write-Utf8NoBom -Path (Join-Path $outputDir "BUILD_INFO.json") -Content $buildInfo
 $archiveName = "navigator-upstream-cli-$version-windows.zip"
 $archivePath = Join-Path $outputDir $archiveName
 if (Test-Path $archivePath) {

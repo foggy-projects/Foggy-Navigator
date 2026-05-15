@@ -43,6 +43,7 @@ class ResumeResponse(BaseModel):
     frame_id: str
     status: str
     message: str
+    resume_message: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +98,11 @@ async def resume(request: ResumeRequest) -> ResumeResponse:
                         f"FSScript run {result.get('script_run_id', '')} "
                         f"resumed with result: {request.approval_result}"
                     ),
+                    resume_message=_resolve_fsscript_resume_message(
+                        result,
+                        request.approval_result,
+                        request.comment,
+                    ),
                 )
             except FsscriptRunNotFound:
                 pass
@@ -114,6 +120,11 @@ async def resume(request: ResumeRequest) -> ResumeResponse:
         )
 
     # 3. Resume the frame
+    resume_message = _resolve_resume_message(
+        frame.approval_request,
+        request.approval_result,
+        request.comment,
+    )
     try:
         _runtime.resume_from_approval(
             frame.frame_id,
@@ -131,4 +142,160 @@ async def resume(request: ResumeRequest) -> ResumeResponse:
         frame_id=frame.frame_id,
         status="RUNNING",
         message=f"Frame {frame.frame_id} resumed with result: {request.approval_result}",
+        resume_message=resume_message,
     )
+
+
+def _resolve_fsscript_resume_message(
+    result: dict[str, Any],
+    approval_result: str,
+    comment: str,
+) -> dict[str, Any]:
+    approval_payload = result.get("approval_payload") if isinstance(result.get("approval_payload"), dict) else {}
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    if not summary and isinstance(approval_payload.get("summary"), dict):
+        summary = approval_payload["summary"]
+
+    content: str | None = None
+    source: str | None = None
+    for source_name, source_payload in (
+        ("fsscript_result", result),
+        ("fsscript_payload", approval_payload),
+        ("fsscript_summary", summary),
+    ):
+        messages = _find_message_templates(source_payload)
+        content, source_key = _select_resume_message(messages, approval_result)
+        if content:
+            source = f"{source_name}.{source_key}"
+            break
+    if not content or not source:
+        content, source = _fallback_resume_message(approval_result), "platform_default"
+    return {
+        "content": content,
+        "source": source,
+        "approval_result": approval_result,
+        "comment": comment,
+        "script_run_id": result.get("script_run_id"),
+        "suspend_id": result.get("suspend_id"),
+    }
+
+
+def _resolve_resume_message(
+    approval_request: dict[str, Any] | None,
+    approval_result: str,
+    comment: str,
+) -> dict[str, Any]:
+    request_payload = approval_request or {}
+    payload = request_payload.get("payload") if isinstance(request_payload.get("payload"), dict) else {}
+    gateway_result = payload.get("gateway_result") if isinstance(payload.get("gateway_result"), dict) else {}
+    input_payload = payload.get("input") if isinstance(payload.get("input"), dict) else {}
+    summary = request_payload.get("summary") if isinstance(request_payload.get("summary"), dict) else {}
+
+    for source_name, source_payload in (
+        ("call_payload", payload),
+        ("function_input", input_payload),
+        ("gateway_result", gateway_result),
+        ("approval_summary", summary),
+        ("approval_request", request_payload),
+    ):
+        messages = _find_message_templates(source_payload)
+        content, source_key = _select_resume_message(messages, approval_result)
+        if content:
+            return _build_resume_message(
+                content=content,
+                source=f"{source_name}.{source_key}",
+                approval_request=request_payload,
+                approval_result=approval_result,
+                comment=comment,
+            )
+
+    return _build_resume_message(
+        content=_fallback_resume_message(approval_result),
+        source="platform_default",
+        approval_request=request_payload,
+        approval_result=approval_result,
+        comment=comment,
+    )
+
+
+def _find_message_templates(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in (
+        "post_approval_message",
+        "postApprovalMessage",
+        "approval_messages",
+        "approvalMessages",
+        "resume_message",
+        "resumeMessage",
+    ):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _select_resume_message(
+    messages: dict[str, Any] | None,
+    approval_result: str,
+) -> tuple[str | None, str | None]:
+    if not messages:
+        return None, None
+    normalized = _normalize_approval_result(approval_result)
+    keys = [normalized]
+    if normalized == "approved":
+        keys.extend(["approve", "accepted", "success"])
+    elif normalized == "rejected":
+        keys.extend(["reject", "denied", "cancelled", "canceled"])
+    elif normalized == "expired":
+        keys.append("timeout")
+    keys.append("default")
+    for key in keys:
+        value = messages.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip(), key
+    return None, None
+
+
+def _build_resume_message(
+    *,
+    content: str,
+    source: str,
+    approval_request: dict[str, Any],
+    approval_result: str,
+    comment: str,
+) -> dict[str, Any]:
+    payload = approval_request.get("payload") if isinstance(approval_request.get("payload"), dict) else {}
+    return {
+        "content": content,
+        "source": source,
+        "approval_result": approval_result,
+        "comment": comment,
+        "approval_type": approval_request.get("approval_type"),
+        "function_id": approval_request.get("function_id"),
+        "version": approval_request.get("version"),
+        "suspend_id": approval_request.get("suspend_id"),
+        "function_frame_id": payload.get("function_frame_id"),
+    }
+
+
+def _fallback_resume_message(approval_result: str) -> str:
+    normalized = _normalize_approval_result(approval_result)
+    if normalized == "approved":
+        return "审批已通过，系统已继续处理该业务操作。"
+    if normalized == "rejected":
+        return "审批已拒绝，本次业务操作不会继续执行。"
+    if normalized == "expired":
+        return "审批已超时，本次业务操作未继续执行。"
+    return f"审批结果已更新：{approval_result}。"
+
+
+def _normalize_approval_result(approval_result: str) -> str:
+    normalized = (approval_result or "").strip().lower()
+    if normalized in {"approved", "approve", "ok", "accepted", "accept"}:
+        return "approved"
+    if normalized in {"rejected", "reject", "denied", "deny", "cancelled", "canceled"}:
+        return "rejected"
+    if normalized in {"expired", "timeout", "timed_out"}:
+        return "expired"
+    return normalized or "unknown"

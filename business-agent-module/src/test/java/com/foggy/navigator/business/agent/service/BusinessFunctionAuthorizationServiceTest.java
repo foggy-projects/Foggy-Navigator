@@ -33,7 +33,6 @@ class BusinessFunctionAuthorizationServiceTest {
         when(clientAppService.requireActiveClientApp("tenant_1", "app_1")).thenReturn(new ClientAppEntity());
         doNothing().when(userGrantService).checkUpstreamUserAccess("tenant_1", "app_1", "user_1");
         doNothing().when(skillRegistryService).checkClientAppSkillAccess("tenant_1", "app_1", "skill_1");
-        doNothing().when(skillRegistryService).checkSkillFunctionAccess("tenant_1", "skill_1", "func_1");
 
         BusinessFunctionRuntimeContextDTO mockContext = new BusinessFunctionRuntimeContextDTO();
         when(functionRegistryService.resolveClientAppFunction("tenant_1", "app_1", "func_1", "v1")).thenReturn(mockContext);
@@ -71,23 +70,23 @@ class BusinessFunctionAuthorizationServiceTest {
                     "tenant_1", "app_1", "user_1", "skill_1", "func_1", "v1"
             );
         });
-        verify(skillRegistryService, never()).checkSkillFunctionAccess(anyString(), anyString(), anyString());
+        verify(functionRegistryService, never()).resolveClientAppFunction(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
-    void missing_or_disabled_skill_function_allowlist_rejected() {
+    void missing_or_disabled_skill_function_allowlist_doesNotBlockRuntimeExecution() {
         when(clientAppService.requireActiveClientApp("tenant_1", "app_1")).thenReturn(new ClientAppEntity());
         doNothing().when(userGrantService).checkUpstreamUserAccess("tenant_1", "app_1", "user_1");
         doNothing().when(skillRegistryService).checkClientAppSkillAccess("tenant_1", "app_1", "skill_1");
-        doThrow(new IllegalStateException("Function allowlist missing or disabled"))
-                .when(skillRegistryService).checkSkillFunctionAccess("tenant_1", "skill_1", "func_1");
+        BusinessFunctionRuntimeContextDTO mockContext = new BusinessFunctionRuntimeContextDTO();
+        when(functionRegistryService.resolveClientAppFunction("tenant_1", "app_1", "func_1", "v1")).thenReturn(mockContext);
 
-        assertThrows(IllegalStateException.class, () -> {
-            authorizationService.resolveExecutableBusinessFunction(
-                    "tenant_1", "app_1", "user_1", "skill_1", "func_1", "v1"
-            );
-        });
-        verify(functionRegistryService, never()).resolveClientAppFunction(anyString(), anyString(), anyString(), anyString());
+        BusinessFunctionRuntimeContextDTO result = authorizationService.resolveExecutableBusinessFunction(
+                "tenant_1", "app_1", "user_1", "skill_1", "func_1", "v1"
+        );
+
+        assertNotNull(result);
+        verify(skillRegistryService, never()).checkSkillFunctionAccess(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -95,7 +94,6 @@ class BusinessFunctionAuthorizationServiceTest {
         when(clientAppService.requireActiveClientApp("tenant_1", "app_1")).thenReturn(new ClientAppEntity());
         doNothing().when(userGrantService).checkUpstreamUserAccess("tenant_1", "app_1", "user_1");
         doNothing().when(skillRegistryService).checkClientAppSkillAccess("tenant_1", "app_1", "skill_1");
-        doNothing().when(skillRegistryService).checkSkillFunctionAccess("tenant_1", "skill_1", "func_1");
 
         doThrow(new IllegalStateException("Function grant missing or disabled"))
                 .when(functionRegistryService).resolveClientAppFunction("tenant_1", "app_1", "func_1", "v1");

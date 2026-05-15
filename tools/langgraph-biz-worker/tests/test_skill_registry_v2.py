@@ -134,6 +134,7 @@ description: TMS public skill
 metadata:
   display_name: TMS Skill
   visibility: public
+  context-visibility: summary
 ---
 
 Use this skill for TMS operations.
@@ -147,6 +148,7 @@ Use this skill for TMS operations.
         assert m is not None
         assert m.name == "TMS Skill"
         assert m.visibility == "public"
+        assert m.context_visibility == "summary"
         assert m.markdown_body == "Use this skill for TMS operations."
 
 

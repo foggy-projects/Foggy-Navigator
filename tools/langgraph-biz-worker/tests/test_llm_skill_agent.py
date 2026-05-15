@@ -6,7 +6,7 @@ import json
 
 from langchain_core.messages import AIMessage
 
-from langgraph_biz_worker.models import FrameStatus, SkillManifest
+from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillManifest
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
@@ -76,6 +76,44 @@ def _artifact_runtime() -> SkillRuntime:
     return SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
 
 
+def _root_runtime() -> SkillRuntime:
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="system.root",
+        name="system.root",
+        description="Persistent root skill.",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+        visibility="builtin",
+    ))
+    return SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+
+
+def _root_with_child_runtime(child_context_visibility: str = "isolated") -> SkillRuntime:
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="system.root",
+        name="system.root",
+        description="Persistent root skill.",
+        output_schema={"type": "object"},
+        allowed_tools=["invoke_business_skill", "submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+        visibility="builtin",
+        context_visibility="passthrough",
+    ))
+    registry.register(SkillManifest(
+        id="child_skill",
+        name="child_skill",
+        description="Child skill.",
+        output_schema={"type": "object"},
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+        context_visibility=child_context_visibility,
+    ))
+    return SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+
+
 def test_llm_agent_completes_skill_via_submit_tool():
     runtime = _runtime()
     frame_id = runtime.invoke_skill(
@@ -124,6 +162,247 @@ def test_llm_agent_completes_skill_via_submit_tool():
     promoted = runtime.close_frame(frame_id)
     assert promoted["structured_output"]["recommended_action"] == "manual_dispatch"
     assert runtime.get_frame(frame_id).private_messages == []
+
+
+def test_llm_agent_persistent_frame_submit_keeps_frame_running():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_agent_001",
+        skill_id="system.root",
+        skill_input={"request": "answer"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Root turn done.",
+                "structured_output": {"answer": "ok"},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_root_agent_001",
+        frame_id=frame_id,
+        prompt="answer",
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert frame.status == FrameStatus.RUNNING
+    assert frame.result_summary == "Root turn done."
+    assert frame.output == {"answer": "ok"}
+    assert frame.private_working_state["turn_results"][0]["summary"] == "Root turn done."
+    assert events[-1].type == "skill_result_submit"
+
+
+def test_llm_agent_root_skill_can_invoke_business_function_directly(monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_function_001",
+        skill_id="system.root",
+        skill_input={"request": "close order"},
+    )
+
+    def fake_invoke(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        return {
+            "functionId": function_id,
+            "version": version,
+            "status": "SUCCESS",
+            "outputCode": "OK",
+            "input": input_data,
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_function",
+            "name": "invoke_business_function",
+            "args": {
+                "function_id": "tms.order.close",
+                "version": "v1",
+                "input": {"orderNo": "ORD-ROOT-001"},
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Root function turn done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_root_function_001",
+        frame_id=frame_id,
+        prompt="close order",
+        runtime_context={"task_scoped_token": "runtime-token"},
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    function_frames = [
+        child for child in runtime.get_frames_by_task("task_root_function_001")
+        if child.frame_kind == FrameKind.FUNCTION_CALL
+    ]
+    bound_tool_names = {tool["function"]["name"] for tool in model.bound_tools}
+
+    assert frame.status == FrameStatus.RUNNING
+    assert frame.result_summary == "Root function turn done."
+    assert "invoke_business_function" in bound_tool_names
+    assert len(function_frames) == 1
+    assert function_frames[0].parent_frame_id == frame_id
+    assert function_frames[0].output["functionId"] == "tms.order.close"
+    assert any(event.tool_name == "invoke_business_function" for event in events)
+
+
+def test_llm_agent_child_skill_summary_visibility_receives_root_context_summary():
+    runtime = _root_with_child_runtime(child_context_visibility="summary")
+    frame_id = runtime.invoke_skill(
+        task_id="task_child_summary_context_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    frame = runtime.get_frame(frame_id)
+    frame.private_working_state["root_context_summary"] = {
+        "turn_count": 2,
+        "latest_summary": "Order ORD-001 was inspected.",
+        "artifact_refs": ["art_1"],
+    }
+    runtime.store.save(frame)
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child",
+            "name": "invoke_business_skill",
+            "args": {
+                "skill_id": "child_skill",
+                "instruction": "handle child work",
+                "input": {"orderNo": "ORD-001"},
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Child done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_root_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Root done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_child_summary_context_001",
+        frame_id=frame_id,
+        prompt="delegate",
+        persistent_frame=True,
+    )
+
+    child_user_prompt = model.seen_messages[1][1].content
+    assert "Visible parent/root context summary:" in child_user_prompt
+    assert "Order ORD-001 was inspected." in child_user_prompt
+    assert "art_1" in child_user_prompt
+
+
+def test_llm_agent_child_skill_isolated_visibility_hides_root_context_summary():
+    runtime = _root_with_child_runtime(child_context_visibility="isolated")
+    frame_id = runtime.invoke_skill(
+        task_id="task_child_isolated_context_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    frame = runtime.get_frame(frame_id)
+    frame.private_working_state["root_context_summary"] = {
+        "latest_summary": "This should not be visible.",
+    }
+    runtime.store.save(frame)
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child",
+            "name": "invoke_business_skill",
+            "args": {"skill_id": "child_skill", "instruction": "handle child work"},
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_submit",
+            "name": "submit_skill_result",
+            "args": {"summary": "Child done.", "structured_output": {"ok": True}},
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_root_submit",
+            "name": "submit_skill_result",
+            "args": {"summary": "Root done.", "structured_output": {"ok": True}},
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_child_isolated_context_001",
+        frame_id=frame_id,
+        prompt="delegate",
+        persistent_frame=True,
+    )
+
+    child_user_prompt = model.seen_messages[1][1].content
+    assert "Visible parent/root context summary:" not in child_user_prompt
+    assert "This should not be visible." not in child_user_prompt
+
+
+def test_llm_agent_child_skill_passthrough_visibility_is_system_only():
+    runtime = _root_with_child_runtime(child_context_visibility="passthrough")
+    frame_id = runtime.invoke_skill(
+        task_id="task_child_passthrough_context_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    frame = runtime.get_frame(frame_id)
+    frame.private_working_state["root_context_summary"] = {
+        "latest_summary": "User skill should not see passthrough context.",
+    }
+    runtime.store.save(frame)
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child",
+            "name": "invoke_business_skill",
+            "args": {"skill_id": "child_skill", "instruction": "handle child work"},
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_submit",
+            "name": "submit_skill_result",
+            "args": {"summary": "Child done.", "structured_output": {"ok": True}},
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_root_submit",
+            "name": "submit_skill_result",
+            "args": {"summary": "Root done.", "structured_output": {"ok": True}},
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_child_passthrough_context_001",
+        frame_id=frame_id,
+        prompt="delegate",
+        persistent_frame=True,
+    )
+
+    child_user_prompt = model.seen_messages[1][1].content
+    assert "Visible parent/root context summary:" not in child_user_prompt
+    assert "User skill should not see passthrough context." not in child_user_prompt
 
 
 def test_llm_agent_retries_when_submit_contract_rejected():
@@ -510,3 +789,106 @@ def test_llm_agent_records_tool_call_args_for_debugging(monkeypatch):
     assert tool_call_messages[0]["content"]["name"] == "invoke_business_function"
     assert tool_call_messages[0]["content"]["args"]["function_id"] == "tms.dataset.listModels"
     assert tool_call_messages[0]["content"]["args"]["access_token"] == "<redacted>"
+
+
+def test_llm_agent_suspends_business_function_call(monkeypatch):
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="business_skill",
+        name="business_skill",
+        description="Uses business functions.",
+        output_schema={"type": "object"},
+        allowed_tools=[],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    frame_id = runtime.invoke_skill(
+        task_id="task_business_suspend_001",
+        skill_id="business_skill",
+        skill_input={},
+    )
+
+    def fake_invoke(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        return {
+            "functionId": function_id,
+            "version": version,
+            "status": "SUSPENDED",
+            "approvalRequired": True,
+            "suspendId": "sus_123",
+            "message": "Approval required",
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_invoke",
+            "name": "invoke_business_function",
+            "args": {
+                "function_id": "tms.order.close",
+                "version": "v1",
+                "input": {"orderNo": "ORD-001"},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_business_suspend_001",
+        frame_id=frame_id,
+        prompt="close order",
+        runtime_context={"task_scoped_token": "runtime-token"},
+    )
+
+    caller = runtime.get_frame(frame_id)
+    assert caller.status == FrameStatus.AWAITING_APPROVAL
+    assert caller.approval_request["suspend_id"] == "sus_123"
+    function_frame_id = caller.private_working_state["pending_function_call_frame_id"]
+    function_frame = runtime.get_frame(function_frame_id)
+    assert function_frame.frame_kind == FrameKind.FUNCTION_CALL
+    assert function_frame.status == FrameStatus.AWAITING_APPROVAL
+    assert function_frame.input["function_id"] == "tms.order.close"
+    assert any(event.type == "approval_required" for event in events)
+    approval_event = next(event for event in events if event.type == "approval_required")
+    assert approval_event.suspend_id == "sus_123"
+    assert approval_event.skill_frame_id == function_frame_id
+    assert approval_event.parent_frame_id == frame_id
+
+
+def test_resume_approval_completes_pending_function_frame(monkeypatch):
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=SkillRegistry())
+    caller_frame_id = runtime.invoke_skill(
+        task_id="task_business_resume_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    function_frame_id = runtime.invoke_function_call(
+        parent_frame_id=caller_frame_id,
+        function_id="tms.order.close",
+        version="v1",
+        arguments={"orderNo": "ORD-001"},
+        idempotency_key="idem-1",
+    )
+    approval_request = {
+        "approval_type": "business_function",
+        "function_id": "tms.order.close",
+        "version": "v1",
+        "suspend_id": "sus_123",
+        "summary": {"title": "Approval required"},
+        "payload": {"function_frame_id": function_frame_id},
+        "resolved": False,
+    }
+    runtime.suspend_function_call(function_frame_id, approval_request)
+    runtime.mark_awaiting_approval(caller_frame_id, approval_request)
+
+    runtime.resume_from_approval(caller_frame_id, "approved", "ok")
+
+    caller = runtime.get_frame(caller_frame_id)
+    function_frame = runtime.get_frame(function_frame_id)
+    assert caller.status == FrameStatus.RUNNING
+    assert "pending_function_call_frame_id" not in caller.private_working_state
+    assert function_frame.status == FrameStatus.COMPLETED
+    assert function_frame.output["status"] == "RESUME_DISPATCHED"
+    assert function_frame.output["approval_result"] == "approved"

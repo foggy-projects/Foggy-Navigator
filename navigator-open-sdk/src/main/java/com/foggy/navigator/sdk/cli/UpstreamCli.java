@@ -20,13 +20,17 @@ import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
 import com.foggy.navigator.sdk.model.businessagent.BusinessAgentBundleDTO;
+import com.foggy.navigator.sdk.model.businessagent.BusinessFunctionSummaryDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClearSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.ClientAppFunctionGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
+import com.foggy.navigator.sdk.model.businessagent.GrantBusinessFunctionForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
+import com.foggy.navigator.sdk.model.businessagent.ImportBusinessFunctionManifestForm;
 import com.foggy.navigator.sdk.model.businessagent.RotateModelConfigKeyForm;
 import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
@@ -96,6 +100,11 @@ public class UpstreamCli {
             case "skill clear-public" -> skillClearPublic(args);
             case "skill clear-account" -> skillClearAccount(args);
             case "agent sync" -> agentSync(args);
+            case "function", "function help" -> functionUsage();
+            case "function import" -> functionImport(args);
+            case "function grant" -> functionGrant(args);
+            case "function grant-status" -> functionGrantStatus(args);
+            case "function visible" -> functionVisible(args);
             case "model grants" -> modelGrants(args);
             case "model grant" -> modelGrant(args);
             case "model set-default" -> modelSetDefault(args);
@@ -114,7 +123,17 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, model grants, model grant, model set-default, model create, model update, model rotate-key, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, model grants, model grant, model set-default, model create, model update, model rotate-key, account-context list, account-context read, account-context write-policy");
+        return 0;
+    }
+
+    private int functionUsage() {
+        out.println("Usage: navi upstream function <command> [options]");
+        out.println("Commands: import, grant, grant-status, visible");
+        out.println("  import       --manifest <path>");
+        out.println("  grant        --function-id <id> [--version <version>] [--status ENABLED|DISABLED]");
+        out.println("  grant-status --grant-id <id> --status ENABLED|DISABLED");
+        out.println("  visible      [--client-app-id <clientAppId>]");
         return 0;
     }
 
@@ -409,6 +428,59 @@ public class UpstreamCli {
 
         BusinessAgentBundleDTO dto = businessAgentControlApi().syncBusinessAgentBundle(form);
         printBusinessAgentBundle(dto);
+        return 0;
+    }
+
+    private int functionImport(CliArguments args) throws Exception {
+        ImportBusinessFunctionManifestForm form = readJsonFile(
+                requiredOption(args, "manifest", "manifest path"),
+                ImportBusinessFunctionManifestForm.class);
+        if (!hasText(form.getFunctionId())) {
+            throw new UpstreamCliException("function manifest requires functionId");
+        }
+        if (!hasText(form.getVersion())) {
+            throw new UpstreamCliException("function manifest requires version");
+        }
+        businessAgentControlApi().importBusinessFunctionManifest(form);
+        out.println("function import ok");
+        out.println("functionId=" + valueOrEmpty(form.getFunctionId()));
+        out.println("version=" + valueOrEmpty(form.getVersion()));
+        out.println("status=" + valueOrEmpty(form.getStatus()));
+        return 0;
+    }
+
+    private int functionGrant(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        GrantBusinessFunctionForm form = new GrantBusinessFunctionForm();
+        form.setFunctionId(requiredOption(args, "function-id", "function id"));
+        form.setVersion(args.option("version"));
+        form.setStatus(args.option("status"));
+        ClientAppFunctionGrantDTO grant = businessAgentControlApi().grantFunctionToClientApp(clientAppId, form);
+        out.println("function grant ok");
+        printFunctionGrant("functionGrant", grant);
+        return 0;
+    }
+
+    private int functionGrantStatus(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String grantId = requiredOption(args, "grant-id", "grant id");
+        String status = requiredOption(args, "status", "status");
+        ClientAppFunctionGrantDTO grant = businessAgentControlApi().updateFunctionGrantStatus(clientAppId, grantId, status);
+        out.println("function grant-status ok");
+        printFunctionGrant("functionGrant", grant);
+        return 0;
+    }
+
+    private int functionVisible(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<BusinessFunctionSummaryDTO> functions = businessAgentControlApi()
+                .listClientAppVisibleFunctionSummaries(clientAppId);
+        out.println("functionVisibleCount=" + (functions != null ? functions.size() : 0));
+        if (functions != null) {
+            for (BusinessFunctionSummaryDTO function : functions) {
+                printFunctionSummary(function);
+            }
+        }
         return 0;
     }
 
@@ -799,6 +871,26 @@ public class UpstreamCli {
         }
     }
 
+    private void printFunctionGrant(String prefix, ClientAppFunctionGrantDTO grant) {
+        out.println(prefix
+                + " grantId=" + valueOrEmpty(grant != null ? grant.getGrantId() : null)
+                + " clientAppId=" + valueOrEmpty(grant != null ? grant.getClientAppId() : null)
+                + " functionId=" + valueOrEmpty(grant != null ? grant.getFunctionId() : null)
+                + " version=" + valueOrEmpty(grant != null ? grant.getVersion() : null)
+                + " status=" + valueOrEmpty(grant != null ? grant.getStatus() : null));
+    }
+
+    private void printFunctionSummary(BusinessFunctionSummaryDTO function) {
+        out.println("function"
+                + " functionId=" + valueOrEmpty(function != null ? function.getFunctionId() : null)
+                + " version=" + valueOrEmpty(function != null ? function.getVersion() : null)
+                + " domain=" + valueOrEmpty(function != null ? function.getDomain() : null)
+                + " name=" + valueOrEmpty(function != null ? function.getName() : null)
+                + " riskLevel=" + valueOrEmpty(function != null ? function.getRiskLevel() : null)
+                + " approvalRequired=" + (function != null && Boolean.TRUE.equals(function.getApprovalRequired()))
+                + " idempotencyRequired=" + (function != null && Boolean.TRUE.equals(function.getIdempotencyRequired())));
+    }
+
     private void printSkillClearResult(String command, SkillClearResultDTO dto) {
         out.println(command + " ok");
         out.println("scope=" + valueOrEmpty(dto != null ? dto.getScope() : null));
@@ -854,6 +946,14 @@ public class UpstreamCli {
             return "ACCOUNT_PRIVATE";
         }
         throw new UpstreamCliException("invalid scope: " + scope);
+    }
+
+    private <T> T readJsonFile(String file, Class<T> type) throws Exception {
+        Path path = cwd.resolve(file).normalize();
+        if (!Files.isRegularFile(path)) {
+            throw new UpstreamCliException("json file not found: " + path);
+        }
+        return new ObjectMapper().readValue(Files.readString(path, StandardCharsets.UTF_8), type);
     }
 
     private void printMessages(List<SessionMessage> messages) {

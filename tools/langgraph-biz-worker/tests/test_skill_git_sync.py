@@ -169,6 +169,7 @@ class TestMaterializeEndpoint:
             "skill_id": "foggy-query-agent",
             "client_app_id": "app_01",
             "name": "foggy-query-agent",
+            "context_visibility": "summary",
             "markdown_body": "Use references for complex payloads.",
             "resources": [
                 {
@@ -185,6 +186,8 @@ class TestMaterializeEndpoint:
         assert resp.status_code == 200
         target = skills_root / "public" / "apps" / "app_01" / "foggy-query-agent"
         assert (target / "SKILL.md").is_file()
+        skill_md = (target / "SKILL.md").read_text(encoding="utf-8")
+        assert "context-visibility: summary" in skill_md
         assert (target / "references" / "functions" / "queryModel.md").read_text(encoding="utf-8") == "# queryModel\nUse model and payload."
         assert (target / "assets" / "schema.json").read_text(encoding="utf-8") == "{\"type\":\"object\"}"
 
@@ -222,6 +225,22 @@ class TestMaterializeEndpoint:
         })
 
         assert resp.status_code == 400
+
+    async def test_materialize_downgrades_passthrough_context_visibility(self, client, tmp_path):
+        from langgraph_biz_worker.routes import skills as skills_module
+        skills_root = tmp_path / "skills"
+        skills_module.configure(skills_root)
+
+        resp = await client.post("/api/v1/skills/materialize", json={
+            "skill_id": "skill_01",
+            "client_app_id": "app_01",
+            "context_visibility": "passthrough",
+            "markdown_body": "fresh",
+        })
+
+        assert resp.status_code == 200
+        skill_md = (skills_root / "public" / "apps" / "app_01" / "skill_01" / "SKILL.md").read_text(encoding="utf-8")
+        assert "context-visibility: isolated" in skill_md
 
 
 class TestAccountSkillLoading:

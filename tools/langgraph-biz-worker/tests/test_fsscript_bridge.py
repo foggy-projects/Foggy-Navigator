@@ -57,7 +57,13 @@ def _fake_runtime_loader():
             script_run_id="sr_test",
             suspend_id="sp_test",
             reason="order.close_apply.submit",
-            summary={"approval_type": "order_close_apply", "title": "提交关单申请"},
+            summary={
+                "approval_type": "order_close_apply",
+                "title": "提交关单申请",
+                "post_approval_message": {
+                    "approved": "审批已通过，FSScript 已继续执行。",
+                },
+            },
             timeout_at=datetime.now(timezone.utc),
         ))
         suspension_manager.event.wait(timeout=2)
@@ -89,6 +95,7 @@ def test_fsscript_bridge_streams_approval_then_result_after_resume():
     async def run() -> list[str]:
         bridge = FsscriptRunBridge(runtime_loader=_fake_runtime_loader)
         seen: list[str] = []
+        resume_result: dict[str, Any] | None = None
         async for event in bridge.stream_events(
             task_id="task-1",
             session_id="session-1",
@@ -102,7 +109,10 @@ def test_fsscript_bridge_streams_approval_then_result_after_resume():
                 assert event.approval_type == "order_close_apply"
                 assert event.script_run_id == "sr_test"
                 assert event.suspend_id == "sp_test"
-                bridge.resume_task("task-1", "approved", "ok")
+                resume_result = bridge.resume_task("task-1", "approved", "ok")
+                assert resume_result["summary"]["post_approval_message"]["approved"] == (
+                    "审批已通过，FSScript 已继续执行。"
+                )
             if event.type == "result":
                 assert event.structured_output == {
                     "value": {

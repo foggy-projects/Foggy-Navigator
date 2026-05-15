@@ -24,7 +24,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ..models import FrameStatus, SkillFrameState
+from ..models import FrameKind, FrameStatus, SkillFrameState
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,14 @@ class FileFrameJournal:
         Used by the resume endpoint — Java side passes only ``taskId``,
         Worker finds the suspended Frame internally (Doc 31 §16.5).
         """
-        for frame in self.load_by_task(task_id):
+        candidates = [
+            frame for frame in self.load_by_task(task_id)
+            if frame.status == FrameStatus.AWAITING_APPROVAL
+        ]
+        for frame in candidates:
+            if frame.frame_kind == FrameKind.SKILL:
+                return frame
+        for frame in candidates:
             if frame.status == FrameStatus.AWAITING_APPROVAL:
                 return frame
         return None

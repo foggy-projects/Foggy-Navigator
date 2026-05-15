@@ -53,6 +53,7 @@ class BusinessAgentBundleServiceTest {
         form.setWorkerId("worker_01");
         form.setDefaultModelConfigId("model_01");
         form.setMarkdownBody("# Agent");
+        form.setContextVisibility("summary");
 
         when(modelConfigGrantService.resolveEffectiveModelConfigId("tenant_01", "app_01", "model_01"))
                 .thenReturn("model_01");
@@ -95,6 +96,7 @@ class BusinessAgentBundleServiceTest {
         assertEquals("app_01", skillForm.getClientAppId());
         assertEquals(form.getAgentId(), skillForm.getSkillId());
         assertEquals("# Agent", skillForm.getMarkdownBody());
+        assertEquals("summary", skillForm.getContextVisibility());
     }
 
     @Test

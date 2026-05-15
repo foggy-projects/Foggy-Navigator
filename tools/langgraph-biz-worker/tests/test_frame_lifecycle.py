@@ -122,6 +122,77 @@ class TestSubmitResult:
         assert runtime.get_frame(fid).status == FrameStatus.FAILED
 
 
+class TestPersistentTurnResult:
+    def test_persistent_turn_result_updates_root_context_summary(self, runtime: SkillRuntime):
+        fid = runtime.invoke_skill("t", "test_skill")
+
+        result = runtime.submit_persistent_turn_result(
+            fid,
+            "turn done",
+            {"result": "success"},
+            artifact_refs=["art_1"],
+            evidence_refs=["ev_1"],
+        )
+
+        frame = runtime.get_frame(fid)
+        summary = frame.private_working_state["root_context_summary"]
+        assert result.ok
+        assert frame.status == FrameStatus.RUNNING
+        assert summary["turn_count"] == 1
+        assert summary["latest_summary"] == "turn done"
+        assert summary["latest_structured_output"] == {"result": "success"}
+        assert summary["artifact_refs"] == ["art_1"]
+        assert summary["evidence_refs"] == ["ev_1"]
+
+    def test_persistent_turn_result_compacts_growth(self, runtime: SkillRuntime):
+        fid = runtime.invoke_skill("t", "test_skill")
+        frame = runtime.get_frame(fid)
+        frame.private_messages = [
+            {"role": "tool", "content": {"index": index}}
+            for index in range(45)
+        ]
+        runtime.store.save(frame)
+
+        for index in range(25):
+            runtime.submit_persistent_turn_result(
+                fid,
+                f"turn {index}",
+                {"result": str(index)},
+                artifact_refs=[f"art_{index}"],
+            )
+
+        frame = runtime.get_frame(fid)
+        summary = frame.private_working_state["root_context_summary"]
+        assert len(frame.private_working_state["turn_results"]) == 20
+        assert len(summary["recent_turns"]) == 10
+        assert len(frame.private_messages) == 40
+        assert summary["compacted_turn_result_count"] == 5
+        assert summary["compacted_private_message_count"] == 5
+        assert summary["turn_count"] == 25
+
+    def test_function_call_frame_captures_root_context_summary_snapshot(self, runtime: SkillRuntime):
+        fid = runtime.invoke_skill("t", "test_skill")
+        runtime.submit_persistent_turn_result(
+            fid,
+            "turn done",
+            {"result": "success"},
+            artifact_refs=["art_1"],
+        )
+
+        function_frame_id = runtime.invoke_function_call(
+            fid,
+            "tms.order.close",
+            "v1",
+            arguments={"orderNo": "ORD-001"},
+        )
+
+        function_frame = runtime.get_frame(function_frame_id)
+        snapshot = function_frame.private_working_state["context_snapshot"]
+        assert snapshot["visibility"] == "passthrough"
+        assert snapshot["root_context_summary"]["latest_summary"] == "turn done"
+        assert snapshot["root_context_summary"]["artifact_refs"] == ["art_1"]
+
+
 class TestCloseFrame:
     def test_close_returns_promoted_result(self, runtime: SkillRuntime):
         fid = runtime.invoke_skill("t", "test_skill")

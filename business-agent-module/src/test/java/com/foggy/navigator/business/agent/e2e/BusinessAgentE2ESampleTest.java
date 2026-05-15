@@ -349,7 +349,7 @@ class BusinessAgentE2ESampleTest {
         assertNotNull(resolvedToken.getTaskId());
         assertNotNull(resolvedToken.getSessionId());
 
-        // --- Step 3: list functions - only allowlisted function visible ---
+        // --- Step 3: list functions - ClientApp granted functions visible ---
         WorkerGatewayFunctionListDTO listResult = workerGatewayService.listBusinessFunctions(plainToken, null, null);
         assertNotNull(listResult.getFunctions());
         assertEquals(1, listResult.getFunctions().size(), "exactly one function should be visible");
@@ -433,7 +433,7 @@ class BusinessAgentE2ESampleTest {
     // ===== NEGATIVE EVIDENCE =====
 
     @Test
-    void stage6_negative_skillAllowlistDisabled_functionHiddenFromList() {
+    void stage6_allowlistDisabled_functionStillVisibleWhenClientAppFunctionGrantExists() {
         stubActiveClientApp();
         stubModelGrant();
         stubUserGrant();
@@ -458,7 +458,8 @@ class BusinessAgentE2ESampleTest {
         allowlistEntity.setStatus("DISABLED");
 
         WorkerGatewayFunctionListDTO listResult = workerGatewayService.listBusinessFunctions(token, null, null);
-        assertTrue(listResult.getFunctions().isEmpty(), "disabled allowlist must hide function from list");
+        assertEquals(1, listResult.getFunctions().size(), "ClientApp function grant, not skill allowlist, controls runtime visibility");
+        assertEquals(FUNCTION_ID, listResult.getFunctions().get(0).getFunctionId());
     }
 
     @Test
