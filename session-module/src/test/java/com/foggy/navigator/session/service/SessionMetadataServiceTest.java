@@ -50,6 +50,7 @@ class SessionMetadataServiceTest {
         session.setTagsJson("[\"tag-a\",\"tag-b\"]");
         session.setAuthMode("API_KEY");
         session.setAuthBoundAt(LocalDateTime.of(2026, 3, 24, 10, 0));
+        session.setAuthModelConfigId("cfg-1");
         session.setAuthTokenCiphertext("cipher");
 
         when(sessionRepository.findAllById(List.of("session-1"))).thenReturn(List.of(session));
@@ -63,6 +64,7 @@ class SessionMetadataServiceTest {
         assertEquals("My Session", dto.getCustomTitle());
         assertTrue(dto.isPinned());
         assertTrue(dto.isAuthBound());
+        assertEquals("cfg-1", dto.getAuthModelConfigId());
         assertEquals("sk-tes****7890", dto.getMaskedAuthToken());
         assertEquals(List.of("tag-a", "tag-b"), dto.getTags());
         assertEquals("AWAITING_REPLY", dto.getInteractionState());
@@ -152,11 +154,62 @@ class SessionMetadataServiceTest {
         when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> service.bindAuth("session-1", "user-1", "API_KEY", "token", null));
+                () -> service.bindAuth("session-1", "user-1", "API_KEY", "token", null, null));
 
         assertEquals("Auth already bound for this conversation", error.getMessage());
         verify(sessionRepository, never()).save(any());
         verify(credentialEncryptor, never()).encrypt(anyString());
+    }
+
+    @Test
+    void bindAuth_resolvesModelConfigUsingSessionWorker() {
+        SessionEntity session = session("session-1");
+        session.setCurrentWorkerId("worker-1");
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setId("cfg-1");
+
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+        when(llmModelManager.getModelConfig("cfg-1")).thenReturn(Optional.of(modelConfig));
+        when(llmModelManager.getDecryptedApiKey("cfg-1")).thenReturn("sk-live-123456");
+        when(credentialEncryptor.encrypt("sk-live-123456")).thenReturn("encrypted");
+        when(sessionRepository.save(session)).thenReturn(session);
+
+        SessionConfigDTO result = service.bindAuth("session-1", "user-1",
+                null, null, null, "cfg-1");
+
+        assertEquals("API_KEY", session.getAuthMode());
+        assertEquals("encrypted", session.getAuthTokenCiphertext());
+        assertEquals("cfg-1", session.getAuthModelConfigId());
+        assertEquals("cfg-1", result.getAuthModelConfigId());
+        assertNotNull(session.getAuthBoundAt());
+        verify(llmModelManager).validateModelAccessForWorker("cfg-1", "worker-1");
+    }
+
+    @Test
+    void bindAuth_preservesSubscriptionModelConfigWithoutToken() {
+        SessionEntity session = session("session-1");
+        session.setCurrentWorkerId("worker-1");
+
+        LlmModelConfigDTO modelConfig = new LlmModelConfigDTO();
+        modelConfig.setId("cfg-subscription");
+        modelConfig.setWorkerBackend("CLAUDE_CODE");
+        modelConfig.setHasApiKey(false);
+
+        when(sessionRepository.findByIdAndUserId("session-1", "user-1")).thenReturn(Optional.of(session));
+        when(llmModelManager.getModelConfig("cfg-subscription")).thenReturn(Optional.of(modelConfig));
+        when(sessionRepository.save(session)).thenReturn(session);
+
+        SessionConfigDTO result = service.bindAuth("session-1", "user-1",
+                null, null, null, "cfg-subscription");
+
+        assertEquals("SUBSCRIPTION", session.getAuthMode());
+        assertNull(session.getAuthTokenCiphertext());
+        assertEquals("cfg-subscription", session.getAuthModelConfigId());
+        assertEquals("cfg-subscription", result.getAuthModelConfigId());
+        assertNotNull(session.getAuthBoundAt());
+        verify(llmModelManager).validateModelAccessForWorker("cfg-subscription", "worker-1");
+        verify(llmModelManager, never()).getDecryptedApiKey("cfg-subscription");
     }
 
     private SessionEntity session(String sessionId) {

@@ -38,6 +38,7 @@ export interface AppConfig {
    *   codex-latest → gpt-5.5
    *   codex-fast   → gpt-5.5:low
    *   codex-deep   → gpt-5.5:high
+   *   codex-xhigh  → gpt-5.5:xhigh
    *   codex-mini   → gpt-5.4-mini   (待 5.5-mini 发布后再升级，仅改 Worker 配置)
    *
    * 环境变量格式：JSON 对象，如 {"codex-latest":"gpt-5.5","codex-fast":"gpt-5.5:low"}
@@ -160,6 +161,7 @@ const DEFAULT_CODEX_MODEL_ALIASES: Readonly<Record<string, string>> = Object.fre
   'codex-latest': 'gpt-5.5',
   'codex-fast': 'gpt-5.5:low',
   'codex-deep': 'gpt-5.5:high',
+  'codex-xhigh': 'gpt-5.5:xhigh',
   'codex-mini': 'gpt-5.4-mini',
 })
 

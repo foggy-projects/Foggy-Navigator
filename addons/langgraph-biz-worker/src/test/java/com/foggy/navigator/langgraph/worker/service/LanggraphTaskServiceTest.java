@@ -7,6 +7,7 @@ import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
+import com.foggy.navigator.langgraph.worker.client.LanggraphWorkerClient;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphTaskEntity;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
+import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -38,6 +40,7 @@ class LanggraphTaskServiceTest {
     private SessionEntityRepository sessionEntityRepository;
     private SessionMessageRepository sessionMessageRepository;
     private LanggraphWorkerService workerService;
+    private LanggraphWorkerClient workerClient;
     private SessionManager sessionManager;
     private ApplicationEventPublisher eventPublisher;
     private LanggraphTaskService service;
@@ -56,6 +59,7 @@ class LanggraphTaskServiceTest {
         sessionMessageRepository = mock(SessionMessageRepository.class);
         LanggraphApprovalRepository approvalRepository = mock(LanggraphApprovalRepository.class);
         workerService = mock(LanggraphWorkerService.class);
+        workerClient = mock(LanggraphWorkerClient.class);
         sessionManager = mock(SessionManager.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
 
@@ -223,6 +227,35 @@ class LanggraphTaskServiceTest {
             assertEquals("ABORTED", existingTask.getStatus());
             assertEquals("Cancelled by user", existingTask.getErrorMessage());
             verify(taskRepository).save(existingTask);
+        }
+
+        @Test
+        void cancelTask_records_recoverable_interruption_on_worker() {
+            existingTask.setWorkerId(WORKER_ID);
+            existingTask.setSessionId(SESSION_ID);
+            existingTask.setContextId("ctx-1");
+            existingTask.setAgentId(AGENT_ID);
+            LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
+            worker.setWorkerId(WORKER_ID);
+            when(workerService.getWorkerEntity(WORKER_ID)).thenReturn(worker);
+            when(workerService.createClient(worker)).thenReturn(workerClient);
+            when(workerClient.recordInterruption(
+                    anyString(), anyString(), anyString(), anyString(), anyString(), anyMap()
+            )).thenReturn(Mono.just(Map.of("status", "recorded")));
+
+            service.cancelTask("lgt_existing", USER_ID);
+
+            verify(workerClient).recordInterruption(
+                    eq("lgt_existing"),
+                    eq(SESSION_ID),
+                    eq("ctx-1"),
+                    eq("user_cancelled"),
+                    eq("Cancelled by user"),
+                    argThat(context -> "ctx-1".equals(context.get("contextId"))
+                            && SESSION_ID.equals(context.get("session_id"))
+                            && AGENT_ID.equals(context.get("agentId"))
+                            && "ABORTED".equals(context.get("taskStatus")))
+            );
         }
 
         @Test

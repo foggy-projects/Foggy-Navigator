@@ -573,7 +573,7 @@ export async function updateConversationMilestone(
 
 export async function bindConversationAuth(
   sessionId: string,
-  form: { authMode: string; authToken: string; baseUrl?: string },
+  form: { authMode: string; authToken: string; baseUrl?: string; modelConfigId?: string },
 ): Promise<ConversationConfig> {
   const rx = (await client.post(
     `/sessions/${sessionId}/config/bind-auth`,
@@ -584,7 +584,7 @@ export async function bindConversationAuth(
 
 export async function updateConversationAuth(
   sessionId: string,
-  form: { authMode: string; authToken: string; baseUrl?: string },
+  form: { authMode: string; authToken: string; baseUrl?: string; modelConfigId?: string },
 ): Promise<ConversationConfig> {
   const rx = (await client.patch(
     `/sessions/${sessionId}/config/auth`,

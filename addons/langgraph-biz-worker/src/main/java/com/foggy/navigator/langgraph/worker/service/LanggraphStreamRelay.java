@@ -313,6 +313,7 @@ public class LanggraphStreamRelay {
     private void handleStreamError(Throwable error, String taskId, String sessionId) {
         log.warn("SSE stream error for langgraph task {}: {}", taskId, error.getMessage());
         activeStreams.remove(taskId);
+        taskService.recordTaskInterruption(taskId, "stream_error", error.getMessage());
         taskService.failTask(taskId, "Stream error: " + error.getMessage());
         publishMessage(sessionId, MessageType.ERROR,
                 Map.of("content", "Stream connection lost: " + error.getMessage(), "taskId", taskId));

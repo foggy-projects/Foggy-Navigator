@@ -192,6 +192,39 @@ class TestPersistentTurnResult:
         assert snapshot["root_context_summary"]["latest_summary"] == "turn done"
         assert snapshot["root_context_summary"]["artifact_refs"] == ["art_1"]
 
+    def test_persistent_turn_archives_interruption_when_user_switches_task(self, runtime: SkillRuntime):
+        fid = runtime.invoke_skill("t", "test_skill")
+        runtime.record_recoverable_interruption(
+            fid,
+            reason="user_cancelled",
+            error="Cancelled by user",
+            task_id="t",
+        )
+
+        result = runtime.submit_persistent_turn_result(
+            fid,
+            "Previous vehicle creation was shelved; started unrelated lookup.",
+            {
+                "continuation_decision": "START_UNRELATED_NEW_TASK",
+                "abandoned_interruption": {
+                    "summary": "Vehicle creation was interrupted before completion.",
+                },
+                "result": "success",
+            },
+        )
+
+        frame = runtime.get_frame(fid)
+        assert result.ok
+        assert "continuation_state" not in frame.private_working_state
+        assert "recoverable" not in frame.private_working_state
+        history = frame.private_working_state["root_context_summary"]["interruption_history"]
+        assert history[-1]["reason"] == "user_cancelled"
+        assert history[-1]["last_error"] == "Cancelled by user"
+        assert history[-1]["resolution"] == "START_UNRELATED_NEW_TASK"
+        assert history[-1]["abandoned_interruption"] == {
+            "summary": "Vehicle creation was interrupted before completion.",
+        }
+
 
 class TestCloseFrame:
     def test_close_returns_promoted_result(self, runtime: SkillRuntime):

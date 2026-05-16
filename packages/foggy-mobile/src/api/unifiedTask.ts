@@ -13,6 +13,8 @@ import type {
   SessionPageResult,
 } from './types'
 
+const taskPageRequests = new Map<string, Promise<SessionPageResult<DispatchTask>>>()
+
 /**
  * Create a task via unified dispatch.
  */
@@ -157,10 +159,22 @@ export async function listTasksPagedUnified(
   size: number,
   state?: string,
 ): Promise<SessionPageResult<DispatchTask>> {
-  const rx = (await client.get('/tasks/page', {
-    params: { page, size, ...(state ? { state } : {}) },
-  })) as unknown as RX<SessionPageResult<DispatchTask>>
-  return rx.data
+  const key = `tasks:${page}:${size}:${state || ''}`
+  const existing = taskPageRequests.get(key)
+  if (existing) return existing
+
+  const request = (async () => {
+    const rx = (await client.get('/tasks/page', {
+      params: { page, size, ...(state ? { state } : {}) },
+    })) as unknown as RX<SessionPageResult<DispatchTask>>
+    return rx.data
+  })()
+  taskPageRequests.set(key, request)
+  request.then(
+    () => taskPageRequests.delete(key),
+    () => taskPageRequests.delete(key),
+  )
+  return request
 }
 
 /**
@@ -172,10 +186,22 @@ export async function listTasksByDirPagedUnified(
   size: number,
   state?: string,
 ): Promise<SessionPageResult<DispatchTask>> {
-  const rx = (await client.get(`/tasks/directory/${directoryId}/page`, {
-    params: { page, size, ...(state ? { state } : {}) },
-  })) as unknown as RX<SessionPageResult<DispatchTask>>
-  return rx.data
+  const key = `directory:${directoryId}:${page}:${size}:${state || ''}`
+  const existing = taskPageRequests.get(key)
+  if (existing) return existing
+
+  const request = (async () => {
+    const rx = (await client.get(`/tasks/directory/${directoryId}/page`, {
+      params: { page, size, ...(state ? { state } : {}) },
+    })) as unknown as RX<SessionPageResult<DispatchTask>>
+    return rx.data
+  })()
+  taskPageRequests.set(key, request)
+  request.then(
+    () => taskPageRequests.delete(key),
+    () => taskPageRequests.delete(key),
+  )
+  return request
 }
 
 /**

@@ -201,4 +201,59 @@ describe('useNavigatorChat business action UX', () => {
     const frame = messages.find((message) => message.skillFrame)?.skillFrame
     expect(frame?.status).toBe('success')
   })
+
+  it('does not use a bare runtime frame id as user-facing skill frame text', async () => {
+    const task: AgentTask = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'frame-open',
+          type: 'STATE',
+          content: 'skill frame open',
+          timestamp: 1_000,
+          metadata: {
+            subtype: 'skill_frame_open',
+            skillFrameId: 'frm_622f67035042',
+          },
+        },
+        {
+          id: 'final-result',
+          type: 'RESULT',
+          content: '已完成操作。',
+          timestamp: 2_000,
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+        },
+      ],
+    }
+
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          showRuntimeEvents: true,
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('执行一下')
+    await nextTick()
+
+    const frameMessage = chat.messages.value.find((message) => message.skillFrame)
+    expect(frameMessage?.content).toContain('技能 执行步骤')
+    expect(frameMessage?.content).not.toContain('frm_622f67035042')
+    expect(frameMessage?.skillFrame?.displayName).toBe('执行步骤')
+  })
 })

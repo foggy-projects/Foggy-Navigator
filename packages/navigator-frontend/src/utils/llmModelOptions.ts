@@ -29,6 +29,7 @@ const CLAUDE_MODEL_OPTIONS: SelectableModelOption[] = [
  *   codex-latest → gpt-5.5
  *   codex-fast   → gpt-5.5:low
  *   codex-deep   → gpt-5.5:high
+ *   codex-xhigh  → gpt-5.5:xhigh
  *   codex-mini   → gpt-5.4-mini
  *
  * 与 Claude（opus/sonnet/haiku）和 Gemini（gemini-pro/gemini-flash）的命名风格保持一致。
@@ -37,6 +38,7 @@ const CODEX_ALIAS_OPTIONS: SelectableModelOption[] = [
   { value: 'codex-latest', label: 'Codex Latest', backend: 'OPENAI_CODEX', description: 'Codex Latest (Alias) — 当前默认 Codex 模型' },
   { value: 'codex-fast', label: 'Codex Fast', backend: 'OPENAI_CODEX', description: 'Codex Fast (Alias) — 快速轻量推理' },
   { value: 'codex-deep', label: 'Codex Deep', backend: 'OPENAI_CODEX', description: 'Codex Deep (Alias) — 深度推理' },
+  { value: 'codex-xhigh', label: 'Codex Extra High', backend: 'OPENAI_CODEX', description: 'Codex Extra High (Alias) — 最高推理' },
   { value: 'codex-mini', label: 'Codex Mini', backend: 'OPENAI_CODEX', description: 'Codex Mini (Alias) — 快速 Mini' },
 ]
 

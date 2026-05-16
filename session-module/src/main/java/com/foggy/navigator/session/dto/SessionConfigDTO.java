@@ -16,6 +16,7 @@ public class SessionConfigDTO {
     private String customTitle;
     private String authMode;
     private boolean authBound;
+    private String authModelConfigId;
     private String baseUrl;
     private String maskedAuthToken;
     private List<String> tags;

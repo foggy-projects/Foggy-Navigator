@@ -163,6 +163,15 @@ class SkillFrameState(BaseModel):
     parent_frame_id: str | None = None
     status: FrameStatus = FrameStatus.CREATED
 
+    # Conversation-scoped identity for persistent frames such as system.root.
+    # ``task_id`` remains the current recoverable Worker task for compatibility
+    # with approval resume and Java-side task lookup.
+    conversation_id: str | None = None
+    session_id: str | None = None
+    current_task_id: str | None = None
+    origin_task_id: str | None = None
+    last_task_ids: list[str] = Field(default_factory=list)
+
     input: dict[str, Any] = Field(default_factory=dict)
     private_messages: list[dict[str, Any]] = Field(default_factory=list)
     private_working_state: dict[str, Any] = Field(default_factory=dict)

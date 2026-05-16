@@ -28,10 +28,18 @@ test('parseModelString maps extra-high to xhigh', () => {
   })
 })
 
+test('parseModelString accepts xhigh reasoning directly', () => {
+  assert.deepEqual(parseModelString('gpt-5.5:xhigh'), {
+    model: 'gpt-5.5',
+    reasoningLevel: 'xhigh',
+  })
+})
+
 const TEST_ALIASES: Record<string, string> = {
   'codex-latest': 'gpt-5.5',
   'codex-fast': 'gpt-5.5:low',
   'codex-deep': 'gpt-5.5:high',
+  'codex-xhigh': 'gpt-5.5:xhigh',
   'codex-mini': 'gpt-5.4-mini',
 }
 
@@ -42,6 +50,10 @@ test('resolveModelAlias returns the mapped real model when whole string hits an 
   })
   assert.deepEqual(resolveModelAlias('codex-mini', TEST_ALIASES), {
     resolved: 'gpt-5.4-mini',
+    wasAlias: true,
+  })
+  assert.deepEqual(resolveModelAlias('codex-xhigh', TEST_ALIASES), {
+    resolved: 'gpt-5.5:xhigh',
     wasAlias: true,
   })
 })
@@ -67,6 +79,10 @@ test('resolveModelAlias appends reasoning suffix when alias value has no colon',
   })
   assert.deepEqual(resolveModelAlias('codex-latest:extra-high', TEST_ALIASES), {
     resolved: 'gpt-5.5:extra-high',
+    wasAlias: true,
+  })
+  assert.deepEqual(resolveModelAlias('codex-latest:xhigh', TEST_ALIASES), {
+    resolved: 'gpt-5.5:xhigh',
     wasAlias: true,
   })
 })

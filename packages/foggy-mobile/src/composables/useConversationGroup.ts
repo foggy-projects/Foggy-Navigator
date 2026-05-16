@@ -41,8 +41,11 @@ export function buildConversationGroups(
       sessionId,
       latestTask,
       config,
-      firstPrompt: earliestTask.prompt || '',
-      totalCost: sessionTasks.reduce((sum, t) => sum + (t.costUsd || 0), 0),
+      firstPrompt: latestTask.sessionFirstPrompt || earliestTask.prompt || '',
+      taskCount: latestTask.sessionTaskCount ?? sessionTasks.length,
+      totalCost: latestTask.sessionTotalCostUsd ?? sessionTasks.reduce((sum, t) => sum + (t.costUsd || 0), 0),
+      totalInputTokens: latestTask.sessionInputTokens ?? sessionTasks.reduce((sum, t) => sum + (t.inputTokens || 0), 0),
+      totalOutputTokens: latestTask.sessionOutputTokens ?? sessionTasks.reduce((sum, t) => sum + (t.outputTokens || 0), 0),
       createdAt: earliestTask.createdAt,
       updatedAt: latestTask.updatedAt,
     })

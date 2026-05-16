@@ -104,4 +104,32 @@ public class LanggraphWorkerClient {
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
                 .doOnError(e -> log.warn("Resume failed for task {}: {}", taskId, e.getMessage()));
     }
+
+    /**
+     * Record a recoverable interruption on the Worker's persistent root frame.
+     */
+    public Mono<Map<String, Object>> recordInterruption(
+            String taskId,
+            String sessionId,
+            String contextId,
+            String reason,
+            String error,
+            Map<String, Object> context
+    ) {
+        Map<String, Object> body = new HashMap<>();
+        if (taskId != null) body.put("taskId", taskId);
+        if (sessionId != null) body.put("session_id", sessionId);
+        if (contextId != null) body.put("context_id", contextId);
+        body.put("reason", reason);
+        if (error != null) body.put("error", error);
+        if (context != null && !context.isEmpty()) body.put("context", context);
+
+        return webClient.post()
+                .uri("/api/v1/frames/interruption")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnError(e -> log.warn("Record interruption failed for task {}: {}", taskId, e.getMessage()));
+    }
 }
