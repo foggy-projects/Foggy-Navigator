@@ -90,6 +90,15 @@ class FileFrameJournal:
             if frame.status == FrameStatus.AWAITING_APPROVAL
         ]
         for frame in candidates:
+            if (
+                frame.frame_kind == FrameKind.SKILL
+                and isinstance(
+                    frame.private_working_state.get("pending_child_approval_frame_id"),
+                    str,
+                )
+            ):
+                return frame
+        for frame in candidates:
             if frame.frame_kind == FrameKind.SKILL:
                 return frame
         for frame in candidates:

@@ -160,6 +160,47 @@ class TestFullApprovalRecoveryFlow:
         assert restored_function.status == FrameStatus.COMPLETED
         assert restored_function.output["status"] == "RESUME_DISPATCHED"
 
+    def test_resume_restores_bubbled_child_approval_frame(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        runtime1 = SkillRuntime(journal=journal)
+        root_frame_id = runtime1.invoke_skill("task_child_fn_restore", "system.root")
+        child_frame_id = runtime1.invoke_child_skill(root_frame_id, "child_skill")
+        function_frame_id = runtime1.invoke_function_call(
+            parent_frame_id=child_frame_id,
+            function_id="tms.vehicle.create",
+            version="v1",
+            arguments={"plateNo": "A-001"},
+        )
+        approval_request = {
+            "approval_type": "business_function",
+            "function_id": "tms.vehicle.create",
+            "version": "v1",
+            "suspend_id": "sus_child_restore",
+            "summary": {"title": "Approval required"},
+            "payload": {"function_frame_id": function_frame_id},
+            "resolved": False,
+        }
+        runtime1.suspend_function_call(function_frame_id, approval_request)
+        runtime1.mark_awaiting_approval(child_frame_id, approval_request)
+        runtime1.mark_child_awaiting_approval(root_frame_id, child_frame_id, approval_request)
+
+        runtime2 = SkillRuntime(journal=journal)
+        root = journal.find_awaiting_approval("task_child_fn_restore")
+        assert root is not None
+        assert root.frame_id == root_frame_id
+        runtime2.restore_frame(root)
+
+        runtime2.resume_from_approval(root_frame_id, "approved", "ok")
+
+        restored_root = runtime2.get_frame(root_frame_id)
+        restored_child = runtime2.get_frame(child_frame_id)
+        restored_function = runtime2.get_frame(function_frame_id)
+        assert restored_root.status == FrameStatus.RUNNING
+        assert "pending_child_approval_frame_id" not in restored_root.private_working_state
+        assert restored_child.status == FrameStatus.RUNNING
+        assert restored_function.status == FrameStatus.COMPLETED
+        assert restored_function.output["status"] == "RESUME_DISPATCHED"
+
 
 # ---------------------------------------------------------------------------
 # HTTP endpoint: POST /api/v1/resume

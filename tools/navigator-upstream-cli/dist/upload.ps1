@@ -53,6 +53,11 @@ function Invoke-RemoteInstallSmoke {
             throw "function help smoke failed: $functionHelpOutput"
         }
 
+        $routeHelpOutput = & powershell -ExecutionPolicy Bypass -File $navi upstream route --help 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $routeHelpOutput -notmatch "Commands: list, set, status") {
+            throw "route help smoke failed: $routeHelpOutput"
+        }
+
         Write-Host "Remote install smoke passed." -ForegroundColor Green
     }
     finally {

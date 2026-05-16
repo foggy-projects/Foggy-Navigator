@@ -148,6 +148,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .message-bubble {
   padding: 8rpx 24rpx;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 .sender-user {
   display: flex;
@@ -160,18 +162,28 @@ onBeforeUnmount(() => {
   justify-content: flex-start;
 }
 .bubble {
-  max-width: 80%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 20rpx 28rpx;
   border-radius: 20rpx;
   font-size: 28rpx;
   line-height: 1.6;
-  overflow-wrap: break-word;
-  word-break: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .copyable-group {
   display: flex;
   flex-direction: column;
   gap: 10rpx;
+  max-width: 80%;
+  min-width: 0;
+}
+.sender-user .copyable-group {
+  align-items: flex-end;
+}
+.sender-assistant .copyable-group {
+  align-items: flex-start;
 }
 .user-bubble {
   background: #667eea;
@@ -186,6 +198,8 @@ onBeforeUnmount(() => {
 }
 .tool-area {
   width: 85%;
+  max-width: 85%;
+  min-width: 0;
 }
 .system-area {
   width: 100%;
@@ -194,6 +208,7 @@ onBeforeUnmount(() => {
 }
 .system-copy-group {
   align-items: center;
+  max-width: 90%;
 }
 .system-text {
   font-size: 24rpx;
@@ -201,6 +216,10 @@ onBeforeUnmount(() => {
   background: rgba(0, 0, 0, 0.04);
   padding: 8rpx 24rpx;
   border-radius: 20rpx;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .copy-action {
   font-size: 22rpx;
@@ -219,13 +238,18 @@ onBeforeUnmount(() => {
   border: 2rpx solid #fbc4c4;
   border-radius: 12rpx;
   padding: 16rpx 24rpx;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .error-text {
   font-size: 26rpx;
   color: #f56c6c;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .task-card {
   width: 90%;
+  box-sizing: border-box;
   border-radius: 16rpx;
   padding: 24rpx;
 }
@@ -247,5 +271,22 @@ onBeforeUnmount(() => {
 .task-card-desc {
   font-size: 26rpx;
   color: #606266;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.bubble :deep(uni-rich-text),
+.bubble :deep(.uni-rich-text),
+.bubble :deep(p),
+.bubble :deep(ol),
+.bubble :deep(ul),
+.bubble :deep(li),
+.bubble :deep(pre),
+.bubble :deep(code),
+.bubble :deep(a) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 </style>

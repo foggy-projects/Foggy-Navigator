@@ -29,6 +29,7 @@ public class ClientAppControlCredentialService {
     public static final String SCOPE_FUNCTION_GRANT_MANAGE = "FUNCTION_GRANT_MANAGE";
     public static final String SCOPE_E2E_MODEL_ENSURE = "E2E_MODEL_ENSURE";
     public static final String SCOPE_UPSTREAM_USER_GRANT = "UPSTREAM_USER_GRANT";
+    public static final String SCOPE_UPSTREAM_ROUTE_MANAGE = "UPSTREAM_ROUTE_MANAGE";
     public static final String SCOPE_MODEL_CONFIG_GRANT_MANAGE = "MODEL_CONFIG_GRANT_MANAGE";
     public static final String SCOPE_MODEL_CONFIG_MANAGE = "MODEL_CONFIG_MANAGE";
 
@@ -108,6 +109,7 @@ public class ClientAppControlCredentialService {
                 SCOPE_FUNCTION_GRANT_MANAGE,
                 SCOPE_E2E_MODEL_ENSURE,
                 SCOPE_UPSTREAM_USER_GRANT,
+                SCOPE_UPSTREAM_ROUTE_MANAGE,
                 SCOPE_MODEL_CONFIG_GRANT_MANAGE,
                 SCOPE_MODEL_CONFIG_MANAGE);
     }

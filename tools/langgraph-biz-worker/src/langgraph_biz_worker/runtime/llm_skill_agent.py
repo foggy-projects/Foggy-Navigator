@@ -480,6 +480,26 @@ class LlmSkillAgent:
             ))
 
             child = self._runtime.get_frame(child_frame_id)
+            if child and child.status == FrameStatus.AWAITING_APPROVAL:
+                approval_request = child.approval_request
+                if not isinstance(approval_request, dict):
+                    return {
+                        "ok": False,
+                        "error": "Child skill is awaiting approval without approval_request",
+                        "_events": child_events,
+                    }
+                self._runtime.mark_child_awaiting_approval(
+                    frame_id,
+                    child_frame_id,
+                    approval_request,
+                )
+                return {
+                    "ok": True,
+                    "approval_wait": True,
+                    "child_frame_id": child_frame_id,
+                    "_events": child_events,
+                    "_suspended": True,
+                }
             if not child or child.status != FrameStatus.COMPLETED:
                 return {
                     "ok": False,

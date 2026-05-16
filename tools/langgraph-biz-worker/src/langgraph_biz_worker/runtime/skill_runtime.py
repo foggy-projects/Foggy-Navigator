@@ -164,6 +164,38 @@ class SkillRuntime:
         self._save(frame)
         logger.info("Frame %s awaiting approval: %s", frame_id, approval_request.get("approval_type", ""))
 
+    def mark_child_awaiting_approval(
+        self,
+        parent_frame_id: str,
+        child_frame_id: str,
+        approval_request: dict[str, Any],
+    ) -> None:
+        """Bubble a child approval wait to its parent frame.
+
+        A parent that invoked a child skill is normally in ``WAITING_CHILD``.
+        If the child suspends for approval, the parent must also become a
+        durable approval wait boundary so the root graph does not treat the
+        waiting child as a failed turn.
+        """
+        parent = self._get_frame(parent_frame_id)
+        child = self._get_frame(child_frame_id)
+        if child.parent_frame_id != parent_frame_id:
+            raise IllegalStateTransition("child frame does not belong to parent")
+        if child.status != FrameStatus.AWAITING_APPROVAL:
+            raise IllegalStateTransition(
+                f"mark_child_awaiting_approval requires child AWAITING_APPROVAL, got {child.status.value}"
+            )
+
+        self._transition(parent, FrameStatus.AWAITING_APPROVAL)
+        parent.approval_request = approval_request
+        parent.private_working_state["pending_child_approval_frame_id"] = child_frame_id
+        self._save(parent)
+        logger.info(
+            "Frame %s awaiting approval from child frame %s",
+            parent_frame_id,
+            child_frame_id,
+        )
+
     def resume_from_approval(
         self,
         frame_id: str,
@@ -180,6 +212,7 @@ class SkillRuntime:
         frame.private_working_state["approval_comment"] = comment
         frame.approval_request = None  # clear the pending request
         self._save(frame)
+        self._resume_pending_child_approval(frame, approval_result, comment)
         self._resume_pending_function_call(frame, approval_result, comment)
         logger.info("Frame %s resumed from approval: %s", frame_id, approval_result)
 
@@ -699,6 +732,30 @@ class SkillRuntime:
             "visibility": "passthrough",
             "root_context_summary": self.context_summary_for_frame(parent_frame_id),
         }
+
+    def _resume_pending_child_approval(
+        self,
+        parent_frame: SkillFrameState,
+        approval_result: str,
+        comment: str,
+    ) -> None:
+        child_frame_id = parent_frame.private_working_state.get("pending_child_approval_frame_id")
+        if not isinstance(child_frame_id, str) or not child_frame_id:
+            return
+        child_frame = self.store.get(child_frame_id)
+        if child_frame is None and self._journal:
+            child_frame = self._journal.load(parent_frame.task_id, child_frame_id)
+            if child_frame is not None:
+                self.restore_frame(child_frame)
+        if child_frame is None:
+            parent_frame.private_working_state.pop("pending_child_approval_frame_id", None)
+            self._save(parent_frame)
+            return
+        if child_frame.status == FrameStatus.AWAITING_APPROVAL:
+            self.resume_from_approval(child_frame_id, approval_result, comment)
+
+        parent_frame.private_working_state.pop("pending_child_approval_frame_id", None)
+        self._save(parent_frame)
 
     def _resume_pending_function_call(
         self,

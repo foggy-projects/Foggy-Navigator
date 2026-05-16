@@ -109,6 +109,8 @@ function handleReject() {
 <style scoped>
 .plan-review-card {
   width: 90%;
+  max-width: 90%;
+  box-sizing: border-box;
   margin: 8rpx auto;
   padding: 24rpx;
   border-radius: 16rpx;
@@ -120,7 +122,7 @@ function handleReject() {
 
 .card-header { display: flex; flex-direction: row; align-items: center; }
 .card-icon { font-size: 32rpx; margin-right: 12rpx; }
-.card-title { font-size: 28rpx; font-weight: 600; color: #303133; flex: 1; }
+.card-title { font-size: 28rpx; font-weight: 600; color: #303133; flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .status-badge { font-size: 22rpx; padding: 4rpx 16rpx; border-radius: 20rpx; }
 .status-badge.pending { background-color: #e8daef; color: #9b59b6; }
 .status-badge.approved { background-color: #e1f3d8; color: #67c23a; }
@@ -137,6 +139,7 @@ function handleReject() {
   background-color: #ffffff;
   border: 2rpx solid #e8daef;
   border-radius: 12rpx;
+  box-sizing: border-box;
 }
 
 .plan-content {
@@ -145,12 +148,13 @@ function handleReject() {
   color: #303133;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .prompts-list { margin-top: 16rpx; padding: 16rpx; background-color: rgba(155, 89, 182, 0.06); border-radius: 8rpx; }
 .prompt-item { display: flex; flex-direction: row; align-items: baseline; margin-bottom: 8rpx; }
 .prompt-tool { font-size: 22rpx; background-color: #e8daef; padding: 4rpx 10rpx; border-radius: 6rpx; color: #9b59b6; margin-right: 12rpx; }
-.prompt-text { font-size: 24rpx; color: #606266; }
+.prompt-text { font-size: 24rpx; color: #606266; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 
 .plan-options { margin-top: 20rpx; display: flex; flex-direction: column; }
 .option-btn {

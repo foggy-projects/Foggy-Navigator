@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from langgraph_biz_worker.models import FrameStatus, SkillFrameState
+from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillFrameState
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 
 
@@ -105,6 +105,32 @@ class TestFindAwaitingApproval:
         found = journal.find_awaiting_approval("task_aaa")
         assert found is not None
         assert found.frame_id == "frm_002"
+
+    def test_prefers_parent_skill_with_bubbled_child_approval(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        child = _make_frame(
+            frame_id="frm_child",
+            status=FrameStatus.AWAITING_APPROVAL,
+        )
+        parent = _make_frame(
+            frame_id="frm_parent",
+            status=FrameStatus.AWAITING_APPROVAL,
+        )
+        parent.private_working_state["pending_child_approval_frame_id"] = child.frame_id
+        function = _make_frame(
+            frame_id="frm_function",
+            skill_id="tms.vehicle.create",
+            status=FrameStatus.AWAITING_APPROVAL,
+        )
+        function.frame_kind = FrameKind.FUNCTION_CALL
+
+        journal.save(child)
+        journal.save(function)
+        journal.save(parent)
+
+        found = journal.find_awaiting_approval("task_aaa")
+        assert found is not None
+        assert found.frame_id == "frm_parent"
 
     def test_returns_none_when_no_awaiting(self, tmp_path):
         journal = FileFrameJournal(tmp_path)

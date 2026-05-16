@@ -857,6 +857,74 @@ def test_llm_agent_suspends_business_function_call(monkeypatch):
     assert approval_event.parent_frame_id == frame_id
 
 
+def test_llm_agent_bubbles_child_business_function_approval_to_root(monkeypatch):
+    runtime = _root_with_child_runtime(child_context_visibility="summary")
+    root_frame_id = runtime.invoke_skill(
+        task_id="task_child_business_suspend_001",
+        skill_id="system.root",
+        skill_input={"request": "create vehicle"},
+    )
+
+    def fake_invoke(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        return {
+            "functionId": function_id,
+            "version": version,
+            "status": "SUSPENDED",
+            "approvalRequired": True,
+            "suspendId": "sus_child_123",
+            "message": "Approval required",
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child",
+            "name": "invoke_business_skill",
+            "args": {
+                "skill_id": "child_skill",
+                "instruction": "create vehicle",
+                "input": {"plateNo": "A-001"},
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_function",
+            "name": "invoke_business_function",
+            "args": {
+                "function_id": "tms.vehicle.create",
+                "version": "v1",
+                "input": {"plateNo": "A-001"},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_child_business_suspend_001",
+        frame_id=root_frame_id,
+        prompt="create vehicle",
+        runtime_context={"task_scoped_token": "runtime-token"},
+        persistent_frame=True,
+    )
+
+    root = runtime.get_frame(root_frame_id)
+    child_frame_id = root.child_frame_ids[0]
+    child = runtime.get_frame(child_frame_id)
+    function_frame_id = child.private_working_state["pending_function_call_frame_id"]
+    function_frame = runtime.get_frame(function_frame_id)
+
+    assert root.status == FrameStatus.AWAITING_APPROVAL
+    assert root.approval_request["suspend_id"] == "sus_child_123"
+    assert root.private_working_state["pending_child_approval_frame_id"] == child_frame_id
+    assert child.status == FrameStatus.AWAITING_APPROVAL
+    assert function_frame.status == FrameStatus.AWAITING_APPROVAL
+    assert any(event.type == "approval_required" for event in events)
+    assert not any(event.type == "error" for event in events)
+    assert model.calls == 2
+
+
 def test_resume_approval_completes_pending_function_frame(monkeypatch):
     runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=SkillRegistry())
     caller_frame_id = runtime.invoke_skill(

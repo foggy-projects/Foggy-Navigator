@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
+import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,7 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
     private final RestTemplate restTemplate;
     private final Environment environment;
     private final ClientAppUserGrantService userGrantService;
+    private final ClientAppUpstreamRouteService upstreamRouteService;
     private static final String UPSTREAM_PROPERTY_PREFIX = "foggy.navigator.business.agent.upstreams.";
     private static final String CONTROLLED_HEADER_PREFIX = "x-navigator-";
     private static final Set<HttpMethod> ALLOWED_METHODS = Set.of(
@@ -71,11 +73,21 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
             }
 
             String baseUrl = environment.getProperty(UPSTREAM_PROPERTY_PREFIX + upstreamRef + ".url");
+            String userTokenHeader = environment.getProperty(UPSTREAM_PROPERTY_PREFIX + upstreamRef + ".user-token-header");
+            if (!StringUtils.hasText(baseUrl) && upstreamRouteService != null) {
+                ClientAppUpstreamRouteService.ResolvedUpstreamRoute route = upstreamRouteService
+                        .resolveEnabledRoute(context.getTenantId(), context.getClientAppId(), upstreamRef)
+                        .orElse(null);
+                if (route != null) {
+                    baseUrl = route.getBaseUrl();
+                    userTokenHeader = route.getUserTokenHeader();
+                }
+            }
             if (!StringUtils.hasText(baseUrl)) {
                 throw new IllegalArgumentException("Unauthorized or unconfigured upstream_ref: " + upstreamRef);
             }
+            userTokenHeader = trimToNull(userTokenHeader);
             validateBaseUrl(baseUrl);
-            String userTokenHeader = environment.getProperty(UPSTREAM_PROPERTY_PREFIX + upstreamRef + ".user-token-header");
             if (StringUtils.hasText(userTokenHeader)) {
                 validateControlledHeaderName(userTokenHeader);
             }
@@ -231,7 +243,7 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
         if (!StringUtils.hasText(headerName)) {
             throw new IllegalArgumentException("Rest adapter header name is required");
         }
-        String normalized = headerName.toLowerCase(Locale.ROOT);
+        String normalized = headerName.trim().toLowerCase(Locale.ROOT);
         if (FORBIDDEN_HEADERS.contains(normalized) || normalized.startsWith(CONTROLLED_HEADER_PREFIX)) {
             throw new IllegalArgumentException("Forbidden REST adapter header: " + headerName);
         }
@@ -262,6 +274,10 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
         if (StringUtils.hasText(value)) {
             headers.set(name, value);
         }
+    }
+
+    private String trimToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     private Object resolveBodyValue(String template, JsonNode rootEvalNode) {

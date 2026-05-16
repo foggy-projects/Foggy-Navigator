@@ -133,6 +133,7 @@ VALID_TRANSITIONS: dict[FrameStatus, frozenset[FrameStatus]] = {
     }),
     FrameStatus.WAITING_CHILD: frozenset({
         FrameStatus.RUNNING,
+        FrameStatus.AWAITING_APPROVAL,
         FrameStatus.FAILED,
         FrameStatus.CANCELLED,
     }),

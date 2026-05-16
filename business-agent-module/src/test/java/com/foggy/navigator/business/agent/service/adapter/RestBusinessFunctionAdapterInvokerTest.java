@@ -3,6 +3,7 @@ package com.foggy.navigator.business.agent.service.adapter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionDTO;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
+import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -28,6 +30,7 @@ class RestBusinessFunctionAdapterInvokerTest {
     private RestTemplate restTemplate;
     private Environment environment;
     private ClientAppUserGrantService userGrantService;
+    private ClientAppUpstreamRouteService upstreamRouteService;
     private RestBusinessFunctionAdapterInvoker invoker;
 
     private BusinessFunctionRuntimeContextDTO context;
@@ -38,7 +41,9 @@ class RestBusinessFunctionAdapterInvokerTest {
         restTemplate = mock(RestTemplate.class);
         environment = mock(Environment.class);
         userGrantService = mock(ClientAppUserGrantService.class);
-        invoker = new RestBusinessFunctionAdapterInvoker(objectMapper, restTemplate, environment, userGrantService);
+        upstreamRouteService = mock(ClientAppUpstreamRouteService.class);
+        invoker = new RestBusinessFunctionAdapterInvoker(
+                objectMapper, restTemplate, environment, userGrantService, upstreamRouteService);
 
         context = new BusinessFunctionRuntimeContextDTO();
         context.setTenantId("tenant_123");
@@ -100,6 +105,120 @@ class RestBusinessFunctionAdapterInvokerTest {
                 invoker.invoke(context, "{}")
         );
         assertTrue(ex.getMessage().contains("requires 'method'"));
+    }
+
+    @Test
+    void invoke_uses_client_app_upstream_route_when_environment_missing() {
+        context.setAdapterConfigJson("""
+                {
+                  "type": "rest",
+                  "method": "POST",
+                  "upstream_ref": "world-sim",
+                  "path": "/api/script",
+                  "adapter": {"body": {"draftId": "$.input.draftId"}}
+                }
+                """);
+        when(environment.getProperty("foggy.navigator.business.agent.upstreams.world-sim.url")).thenReturn(null);
+        when(upstreamRouteService.resolveEnabledRoute("tenant_123", "app_123", "world-sim"))
+                .thenReturn(Optional.of(new ClientAppUpstreamRouteService.ResolvedUpstreamRoute(
+                        "http://world-sim.local", "X-World-Sim-User-Token")));
+        when(userGrantService.resolveUpstreamUserToken("tenant_123", "app_123", "user_123"))
+                .thenReturn("user-token-secret");
+        when(restTemplate.exchange(
+                eq("http://world-sim.local/api/script"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{\"ok\":true}", HttpStatus.OK));
+
+        BusinessFunctionAdapterResult result = invoker.invoke(context, "{\"draftId\":\"d-1\"}");
+
+        assertEquals(BusinessFunctionAdapterResult.STATUS_SUCCESS, result.getStatus());
+        ArgumentCaptor<HttpEntity> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(
+                eq("http://world-sim.local/api/script"),
+                eq(HttpMethod.POST),
+                entityCaptor.capture(),
+                eq(String.class));
+        HttpEntity<?> entity = entityCaptor.getValue();
+        assertEquals("user-token-secret", entity.getHeaders().getFirst("X-World-Sim-User-Token"));
+    }
+
+    @Test
+    void invoke_environment_route_takes_precedence_over_registered_route() {
+        context.setAdapterConfigJson("""
+                {
+                  "type": "rest",
+                  "method": "POST",
+                  "upstream_ref": "world-sim",
+                  "path": "/api/script",
+                  "adapter": {}
+                }
+                """);
+        when(environment.getProperty("foggy.navigator.business.agent.upstreams.world-sim.url"))
+                .thenReturn("http://env-world-sim.local");
+        when(restTemplate.exchange(
+                eq("http://env-world-sim.local/api/script"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{\"ok\":true}", HttpStatus.OK));
+
+        invoker.invoke(context, "{}");
+
+        verify(upstreamRouteService, never()).resolveEnabledRoute(anyString(), anyString(), anyString());
+        verify(restTemplate).exchange(
+                eq("http://env-world-sim.local/api/script"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(String.class));
+    }
+
+    @Test
+    void invoke_does_not_use_missing_or_disabled_registered_route() {
+        context.setAdapterConfigJson("""
+                {
+                  "type": "rest",
+                  "method": "POST",
+                  "upstream_ref": "world-sim",
+                  "path": "/api/script",
+                  "adapter": {}
+                }
+                """);
+        when(environment.getProperty("foggy.navigator.business.agent.upstreams.world-sim.url")).thenReturn(null);
+        when(upstreamRouteService.resolveEnabledRoute("tenant_123", "app_123", "world-sim"))
+                .thenReturn(Optional.empty());
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                invoker.invoke(context, "{}")
+        );
+
+        assertTrue(ex.getMessage().contains("Unauthorized or unconfigured upstream_ref: world-sim"));
+        verify(restTemplate, never()).exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    void invoke_rejects_trimmed_dangerous_registered_token_header() {
+        context.setAdapterConfigJson("""
+                {
+                  "type": "rest",
+                  "method": "POST",
+                  "upstream_ref": "world-sim",
+                  "path": "/api/script",
+                  "adapter": {}
+                }
+                """);
+        when(environment.getProperty("foggy.navigator.business.agent.upstreams.world-sim.url")).thenReturn(null);
+        when(upstreamRouteService.resolveEnabledRoute("tenant_123", "app_123", "world-sim"))
+                .thenReturn(Optional.of(new ClientAppUpstreamRouteService.ResolvedUpstreamRoute(
+                        "http://world-sim.local", " Authorization ")));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                invoker.invoke(context, "{}")
+        );
+
+        assertTrue(ex.getMessage().contains("Forbidden REST adapter header"));
+        verify(restTemplate, never()).exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
     }
 
     @Test

@@ -133,6 +133,24 @@ public class BusinessAgentApi {
         return http.put("/api/v1/business-agent/client-apps/" + clientAppId + "/upstream-users/" + upstreamUserId + "/status?status=" + status, null, new TypeReference<>() {});
     }
 
+    // ===== Upstream Route =====
+
+    public List<ClientAppUpstreamRouteDTO> listUpstreamRoutes(String clientAppId) {
+        return http.get("/api/v1/business-agent/client-apps/" + clientAppId + "/upstream-routes", new TypeReference<>() {});
+    }
+
+    public ClientAppUpstreamRouteDTO upsertUpstreamRoute(String clientAppId, String upstreamRef,
+                                                         UpsertClientAppUpstreamRouteForm form) {
+        return http.put("/api/v1/business-agent/client-apps/" + clientAppId
+                + "/upstream-routes/" + urlEncode(upstreamRef), form, new TypeReference<>() {});
+    }
+
+    public ClientAppUpstreamRouteDTO updateUpstreamRouteStatus(String clientAppId, String upstreamRef, String status) {
+        return http.put("/api/v1/business-agent/client-apps/" + clientAppId
+                + "/upstream-routes/" + urlEncode(upstreamRef)
+                + "/status?status=" + urlEncode(status), null, new TypeReference<>() {});
+    }
+
     // ===== Business Object & Function =====
 
     public BusinessObjectDTO createBusinessObject(CreateBusinessObjectForm form) {
@@ -181,5 +199,9 @@ public class BusinessAgentApi {
 
     public WorkerGatewayResumeResponseDTO resumeSuspension(String suspendId, WorkerGatewayResumeForm form) {
         return http.post("/api/v1/business-agent/suspensions/" + suspendId + "/resume", form, new TypeReference<>() {});
+    }
+
+    private String urlEncode(String value) {
+        return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
     }
 }

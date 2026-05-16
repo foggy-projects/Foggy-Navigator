@@ -169,7 +169,7 @@ class RestAdapterUpstreamE2ETest {
         BusinessFunctionAdapterInvoker adapterInvoker = new CompositeBusinessFunctionAdapterInvoker(
                 Arrays.asList(
                         new LocalEchoBusinessFunctionAdapterInvoker(objectMapper),
-                        new RestBusinessFunctionAdapterInvoker(objectMapper, restTemplate, env, userGrantService1)
+                        new RestBusinessFunctionAdapterInvoker(objectMapper, restTemplate, env, userGrantService1, null)
                 ),
                 objectMapper
         );

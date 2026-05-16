@@ -61,6 +61,7 @@ $features = @(
     "function-grant",
     "function-grant-status",
     "function-visible",
+    "upstream-route",
     "model-grant",
     "model-owned-config",
     "account-context",

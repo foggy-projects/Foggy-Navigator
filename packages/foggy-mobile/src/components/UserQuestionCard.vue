@@ -148,6 +148,8 @@ const statusIcon = computed(() => {
 <style scoped>
 .question-card {
   width: 90%;
+  max-width: 90%;
+  box-sizing: border-box;
   margin: 8rpx auto;
   padding: 24rpx;
   border-radius: 16rpx;
@@ -159,7 +161,7 @@ const statusIcon = computed(() => {
 
 .card-header { display: flex; flex-direction: row; align-items: center; }
 .card-icon { font-size: 32rpx; margin-right: 12rpx; }
-.card-title { font-size: 28rpx; font-weight: 600; color: #303133; flex: 1; }
+.card-title { font-size: 28rpx; font-weight: 600; color: #303133; flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .status-badge { font-size: 22rpx; padding: 4rpx 16rpx; border-radius: 20rpx; }
 .status-badge.pending { background-color: #d9ecff; color: #409eff; }
 .status-badge.approved { background-color: #e1f3d8; color: #67c23a; }
@@ -168,7 +170,7 @@ const statusIcon = computed(() => {
 .questions-body { margin-top: 16rpx; }
 .question-block { margin-bottom: 20rpx; }
 .question-header { font-size: 24rpx; color: #409eff; font-weight: 600; display: block; margin-bottom: 8rpx; }
-.question-text { font-size: 26rpx; color: #303133; display: block; margin-bottom: 12rpx; }
+.question-text { font-size: 26rpx; color: #303133; display: block; margin-bottom: 12rpx; overflow-wrap: anywhere; word-break: break-word; }
 
 .option-list { display: flex; flex-direction: column; }
 .option-item {
@@ -177,13 +179,14 @@ const statusIcon = computed(() => {
   border: 2rpx solid #dcdfe6;
   border-radius: 12rpx;
   margin-bottom: 8rpx;
+  box-sizing: border-box;
 }
 .option-item.selected {
   border-color: #409eff;
   background: #ecf5ff;
 }
-.option-label { font-size: 26rpx; color: #303133; display: block; }
-.option-desc { font-size: 22rpx; color: #909399; display: block; margin-top: 4rpx; }
+.option-label { font-size: 26rpx; color: #303133; display: block; overflow-wrap: anywhere; word-break: break-word; }
+.option-desc { font-size: 22rpx; color: #909399; display: block; margin-top: 4rpx; overflow-wrap: anywhere; word-break: break-word; }
 
 .other-input {
   height: 64rpx;

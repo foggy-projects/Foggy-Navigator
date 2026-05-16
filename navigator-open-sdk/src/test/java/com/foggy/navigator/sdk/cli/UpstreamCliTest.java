@@ -835,6 +835,99 @@ class UpstreamCliTest {
     }
 
     @Test
+    void routeSetUsesClientAppScopedControlCredential() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":7,
+                  "clientAppId":"app-1",
+                  "upstreamRef":"world-sim",
+                  "baseUrl":"http://localhost:13080",
+                  "userTokenHeader":"X-World-Sim-Token",
+                  "status":"ENABLED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "route", "set",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--upstream-ref", "world-sim",
+                "--url", "http://localhost:13080",
+                "--user-token-header", "X-World-Sim-Token"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/upstream-routes/world-sim", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"baseUrl\":\"http://localhost:13080\""));
+        assertTrue(lastBody.contains("\"userTokenHeader\":\"X-World-Sim-Token\""));
+        assertTrue(output.contains("route set ok"));
+        assertTrue(output.contains("upstreamRef=world-sim"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void routeListPrintsRegisteredRoutes() {
+        responseOverride = """
+                {"code":0,"data":[
+                  {
+                    "id":7,
+                    "clientAppId":"app-1",
+                    "upstreamRef":"world-sim",
+                    "baseUrl":"http://localhost:13080",
+                    "userTokenHeader":"X-World-Sim-Token",
+                    "status":"ENABLED"
+                  }
+                ]}
+                """;
+
+        int code = run(new String[]{"upstream", "route", "list",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/upstream-routes", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(output.contains("upstreamRouteCount=1"));
+        assertTrue(output.contains("upstreamRef=world-sim"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void routeStatusDisablesRoute() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":7,
+                  "clientAppId":"app-1",
+                  "upstreamRef":"world-sim",
+                  "baseUrl":"http://localhost:13080",
+                  "status":"DISABLED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "route", "status",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--upstream-ref", "world-sim",
+                "--status", "DISABLED"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/upstream-routes/world-sim/status?status=DISABLED", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertTrue(output.contains("route status ok"));
+        assertTrue(output.contains("status=DISABLED"));
+    }
+
+    @Test
     void skillSyncAccountPrivateUsesRuntimeHeaders() throws Exception {
         responseOverride = """
                 {"code":0,"data":{

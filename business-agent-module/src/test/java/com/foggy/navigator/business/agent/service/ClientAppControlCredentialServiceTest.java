@@ -135,6 +135,23 @@ class ClientAppControlCredentialServiceTest {
         assertEquals("capp-1", principal.getClientAppId());
     }
 
+    @Test
+    void requireAccess_acceptsUpstreamRouteManageScope() {
+        when(repository.findByControlKeyHash(anyString()))
+                .thenReturn(Optional.of(activeCredential("tenant-1", "capp-1",
+                        ClientAppControlCredentialService.SCOPE_UPSTREAM_ROUTE_MANAGE)));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader(ClientAppControlCredentialService.HEADER_CONTROL_KEY, "cac_test");
+
+        ClientAppControlPlanePrincipal principal = service.requireAccess(
+                request,
+                ClientAppControlCredentialService.SCOPE_UPSTREAM_ROUTE_MANAGE,
+                "capp-1");
+
+        assertFalse(principal.isAdmin());
+        assertEquals("capp-1", principal.getClientAppId());
+    }
+
     private ClientAppControlCredentialEntity activeCredential(String tenantId, String clientAppId, String scopes) {
         ClientAppControlCredentialEntity entity = new ClientAppControlCredentialEntity();
         entity.setCredentialId("cacc-1");

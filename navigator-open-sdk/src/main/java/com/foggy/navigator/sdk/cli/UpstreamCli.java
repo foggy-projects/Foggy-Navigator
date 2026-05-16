@@ -26,6 +26,7 @@ import com.foggy.navigator.sdk.model.businessagent.ClientAppFunctionGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
+import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamRouteDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.GrantBusinessFunctionForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantModelConfigForm;
@@ -37,6 +38,7 @@ import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncBusinessAgentBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.UpsertClientAppUpstreamRouteForm;
 
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
@@ -105,6 +107,10 @@ public class UpstreamCli {
             case "function grant" -> functionGrant(args);
             case "function grant-status" -> functionGrantStatus(args);
             case "function visible" -> functionVisible(args);
+            case "route", "route help" -> routeUsage();
+            case "route list" -> routeList(args);
+            case "route set" -> routeSet(args);
+            case "route status" -> routeStatus(args);
             case "model grants" -> modelGrants(args);
             case "model grant" -> modelGrant(args);
             case "model set-default" -> modelSetDefault(args);
@@ -123,7 +129,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, model grants, model grant, model set-default, model create, model update, model rotate-key, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, account-context list, account-context read, account-context write-policy");
         return 0;
     }
 
@@ -134,6 +140,15 @@ public class UpstreamCli {
         out.println("  grant        --function-id <id> [--version <version>] [--status ENABLED|DISABLED]");
         out.println("  grant-status --grant-id <id> --status ENABLED|DISABLED");
         out.println("  visible      [--client-app-id <clientAppId>]");
+        return 0;
+    }
+
+    private int routeUsage() {
+        out.println("Usage: navi upstream route <command> [options]");
+        out.println("Commands: list, set, status");
+        out.println("  list   [--client-app-id <clientAppId>]");
+        out.println("  set    --upstream-ref <ref> --url <baseUrl> [--user-token-header <header>] [--status ENABLED|DISABLED]");
+        out.println("  status --upstream-ref <ref> --status ENABLED|DISABLED");
         return 0;
     }
 
@@ -481,6 +496,43 @@ public class UpstreamCli {
                 printFunctionSummary(function);
             }
         }
+        return 0;
+    }
+
+    private int routeList(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<ClientAppUpstreamRouteDTO> routes = businessAgentControlApi().listUpstreamRoutes(clientAppId);
+        out.println("upstreamRouteCount=" + (routes != null ? routes.size() : 0));
+        if (routes != null) {
+            for (ClientAppUpstreamRouteDTO route : routes) {
+                printUpstreamRoute("upstreamRoute", route);
+            }
+        }
+        return 0;
+    }
+
+    private int routeSet(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String upstreamRef = requiredOption(args, "upstream-ref", "upstream ref");
+        UpsertClientAppUpstreamRouteForm form = new UpsertClientAppUpstreamRouteForm();
+        form.setBaseUrl(requiredOption(args, "url", "upstream base URL"));
+        form.setUserTokenHeader(args.option("user-token-header"));
+        form.setStatus(args.option("status"));
+        form.setDescription(args.option("description"));
+        ClientAppUpstreamRouteDTO route = businessAgentControlApi().upsertUpstreamRoute(clientAppId, upstreamRef, form);
+        out.println("route set ok");
+        printUpstreamRoute("upstreamRoute", route);
+        return 0;
+    }
+
+    private int routeStatus(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String upstreamRef = requiredOption(args, "upstream-ref", "upstream ref");
+        String status = requiredOption(args, "status", "status");
+        ClientAppUpstreamRouteDTO route = businessAgentControlApi()
+                .updateUpstreamRouteStatus(clientAppId, upstreamRef, status);
+        out.println("route status ok");
+        printUpstreamRoute("upstreamRoute", route);
         return 0;
     }
 
@@ -889,6 +941,16 @@ public class UpstreamCli {
                 + " riskLevel=" + valueOrEmpty(function != null ? function.getRiskLevel() : null)
                 + " approvalRequired=" + (function != null && Boolean.TRUE.equals(function.getApprovalRequired()))
                 + " idempotencyRequired=" + (function != null && Boolean.TRUE.equals(function.getIdempotencyRequired())));
+    }
+
+    private void printUpstreamRoute(String prefix, ClientAppUpstreamRouteDTO route) {
+        out.println(prefix
+                + " id=" + valueOrEmpty(route != null ? route.getId() : null)
+                + " clientAppId=" + valueOrEmpty(route != null ? route.getClientAppId() : null)
+                + " upstreamRef=" + valueOrEmpty(route != null ? route.getUpstreamRef() : null)
+                + " baseUrl=" + valueOrEmpty(route != null ? route.getBaseUrl() : null)
+                + " userTokenHeader=" + valueOrEmpty(route != null ? route.getUserTokenHeader() : null)
+                + " status=" + valueOrEmpty(route != null ? route.getStatus() : null));
     }
 
     private void printSkillClearResult(String command, SkillClearResultDTO dto) {

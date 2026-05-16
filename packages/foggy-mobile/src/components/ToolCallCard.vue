@@ -58,6 +58,10 @@ const truncatedOutput = computed(() => {
   padding: 20rpx 24rpx;
   margin: 8rpx 0;
   border-left: 6rpx solid #909399;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 .tool-header {
   display: flex;
@@ -70,6 +74,9 @@ const truncatedOutput = computed(() => {
   color: #606266;
   font-weight: 500;
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .tool-expand {
   font-size: 22rpx;
@@ -82,6 +89,8 @@ const truncatedOutput = computed(() => {
 .tool-command-text {
   font-size: 24rpx;
   color: #909399;
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -95,6 +104,8 @@ const truncatedOutput = computed(() => {
 .detail-text {
   font-size: 26rpx;
   color: #606266;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .tool-thought, .tool-command, .tool-output {
   margin-bottom: 12rpx;
@@ -104,16 +115,22 @@ const truncatedOutput = computed(() => {
   border-radius: 8rpx;
   padding: 12rpx;
   margin-top: 4rpx;
+  width: 100%;
+  box-sizing: border-box;
 }
 .code-text {
   font-size: 24rpx;
   font-family: monospace;
   color: #303133;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .tool-error { margin-top: 8rpx; }
 .error-text {
   font-size: 24rpx;
   color: #f56c6c;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 </style>

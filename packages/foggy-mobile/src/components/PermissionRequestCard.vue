@@ -66,6 +66,8 @@ function handleRespond(decision: string, scope: string) {
 <style scoped>
 .permission-card {
   width: 90%;
+  max-width: 90%;
+  box-sizing: border-box;
   margin: 8rpx auto;
   padding: 24rpx;
   border-radius: 16rpx;
@@ -77,7 +79,7 @@ function handleRespond(decision: string, scope: string) {
 
 .card-header { display: flex; flex-direction: row; align-items: center; }
 .card-icon { font-size: 32rpx; margin-right: 12rpx; }
-.card-title { font-size: 26rpx; font-weight: 600; color: #303133; flex: 1; }
+.card-title { font-size: 26rpx; font-weight: 600; color: #303133; flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .status-badge { font-size: 22rpx; padding: 4rpx 16rpx; border-radius: 20rpx; }
 .status-badge.pending { background-color: #faecd8; color: #e6a23c; }
 .status-badge.approved { background-color: #e1f3d8; color: #67c23a; }
