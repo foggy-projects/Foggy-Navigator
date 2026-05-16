@@ -64,6 +64,20 @@ PERSISTENT_FRAME_MAX_TURN_RESULTS = 20
 PERSISTENT_FRAME_MAX_RECENT_SUMMARIES = 10
 PERSISTENT_FRAME_MAX_PRIVATE_MESSAGES = 40
 PERSISTENT_FRAME_MAX_INTERRUPTION_HISTORY = 10
+RECOVERABLE_FOCUS_KEYS = (
+    "recoverable_focus_frame_id",
+    "recoverable_focus_kind",
+    "recoverable_focus_status",
+    "recoverable_focus_interrupted_at",
+    "recoverable_focus_summary",
+    "recoverable_focus_stack",
+)
+INTENT_RESOLUTIONS = frozenset({
+    "CONTINUE_PREVIOUS",
+    "ABANDON_PREVIOUS",
+    "START_UNRELATED_NEW_TASK",
+    "ASK_CLARIFICATION",
+})
 
 
 class SkillRuntime:
@@ -352,14 +366,17 @@ class SkillRuntime:
             if frame.private_working_state.get("continuation_state") == "INTERRUPTED"
             else None
         )
+        keep_recoverable_focus = _continuation_resolution(structured_output) == "ASK_CLARIFICATION"
 
         if result.ok:
-            frame.private_working_state.pop("continuation_state", None)
-            frame.private_working_state.pop("interrupt_reason", None)
-            frame.private_working_state.pop("last_error", None)
-            frame.private_working_state.pop("last_task_id", None)
-            frame.private_working_state.pop("recoverable", None)
-            frame.private_working_state.pop("interrupted_at", None)
+            if not keep_recoverable_focus:
+                frame.private_working_state.pop("continuation_state", None)
+                frame.private_working_state.pop("interrupt_reason", None)
+                frame.private_working_state.pop("last_error", None)
+                frame.private_working_state.pop("last_task_id", None)
+                frame.private_working_state.pop("recoverable", None)
+                frame.private_working_state.pop("interrupted_at", None)
+                _clear_recoverable_focus_fields(frame.private_working_state)
             turn_results = frame.private_working_state.setdefault("turn_results", [])
             turn_entry = {
                 "summary": summary,
@@ -370,7 +387,7 @@ class SkillRuntime:
             }
             turn_results.append(turn_entry)
             self._compact_persistent_frame_context(frame, turn_entry)
-            if interruption_entry:
+            if interruption_entry and not keep_recoverable_focus:
                 _append_interruption_history(frame, interruption_entry)
         else:
             frame.output = None
@@ -385,6 +402,7 @@ class SkillRuntime:
         summary: str,
         abandoned_interruption: dict[str, Any] | str | None,
         decision: str = "START_UNRELATED_NEW_TASK",
+        intent_resolution: str | None = None,
         new_task: dict[str, Any] | None = None,
         artifact_refs: list[str] | None = None,
         evidence_refs: list[str] | None = None,
@@ -408,21 +426,32 @@ class SkillRuntime:
             return ValidationResult(ok=False, errors=["No recoverable interruption to shelve"])
 
         normalized_decision = _normalize_shelve_decision(decision)
+        normalized_intent = _normalize_intent_resolution(intent_resolution or normalized_decision)
+        if normalized_intent not in {"ABANDON_PREVIOUS", "START_UNRELATED_NEW_TASK"}:
+            normalized_intent = normalized_decision
         structured_output: dict[str, Any] = {
             "continuation_decision": normalized_decision,
+            "intent_resolution": normalized_intent,
             "abandoned_interruption": _normalize_abandoned_interruption(abandoned_interruption),
         }
         if new_task:
             structured_output["new_task"] = _safe_json_copy(new_task)
+        focus_frame_ids = _recoverable_focus_frame_ids(frame.private_working_state, frame.frame_id)
 
-        self.clear_recoverable_child_focus(frame_id, normalized_decision)
-        return self.submit_persistent_turn_result(
+        validation = self.submit_persistent_turn_result(
             frame_id=frame_id,
             summary=summary,
             structured_output=structured_output,
             artifact_refs=artifact_refs,
             evidence_refs=evidence_refs,
         )
+        if validation.ok:
+            self.clear_recoverable_child_focus(
+                frame_id,
+                normalized_decision,
+                focus_frame_ids=focus_frame_ids,
+            )
+        return validation
 
     # -- Frame closure -------------------------------------------------------
 
@@ -744,12 +773,26 @@ class SkillRuntime:
     ) -> None:
         """Mark a RUNNING persistent frame as interrupted but reusable."""
         frame = self._get_frame(frame_id)
+        now = datetime.now(timezone.utc).isoformat()
+        last_task_id = task_id or frame.current_task_id or frame.task_id
         frame.private_working_state["continuation_state"] = "INTERRUPTED"
         frame.private_working_state["interrupt_reason"] = reason
         frame.private_working_state["last_error"] = error
-        frame.private_working_state["last_task_id"] = task_id or frame.current_task_id or frame.task_id
+        frame.private_working_state["last_task_id"] = last_task_id
         frame.private_working_state["recoverable"] = True
-        frame.private_working_state["interrupted_at"] = datetime.now(timezone.utc).isoformat()
+        frame.private_working_state["interrupted_at"] = now
+        if not frame.private_working_state.get("recoverable_focus_frame_id"):
+            self._set_recoverable_focus(
+                owner=frame,
+                focus=frame,
+                kind="ROOT",
+                status="INTERRUPTED",
+                reason=reason,
+                error=error,
+                last_task_id=last_task_id,
+                interrupted_at=now,
+                stack=[frame],
+            )
         self._save(frame)
 
     def record_recoverable_child_interruption(
@@ -774,13 +817,19 @@ class SkillRuntime:
 
         now = datetime.now(timezone.utc).isoformat()
         last_task_id = task_id or parent.current_task_id or parent.task_id
-        child.private_working_state["continuation_state"] = "INTERRUPTED"
-        child.private_working_state["interrupt_reason"] = reason
-        child.private_working_state["last_error"] = error
-        child.private_working_state["last_task_id"] = last_task_id
-        child.private_working_state["recoverable"] = True
-        child.private_working_state["interrupted_at"] = now
-        self._save(child)
+        focus_stack = self._active_descendant_stack(parent)
+        if len(focus_stack) < 2 or focus_stack[1].frame_id != child.frame_id:
+            focus_stack = [parent, child]
+        focus = focus_stack[-1]
+
+        for interrupted_frame in focus_stack[1:]:
+            interrupted_frame.private_working_state["continuation_state"] = "INTERRUPTED"
+            interrupted_frame.private_working_state["interrupt_reason"] = reason
+            interrupted_frame.private_working_state["last_error"] = error
+            interrupted_frame.private_working_state["last_task_id"] = last_task_id
+            interrupted_frame.private_working_state["recoverable"] = True
+            interrupted_frame.private_working_state["interrupted_at"] = now
+            self._save(interrupted_frame)
 
         parent.private_working_state["pending_recoverable_child_frame_id"] = child.frame_id
         parent.private_working_state["pending_recoverable_child"] = {
@@ -792,7 +841,20 @@ class SkillRuntime:
             "last_error": error,
             "last_task_id": last_task_id,
             "interrupted_at": now,
+            "recoverable_focus_frame_id": focus.frame_id,
+            "recoverable_focus_kind": _recoverable_focus_kind(parent, focus, focus_stack),
         }
+        self._set_recoverable_focus(
+            owner=parent,
+            focus=focus,
+            kind=_recoverable_focus_kind(parent, focus, focus_stack),
+            status="INTERRUPTED",
+            reason=reason,
+            error=error,
+            last_task_id=last_task_id,
+            interrupted_at=now,
+            stack=focus_stack,
+        )
         self._save(parent)
         if parent.status == FrameStatus.WAITING_CHILD:
             self.resume_from_child(parent.frame_id)
@@ -830,21 +892,35 @@ class SkillRuntime:
         self,
         parent_frame_id: str,
         resolution: str = "SHELVED",
+        focus_frame_ids: list[str] | None = None,
     ) -> None:
         """Shelve and detach the current pending recoverable child, if any."""
         parent = self._get_frame(parent_frame_id)
         child_frame_id = parent.private_working_state.get("pending_recoverable_child_frame_id")
         if not isinstance(child_frame_id, str) or not child_frame_id:
+            self._clear_recoverable_child_reference(parent.frame_id)
             return
-        child = self._load_related_child_frame(parent, child_frame_id)
-        if child is not None:
-            child.private_working_state["continuation_state"] = "SHELVED"
-            child.private_working_state["shelve_resolution"] = resolution
-            child.private_working_state["shelved_at"] = datetime.now(timezone.utc).isoformat()
-            if child.status not in TERMINAL_STATES:
-                self._transition(child, FrameStatus.CANCELLED)
-                child.ended_at = datetime.now(timezone.utc).isoformat()
-            self._save(child)
+        focus_frame_ids = list(
+            focus_frame_ids
+            or _recoverable_focus_frame_ids(
+                parent.private_working_state,
+                parent.frame_id,
+            )
+        )
+        if child_frame_id not in focus_frame_ids:
+            focus_frame_ids.insert(0, child_frame_id)
+        shelved_at = datetime.now(timezone.utc).isoformat()
+        for focus_frame_id in reversed(focus_frame_ids):
+            frame = self._load_related_child_frame(parent, focus_frame_id)
+            if frame is None:
+                continue
+            frame.private_working_state["continuation_state"] = "SHELVED"
+            frame.private_working_state["shelve_resolution"] = resolution
+            frame.private_working_state["shelved_at"] = shelved_at
+            if frame.status not in TERMINAL_STATES:
+                self._transition(frame, FrameStatus.CANCELLED)
+                frame.ended_at = shelved_at
+            self._save(frame)
         self._clear_recoverable_child_reference(parent.frame_id, child_frame_id)
 
     def set_evidence_refs(self, frame_id: str, evidence_refs: list[str]) -> None:
@@ -960,6 +1036,52 @@ class SkillRuntime:
                 return child
         return None
 
+    def _active_descendant_stack(self, root: SkillFrameState) -> list[SkillFrameState]:
+        """Return root-to-deepest-active stack for recoverable focus metadata."""
+        stack = [root]
+        current = root
+        visited = {root.frame_id}
+        while True:
+            child = self._find_active_child_frame(current)
+            if child is None or child.frame_id in visited:
+                break
+            stack.append(child)
+            visited.add(child.frame_id)
+            current = child
+        return stack
+
+    def _set_recoverable_focus(
+        self,
+        *,
+        owner: SkillFrameState,
+        focus: SkillFrameState,
+        kind: str,
+        status: str,
+        reason: str,
+        error: str,
+        last_task_id: str,
+        interrupted_at: str,
+        stack: list[SkillFrameState],
+    ) -> None:
+        summary = {
+            "frame_id": focus.frame_id,
+            "skill_id": focus.skill_id,
+            "frame_kind": focus.frame_kind.value,
+            "focus_kind": kind,
+            "status": focus.status.value,
+            "input": _safe_json_copy(focus.input),
+            "reason": reason,
+            "last_error": error,
+            "last_task_id": last_task_id,
+            "interrupted_at": interrupted_at,
+        }
+        owner.private_working_state["recoverable_focus_frame_id"] = focus.frame_id
+        owner.private_working_state["recoverable_focus_kind"] = kind
+        owner.private_working_state["recoverable_focus_status"] = status
+        owner.private_working_state["recoverable_focus_interrupted_at"] = interrupted_at
+        owner.private_working_state["recoverable_focus_summary"] = summary
+        owner.private_working_state["recoverable_focus_stack"] = _frame_stack_snapshot(stack)
+
     def _load_related_child_frame(
         self,
         parent: SkillFrameState,
@@ -1003,6 +1125,7 @@ class SkillRuntime:
             return
         parent.private_working_state.pop("pending_recoverable_child_frame_id", None)
         parent.private_working_state.pop("pending_recoverable_child", None)
+        _clear_recoverable_focus_fields(parent.private_working_state)
         self._save(parent)
 
     def _resume_pending_child_approval(
@@ -1122,13 +1245,73 @@ def _append_unique_capped(existing: Any, incoming: list[str], limit: int) -> lis
     return deduped[-limit:]
 
 
+def _recoverable_focus_kind(
+    owner: SkillFrameState,
+    focus: SkillFrameState,
+    stack: list[SkillFrameState],
+) -> str:
+    if focus.frame_id == owner.frame_id:
+        return "ROOT"
+    if focus.frame_kind == FrameKind.FUNCTION_CALL:
+        return "APPROVAL" if focus.status == FrameStatus.AWAITING_APPROVAL else "FUNCTION_CALL"
+    if len(stack) > 2:
+        return "NESTED_SKILL"
+    return "CHILD_SKILL"
+
+
+def _frame_stack_snapshot(stack: list[SkillFrameState]) -> list[dict[str, Any]]:
+    return [
+        {
+            "frame_id": frame.frame_id,
+            "parent_frame_id": frame.parent_frame_id,
+            "skill_id": frame.skill_id,
+            "frame_kind": frame.frame_kind.value,
+            "status": frame.status.value,
+            "input": _safe_json_copy(frame.input),
+        }
+        for frame in stack
+    ]
+
+
+def _clear_recoverable_focus_fields(working_state: dict[str, Any]) -> None:
+    for key in RECOVERABLE_FOCUS_KEYS:
+        working_state.pop(key, None)
+
+
+def _recoverable_focus_frame_ids(
+    working_state: dict[str, Any],
+    owner_frame_id: str,
+) -> list[str]:
+    stack = working_state.get("recoverable_focus_stack")
+    frame_ids: list[str] = []
+    if isinstance(stack, list):
+        for entry in stack:
+            if not isinstance(entry, dict):
+                continue
+            frame_id = entry.get("frame_id")
+            if isinstance(frame_id, str) and frame_id and frame_id != owner_frame_id:
+                frame_ids.append(frame_id)
+    focus_frame_id = working_state.get("recoverable_focus_frame_id")
+    if isinstance(focus_frame_id, str) and focus_frame_id and focus_frame_id != owner_frame_id:
+        frame_ids.append(focus_frame_id)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for frame_id in frame_ids:
+        if frame_id in seen:
+            continue
+        seen.add(frame_id)
+        deduped.append(frame_id)
+    return deduped
+
+
 def _interruption_history_entry(
     frame: SkillFrameState,
     summary: str,
     structured_output: dict[str, Any],
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
-    return {
+    entry = {
         "reason": frame.private_working_state.get("interrupt_reason") or "unknown",
         "last_error": frame.private_working_state.get("last_error") or "",
         "last_task_id": frame.private_working_state.get("last_task_id") or "",
@@ -1144,6 +1327,13 @@ def _interruption_history_entry(
         ),
         "resolved_at": now,
     }
+    focus_summary = frame.private_working_state.get("recoverable_focus_summary")
+    if isinstance(focus_summary, dict):
+        entry["recoverable_focus_summary"] = _safe_json_copy(focus_summary)
+    focus_stack = frame.private_working_state.get("recoverable_focus_stack")
+    if isinstance(focus_stack, list):
+        entry["recoverable_focus_stack"] = _safe_json_copy({"stack": focus_stack}).get("stack", [])
+    return entry
 
 
 def _normalize_shelve_decision(decision: str | None) -> str:
@@ -1151,6 +1341,13 @@ def _normalize_shelve_decision(decision: str | None) -> str:
     if normalized in {"ABANDON_PREVIOUS", "START_UNRELATED_NEW_TASK"}:
         return normalized
     return "START_UNRELATED_NEW_TASK"
+
+
+def _normalize_intent_resolution(value: str | None) -> str:
+    normalized = (value or "").strip().upper()
+    if normalized in INTENT_RESOLUTIONS:
+        return normalized
+    return ""
 
 
 def _normalize_abandoned_interruption(value: dict[str, Any] | str | None) -> dict[str, Any]:
@@ -1173,16 +1370,33 @@ def _append_interruption_history(
         summary["interruption_history"] = history
     history.append(entry)
     del history[:-PERSISTENT_FRAME_MAX_INTERRUPTION_HISTORY]
+    focus_summary = entry.get("recoverable_focus_summary")
+    if isinstance(focus_summary, dict):
+        focus_history = summary.setdefault("focus_history", [])
+        if not isinstance(focus_history, list):
+            focus_history = []
+            summary["focus_history"] = focus_history
+        focus_history.append({
+            "focus": _safe_json_copy(focus_summary),
+            "resolution": entry.get("resolution"),
+            "resolved_at": entry.get("resolved_at"),
+        })
+        del focus_history[:-PERSISTENT_FRAME_MAX_INTERRUPTION_HISTORY]
 
 
 def _continuation_resolution(structured_output: dict[str, Any]) -> str:
     value = _extract_value(
         structured_output,
+        "intent_resolution",
+        "intentResolution",
         "continuation_decision",
         "continuationDecision",
         "previous_frame_action",
         "previousFrameAction",
     )
+    normalized = _normalize_intent_resolution(value if isinstance(value, str) else None)
+    if normalized:
+        return normalized
     if isinstance(value, str) and value.strip():
         return value.strip().upper()
     return "TURN_COMPLETED"

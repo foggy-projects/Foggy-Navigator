@@ -1,0 +1,539 @@
+{
+  "frame_id": "frm_4ebd0b6c37b9",
+  "task_id": "lgt_real_smoke_20260517-010136-4021a5_003",
+  "skill_id": "system.root",
+  "frame_kind": "SKILL",
+  "parent_frame_id": null,
+  "status": "RUNNING",
+  "conversation_id": "ctx-real-llm-smoke-20260517-010136-4021a5",
+  "session_id": "sess-real-llm-smoke-20260517-010136-4021a5",
+  "current_task_id": "lgt_real_smoke_20260517-010136-4021a5_003",
+  "origin_task_id": "lgt_real_smoke_20260517-010136-4021a5_001",
+  "last_task_ids": [
+    "lgt_real_smoke_20260517-010136-4021a5_001",
+    "lgt_real_smoke_20260517-010136-4021a5_002",
+    "lgt_real_smoke_20260517-010136-4021a5_003"
+  ],
+  "input": {
+    "contextId": "ctx-real-llm-smoke-20260517-010136-4021a5",
+    "smokeRunId": "20260517-010136-4021a5",
+    "available_skills": [
+      {
+        "id": "exception_triage",
+        "description": "Analyze exception orders using mock order and vehicle evidence."
+      }
+    ],
+    "order_id": "ORD-REAL-SMOKE-001"
+  },
+  "private_messages": [
+    {
+      "role": "assistant",
+      "content": ""
+    },
+    {
+      "role": "tool_call",
+      "content": {
+        "name": "invoke_business_skill",
+        "args": {
+          "skill_id": "exception_triage",
+          "instruction": "Analyze exception order ORD-REAL-SMOKE-001. First collect evidence, then provide disposal suggestions.",
+          "input": {
+            "order_id": "ORD-REAL-SMOKE-001"
+          }
+        }
+      }
+    },
+    {
+      "role": "tool",
+      "content": {
+        "ok": true,
+        "result": {
+          "frame_id": "frm_126b789da9ce",
+          "skill_id": "exception_triage",
+          "result_summary": "异常订单 ORD-REAL-SMOKE-001 分析完成。订单状态为延迟（45分钟），关联车辆 V09 发生抛锚故障，位于 highway_section_3，错误代码为 E_MOTOR_OVERHEAT（电机过热），电池电量仅 15%。判定为车辆故障导致的延迟异常，建议手动调度替换车辆进行处置。",
+          "structured_output": {
+            "classification": "vehicle_delay",
+            "confidence": 0.9,
+            "recommended_action": "manual_dispatch"
+          },
+          "evidence_refs": [
+            "mock_get_order:ORD-REAL-SMOKE-001",
+            "mock_get_vehicle_status:V09"
+          ]
+        }
+      }
+    },
+    {
+      "role": "assistant",
+      "content": ""
+    },
+    {
+      "role": "tool_call",
+      "content": {
+        "name": "submit_skill_result",
+        "args": {
+          "summary": "异常订单 ORD-REAL-SMOKE-001 分析完成。\n\n**证据收集：**\n- 订单证据：订单状态为延迟（已延迟45分钟）\n- 车辆证据：关联车辆 V09 在 highway_section_3 发生抛锚故障\n\n**异常诊断：**\n- 错误代码：E_MOTOR_OVERHEAT（电机过热）\n- 电池电量：仅 15%\n- 异常分类：vehicle_delay（车辆故障导致的延迟）\n- 置信度：90%\n\n**处置建议：**\n- 推荐操作：manual_dispatch（手动调度替换车辆）\n- 建议立即调度备用车辆前往 highway_section_3 替换故障车辆 V09，以恢复订单配送。",
+          "structured_output": {
+            "order_id": "ORD-REAL-SMOKE-001",
+            "status": "delayed",
+            "delay_minutes": 45,
+            "vehicle_id": "V09",
+            "location": "highway_section_3",
+            "error_code": "E_MOTOR_OVERHEAT",
+            "error_description": "电机过热",
+            "battery_level": 15,
+            "classification": "vehicle_delay",
+            "confidence": 0.9,
+            "recommended_action": "manual_dispatch",
+            "disposal_suggestion": "立即调度备用车辆前往 highway_section_3 替换故障车辆 V09，以恢复订单配送"
+          },
+          "evidence_refs": [
+            "mock_get_order:ORD-REAL-SMOKE-001",
+            "mock_get_vehicle_status:V09"
+          ]
+        }
+      }
+    },
+    {
+      "role": "tool",
+      "content": {
+        "ok": true,
+        "errors": []
+      }
+    },
+    {
+      "role": "assistant",
+      "content": ""
+    },
+    {
+      "role": "tool_call",
+      "content": {
+        "name": "invoke_business_skill",
+        "args": {
+          "instruction": "分析异常订单 ORD-REAL-SMOKE-001，使用模拟订单和车辆证据进行异常诊断",
+          "skill_id": "exception_triage",
+          "input": {
+            "order_id": "ORD-REAL-SMOKE-001",
+            "contextId": "ctx-real-llm-smoke-20260517-010136-4021a5",
+            "smokeRunId": "20260517-010136-4021a5"
+          }
+        }
+      }
+    },
+    {
+      "role": "tool",
+      "content": {
+        "ok": true,
+        "result": {
+          "frame_id": "frm_c84099f9119b",
+          "skill_id": "exception_triage",
+          "result_summary": "订单 ORD-REAL-SMOKE-001 异常诊断完成：车辆 V09 发生电机过热故障（E_MOTOR_OVERHEAT）且电量极低（15%），导致订单延迟45分钟。分类为 vehicle_delay，建议采取 manual_dispatch（人工调度替换车辆）。",
+          "structured_output": {
+            "classification": "vehicle_delay",
+            "confidence": 0.95,
+            "recommended_action": "manual_dispatch"
+          },
+          "evidence_refs": [
+            "mock_get_order:ORD-REAL-SMOKE-001",
+            "mock_get_vehicle_status:V09"
+          ]
+        }
+      }
+    },
+    {
+      "role": "assistant",
+      "content": ""
+    },
+    {
+      "role": "tool_call",
+      "content": {
+        "name": "submit_skill_result",
+        "args": {
+          "summary": "异常订单 ORD-REAL-SMOKE-001 诊断完成。\n\n**异常原因：** 配送车辆 V09 发生电机过热故障（E_MOTOR_OVERHEAT），且电量仅剩15%，导致订单延迟45分钟。\n\n**异常分类：** vehicle_delay（车辆延迟）\n**置信度：** 95%\n**建议措施：** manual_dispatch（人工调度替换车辆）\n\n**证据来源：** mock_get_order:ORD-REAL-SMOKE-001, mock_get_vehicle_status:V09",
+          "structured_output": {
+            "order_id": "ORD-REAL-SMOKE-001",
+            "classification": "vehicle_delay",
+            "confidence": 0.95,
+            "root_cause": "Vehicle V09 motor overheating (E_MOTOR_OVERHEAT) with critically low battery (15%)",
+            "delay_minutes": 45,
+            "recommended_action": "manual_dispatch",
+            "evidence_refs": [
+              "mock_get_order:ORD-REAL-SMOKE-001",
+              "mock_get_vehicle_status:V09"
+            ]
+          },
+          "evidence_refs": [
+            "mock_get_order:ORD-REAL-SMOKE-001",
+            "mock_get_vehicle_status:V09"
+          ]
+        }
+      }
+    },
+    {
+      "role": "tool",
+      "content": {
+        "ok": true,
+        "errors": []
+      }
+    },
+    {
+      "role": "assistant",
+      "content": ""
+    },
+    {
+      "role": "tool_call",
+      "content": {
+        "name": "shelve_interrupted_frame",
+        "args": {
+          "summary": "User requested to abandon previous exception analysis (ORD-REAL-SMOKE-001) and start a new task to analyze a different exception order (ORD-REAL-SMOKE-NEW) for manual intervention needs.",
+          "decision": "START_UNRELATED_NEW_TASK",
+          "intent_resolution": "START_UNRELATED_NEW_TASK",
+          "abandoned_interruption": {
+            "previous_order_id": "ORD-REAL-SMOKE-001",
+            "task": "Analyze exception order for manual intervention",
+            "status": "Interrupted by user cancellation"
+          },
+          "new_task": {
+            "order_id": "ORD-REAL-SMOKE-NEW",
+            "task": "Analyze new exception order for manual intervention needs"
+          }
+        }
+      }
+    }
+  ],
+  "private_working_state": {
+    "_skill_manifest": {
+      "id": "system.root",
+      "name": "system.root",
+      "description": "System root business skill for task-level orchestration.",
+      "markdown_body": "You are the system root skill for this business task. Handle the user's request directly when possible. Use invoke_business_function for authorized business functions when the needed function is described in the available context or skill material. Use invoke_business_skill to delegate bounded work to a specialized child skill. When the current user turn is ready to answer, call submit_skill_result. This root skill is persistent; submit_skill_result ends the current turn, not the root skill frame.",
+      "input_schema": {},
+      "output_schema": {},
+      "allowed_tools": [
+        "invoke_business_function",
+        "invoke_business_skill",
+        "submit_skill_result"
+      ],
+      "approval_tools": [],
+      "promote_to_parent": [
+        "result_summary",
+        "structured_output",
+        "artifact_refs",
+        "evidence_refs"
+      ],
+      "business_rules": {},
+      "subgraph": null,
+      "visibility": "builtin",
+      "context_visibility": "passthrough",
+      "client_app_id": null
+    },
+    "child_results": {
+      "frm_126b789da9ce": {
+        "frame_id": "frm_126b789da9ce",
+        "skill_id": "exception_triage",
+        "result_summary": "异常订单 ORD-REAL-SMOKE-001 分析完成。订单状态为延迟（45分钟），关联车辆 V09 发生抛锚故障，位于 highway_section_3，错误代码为 E_MOTOR_OVERHEAT（电机过热），电池电量仅 15%。判定为车辆故障导致的延迟异常，建议手动调度替换车辆进行处置。",
+        "structured_output": {
+          "classification": "vehicle_delay",
+          "confidence": 0.9,
+          "recommended_action": "manual_dispatch"
+        },
+        "evidence_refs": [
+          "mock_get_order:ORD-REAL-SMOKE-001",
+          "mock_get_vehicle_status:V09"
+        ]
+      },
+      "frm_c84099f9119b": {
+        "frame_id": "frm_c84099f9119b",
+        "skill_id": "exception_triage",
+        "result_summary": "订单 ORD-REAL-SMOKE-001 异常诊断完成：车辆 V09 发生电机过热故障（E_MOTOR_OVERHEAT）且电量极低（15%），导致订单延迟45分钟。分类为 vehicle_delay，建议采取 manual_dispatch（人工调度替换车辆）。",
+        "structured_output": {
+          "classification": "vehicle_delay",
+          "confidence": 0.95,
+          "recommended_action": "manual_dispatch"
+        },
+        "evidence_refs": [
+          "mock_get_order:ORD-REAL-SMOKE-001",
+          "mock_get_vehicle_status:V09"
+        ]
+      }
+    },
+    "turn_results": [
+      {
+        "summary": "异常订单 ORD-REAL-SMOKE-001 分析完成。\n\n**证据收集：**\n- 订单证据：订单状态为延迟（已延迟45分钟）\n- 车辆证据：关联车辆 V09 在 highway_section_3 发生抛锚故障\n\n**异常诊断：**\n- 错误代码：E_MOTOR_OVERHEAT（电机过热）\n- 电池电量：仅 15%\n- 异常分类：vehicle_delay（车辆故障导致的延迟）\n- 置信度：90%\n\n**处置建议：**\n- 推荐操作：manual_dispatch（手动调度替换车辆）\n- 建议立即调度备用车辆前往 highway_section_3 替换故障车辆 V09，以恢复订单配送。",
+        "structured_output": {
+          "order_id": "ORD-REAL-SMOKE-001",
+          "status": "delayed",
+          "delay_minutes": 45,
+          "vehicle_id": "V09",
+          "location": "highway_section_3",
+          "error_code": "E_MOTOR_OVERHEAT",
+          "error_description": "电机过热",
+          "battery_level": 15,
+          "classification": "vehicle_delay",
+          "confidence": 0.9,
+          "recommended_action": "manual_dispatch",
+          "disposal_suggestion": "立即调度备用车辆前往 highway_section_3 替换故障车辆 V09，以恢复订单配送"
+        },
+        "artifact_refs": [],
+        "evidence_refs": [
+          "mock_get_order:ORD-REAL-SMOKE-001",
+          "mock_get_vehicle_status:V09"
+        ],
+        "submitted_at": "2026-05-16T17:02:22.273494+00:00"
+      },
+      {
+        "summary": "异常订单 ORD-REAL-SMOKE-001 诊断完成。\n\n**异常原因：** 配送车辆 V09 发生电机过热故障（E_MOTOR_OVERHEAT），且电量仅剩15%，导致订单延迟45分钟。\n\n**异常分类：** vehicle_delay（车辆延迟）\n**置信度：** 95%\n**建议措施：** manual_dispatch（人工调度替换车辆）\n\n**证据来源：** mock_get_order:ORD-REAL-SMOKE-001, mock_get_vehicle_status:V09",
+        "structured_output": {
+          "order_id": "ORD-REAL-SMOKE-001",
+          "classification": "vehicle_delay",
+          "confidence": 0.95,
+          "root_cause": "Vehicle V09 motor overheating (E_MOTOR_OVERHEAT) with critically low battery (15%)",
+          "delay_minutes": 45,
+          "recommended_action": "manual_dispatch",
+          "evidence_refs": [
+            "mock_get_order:ORD-REAL-SMOKE-001",
+            "mock_get_vehicle_status:V09"
+          ]
+        },
+        "artifact_refs": [],
+        "evidence_refs": [
+          "mock_get_order:ORD-REAL-SMOKE-001",
+          "mock_get_vehicle_status:V09"
+        ],
+        "submitted_at": "2026-05-16T17:03:26.888665+00:00"
+      },
+      {
+        "summary": "User requested to abandon previous exception analysis (ORD-REAL-SMOKE-001) and start a new task to analyze a different exception order (ORD-REAL-SMOKE-NEW) for manual intervention needs.",
+        "structured_output": {
+          "continuation_decision": "START_UNRELATED_NEW_TASK",
+          "intent_resolution": "START_UNRELATED_NEW_TASK",
+          "abandoned_interruption": {
+            "previous_order_id": "ORD-REAL-SMOKE-001",
+            "task": "Analyze exception order for manual intervention",
+            "status": "Interrupted by user cancellation"
+          },
+          "new_task": {
+            "order_id": "ORD-REAL-SMOKE-NEW",
+            "task": "Analyze new exception order for manual intervention needs"
+          }
+        },
+        "artifact_refs": [],
+        "evidence_refs": [],
+        "submitted_at": "2026-05-16T17:03:37.617279+00:00"
+      }
+    ],
+    "root_context_summary": {
+      "turn_count": 3,
+      "latest_summary": "User requested to abandon previous exception analysis (ORD-REAL-SMOKE-001) and start a new task to analyze a different exception order (ORD-REAL-SMOKE-NEW) for manual intervention needs.",
+      "latest_structured_output": {
+        "continuation_decision": "START_UNRELATED_NEW_TASK",
+        "intent_resolution": "START_UNRELATED_NEW_TASK",
+        "abandoned_interruption": {
+          "previous_order_id": "ORD-REAL-SMOKE-001",
+          "task": "Analyze exception order for manual intervention",
+          "status": "Interrupted by user cancellation"
+        },
+        "new_task": {
+          "order_id": "ORD-REAL-SMOKE-NEW",
+          "task": "Analyze new exception order for manual intervention needs"
+        }
+      },
+      "recent_turns": [
+        {
+          "summary": "异常订单 ORD-REAL-SMOKE-001 分析完成。\n\n**证据收集：**\n- 订单证据：订单状态为延迟（已延迟45分钟）\n- 车辆证据：关联车辆 V09 在 highway_section_3 发生抛锚故障\n\n**异常诊断：**\n- 错误代码：E_MOTOR_OVERHEAT（电机过热）\n- 电池电量：仅 15%\n- 异常分类：vehicle_delay（车辆故障导致的延迟）\n- 置信度：90%\n\n**处置建议：**\n- 推荐操作：manual_dispatch（手动调度替换车辆）\n- 建议立即调度备用车辆前往 highway_section_3 替换故障车辆 V09，以恢复订单配送。",
+          "structured_output": {
+            "order_id": "ORD-REAL-SMOKE-001",
+            "status": "delayed",
+            "delay_minutes": 45,
+            "vehicle_id": "V09",
+            "location": "highway_section_3",
+            "error_code": "E_MOTOR_OVERHEAT",
+            "error_description": "电机过热",
+            "battery_level": 15,
+            "classification": "vehicle_delay",
+            "confidence": 0.9,
+            "recommended_action": "manual_dispatch",
+            "disposal_suggestion": "立即调度备用车辆前往 highway_section_3 替换故障车辆 V09，以恢复订单配送"
+          },
+          "artifact_refs": [],
+          "evidence_refs": [
+            "mock_get_order:ORD-REAL-SMOKE-001",
+            "mock_get_vehicle_status:V09"
+          ],
+          "submitted_at": "2026-05-16T17:02:22.273494+00:00"
+        },
+        {
+          "summary": "异常订单 ORD-REAL-SMOKE-001 诊断完成。\n\n**异常原因：** 配送车辆 V09 发生电机过热故障（E_MOTOR_OVERHEAT），且电量仅剩15%，导致订单延迟45分钟。\n\n**异常分类：** vehicle_delay（车辆延迟）\n**置信度：** 95%\n**建议措施：** manual_dispatch（人工调度替换车辆）\n\n**证据来源：** mock_get_order:ORD-REAL-SMOKE-001, mock_get_vehicle_status:V09",
+          "structured_output": {
+            "order_id": "ORD-REAL-SMOKE-001",
+            "classification": "vehicle_delay",
+            "confidence": 0.95,
+            "root_cause": "Vehicle V09 motor overheating (E_MOTOR_OVERHEAT) with critically low battery (15%)",
+            "delay_minutes": 45,
+            "recommended_action": "manual_dispatch",
+            "evidence_refs": [
+              "mock_get_order:ORD-REAL-SMOKE-001",
+              "mock_get_vehicle_status:V09"
+            ]
+          },
+          "artifact_refs": [],
+          "evidence_refs": [
+            "mock_get_order:ORD-REAL-SMOKE-001",
+            "mock_get_vehicle_status:V09"
+          ],
+          "submitted_at": "2026-05-16T17:03:26.888665+00:00"
+        },
+        {
+          "summary": "User requested to abandon previous exception analysis (ORD-REAL-SMOKE-001) and start a new task to analyze a different exception order (ORD-REAL-SMOKE-NEW) for manual intervention needs.",
+          "structured_output": {
+            "continuation_decision": "START_UNRELATED_NEW_TASK",
+            "intent_resolution": "START_UNRELATED_NEW_TASK",
+            "abandoned_interruption": {
+              "previous_order_id": "ORD-REAL-SMOKE-001",
+              "task": "Analyze exception order for manual intervention",
+              "status": "Interrupted by user cancellation"
+            },
+            "new_task": {
+              "order_id": "ORD-REAL-SMOKE-NEW",
+              "task": "Analyze new exception order for manual intervention needs"
+            }
+          },
+          "artifact_refs": [],
+          "evidence_refs": [],
+          "submitted_at": "2026-05-16T17:03:37.617279+00:00"
+        }
+      ],
+      "artifact_refs": [],
+      "evidence_refs": [
+        "mock_get_order:ORD-REAL-SMOKE-001",
+        "mock_get_vehicle_status:V09"
+      ],
+      "private_messages_retained": 14,
+      "interruption_history": [
+        {
+          "reason": "user_cancelled",
+          "last_error": "Real smoke synthetic cancellation after first turn.",
+          "last_task_id": "lgt_real_smoke_20260517-010136-4021a5_001",
+          "interrupted_at": "2026-05-16T17:02:22.321576+00:00",
+          "resolution": "TURN_COMPLETED",
+          "resolution_summary": "异常订单 ORD-REAL-SMOKE-001 诊断完成。\n\n**异常原因：** 配送车辆 V09 发生电机过热故障（E_MOTOR_OVERHEAT），且电量仅剩15%，导致订单延迟45分钟。\n\n**异常分类：** vehicle_delay（车辆延迟）\n**置信度：** 95%\n**建议措施：** manual_dispatch（人工调度替换车辆）\n\n**证据来源：** mock_get_order:ORD-REAL-SMOKE-001, mock_get_vehicle_status:V09",
+          "abandoned_interruption": null,
+          "resolved_at": "2026-05-16T17:03:26.888665+00:00"
+        },
+        {
+          "reason": "user_cancelled",
+          "last_error": "Real smoke synthetic cancellation before unrelated turn.",
+          "last_task_id": "lgt_real_smoke_20260517-010136-4021a5_002",
+          "interrupted_at": "2026-05-16T17:03:26.932459+00:00",
+          "resolution": "START_UNRELATED_NEW_TASK",
+          "resolution_summary": "User requested to abandon previous exception analysis (ORD-REAL-SMOKE-001) and start a new task to analyze a different exception order (ORD-REAL-SMOKE-NEW) for manual intervention needs.",
+          "abandoned_interruption": {
+            "previous_order_id": "ORD-REAL-SMOKE-001",
+            "task": "Analyze exception order for manual intervention",
+            "status": "Interrupted by user cancellation"
+          },
+          "resolved_at": "2026-05-16T17:03:37.617279+00:00",
+          "recoverable_focus_summary": {
+            "frame_id": "frm_4ebd0b6c37b9",
+            "skill_id": "system.root",
+            "frame_kind": "SKILL",
+            "focus_kind": "ROOT",
+            "status": "RUNNING",
+            "input": {
+              "contextId": "ctx-real-llm-smoke-20260517-010136-4021a5",
+              "smokeRunId": "20260517-010136-4021a5",
+              "available_skills": [
+                {
+                  "id": "exception_triage",
+                  "description": "Analyze exception orders using mock order and vehicle evidence."
+                }
+              ],
+              "order_id": "ORD-REAL-SMOKE-001"
+            },
+            "reason": "user_cancelled",
+            "last_error": "Real smoke synthetic cancellation before unrelated turn.",
+            "last_task_id": "lgt_real_smoke_20260517-010136-4021a5_002",
+            "interrupted_at": "2026-05-16T17:03:26.932459+00:00"
+          },
+          "recoverable_focus_stack": [
+            {
+              "frame_id": "frm_4ebd0b6c37b9",
+              "parent_frame_id": null,
+              "skill_id": "system.root",
+              "frame_kind": "SKILL",
+              "status": "RUNNING",
+              "input": {
+                "contextId": "ctx-real-llm-smoke-20260517-010136-4021a5",
+                "smokeRunId": "20260517-010136-4021a5",
+                "available_skills": [
+                  {
+                    "id": "exception_triage",
+                    "description": "Analyze exception orders using mock order and vehicle evidence."
+                  }
+                ],
+                "order_id": "ORD-REAL-SMOKE-001"
+              }
+            }
+          ]
+        }
+      ],
+      "focus_history": [
+        {
+          "focus": {
+            "frame_id": "frm_4ebd0b6c37b9",
+            "skill_id": "system.root",
+            "frame_kind": "SKILL",
+            "focus_kind": "ROOT",
+            "status": "RUNNING",
+            "input": {
+              "contextId": "ctx-real-llm-smoke-20260517-010136-4021a5",
+              "smokeRunId": "20260517-010136-4021a5",
+              "available_skills": [
+                {
+                  "id": "exception_triage",
+                  "description": "Analyze exception orders using mock order and vehicle evidence."
+                }
+              ],
+              "order_id": "ORD-REAL-SMOKE-001"
+            },
+            "reason": "user_cancelled",
+            "last_error": "Real smoke synthetic cancellation before unrelated turn.",
+            "last_task_id": "lgt_real_smoke_20260517-010136-4021a5_002",
+            "interrupted_at": "2026-05-16T17:03:26.932459+00:00"
+          },
+          "resolution": "START_UNRELATED_NEW_TASK",
+          "resolved_at": "2026-05-16T17:03:37.617279+00:00"
+        }
+      ]
+    }
+  },
+  "tool_calls": [],
+  "child_frame_ids": [
+    "frm_126b789da9ce",
+    "frm_c84099f9119b"
+  ],
+  "output": {
+    "continuation_decision": "START_UNRELATED_NEW_TASK",
+    "intent_resolution": "START_UNRELATED_NEW_TASK",
+    "abandoned_interruption": {
+      "previous_order_id": "ORD-REAL-SMOKE-001",
+      "task": "Analyze exception order for manual intervention",
+      "status": "Interrupted by user cancellation"
+    },
+    "new_task": {
+      "order_id": "ORD-REAL-SMOKE-NEW",
+      "task": "Analyze new exception order for manual intervention needs"
+    }
+  },
+  "result_summary": "User requested to abandon previous exception analysis (ORD-REAL-SMOKE-001) and start a new task to analyze a different exception order (ORD-REAL-SMOKE-NEW) for manual intervention needs.",
+  "artifact_refs": [],
+  "evidence_refs": [
+    "mock_get_order:ORD-REAL-SMOKE-001",
+    "mock_get_vehicle_status:V09"
+  ],
+  "approval_request": null,
+  "started_at": "2026-05-16T17:01:36.992561+00:00",
+  "ended_at": "",
+  "submit_attempts": 0,
+  "max_submit_attempts": 3
+}

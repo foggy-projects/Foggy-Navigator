@@ -1,0 +1,41 @@
+{
+  "frame_id": "frm_c84099f9119b",
+  "task_id": "lgt_real_smoke_20260517-010136-4021a5_002",
+  "skill_id": "exception_triage",
+  "frame_kind": "SKILL",
+  "parent_frame_id": "frm_4ebd0b6c37b9",
+  "status": "COMPLETED",
+  "conversation_id": "ctx-real-llm-smoke-20260517-010136-4021a5",
+  "session_id": "sess-real-llm-smoke-20260517-010136-4021a5",
+  "current_task_id": "lgt_real_smoke_20260517-010136-4021a5_002",
+  "origin_task_id": "lgt_real_smoke_20260517-010136-4021a5_001",
+  "last_task_ids": [
+    "lgt_real_smoke_20260517-010136-4021a5_001",
+    "lgt_real_smoke_20260517-010136-4021a5_002"
+  ],
+  "input": {
+    "order_id": "ORD-REAL-SMOKE-001",
+    "contextId": "ctx-real-llm-smoke-20260517-010136-4021a5",
+    "smokeRunId": "20260517-010136-4021a5"
+  },
+  "private_messages": [],
+  "private_working_state": {},
+  "tool_calls": [],
+  "child_frame_ids": [],
+  "output": {
+    "classification": "vehicle_delay",
+    "confidence": 0.95,
+    "recommended_action": "manual_dispatch"
+  },
+  "result_summary": "订单 ORD-REAL-SMOKE-001 异常诊断完成：车辆 V09 发生电机过热故障（E_MOTOR_OVERHEAT）且电量极低（15%），导致订单延迟45分钟。分类为 vehicle_delay，建议采取 manual_dispatch（人工调度替换车辆）。",
+  "artifact_refs": [],
+  "evidence_refs": [
+    "mock_get_order:ORD-REAL-SMOKE-001",
+    "mock_get_vehicle_status:V09"
+  ],
+  "approval_request": null,
+  "started_at": "2026-05-16T17:02:41.052674+00:00",
+  "ended_at": "2026-05-16T17:03:08.633815+00:00",
+  "submit_attempts": 2,
+  "max_submit_attempts": 3
+}

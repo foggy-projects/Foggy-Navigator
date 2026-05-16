@@ -668,7 +668,13 @@ class LlmSkillAgent:
                 skill_id=child.skill_id,
                 content=f"Frame closed: {child.skill_id}",
             ))
-            return {"ok": True, "result": promoted, "child_frame_id": child.frame_id, "_events": child_events}
+            return {
+                "ok": True,
+                "intent_resolution": "CONTINUE_PREVIOUS",
+                "result": promoted,
+                "child_frame_id": child.frame_id,
+                "_events": child_events,
+            }
 
         if name == "shelve_interrupted_frame":
             if not persistent_frame:
@@ -678,6 +684,7 @@ class LlmSkillAgent:
                 summary=args.get("summary", ""),
                 abandoned_interruption=args.get("abandoned_interruption"),
                 decision=args.get("decision") or "START_UNRELATED_NEW_TASK",
+                intent_resolution=args.get("intent_resolution"),
                 new_task=args.get("new_task") if isinstance(args.get("new_task"), dict) else None,
                 artifact_refs=args.get("artifact_refs"),
                 evidence_refs=args.get("evidence_refs"),
@@ -967,6 +974,12 @@ def _recoverable_interruption_context(working_state: dict[str, Any]) -> dict[str
     pending_child = working_state.get("pending_recoverable_child")
     if isinstance(pending_child, dict):
         context["pending_child_skill"] = _safe_content(pending_child)
+    recoverable_focus = working_state.get("recoverable_focus_summary")
+    if isinstance(recoverable_focus, dict):
+        context["recoverable_focus"] = _safe_content(recoverable_focus)
+    recoverable_focus_stack = working_state.get("recoverable_focus_stack")
+    if isinstance(recoverable_focus_stack, list):
+        context["recoverable_focus_stack"] = _safe_content(recoverable_focus_stack)
     return context
 
 
@@ -995,20 +1008,36 @@ def _build_recoverable_interruption_prompt(
             "Pending child skill: "
             f"{json.dumps(pending_child, ensure_ascii=False, sort_keys=True)}"
         )
+    recoverable_focus = interruption.get("recoverable_focus")
+    if isinstance(recoverable_focus, dict):
+        parts.append(
+            "Recoverable focus: "
+            f"{json.dumps(recoverable_focus, ensure_ascii=False, sort_keys=True)}"
+        )
+    recoverable_focus_stack = interruption.get("recoverable_focus_stack")
+    if isinstance(recoverable_focus_stack, list):
+        parts.append(
+            "Recoverable focus stack: "
+            f"{json.dumps(recoverable_focus_stack, ensure_ascii=False, sort_keys=True)}"
+        )
     parts.append(f"User's new instruction: {prompt}")
     parts.append(
         "The interrupted work is a recoverable candidate, not a mandatory "
-        "continuation. If the new instruction explicitly continues, corrects, "
-        "or supplements the interrupted work, continue from the existing frame "
-        "context. If there is a pending child skill, use "
-        "resume_recoverable_child_skill so the same child frame continues. "
-        "If the user explicitly stops/cancels it, or asks for an "
-        "unrelated new task, do not continue the interrupted work; summarize "
-        "what is being abandoned, then use shelve_interrupted_frame with "
-        "decision set to ABANDON_PREVIOUS or START_UNRELATED_NEW_TASK and "
-        "include an abandoned_interruption summary. "
+        "continuation. First resolve intent_resolution as one of "
+        "CONTINUE_PREVIOUS, ABANDON_PREVIOUS, START_UNRELATED_NEW_TASK, or "
+        "ASK_CLARIFICATION. If the new instruction explicitly continues, "
+        "corrects, or supplements the interrupted work, use CONTINUE_PREVIOUS "
+        "and continue from the existing frame context. If there is a pending "
+        "child skill, use resume_recoverable_child_skill so the same child "
+        "frame continues. If the user explicitly stops/cancels it, use "
+        "ABANDON_PREVIOUS. If the user asks for an unrelated new task, use "
+        "START_UNRELATED_NEW_TASK. For either shelving case, summarize what "
+        "is being abandoned, then use shelve_interrupted_frame with decision "
+        "set to ABANDON_PREVIOUS or START_UNRELATED_NEW_TASK, include "
+        "intent_resolution, and include an abandoned_interruption summary. "
         "If the intent is ambiguous and the interrupted work involves approval "
-        "or business side effects, ask for clarification via submit_skill_result."
+        "or business side effects, use ASK_CLARIFICATION and ask for "
+        "clarification via submit_skill_result."
     )
     return "\n".join(parts)
 
@@ -1415,6 +1444,14 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "decision": {
                         "type": "string",
                         "enum": ["ABANDON_PREVIOUS", "START_UNRELATED_NEW_TASK"],
+                    },
+                    "intent_resolution": {
+                        "type": "string",
+                        "enum": ["ABANDON_PREVIOUS", "START_UNRELATED_NEW_TASK"],
+                        "description": (
+                            "Normalized intent after comparing the user's new "
+                            "instruction with the interrupted focus."
+                        ),
                     },
                     "abandoned_interruption": {
                         "type": "object",
