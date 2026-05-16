@@ -16,6 +16,7 @@
     </view>
     <view class="session-footer">
       <text class="session-time">{{ shortDateTime(group.updatedAt) }}</text>
+      <text v-if="group.taskCount > 1" class="session-rounds">{{ group.taskCount }}轮</text>
       <text v-if="group.totalCost > 0" class="session-cost">${{ group.totalCost.toFixed(4) }}</text>
       <text v-if="modelConfigName" class="session-config">{{ modelConfigName }}</text>
     </view>
@@ -141,11 +142,12 @@ function milestoneStatusLabel(status?: string): string {
   align-items: center;
   margin-top: 16rpx;
 }
-.session-time, .session-cost, .session-config {
+.session-time, .session-rounds, .session-cost, .session-config {
   font-size: 24rpx;
   color: #c0c4cc;
   margin-right: 20rpx;
 }
+.session-rounds { color: #909399; }
 .session-cost { color: #e6a23c; }
 .session-config {
   color: #2e7d32;

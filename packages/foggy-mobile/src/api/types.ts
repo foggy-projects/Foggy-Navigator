@@ -94,6 +94,16 @@ export interface DispatchTask {
   fileCheckpointingEnabled?: boolean
   /** Task source: "PLATFORM" or "SYNCED" */
   source?: string
+  /** Session page API: number of tasks in this session */
+  sessionTaskCount?: number
+  /** Session page API: accumulated cost for this session */
+  sessionTotalCostUsd?: number
+  /** Session page API: accumulated input tokens for this session */
+  sessionInputTokens?: number
+  /** Session page API: accumulated output tokens for this session */
+  sessionOutputTokens?: number
+  /** Session page API: first prompt in this session */
+  sessionFirstPrompt?: string
   /** Agent Teams 配置 ID（任务创建时锁定） */
   agentTeamsConfigId?: string
   /** 仅 /active 端点填充：工作目录名称 */
@@ -278,7 +288,10 @@ export interface ConversationGroup {
   latestTask: DispatchTask
   config?: ConversationConfig
   firstPrompt: string
+  taskCount: number
   totalCost: number
+  totalInputTokens: number
+  totalOutputTokens: number
   createdAt: string
   updatedAt: string
 }

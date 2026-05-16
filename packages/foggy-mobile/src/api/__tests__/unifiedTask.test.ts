@@ -12,6 +12,7 @@ vi.mock('../client', () => ({
 
 describe('unifiedTask api', () => {
   beforeEach(() => {
+    vi.resetModules()
     vi.clearAllMocks()
   })
 
@@ -66,6 +67,23 @@ describe('unifiedTask api', () => {
       params: { page: 2, size: 20, state: 'ACTIVE' },
     })
     expect(result).toEqual(response.data)
+  })
+
+  it('listTasksByDirPagedUnified reuses identical in-flight requests', async () => {
+    const response = { data: { content: [], totalSessions: 0, page: 0, size: 20 } }
+    let resolveRequest: (value: typeof response) => void = () => {}
+    mockClient.get.mockReturnValue(new Promise<typeof response>((resolve) => {
+      resolveRequest = resolve
+    }))
+    const { listTasksByDirPagedUnified } = await import('../unifiedTask')
+
+    const first = listTasksByDirPagedUnified('dir-1', 0, 20, 'AWAITING_REPLY')
+    const second = listTasksByDirPagedUnified('dir-1', 0, 20, 'AWAITING_REPLY')
+    expect(mockClient.get).toHaveBeenCalledTimes(1)
+
+    resolveRequest(response)
+    await expect(first).resolves.toEqual(response.data)
+    await expect(second).resolves.toEqual(response.data)
   })
 
   it('searchSessionsUnified omits empty optional params', async () => {
