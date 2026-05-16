@@ -12,10 +12,10 @@ from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
 
-def _state(task_id: str) -> dict[str, Any]:
+def _state(task_id: str, session_id: str = "sess_root") -> dict[str, Any]:
     return {
         "task_id": task_id,
-        "session_id": "sess_root",
+        "session_id": session_id,
         "prompt": "handle the request",
         "model": "test-model",
         "model_config_id": None,
@@ -84,3 +84,42 @@ def test_route_skill_restores_persistent_system_root_frame_from_journal(monkeypa
     assert second["active_frame_id"] == first["active_frame_id"]
     assert second["events"][-1].content == "Reusing frame for skill: system.root"
     assert restored_runtime.get_frame(first["active_frame_id"]) is not None
+
+
+def test_route_skill_reuses_system_root_frame_across_tasks_in_same_session(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+
+    first = root_graph_module.route_skill(_state("task_root_session_001", "sess_shared"))
+    second = root_graph_module.route_skill(_state("task_root_session_002", "sess_shared"))
+
+    assert first["active_frame_id"] == second["active_frame_id"]
+    assert second["events"][-1].content == "Reusing frame for skill: system.root"
+
+    frame = runtime.get_frame(first["active_frame_id"])
+    assert frame is not None
+    assert frame.conversation_id == "sess_shared"
+    assert frame.origin_task_id == "task_root_session_001"
+    assert frame.current_task_id == "task_root_session_002"
+    assert frame.last_task_ids == ["task_root_session_001", "task_root_session_002"]
+
+
+def test_route_skill_restores_system_root_frame_by_session_for_new_task(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    first = root_graph_module.route_skill(_state("task_root_session_restore_001", "sess_restore"))
+
+    restored_runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=runtime.registry,
+        journal=root_graph_module._journal,
+    )
+    monkeypatch.setattr(root_graph_module, "_runtime", restored_runtime)
+
+    second = root_graph_module.route_skill(_state("task_root_session_restore_002", "sess_restore"))
+
+    assert second["active_frame_id"] == first["active_frame_id"]
+    assert second["events"][-1].content == "Reusing frame for skill: system.root"
+
+    frame = restored_runtime.get_frame(first["active_frame_id"])
+    assert frame is not None
+    assert frame.conversation_id == "sess_restore"
+    assert frame.current_task_id == "task_root_session_restore_002"

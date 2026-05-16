@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import datetime
+import re
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,47 @@ logger = logging.getLogger(__name__)
 
 _SCRUB_TEMPLATE = "[externalized: {artifact_id}, size={size}, summary={summary}]"
 _PROGRESS_EVENT_SINK_KEY = "_progress_event_sink"
+_BUSINESS_IDENTIFIER_FIELDS = frozenset({
+    "orderNo",
+    "order_no",
+    "orderIdentifier",
+    "order_identifier",
+    "waybillNo",
+    "waybill_no",
+    "businessOrderNo",
+    "business_order_no",
+})
+_NAVIGATOR_RUNTIME_IDENTIFIER_FIELDS = frozenset({
+    "skillId",
+    "skill_id",
+    "functionId",
+    "function_id",
+    "objectId",
+    "object_id",
+    "routeName",
+    "route_name",
+    "frameId",
+    "frame_id",
+    "skillFrameId",
+    "skill_frame_id",
+    "functionFrameId",
+    "function_frame_id",
+    "taskId",
+    "task_id",
+    "sessionId",
+    "session_id",
+    "messageId",
+    "message_id",
+})
+_NAVIGATOR_RUNTIME_IDENTIFIER_PATTERN = re.compile(r"\b(?:frm|lgt|msg|sess)_[A-Za-z0-9_-]+\b")
+_BUSINESS_ID_CLAIM_PATTERN = re.compile(
+    r"(订单号|运单号|业务单号|单号|order\s*(?:no|number|id)|waybill\s*(?:no|number|id))",
+    re.IGNORECASE,
+)
+_FORMAL_ORDER_SUCCESS_PATTERN = re.compile(
+    r"(订单创建成功|创建订单成功|已创建订单|已下单|下单成功|order\s+created)",
+    re.IGNORECASE,
+)
 
 
 class LlmSkillAgent:
@@ -71,6 +113,11 @@ class LlmSkillAgent:
         frame = self._runtime.get_frame(frame_id)
         if frame is None:
             return [QueryEvent(type="error", task_id=task_id, error=f"Frame not found: {frame_id}")]
+        runtime_context = dict(runtime_context or {})
+        if persistent_frame:
+            interruption_context = _recoverable_interruption_context(frame.private_working_state)
+            if interruption_context:
+                runtime_context["_recoverable_interruption"] = interruption_context
 
         manifest = _manifest_for_frame(self._runtime, frame)
         if manifest is None:
@@ -103,10 +150,27 @@ class LlmSkillAgent:
             )),
         ]
         events: list[QueryEvent] = []
-        model = self._bind_tools(self._model, manifest)
+        model = self._bind_tools(self._model, manifest, persistent_frame=persistent_frame)
 
         for _ in range(self._max_iterations):
-            response = model.invoke(messages)
+            try:
+                response = model.invoke(messages)
+            except Exception as exc:
+                if persistent_frame:
+                    self._runtime.record_recoverable_interruption(
+                        frame_id,
+                        reason="model_error",
+                        error=str(exc),
+                        task_id=task_id,
+                    )
+                else:
+                    self._runtime.fail_frame(frame_id, str(exc))
+                return [QueryEvent(
+                    type="error",
+                    task_id=task_id,
+                    skill_frame_id=frame_id,
+                    error=str(exc),
+                )]
             messages.append(response)
             self._append_private_message(frame_id, "assistant", _safe_content(response.content))
 
@@ -151,13 +215,22 @@ class LlmSkillAgent:
                 if event.get("suspended"):
                     return events
 
-        self._runtime.fail_frame(frame_id, "LLM skill agent reached max iterations without valid submit")
+        error = "LLM skill agent reached max iterations without valid submit"
+        if persistent_frame:
+            self._runtime.record_recoverable_interruption(
+                frame_id,
+                reason="model_error",
+                error=error,
+                task_id=task_id,
+            )
+        else:
+            self._runtime.fail_frame(frame_id, error)
         events.append(QueryEvent(
             type="error",
             task_id=task_id,
             skill_frame_id=frame_id,
             skill_id=manifest.id,
-            error="LLM skill agent reached max iterations without valid submit",
+            error=error,
         ))
         return events
 
@@ -239,7 +312,7 @@ class LlmSkillAgent:
             _emit_progress_event(runtime_context, extra_event)
 
         ret: dict[str, Any] = {"events": events, "tool_result": result}
-        if name == "submit_skill_result" and persistent_frame and result.get("ok"):
+        if name in {"submit_skill_result", "shelve_interrupted_frame"} and persistent_frame and result.get("ok"):
             ret["persistent_turn_completed"] = True
         if suspended:
             ret["suspended"] = True
@@ -518,7 +591,111 @@ class LlmSkillAgent:
             ))
             return {"ok": True, "result": promoted, "_events": child_events}
 
+        if name == "resume_recoverable_child_skill":
+            if not persistent_frame:
+                return {"ok": False, "error": "resume_recoverable_child_skill is only available on persistent frames"}
+            parent = self._runtime.get_frame(frame_id)
+            if not parent:
+                return {"ok": False, "error": f"Frame not found: {frame_id}"}
+            child = self._runtime.prepare_recoverable_child_resume(frame_id)
+            if child is None:
+                return {"ok": False, "error": "No recoverable child skill is pending"}
+            child_manifest = self._runtime.registry.get_manifest(child.skill_id)
+            if not child_manifest:
+                return {"ok": False, "error": f"Skill manifest not found: {child.skill_id}"}
+
+            instruction = args.get("instruction") or args.get("prompt") or ""
+            child_runtime_context = _runtime_context_for_child_skill(
+                runtime_context,
+                self._runtime.context_summary_for_frame(frame_id),
+                child_manifest,
+            )
+            child_events = [
+                QueryEvent(
+                    type="skill_frame_open",
+                    task_id=task_id,
+                    skill_frame_id=child.frame_id,
+                    parent_frame_id=frame_id,
+                    skill_id=child.skill_id,
+                    content=f"Resuming frame for skill: {child.skill_id}",
+                )
+            ]
+            child_events.extend(self.run(
+                task_id=task_id,
+                frame_id=child.frame_id,
+                prompt=instruction,
+                account_id=account_id,
+                runtime_context=child_runtime_context,
+            ))
+
+            refreshed_child = self._runtime.get_frame(child.frame_id)
+            if refreshed_child and refreshed_child.status == FrameStatus.AWAITING_APPROVAL:
+                approval_request = refreshed_child.approval_request
+                if not isinstance(approval_request, dict):
+                    _resume_parent_if_waiting(self._runtime, frame_id)
+                    return {
+                        "ok": False,
+                        "error": "Child skill is awaiting approval without approval_request",
+                        "_events": child_events,
+                    }
+                self._runtime.mark_child_awaiting_approval(
+                    frame_id,
+                    child.frame_id,
+                    approval_request,
+                )
+                return {
+                    "ok": True,
+                    "approval_wait": True,
+                    "child_frame_id": child.frame_id,
+                    "_events": child_events,
+                    "_suspended": True,
+                }
+            if not refreshed_child or refreshed_child.status != FrameStatus.COMPLETED:
+                _resume_parent_if_waiting(self._runtime, frame_id)
+                return {
+                    "ok": False,
+                    "error": f"Child skill ended in {refreshed_child.status.value if refreshed_child else 'MISSING'}",
+                    "child_frame_id": child.frame_id,
+                    "_events": child_events,
+                }
+
+            promoted = self._runtime.complete_child_and_resume_parent(child.frame_id)
+            child_events.append(QueryEvent(
+                type="skill_frame_close",
+                task_id=task_id,
+                skill_frame_id=child.frame_id,
+                parent_frame_id=frame_id,
+                skill_id=child.skill_id,
+                content=f"Frame closed: {child.skill_id}",
+            ))
+            return {"ok": True, "result": promoted, "child_frame_id": child.frame_id, "_events": child_events}
+
+        if name == "shelve_interrupted_frame":
+            if not persistent_frame:
+                return {"ok": False, "error": "shelve_interrupted_frame is only available on persistent frames"}
+            validation = self._runtime.shelve_recoverable_interruption(
+                frame_id=frame_id,
+                summary=args.get("summary", ""),
+                abandoned_interruption=args.get("abandoned_interruption"),
+                decision=args.get("decision") or "START_UNRELATED_NEW_TASK",
+                new_task=args.get("new_task") if isinstance(args.get("new_task"), dict) else None,
+                artifact_refs=args.get("artifact_refs"),
+                evidence_refs=args.get("evidence_refs"),
+            )
+            frame = self._runtime.get_frame(frame_id)
+            return {
+                "ok": validation.ok,
+                "errors": validation.errors,
+                "structured_output": frame.output if frame else None,
+            }
+
         if name == "submit_skill_result":
+            structured_output = args.get("structured_output") or {}
+            summary = _guard_final_summary(
+                args.get("summary", ""),
+                structured_output,
+                self._runtime.get_frame(frame_id),
+            )
             submit = (
                 self._runtime.submit_persistent_turn_result
                 if persistent_frame
@@ -526,8 +703,8 @@ class LlmSkillAgent:
             )
             validation = submit(
                 frame_id=frame_id,
-                summary=args.get("summary", ""),
-                structured_output=args.get("structured_output") or {},
+                summary=summary,
+                structured_output=structured_output,
                 artifact_refs=args.get("artifact_refs"),
                 evidence_refs=args.get("evidence_refs"),
             )
@@ -649,10 +826,14 @@ class LlmSkillAgent:
             logger.debug("Failed to write skill tool audit log", exc_info=True)
 
     @staticmethod
-    def _bind_tools(model: BaseChatModel, manifest: SkillManifest) -> BaseChatModel:
+    def _bind_tools(
+        model: BaseChatModel,
+        manifest: SkillManifest,
+        persistent_frame: bool = False,
+    ) -> BaseChatModel:
         if not hasattr(model, "bind_tools"):
             return model
-        return model.bind_tools(_tool_specs(manifest))
+        return model.bind_tools(_tool_specs(manifest, persistent_frame=persistent_frame))
 
     @staticmethod
     def _build_system_prompt(manifest: SkillManifest, account_context_prompt: str = "") -> str:
@@ -670,6 +851,19 @@ class LlmSkillAgent:
             "Business functions may be shown as `function_id@version`; when using "
             "invoke_business_function, pass them as `function_id` without the @version "
             "suffix and `version` separately. "
+            "Navigator runtime identifiers such as skillId, functionId, frameId, "
+            "skillFrameId, function_frame_id, taskId, sessionId, messageId, and "
+            "values prefixed with frm_, lgt_, msg_, or sess_ are internal tracing "
+            "ids. Use them only when reasoning about execution history or when the "
+            "user explicitly asks for trace/debug identifiers; do not expose them "
+            "in normal user-facing summaries, and never present them as an order "
+            "number, waybill number, business document number, or proof that a "
+            "formal order was created. Only call a value an order/waybill/business "
+            "id when the tool output schema or result explicitly provides a public "
+            "business identifier field such as orderNo, orderIdentifier, or waybillNo. "
+            "For page-opening structured outputs, prefer the tool summary and action "
+            "label; do not infer business success or business ids from page actions, "
+            "buttons, Navigator frame ids, skill ids, or action metadata. "
             "If the skill references files under its bundle, use list_skill_resources "
             "or read_skill_resource; those tools only expose the current ClientApp's "
             "public skill resources. "
@@ -688,6 +882,7 @@ class LlmSkillAgent:
         parts = [
             f"SKILL_AGENT_START {skill_id}",
             _build_runtime_time_context_prompt(runtime_context),
+            _build_recoverable_interruption_prompt(runtime_context, prompt),
             f"User request: {prompt}",
             f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}",
             _build_visible_context_prompt(runtime_context),
@@ -736,6 +931,12 @@ def _runtime_context_for_child_skill(
     return child_context
 
 
+def _resume_parent_if_waiting(runtime: SkillRuntime, parent_frame_id: str) -> None:
+    parent = runtime.get_frame(parent_frame_id)
+    if parent and parent.status == FrameStatus.WAITING_CHILD:
+        runtime.resume_from_child(parent_frame_id)
+
+
 def _context_visibility_for_child_manifest(manifest: SkillManifest) -> str:
     visibility = _normalize_context_visibility(manifest.context_visibility)
     if visibility != "passthrough":
@@ -750,6 +951,66 @@ def _normalize_context_visibility(value: str | None) -> str:
     if normalized in {"isolated", "summary", "passthrough"}:
         return normalized
     return "isolated"
+
+
+def _recoverable_interruption_context(working_state: dict[str, Any]) -> dict[str, Any] | None:
+    if working_state.get("continuation_state") != "INTERRUPTED":
+        return None
+    if not working_state.get("recoverable"):
+        return None
+    context = {
+        "reason": working_state.get("interrupt_reason") or "unknown",
+        "last_error": working_state.get("last_error") or "",
+        "last_task_id": working_state.get("last_task_id") or "",
+        "interrupted_at": working_state.get("interrupted_at") or "",
+    }
+    pending_child = working_state.get("pending_recoverable_child")
+    if isinstance(pending_child, dict):
+        context["pending_child_skill"] = _safe_content(pending_child)
+    return context
+
+
+def _build_recoverable_interruption_prompt(
+    runtime_context: dict[str, Any] | None,
+    prompt: str,
+) -> str:
+    if not runtime_context:
+        return ""
+    interruption = runtime_context.get("_recoverable_interruption")
+    if not isinstance(interruption, dict):
+        return ""
+    parts = [
+        "Previous execution was interrupted.",
+        f"Reason: {interruption.get('reason') or 'unknown'}",
+    ]
+    last_error = interruption.get("last_error")
+    if last_error:
+        parts.append(f"Last error: {last_error}")
+    last_task_id = interruption.get("last_task_id")
+    if last_task_id:
+        parts.append(f"Last task: {last_task_id}")
+    pending_child = interruption.get("pending_child_skill")
+    if isinstance(pending_child, dict):
+        parts.append(
+            "Pending child skill: "
+            f"{json.dumps(pending_child, ensure_ascii=False, sort_keys=True)}"
+        )
+    parts.append(f"User's new instruction: {prompt}")
+    parts.append(
+        "The interrupted work is a recoverable candidate, not a mandatory "
+        "continuation. If the new instruction explicitly continues, corrects, "
+        "or supplements the interrupted work, continue from the existing frame "
+        "context. If there is a pending child skill, use "
+        "resume_recoverable_child_skill so the same child frame continues. "
+        "If the user explicitly stops/cancels it, or asks for an "
+        "unrelated new task, do not continue the interrupted work; summarize "
+        "what is being abandoned, then use shelve_interrupted_frame with "
+        "decision set to ABANDON_PREVIOUS or START_UNRELATED_NEW_TASK and "
+        "include an abandoned_interruption summary. "
+        "If the intent is ambiguous and the interrupted work involves approval "
+        "or business side effects, ask for clarification via submit_skill_result."
+    )
+    return "\n".join(parts)
 
 
 def _build_visible_context_prompt(runtime_context: dict[str, Any] | None) -> str:
@@ -949,7 +1210,7 @@ def _dispatch_public_resource_tool(
 # ---------------------------------------------------------------------------
 
 
-def _tool_specs(manifest: SkillManifest) -> list[dict[str, Any]]:
+def _tool_specs(manifest: SkillManifest, persistent_frame: bool = False) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     for name in [*_GLOBAL_TOOL_NAMES, *manifest.allowed_tools]:
         if name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES:
@@ -958,6 +1219,9 @@ def _tool_specs(manifest: SkillManifest) -> list[dict[str, Any]]:
             specs.append(_KNOWN_TOOL_SCHEMAS[name])
     if "submit_skill_result" not in {s["function"]["name"] for s in specs}:
         specs.append(_KNOWN_TOOL_SCHEMAS["submit_skill_result"])
+    if persistent_frame and manifest.id == "system.root":
+        specs.append(_KNOWN_TOOL_SCHEMAS["resume_recoverable_child_skill"])
+        specs.append(_KNOWN_TOOL_SCHEMAS["shelve_interrupted_frame"])
     return _dedupe_tool_specs(specs)
 
 
@@ -1133,6 +1397,57 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "evidence_refs": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["summary", "structured_output"],
+            },
+        },
+    },
+    "shelve_interrupted_frame": {
+        "type": "function",
+        "function": {
+            "name": "shelve_interrupted_frame",
+            "description": (
+                "Root-only tool. Shelve the previous recoverable interruption "
+                "when the user stops it or asks for an unrelated new task."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "decision": {
+                        "type": "string",
+                        "enum": ["ABANDON_PREVIOUS", "START_UNRELATED_NEW_TASK"],
+                    },
+                    "abandoned_interruption": {
+                        "type": "object",
+                        "description": "Compact summary of the interrupted work being shelved.",
+                    },
+                    "new_task": {
+                        "type": "object",
+                        "description": "Optional compact description of the unrelated new task.",
+                    },
+                    "artifact_refs": {"type": "array", "items": {"type": "string"}},
+                    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["summary", "decision", "abandoned_interruption"],
+            },
+        },
+    },
+    "resume_recoverable_child_skill": {
+        "type": "function",
+        "function": {
+            "name": "resume_recoverable_child_skill",
+            "description": (
+                "Root-only tool. Continue the pending recoverable child skill "
+                "frame after an interrupted child-skill execution."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": {
+                        "type": "string",
+                        "description": "Natural language instruction for continuing the child skill.",
+                    },
+                },
+                "required": ["instruction"],
             },
         },
     },
@@ -1378,6 +1693,138 @@ def _safe_tool_call_args(args: dict[str, Any]) -> dict[str, Any]:
         if "token" in lowered or "secret" in lowered or "password" in lowered:
             safe_args[key] = "<redacted>"
     return _safe_content(safe_args)
+
+
+def _guard_final_summary(
+    summary: Any,
+    structured_output: Any,
+    frame: Any | None,
+) -> str:
+    text = summary if isinstance(summary, str) else str(summary or "")
+    text = text.strip()
+    if not text:
+        return _safe_summary_from_context(frame, structured_output)
+
+    claims_business_id = _BUSINESS_ID_CLAIM_PATTERN.search(text) is not None
+    claims_formal_order = _FORMAL_ORDER_SUCCESS_PATTERN.search(text) is not None
+    if not (claims_business_id or claims_formal_order):
+        return text
+
+    allowed_ids = _collect_business_identifier_values(structured_output)
+    if frame is not None:
+        for message in frame.private_messages:
+            allowed_ids.update(_collect_business_identifier_values(message.get("content")))
+
+    if claims_business_id and any(value and value in text for value in allowed_ids):
+        return text
+
+    if _is_page_action_without_business_identifier(structured_output) or _contains_runtime_identifier_claim(text):
+        return _safe_summary_from_context(frame, structured_output)
+
+    if claims_business_id and not allowed_ids:
+        return _safe_summary_from_context(frame, structured_output)
+
+    return text
+
+
+def _contains_runtime_identifier_claim(text: str) -> bool:
+    if _NAVIGATOR_RUNTIME_IDENTIFIER_PATTERN.search(text):
+        return True
+    return any(field in text for field in _NAVIGATOR_RUNTIME_IDENTIFIER_FIELDS)
+
+
+def _is_page_action_without_business_identifier(value: Any) -> bool:
+    actions = _collect_action_like_outputs(value)
+    if not actions:
+        return False
+    return not _collect_business_identifier_values(value)
+
+
+def _collect_action_like_outputs(value: Any) -> list[dict[str, Any]]:
+    parsed = _parse_maybe_json(value)
+    if isinstance(parsed, list):
+        actions: list[dict[str, Any]] = []
+        for item in parsed:
+            actions.extend(_collect_action_like_outputs(item))
+        return actions
+    if not isinstance(parsed, dict):
+        return []
+    actions = []
+    action_type = parsed.get("type") or parsed.get("actionType") or parsed.get("action")
+    if isinstance(action_type, str) and re.search(r"OPEN_.*PAGE|OPEN_TMS_PAGE", action_type, re.IGNORECASE):
+        actions.append(parsed)
+    for key in ("actions", "structured_output", "structuredOutput", "result", "output", "payload", "data"):
+        actions.extend(_collect_action_like_outputs(parsed.get(key)))
+    return actions
+
+
+def _collect_business_identifier_values(value: Any) -> set[str]:
+    parsed = _parse_maybe_json(value)
+    found: set[str] = set()
+    if isinstance(parsed, list):
+        for item in parsed:
+            found.update(_collect_business_identifier_values(item))
+        return found
+    if not isinstance(parsed, dict):
+        return found
+    for key, nested in parsed.items():
+        if key in _BUSINESS_IDENTIFIER_FIELDS and isinstance(nested, (str, int, float)):
+            text = str(nested).strip()
+            if text:
+                found.add(text)
+        elif key not in _NAVIGATOR_RUNTIME_IDENTIFIER_FIELDS:
+            found.update(_collect_business_identifier_values(nested))
+    return found
+
+
+def _safe_summary_from_context(frame: Any | None, structured_output: Any) -> str:
+    if frame is not None:
+        for message in reversed(frame.private_messages):
+            candidate = _extract_safe_summary(message.get("content"))
+            if candidate:
+                return candidate
+    candidate = _extract_safe_summary(structured_output)
+    if candidate:
+        return candidate
+    if _is_page_action_without_business_identifier(structured_output):
+        return "已完成操作，可继续处理。"
+    return "已完成操作。"
+
+
+def _extract_safe_summary(value: Any) -> str | None:
+    parsed = _parse_maybe_json(value)
+    if isinstance(parsed, list):
+        for item in reversed(parsed):
+            candidate = _extract_safe_summary(item)
+            if candidate:
+                return candidate
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    for key in ("summary", "message", "label"):
+        candidate = parsed.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            text = candidate.strip()
+            if (
+                not _contains_runtime_identifier_claim(text)
+                and not _BUSINESS_ID_CLAIM_PATTERN.search(text)
+                and not _FORMAL_ORDER_SUCCESS_PATTERN.search(text)
+            ):
+                return text
+    for key in ("result", "output", "data", "structured_output", "structuredOutput", "payload"):
+        candidate = _extract_safe_summary(parsed.get(key))
+        if candidate:
+            return candidate
+    return None
+
+
+def _parse_maybe_json(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
 
 
 def _tool_function_id(

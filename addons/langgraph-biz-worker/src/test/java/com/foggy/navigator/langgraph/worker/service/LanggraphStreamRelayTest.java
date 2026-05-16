@@ -213,6 +213,23 @@ class LanggraphStreamRelayTest {
     }
 
     @Test
+    void streamErrorRecordsRecoverableInterruptionBeforeFailingTask() throws Exception {
+        String taskId = "lgt-task-5";
+        String sessionId = "session-5";
+
+        invokeHandleStreamError(new RuntimeException("connection reset"), taskId, sessionId);
+
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(taskService, sessionEventListener);
+        inOrder.verify(taskService).recordTaskInterruption(taskId, "stream_error", "connection reset");
+        inOrder.verify(taskService).failTask(taskId, "Stream error: connection reset");
+        inOrder.verify(sessionEventListener).handleMessage(org.mockito.ArgumentMatchers.argThat(message ->
+                message.getType() == MessageType.ERROR
+                        && taskId.equals(message.getTaskId())
+        ));
+    }
+
+
+    @Test
     void resolveLlmConfigBuildsWorkerRequestConfigFromModelConfig() throws Exception {
         LlmModelConfigDTO model = new LlmModelConfigDTO();
         model.setId("cfg-e2e");
@@ -255,5 +272,16 @@ class LanggraphStreamRelayTest {
         );
         method.setAccessible(true);
         return method.invoke(relay, modelConfigId, workerId);
+    }
+
+    private void invokeHandleStreamError(Throwable error, String taskId, String sessionId) throws Exception {
+        Method method = LanggraphStreamRelay.class.getDeclaredMethod(
+                "handleStreamError",
+                Throwable.class,
+                String.class,
+                String.class
+        );
+        method.setAccessible(true);
+        method.invoke(relay, error, taskId, sessionId);
     }
 }

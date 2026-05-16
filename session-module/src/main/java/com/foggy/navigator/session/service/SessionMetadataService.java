@@ -85,21 +85,27 @@ public class SessionMetadataService {
     }
 
     @Transactional
-    public SessionConfigDTO bindAuth(String sessionId, String userId, String authMode, String authToken, String baseUrl) {
+    public SessionConfigDTO bindAuth(String sessionId, String userId, String authMode, String authToken,
+                                     String baseUrl, String modelConfigId) {
         SessionEntity session = requireOwnedSession(sessionId, userId);
         if (session.getAuthBoundAt() != null) {
             throw new IllegalStateException("Auth already bound for this conversation");
         }
-        applyAuth(session, authMode, authToken, baseUrl, null, true);
-        log.info("Auth bound for session {}: mode={}", sessionId, authMode);
+        ResolvedAuth resolvedAuth = resolveAuthBinding(session, authMode, authToken, baseUrl, modelConfigId);
+        applyAuth(session, resolvedAuth.authMode(), resolvedAuth.authToken(), resolvedAuth.baseUrl(),
+                resolvedAuth.modelConfigId(), true);
+        log.info("Auth bound for session {}: mode={}", sessionId, resolvedAuth.authMode());
         return toDTO(sessionRepository.save(session));
     }
 
     @Transactional
-    public SessionConfigDTO updateAuth(String sessionId, String userId, String authMode, String authToken, String baseUrl) {
+    public SessionConfigDTO updateAuth(String sessionId, String userId, String authMode, String authToken,
+                                       String baseUrl, String modelConfigId) {
         SessionEntity session = requireOwnedSession(sessionId, userId);
-        applyAuth(session, authMode, authToken, baseUrl, null, false);
-        log.info("Auth updated for session {}: mode={}", sessionId, authMode);
+        ResolvedAuth resolvedAuth = resolveAuthBinding(session, authMode, authToken, baseUrl, modelConfigId);
+        applyAuth(session, resolvedAuth.authMode(), resolvedAuth.authToken(), resolvedAuth.baseUrl(),
+                resolvedAuth.modelConfigId(), false);
+        log.info("Auth updated for session {}: mode={}", sessionId, resolvedAuth.authMode());
         return toDTO(sessionRepository.save(session));
     }
 
@@ -194,6 +200,10 @@ public class SessionMetadataService {
             return new ResolvedAuth(blankToNull(authMode), blankToNull(authToken), blankToNull(baseUrl), null);
         }
 
+        if (isSubscriptionConfig(modelConfig)) {
+            return new ResolvedAuth("SUBSCRIPTION", null, null, modelConfigId);
+        }
+
         String decryptedApiKey = llmModelManager.getDecryptedApiKey(modelConfigId);
         if (decryptedApiKey == null || decryptedApiKey.isBlank()) {
             return new ResolvedAuth(blankToNull(authMode), blankToNull(authToken), blankToNull(baseUrl), null);
@@ -203,6 +213,14 @@ public class SessionMetadataService {
                 ? "CUSTOM_ENDPOINT"
                 : "API_KEY";
         return new ResolvedAuth(resolvedMode, decryptedApiKey, blankToNull(modelConfig.getBaseUrl()), modelConfigId);
+    }
+
+    private boolean isSubscriptionConfig(LlmModelConfigDTO modelConfig) {
+        return modelConfig != null
+                && modelConfig.getWorkerBackend() != null
+                && !modelConfig.getWorkerBackend().isBlank()
+                && (modelConfig.getBaseUrl() == null || modelConfig.getBaseUrl().isBlank())
+                && !Boolean.TRUE.equals(modelConfig.getHasApiKey());
     }
 
     private void applyAuth(SessionEntity session, String authMode, String authToken, String baseUrl,
@@ -238,6 +256,7 @@ public class SessionMetadataService {
                 .customTitle(session.getTitle())
                 .authMode(session.getAuthMode())
                 .authBound(session.getAuthBoundAt() != null)
+                .authModelConfigId(session.getAuthModelConfigId())
                 .baseUrl(session.getAuthBaseUrl())
                 .maskedAuthToken(maskedAuthToken)
                 .tags(parseTags(session.getTagsJson()))

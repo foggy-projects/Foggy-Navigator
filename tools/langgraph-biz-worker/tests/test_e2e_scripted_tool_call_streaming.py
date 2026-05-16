@@ -7,6 +7,7 @@ import json
 import socket
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 import httpx
@@ -20,7 +21,8 @@ if str(MOCK_LLM_SRC) not in sys.path:
 
 from langgraph_biz_worker.graphs import root_graph as root_graph_module
 from langgraph_biz_worker.main import app as worker_app
-from langgraph_biz_worker.models import QueryEvent
+from langgraph_biz_worker.models import FrameStatus, QueryEvent
+from langgraph_biz_worker.routes import frame_interruption as frame_interruption_module
 from mock_llm.main import app as mock_llm_app
 
 
@@ -199,3 +201,717 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
     assert first_turn["responseSummary"]["toolCalls"] == ["invoke_business_skill"]
     assert second_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
     assert third_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
+
+
+@pytest.mark.anyio
+async def test_scripted_root_skill_reuses_frame_across_tasks(monkeypatch, mock_llm_server):
+    """Same session/context should reuse one persistent system.root frame."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-frame-reuse-{run_id}"
+    session_id = f"sess-e2e-root-reuse-{run_id}"
+    context_id = f"ctx-e2e-root-reuse-{run_id}"
+    first_task_id = f"task_e2e_root_reuse_001_{run_id}"
+    second_task_id = f"task_e2e_root_reuse_002_{run_id}"
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-reuse",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "First root turn complete.",
+                                        "structured_output": {"turn": 1},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Second root turn complete.",
+                                        "structured_output": {"turn": 2},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"first root turn next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+        second_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"second root turn next:{trace_id}:002",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    second_events = _parse_worker_sse(second_response.text)
+
+    first_open = next(event for event in first_events if event.type == "skill_frame_open")
+    second_open = next(event for event in second_events if event.type == "skill_frame_open")
+    assert first_open.skill_frame_id == second_open.skill_frame_id
+    assert first_open.content == "Opening frame for skill: system.root"
+    assert second_open.content == "Reusing frame for skill: system.root"
+
+    first_result = next(event for event in first_events if event.type == "result")
+    second_result = next(event for event in second_events if event.type == "result")
+    assert first_result.content == "First root turn complete."
+    assert second_result.content == "Second root turn complete."
+
+    frame = root_graph_module.get_runtime().get_frame(first_open.skill_frame_id)
+    assert frame is not None
+    assert frame.conversation_id == context_id
+    assert frame.origin_task_id == first_task_id
+    assert frame.current_task_id == second_task_id
+    assert frame.last_task_ids[-2:] == [first_task_id, second_task_id]
+
+
+@pytest.mark.anyio
+async def test_scripted_root_skill_continues_after_recoverable_model_loop_failure(
+    monkeypatch,
+    mock_llm_server,
+):
+    """A no-submit mock LLM loop should keep system.root recoverable for the next task."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-continue-{run_id}"
+    session_id = f"sess-e2e-root-continue-{run_id}"
+    context_id = f"ctx-e2e-root-continue-{run_id}"
+    first_task_id = f"task_e2e_root_continue_001_{run_id}"
+    second_task_id = f"task_e2e_root_continue_002_{run_id}"
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-continue",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {"content": f"No tool yet next:{trace_id}:002"},
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {"content": "Still no valid submit."},
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Continued root turn complete.",
+                                        "structured_output": {"continued": True},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_skill_max_iterations", 2)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        failed_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"start and fail recoverably next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"继续 next:{trace_id}:003",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert failed_response.status_code == 200
+    assert continued_response.status_code == 200
+    failed_events = _parse_worker_sse(failed_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+
+    failed_open = next(event for event in failed_events if event.type == "skill_frame_open")
+    continued_open = next(event for event in continued_events if event.type == "skill_frame_open")
+    assert failed_open.skill_frame_id == continued_open.skill_frame_id
+    assert any(
+        event.type == "error"
+        and event.error == "LLM skill agent reached max iterations without valid submit"
+        for event in failed_events
+    )
+    assert continued_open.content == "Reusing frame for skill: system.root"
+    result = next(event for event in continued_events if event.type == "result")
+    assert result.content == "Continued root turn complete."
+    assert result.structured_output == {"continued": True}
+
+    frame = root_graph_module.get_runtime().get_frame(failed_open.skill_frame_id)
+    assert frame is not None
+    assert frame.status.value == "RUNNING"
+    assert frame.current_task_id == second_task_id
+    assert "continuation_state" not in frame.private_working_state
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    cursors = [record["cursor"] for record in records]
+    assert cursors == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+    ]
+    continue_record = records[2]
+    user_messages = [
+        message["content"]
+        for message in continue_record["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("Previous execution was interrupted." in content for content in user_messages)
+    assert any("Reason: model_error" in content for content in user_messages)
+    assert any(
+        "LLM skill agent reached max iterations without valid submit" in content
+        for content in user_messages
+    )
+    assert any("User's new instruction: 继续" in content for content in user_messages)
+
+
+@pytest.mark.anyio
+async def test_scripted_root_skill_continues_after_user_cancelled_interruption(
+    monkeypatch,
+    mock_llm_server,
+):
+    """Java-style cancel callback should make the root frame visible to the next mock LLM turn."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-cancel-continue-{run_id}"
+    session_id = f"sess-e2e-root-cancel-{run_id}"
+    context_id = f"ctx-e2e-root-cancel-{run_id}"
+    first_task_id = f"task_e2e_root_cancel_001_{run_id}"
+    second_task_id = f"task_e2e_root_cancel_002_{run_id}"
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-cancel-continue",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Initial root turn complete.",
+                                        "structured_output": {"turn": 1},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Continued after user cancellation.",
+                                        "structured_output": {"continued_after_cancel": True},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    frame_interruption_module.configure(
+        root_graph_module.get_runtime(),
+        root_graph_module.get_journal(),
+    )
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"initial root turn next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+        interruption_response = await worker_client.post(
+            "/api/v1/frames/interruption",
+            json={
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "context_id": context_id,
+                "reason": "user_cancelled",
+                "error": "Cancelled by user",
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"继续 next:{trace_id}:002",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert interruption_response.status_code == 200
+    assert interruption_response.json()["status"] == "recorded"
+    assert continued_response.status_code == 200
+
+    first_events = _parse_worker_sse(first_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+    first_open = next(event for event in first_events if event.type == "skill_frame_open")
+    continued_open = next(event for event in continued_events if event.type == "skill_frame_open")
+    assert first_open.skill_frame_id == continued_open.skill_frame_id
+    assert continued_open.content == "Reusing frame for skill: system.root"
+
+    result = next(event for event in continued_events if event.type == "result")
+    assert result.content == "Continued after user cancellation."
+    assert result.structured_output == {"continued_after_cancel": True}
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+    ]
+    continue_record = records[1]
+    user_messages = [
+        message["content"]
+        for message in continue_record["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("Previous execution was interrupted." in content for content in user_messages)
+    assert any("Reason: user_cancelled" in content for content in user_messages)
+    assert any("Cancelled by user" in content for content in user_messages)
+    assert any("User's new instruction: 继续" in content for content in user_messages)
+
+
+@pytest.mark.anyio
+async def test_scripted_root_skill_shelves_interruption_for_unrelated_task(
+    monkeypatch,
+    mock_llm_server,
+):
+    """An unrelated new request should archive the interruption instead of forcing continuation."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-shelve-{run_id}"
+    session_id = f"sess-e2e-root-shelve-{run_id}"
+    context_id = f"ctx-e2e-root-shelve-{run_id}"
+    first_task_id = f"task_e2e_root_shelve_001_{run_id}"
+    second_task_id = f"task_e2e_root_shelve_002_{run_id}"
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-shelve",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Initial vehicle task started.",
+                                        "structured_output": {"vehicle_task_started": True},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "shelve_interrupted_frame",
+                                    "args": {
+                                        "summary": "Previous vehicle task was shelved; handled the new lookup.",
+                                        "decision": "START_UNRELATED_NEW_TASK",
+                                        "abandoned_interruption": {
+                                            "summary": "Vehicle creation was cancelled before completion.",
+                                        },
+                                        "new_task": {"type": "lookup"},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    frame_interruption_module.configure(
+        root_graph_module.get_runtime(),
+        root_graph_module.get_journal(),
+    )
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"创建车辆 next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+        interruption_response = await worker_client.post(
+            "/api/v1/frames/interruption",
+            json={
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "context_id": context_id,
+                "reason": "user_cancelled",
+                "error": "Cancelled by user",
+            },
+        )
+        unrelated_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"帮我查一下新的订单列表 next:{trace_id}:002",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert interruption_response.status_code == 200
+    assert interruption_response.json()["status"] == "recorded"
+    assert unrelated_response.status_code == 200
+
+    first_events = _parse_worker_sse(first_response.text)
+    unrelated_events = _parse_worker_sse(unrelated_response.text)
+    first_open = next(event for event in first_events if event.type == "skill_frame_open")
+    unrelated_open = next(event for event in unrelated_events if event.type == "skill_frame_open")
+    assert first_open.skill_frame_id == unrelated_open.skill_frame_id
+    assert unrelated_open.content == "Reusing frame for skill: system.root"
+
+    result = next(event for event in unrelated_events if event.type == "result")
+    assert result.content == "Previous vehicle task was shelved; handled the new lookup."
+    assert result.structured_output["continuation_decision"] == "START_UNRELATED_NEW_TASK"
+
+    frame = root_graph_module.get_runtime().get_frame(first_open.skill_frame_id)
+    assert frame is not None
+    assert frame.current_task_id == second_task_id
+    assert "continuation_state" not in frame.private_working_state
+    history = frame.private_working_state["root_context_summary"]["interruption_history"]
+    assert history[-1]["reason"] == "user_cancelled"
+    assert history[-1]["resolution"] == "START_UNRELATED_NEW_TASK"
+    assert history[-1]["abandoned_interruption"] == {
+        "summary": "Vehicle creation was cancelled before completion.",
+    }
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+    ]
+    user_messages = [
+        message["content"]
+        for message in records[1]["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("recoverable candidate, not a mandatory continuation" in content for content in user_messages)
+    assert any("START_UNRELATED_NEW_TASK" in content for content in user_messages)
+    assert any("abandoned_interruption" in content for content in user_messages)
+    assert any("shelve_interrupted_frame" in content for content in user_messages)
+
+
+@pytest.mark.anyio
+async def test_scripted_root_skill_resumes_interrupted_child_frame(
+    monkeypatch,
+    mock_llm_server,
+):
+    """A "continue" request should resume the exact child frame interrupted earlier."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-resume-child-{run_id}"
+    session_id = f"sess-e2e-root-resume-child-{run_id}"
+    context_id = f"ctx-e2e-root-resume-child-{run_id}"
+    first_task_id = f"task_e2e_root_resume_child_001_{run_id}"
+    second_task_id = f"task_e2e_root_resume_child_002_{run_id}"
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-resume-child",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "resume_recoverable_child_skill",
+                                    "args": {
+                                        "instruction": f"继续子技能 next:{trace_id}:002",
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": f"Child resumed successfully next:{trace_id}:003",
+                                        "structured_output": {
+                                            "classification": "vehicle_delay",
+                                            "recommended_action": "manual_dispatch",
+                                            "confidence": 0.91,
+                                        },
+                                        "evidence_refs": ["e2e:resume-child"],
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Root completed after resuming child.",
+                                        "structured_output": {"child_resumed": True},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    frame_interruption_module.configure(
+        root_graph_module.get_runtime(),
+        root_graph_module.get_journal(),
+    )
+    runtime = root_graph_module.get_runtime()
+    root_frame_id = runtime.invoke_skill(
+        task_id=first_task_id,
+        skill_id="system.root",
+        conversation_id=context_id,
+        session_id=session_id,
+        current_task_id=first_task_id,
+        origin_task_id=first_task_id,
+    )
+    child_frame_id = runtime.invoke_child_skill(
+        root_frame_id,
+        "exception_triage",
+        {"order_id": "ORD-1"},
+    )
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        interruption_response = await worker_client.post(
+            "/api/v1/frames/interruption",
+            json={
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "context_id": context_id,
+                "reason": "user_cancelled",
+                "error": "Cancelled by user while child skill was running",
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"继续 next:{trace_id}:001",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert interruption_response.status_code == 200
+    assert interruption_response.json()["status"] == "recorded"
+    assert continued_response.status_code == 200
+
+    events = _parse_worker_sse(continued_response.text)
+    root_open = next(event for event in events if event.type == "skill_frame_open" and event.skill_id == "system.root")
+    child_open = next(event for event in events if event.type == "skill_frame_open" and event.skill_id == "exception_triage")
+    result = next(event for event in events if event.type == "result")
+    assert root_open.skill_frame_id == root_frame_id
+    assert root_open.content == "Reusing frame for skill: system.root"
+    assert child_open.skill_frame_id == child_frame_id
+    assert child_open.content == "Resuming frame for skill: exception_triage"
+    assert result.content == "Root completed after resuming child."
+    assert result.structured_output == {"child_resumed": True}
+
+    root = runtime.get_frame(root_frame_id)
+    child = runtime.get_frame(child_frame_id)
+    assert root is not None
+    assert child is not None
+    assert root.status == FrameStatus.RUNNING
+    assert child.status == FrameStatus.COMPLETED
+    assert "pending_recoverable_child_frame_id" not in root.private_working_state
+    assert root.private_working_state["child_results"][child_frame_id]["structured_output"] == {
+        "classification": "vehicle_delay",
+        "recommended_action": "manual_dispatch",
+        "confidence": 0.91,
+    }
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+    ]
+    root_user_messages = [
+        message["content"]
+        for message in records[0]["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("Pending child skill:" in content for content in root_user_messages)
+    assert any("resume_recoverable_child_skill" in content for content in root_user_messages)

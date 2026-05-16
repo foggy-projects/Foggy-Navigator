@@ -31,6 +31,14 @@ class FakeToolCallModel:
         return response
 
 
+class FailingModel:
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        raise RuntimeError("upstream model timed out")
+
+
 def _manifest() -> SkillManifest:
     return SkillManifest(
         id="exception_triage",
@@ -197,6 +205,331 @@ def test_llm_agent_persistent_frame_submit_keeps_frame_running():
     assert events[-1].type == "skill_result_submit"
 
 
+def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_context():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_continue_001",
+        skill_id="system.root",
+        skill_input={"request": "create vehicle"},
+        conversation_id="sess_continue",
+        session_id="sess_continue",
+    )
+    runtime.record_recoverable_interruption(
+        frame_id,
+        reason="model_error",
+        error="upstream model timed out",
+        task_id="task_root_continue_001",
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Continued from interruption.",
+                "structured_output": {"continued": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_continue_002",
+        frame_id=frame_id,
+        prompt="继续",
+        persistent_frame=True,
+    )
+
+    user_prompt = model.seen_messages[0][1].content
+    assert "Previous execution was interrupted." in user_prompt
+    assert "Reason: model_error" in user_prompt
+    assert "upstream model timed out" in user_prompt
+    assert "User's new instruction: 继续" in user_prompt
+    assert "recoverable candidate, not a mandatory continuation" in user_prompt
+    assert "START_UNRELATED_NEW_TASK" in user_prompt
+    assert "abandoned_interruption" in user_prompt
+    assert "shelve_interrupted_frame" in user_prompt
+
+
+def test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child():
+    runtime = _root_with_child_runtime()
+    root_frame_id = runtime.invoke_skill(
+        task_id="task_root_child_prompt_001",
+        skill_id="system.root",
+        conversation_id="sess_child_prompt",
+        session_id="sess_child_prompt",
+    )
+    child_frame_id = runtime.invoke_child_skill(root_frame_id, "child_skill", {"order_id": "ORD-1"})
+    runtime.record_recoverable_child_interruption(
+        root_frame_id,
+        reason="user_cancelled",
+        error="Cancelled during child",
+        task_id="task_root_child_prompt_001",
+    )
+    runtime.record_recoverable_interruption(
+        root_frame_id,
+        reason="user_cancelled",
+        error="Cancelled during child",
+        task_id="task_root_child_prompt_001",
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Asked for clarification.",
+                "structured_output": {"needs_clarification": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_child_prompt_002",
+        frame_id=root_frame_id,
+        prompt="继续",
+        persistent_frame=True,
+    )
+
+    user_prompt = model.seen_messages[0][1].content
+    assert "Pending child skill:" in user_prompt
+    assert child_frame_id in user_prompt
+    assert "child_skill" in user_prompt
+    assert "resume_recoverable_child_skill" in user_prompt
+
+
+def test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_shelve_tools_001",
+        skill_id="system.root",
+        conversation_id="sess_root_shelve_tools",
+        session_id="sess_root_shelve_tools",
+    )
+    runtime.record_recoverable_interruption(
+        frame_id,
+        reason="user_cancelled",
+        error="Cancelled by user",
+        task_id="task_root_shelve_tools_001",
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_shelve",
+            "name": "shelve_interrupted_frame",
+            "args": {
+                "summary": "Previous vehicle task was shelved.",
+                "decision": "START_UNRELATED_NEW_TASK",
+                "abandoned_interruption": {
+                    "summary": "Vehicle creation was cancelled before completion.",
+                },
+                "new_task": {"type": "lookup"},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_root_shelve_tools_002",
+        frame_id=frame_id,
+        prompt="帮我查订单列表",
+        persistent_frame=True,
+    )
+
+    bound_tool_names = {tool["function"]["name"] for tool in model.bound_tools}
+    frame = runtime.get_frame(frame_id)
+    assert "shelve_interrupted_frame" in bound_tool_names
+    assert "resume_recoverable_child_skill" in bound_tool_names
+    assert events[-1].tool_name == "shelve_interrupted_frame"
+    assert frame.status == FrameStatus.RUNNING
+    assert frame.result_summary == "Previous vehicle task was shelved."
+    assert frame.output["continuation_decision"] == "START_UNRELATED_NEW_TASK"
+    assert "continuation_state" not in frame.private_working_state
+    history = frame.private_working_state["root_context_summary"]["interruption_history"]
+    assert history[-1]["resolution"] == "START_UNRELATED_NEW_TASK"
+    assert history[-1]["abandoned_interruption"] == {
+        "summary": "Vehicle creation was cancelled before completion.",
+    }
+
+
+def test_llm_agent_root_resumes_pending_recoverable_child_frame():
+    runtime = _root_with_child_runtime()
+    root_frame_id = runtime.invoke_skill(
+        task_id="task_root_resume_child_001",
+        skill_id="system.root",
+        conversation_id="sess_resume_child",
+        session_id="sess_resume_child",
+    )
+    child_frame_id = runtime.invoke_child_skill(
+        root_frame_id,
+        "child_skill",
+        {"order_id": "ORD-1"},
+    )
+    runtime.record_recoverable_child_interruption(
+        root_frame_id,
+        reason="user_cancelled",
+        error="Cancelled during child",
+        task_id="task_root_resume_child_001",
+    )
+    runtime.record_recoverable_interruption(
+        root_frame_id,
+        reason="user_cancelled",
+        error="Cancelled during child",
+        task_id="task_root_resume_child_001",
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_resume_child",
+            "name": "resume_recoverable_child_skill",
+            "args": {"instruction": "继续完成子技能"},
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Child completed after resume.",
+                "structured_output": {"child_continued": True},
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_root_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Root completed after child resume.",
+                "structured_output": {"root_continued_child": True},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_root_resume_child_002",
+        frame_id=root_frame_id,
+        prompt="继续",
+        persistent_frame=True,
+    )
+
+    root = runtime.get_frame(root_frame_id)
+    child = runtime.get_frame(child_frame_id)
+    assert root is not None
+    assert child is not None
+    assert root.status == FrameStatus.RUNNING
+    assert child.status == FrameStatus.COMPLETED
+    assert root.output == {"root_continued_child": True}
+    assert child_frame_id in root.private_working_state["child_results"]
+    assert "pending_recoverable_child_frame_id" not in root.private_working_state
+    assert any(event.tool_name == "resume_recoverable_child_skill" for event in events)
+    assert any(
+        event.type == "skill_frame_open"
+        and event.skill_frame_id == child_frame_id
+        and event.content == "Resuming frame for skill: child_skill"
+        for event in events
+    )
+
+
+def test_llm_agent_shelve_clears_pending_recoverable_child_frame():
+    runtime = _root_with_child_runtime()
+    root_frame_id = runtime.invoke_skill(
+        task_id="task_root_shelve_child_001",
+        skill_id="system.root",
+        conversation_id="sess_shelve_child",
+        session_id="sess_shelve_child",
+    )
+    child_frame_id = runtime.invoke_child_skill(root_frame_id, "child_skill", {"order_id": "ORD-2"})
+    runtime.record_recoverable_child_interruption(
+        root_frame_id,
+        reason="user_cancelled",
+        error="Cancelled during child",
+        task_id="task_root_shelve_child_001",
+    )
+    runtime.record_recoverable_interruption(
+        root_frame_id,
+        reason="user_cancelled",
+        error="Cancelled during child",
+        task_id="task_root_shelve_child_001",
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_shelve",
+            "name": "shelve_interrupted_frame",
+            "args": {
+                "summary": "Shelved child work.",
+                "decision": "START_UNRELATED_NEW_TASK",
+                "abandoned_interruption": {"summary": "Child work was cancelled."},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_shelve_child_002",
+        frame_id=root_frame_id,
+        prompt="查新订单",
+        persistent_frame=True,
+    )
+
+    root = runtime.get_frame(root_frame_id)
+    child = runtime.get_frame(child_frame_id)
+    assert root is not None
+    assert child is not None
+    assert "pending_recoverable_child_frame_id" not in root.private_working_state
+    assert "pending_recoverable_child" not in root.private_working_state
+    assert child.status == FrameStatus.CANCELLED
+    assert child.private_working_state["continuation_state"] == "SHELVED"
+
+
+def test_llm_agent_non_persistent_frame_does_not_expose_shelve_tool():
+    runtime = _runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_regular_skill_001",
+        skill_id="exception_triage",
+        skill_input={"order_id": "ORD-LLM-001"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "done",
+                "structured_output": {
+                    "classification": "other",
+                    "recommended_action": "ignore",
+                    "confidence": 0.9,
+                },
+                "evidence_refs": ["ev_1"],
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_regular_skill_001",
+        frame_id=frame_id,
+        prompt="triage",
+    )
+
+    bound_tool_names = {tool["function"]["name"] for tool in model.bound_tools}
+    assert "shelve_interrupted_frame" not in bound_tool_names
+
+
+def test_llm_agent_persistent_frame_model_error_records_recoverable_interruption():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_model_error_001",
+        skill_id="system.root",
+        skill_input={"request": "create vehicle"},
+        conversation_id="sess_model_error",
+        session_id="sess_model_error",
+    )
+
+    events = LlmSkillAgent(FailingModel(), runtime).run(
+        task_id="task_root_model_error_001",
+        frame_id=frame_id,
+        prompt="创建车辆",
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert frame.status == FrameStatus.RUNNING
+    assert events[0].type == "error"
+    assert frame.private_working_state["continuation_state"] == "INTERRUPTED"
+    assert frame.private_working_state["interrupt_reason"] == "model_error"
+    assert frame.private_working_state["last_error"] == "upstream model timed out"
+    assert frame.private_working_state["recoverable"] is True
+
+
 def test_llm_agent_root_skill_can_invoke_business_function_directly(monkeypatch):
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
@@ -261,6 +594,140 @@ def test_llm_agent_root_skill_can_invoke_business_function_directly(monkeypatch)
     assert function_frames[0].parent_frame_id == frame_id
     assert function_frames[0].output["functionId"] == "tms.order.close"
     assert any(event.tool_name == "invoke_business_function" for event in events)
+
+
+def test_llm_agent_does_not_turn_tms_draft_or_frame_id_into_order_number(monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_tms_draft_001",
+        skill_id="system.root",
+        skill_input={"request": "create opening draft"},
+    )
+    draft_id = "afd_9eadcfa5c92b492a88be6f5e583b1271"
+    structured_output = {
+        "type": "OPEN_TMS_PAGE",
+        "label": "去下单",
+        "routeName": "OrderWorkbench",
+        "query": {"aiDraftId": draft_id},
+    }
+
+    def fake_invoke(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        return {
+            "summary": "已生成开单草稿，可点击打开补齐并确认。",
+            "draftId": draft_id,
+            "structured_output": structured_output,
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_function",
+            "name": "invoke_business_function",
+            "args": {
+                "function_id": "tms.order.createOpeningDraft",
+                "version": "v1",
+                "input": {"phone": "18911897361", "weight": "100KG"},
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "订单创建成功！订单号：frm_622f67035042",
+                "structured_output": structured_output,
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_tms_draft_001",
+        frame_id=frame_id,
+        prompt="创建开单草稿",
+        runtime_context={"task_scoped_token": "runtime-token"},
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert frame.result_summary == "已生成开单草稿，可点击打开补齐并确认。"
+    assert "订单创建成功" not in frame.result_summary
+    assert "订单号" not in frame.result_summary
+    assert "frm_622f67035042" not in frame.result_summary
+    assert draft_id not in frame.result_summary
+    assert frame.output == structured_output
+
+
+def test_llm_agent_allows_explicit_order_number_field_in_final_summary():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_order_no_001",
+        skill_id="system.root",
+        skill_input={"request": "query order"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "订单号 EO202605160001，当前状态：待揽收。",
+                "structured_output": {
+                    "orderNo": "EO202605160001",
+                    "orderStatusText": "待揽收",
+                },
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_order_no_001",
+        frame_id=frame_id,
+        prompt="查询订单",
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert frame.result_summary == "订单号 EO202605160001，当前状态：待揽收。"
+
+
+def test_llm_agent_page_action_without_business_id_does_not_generate_order_number():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_page_action_001",
+        skill_id="system.root",
+        skill_input={"request": "open page"},
+    )
+    structured_output = {
+        "type": "OPEN_TMS_PAGE",
+        "label": "去下单",
+        "routeName": "OrderWorkbench",
+        "query": {"aiDraftId": "afd_9eadcfa5c92b492a88be6f5e583b1271"},
+    }
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "订单创建成功！订单号：OrderWorkbench",
+                "structured_output": structured_output,
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_page_action_001",
+        frame_id=frame_id,
+        prompt="打开页面",
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert "订单创建成功" not in frame.result_summary
+    assert "订单号" not in frame.result_summary
+    assert "OrderWorkbench" not in frame.result_summary
+    assert frame.result_summary == "去下单"
 
 
 def test_llm_agent_child_skill_summary_visibility_receives_root_context_summary():

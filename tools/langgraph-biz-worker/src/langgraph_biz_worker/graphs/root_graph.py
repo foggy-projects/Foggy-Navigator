@@ -163,21 +163,85 @@ def _should_use_system_root_skill(state: RootState) -> bool:
     return _chat_model_for_state(state) is not None
 
 
-def _get_or_create_system_root_frame(task_id: str, context: dict[str, Any]) -> tuple[str, bool]:
-    """Return the persistent root frame for this task, restoring it if needed."""
+def _conversation_id_for_root_frame(
+    task_id: str,
+    session_id: str | None,
+    context: dict[str, Any],
+) -> str:
+    for key in (
+        "contextId",
+        "context_id",
+        "conversationId",
+        "conversation_id",
+        "foggy_session_id",
+        "session_id",
+    ):
+        value = context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    if session_id:
+        return session_id
+    return task_id
+
+
+def _get_or_create_system_root_frame(
+    task_id: str,
+    session_id: str | None,
+    context: dict[str, Any],
+) -> tuple[str, bool]:
+    """Return the persistent root frame for this conversation, restoring it if needed."""
+    conversation_id = _conversation_id_for_root_frame(task_id, session_id, context)
+
+    for frame in _runtime.get_frames_by_conversation(conversation_id):
+        if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
+            rebound = _runtime.rebind_frame_to_task(
+                frame.frame_id,
+                task_id,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+            return rebound.frame_id, False
+
+    for frame in _journal.load_by_conversation(conversation_id):
+        if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
+            _runtime.restore_frame(frame)
+            rebound = _runtime.rebind_frame_to_task(
+                frame.frame_id,
+                task_id,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+            return rebound.frame_id, False
+
     for frame in _runtime.get_frames_by_task(task_id):
         if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
-            return frame.frame_id, False
+            rebound = _runtime.rebind_frame_to_task(
+                frame.frame_id,
+                task_id,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+            return rebound.frame_id, False
 
     for frame in _journal.load_by_task(task_id):
         if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
             _runtime.restore_frame(frame)
-            return frame.frame_id, False
+            rebound = _runtime.rebind_frame_to_task(
+                frame.frame_id,
+                task_id,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+            return rebound.frame_id, False
 
     frame_id = _runtime.invoke_skill(
         task_id=task_id,
         skill_id=ROOT_SKILL_ID,
         skill_input=context,
+        conversation_id=conversation_id,
+        session_id=session_id,
+        current_task_id=task_id,
+        origin_task_id=task_id,
     )
     return frame_id, True
 
@@ -335,7 +399,7 @@ def route_skill(state: RootState) -> dict:
     ]
 
     if _should_use_system_root_skill(state):
-        frame_id, created = _get_or_create_system_root_frame(task_id, context)
+        frame_id, created = _get_or_create_system_root_frame(task_id, state.get("session_id"), context)
         events.append(QueryEvent(
             type="skill_frame_open",
             task_id=task_id,
@@ -693,6 +757,14 @@ def run_skill(state: RootState) -> dict:
     return {"events": all_events}
 
 
+def _is_current_turn_interrupted(frame: Any, task_id: str) -> bool:
+    state = frame.private_working_state
+    return (
+        state.get("continuation_state") == "INTERRUPTED"
+        and state.get("last_task_id") == task_id
+    )
+
+
 def close_skill_frame(state: RootState) -> dict:
     """Close the active frame and promote results to root context."""
     frame_id = state.get("active_frame_id")
@@ -734,6 +806,13 @@ def close_skill_frame(state: RootState) -> dict:
             structured_output=structured_output,
             duration_ms=int((time.time() - state["started_at"]) * 1000),
         ))
+    elif (
+        frame
+        and frame.skill_id == ROOT_SKILL_ID
+        and frame.status == FrameStatus.RUNNING
+        and _is_current_turn_interrupted(frame, task_id)
+    ):
+        pass
     elif frame and frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING and frame.result_summary:
         events.append(QueryEvent(
             type="result",

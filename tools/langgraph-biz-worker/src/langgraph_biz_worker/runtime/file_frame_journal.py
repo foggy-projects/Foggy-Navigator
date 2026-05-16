@@ -13,6 +13,9 @@ Directory layout::
       frames/
         <task-id>/
           <frame-id>.json
+        by-conversation/
+          <conversation-id>/
+            <frame-id>.json
 
 Design reference: Doc 31 §16.3
 """
@@ -57,6 +60,15 @@ class FileFrameJournal:
         payload = frame.model_dump(mode="json")
         file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+        if frame.conversation_id:
+            conversation_dir = self._root / "by-conversation" / _safe_path_segment(frame.conversation_id)
+            conversation_dir.mkdir(parents=True, exist_ok=True)
+            conversation_file_path = conversation_dir / f"{frame.frame_id}.json"
+            conversation_file_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
         logger.debug("Journal saved frame=%s to %s", frame.frame_id, file_path)
         return file_path
 
@@ -74,6 +86,18 @@ class FileFrameJournal:
             return []
         frames: list[SkillFrameState] = []
         for file_path in sorted(task_dir.glob("*.json")):
+            frame = self._read_file(file_path)
+            if frame:
+                frames.append(frame)
+        return frames
+
+    def load_by_conversation(self, conversation_id: str) -> list[SkillFrameState]:
+        """Load all Frame snapshots for a conversation/session."""
+        conversation_dir = self._root / "by-conversation" / _safe_path_segment(conversation_id)
+        if not conversation_dir.is_dir():
+            return []
+        frames: list[SkillFrameState] = []
+        for file_path in sorted(conversation_dir.glob("*.json")):
             frame = self._read_file(file_path)
             if frame:
                 frames.append(frame)
@@ -135,3 +159,7 @@ class FileFrameJournal:
         except Exception:
             logger.warning("Failed to parse frame file: %s", file_path, exc_info=True)
             return None
+
+
+def _safe_path_segment(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value) or "_"

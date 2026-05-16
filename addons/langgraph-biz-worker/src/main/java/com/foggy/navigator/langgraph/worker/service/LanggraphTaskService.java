@@ -25,6 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -291,7 +292,13 @@ public class LanggraphTaskService implements TaskQueryProvider {
         entity.setStatus("ABORTED");
         entity.setErrorMessage("Cancelled by user");
         persistTask(entity);
+        recordRecoverableInterruption(entity, "user_cancelled", "Cancelled by user");
         log.info("Task cancelled: taskId={}", taskId);
+    }
+
+    public void recordTaskInterruption(String taskId, String reason, String errorMessage) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity ->
+                recordRecoverableInterruption(entity, reason, errorMessage));
     }
 
     @Override
@@ -311,6 +318,48 @@ public class LanggraphTaskService implements TaskQueryProvider {
         LanggraphTaskEntity saved = taskRepository.save(entity);
         syncSessionTask(saved);
         syncSessionProjection(saved);
+    }
+
+    private void recordRecoverableInterruption(
+            LanggraphTaskEntity entity,
+            String reason,
+            String errorMessage
+    ) {
+        if (entity == null || !StringUtils.hasText(entity.getWorkerId())) {
+            return;
+        }
+        try {
+            LanggraphWorkerEntity worker = workerService.getWorkerEntity(entity.getWorkerId());
+            var client = workerService.createClient(worker);
+            client.recordInterruption(
+                    entity.getTaskId(),
+                    entity.getSessionId(),
+                    entity.getContextId(),
+                    reason,
+                    errorMessage,
+                    buildInterruptionContext(entity)
+            ).doOnSuccess(resp -> log.info(
+                    "Worker interruption recorded: taskId={}, reason={}, status={}",
+                    entity.getTaskId(), reason, resp != null ? resp.get("status") : "empty"
+            )).doOnError(e -> log.warn(
+                    "Worker interruption record failed: taskId={}, reason={}, error={}",
+                    entity.getTaskId(), reason, e.getMessage()
+            )).subscribe();
+        } catch (Exception e) {
+            log.warn(
+                    "Unable to record worker interruption: taskId={}, reason={}, error={}",
+                    entity.getTaskId(), reason, e.getMessage()
+            );
+        }
+    }
+
+    private Map<String, Object> buildInterruptionContext(LanggraphTaskEntity entity) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        putIfNotBlank(context, "contextId", entity.getContextId());
+        putIfNotBlank(context, "session_id", entity.getSessionId());
+        putIfNotBlank(context, "agentId", resolveAgentId(entity));
+        putIfNotBlank(context, "taskStatus", entity.getStatus());
+        return context;
     }
 
     private void syncSessionTask(LanggraphTaskEntity entity) {

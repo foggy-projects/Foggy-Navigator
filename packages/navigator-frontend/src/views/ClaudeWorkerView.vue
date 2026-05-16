@@ -1795,6 +1795,7 @@
       <template v-if="authDialogReadonly">
         <el-descriptions :column="1" border>
           <el-descriptions-item label="认证模式">{{ authForm.authMode || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="平台模型配置">{{ formatAuthModelConfig(authForm.modelConfigId) }}</el-descriptions-item>
           <el-descriptions-item label="Base URL">{{ authForm.baseUrl || '(默认)' }}</el-descriptions-item>
           <el-descriptions-item label="状态">已锁定，不可修改</el-descriptions-item>
         </el-descriptions>
@@ -1820,6 +1821,17 @@
           </el-form-item>
           <el-form-item v-if="authForm.authMode === 'CUSTOM_ENDPOINT'" label="Base URL" required>
             <el-input v-model="authForm.baseUrl" placeholder="https://aiproxy.example.com/api/v1/anthropic" />
+          </el-form-item>
+          <el-form-item v-if="platformModels.length > 0" label="平台模型配置">
+            <el-select v-model="authForm.modelConfigId" clearable placeholder="不覆盖模型配置" style="width: 100%">
+              <el-option
+                v-for="m in platformModels"
+                :key="m.id"
+                :label="m.name"
+                :value="m.id"
+              />
+            </el-select>
+            <div v-if="authForm.modelConfigId" class="form-tip">选择后将使用该平台模型配置的凭据</div>
           </el-form-item>
         </el-form>
       </template>
@@ -2939,7 +2951,7 @@ const worktreeForm = ref({ branch: '' })
 const showAuthDialog = ref(false)
 const authDialogReadonly = ref(false)
 const authDialogSessionId = ref('')
-const authForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '' })
+const authForm = ref({ authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', modelConfigId: '' })
 
 // Batch auth dialog state
 const showBatchAuthDialog = ref(false)
@@ -5274,22 +5286,24 @@ function handleAuthConfig(conv: ConversationGroup) {
       authMode: conv.config.authMode || '',
       authToken: '',
       baseUrl: conv.config.baseUrl || '',
+      modelConfigId: conv.config.authModelConfigId || '',
     }
   } else {
     authDialogReadonly.value = false
-    authForm.value = { authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '' }
+    authForm.value = { authMode: 'SUBSCRIPTION', authToken: '', baseUrl: '', modelConfigId: platformModelConfigId.value }
   }
   showAuthDialog.value = true
 }
 
 async function handleBindAuth() {
   const mode = authForm.value.authMode
-  if (mode === 'API_KEY' && !authForm.value.authToken) {
+  const hasModelConfig = !!authForm.value.modelConfigId
+  if (mode === 'API_KEY' && !authForm.value.authToken && !hasModelConfig) {
     ElMessage.warning('请填写 API Key')
     return
   }
-  if (mode === 'CUSTOM_ENDPOINT' && (!authForm.value.authToken || !authForm.value.baseUrl)) {
-    ElMessage.warning('请填写 Token 和 Base URL')
+  if (mode === 'CUSTOM_ENDPOINT' && !hasModelConfig && (!authForm.value.authToken || !authForm.value.baseUrl)) {
+    ElMessage.warning('请填写 Token 和 Base URL，或选择平台模型配置')
     return
   }
   saving.value = true
@@ -5298,6 +5312,7 @@ async function handleBindAuth() {
       authMode: mode,
       authToken: authForm.value.authToken,
       baseUrl: mode === 'CUSTOM_ENDPOINT' ? authForm.value.baseUrl : undefined,
+      modelConfigId: authForm.value.modelConfigId || undefined,
     })
     showAuthDialog.value = false
     ElMessage.success('Auth 已绑定')
@@ -6927,6 +6942,13 @@ function authModeLabel(mode: string): string {
   if (mode === 'CUSTOM_ENDPOINT') return 'Custom'
   if (mode === 'SUBSCRIPTION') return 'Subscription'
   return mode
+}
+
+function formatAuthModelConfig(modelConfigId?: string): string {
+  if (!modelConfigId) return '(未绑定)'
+  const config = platformModels.value.find((m) => m.id === modelConfigId)
+  if (!config) return modelConfigId
+  return `${config.name} (${modelConfigId})`
 }
 
 function shortModel(model: string): string {

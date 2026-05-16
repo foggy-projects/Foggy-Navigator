@@ -235,6 +235,7 @@ export interface ConversationConfig {
   customTitle?: string
   authMode?: string
   authBound: boolean
+  authModelConfigId?: string
   baseUrl?: string
   maskedAuthToken?: string
   tags?: string[]

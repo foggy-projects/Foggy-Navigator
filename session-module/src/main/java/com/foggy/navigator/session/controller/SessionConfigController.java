@@ -44,13 +44,13 @@ public class SessionConfigController {
     @PostMapping("/{sessionId}/config/bind-auth")
     public RX<SessionConfigDTO> bindAuth(@PathVariable String sessionId, @RequestBody UpdateAuthForm form) {
         return RX.ok(sessionMetadataService.bindAuth(sessionId, UserContext.getCurrentUserId(),
-                form.getAuthMode(), form.getAuthToken(), form.getBaseUrl()));
+                form.getAuthMode(), form.getAuthToken(), form.getBaseUrl(), form.getModelConfigId()));
     }
 
     @PatchMapping("/{sessionId}/config/auth")
     public RX<SessionConfigDTO> updateAuth(@PathVariable String sessionId, @RequestBody UpdateAuthForm form) {
         return RX.ok(sessionMetadataService.updateAuth(sessionId, UserContext.getCurrentUserId(),
-                form.getAuthMode(), form.getAuthToken(), form.getBaseUrl()));
+                form.getAuthMode(), form.getAuthToken(), form.getBaseUrl(), form.getModelConfigId()));
     }
 
     @GetMapping("/configs")
@@ -137,6 +137,7 @@ public class SessionConfigController {
         private String authMode;
         private String authToken;
         private String baseUrl;
+        private String modelConfigId;
     }
 
     @Data

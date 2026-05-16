@@ -292,13 +292,13 @@ export function useClaudeWorker() {
     return config
   }
 
-  async function bindAuth(sessionId: string, form: { authMode: string; authToken: string; baseUrl?: string }) {
+  async function bindAuth(sessionId: string, form: { authMode: string; authToken: string; baseUrl?: string; modelConfigId?: string }) {
     const config = await api.bindConversationAuth(sessionId, form)
     conversationConfigs.value.set(config.sessionId, config)
     return config
   }
 
-  async function updateAuth(sessionId: string, form: { authMode: string; authToken: string; baseUrl?: string }) {
+  async function updateAuth(sessionId: string, form: { authMode: string; authToken: string; baseUrl?: string; modelConfigId?: string }) {
     const config = await api.updateConversationAuth(sessionId, form)
     conversationConfigs.value.set(config.sessionId, config)
     return config

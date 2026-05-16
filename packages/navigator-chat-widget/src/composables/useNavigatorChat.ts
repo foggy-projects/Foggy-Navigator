@@ -693,7 +693,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       frameId,
       parentFrameId: options.parentFrameId,
       skillId: options.skillId,
-      displayName: options.skillId || frameId,
+      displayName: options.skillId || '执行步骤',
       status: options.phase === 'close' ? 'success' : 'running',
       openedAt: options.phase === 'open' ? options.timestamp : undefined,
       closedAt: options.phase === 'close' ? options.timestamp : undefined,
@@ -830,7 +830,7 @@ function resolveSkillFrameId(message: OpenTaskMessage, payload: Record<string, u
 }
 
 function skillFrameDisplayName(frame: SkillFrameBlock): string {
-  return frame.skillId || frame.frameId
+  return frame.skillId || '执行步骤'
 }
 
 function skillFrameTitle(frame: SkillFrameBlock): string {
