@@ -20,6 +20,15 @@ export type DispatchTask = ClaudeTask & {
   contextId?: string
 }
 
+type TaskPageResult = {
+  content: ClaudeTask[]
+  totalSessions: number
+  page: number
+  size: number
+}
+
+const taskPageRequests = new Map<string, Promise<TaskPageResult>>()
+
 export type ForwardTargetMode = 'NEW_SESSION' | 'EXISTING_SESSION'
 
 export interface ForwardSessionForm {
@@ -239,11 +248,23 @@ export async function listTasksPagedUnified(
   page: number,
   size: number,
   state?: string,
-): Promise<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }> {
-  const rx = (await client.get('/tasks/page', {
-    params: { page, size, ...(state ? { state } : {}) },
-  })) as unknown as RX<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }>
-  return rx.data
+): Promise<TaskPageResult> {
+  const key = `tasks:${page}:${size}:${state || ''}`
+  const existing = taskPageRequests.get(key)
+  if (existing) return existing
+
+  const request = (async () => {
+    const rx = (await client.get('/tasks/page', {
+      params: { page, size, ...(state ? { state } : {}) },
+    })) as unknown as RX<TaskPageResult>
+    return rx.data
+  })()
+  taskPageRequests.set(key, request)
+  request.then(
+    () => taskPageRequests.delete(key),
+    () => taskPageRequests.delete(key),
+  )
+  return request
 }
 
 /**
@@ -309,11 +330,23 @@ export async function listTasksByDirectoryPagedUnified(
   page: number,
   size: number,
   state?: string,
-): Promise<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }> {
-  const rx = (await client.get(`/tasks/directory/${directoryId}/page`, {
-    params: { page, size, ...(state ? { state } : {}) },
-  })) as unknown as RX<{ content: ClaudeTask[]; totalSessions: number; page: number; size: number }>
-  return rx.data
+): Promise<TaskPageResult> {
+  const key = `directory:${directoryId}:${page}:${size}:${state || ''}`
+  const existing = taskPageRequests.get(key)
+  if (existing) return existing
+
+  const request = (async () => {
+    const rx = (await client.get(`/tasks/directory/${directoryId}/page`, {
+      params: { page, size, ...(state ? { state } : {}) },
+    })) as unknown as RX<TaskPageResult>
+    return rx.data
+  })()
+  taskPageRequests.set(key, request)
+  request.then(
+    () => taskPageRequests.delete(key),
+    () => taskPageRequests.delete(key),
+  )
+  return request
 }
 
 // ── Worker Session 查询（统一端点） ──

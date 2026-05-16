@@ -760,11 +760,10 @@ class TaskDispatchFacadeTest {
                         sessionEntity("session-codex-1", "user-1", "AWAITING_REPLY", LocalDateTime.of(2026, 3, 24, 22, 5)),
                         sessionEntity("session-claude-1", "user-1", "PROCESSING", LocalDateTime.of(2026, 3, 24, 21, 5))
                 ));
-        when(workingDirectoryRepository.findByDirectoryIdIn(List.of("dir-2", "dir-1")))
-                .thenReturn(List.of(
-                        directoryEntity("dir-2", "Codex Project"),
-                        directoryEntity("dir-1", "Claude Project")
-                ));
+        when(workingDirectoryRepository.findByDirectoryIdIn(List.of("dir-2")))
+                .thenReturn(List.of(directoryEntity("dir-2", "Codex Project")));
+        when(workingDirectoryRepository.findByDirectoryIdIn(List.of("dir-1")))
+                .thenReturn(List.of(directoryEntity("dir-1", "Claude Project")));
 
         Object result = facade.listTasksPaged("user-1", 0, 20, null);
 
@@ -781,6 +780,50 @@ class TaskDispatchFacadeTest {
         assertEquals("claude-session-1", second.getClaudeSessionId());
         assertEquals("Claude Project", second.getDirectoryName());
         verify(taskQueryProvider, never()).listTasksPaged(anyString(), anyInt(), anyInt(), any());
+    }
+
+    @Test
+    void listTasksPaged_returnsOneSummaryTaskPerSession() {
+        ReflectionTestUtils.setField(facade, "sessionTaskRepository", sessionTaskRepository);
+
+        SessionTaskEntity latestTask = sessionTask(
+                "task-latest", "session-1", "codex-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 24, 22, 0), "{\"codexThreadId\":\"thread-1\"}"
+        );
+        latestTask.setPrompt("latest prompt");
+        latestTask.setCostUsd(new BigDecimal("2.000000"));
+        latestTask.setInputTokens(20L);
+        latestTask.setOutputTokens(30L);
+        SessionTaskEntity firstTask = sessionTask(
+                "task-first", "session-1", "codex-worker", "worker-1", "dir-1",
+                "COMPLETED", LocalDateTime.of(2026, 3, 24, 21, 0), "{\"codexThreadId\":\"thread-1\"}"
+        );
+        firstTask.setPrompt("first prompt");
+        firstTask.setCostUsd(new BigDecimal("1.250000"));
+        firstTask.setInputTokens(10L);
+        firstTask.setOutputTokens(15L);
+
+        when(sessionTaskRepository.findByUserIdOrderByCreatedAtDesc("user-1"))
+                .thenReturn(List.of(latestTask, firstTask));
+        when(sessionRepository.findAllById(List.of("session-1")))
+                .thenReturn(List.of(
+                        sessionEntity("session-1", "user-1", "AWAITING_REPLY",
+                                LocalDateTime.of(2026, 3, 24, 22, 5))
+                ));
+
+        Object result = facade.listTasksPaged("user-1", 0, 1, "AWAITING_REPLY");
+
+        Map<?, ?> page = assertInstanceOf(Map.class, result);
+        assertEquals(1L, page.get("totalSessions"));
+        List<?> content = assertInstanceOf(List.class, page.get("content"));
+        assertEquals(1, content.size());
+        DispatchTaskDTO summary = assertInstanceOf(DispatchTaskDTO.class, content.get(0));
+        assertEquals("task-latest", summary.getTaskId());
+        assertEquals(2, summary.getSessionTaskCount());
+        assertEquals(new BigDecimal("3.250000"), summary.getSessionTotalCostUsd());
+        assertEquals(30L, summary.getSessionInputTokens());
+        assertEquals(45L, summary.getSessionOutputTokens());
+        assertEquals("first prompt", summary.getSessionFirstPrompt());
     }
 
     @Test

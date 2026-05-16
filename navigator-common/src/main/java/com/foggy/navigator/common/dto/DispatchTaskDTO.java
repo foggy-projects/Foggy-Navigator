@@ -42,6 +42,13 @@ public class DispatchTaskDTO {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    // Session summary fields populated by paged history APIs.
+    private Integer sessionTaskCount;
+    private BigDecimal sessionTotalCostUsd;
+    private Long sessionInputTokens;
+    private Long sessionOutputTokens;
+    private String sessionFirstPrompt;
+
     // ── 扩展字段（nullable，Provider 特有） ──
     /** Claude: 内部会话 ID */
     private String claudeSessionId;
