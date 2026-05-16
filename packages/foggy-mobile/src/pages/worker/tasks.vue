@@ -175,7 +175,7 @@ const selectedModelName = computed(() => {
 // 的源码目录，所以在本文件保留一份"薄壁镜像"，但字段结构、value 集合必须与 PC SSOT 对齐。
 //
 // 1.0.4 alias-only 重构（见 docs/version-tracker/1.0.4-SNAPSHOT/04-codex-worker-gpt55-upgrade-and-model-alias-plan.md）：
-// - Codex 切到 alias-only：前端只展示稳定 alias（codex-latest/fast/deep/mini）
+// - Codex 切到 alias-only：前端只展示稳定 alias（codex-latest/fast/deep/xhigh/mini）
 // - Worker 在执行前把 alias 解析为真实模型（如 codex-latest → gpt-5.5）
 // - 模型版本升级时仅改 Worker 配置（CODEX_MODEL_ALIASES），前端 / Java 后端无需任何改动
 // - Claude / Gemini 命名风格相同：opus/sonnet/haiku、gemini-pro/flash/flash-lite
@@ -190,6 +190,7 @@ const ALL_MODELS: { value: string; label: string; backend: string }[] = [
   { value: 'codex-latest', label: 'Codex Latest', backend: 'OPENAI_CODEX' },
   { value: 'codex-fast', label: 'Codex Fast', backend: 'OPENAI_CODEX' },
   { value: 'codex-deep', label: 'Codex Deep', backend: 'OPENAI_CODEX' },
+  { value: 'codex-xhigh', label: 'Codex Extra High', backend: 'OPENAI_CODEX' },
   { value: 'codex-mini', label: 'Codex Mini', backend: 'OPENAI_CODEX' },
   // Gemini aliases（保持与 PC SSOT 对齐）
   { value: 'gemini-pro', label: 'Gemini Pro (Alias)', backend: 'GEMINI_CLI' },

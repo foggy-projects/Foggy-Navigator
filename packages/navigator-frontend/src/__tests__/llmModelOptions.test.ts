@@ -74,10 +74,10 @@ describe('llmModelOptions', () => {
     expect(resolveModelOptions(config).map((item) => item.value)).toEqual(['opus'])
   })
 
-  it('exposes Codex aliases (codex-latest/fast/deep/mini) for OPENAI_CODEX backend', () => {
+  it('exposes Codex aliases for OPENAI_CODEX backend', () => {
     const codex = getModelOptionsByBackend('OPENAI_CODEX' as WorkerBackend)
     const values = codex.map((opt) => opt.value)
-    expect(values).toEqual(['codex-latest', 'codex-fast', 'codex-deep', 'codex-mini'])
+    expect(values).toEqual(['codex-latest', 'codex-fast', 'codex-deep', 'codex-xhigh', 'codex-mini'])
   })
 
   it('exposes LangGraph Biz aliases for LANGGRAPH_BIZ backend', () => {
@@ -111,6 +111,6 @@ describe('llmModelOptions', () => {
       availableModels: ['gpt-5.4', 'gpt-5.5', 'gpt-5.4-mini'],
     })
     const result = resolveModelOptions(config).map((m) => m.value)
-    expect(result).toEqual(['codex-latest', 'codex-fast', 'codex-deep', 'codex-mini'])
+    expect(result).toEqual(['codex-latest', 'codex-fast', 'codex-deep', 'codex-xhigh', 'codex-mini'])
   })
 })

@@ -73,6 +73,7 @@ test('createConfig provides default Codex modelAliases when CODEX_MODEL_ALIASES 
   assert.equal(config.modelAliases['codex-latest'], 'gpt-5.5')
   assert.equal(config.modelAliases['codex-fast'], 'gpt-5.5:low')
   assert.equal(config.modelAliases['codex-deep'], 'gpt-5.5:high')
+  assert.equal(config.modelAliases['codex-xhigh'], 'gpt-5.5:xhigh')
   assert.equal(config.modelAliases['codex-mini'], 'gpt-5.4-mini')
 })
 
