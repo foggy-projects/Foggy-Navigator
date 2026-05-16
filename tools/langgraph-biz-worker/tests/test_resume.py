@@ -10,6 +10,7 @@ from langgraph_biz_worker.runtime.skill_runtime import (
     IllegalStateTransition,
     SkillRuntime,
 )
+from langgraph_biz_worker.runtime.fsscript_bridge import FsscriptRunNotFound
 
 
 def _make_frame(
@@ -126,6 +127,80 @@ class TestFullApprovalRecoveryFlow:
 
         assert journal.find_awaiting_approval("task_y") is None
 
+    def test_resume_restores_pending_function_frame(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        runtime1 = SkillRuntime(journal=journal)
+        caller_frame_id = runtime1.invoke_skill("task_fn_restore", "system.root")
+        function_frame_id = runtime1.invoke_function_call(
+            parent_frame_id=caller_frame_id,
+            function_id="tms.order.close",
+            version="v1",
+            arguments={"orderNo": "ORD-001"},
+        )
+        approval_request = {
+            "approval_type": "business_function",
+            "function_id": "tms.order.close",
+            "version": "v1",
+            "suspend_id": "sus_restore",
+            "summary": {"title": "Approval required"},
+            "payload": {"function_frame_id": function_frame_id},
+            "resolved": False,
+        }
+        runtime1.suspend_function_call(function_frame_id, approval_request)
+        runtime1.mark_awaiting_approval(caller_frame_id, approval_request)
+
+        runtime2 = SkillRuntime(journal=journal)
+        caller = journal.find_awaiting_approval("task_fn_restore")
+        runtime2.restore_frame(caller)
+
+        runtime2.resume_from_approval(caller_frame_id, "approved", "ok")
+
+        restored_function = runtime2.get_frame(function_frame_id)
+        assert restored_function is not None
+        assert restored_function.status == FrameStatus.COMPLETED
+        assert restored_function.output["status"] == "RESUME_DISPATCHED"
+
+    def test_resume_restores_bubbled_child_approval_frame(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        runtime1 = SkillRuntime(journal=journal)
+        root_frame_id = runtime1.invoke_skill("task_child_fn_restore", "system.root")
+        child_frame_id = runtime1.invoke_child_skill(root_frame_id, "child_skill")
+        function_frame_id = runtime1.invoke_function_call(
+            parent_frame_id=child_frame_id,
+            function_id="tms.vehicle.create",
+            version="v1",
+            arguments={"plateNo": "A-001"},
+        )
+        approval_request = {
+            "approval_type": "business_function",
+            "function_id": "tms.vehicle.create",
+            "version": "v1",
+            "suspend_id": "sus_child_restore",
+            "summary": {"title": "Approval required"},
+            "payload": {"function_frame_id": function_frame_id},
+            "resolved": False,
+        }
+        runtime1.suspend_function_call(function_frame_id, approval_request)
+        runtime1.mark_awaiting_approval(child_frame_id, approval_request)
+        runtime1.mark_child_awaiting_approval(root_frame_id, child_frame_id, approval_request)
+
+        runtime2 = SkillRuntime(journal=journal)
+        root = journal.find_awaiting_approval("task_child_fn_restore")
+        assert root is not None
+        assert root.frame_id == root_frame_id
+        runtime2.restore_frame(root)
+
+        runtime2.resume_from_approval(root_frame_id, "approved", "ok")
+
+        restored_root = runtime2.get_frame(root_frame_id)
+        restored_child = runtime2.get_frame(child_frame_id)
+        restored_function = runtime2.get_frame(function_frame_id)
+        assert restored_root.status == FrameStatus.RUNNING
+        assert "pending_child_approval_frame_id" not in restored_root.private_working_state
+        assert restored_child.status == FrameStatus.RUNNING
+        assert restored_function.status == FrameStatus.COMPLETED
+        assert restored_function.output["status"] == "RESUME_DISPATCHED"
+
 
 # ---------------------------------------------------------------------------
 # HTTP endpoint: POST /api/v1/resume
@@ -179,12 +254,92 @@ class TestResumeEndpoint:
         frame = self.runtime.get_frame(fid)
         assert frame.status == FrameStatus.RUNNING
 
+    async def test_resume_returns_call_time_post_approval_message(self, client):
+        caller_frame_id = self.runtime.invoke_skill("task_resume_msg", "system.root")
+        function_frame_id = self.runtime.invoke_function_call(
+            parent_frame_id=caller_frame_id,
+            function_id="tms.order.close",
+            version="v1",
+            arguments={"orderNo": "ORD-001"},
+        )
+        approval_request = {
+            "approval_type": "business_function",
+            "function_id": "tms.order.close",
+            "version": "v1",
+            "suspend_id": "sus_msg_1",
+            "summary": {"title": "Close order approval"},
+            "payload": {
+                "function_frame_id": function_frame_id,
+                "input": {
+                    "orderNo": "ORD-001",
+                    "post_approval_message": {
+                        "approved": "审批已通过，已继续提交关单申请。",
+                        "rejected": "审批已拒绝，关单申请未提交。",
+                    },
+                },
+            },
+            "resolved": False,
+        }
+        self.runtime.suspend_function_call(function_frame_id, approval_request)
+        self.runtime.mark_awaiting_approval(caller_frame_id, approval_request)
+
+        resp = await client.post("/api/v1/resume", json={
+            "taskId": "task_resume_msg",
+            "approvalResult": "approved",
+            "comment": "同意",
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["frame_id"] == caller_frame_id
+        assert data["resume_message"]["content"] == "审批已通过，已继续提交关单申请。"
+        assert data["resume_message"]["source"] == "function_input.approved"
+        assert data["resume_message"]["approval_result"] == "approved"
+        assert data["resume_message"]["comment"] == "同意"
+        assert data["resume_message"]["function_id"] == "tms.order.close"
+        assert data["resume_message"]["suspend_id"] == "sus_msg_1"
+
     async def test_resume_not_found(self, client):
         resp = await client.post("/api/v1/resume", json={
             "taskId": "nonexistent_task",
             "approvalResult": "approved",
         })
         assert resp.status_code == 404
+
+    async def test_resume_returns_fsscript_summary_post_approval_message(self, client):
+        class FakeFsscriptBridge:
+            def resume_task(self, task_id: str, approval_result: str, comment: str = ""):
+                if task_id != "task_fsscript_msg":
+                    raise FsscriptRunNotFound(task_id)
+                return {
+                    "script_run_id": "sr_msg_1",
+                    "suspend_id": "sp_msg_1",
+                    "status": "RUNNING",
+                    "summary": {
+                        "post_approval_message": {
+                            "approved": "审批已通过，FSScript 已继续执行。",
+                            "rejected": "审批已拒绝，FSScript 已停止执行。",
+                        },
+                    },
+                }
+
+        from langgraph_biz_worker.routes import resume as resume_module
+
+        resume_module.configure(self.runtime, self.journal, FakeFsscriptBridge())
+
+        resp = await client.post("/api/v1/resume", json={
+            "taskId": "task_fsscript_msg",
+            "approvalResult": "approved",
+            "comment": "同意",
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["frame_id"] == "sr_msg_1"
+        assert data["resume_message"]["content"] == "审批已通过，FSScript 已继续执行。"
+        assert data["resume_message"]["source"] == "fsscript_summary.approved"
+        assert data["resume_message"]["script_run_id"] == "sr_msg_1"
+        assert data["resume_message"]["suspend_id"] == "sp_msg_1"
 
     async def test_resume_no_awaiting_frame(self, client):
         # Frame is RUNNING, not AWAITING_APPROVAL

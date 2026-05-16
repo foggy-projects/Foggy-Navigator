@@ -10,10 +10,27 @@ import java.util.Optional;
 
 public interface SessionRepository extends JpaRepository<SessionEntity, String> {
 
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.userId = :userId " +
+           "AND s.deletedAt IS NULL " +
+           "AND s.status <> 'DELETED' " +
+           "ORDER BY s.updatedAt DESC")
     List<SessionEntity> findByUserIdOrderByUpdatedAtDesc(String userId);
 
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.userId = :userId " +
+           "AND s.agentId = :agentId " +
+           "AND s.deletedAt IS NULL " +
+           "AND s.status <> 'DELETED' " +
+           "ORDER BY s.updatedAt DESC")
     List<SessionEntity> findByUserIdAndAgentIdOrderByUpdatedAtDesc(String userId, String agentId);
 
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.userId = :userId " +
+           "AND s.status IN :statuses " +
+           "AND s.deletedAt IS NULL " +
+           "AND s.status <> 'DELETED' " +
+           "ORDER BY s.updatedAt DESC")
     List<SessionEntity> findByUserIdAndStatusInOrderByUpdatedAtDesc(String userId, List<String> statuses);
 
     Optional<SessionEntity> findByIdAndUserId(String id, String userId);
@@ -32,7 +49,11 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
            "WHERE s.interactionState IN :states AND s.deletedAt IS NULL")
     List<String> findSessionIdsByStates(@Param("states") List<String> states);
 
-    List<SessionEntity> findByInteractionStateIn(List<String> states);
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.interactionState IN :states " +
+           "AND s.deletedAt IS NULL " +
+           "AND s.status <> 'DELETED'")
+    List<SessionEntity> findByInteractionStateIn(@Param("states") List<String> states);
 
     @Query("SELECT s.id FROM SessionEntity s " +
            "WHERE s.userId = :userId AND s.deletedAt IS NULL " +

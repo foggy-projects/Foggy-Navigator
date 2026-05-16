@@ -19,6 +19,7 @@ public class SyncBusinessAgentBundleForm {
     private String defaultModelConfigId;
     private String defaultModel;
     private String markdownBody;
+    private String contextVisibility;
     private List<SkillResourceForm> resources;
     private List<SkillBundleFunctionForm> functions;
     private Boolean materialize;

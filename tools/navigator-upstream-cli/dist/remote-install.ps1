@@ -13,7 +13,7 @@ if ($ReleaseBaseUrl -eq "__RELEASE_BASE_URL__" -or -not $ReleaseBaseUrl) {
 Write-Host "=== Navigator Upstream CLI Remote Installer ===" -ForegroundColor Cyan
 Write-Host "Release: $ReleaseBaseUrl" -ForegroundColor Cyan
 
-$latest = Invoke-RestMethod -Uri "$ReleaseBaseUrl/latest.json" -TimeoutSec 20
+$latest = Invoke-RestMethod -Uri "$ReleaseBaseUrl/latest.json?ts=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())" -Headers @{ "Cache-Control" = "no-cache" } -TimeoutSec 20
 $version = [string]$latest.version
 if (-not $version) {
     throw "Could not parse version from latest.json"
@@ -50,6 +50,7 @@ if (-not $installScript) {
 
 & powershell -ExecutionPolicy Bypass -File $installScript.FullName `
     -ProjectRoot (Get-Location).Path `
-    -ReleaseBaseUrl $ReleaseBaseUrl
+    -ReleaseBaseUrl $ReleaseBaseUrl `
+    -ReleaseManifestJson ($latest | ConvertTo-Json -Depth 8 -Compress)
 
 Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue

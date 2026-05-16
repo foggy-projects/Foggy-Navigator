@@ -19,12 +19,16 @@ public class BusinessFunctionAuthorizationService {
 
     /**
      * Resolves and verifies the full authorization chain for a business function call.
-     * This method enforces a fail-closed policy, sequentially checking:
+     * This method enforces a fail-closed policy on user/client function permission,
+     * sequentially checking:
      * 1. Client App is active
      * 2. Upstream User Grant is ENABLED
      * 3. Client App Skill Grant is ENABLED
-     * 4. Skill Function Allowlist is ENABLED
-     * 5. Business Function, Version, and App Function Grant are valid
+     * 4. Business Function, Version, and App Function Grant are valid
+     *
+     * SkillFunctionAllowlist is intentionally not a runtime hard gate here. It is
+     * used for skill materialization and recommendation scope, while actual
+     * execution is controlled by user/client function grants.
      */
     @Transactional(readOnly = true)
     public BusinessFunctionRuntimeContextDTO resolveExecutableBusinessFunction(
@@ -51,10 +55,7 @@ public class BusinessFunctionAuthorizationService {
         // 3. skillId 非空且 Skill ENABLED, ClientAppSkillGrant ENABLED
         skillRegistryService.checkClientAppSkillAccess(tenantId, clientAppId, skillId);
 
-        // 4. SkillFunctionAllowlist ENABLED
-        skillRegistryService.checkSkillFunctionAccess(tenantId, skillId, functionId);
-
-        // 5. BusinessFunction / BusinessFunctionVersion / ClientAppFunctionGrant 均有效
+        // 4. BusinessFunction / BusinessFunctionVersion / ClientAppFunctionGrant 均有效
         return functionRegistryService.resolveClientAppFunction(tenantId, clientAppId, functionId, version);
     }
 }

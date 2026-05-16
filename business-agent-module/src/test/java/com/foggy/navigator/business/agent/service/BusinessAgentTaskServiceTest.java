@@ -181,6 +181,32 @@ class BusinessAgentTaskServiceTest {
     }
 
     @Test
+    void bindOpenApiTaskScopedTokenToWorkerTask_persistsMappingAndRegistersWorkerAlias() {
+        BusinessTaskScopedTokenEntity token = new BusinessTaskScopedTokenEntity();
+        token.setTokenId("tst_open_api");
+        token.setTokenHash(SecretTokenSupport.sha256("btt_open_api"));
+        token.setTaskId("obt_123");
+        token.setSessionId("ctx_123");
+        token.setTenantId("tenant_01");
+        token.setStatus(BusinessAgentTaskService.STATUS_ACTIVE);
+        token.setExpiresAt(java.time.LocalDateTime.now().plusHours(1));
+
+        when(tokenRepository.findByTokenHash(SecretTokenSupport.sha256("btt_open_api"))).thenReturn(Optional.of(token));
+
+        taskService.bindOpenApiTaskScopedTokenToWorkerTask(
+                "tenant_01",
+                "btt_open_api",
+                "lgt_123",
+                "worker_session_123");
+
+        assertEquals("lgt_123", token.getWorkerTaskId());
+        assertEquals("worker_session_123", token.getWorkerSessionId());
+        verify(tokenRepository).save(token);
+        verify(tokenRuntimeStore).registerToken("tenant_01", "ctx_123", "lgt_123", "btt_open_api", token.getExpiresAt());
+        verify(tokenRuntimeStore).registerToken("tenant_01", "worker_session_123", "lgt_123", "btt_open_api", token.getExpiresAt());
+    }
+
+    @Test
     void createTask_resumeFromTaskId_success() {
         form.setResumeFromTaskId("bt_old123");
         form.setRequestedModelConfigId("model_01");

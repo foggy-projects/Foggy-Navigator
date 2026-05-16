@@ -41,7 +41,7 @@ upstream-project/
 irm <release-base-url>/install.ps1 | iex
 ```
 
-当前 1.0.0-SNAPSHOT 发布地址：
+当前发布地址：
 
 ```powershell
 irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/install.ps1 | iex
@@ -69,7 +69,7 @@ irm https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli/ins
 如果已经拿到发布包：
 
 ```powershell
-Expand-Archive .\navigator-upstream-cli-1.0.0-SNAPSHOT-windows.zip -DestinationPath .\temp\navi-upstream
+Expand-Archive .\navigator-upstream-cli-<version>-windows.zip -DestinationPath .\temp\navi-upstream
 powershell -ExecutionPolicy Bypass -File .\temp\navi-upstream\navigator-upstream\install.ps1 -ProjectRoot .
 ```
 
@@ -143,6 +143,7 @@ E2E 回归使用独立 wrapper，仍读取同一个 project-local `.navigator/up
 - 否则读取安装目录下的 `RELEASE_URL`。
 - 拉取 `<release-base-url>/latest.json`。
 - 下载 Windows 发布包并校验 SHA256。
+- 同版本也会比较本地 `RELEASE_MANIFEST.json` 中的包 SHA256；SHA 不一致时会刷新安装。
 - 重新运行安装脚本覆盖 `tools/navigator-upstream/`。
 - 保留项目自己的 `.navigator/upstream.env`。
 
@@ -169,11 +170,18 @@ copy tools\navigator-upstream-cli\.env.example tools\navigator-upstream-cli\.env
 powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1 -Upload
 ```
 
-如果当前发布版本仍是 `1.0.0-SNAPSHOT` 且需要修补同版本快照，先打包再显式允许同版本上传：
+发布规则：
+
+1. 上游可见版本必须单调递增，常规交付不要复用同一个 `SNAPSHOT` 版本。
+2. `latest.json` 必须包含 `version`、`buildId`、`buildTimeUtc`、`gitCommit`、`gitDirty`、`features`、`files.windows` 和 `sha256.windows`。
+3. 上传脚本默认拒绝同版本覆盖；`-AllowSameVersion` 只允许用于 OBS metadata repair，不作为正常交付路径。
+4. 上传脚本默认执行 OBS 远端安装 smoke，验证 `version`、`upstream --help` 和 `upstream function --help`。
+
+正常发版：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1
-powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\upload.ps1 -Version 1.0.0-SNAPSHOT -AllowSameVersion
+powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\upload.ps1 -Version <version>
 ```
 
 上传脚本会发布：
@@ -184,7 +192,7 @@ powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\uploa
 <release-base-url>/<version>/navigator-upstream-cli-<version>-windows.zip
 ```
 
-当前 1.0.0-SNAPSHOT 已发布到：
+当前 OBS 发布根地址：
 
 ```text
 https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli
@@ -192,11 +200,12 @@ https://obs-fe55.obs.cn-north-4.myhuaweicloud.com/navigator-upstream-cli
 
 发布校验：
 
-- `latest.json` 可访问，版本为 `1.0.0-SNAPSHOT`。
-- Windows 包 SHA256 为 `a398b947898da2d7be757338056e3f5947f9aeb7dd45fc88ccbb126504db443b`。
+- `latest.json` 可访问，版本与本次发布版本一致。
+- `latest.json` 的 `features` 包含 `function-import`、`function-grant`、`function-grant-status`、`function-visible`。
+- Windows 包 SHA256 与 `latest.json.sha256.windows` 一致。
 - 临时上游项目执行远程安装命令成功。
 - 安装后 `.\tools\navigator-upstream\navi.ps1 upstream config check` 成功，默认读取本项目 `.navigator/upstream.env`。
-- 临时解压包执行 `.\navi.ps1 version` 与 `.\navi.ps1 upstream help` 成功。
+- 临时解压包执行 `.\navi.ps1 version`、`.\navi.ps1 upstream --help` 与 `.\navi.ps1 upstream function --help` 成功。
 
 ## 安全约束
 

@@ -47,18 +47,11 @@ public class WorkerGatewayService {
         List<BusinessFunctionSummaryDTO> appFunctions = functionRegistryService.listClientAppVisibleFunctionSummaries(
                 token.getTenantId(), token.getClientAppId());
 
-        // Filter by skill allowlist, domain, and riskLevel
+        // Runtime visibility follows ClientApp function grants. Skill allowlist is
+        // only a materialization/recommendation hint and is not a hard gate here.
         List<WorkerGatewayFunctionSummaryDTO> summaries = appFunctions.stream()
                 .filter(f -> !StringUtils.hasText(domain) || domain.equals(f.getDomain()))
                 .filter(f -> !StringUtils.hasText(riskLevel) || riskLevel.equals(f.getRiskLevel()))
-                .filter(f -> {
-                    try {
-                        skillRegistryService.checkSkillFunctionAccess(token.getTenantId(), token.getSkillId(), f.getFunctionId());
-                        return true;
-                    } catch (Exception e) {
-                        return false;
-                    }
-                })
                 .map(f -> {
                     WorkerGatewayFunctionSummaryDTO summary = new WorkerGatewayFunctionSummaryDTO();
                     summary.setFunctionId(f.getFunctionId());

@@ -12,6 +12,7 @@ public class SkillBundleDTO {
     private String name;
     private String description;
     private String status;
+    private String contextVisibility;
     private SkillMaterializeResultDTO materializeResult;
 
     public String getTenantId() { return tenantId; }
@@ -30,6 +31,8 @@ public class SkillBundleDTO {
     public void setDescription(String description) { this.description = description; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getContextVisibility() { return contextVisibility; }
+    public void setContextVisibility(String contextVisibility) { this.contextVisibility = contextVisibility; }
     public SkillMaterializeResultDTO getMaterializeResult() { return materializeResult; }
     public void setMaterializeResult(SkillMaterializeResultDTO materializeResult) { this.materializeResult = materializeResult; }
 }

@@ -16,6 +16,7 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -259,6 +260,35 @@ class JpaSessionManagerTest {
 
         assertEquals(2, user1Sessions.size());
         assertEquals(1, user2Sessions.size());
+    }
+
+    @Test
+    void findByUser_shouldSkipLegacyDeletedSessions() {
+        String activeId = sessionManager.createSession(SessionCreateRequest.builder()
+                .userId("user-deleted-compat")
+                .agentId("agent-1")
+                .build());
+        String legacyDeletedId = sessionManager.createSession(SessionCreateRequest.builder()
+                .userId("user-deleted-compat")
+                .agentId("agent-1")
+                .build());
+        String softDeletedId = sessionManager.createSession(SessionCreateRequest.builder()
+                .userId("user-deleted-compat")
+                .agentId("agent-1")
+                .build());
+
+        var legacyDeleted = sessionRepository.findById(legacyDeletedId).orElseThrow();
+        legacyDeleted.setStatus("DELETED");
+        sessionRepository.save(legacyDeleted);
+
+        var softDeleted = sessionRepository.findById(softDeletedId).orElseThrow();
+        softDeleted.setDeletedAt(LocalDateTime.now());
+        sessionRepository.save(softDeleted);
+
+        List<Session> sessions = sessionManager.findByUser("user-deleted-compat");
+
+        assertEquals(1, sessions.size());
+        assertEquals(activeId, sessions.get(0).getId());
     }
 
     @Test

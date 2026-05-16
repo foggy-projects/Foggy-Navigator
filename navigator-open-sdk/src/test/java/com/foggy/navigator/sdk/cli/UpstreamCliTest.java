@@ -78,6 +78,34 @@ class UpstreamCliTest {
                           ]
                         }}
                         """;
+            } else if ("__MODEL_GRANTS_THEN_DEFAULT__".equals(responseOverride)) {
+                response = lastPath.endsWith("/default")
+                        ? """
+                        {"code":0,"data":{
+                          "id":31,
+                          "clientAppId":"app-1",
+                          "modelConfigId":"model-target",
+                          "modelConfigName":"Target Model",
+                          "workerBackend":"LANGGRAPH_BIZ",
+                          "status":"ENABLED",
+                          "isDefault":true,
+                          "grantScope":"CLIENT_APP"
+                        }}
+                        """
+                        : """
+                        {"code":0,"data":[
+                          {
+                            "id":31,
+                            "clientAppId":"app-1",
+                            "modelConfigId":"model-target",
+                            "modelConfigName":"Target Model",
+                            "workerBackend":"LANGGRAPH_BIZ",
+                            "status":"ENABLED",
+                            "isDefault":false,
+                            "grantScope":"CLIENT_APP"
+                          }
+                        ]}
+                        """;
             } else {
                 response = responseOverride != null ? responseOverride : "{\"code\":0,\"data\":{}}";
             }
@@ -633,6 +661,7 @@ class UpstreamCliTest {
                 {
                   "skillId":"agent-1",
                   "name":"Agent One",
+                  "contextVisibility":"summary",
                   "markdownBody":"# Agent One"
                 }
                 """, StandardCharsets.UTF_8);
@@ -653,6 +682,7 @@ class UpstreamCliTest {
         assertEquals("control-key-secret", lastClientAppControlKeyHeader);
         assertTrue(lastBody.contains("\"clientAppId\":\"app-1\""));
         assertTrue(lastBody.contains("\"scope\":\"CLIENT_APP_PUBLIC\""));
+        assertTrue(lastBody.contains("\"contextVisibility\":\"summary\""));
         assertTrue(output.contains("skill sync ok"));
         assertTrue(output.contains("scope=CLIENT_APP_PUBLIC"));
         assertFalse(output.contains("control-key-secret"));
@@ -678,6 +708,7 @@ class UpstreamCliTest {
                   "name":"Agent One",
                   "workerId":"worker-1",
                   "defaultModelConfigId":"model-1",
+                  "contextVisibility":"summary",
                   "markdownBody":"# Agent One"
                 }
                 """, StandardCharsets.UTF_8);
@@ -697,10 +728,203 @@ class UpstreamCliTest {
         assertEquals("control-key-secret", lastClientAppControlKeyHeader);
         assertTrue(lastBody.contains("\"clientAppId\":\"app-1\""));
         assertTrue(lastBody.contains("\"workerId\":\"worker-1\""));
+        assertTrue(lastBody.contains("\"contextVisibility\":\"summary\""));
         assertTrue(output.contains("agent sync ok"));
         assertTrue(output.contains("agentId=agent-1"));
         assertTrue(output.contains("skillBundleStatus=ENABLED"));
         assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void functionImportUsesControlPlaneCredentialAndManifest() throws Exception {
+        responseOverride = "{\"code\":0,\"data\":{}}";
+        Path manifest = tempDir.resolve("function-manifest.json");
+        Files.writeString(manifest, """
+                {
+                  "functionId":"order.close.apply",
+                  "version":"v1",
+                  "domain":"tms",
+                  "name":"Apply close order",
+                  "riskLevel":"HIGH",
+                  "approvalRequired":true,
+                  "inputSchemaJson":"{}"
+                }
+                """, StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "function", "import",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--manifest", manifest.getFileName().toString()}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/functions/import", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"functionId\":\"order.close.apply\""));
+        assertTrue(output.contains("function import ok"));
+        assertTrue(output.contains("functionId=order.close.apply"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void functionGrantUsesClientAppScopedControlCredential() throws Exception {
+        responseOverride = """
+                {"code":0,"data":{
+                  "grantId":"fg-1",
+                  "clientAppId":"app-1",
+                  "functionId":"order.close.apply",
+                  "version":"v1",
+                  "status":"ENABLED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "function", "grant",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--function-id", "order.close.apply",
+                "--version", "v1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/function-grants", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"functionId\":\"order.close.apply\""));
+        assertTrue(lastBody.contains("\"version\":\"v1\""));
+        assertTrue(output.contains("function grant ok"));
+        assertTrue(output.contains("grantId=fg-1"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void functionVisibleListsGrantedFunctions() throws Exception {
+        responseOverride = """
+                {"code":0,"data":[
+                  {
+                    "functionId":"order.close.apply",
+                    "version":"v1",
+                    "domain":"tms",
+                    "name":"Apply close order",
+                    "riskLevel":"HIGH",
+                    "approvalRequired":true,
+                    "idempotencyRequired":true
+                  }
+                ]}
+                """;
+
+        int code = run(new String[]{"upstream", "function", "visible",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/visible-functions", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(output.contains("functionVisibleCount=1"));
+        assertTrue(output.contains("functionId=order.close.apply"));
+        assertTrue(output.contains("approvalRequired=true"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void routeSetUsesClientAppScopedControlCredential() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":7,
+                  "clientAppId":"app-1",
+                  "upstreamRef":"world-sim",
+                  "baseUrl":"http://localhost:13080",
+                  "userTokenHeader":"X-World-Sim-Token",
+                  "status":"ENABLED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "route", "set",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--upstream-ref", "world-sim",
+                "--url", "http://localhost:13080",
+                "--user-token-header", "X-World-Sim-Token"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/upstream-routes/world-sim", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"baseUrl\":\"http://localhost:13080\""));
+        assertTrue(lastBody.contains("\"userTokenHeader\":\"X-World-Sim-Token\""));
+        assertTrue(output.contains("route set ok"));
+        assertTrue(output.contains("upstreamRef=world-sim"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void routeListPrintsRegisteredRoutes() {
+        responseOverride = """
+                {"code":0,"data":[
+                  {
+                    "id":7,
+                    "clientAppId":"app-1",
+                    "upstreamRef":"world-sim",
+                    "baseUrl":"http://localhost:13080",
+                    "userTokenHeader":"X-World-Sim-Token",
+                    "status":"ENABLED"
+                  }
+                ]}
+                """;
+
+        int code = run(new String[]{"upstream", "route", "list",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/upstream-routes", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(output.contains("upstreamRouteCount=1"));
+        assertTrue(output.contains("upstreamRef=world-sim"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void routeStatusDisablesRoute() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":7,
+                  "clientAppId":"app-1",
+                  "upstreamRef":"world-sim",
+                  "baseUrl":"http://localhost:13080",
+                  "status":"DISABLED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "route", "status",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--upstream-ref", "world-sim",
+                "--status", "DISABLED"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/business-agent/client-apps/app-1/upstream-routes/world-sim/status?status=DISABLED", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertTrue(output.contains("route status ok"));
+        assertTrue(output.contains("status=DISABLED"));
     }
 
     @Test
@@ -719,6 +943,7 @@ class UpstreamCliTest {
                 {
                   "skillId":"personal-agent",
                   "name":"Personal Agent",
+                  "contextVisibility":"summary",
                   "markdownBody":"# Personal Agent"
                 }
                 """, StandardCharsets.UTF_8);
@@ -739,6 +964,7 @@ class UpstreamCliTest {
         assertEquals("cat-runtime-secret", lastClientAppAccessTokenHeader);
         assertEquals("staff-1", lastUpstreamUserIdHeader);
         assertFalse(lastBody.contains("accountId"));
+        assertTrue(lastBody.contains("\"contextVisibility\":\"summary\""));
         assertTrue(output.contains("accountId=staff-1"));
         assertFalse(output.contains("cat-runtime-secret"));
     }
@@ -842,6 +1068,194 @@ class UpstreamCliTest {
         assertTrue(output.contains("executed=true"));
         assertTrue(output.contains("workerClearStatus=CLEARED"));
         assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelGrantsListsClientAppModelGrantsWithControlCredential() {
+        responseOverride = """
+                {"code":0,"data":[
+                  {
+                    "id":11,
+                    "clientAppId":"app-1",
+                    "modelConfigId":"model-live",
+                    "modelConfigName":"Live Model",
+                    "workerBackend":"LANGGRAPH_BIZ",
+                    "status":"ENABLED",
+                    "isDefault":true,
+                    "grantScope":"CLIENT_APP"
+                  },
+                  {
+                    "id":12,
+                    "clientAppId":"app-1",
+                    "modelConfigId":"model-e2e",
+                    "modelConfigName":"E2E Model",
+                    "workerBackend":"LANGGRAPH_BIZ",
+                    "status":"ENABLED",
+                    "isDefault":false,
+                    "grantScope":"CLIENT_APP"
+                  }
+                ]}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "grants",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-config-grants", lastPath);
+        assertEquals("GET", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(output.contains("modelGrantCount=2"));
+        assertTrue(output.contains("modelConfigId=model-live"));
+        assertTrue(output.contains("default=true"));
+        assertTrue(output.contains("modelConfigId=model-e2e"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelGrantUsesControlCredentialAndCanWriteProfile() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path profile = profileDir.resolve("upstream.env");
+        Files.writeString(profile, "NAVI_BASE_URL=" + baseUrl() + "\nNAVI_CLIENT_APP_ID=app-1\n", StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":21,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-live",
+                  "modelConfigName":"Live Model",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "grant",
+                "--control-api-key", "control-key-secret",
+                "--model-config-id", "model-live",
+                "--set-default",
+                "--grant-scope", "CLIENT_APP",
+                "--write-profile"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profileContent = Files.readString(profile, StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-config-grants", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"modelConfigId\":\"model-live\""));
+        assertTrue(lastBody.contains("\"isDefault\":true"));
+        assertTrue(lastBody.contains("\"grantScope\":\"CLIENT_APP\""));
+        assertTrue(output.contains("model grant ok"));
+        assertTrue(output.contains("modelConfigId=model-live"));
+        assertTrue(output.contains("stored=NAVI_MODEL_CONFIG_ID"));
+        assertTrue(profileContent.contains("NAVI_MODEL_CONFIG_ID=model-live"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelSetDefaultCanResolveGrantIdByModelConfigId() {
+        responseOverride = "__MODEL_GRANTS_THEN_DEFAULT__";
+
+        int code = run(new String[]{"upstream", "model", "set-default",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--model-config-id", "model-target"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals(List.of(
+                "/api/v1/client-apps/app-1/model-config-grants",
+                "/api/v1/client-apps/app-1/model-config-grants/31/default"
+        ), requestPaths);
+        assertEquals("PUT", lastMethod);
+        assertTrue(output.contains("model set-default ok"));
+        assertFalse(output.contains("control-key-secret"));
+    }
+
+    @Test
+    void modelCreateUsesControlCredentialAndApiKeyEnv() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":41,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-owned",
+                  "modelConfigName":"Upstream GPT",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP_OWNED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "create",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--name", "Upstream GPT",
+                "--model-base-url", "https://llm.example/v1",
+                "--model-name", "gpt-test",
+                "--provider", "openai",
+                "--api-key-env", "UPSTREAM_LLM_KEY",
+                "--set-default"}, env("UPSTREAM_LLM_KEY", "llm-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"name\":\"Upstream GPT\""));
+        assertTrue(lastBody.contains("\"baseUrl\":\"https://llm.example/v1\""));
+        assertTrue(lastBody.contains("\"modelName\":\"gpt-test\""));
+        assertTrue(lastBody.contains("\"apiKey\":\"llm-secret\""));
+        assertTrue(lastBody.contains("\"NAVI_LLM_PROVIDER\":\"openai\""));
+        assertTrue(lastBody.contains("\"setDefault\":true"));
+        assertTrue(output.contains("model create ok"));
+        assertTrue(output.contains("modelConfigId=model-owned"));
+        assertFalse(output.contains("control-key-secret"));
+        assertFalse(output.contains("llm-secret"));
+    }
+
+    @Test
+    void modelRotateKeyUsesApiKeyEnvWithoutPrintingSecret() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "id":42,
+                  "clientAppId":"app-1",
+                  "modelConfigId":"model-owned",
+                  "modelConfigName":"Upstream GPT",
+                  "workerBackend":"LANGGRAPH_BIZ",
+                  "status":"ENABLED",
+                  "isDefault":true,
+                  "grantScope":"CLIENT_APP_OWNED"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "model", "rotate-key",
+                "--base-url", baseUrl(),
+                "--tenant-id", "tenant-1",
+                "--control-api-key", "control-key-secret",
+                "--client-app-id", "app-1",
+                "--model-config-id", "model-owned",
+                "--api-key-env", "UPSTREAM_LLM_KEY"}, env("UPSTREAM_LLM_KEY", "new-llm-secret"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/client-apps/app-1/model-configs/model-owned/key", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+        assertTrue(lastBody.contains("\"apiKey\":\"new-llm-secret\""));
+        assertTrue(output.contains("model rotate-key ok"));
+        assertFalse(output.contains("control-key-secret"));
+        assertFalse(output.contains("new-llm-secret"));
     }
 
     private int run(String[] args, Map<String, String> env) {

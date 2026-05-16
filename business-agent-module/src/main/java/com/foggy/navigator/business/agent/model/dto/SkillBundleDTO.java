@@ -15,6 +15,7 @@ public class SkillBundleDTO {
     private String name;
     private String description;
     private String status;
+    private String contextVisibility;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private SkillMaterializeResultDTO materializeResult;
@@ -32,6 +33,7 @@ public class SkillBundleDTO {
         dto.setName(entity.getName());
         dto.setDescription(entity.getDescription());
         dto.setStatus(entity.getStatus());
+        dto.setContextVisibility(entity.getContextVisibility() == null ? "isolated" : entity.getContextVisibility());
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());
         return dto;

@@ -1,0 +1,9 @@
+.env
+host.env
+release.env
+*.local
+*.secret
+runtime/release.env
+runtime/*.env
+runtime/current-image-tag
+runtime/previous-image-tag

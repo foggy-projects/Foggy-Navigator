@@ -2,6 +2,8 @@ package com.foggy.navigator.business.agent.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.agent.framework.protocol.AgentMessage;
+import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.business.agent.event.BusinessSuspensionResumeDecisionEvent;
 import com.foggy.navigator.common.event.WorkerGatewayResumeEvent;
 import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
@@ -24,6 +26,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -55,6 +59,9 @@ public class BusinessFunctionSuspensionService {
     private static final String EXECUTION_NOT_APPLICABLE = "NOT_APPLICABLE";
     private static final String WORKER_NOTIFICATION_NOT_DISPATCHED = "NOT_DISPATCHED";
     private static final String WORKER_NOTIFICATION_DISPATCH_REQUESTED = "DISPATCH_REQUESTED";
+    private static final String BUSINESS_AGENT_ID = "business-agent";
+    private static final String SUBTYPE_BUSINESS_FUNCTION_RESULT_MESSAGE = "business_function_result_message";
+    private static final String DEFAULT_ADAPTER_SUCCESS_MESSAGE = "Adapter execution successful";
 
     private final BusinessFunctionSuspensionRepository repository;
     private final ApplicationEventPublisher eventPublisher;
@@ -332,6 +339,7 @@ public class BusinessFunctionSuspensionService {
                     BusinessFunctionAdapterResult.STATUS_SUCCESS,
                     extractOutputCode(adapterResult.getOutputJson()),
                     hasOutputData(adapterResult.getOutputJson()));
+            publishBusinessExecutionResultMessage(suspension, true, adapterResult, null);
 
             WorkerGatewayInvokeResponseDTO response = new WorkerGatewayInvokeResponseDTO();
             response.setFunctionId(suspension.getFunctionId());
@@ -348,6 +356,7 @@ public class BusinessFunctionSuspensionService {
             repository.save(suspension);
             long durationMs = System.currentTimeMillis() - startTime;
             auditService.recordInvokeFailed(auditToken, suspension.getFunctionId(), suspension.getVersion(), suspension.getSuspendId(), "ADAPTER_ERROR", e.getMessage(), durationMs);
+            publishBusinessExecutionResultMessage(suspension, false, null, e.getMessage());
             throw e;
         }
     }
@@ -532,5 +541,98 @@ public class BusinessFunctionSuspensionService {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private void publishBusinessExecutionResultMessage(BusinessFunctionSuspensionEntity suspension,
+                                                       boolean success,
+                                                       BusinessFunctionAdapterResult adapterResult,
+                                                       String errorMessage) {
+        String sessionId = resolveConversationSessionId(suspension);
+        if (!StringUtils.hasText(sessionId)) {
+            log.warn("Skip business execution result message because sessionId is blank: suspendId={}",
+                    suspension.getSuspendId());
+            return;
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("subtype", SUBTYPE_BUSINESS_FUNCTION_RESULT_MESSAGE);
+        payload.put("content", buildBusinessExecutionResultContent(success, adapterResult, errorMessage));
+        payload.put("status", success ? WorkerGatewayInvokeResponseDTO.STATUS_SUCCESS : "FAILED");
+        payload.put("executionStatus", success ? EXECUTION_COMPLETED : EXECUTION_FAILED);
+        payload.put("suspendId", suspension.getSuspendId());
+        payload.put("functionId", suspension.getFunctionId());
+        payload.put("version", suspension.getVersion());
+        payload.put("businessTaskId", suspension.getTaskId());
+        payload.put("businessSessionId", suspension.getSessionId());
+        payload.put("workerTaskId", suspension.getWorkerTaskId());
+        payload.put("workerSessionId", suspension.getWorkerSessionId());
+        if (success && adapterResult != null) {
+            payload.put("adapterMessage", adapterResult.getMessage());
+            payload.put("outputCode", extractOutputCode(adapterResult.getOutputJson()));
+            payload.put("hasOutputData", hasOutputData(adapterResult.getOutputJson()));
+        } else if (!success && StringUtils.hasText(errorMessage)) {
+            payload.put("errorMessage", truncate(errorMessage, 500));
+        }
+
+        AgentMessage message = AgentMessage.of(sessionId, BUSINESS_AGENT_ID, MessageType.TEXT_COMPLETE, payload);
+        message.setTaskId(resolveConversationTaskId(suspension));
+        publishBusinessExecutionResultMessageAfterCommit(suspension.getSuspendId(), message);
+    }
+
+    private String buildBusinessExecutionResultContent(boolean success,
+                                                       BusinessFunctionAdapterResult adapterResult,
+                                                       String errorMessage) {
+        if (success) {
+            if (adapterResult != null
+                    && StringUtils.hasText(adapterResult.getMessage())
+                    && !DEFAULT_ADAPTER_SUCCESS_MESSAGE.equals(adapterResult.getMessage())) {
+                return adapterResult.getMessage();
+            }
+            return "业务函数执行完成。";
+        }
+        if (StringUtils.hasText(errorMessage)) {
+            return "业务函数执行失败：" + truncate(errorMessage, 200);
+        }
+        return "业务函数执行失败。";
+    }
+
+    private void publishBusinessExecutionResultMessageAfterCommit(String suspendId, AgentMessage message) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    publishBusinessExecutionResultMessageNow(suspendId, message);
+                }
+            });
+            return;
+        }
+        publishBusinessExecutionResultMessageNow(suspendId, message);
+    }
+
+    private void publishBusinessExecutionResultMessageNow(String suspendId, AgentMessage message) {
+        try {
+            eventPublisher.publishEvent(message);
+        } catch (Exception e) {
+            log.error("Failed to publish business execution result message for suspendId: {}", suspendId, e);
+        }
+    }
+
+    private String resolveConversationSessionId(BusinessFunctionSuspensionEntity suspension) {
+        return StringUtils.hasText(suspension.getWorkerSessionId())
+                ? suspension.getWorkerSessionId()
+                : suspension.getSessionId();
+    }
+
+    private String resolveConversationTaskId(BusinessFunctionSuspensionEntity suspension) {
+        return StringUtils.hasText(suspension.getWorkerTaskId())
+                ? suspension.getWorkerTaskId()
+                : suspension.getTaskId();
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 }

@@ -777,7 +777,7 @@ public class TaskDispatchFacade {
         int from = Math.min(page * size, sortedSessions.size());
         int to = Math.min(from + size, sortedSessions.size());
         List<Object> content = sortedSessions.subList(from, to).stream()
-                .flatMap(Collection::stream)
+                .map(this::toSessionSummaryItem)
                 .toList();
 
         return Map.of(
@@ -790,14 +790,16 @@ public class TaskDispatchFacade {
 
     private LocalDateTime latestTaskTime(List<Object> tasks) {
         return tasks.stream()
-                .map(task -> {
-                    LocalDateTime createdAt = readDateTimeProperty(task, "createdAt");
-                    LocalDateTime updatedAt = readDateTimeProperty(task, "updatedAt");
-                    return compareNullableTime(createdAt, updatedAt) >= 0 ? createdAt : updatedAt;
-                })
+                .map(this::latestItemTime)
                 .filter(Objects::nonNull)
                 .max(LocalDateTime::compareTo)
                 .orElse(null);
+    }
+
+    private LocalDateTime latestItemTime(Object task) {
+        LocalDateTime createdAt = readDateTimeProperty(task, "createdAt");
+        LocalDateTime updatedAt = readDateTimeProperty(task, "updatedAt");
+        return compareNullableTime(createdAt, updatedAt) >= 0 ? createdAt : updatedAt;
     }
 
     private TaskPageEnvelope toTaskPageEnvelope(Object pageResult) {
@@ -903,10 +905,9 @@ public class TaskDispatchFacade {
         List<UnifiedSessionView> sessions = buildUnifiedSessionViews(tasks, userId, directoryId, state);
         int from = Math.min(page * size, sessions.size());
         int to = Math.min(from + size, sessions.size());
-        List<SessionTaskEntity> pagedTasks = sessions.subList(from, to).stream()
-                .flatMap(view -> view.tasks().stream())
+        List<DispatchTaskDTO> content = sessions.subList(from, to).stream()
+                .map(this::toSessionSummaryDispatchTaskDTO)
                 .toList();
-        List<Object> content = new ArrayList<>(toDispatchTaskDTOs(pagedTasks));
 
         return Map.of(
                 "content", content,
@@ -1054,6 +1055,133 @@ public class TaskDispatchFacade {
         result.put("createdAt", view.earliestTask().getCreatedAt());
         result.put("updatedAt", resolveSessionSortTime(view));
         return result;
+    }
+
+    private DispatchTaskDTO toSessionSummaryDispatchTaskDTO(UnifiedSessionView view) {
+        DispatchTaskDTO summary = toDispatchTaskDTO(view.latestTask());
+        applySessionSummaryFields(
+                summary,
+                view.tasks().size(),
+                sumCost(view.tasks()),
+                sumInputTokens(view.tasks()),
+                sumOutputTokens(view.tasks()),
+                view.earliestTask().getPrompt()
+        );
+        return summary;
+    }
+
+    private Object toSessionSummaryItem(List<Object> sessionTasks) {
+        Object latest = sessionTasks.stream()
+                .max((left, right) -> compareNullableTime(latestItemTime(left), latestItemTime(right)))
+                .orElse(null);
+        if (latest == null) {
+            return Map.of();
+        }
+
+        BigDecimal totalCost = sessionTasks.stream()
+                .map(task -> readProperty(task, "costUsd"))
+                .map(this::toBigDecimal)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        Long inputTokens = sumLongProperty(sessionTasks, "inputTokens");
+        Long outputTokens = sumLongProperty(sessionTasks, "outputTokens");
+        String firstPrompt = sessionTasks.stream()
+                .min((left, right) -> compareNullableTime(latestItemTime(left), latestItemTime(right)))
+                .map(task -> readStringProperty(task, "prompt"))
+                .orElse(null);
+
+        if (latest instanceof DispatchTaskDTO dto) {
+            applySessionSummaryFields(dto, sessionTasks.size(), totalCost, inputTokens, outputTokens, firstPrompt);
+            return dto;
+        }
+        if (latest instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, value) -> {
+                if (key != null) {
+                    copy.put(key.toString(), value);
+                }
+            });
+            copy.put("sessionTaskCount", sessionTasks.size());
+            copy.put("sessionTotalCostUsd", totalCost);
+            copy.put("sessionInputTokens", inputTokens);
+            copy.put("sessionOutputTokens", outputTokens);
+            copy.put("sessionFirstPrompt", firstPrompt);
+            return copy;
+        }
+        setSessionSummaryByReflection(latest, sessionTasks.size(), totalCost, inputTokens, outputTokens, firstPrompt);
+        return latest;
+    }
+
+    private void applySessionSummaryFields(DispatchTaskDTO dto, int taskCount, BigDecimal totalCost,
+                                           Long inputTokens, Long outputTokens, String firstPrompt) {
+        dto.setSessionTaskCount(taskCount);
+        dto.setSessionTotalCostUsd(totalCost);
+        dto.setSessionInputTokens(inputTokens);
+        dto.setSessionOutputTokens(outputTokens);
+        dto.setSessionFirstPrompt(firstPrompt);
+    }
+
+    private void setSessionSummaryByReflection(Object target, int taskCount, BigDecimal totalCost,
+                                               Long inputTokens, Long outputTokens, String firstPrompt) {
+        invokeSetter(target, "setSessionTaskCount", Integer.class, taskCount);
+        invokeSetter(target, "setSessionTotalCostUsd", BigDecimal.class, totalCost);
+        invokeSetter(target, "setSessionInputTokens", Long.class, inputTokens);
+        invokeSetter(target, "setSessionOutputTokens", Long.class, outputTokens);
+        invokeSetter(target, "setSessionFirstPrompt", String.class, firstPrompt);
+    }
+
+    private void invokeSetter(Object target, String methodName, Class<?> parameterType, Object value) {
+        try {
+            Method setter = target.getClass().getMethod(methodName, parameterType);
+            setter.invoke(target, value);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private BigDecimal sumCost(List<SessionTaskEntity> tasks) {
+        return tasks.stream()
+                .map(task -> task.getCostUsd() != null ? task.getCostUsd() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private Long sumInputTokens(List<SessionTaskEntity> tasks) {
+        return tasks.stream()
+                .map(SessionTaskEntity::getInputTokens)
+                .filter(Objects::nonNull)
+                .reduce(0L, Long::sum);
+    }
+
+    private Long sumOutputTokens(List<SessionTaskEntity> tasks) {
+        return tasks.stream()
+                .map(SessionTaskEntity::getOutputTokens)
+                .filter(Objects::nonNull)
+                .reduce(0L, Long::sum);
+    }
+
+    private Long sumLongProperty(List<Object> tasks, String property) {
+        return tasks.stream()
+                .map(task -> readProperty(task, property))
+                .filter(Number.class::isInstance)
+                .map(Number.class::cast)
+                .map(Number::longValue)
+                .reduce(0L, Long::sum);
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        if (value instanceof BigDecimal decimal) {
+            return decimal;
+        }
+        if (value instanceof Number number) {
+            return BigDecimal.valueOf(number.doubleValue());
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return new BigDecimal(text);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private List<DispatchTaskDTO> toDispatchTaskDTOs(List<SessionTaskEntity> entities) {

@@ -62,6 +62,7 @@ class _RunHandle:
     started_at: float
     script_run_id: str | None = None
     suspend_id: str | None = None
+    approval_payload: dict[str, Any] | None = None
 
 
 _runtime_imports: _RuntimeImports | None = None
@@ -168,6 +169,7 @@ class FsscriptRunBridge:
                 "summary": summary,
                 "timeout_at": getattr(result, "timeout_at").isoformat(),
             }
+            handle.approval_payload = payload
             events.put(
                 QueryEvent(
                     type="approval_required",
@@ -273,6 +275,8 @@ class FsscriptRunBridge:
             "script_run_id": handle.script_run_id,
             "suspend_id": handle.suspend_id,
             "status": "RUNNING",
+            "approval_payload": handle.approval_payload or {},
+            "summary": (handle.approval_payload or {}).get("summary") or {},
         }
 
     def _run_script_thread(

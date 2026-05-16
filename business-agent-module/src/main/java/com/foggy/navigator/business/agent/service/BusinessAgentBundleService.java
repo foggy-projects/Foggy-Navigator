@@ -81,6 +81,7 @@ public class BusinessAgentBundleService {
         skillForm.setDescription(form.getDescription());
         skillForm.setStatus(form.getStatus());
         skillForm.setMarkdownBody(form.getMarkdownBody());
+        skillForm.setContextVisibility(form.getContextVisibility());
         skillForm.setResources(form.getResources());
         skillForm.setFunctions(form.getFunctions());
         skillForm.setMaterialize(form.getMaterialize());

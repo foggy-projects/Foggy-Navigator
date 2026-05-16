@@ -523,12 +523,13 @@ public class OpenApiController {
         if (form.getFirstMsg() != null && !form.getFirstMsg().isBlank()) {
             metadata.put("firstMsg", form.getFirstMsg());
         }
-        enrichBusinessRuntimeContext(tenantId, metadata, agentId, clientAppCredential, request, contextId);
+        String businessRuntimeToken = enrichBusinessRuntimeContext(tenantId, metadata, agentId, clientAppCredential, request, contextId);
         if (!metadata.isEmpty()) {
             message.setMetadata(metadata);
         }
 
         A2aTask task = agent.sendTask(message);
+        bindBusinessRuntimeTokenToWorkerTaskIfPossible(tenantId, businessRuntimeToken, task);
         String agentOwnerUserId = null;
         if (clientContextJson != null) {
             agentOwnerUserId = resolveAgentOwnerUserId(agentId, tenantId);
@@ -807,7 +808,7 @@ public class OpenApiController {
         service.getSession(tenantId, clientAppId, upstreamUserId, contextId);
     }
 
-    private void enrichBusinessRuntimeContext(
+    private String enrichBusinessRuntimeContext(
             String tenantId,
             Map<String, Object> metadata,
             String skillId,
@@ -815,7 +816,7 @@ public class OpenApiController {
             HttpServletRequest request,
             String contextId) {
         if (clientAppCredential == null) {
-            return;
+            return null;
         }
 
         Map<String, Object> context = new LinkedHashMap<>();
@@ -839,7 +840,7 @@ public class OpenApiController {
                 "X-Client-Upstream-User-Id");
         if (StringUtils.hasText(upstreamUserId)) {
             context.putIfAbsent("upstreamUserId", upstreamUserId);
-            issueBusinessRuntimeToken(
+            String token = issueBusinessRuntimeToken(
                     tenantId,
                     clientAppCredential.getClientAppId(),
                     metadata,
@@ -848,12 +849,15 @@ public class OpenApiController {
                     skillId,
                     contextId,
                     metadata.get("modelConfigId"));
+            metadata.put("context", context);
+            return token;
         }
 
         metadata.put("context", context);
+        return null;
     }
 
-    private void issueBusinessRuntimeToken(
+    private String issueBusinessRuntimeToken(
             String tenantId,
             String actorUserId,
             Map<String, Object> metadata,
@@ -864,7 +868,7 @@ public class OpenApiController {
             Object requestedModelConfigId) {
         BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
         if (service == null) {
-            return;
+            return null;
         }
         String token = service.issueOpenApiTaskScopedToken(
                 tenantId,
@@ -886,6 +890,35 @@ public class OpenApiController {
         }
         runtimeContext.put("task_scoped_token", token);
         metadata.put("runtimeContext", runtimeContext);
+        return token;
+    }
+
+    private void bindBusinessRuntimeTokenToWorkerTaskIfPossible(
+            String tenantId,
+            String businessRuntimeToken,
+            A2aTask task) {
+        if (!StringUtils.hasText(businessRuntimeToken) || task == null || !StringUtils.hasText(task.getId())) {
+            return;
+        }
+        BusinessAgentTaskService service = businessAgentTaskService.getIfAvailable();
+        if (service == null) {
+            return;
+        }
+        service.bindOpenApiTaskScopedTokenToWorkerTask(
+                tenantId,
+                businessRuntimeToken,
+                task.getId(),
+                resolveTaskSessionId(task));
+    }
+
+    private String resolveTaskSessionId(A2aTask task) {
+        if (task != null && task.getMetadata() != null) {
+            Object sessionId = task.getMetadata().get("sessionId");
+            if (sessionId instanceof String value && StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return task != null ? task.getContextId() : null;
     }
 
     private void bindBusinessAgentSessionIfPossible(

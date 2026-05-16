@@ -211,6 +211,43 @@ public class BusinessAgentTaskService {
         return plainToken;
     }
 
+    @Transactional
+    public void bindOpenApiTaskScopedTokenToWorkerTask(
+            String tenantId,
+            String plainToken,
+            String workerTaskId,
+            String workerSessionId) {
+        requireText(tenantId, "tenantId is required");
+        requireText(plainToken, "plainToken is required");
+        requireText(workerTaskId, "workerTaskId is required");
+
+        String hash = SecretTokenSupport.sha256(plainToken);
+        BusinessTaskScopedTokenEntity token = tokenRepository.findByTokenHash(hash)
+                .orElseThrow(() -> new IllegalArgumentException("invalid token"));
+        if (!tenantId.equals(token.getTenantId())) {
+            throw new SecurityException("token tenant mismatch");
+        }
+        if (!STATUS_ACTIVE.equals(token.getStatus())) {
+            throw new IllegalStateException("token is not active");
+        }
+        if (token.getExpiresAt() != null && token.getExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new IllegalStateException("token is expired");
+        }
+        if (StringUtils.hasText(token.getWorkerTaskId()) && !workerTaskId.equals(token.getWorkerTaskId())) {
+            throw new IllegalStateException("token already bound to another worker task");
+        }
+
+        String resolvedWorkerSessionId = StringUtils.hasText(workerSessionId) ? workerSessionId : token.getSessionId();
+        token.setWorkerTaskId(workerTaskId);
+        token.setWorkerSessionId(resolvedWorkerSessionId);
+        tokenRepository.save(token);
+
+        tokenRuntimeStore.registerToken(tenantId, token.getSessionId(), workerTaskId, plainToken, token.getExpiresAt());
+        if (StringUtils.hasText(resolvedWorkerSessionId) && !resolvedWorkerSessionId.equals(token.getSessionId())) {
+            tokenRuntimeStore.registerToken(tenantId, resolvedWorkerSessionId, workerTaskId, plainToken, token.getExpiresAt());
+        }
+    }
+
     @Transactional(readOnly = true)
     public BusinessAgentTaskDTO getTask(String tenantId, String taskId) {
         requireText(tenantId, "tenantId is required");

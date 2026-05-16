@@ -313,14 +313,17 @@ public class BusinessAgentApiSmokeTest {
     public void testCreateSkill() {
         CreateSkillForm form = new CreateSkillForm();
         form.setName("test-skill");
+        form.setContextVisibility("summary");
 
-        responseOverride = "{\"skillId\":\"skill-123\", \"name\":\"test-skill\"}"; // naked object
+        responseOverride = "{\"skillId\":\"skill-123\", \"name\":\"test-skill\", \"contextVisibility\":\"summary\"}"; // naked object
         SkillDTO skill = client.businessAgent().createSkill(form);
         assertNotNull(skill);
         assertEquals("skill-123", skill.getSkillId());
+        assertEquals("summary", skill.getContextVisibility());
         assertEquals("/api/v1/business-agent/skills", lastPath);
         assertEquals("POST", lastMethod);
         assertTrue(lastBody.contains("\"name\":\"test-skill\""));
+        assertTrue(lastBody.contains("\"contextVisibility\":\"summary\""));
         assertCommon();
     }
 
@@ -350,6 +353,42 @@ public class BusinessAgentApiSmokeTest {
         assertEquals("POST", lastMethod);
         assertTrue(lastBody.contains("\"modelConfigId\":\"cfg-123\""), "Payload must have modelConfigId");
         assertTrue(lastBody.contains("\"isDefault\":true"), "Payload must have isDefault");
+        assertCommon();
+    }
+
+    @Test
+    public void testCreateClientAppModelConfig() {
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        form.setName("Upstream GPT");
+        form.setBaseUrl("https://llm.example/v1");
+        form.setModelName("gpt-test");
+        form.setApiKey("llm-secret");
+        form.setSetDefault(true);
+
+        responseOverride = "{\"modelConfigId\":\"cfg-owned\", \"grantScope\":\"CLIENT_APP_OWNED\"}";
+        ClientAppModelConfigGrantDTO grant = client.businessAgent().createClientAppModelConfig("app-123", form);
+        assertNotNull(grant);
+        assertEquals("cfg-owned", grant.getModelConfigId());
+        assertEquals("/api/v1/client-apps/app-123/model-configs", lastPath);
+        assertEquals("POST", lastMethod);
+        assertTrue(lastBody.contains("\"baseUrl\":\"https://llm.example/v1\""));
+        assertTrue(lastBody.contains("\"apiKey\":\"llm-secret\""));
+        assertCommon();
+    }
+
+    @Test
+    public void testRotateClientAppModelConfigKey() {
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setApiKey("new-secret");
+
+        responseOverride = "{\"modelConfigId\":\"cfg-owned\", \"grantScope\":\"CLIENT_APP_OWNED\"}";
+        ClientAppModelConfigGrantDTO grant = client.businessAgent()
+                .rotateClientAppModelConfigKey("app-123", "cfg-owned", form);
+        assertNotNull(grant);
+        assertEquals("cfg-owned", grant.getModelConfigId());
+        assertEquals("/api/v1/client-apps/app-123/model-configs/cfg-owned/key", lastPath);
+        assertEquals("PUT", lastMethod);
+        assertTrue(lastBody.contains("\"apiKey\":\"new-secret\""));
         assertCommon();
     }
 

@@ -16,6 +16,7 @@ public class SyncBusinessAgentBundleForm {
     private String workerId;
     private String defaultModelConfigId;
     private String defaultModel;
+    private String contextVisibility;
     private String markdownBody;
     private List<SkillResourceForm> resources;
     private List<SkillBundleFunctionForm> functions;
@@ -41,6 +42,8 @@ public class SyncBusinessAgentBundleForm {
     public void setDefaultModelConfigId(String defaultModelConfigId) { this.defaultModelConfigId = defaultModelConfigId; }
     public String getDefaultModel() { return defaultModel; }
     public void setDefaultModel(String defaultModel) { this.defaultModel = defaultModel; }
+    public String getContextVisibility() { return contextVisibility; }
+    public void setContextVisibility(String contextVisibility) { this.contextVisibility = contextVisibility; }
     public String getMarkdownBody() { return markdownBody; }
     public void setMarkdownBody(String markdownBody) { this.markdownBody = markdownBody; }
     public List<SkillResourceForm> getResources() { return resources; }

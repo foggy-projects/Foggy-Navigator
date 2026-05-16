@@ -28,6 +28,11 @@ class BizWorkerControlPlaneAuthorizationTest {
     }
 
     @Test
+    void clientAppOwnedModelConfigController_uses_client_app_control_plane_guard() {
+        assertNull(ClientAppOwnedModelConfigController.class.getAnnotation(RequireAuth.class));
+    }
+
+    @Test
     void e2eModelConfigEnsure_uses_client_app_control_plane_guard() throws NoSuchMethodException {
         Method method = E2eModelConfigController.class.getMethod(
                 "ensure",

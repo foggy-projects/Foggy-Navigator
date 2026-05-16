@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import logging
 import uuid
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any
 
 from ..models import (
+    FrameKind,
     FrameStatus,
     SkillFrameState,
     SkillManifest,
@@ -57,6 +60,9 @@ class MaxNestingDepthExceeded(Exception):
 
 # Default maximum nesting depth for Skill calls.
 DEFAULT_MAX_NESTING_DEPTH = 5
+PERSISTENT_FRAME_MAX_TURN_RESULTS = 20
+PERSISTENT_FRAME_MAX_RECENT_SUMMARIES = 10
+PERSISTENT_FRAME_MAX_PRIVATE_MESSAGES = 40
 
 
 class SkillRuntime:
@@ -158,6 +164,38 @@ class SkillRuntime:
         self._save(frame)
         logger.info("Frame %s awaiting approval: %s", frame_id, approval_request.get("approval_type", ""))
 
+    def mark_child_awaiting_approval(
+        self,
+        parent_frame_id: str,
+        child_frame_id: str,
+        approval_request: dict[str, Any],
+    ) -> None:
+        """Bubble a child approval wait to its parent frame.
+
+        A parent that invoked a child skill is normally in ``WAITING_CHILD``.
+        If the child suspends for approval, the parent must also become a
+        durable approval wait boundary so the root graph does not treat the
+        waiting child as a failed turn.
+        """
+        parent = self._get_frame(parent_frame_id)
+        child = self._get_frame(child_frame_id)
+        if child.parent_frame_id != parent_frame_id:
+            raise IllegalStateTransition("child frame does not belong to parent")
+        if child.status != FrameStatus.AWAITING_APPROVAL:
+            raise IllegalStateTransition(
+                f"mark_child_awaiting_approval requires child AWAITING_APPROVAL, got {child.status.value}"
+            )
+
+        self._transition(parent, FrameStatus.AWAITING_APPROVAL)
+        parent.approval_request = approval_request
+        parent.private_working_state["pending_child_approval_frame_id"] = child_frame_id
+        self._save(parent)
+        logger.info(
+            "Frame %s awaiting approval from child frame %s",
+            parent_frame_id,
+            child_frame_id,
+        )
+
     def resume_from_approval(
         self,
         frame_id: str,
@@ -174,6 +212,8 @@ class SkillRuntime:
         frame.private_working_state["approval_comment"] = comment
         frame.approval_request = None  # clear the pending request
         self._save(frame)
+        self._resume_pending_child_approval(frame, approval_result, comment)
+        self._resume_pending_function_call(frame, approval_result, comment)
         logger.info("Frame %s resumed from approval: %s", frame_id, approval_result)
 
     def fail_frame(self, frame_id: str, reason: str = "") -> None:
@@ -261,6 +301,59 @@ class SkillRuntime:
 
             return result
 
+    def submit_persistent_turn_result(
+        self,
+        frame_id: str,
+        summary: str,
+        structured_output: dict[str, Any],
+        artifact_refs: list[str] | None = None,
+        evidence_refs: list[str] | None = None,
+    ) -> ValidationResult:
+        """Record a turn result for a persistent Frame without closing it.
+
+        System frames such as ``system.root`` do not have ordinary Skill exit
+        semantics.  ``submit_skill_result`` ends the current user turn, but the
+        Frame remains RUNNING so future resume logic can continue from the same
+        root working context.
+        """
+        frame = self._get_frame(frame_id)
+
+        if frame.status != FrameStatus.RUNNING:
+            raise IllegalStateTransition(
+                f"submit_persistent_turn_result requires RUNNING, got {frame.status.value}"
+            )
+
+        frame.result_summary = summary
+        frame.output = structured_output
+        if artifact_refs:
+            frame.artifact_refs = artifact_refs
+        if evidence_refs:
+            frame.evidence_refs = evidence_refs
+
+        manifest = self._manifest_for_frame(frame)
+        if manifest:
+            result = validate_output_contract(frame, manifest, structured_output)
+        else:
+            result = ValidationResult(ok=True)
+
+        if result.ok:
+            turn_results = frame.private_working_state.setdefault("turn_results", [])
+            turn_entry = {
+                "summary": summary,
+                "structured_output": structured_output,
+                "artifact_refs": artifact_refs or [],
+                "evidence_refs": evidence_refs or [],
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
+            }
+            turn_results.append(turn_entry)
+            self._compact_persistent_frame_context(frame, turn_entry)
+        else:
+            frame.output = None
+            frame.result_summary = None
+
+        self._save(frame)
+        return result
+
     # -- Frame closure -------------------------------------------------------
 
     def close_frame(self, frame_id: str) -> dict[str, Any]:
@@ -321,6 +414,126 @@ class SkillRuntime:
         child_results = parent.private_working_state.setdefault("child_results", {})
         child_results[child_frame_id] = child_promoted
         self._save(parent)
+
+    # -- Business function call frames --------------------------------------
+
+    def invoke_function_call(
+        self,
+        parent_frame_id: str,
+        function_id: str,
+        version: str | None,
+        arguments: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> str:
+        """Create a runtime wrapper frame for one business function call.
+
+        Function-call frames are not LLM skills and do not put the caller in
+        ``WAITING_CHILD``. They provide a durable audit/suspend boundary for a
+        tool invocation that happens inside the caller skill loop.
+        """
+        parent = self._get_frame(parent_frame_id)
+        frame_id = f"fn_{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        safe_args = arguments or {}
+        argument_hash = hashlib.sha256(
+            json.dumps(safe_args, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+
+        frame = SkillFrameState(
+            frame_id=frame_id,
+            task_id=parent.task_id,
+            skill_id=f"__function__:{function_id}",
+            frame_kind=FrameKind.FUNCTION_CALL,
+            parent_frame_id=parent_frame_id,
+            status=FrameStatus.CREATED,
+            input={
+                "function_id": function_id,
+                "version": version,
+                "arguments": safe_args,
+                "argument_hash": argument_hash,
+                "idempotency_key": idempotency_key,
+                "tool_call_id": tool_call_id,
+            },
+            private_working_state={
+                "caller_skill_id": parent.skill_id,
+                "approval_state": "NONE",
+                "context_visibility": "passthrough",
+                "context_snapshot": self._context_snapshot_for_function_call(parent_frame_id),
+            },
+            started_at=now,
+        )
+
+        self._transition(frame, FrameStatus.RUNNING)
+        self._save(frame)
+
+        parent.child_frame_ids.append(frame_id)
+        self._save(parent)
+        return frame_id
+
+    def complete_function_call(
+        self,
+        function_frame_id: str,
+        result: dict[str, Any],
+        summary: str = "",
+    ) -> None:
+        """Complete a function-call frame and write its result to the caller."""
+        frame = self._get_frame(function_frame_id)
+        if frame.frame_kind != FrameKind.FUNCTION_CALL:
+            raise IllegalStateTransition("complete_function_call requires FUNCTION_CALL frame")
+        if frame.status != FrameStatus.RUNNING:
+            raise IllegalStateTransition(
+                f"complete_function_call requires RUNNING, got {frame.status.value}"
+            )
+
+        frame.result_summary = summary or _function_result_summary(frame, result)
+        frame.output = result
+        self._transition(frame, FrameStatus.COMPLETED)
+        frame.ended_at = datetime.now(timezone.utc).isoformat()
+        self._save(frame)
+
+        if frame.parent_frame_id:
+            parent = self._get_frame(frame.parent_frame_id)
+            function_results = parent.private_working_state.setdefault("function_results", {})
+            function_results[function_frame_id] = {
+                "function_id": frame.input.get("function_id"),
+                "version": frame.input.get("version"),
+                "result": result,
+                "completed_at": frame.ended_at,
+            }
+            self._save(parent)
+
+    def suspend_function_call(
+        self,
+        function_frame_id: str,
+        approval_request: dict[str, Any],
+    ) -> None:
+        """Mark a function-call frame as waiting for Java-owned approval."""
+        frame = self._get_frame(function_frame_id)
+        if frame.frame_kind != FrameKind.FUNCTION_CALL:
+            raise IllegalStateTransition("suspend_function_call requires FUNCTION_CALL frame")
+        if frame.status != FrameStatus.RUNNING:
+            raise IllegalStateTransition(
+                f"suspend_function_call requires RUNNING, got {frame.status.value}"
+            )
+
+        self._transition(frame, FrameStatus.AWAITING_APPROVAL)
+        frame.approval_request = approval_request
+        frame.private_working_state["approval_state"] = "PENDING"
+        frame.private_working_state["suspend_id"] = approval_request.get("suspend_id")
+        self._save(frame)
+
+        if frame.parent_frame_id:
+            parent = self._get_frame(frame.parent_frame_id)
+            parent.private_working_state["pending_function_call_frame_id"] = function_frame_id
+            parent.private_working_state["pending_function_call"] = {
+                "function_frame_id": function_frame_id,
+                "function_id": frame.input.get("function_id"),
+                "version": frame.input.get("version"),
+                "argument_hash": frame.input.get("argument_hash"),
+                "suspend_id": approval_request.get("suspend_id"),
+            }
+            self._save(parent)
 
     # -- Composite child Skill operations (Doc 31a §4.1) ---------------------
 
@@ -427,6 +640,14 @@ class SkillRuntime:
         """
         self.store.save(frame)
 
+    def context_summary_for_frame(self, frame_id: str) -> dict[str, Any] | None:
+        """Return the nearest root context summary visible from a frame stack."""
+        for frame in self.get_call_stack(frame_id):
+            summary = frame.private_working_state.get("root_context_summary")
+            if isinstance(summary, dict):
+                return _safe_json_copy(summary)
+        return None
+
     # -- Internal helpers ----------------------------------------------------
 
     def _get_frame(self, frame_id: str) -> SkillFrameState:
@@ -460,3 +681,169 @@ class SkillRuntime:
                 f"Cannot transition from {current.value} to {target.value}"
             )
         frame.status = target
+
+    def _compact_persistent_frame_context(
+        self,
+        frame: SkillFrameState,
+        turn_entry: dict[str, Any],
+    ) -> None:
+        summary = frame.private_working_state.setdefault("root_context_summary", {})
+        summary["turn_count"] = int(summary.get("turn_count") or 0) + 1
+        summary["latest_summary"] = turn_entry["summary"]
+        summary["latest_structured_output"] = _compact_structured_output(turn_entry["structured_output"])
+
+        recent_turns = summary.setdefault("recent_turns", [])
+        recent_turns.append({
+            "summary": turn_entry["summary"],
+            "structured_output": _compact_structured_output(turn_entry["structured_output"]),
+            "artifact_refs": turn_entry["artifact_refs"],
+            "evidence_refs": turn_entry["evidence_refs"],
+            "submitted_at": turn_entry["submitted_at"],
+        })
+        del recent_turns[:-PERSISTENT_FRAME_MAX_RECENT_SUMMARIES]
+
+        summary["artifact_refs"] = _append_unique_capped(
+            summary.get("artifact_refs"),
+            turn_entry["artifact_refs"],
+            limit=50,
+        )
+        summary["evidence_refs"] = _append_unique_capped(
+            summary.get("evidence_refs"),
+            turn_entry["evidence_refs"],
+            limit=50,
+        )
+
+        turn_results = frame.private_working_state.get("turn_results")
+        if isinstance(turn_results, list) and len(turn_results) > PERSISTENT_FRAME_MAX_TURN_RESULTS:
+            dropped = len(turn_results) - PERSISTENT_FRAME_MAX_TURN_RESULTS
+            del turn_results[:-PERSISTENT_FRAME_MAX_TURN_RESULTS]
+            summary["compacted_turn_result_count"] = int(summary.get("compacted_turn_result_count") or 0) + dropped
+
+        if len(frame.private_messages) > PERSISTENT_FRAME_MAX_PRIVATE_MESSAGES:
+            dropped = len(frame.private_messages) - PERSISTENT_FRAME_MAX_PRIVATE_MESSAGES
+            del frame.private_messages[:-PERSISTENT_FRAME_MAX_PRIVATE_MESSAGES]
+            summary["compacted_private_message_count"] = (
+                int(summary.get("compacted_private_message_count") or 0) + dropped
+            )
+        summary["private_messages_retained"] = len(frame.private_messages)
+
+    def _context_snapshot_for_function_call(self, parent_frame_id: str) -> dict[str, Any]:
+        return {
+            "visibility": "passthrough",
+            "root_context_summary": self.context_summary_for_frame(parent_frame_id),
+        }
+
+    def _resume_pending_child_approval(
+        self,
+        parent_frame: SkillFrameState,
+        approval_result: str,
+        comment: str,
+    ) -> None:
+        child_frame_id = parent_frame.private_working_state.get("pending_child_approval_frame_id")
+        if not isinstance(child_frame_id, str) or not child_frame_id:
+            return
+        child_frame = self.store.get(child_frame_id)
+        if child_frame is None and self._journal:
+            child_frame = self._journal.load(parent_frame.task_id, child_frame_id)
+            if child_frame is not None:
+                self.restore_frame(child_frame)
+        if child_frame is None:
+            parent_frame.private_working_state.pop("pending_child_approval_frame_id", None)
+            self._save(parent_frame)
+            return
+        if child_frame.status == FrameStatus.AWAITING_APPROVAL:
+            self.resume_from_approval(child_frame_id, approval_result, comment)
+
+        parent_frame.private_working_state.pop("pending_child_approval_frame_id", None)
+        self._save(parent_frame)
+
+    def _resume_pending_function_call(
+        self,
+        caller_frame: SkillFrameState,
+        approval_result: str,
+        comment: str,
+    ) -> None:
+        function_frame_id = caller_frame.private_working_state.get("pending_function_call_frame_id")
+        if not isinstance(function_frame_id, str) or not function_frame_id:
+            return
+        function_frame = self.store.get(function_frame_id)
+        if function_frame is None and self._journal:
+            function_frame = self._journal.load(caller_frame.task_id, function_frame_id)
+            if function_frame is not None:
+                self.restore_frame(function_frame)
+        if function_frame is None or function_frame.frame_kind != FrameKind.FUNCTION_CALL:
+            return
+        if function_frame.status != FrameStatus.AWAITING_APPROVAL:
+            return
+
+        normalized = (approval_result or "").strip().lower()
+        function_frame.private_working_state["approval_result"] = approval_result
+        function_frame.private_working_state["approval_comment"] = comment
+        function_frame.approval_request = None
+        if normalized in {"approved", "approve", "ok", "accepted"}:
+            self._transition(function_frame, FrameStatus.RUNNING)
+            self.complete_function_call(
+                function_frame.frame_id,
+                {
+                    "status": "RESUME_DISPATCHED",
+                    "approval_result": approval_result,
+                    "comment": comment,
+                    "message": (
+                        "Approval accepted. Business function execution is "
+                        "owned by Java suspension service."
+                    ),
+                },
+                summary="Business function approval accepted.",
+            )
+        else:
+            function_frame.private_working_state["approval_state"] = "REJECTED"
+            self._transition(function_frame, FrameStatus.CANCELLED)
+            function_frame.ended_at = datetime.now(timezone.utc).isoformat()
+            self._save(function_frame)
+
+        caller_frame.private_working_state.pop("pending_function_call_frame_id", None)
+        caller_frame.private_working_state.pop("pending_function_call", None)
+        self._save(caller_frame)
+
+
+def _function_result_summary(frame: SkillFrameState, result: dict[str, Any]) -> str:
+    function_id = frame.input.get("function_id") or frame.skill_id
+    status = result.get("status") or result.get("approval_result") or "completed"
+    return f"Business function {function_id} {status}"
+
+
+def _compact_structured_output(output: dict[str, Any]) -> dict[str, Any]:
+    try:
+        encoded = json.dumps(output, ensure_ascii=False, sort_keys=True, default=str)
+    except TypeError:
+        return {"summary": str(output)}
+    if len(encoded) <= 2000:
+        return output
+    return {
+        "summary": "[structured_output omitted from root_context_summary]",
+        "size": len(encoded),
+        "keys": sorted(str(key) for key in output.keys()),
+    }
+
+
+def _append_unique_capped(existing: Any, incoming: list[str], limit: int) -> list[str]:
+    values: list[str] = []
+    if isinstance(existing, list):
+        values.extend(str(item) for item in existing if item is not None)
+    values.extend(str(item) for item in incoming if item is not None)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped[-limit:]
+
+
+def _safe_json_copy(value: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return {"summary": str(value)}

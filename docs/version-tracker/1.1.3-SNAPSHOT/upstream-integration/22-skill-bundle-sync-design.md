@@ -17,7 +17,7 @@
 
 两类 Skill 的主体参数高度一致：
 
-1. `skillId`、`name`、`description`、`markdownBody`。
+1. `skillId`、`name`、`description`、`markdownBody`、`contextVisibility`。
 2. `resources`，包含 `references/**` 和 `assets/**`。
 3. `functions`，表示 Skill 可见和可调用的 Business Function 集合。
 4. `status` 和物化到 worker 的需求。
@@ -46,6 +46,7 @@ SkillBundle
   name
   description
   markdownBody
+  contextVisibility = isolated | summary
   resourcesJson
   functionsJson
   status = ENABLED | DISABLED
@@ -112,6 +113,7 @@ POST /api/v1/business-agent/skill-bundles/sync
   "skillId": "order-agent",
   "name": "Order Agent",
   "description": "Order operation assistant",
+  "contextVisibility": "summary",
   "markdownBody": "# Order Agent\n...",
   "resources": [],
   "functions": [
@@ -156,6 +158,8 @@ SDK 新增：
 client.businessAgent().syncSkillBundle(SyncSkillBundleForm form);
 client.agents().syncMyAccountSkillBundleWithClientAppAccessToken(form, appKey, accessToken, upstreamUserId);
 ```
+
+`contextVisibility` 为可选字段，默认由服务端按 `isolated` 处理。普通业务 skill 首版只允许 `isolated` 或 `summary`；`passthrough` 是平台内置 root/function frame 保留策略，SDK/CLI 可传但服务端会降级或拒绝，具体以控制面 policy 为准。
 
 CLI 新增：
 

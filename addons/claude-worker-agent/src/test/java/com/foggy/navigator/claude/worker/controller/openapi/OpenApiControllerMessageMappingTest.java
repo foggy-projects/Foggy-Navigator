@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.BusinessAgentSessionDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.service.BusinessAgentSessionService;
+import com.foggy.navigator.business.agent.service.BusinessAgentTaskService;
 import com.foggy.navigator.business.agent.service.ClientAppRuntimeCredentialResolver;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionSummaryDTO;
 import com.foggy.navigator.claude.worker.model.dto.OpenSessionMessageDTO;
@@ -227,6 +228,53 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void askAgent_bindsOpenApiBusinessRuntimeTokenToVisibleWorkerTask() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver, null, taskService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("创建车辆并走审批");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessTokenForSkill(
+                nullable(String.class), nullable(String.class), eq("agent-1")))
+                .thenReturn(Optional.of(credential()));
+        when(taskService.issueOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("agent-1"),
+                any(),
+                nullable(String.class)))
+                .thenReturn("btt_open_api_1");
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("lgt_visible_1")
+                .contextId("ctx-1")
+                .metadata(Map.of("sessionId", "worker_session_1"))
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> runtimeContext = (Map<String, Object>) captor.getValue().getMetadata().get("runtimeContext");
+        assertEquals("btt_open_api_1", runtimeContext.get("task_scoped_token"));
+        verify(taskService).bindOpenApiTaskScopedTokenToWorkerTask(
+                "tenant-1",
+                "btt_open_api_1",
+                "lgt_visible_1",
+                "worker_session_1");
+    }
+
+    @Test
     void askAgent_rejectsContextIdWithoutUpstreamUserId() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
@@ -358,7 +406,22 @@ class OpenApiControllerMessageMappingTest {
     private OpenApiController newController(
             UnifiedAgentResolver agentResolver,
             ClientAppRuntimeCredentialResolver credentialResolver) {
-        return newController(agentResolver, credentialResolver, null);
+        return newController(agentResolver, credentialResolver, null, null);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(
+            UnifiedAgentResolver agentResolver,
+            ClientAppRuntimeCredentialResolver credentialResolver,
+            BusinessAgentSessionService sessionService,
+            BusinessAgentTaskService taskService) {
+        return newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class));
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -370,6 +433,7 @@ class OpenApiControllerMessageMappingTest {
                 agentResolver,
                 credentialResolver,
                 sessionService,
+                null,
                 mock(CodingAgentRepository.class),
                 mock(OpenApiSessionQueryService.class));
     }
@@ -381,8 +445,21 @@ class OpenApiControllerMessageMappingTest {
             BusinessAgentSessionService sessionService,
             CodingAgentRepository codingAgentRepository,
             OpenApiSessionQueryService sessionQueryService) {
+        return newController(agentResolver, credentialResolver, sessionService, null, codingAgentRepository, sessionQueryService);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(
+            UnifiedAgentResolver agentResolver,
+            ClientAppRuntimeCredentialResolver credentialResolver,
+            BusinessAgentSessionService sessionService,
+            BusinessAgentTaskService taskService,
+            CodingAgentRepository codingAgentRepository,
+            OpenApiSessionQueryService sessionQueryService) {
         ObjectProvider<ClientAppRuntimeCredentialResolver> credentialProvider = mock(ObjectProvider.class);
         when(credentialProvider.getIfAvailable()).thenReturn(credentialResolver);
+        ObjectProvider<BusinessAgentTaskService> taskProvider = mock(ObjectProvider.class);
+        when(taskProvider.getIfAvailable()).thenReturn(taskService);
         ObjectProvider<BusinessAgentSessionService> sessionProvider = mock(ObjectProvider.class);
         when(sessionProvider.getIfAvailable()).thenReturn(sessionService);
         return new OpenApiController(
@@ -400,7 +477,7 @@ class OpenApiControllerMessageMappingTest {
                 sessionQueryService,
                 new ObjectMapper(),
                 credentialProvider,
-                mock(ObjectProvider.class),
+                taskProvider,
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),
                 mock(ObjectProvider.class),

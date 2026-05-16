@@ -107,6 +107,17 @@ class FrameStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class FrameKind(str, Enum):
+    """Runtime frame kind.
+
+    ``SKILL`` frames are LLM-executed skills. ``FUNCTION_CALL`` frames are
+    runtime-created wrappers around one business function invocation.
+    """
+
+    SKILL = "SKILL"
+    FUNCTION_CALL = "FUNCTION_CALL"
+
+
 # Terminal states — once entered, no further transitions allowed.
 TERMINAL_STATES = frozenset({FrameStatus.COMPLETED, FrameStatus.FAILED, FrameStatus.CANCELLED})
 
@@ -122,6 +133,7 @@ VALID_TRANSITIONS: dict[FrameStatus, frozenset[FrameStatus]] = {
     }),
     FrameStatus.WAITING_CHILD: frozenset({
         FrameStatus.RUNNING,
+        FrameStatus.AWAITING_APPROVAL,
         FrameStatus.FAILED,
         FrameStatus.CANCELLED,
     }),
@@ -147,6 +159,7 @@ class SkillFrameState(BaseModel):
     frame_id: str
     task_id: str
     skill_id: str
+    frame_kind: FrameKind = FrameKind.SKILL
     parent_frame_id: str | None = None
     status: FrameStatus = FrameStatus.CREATED
 
@@ -191,6 +204,7 @@ class SkillManifest(BaseModel):
     subgraph: str | None = None
     # Visibility: 'builtin' skills are internal/test-only and excluded from LLM routing prompt
     visibility: str = "public"  # "builtin" | "public" | "private"
+    context_visibility: str = "isolated"  # "isolated" | "summary" | "passthrough"
     client_app_id: str | None = None
 
 

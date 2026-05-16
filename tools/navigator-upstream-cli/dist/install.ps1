@@ -7,6 +7,7 @@ param(
     [string]$ProjectRoot = "",
     [string]$InstallDir = "",
     [string]$ReleaseBaseUrl = "",
+    [string]$ReleaseManifestJson = "",
     [switch]$Upgrade
 )
 
@@ -132,6 +133,9 @@ if (-not $ReleaseBaseUrl -and $env:NAVI_UPSTREAM_CLI_URL) {
 }
 if ($ReleaseBaseUrl) {
     Write-Utf8NoBom -Path (Join-Path $InstallDir "RELEASE_URL") -Content $ReleaseBaseUrl
+}
+if ($ReleaseManifestJson) {
+    Write-Utf8NoBom -Path (Join-Path $InstallDir "RELEASE_MANIFEST.json") -Content $ReleaseManifestJson
 }
 
 Write-Host ""

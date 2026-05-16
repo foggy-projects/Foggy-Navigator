@@ -1122,7 +1122,7 @@
                   {{ resolveConversationMilestone(conv)?.name }}
                 </el-tag>
                 <el-tag v-for="tag in (conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
-                <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }}轮</span>
+                <span v-if="conv.taskCount > 1" class="conv-rounds">{{ conv.taskCount }}轮</span>
                 <span v-if="conv.latestTask.model" class="conv-model">{{ shortModel(conv.latestTask.model) }}</span>
                 <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(2) }}</span>
                 <span v-if="conv.config?.authBound" class="conv-auth-badge" :title="'Auth: ' + (conv.config.authMode || 'bound')">&#128273;</span>
@@ -1314,7 +1314,7 @@
                 {{ resolveConversationMilestone(conv)?.name }}
               </el-tag>
               <el-tag v-for="tag in (conv.config?.tags || [])" :key="tag" :type="tagColor(tag)" size="small" class="conv-tag">{{ tag }}</el-tag>
-              <span v-if="conv.tasks.length > 1" class="conv-rounds">{{ conv.tasks.length }}轮</span>
+              <span v-if="conv.taskCount > 1" class="conv-rounds">{{ conv.taskCount }}轮</span>
               <span v-if="conv.latestTask.model" class="conv-model">{{ shortModel(conv.latestTask.model) }}</span>
               <span v-if="conv.totalCost > 0" class="conv-cost">${{ conv.totalCost.toFixed(2) }}</span>
               <span v-if="conv.config?.authBound" class="conv-auth-badge" :title="'Auth: ' + (conv.config.authMode || 'bound')">&#128273;</span>
@@ -3149,10 +3149,9 @@ const showDetailDialog = ref(false)
 const detailConv = ref<ConversationGroup | null>(null)
 const detailTotalTokens = computed(() => {
   if (!detailConv.value) return { input: 0, output: 0 }
-  const tasks = detailConv.value.tasks
   return {
-    input: tasks.reduce((s, t) => s + (t.inputTokens || 0), 0),
-    output: tasks.reduce((s, t) => s + (t.outputTokens || 0), 0),
+    input: detailConv.value.totalInputTokens,
+    output: detailConv.value.totalOutputTokens,
   }
 })
 const detailAuthModeLabel = computed(() => {
@@ -3919,7 +3918,10 @@ interface ConversationGroup {
   codexThreadId: string
   latestTask: ClaudeTask
   tasks: ClaudeTask[]
+  taskCount: number
   totalCost: number
+  totalInputTokens: number
+  totalOutputTokens: number
   firstPrompt: string
   config?: ConversationConfig
 }
@@ -3961,8 +3963,11 @@ function groupTasksToConversations(taskList: ClaudeTask[]): ConversationGroup[] 
       codexThreadId: tasks.find((t) => t.codexThreadId)?.codexThreadId || '',
       latestTask: tasks[0]!,
       tasks,
-      totalCost: tasks.reduce((s, t) => s + (t.costUsd || 0), 0),
-      firstPrompt: tasks[tasks.length - 1]!.prompt,
+      taskCount: tasks[0]!.sessionTaskCount ?? tasks.length,
+      totalCost: tasks[0]!.sessionTotalCostUsd ?? tasks.reduce((s, t) => s + (t.costUsd || 0), 0),
+      totalInputTokens: tasks[0]!.sessionInputTokens ?? tasks.reduce((s, t) => s + (t.inputTokens || 0), 0),
+      totalOutputTokens: tasks[0]!.sessionOutputTokens ?? tasks.reduce((s, t) => s + (t.outputTokens || 0), 0),
+      firstPrompt: tasks[0]!.sessionFirstPrompt || tasks[tasks.length - 1]!.prompt,
       config: workerState.conversationConfigs.value.get(tasks[0]!.sessionId),
     }))
     .sort((a, b) => {
@@ -4432,7 +4437,10 @@ function handleSearchSelect(result: SessionSearchResult) {
     codexThreadId: '',
     latestTask: minimalTask,
     tasks: [minimalTask],
+    taskCount: 1,
     totalCost: result.totalCost || 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
     firstPrompt: result.firstPrompt,
     config: result.customTitle
       ? ({
@@ -6623,7 +6631,7 @@ async function executeContextRepair() {
 async function handleDeleteConversation(conv: ConversationGroup) {
   try {
     await ElMessageBox.confirm(
-      `确认删除该会话？包含 ${conv.tasks.length} 个任务，此操作不可恢复。`,
+      `确认删除该会话？包含 ${conv.taskCount} 个任务，此操作不可恢复。`,
       '提示',
       { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' },
     )

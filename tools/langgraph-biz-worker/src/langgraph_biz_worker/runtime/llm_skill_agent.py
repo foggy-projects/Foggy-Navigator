@@ -65,6 +65,7 @@ class LlmSkillAgent:
         prompt: str,
         account_id: str | None = None,
         runtime_context: dict[str, Any] | None = None,
+        persistent_frame: bool = False,
     ) -> list[QueryEvent]:
         """Execute a Skill until ``submit_skill_result`` completes the frame."""
         frame = self._runtime.get_frame(frame_id)
@@ -125,6 +126,7 @@ class LlmSkillAgent:
                     artifact_store=artifact_store,
                     file_tools=file_tools,
                     public_resource_tools=public_resource_tools,
+                    persistent_frame=persistent_frame,
                 )
                 events.extend(event["events"])
                 tool_result = event["tool_result"]
@@ -143,6 +145,10 @@ class LlmSkillAgent:
 
                 current = self._runtime.get_frame(frame_id)
                 if current and current.status == FrameStatus.COMPLETED:
+                    return events
+                if event.get("persistent_turn_completed"):
+                    return events
+                if event.get("suspended"):
                     return events
 
         self._runtime.fail_frame(frame_id, "LLM skill agent reached max iterations without valid submit")
@@ -167,6 +173,7 @@ class LlmSkillAgent:
         artifact_store: ArtifactStore | None = None,
         file_tools: AccountFileTools | None = None,
         public_resource_tools: PublicSkillResourceTools | None = None,
+        persistent_frame: bool = False,
     ) -> dict[str, Any]:
         name = call["name"]
         args = call["args"]
@@ -199,10 +206,13 @@ class LlmSkillAgent:
                 artifact_store=artifact_store,
                 file_tools=file_tools,
                 public_resource_tools=public_resource_tools,
+                persistent_frame=persistent_frame,
             )
         except Exception as exc:
             logger.exception("LLM skill tool call failed: %s", name)
             result = {"ok": False, "error": str(exc)}
+        extra_events = result.pop("_events", []) if isinstance(result, dict) else []
+        suspended = bool(result.pop("_suspended", False)) if isinstance(result, dict) else False
         self._append_tool_audit(task_id, frame_id, manifest.id, name, safe_args, phase="response", result=result)
 
         event_type = "skill_result_submit" if name == "submit_skill_result" and result.get("ok") else "tool_result"
@@ -223,9 +233,16 @@ class LlmSkillAgent:
             args=safe_args,
         )
         events.append(result_event)
+        events.extend(extra_events)
         _emit_progress_event(runtime_context, result_event)
+        for extra_event in extra_events:
+            _emit_progress_event(runtime_context, extra_event)
 
         ret: dict[str, Any] = {"events": events, "tool_result": result}
+        if name == "submit_skill_result" and persistent_frame and result.get("ok"):
+            ret["persistent_turn_completed"] = True
+        if suspended:
+            ret["suspended"] = True
 
         # If create_artifact succeeded, attach scrub placeholder
         if name == "create_artifact" and result.get("ok") is not False and "artifact_id" in result:
@@ -249,6 +266,7 @@ class LlmSkillAgent:
         artifact_store: ArtifactStore | None = None,
         file_tools: AccountFileTools | None = None,
         public_resource_tools: PublicSkillResourceTools | None = None,
+        persistent_frame: bool = False,
     ) -> dict[str, Any]:
         # --- Mock biz tools ---
         if name == "mock_get_order":
@@ -301,19 +319,41 @@ class LlmSkillAgent:
             token = _runtime_task_scoped_token(runtime_context)
             if not token:
                 return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
+            function_id = args.get("function_id", "")
+            version = args.get("version")
+            function_frame_id = self._runtime.invoke_function_call(
+                parent_frame_id=frame_id,
+                function_id=function_id,
+                version=version,
+                arguments=args.get("input") if isinstance(args.get("input"), dict) else {},
+                idempotency_key=args.get("idempotency_key"),
+                tool_call_id=args.get("tool_call_id"),
+            )
             try:
-                return {
-                    "ok": True,
-                    "result": invoke_business_function(
-                        token,
-                        function_id=args.get("function_id", ""),
-                        version=args.get("version"),
-                        input_data=args.get("input"),
-                        idempotency_key=args.get("idempotency_key"),
-                    ),
-                }
+                gateway_result = invoke_business_function(
+                    token,
+                    function_id=function_id,
+                    version=version,
+                    input_data=args.get("input"),
+                    idempotency_key=args.get("idempotency_key"),
+                )
+                result = {"ok": True, "result": gateway_result}
+                return self._finalize_business_function_call(
+                    task_id=task_id,
+                    caller_frame_id=frame_id,
+                    function_frame_id=function_frame_id,
+                    function_id=function_id,
+                    version=version,
+                    call_args=args,
+                    result=result,
+                )
             except BusinessFunctionToolError as exc:
-                return {"ok": False, "error": str(exc)}
+                self._runtime.fail_frame(function_frame_id, str(exc))
+                return {
+                    "ok": False,
+                    "error": str(exc),
+                    "function_frame_id": function_frame_id,
+                }
 
         if _looks_like_business_function_id(name):
             token = _runtime_task_scoped_token(runtime_context)
@@ -324,19 +364,40 @@ class LlmSkillAgent:
                 key: value for key, value in args.items()
                 if key not in {"version", "idempotency_key"}
             }
+            resolved_version = args.get("version") or version
+            function_frame_id = self._runtime.invoke_function_call(
+                parent_frame_id=frame_id,
+                function_id=function_id,
+                version=resolved_version,
+                arguments=input_data,
+                idempotency_key=args.get("idempotency_key"),
+                tool_call_id=args.get("tool_call_id"),
+            )
             try:
-                return {
-                    "ok": True,
-                    "result": invoke_business_function(
-                        token,
-                        function_id=function_id,
-                        version=args.get("version") or version,
-                        input_data=input_data,
-                        idempotency_key=args.get("idempotency_key"),
-                    ),
-                }
+                gateway_result = invoke_business_function(
+                    token,
+                    function_id=function_id,
+                    version=resolved_version,
+                    input_data=input_data,
+                    idempotency_key=args.get("idempotency_key"),
+                )
+                result = {"ok": True, "result": gateway_result}
+                return self._finalize_business_function_call(
+                    task_id=task_id,
+                    caller_frame_id=frame_id,
+                    function_frame_id=function_frame_id,
+                    function_id=function_id,
+                    version=resolved_version,
+                    call_args={**args, "input": input_data},
+                    result=result,
+                )
             except BusinessFunctionToolError as exc:
-                return {"ok": False, "error": str(exc)}
+                self._runtime.fail_frame(function_frame_id, str(exc))
+                return {
+                    "ok": False,
+                    "error": str(exc),
+                    "function_frame_id": function_frame_id,
+                }
 
         # --- Artifact tools ---
         if name == "create_artifact":
@@ -378,8 +439,92 @@ class LlmSkillAgent:
                 return {"ok": False, "error": "ClientApp public skill resources are not configured"}
             return _dispatch_public_resource_tool(public_resource_tools, name, args)
 
+        if name == "invoke_business_skill":
+            child_skill_id = args.get("skill_id") or args.get("skillId")
+            if not child_skill_id:
+                return {"ok": False, "error": "skill_id is required"}
+            if child_skill_id == self._runtime.get_frame(frame_id).skill_id:
+                return {"ok": False, "error": "A skill cannot invoke itself"}
+            child_manifest = self._runtime.registry.get_manifest(child_skill_id)
+            if not child_manifest:
+                return {"ok": False, "error": f"Skill manifest not found: {child_skill_id}"}
+
+            instruction = args.get("instruction") or args.get("prompt") or ""
+            child_input = args.get("input") if isinstance(args.get("input"), dict) else {}
+            child_runtime_context = _runtime_context_for_child_skill(
+                runtime_context,
+                self._runtime.context_summary_for_frame(frame_id),
+                child_manifest,
+            )
+            child_frame_id = self._runtime.invoke_child_skill(
+                parent_frame_id=frame_id,
+                child_skill_id=child_skill_id,
+                child_input=child_input,
+            )
+            child_events = [
+                QueryEvent(
+                    type="skill_frame_open",
+                    task_id=task_id,
+                    skill_frame_id=child_frame_id,
+                    parent_frame_id=frame_id,
+                    skill_id=child_skill_id,
+                    content=f"Opening frame for skill: {child_skill_id}",
+                )
+            ]
+            child_events.extend(self.run(
+                task_id=task_id,
+                frame_id=child_frame_id,
+                prompt=instruction,
+                account_id=account_id,
+                runtime_context=child_runtime_context,
+            ))
+
+            child = self._runtime.get_frame(child_frame_id)
+            if child and child.status == FrameStatus.AWAITING_APPROVAL:
+                approval_request = child.approval_request
+                if not isinstance(approval_request, dict):
+                    return {
+                        "ok": False,
+                        "error": "Child skill is awaiting approval without approval_request",
+                        "_events": child_events,
+                    }
+                self._runtime.mark_child_awaiting_approval(
+                    frame_id,
+                    child_frame_id,
+                    approval_request,
+                )
+                return {
+                    "ok": True,
+                    "approval_wait": True,
+                    "child_frame_id": child_frame_id,
+                    "_events": child_events,
+                    "_suspended": True,
+                }
+            if not child or child.status != FrameStatus.COMPLETED:
+                return {
+                    "ok": False,
+                    "error": f"Child skill ended in {child.status.value if child else 'MISSING'}",
+                    "_events": child_events,
+                }
+
+            promoted = self._runtime.complete_child_and_resume_parent(child_frame_id)
+            child_events.append(QueryEvent(
+                type="skill_frame_close",
+                task_id=task_id,
+                skill_frame_id=child_frame_id,
+                parent_frame_id=frame_id,
+                skill_id=child_skill_id,
+                content=f"Frame closed: {child_skill_id}",
+            ))
+            return {"ok": True, "result": promoted, "_events": child_events}
+
         if name == "submit_skill_result":
-            validation = self._runtime.submit_result(
+            submit = (
+                self._runtime.submit_persistent_turn_result
+                if persistent_frame
+                else self._runtime.submit_result
+            )
+            validation = submit(
                 frame_id=frame_id,
                 summary=args.get("summary", ""),
                 structured_output=args.get("structured_output") or {},
@@ -389,6 +534,74 @@ class LlmSkillAgent:
             return {"ok": validation.ok, "errors": validation.errors}
 
         return {"ok": False, "error": f"Unknown tool: {name}"}
+
+    def _finalize_business_function_call(
+        self,
+        *,
+        task_id: str,
+        caller_frame_id: str,
+        function_frame_id: str,
+        function_id: str,
+        version: str | None,
+        call_args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        gateway_result = result.get("result") if isinstance(result.get("result"), dict) else {}
+        if _business_function_result_is_suspended(gateway_result):
+            suspend_id = _business_function_suspend_id(gateway_result)
+            summary = _business_function_approval_summary(gateway_result, function_id)
+            approval_request = {
+                "approval_type": "business_function",
+                "function_id": function_id,
+                "version": version,
+                "suspend_id": suspend_id,
+                "summary": summary,
+                "payload": {
+                    "function_id": function_id,
+                    "version": version,
+                    "input": call_args.get("input") if isinstance(call_args.get("input"), dict) else {},
+                    "idempotency_key": call_args.get("idempotency_key"),
+                    "gateway_result": _safe_content(gateway_result),
+                    "function_frame_id": function_frame_id,
+                },
+                "resolved": False,
+            }
+            self._runtime.suspend_function_call(function_frame_id, approval_request)
+            self._runtime.mark_awaiting_approval(caller_frame_id, approval_request)
+            caller_frame = self._runtime.get_frame(caller_frame_id)
+            approval_event = QueryEvent(
+                type="approval_required",
+                task_id=task_id,
+                skill_frame_id=function_frame_id,
+                parent_frame_id=caller_frame_id,
+                skill_id=caller_frame.skill_id if caller_frame else None,
+                function_id=function_id,
+                content=summary.get("title") or summary.get("message") or "Business function approval required",
+                approval_type="business_function",
+                payload=approval_request["payload"],
+                suspend_id=suspend_id,
+                reason=summary.get("reason") or "approval_required",
+                summary=summary,
+                timeout_at=_business_function_timeout_at(gateway_result),
+            )
+            return {
+                **result,
+                "approval_wait": True,
+                "suspend_id": suspend_id,
+                "function_frame_id": function_frame_id,
+                "_events": [approval_event],
+                "_suspended": True,
+            }
+
+        self._runtime.complete_function_call(
+            function_frame_id,
+            result=gateway_result,
+        )
+        return {
+            **result,
+            "approval_wait": False,
+            "function_frame_id": function_frame_id,
+        }
 
     def _append_private_message(self, frame_id: str, role: str, content: Any) -> None:
         frame = self._runtime.get_frame(frame_id)
@@ -477,6 +690,7 @@ class LlmSkillAgent:
             _build_runtime_time_context_prompt(runtime_context),
             f"User request: {prompt}",
             f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}",
+            _build_visible_context_prompt(runtime_context),
         ]
         return "\n".join(part for part in parts if part)
 
@@ -506,6 +720,48 @@ def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None
         return None
     value = runtime_context.get("client_app_id") or runtime_context.get("clientAppId")
     return value if isinstance(value, str) and value else None
+
+
+def _runtime_context_for_child_skill(
+    runtime_context: dict[str, Any] | None,
+    root_context_summary: dict[str, Any] | None,
+    child_manifest: SkillManifest,
+) -> dict[str, Any] | None:
+    child_context = dict(runtime_context or {})
+    visibility = _context_visibility_for_child_manifest(child_manifest)
+    child_context["_context_visibility"] = visibility
+    child_context.pop("_visible_root_context_summary", None)
+    if visibility == "summary" and root_context_summary:
+        child_context["_visible_root_context_summary"] = root_context_summary
+    return child_context
+
+
+def _context_visibility_for_child_manifest(manifest: SkillManifest) -> str:
+    visibility = _normalize_context_visibility(manifest.context_visibility)
+    if visibility != "passthrough":
+        return visibility
+    if manifest.visibility == "builtin" or manifest.id.startswith("system."):
+        return "passthrough"
+    return "isolated"
+
+
+def _normalize_context_visibility(value: str | None) -> str:
+    normalized = (value or "isolated").strip().lower()
+    if normalized in {"isolated", "summary", "passthrough"}:
+        return normalized
+    return "isolated"
+
+
+def _build_visible_context_prompt(runtime_context: dict[str, Any] | None) -> str:
+    if not runtime_context:
+        return ""
+    summary = runtime_context.get("_visible_root_context_summary")
+    if not isinstance(summary, dict):
+        return ""
+    return (
+        "Visible parent/root context summary:\n"
+        f"{json.dumps(summary, ensure_ascii=False, sort_keys=True)}"
+    )
 
 
 def _build_runtime_time_context_prompt(runtime_context: dict[str, Any] | None) -> str:
@@ -810,6 +1066,22 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "idempotency_key": {"type": "string"},
                 },
                 "required": ["function_id", "version", "input"],
+            },
+        },
+    },
+    "invoke_business_skill": {
+        "type": "function",
+        "function": {
+            "name": "invoke_business_skill",
+            "description": "Invoke a child business skill and return its promoted result.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill_id": {"type": "string"},
+                    "instruction": {"type": "string"},
+                    "input": {"type": "object"},
+                },
+                "required": ["skill_id", "instruction"],
             },
         },
     },
@@ -1121,6 +1393,42 @@ def _tool_function_id(
             return nested_result.get("functionId") or nested_result.get("function_id")
         return result.get("functionId") or result.get("function_id")
     return None
+
+
+def _business_function_result_is_suspended(result: dict[str, Any]) -> bool:
+    status = str(result.get("status") or "").upper()
+    return (
+        status == "SUSPENDED"
+        or result.get("approvalRequired") is True
+        or result.get("approval_required") is True
+        or result.get("approval_wait") is True
+    )
+
+
+def _business_function_suspend_id(result: dict[str, Any]) -> str | None:
+    value = result.get("suspendId") or result.get("suspend_id")
+    return str(value) if value is not None else None
+
+
+def _business_function_timeout_at(result: dict[str, Any]) -> str | None:
+    value = result.get("timeoutAt") or result.get("timeout_at")
+    return str(value) if value is not None else None
+
+
+def _business_function_approval_summary(result: dict[str, Any], function_id: str) -> dict[str, Any]:
+    raw_summary = result.get("approvalSummary") or result.get("approval_summary") or result.get("summary")
+    if isinstance(raw_summary, dict):
+        summary = dict(raw_summary)
+    else:
+        summary = {}
+    summary.setdefault("approval_type", "business_function")
+    summary.setdefault("function_id", function_id)
+    summary.setdefault(
+        "title",
+        result.get("message") or f"Business function {function_id} requires approval",
+    )
+    summary.setdefault("reason", "approval_required")
+    return _safe_content(summary)
 
 
 def _manifest_for_frame(runtime: SkillRuntime, frame: Any) -> SkillManifest | None:

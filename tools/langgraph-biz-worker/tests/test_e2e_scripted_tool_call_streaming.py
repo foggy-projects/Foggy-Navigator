@@ -108,13 +108,32 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
                                 {
                                     "name": "submit_skill_result",
                                     "args": {
-                                        "summary": "TMS Navigator deterministic tool loop ok",
+                                        "summary": f"Child skill deterministic tool loop ok next:{trace_id}:003",
                                         "structured_output": {
                                             "classification": "vehicle_delay",
                                             "recommended_action": "manual_dispatch",
                                             "confidence": 0.91,
                                         },
                                         "evidence_refs": ["e2e:scripted-tool-loop"],
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "TMS Navigator deterministic root skill loop ok",
+                                        "structured_output": {
+                                            "classification": "vehicle_delay",
+                                            "recommended_action": "manual_dispatch",
+                                            "confidence": 0.91,
+                                        },
+                                        "evidence_refs": ["e2e:scripted-root-skill-loop"],
                                     },
                                 }
                             ],
@@ -156,16 +175,16 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
     assert response.status_code == 200
     events = _parse_worker_sse(response.text)
     event_types = [event.type for event in events]
-    assert event_types.count("skill_frame_open") == 1
-    assert "tool_result" not in event_types
-    assert not any(event.tool_name == "invoke_business_skill" for event in events)
+    assert event_types.count("skill_frame_open") == 2
+    assert "tool_result" in event_types
+    assert any(event.tool_name == "invoke_business_skill" for event in events)
     assert not any(
         "Unknown tool: invoke_business_skill" in (event.content or "")
         for event in events
     )
-    assert any(event.type == "skill_result_submit" for event in events)
+    assert sum(1 for event in events if event.type == "skill_result_submit") == 2
     result = next(event for event in events if event.type == "result")
-    assert result.content == "TMS Navigator deterministic tool loop ok"
+    assert result.content == "TMS Navigator deterministic root skill loop ok"
     assert result.structured_output["classification"] == "vehicle_delay"
 
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
@@ -173,8 +192,10 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
     assert debug.status_code == 200
     records = debug.json()
     cursors = [record["cursor"] for record in records]
-    assert cursors == [f"next:{trace_id}:001", f"next:{trace_id}:002"]
+    assert cursors == [f"next:{trace_id}:001", f"next:{trace_id}:002", f"next:{trace_id}:003"]
     first_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:001")
     second_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:002")
+    third_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:003")
     assert first_turn["responseSummary"]["toolCalls"] == ["invoke_business_skill"]
     assert second_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
+    assert third_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]

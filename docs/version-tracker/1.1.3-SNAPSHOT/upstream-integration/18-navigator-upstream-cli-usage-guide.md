@@ -32,6 +32,19 @@ verify-agent-grant
 skill tree
 skill read
 skill sync
+skill clear-public
+skill clear-account
+agent sync
+function import
+function grant
+function grant-status
+function visible
+model grants
+model grant
+model set-default
+model create
+model update
+model rotate-key
 account-context list
 account-context read
 account-context write-policy
@@ -219,6 +232,92 @@ NAVI_MODEL_CONFIG_ID=<modelConfigId>
 
 `sessions` / `session-messages` 使用 `/api/v1/open/business-agent/sessions` 读模型，只返回当前 ClientApp + upstream user 归属的会话。`ask --context-id` 续聊也会在发任务前校验同一归属，不能复用其他 upstream user 的 `contextId`。
 
+### 7. 导入和授权 Business Function
+
+Business Function 命令使用 ClientApp-scoped `NAVI_CONTROL_API_KEY`，不要求上游持有全局 admin token。典型顺序是先导入 manifest，再授权给当前 ClientApp，最后查看当前 ClientApp 可见函数。
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream function import `
+  --manifest .\.navigator\function-manifest.json
+
+.\tools\navigator-upstream\navi.ps1 upstream function grant `
+  --function-id <functionId> `
+  --version <version>
+
+.\tools\navigator-upstream\navi.ps1 upstream function visible
+```
+
+如需禁用或重新启用某个 grant：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream function grant-status `
+  --grant-id <grantId> `
+  --status DISABLED
+```
+
+约定：
+
+1. `function import` 的 manifest 文件是 `ImportBusinessFunctionManifestForm` JSON，不要在终端、日志或 issue 中粘贴 `adapterConfigJson`、`manifestJson` 或凭据。
+2. `function grant` 默认读取 `NAVI_CLIENT_APP_ID`，也可以通过 `--client-app-id` 显式覆盖。
+3. `skill sync` / `agent sync` 中的 `functions` 只是 Skill allowlist 引用，不会创建 Business Function，也不会扩大 ClientApp function grant。
+4. 上游交付 smoke 至少验证 `upstream function --help`、`function import`、`function grant` 和 `function visible` 可用。
+
+### 8. 维护 ClientApp 模型授权
+
+正式业务模型由 `navi upstream model` 命令组维护，使用 ClientApp-scoped `NAVI_CONTROL_API_KEY`，不会要求上游持有全局 admin token。
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream model grants
+.\tools\navigator-upstream\navi.ps1 upstream model grant --model-config-id <modelConfigId> --set-default --write-profile
+.\tools\navigator-upstream\navi.ps1 upstream model set-default --model-config-id <modelConfigId> --write-profile
+```
+
+如果上游项目有自己的 LLM key，可以先放到当前 shell 的环境变量，再创建当前 ClientApp 自有模型：
+
+```powershell
+$env:NAVI_LLM_API_KEY="<llm-api-key>"
+.\tools\navigator-upstream\navi.ps1 upstream model create `
+  --name "tms-owned-gpt" `
+  --model-base-url "https://llm.example/v1" `
+  --model-name "gpt-4.1-mini" `
+  --provider openai `
+  --api-key-env NAVI_LLM_API_KEY `
+  --set-default `
+  --write-profile
+```
+
+也可以直接用 grant id 设置默认模型：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream model set-default --grant-id <grantId>
+```
+
+维护自有模型：
+
+```powershell
+.\tools\navigator-upstream\navi.ps1 upstream model update `
+  --model-config-id <modelConfigId> `
+  --model-base-url "https://llm.example/v1" `
+  --model-name "gpt-4.1-mini"
+
+$env:NAVI_LLM_API_KEY="<new-llm-api-key>"
+.\tools\navigator-upstream\navi.ps1 upstream model rotate-key `
+  --model-config-id <modelConfigId> `
+  --api-key-env NAVI_LLM_API_KEY
+```
+
+约定：
+
+1. `model grants` 列出当前 `NAVI_CLIENT_APP_ID` 下已授权的模型、状态和默认标记。
+2. `model grant` 为当前 ClientApp 授权已有 `modelConfigId`；`--set-default` 同时设为默认。
+3. `model set-default --model-config-id` 会先查当前 ClientApp 的 grant，再设置默认。
+4. `model create` 创建 `LANGGRAPH_BIZ` 模型配置，并以 `CLIENT_APP_OWNED` grant 绑定到当前 ClientApp。
+5. `model update` / `model rotate-key` 只允许维护 `CLIENT_APP_OWNED` 自有模型，不能修改管理员授权的共享模型。
+6. `--model-base-url` 是上游 LLM/OpenAI-compatible 地址；`--base-url` 仍然是 Navi 服务地址。
+7. `--api-key-env` 从环境变量读取 LLM key，避免 key 进入命令历史或 CLI 输出。
+8. `--write-profile` 只把最终 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
+9. `NAVI_MODEL_CONFIG_ID` 是上游项目本地默认模型，不代表租户全局默认模型。
+
 ## Deterministic E2E Test Model
 
 真实 LLM smoke 不应作为上游主回归 gate。上游自动化 E2E 应优先使用 Navigator 标准 E2E Test Model 与 scripted response，完整设计见 [27-e2e-scripted-test-model-design.md](./27-e2e-scripted-test-model-design.md)。
@@ -257,7 +356,7 @@ next:4f6c0a7e-7d7b-4f1d-91af-7c7f60d0b2d1:002
 
 `navi-e2e` 默认读取同一个 project-local `.navigator/upstream.env`，其中 `NAVI_E2E_MOCK_LLM_URL` 默认指向 `http://localhost:8200`，也可用 `--mock-url` 临时覆盖。`model ensure` 需要 `NAVI_CONTROL_API_KEY`，只创建/更新当前 ClientApp 专属的标准 E2E model config 与 ClientApp model grant；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback；`--write-profile` 只把 `NAVI_MODEL_CONFIG_ID` 写回 gitignored `.navigator/upstream.env`。
 
-### 7. 查询或维护账号上下文文件
+### 9. 查询或维护账号上下文文件
 
 ```powershell
 .\tools\navigator-upstream\navi.ps1 upstream account-context list --upstream-user-id <id>
@@ -285,6 +384,7 @@ Navigator 工作区内至少运行：
 ```powershell
 mvn test -pl navigator-open-sdk
 powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\package.ps1
+powershell -ExecutionPolicy Bypass -File tools\navigator-upstream-cli\dist\upload.ps1 -Version <version>
 mvn test -pl business-agent-module -Dtest=ClientAppRuntimeCredentialResolverTest
 mvn test -pl addons/claude-worker-agent -am
 mvn -q -pl navigator-open-sdk exec:java '-Dexec.args=upstream config check'

@@ -20,21 +20,32 @@ import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
 import com.foggy.navigator.sdk.model.businessagent.BusinessAgentBundleDTO;
+import com.foggy.navigator.sdk.model.businessagent.BusinessFunctionSummaryDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClearSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.ClientAppFunctionGrantDTO;
+import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigForm;
+import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
+import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamRouteDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
+import com.foggy.navigator.sdk.model.businessagent.GrantBusinessFunctionForm;
+import com.foggy.navigator.sdk.model.businessagent.GrantModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
+import com.foggy.navigator.sdk.model.businessagent.ImportBusinessFunctionManifestForm;
+import com.foggy.navigator.sdk.model.businessagent.RotateModelConfigKeyForm;
 import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncBusinessAgentBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.UpsertClientAppUpstreamRouteForm;
 
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -91,6 +102,21 @@ public class UpstreamCli {
             case "skill clear-public" -> skillClearPublic(args);
             case "skill clear-account" -> skillClearAccount(args);
             case "agent sync" -> agentSync(args);
+            case "function", "function help" -> functionUsage();
+            case "function import" -> functionImport(args);
+            case "function grant" -> functionGrant(args);
+            case "function grant-status" -> functionGrantStatus(args);
+            case "function visible" -> functionVisible(args);
+            case "route", "route help" -> routeUsage();
+            case "route list" -> routeList(args);
+            case "route set" -> routeSet(args);
+            case "route status" -> routeStatus(args);
+            case "model grants" -> modelGrants(args);
+            case "model grant" -> modelGrant(args);
+            case "model set-default" -> modelSetDefault(args);
+            case "model create" -> modelCreate(args);
+            case "model update" -> modelUpdate(args);
+            case "model rotate-key" -> modelRotateKey(args);
             case "account-context list" -> accountContextList(args);
             case "account-context read" -> accountContextRead(args);
             case "account-context write-policy" -> accountContextWritePolicy(args);
@@ -103,7 +129,26 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, account-context list, account-context read, account-context write-policy");
+        return 0;
+    }
+
+    private int functionUsage() {
+        out.println("Usage: navi upstream function <command> [options]");
+        out.println("Commands: import, grant, grant-status, visible");
+        out.println("  import       --manifest <path>");
+        out.println("  grant        --function-id <id> [--version <version>] [--status ENABLED|DISABLED]");
+        out.println("  grant-status --grant-id <id> --status ENABLED|DISABLED");
+        out.println("  visible      [--client-app-id <clientAppId>]");
+        return 0;
+    }
+
+    private int routeUsage() {
+        out.println("Usage: navi upstream route <command> [options]");
+        out.println("Commands: list, set, status");
+        out.println("  list   [--client-app-id <clientAppId>]");
+        out.println("  set    --upstream-ref <ref> --url <baseUrl> [--user-token-header <header>] [--status ENABLED|DISABLED]");
+        out.println("  status --upstream-ref <ref> --status ENABLED|DISABLED");
         return 0;
     }
 
@@ -401,6 +446,276 @@ public class UpstreamCli {
         return 0;
     }
 
+    private int functionImport(CliArguments args) throws Exception {
+        ImportBusinessFunctionManifestForm form = readJsonFile(
+                requiredOption(args, "manifest", "manifest path"),
+                ImportBusinessFunctionManifestForm.class);
+        if (!hasText(form.getFunctionId())) {
+            throw new UpstreamCliException("function manifest requires functionId");
+        }
+        if (!hasText(form.getVersion())) {
+            throw new UpstreamCliException("function manifest requires version");
+        }
+        businessAgentControlApi().importBusinessFunctionManifest(form);
+        out.println("function import ok");
+        out.println("functionId=" + valueOrEmpty(form.getFunctionId()));
+        out.println("version=" + valueOrEmpty(form.getVersion()));
+        out.println("status=" + valueOrEmpty(form.getStatus()));
+        return 0;
+    }
+
+    private int functionGrant(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        GrantBusinessFunctionForm form = new GrantBusinessFunctionForm();
+        form.setFunctionId(requiredOption(args, "function-id", "function id"));
+        form.setVersion(args.option("version"));
+        form.setStatus(args.option("status"));
+        ClientAppFunctionGrantDTO grant = businessAgentControlApi().grantFunctionToClientApp(clientAppId, form);
+        out.println("function grant ok");
+        printFunctionGrant("functionGrant", grant);
+        return 0;
+    }
+
+    private int functionGrantStatus(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String grantId = requiredOption(args, "grant-id", "grant id");
+        String status = requiredOption(args, "status", "status");
+        ClientAppFunctionGrantDTO grant = businessAgentControlApi().updateFunctionGrantStatus(clientAppId, grantId, status);
+        out.println("function grant-status ok");
+        printFunctionGrant("functionGrant", grant);
+        return 0;
+    }
+
+    private int functionVisible(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<BusinessFunctionSummaryDTO> functions = businessAgentControlApi()
+                .listClientAppVisibleFunctionSummaries(clientAppId);
+        out.println("functionVisibleCount=" + (functions != null ? functions.size() : 0));
+        if (functions != null) {
+            for (BusinessFunctionSummaryDTO function : functions) {
+                printFunctionSummary(function);
+            }
+        }
+        return 0;
+    }
+
+    private int routeList(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<ClientAppUpstreamRouteDTO> routes = businessAgentControlApi().listUpstreamRoutes(clientAppId);
+        out.println("upstreamRouteCount=" + (routes != null ? routes.size() : 0));
+        if (routes != null) {
+            for (ClientAppUpstreamRouteDTO route : routes) {
+                printUpstreamRoute("upstreamRoute", route);
+            }
+        }
+        return 0;
+    }
+
+    private int routeSet(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String upstreamRef = requiredOption(args, "upstream-ref", "upstream ref");
+        UpsertClientAppUpstreamRouteForm form = new UpsertClientAppUpstreamRouteForm();
+        form.setBaseUrl(requiredOption(args, "url", "upstream base URL"));
+        form.setUserTokenHeader(args.option("user-token-header"));
+        form.setStatus(args.option("status"));
+        form.setDescription(args.option("description"));
+        ClientAppUpstreamRouteDTO route = businessAgentControlApi().upsertUpstreamRoute(clientAppId, upstreamRef, form);
+        out.println("route set ok");
+        printUpstreamRoute("upstreamRoute", route);
+        return 0;
+    }
+
+    private int routeStatus(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String upstreamRef = requiredOption(args, "upstream-ref", "upstream ref");
+        String status = requiredOption(args, "status", "status");
+        ClientAppUpstreamRouteDTO route = businessAgentControlApi()
+                .updateUpstreamRouteStatus(clientAppId, upstreamRef, status);
+        out.println("route status ok");
+        printUpstreamRoute("upstreamRoute", route);
+        return 0;
+    }
+
+    private int modelGrants(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        List<ClientAppModelConfigGrantDTO> grants = businessAgentControlApi().listModelConfigGrants(clientAppId);
+        out.println("modelGrantCount=" + (grants != null ? grants.size() : 0));
+        if (grants != null) {
+            for (ClientAppModelConfigGrantDTO grant : grants) {
+                printModelConfigGrant("modelGrant", grant);
+            }
+        }
+        return 0;
+    }
+
+    private int modelGrant(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        GrantModelConfigForm form = new GrantModelConfigForm();
+        form.setModelConfigId(modelConfigId);
+        form.setIsDefault(args.flag("set-default") || args.flag("default"));
+        form.setGrantScope(args.option("grant-scope"));
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi().grantModelConfig(clientAppId, form);
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", valueOrEmpty(grant != null && hasText(grant.getModelConfigId())
+                    ? grant.getModelConfigId()
+                    : modelConfigId));
+        }
+        out.println("model grant ok");
+        printModelConfigGrant("modelGrant", grant);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private int modelSetDefault(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        Long grantId = resolveModelGrantId(args, clientAppId);
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi().setDefaultModelConfigGrant(clientAppId, grantId);
+        if (args.flag("write-profile")) {
+            String modelConfigId = grant != null && hasText(grant.getModelConfigId())
+                    ? grant.getModelConfigId()
+                    : args.option("model-config-id");
+            if (!hasText(modelConfigId)) {
+                throw new UpstreamCliException("model set-default response did not include modelConfigId; use --model-config-id with --write-profile");
+            }
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", modelConfigId);
+        }
+        out.println("model set-default ok");
+        printModelConfigGrant("modelGrant", grant);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private Long resolveModelGrantId(CliArguments args, String clientAppId) {
+        String grantId = args.option("grant-id");
+        if (hasText(grantId)) {
+            return parseLong(grantId, "grant id");
+        }
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id or grant id");
+        List<ClientAppModelConfigGrantDTO> grants = businessAgentControlApi().listModelConfigGrants(clientAppId);
+        if (grants != null) {
+            for (ClientAppModelConfigGrantDTO grant : grants) {
+                if (modelConfigId.equals(grant.getModelConfigId())) {
+                    return grant.getId();
+                }
+            }
+        }
+        throw new UpstreamCliException("model config grant not found for modelConfigId: " + modelConfigId);
+    }
+
+    private int modelCreate(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        ClientAppModelConfigForm form = buildModelConfigForm(args, true);
+        form.setSetDefault(args.flag("set-default") || args.flag("default"));
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi().createClientAppModelConfig(clientAppId, form);
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", modelConfigIdFromGrant(grant));
+        }
+        out.println("model create ok");
+        printModelConfigGrant("modelGrant", grant);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private int modelUpdate(CliArguments args) {
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable();
+        }
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        ClientAppModelConfigForm form = buildModelConfigForm(args, false);
+        form.setSetDefault(args.flag("set-default") || args.flag("default"));
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi()
+                .updateClientAppModelConfig(clientAppId, modelConfigId, form);
+        if (args.flag("write-profile")) {
+            config.writeProfileValue("NAVI_MODEL_CONFIG_ID", modelConfigIdFromGrantOrFallback(grant, modelConfigId));
+        }
+        out.println("model update ok");
+        printModelConfigGrant("modelGrant", grant);
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + config.profilePath());
+            out.println("stored=NAVI_MODEL_CONFIG_ID");
+        }
+        return 0;
+    }
+
+    private int modelRotateKey(CliArguments args) {
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        String modelConfigId = requiredOption(args, "model-config-id", "model config id");
+        RotateModelConfigKeyForm form = new RotateModelConfigKeyForm();
+        form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
+
+        ClientAppModelConfigGrantDTO grant = businessAgentControlApi()
+                .rotateClientAppModelConfigKey(clientAppId, modelConfigId, form);
+        out.println("model rotate-key ok");
+        printModelConfigGrant("modelGrant", grant);
+        return 0;
+    }
+
+    private ClientAppModelConfigForm buildModelConfigForm(CliArguments args, boolean create) {
+        ClientAppModelConfigForm form = new ClientAppModelConfigForm();
+        form.setName(create ? requiredOption(args, "name", "model name") : args.option("name"));
+        form.setBaseUrl(create ? requiredOption(args, "model-base-url", "LLM model base URL") : args.option("model-base-url"));
+        form.setModelName(create ? requiredOption(args, "model-name", "LLM model name") : args.option("model-name"));
+        form.setCategory(args.option("category"));
+        String provider = args.option("provider");
+        if (hasText(provider)) {
+            form.setEnvVars(Map.of("NAVI_LLM_PROVIDER", provider));
+        }
+        String availableModels = args.option("available-models");
+        if (hasText(availableModels)) {
+            form.setAvailableModels(parseCsv(availableModels));
+        }
+        if (create) {
+            form.setApiKey(config.required("NAVI_LLM_API_KEY", "LLM API key; pass --api-key-env <envName>"));
+        }
+        return form;
+    }
+
+    private String modelConfigIdFromGrant(ClientAppModelConfigGrantDTO grant) {
+        String modelConfigId = grant != null ? grant.getModelConfigId() : null;
+        if (!hasText(modelConfigId)) {
+            throw new UpstreamCliException("model create response did not include modelConfigId");
+        }
+        return modelConfigId;
+    }
+
+    private String modelConfigIdFromGrantOrFallback(ClientAppModelConfigGrantDTO grant, String fallback) {
+        String modelConfigId = grant != null ? grant.getModelConfigId() : null;
+        return hasText(modelConfigId) ? modelConfigId : fallback;
+    }
+
+    private List<String> parseCsv(String value) {
+        List<String> list = new ArrayList<>();
+        for (String item : value.split(",")) {
+            if (hasText(item)) {
+                list.add(item.trim());
+            }
+        }
+        return list;
+    }
+
     private int accountContextList(CliArguments args) {
         String upstreamUserId = upstreamUserId(args);
         AccountContextFileTreeDTO tree = agentApi().listAccountContextFilesWithClientAppAccessToken(
@@ -608,6 +923,36 @@ public class UpstreamCli {
         }
     }
 
+    private void printFunctionGrant(String prefix, ClientAppFunctionGrantDTO grant) {
+        out.println(prefix
+                + " grantId=" + valueOrEmpty(grant != null ? grant.getGrantId() : null)
+                + " clientAppId=" + valueOrEmpty(grant != null ? grant.getClientAppId() : null)
+                + " functionId=" + valueOrEmpty(grant != null ? grant.getFunctionId() : null)
+                + " version=" + valueOrEmpty(grant != null ? grant.getVersion() : null)
+                + " status=" + valueOrEmpty(grant != null ? grant.getStatus() : null));
+    }
+
+    private void printFunctionSummary(BusinessFunctionSummaryDTO function) {
+        out.println("function"
+                + " functionId=" + valueOrEmpty(function != null ? function.getFunctionId() : null)
+                + " version=" + valueOrEmpty(function != null ? function.getVersion() : null)
+                + " domain=" + valueOrEmpty(function != null ? function.getDomain() : null)
+                + " name=" + valueOrEmpty(function != null ? function.getName() : null)
+                + " riskLevel=" + valueOrEmpty(function != null ? function.getRiskLevel() : null)
+                + " approvalRequired=" + (function != null && Boolean.TRUE.equals(function.getApprovalRequired()))
+                + " idempotencyRequired=" + (function != null && Boolean.TRUE.equals(function.getIdempotencyRequired())));
+    }
+
+    private void printUpstreamRoute(String prefix, ClientAppUpstreamRouteDTO route) {
+        out.println(prefix
+                + " id=" + valueOrEmpty(route != null ? route.getId() : null)
+                + " clientAppId=" + valueOrEmpty(route != null ? route.getClientAppId() : null)
+                + " upstreamRef=" + valueOrEmpty(route != null ? route.getUpstreamRef() : null)
+                + " baseUrl=" + valueOrEmpty(route != null ? route.getBaseUrl() : null)
+                + " userTokenHeader=" + valueOrEmpty(route != null ? route.getUserTokenHeader() : null)
+                + " status=" + valueOrEmpty(route != null ? route.getStatus() : null));
+    }
+
     private void printSkillClearResult(String command, SkillClearResultDTO dto) {
         out.println(command + " ok");
         out.println("scope=" + valueOrEmpty(dto != null ? dto.getScope() : null));
@@ -632,6 +977,18 @@ public class UpstreamCli {
         }
     }
 
+    private void printModelConfigGrant(String prefix, ClientAppModelConfigGrantDTO grant) {
+        out.println(prefix
+                + " id=" + valueOrEmpty(grant != null ? grant.getId() : null)
+                + " clientAppId=" + valueOrEmpty(grant != null ? grant.getClientAppId() : null)
+                + " modelConfigId=" + valueOrEmpty(grant != null ? grant.getModelConfigId() : null)
+                + " name=" + valueOrEmpty(grant != null ? grant.getModelConfigName() : null)
+                + " backend=" + valueOrEmpty(grant != null ? grant.getWorkerBackend() : null)
+                + " status=" + valueOrEmpty(grant != null ? grant.getStatus() : null)
+                + " default=" + (grant != null && Boolean.TRUE.equals(grant.getIsDefault()))
+                + " scope=" + valueOrEmpty(grant != null ? grant.getGrantScope() : null));
+    }
+
     private void printAccountContextFileMetadata(AccountContextFileDTO file) {
         out.println("file name=" + valueOrEmpty(file != null ? file.getFileName() : null)
                 + " exists=" + (file != null && file.isExists())
@@ -651,6 +1008,14 @@ public class UpstreamCli {
             return "ACCOUNT_PRIVATE";
         }
         throw new UpstreamCliException("invalid scope: " + scope);
+    }
+
+    private <T> T readJsonFile(String file, Class<T> type) throws Exception {
+        Path path = cwd.resolve(file).normalize();
+        if (!Files.isRegularFile(path)) {
+            throw new UpstreamCliException("json file not found: " + path);
+        }
+        return new ObjectMapper().readValue(Files.readString(path, StandardCharsets.UTF_8), type);
     }
 
     private void printMessages(List<SessionMessage> messages) {
@@ -701,6 +1066,14 @@ public class UpstreamCli {
             return Integer.parseInt(value);
         } catch (NumberFormatException e) {
             throw new UpstreamCliException("Expected integer but got: " + value);
+        }
+    }
+
+    private long parseLong(String value, String description) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            throw new UpstreamCliException("Expected numeric " + description + " but got: " + value);
         }
     }
 

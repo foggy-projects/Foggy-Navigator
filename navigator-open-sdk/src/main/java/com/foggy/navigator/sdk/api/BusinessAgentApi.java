@@ -69,6 +69,20 @@ public class BusinessAgentApi {
         return http.put("/api/v1/client-apps/" + clientAppId + "/model-config-grants/" + grantId + "/default", null, new TypeReference<>() {});
     }
 
+    public ClientAppModelConfigGrantDTO createClientAppModelConfig(String clientAppId, ClientAppModelConfigForm form) {
+        return http.post("/api/v1/client-apps/" + clientAppId + "/model-configs", form, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO updateClientAppModelConfig(String clientAppId, String modelConfigId,
+                                                                   ClientAppModelConfigForm form) {
+        return http.put("/api/v1/client-apps/" + clientAppId + "/model-configs/" + modelConfigId, form, new TypeReference<>() {});
+    }
+
+    public ClientAppModelConfigGrantDTO rotateClientAppModelConfigKey(String clientAppId, String modelConfigId,
+                                                                      RotateModelConfigKeyForm form) {
+        return http.put("/api/v1/client-apps/" + clientAppId + "/model-configs/" + modelConfigId + "/key", form, new TypeReference<>() {});
+    }
+
     public E2eModelConfigEnsureResultDTO ensureE2eModelConfig(String clientAppId, EnsureE2eModelConfigForm form) {
         return http.post("/api/v1/business-agent/client-apps/" + clientAppId + "/e2e-model-config/ensure", form, new TypeReference<>() {});
     }
@@ -119,6 +133,24 @@ public class BusinessAgentApi {
         return http.put("/api/v1/business-agent/client-apps/" + clientAppId + "/upstream-users/" + upstreamUserId + "/status?status=" + status, null, new TypeReference<>() {});
     }
 
+    // ===== Upstream Route =====
+
+    public List<ClientAppUpstreamRouteDTO> listUpstreamRoutes(String clientAppId) {
+        return http.get("/api/v1/business-agent/client-apps/" + clientAppId + "/upstream-routes", new TypeReference<>() {});
+    }
+
+    public ClientAppUpstreamRouteDTO upsertUpstreamRoute(String clientAppId, String upstreamRef,
+                                                         UpsertClientAppUpstreamRouteForm form) {
+        return http.put("/api/v1/business-agent/client-apps/" + clientAppId
+                + "/upstream-routes/" + urlEncode(upstreamRef), form, new TypeReference<>() {});
+    }
+
+    public ClientAppUpstreamRouteDTO updateUpstreamRouteStatus(String clientAppId, String upstreamRef, String status) {
+        return http.put("/api/v1/business-agent/client-apps/" + clientAppId
+                + "/upstream-routes/" + urlEncode(upstreamRef)
+                + "/status?status=" + urlEncode(status), null, new TypeReference<>() {});
+    }
+
     // ===== Business Object & Function =====
 
     public BusinessObjectDTO createBusinessObject(CreateBusinessObjectForm form) {
@@ -167,5 +199,9 @@ public class BusinessAgentApi {
 
     public WorkerGatewayResumeResponseDTO resumeSuspension(String suspendId, WorkerGatewayResumeForm form) {
         return http.post("/api/v1/business-agent/suspensions/" + suspendId + "/resume", form, new TypeReference<>() {});
+    }
+
+    private String urlEncode(String value) {
+        return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
     }
 }

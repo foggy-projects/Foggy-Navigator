@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:13309/coding_agent?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${SPRING_DATASOURCE_USERNAME:foggy}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+server:
+  port: 8112
+
+navigator:
+  api:
+    external-url: ${NAVIGATOR_API_EXTERNAL_URL:http://192.168.31.81:8112}
+
+logging:
+  level:
+    root: INFO
+    com.foggy.navigator: DEBUG
+    com.github.dockerjava: WARN

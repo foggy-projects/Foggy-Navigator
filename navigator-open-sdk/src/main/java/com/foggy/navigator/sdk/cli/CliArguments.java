@@ -56,6 +56,12 @@ final class CliArguments {
         if (words.size() >= 2 && "agent".equals(words.get(0))) {
             return "agent " + words.get(1);
         }
+        if (words.size() >= 2 && "function".equals(words.get(0))) {
+            return "function " + words.get(1);
+        }
+        if (words.size() >= 2 && "route".equals(words.get(0))) {
+            return "route " + words.get(1);
+        }
         if (words.size() >= 2 && "account-context".equals(words.get(0))) {
             return "account-context " + words.get(1);
         }

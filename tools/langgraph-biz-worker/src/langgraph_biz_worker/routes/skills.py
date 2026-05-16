@@ -55,6 +55,7 @@ class MaterializeRequest(BaseModel):
     name: str | None = None
     display_name: str | None = None
     description: str | None = None
+    context_visibility: str | None = None
     markdown_body: str | None = None
     resources: list[SkillResource] = Field(default_factory=list)
 
@@ -122,6 +123,7 @@ async def materialize_skill(req: MaterializeRequest) -> dict:
     yaml_lines.append("metadata:")
     yaml_lines.append(f"  display_name: {display_name}")
     yaml_lines.append(f"  visibility: {visibility}")
+    yaml_lines.append(f"  context-visibility: {_normalize_context_visibility(req.context_visibility)}")
     if client_app_id:
         yaml_lines.append(f"  client_app_id: {client_app_id}")
     yaml_lines.append("---")
@@ -235,6 +237,15 @@ def _replace_bundle_resources(target_dir: Path, resources: list[SkillResource]) 
             raise HTTPException(status_code=400, detail=f"resource path escapes skill directory: {resource.path}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content_bytes)
+
+
+def _normalize_context_visibility(value: str | None) -> str:
+    normalized = (value or "isolated").strip().replace("_", "-").lower()
+    if normalized in {"isolated", "summary"}:
+        return normalized
+    if normalized == "passthrough":
+        return "isolated"
+    raise HTTPException(status_code=400, detail="invalid context_visibility")
 
 
 _ALLOWED_RESOURCE_EXTENSIONS = {".md", ".txt", ".json", ".yaml", ".yml", ".fsscript"}

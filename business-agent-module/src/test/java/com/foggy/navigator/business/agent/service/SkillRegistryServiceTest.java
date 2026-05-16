@@ -82,6 +82,7 @@ class SkillRegistryServiceTest {
         CreateSkillForm form = new CreateSkillForm();
         form.setSkillId("skill_01");
         form.setName("Test Skill");
+        form.setContextVisibility("summary");
         SkillResourceForm resource = new SkillResourceForm();
         resource.setPath("references/usage.md");
         resource.setContent("Use this when needed.");
@@ -95,11 +96,13 @@ class SkillRegistryServiceTest {
         assertNotNull(dto);
         assertEquals("skill_01", dto.getSkillId());
         assertEquals("Test Skill", dto.getName());
+        assertEquals("summary", dto.getContextVisibility());
         assertEquals("ENABLED", dto.getStatus());
         verify(skillRepository).save(argThat(entity ->
                 entity.getResourcesJson() != null
                         && entity.getResourcesJson().contains("references/usage.md")
-                        && entity.getResourcesJson().contains("Use this when needed.")));
+                        && entity.getResourcesJson().contains("Use this when needed.")
+                        && "summary".equals(entity.getContextVisibility())));
     }
 
     @Test
@@ -175,6 +178,7 @@ class SkillRegistryServiceTest {
             skill.setName("TMS Skill");
             skill.setDescription("TMS public skill");
             skill.setMarkdownBody("Use this skill for TMS operations.");
+            skill.setContextVisibility("summary");
             skill.setResourcesJson("[{\"path\":\"references/usage.md\",\"content\":\"Use this reference.\"}]");
             skill.setStatus("ENABLED");
             when(skillRepository.findByTenantIdAndSkillId("tenant_1", "tms_skill")).thenReturn(Optional.of(skill));
@@ -205,6 +209,7 @@ class SkillRegistryServiceTest {
             assertTrue(bodyRef.get().contains("\"skill_id\":\"tms_skill\""));
             assertTrue(bodyRef.get().contains("\"name\":\"tms_skill\""));
             assertTrue(bodyRef.get().contains("\"display_name\":\"TMS Skill\""));
+            assertTrue(bodyRef.get().contains("\"context_visibility\":\"summary\""));
             assertTrue(bodyRef.get().contains("\"resources\":[{\"path\":\"references/usage.md\",\"content\":\"Use this reference.\"}]"));
             assertTrue(bodyRef.get().contains("tms.order.submit@v1"));
             assertTrue(bodyRef.get().contains("Submit by orderIdentifier."));
@@ -343,6 +348,7 @@ class SkillRegistryServiceTest {
             form.setSkillId("tms_skill");
             form.setName("TMS Skill");
             form.setMarkdownBody("Use this skill for TMS.");
+            form.setContextVisibility("summary");
             form.setMaterialize(true);
             SkillBundleFunctionForm functionForm = new SkillBundleFunctionForm();
             functionForm.setFunctionId("tms.order.submit");
@@ -371,10 +377,12 @@ class SkillRegistryServiceTest {
             var dto = skillRegistryService.syncSkillBundle("tenant_1", "user_1", form);
 
             assertEquals("CLIENT_APP_PUBLIC", dto.getScope());
+            assertEquals("summary", dto.getContextVisibility());
             assertEquals("MATERIALIZED", dto.getMaterializeResult().getStatus());
             assertNotNull(bodyRef.get());
             assertTrue(bodyRef.get().contains("\"scope\":\"public\""));
             assertTrue(bodyRef.get().contains("\"client_app_id\":\"tms_app\""));
+            assertTrue(bodyRef.get().contains("\"context_visibility\":\"summary\""));
             assertTrue(bodyRef.get().contains("tms.order.submit"));
             verify(skillRepository).save(any(SkillEntity.class));
             verify(grantRepository).save(any(ClientAppSkillGrantEntity.class));

@@ -27,7 +27,11 @@ public interface SessionEntityRepository extends JpaRepository<SessionEntity, St
            "WHERE s.interactionState IN :states AND s.deletedAt IS NULL")
     List<String> findSessionIdsByStates(@Param("states") List<String> states);
 
-    List<SessionEntity> findByInteractionStateIn(List<String> states);
+    @Query("SELECT s FROM SessionEntity s " +
+           "WHERE s.interactionState IN :states " +
+           "AND s.deletedAt IS NULL " +
+           "AND s.status <> 'DELETED'")
+    List<SessionEntity> findByInteractionStateIn(@Param("states") List<String> states);
 
     @Query("SELECT s.id FROM SessionEntity s " +
            "WHERE s.userId = :userId AND s.deletedAt IS NULL " +
