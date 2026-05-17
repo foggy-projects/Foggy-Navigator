@@ -4,7 +4,7 @@ bug_source: regression-found
 version: 1.3.0-SNAPSHOT
 ticket: BUG-021
 severity: major
-status: ready-for-verification
+status: closed
 reproduction_status: confirmed
 test_strategy: integration-test
 automation_decision: required
@@ -493,3 +493,72 @@ Navi local runtime was rebuilt and restarted on 2026-05-16:
   - Health: `UP`.
 
 Note: direct `jar tf launcher/target/launcher-1.0.0-SNAPSHOT.jar | grep LanggraphBusinessFunctionResultMessageListener` does not show nested classes inside Spring Boot `BOOT-INF/lib/*.jar`; verify the nested `langgraph-biz-worker` jar instead.
+
+## Final Upstream Verification
+
+TMS X6 completed the latest BUG-021 follow-up verification on 2026-05-17 against the rebuilt and restarted Navi backend/Worker runtime.
+
+Environment:
+
+- Navigator Upstream CLI: `1.0.2`.
+- Agent: `tms-root-router-agent`.
+- Function: `tms.vehicle.create` `v1`.
+- Link: root skill -> `tms-fulfillment-agent` -> `tms.vehicle.create` `v1`.
+- Backend/Worker latest artifact was rebuilt and restarted.
+- Actuator health: `UP`.
+
+Sync and readiness:
+
+- TMS skills and root agent were re-synced.
+- `tms-order-agent`, `tms-fulfillment-agent`, `foggy-query-agent`, `tms-basic-agent`, `tms-route-agent`, `tms-pay-agent`, and `tms-attachment-agent` materialized `contextVisibility=summary`.
+- `tms-root-router-agent` remained `isolated`.
+- `verify-agent-readiness` returned OK.
+- `function visible` confirmed `tms.vehicle.create` `v1` with `approvalRequired=true` and `idempotencyRequired=true`.
+
+Failure path passed:
+
+- task: `lgt_39af29732e074324`.
+- context: `20260517-dd80`.
+- suspension: `sus_138fbec19452469baab435bc4a30f9e9`.
+- approval pre-suspend messages included normal `invoke_business_skill`, `invoke_business_function`, and `TOOL_RESULT status=SUSPENDED approvalRequired=true`.
+- suspension persisted `worker_task_id=lgt_39af29732e074324`.
+- `worker_session_id` was non-empty.
+- after approval, deterministic `post_approval_message` and `business_function_result_message` were written back to the visible `lgt_*` task/context.
+- no resume/result message fell back to `obt_*`.
+- adapter 401 failure terminalized:
+  - `suspension.status=EXECUTE_FAILED`.
+  - `business_execution_status=FAILED`.
+  - `langgraph_tasks.status=FAILED`.
+  - `session_tasks.status=FAILED`.
+  - `error_message` contained `HTTP 401 UNAUTHORIZED`.
+
+Success path passed:
+
+- task: `lgt_99f3807b4a034ed6`.
+- context: `20260517-d158`.
+- suspension: `sus_15581b71472b4b76905a16b78731e1cb`.
+- approval pre-suspend messages included normal `invoke_business_skill`, `invoke_business_function`, and `TOOL_RESULT status=SUSPENDED approvalRequired=true`.
+- suspension persisted `worker_task_id=lgt_99f3807b4a034ed6`.
+- `worker_session_id` was non-empty.
+- after approval, deterministic `post_approval_message` and `business_function_result_message` were written back to the visible `lgt_*` task/context.
+- no resume/result message fell back to `obt_*`.
+- adapter success terminalized:
+  - `suspension.status=COMPLETED`.
+  - `business_execution_status=COMPLETED`.
+  - `langgraph_tasks.status=COMPLETED`.
+  - `session_tasks.status=COMPLETED`.
+  - `result_text=业务函数执行完成。`
+  - `structured_output` contained `executionStatus=COMPLETED`, `outputCode=200`, and `hasOutputData=true`.
+
+The upstream verification did not observe any of the original or follow-up regressions:
+
+- result message written back to `lgt_*` while `langgraph_tasks.status` stayed `RUNNING`.
+- resume/result message written back to `obt_*`.
+- `Child skill ended in AWAITING_APPROVAL`.
+- `Cannot transition from WAITING_CHILD to AWAITING_APPROVAL`.
+- `submit_persistent_turn_result requires RUNNING, got WAITING_CHILD`.
+- `Frame ended in FAILED`.
+
+The intermediate adapter 401 was confirmed by TMS as an upstream user grant token refresh/configuration issue. After refreshing the TMS upstream user grant token, the success path passed. This is not classified as a Navi BUG-021 issue.
+
+Final status: `closed`.
