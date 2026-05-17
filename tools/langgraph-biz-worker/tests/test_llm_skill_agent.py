@@ -7,6 +7,7 @@ import json
 from langchain_core.messages import AIMessage
 
 from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillManifest
+from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
@@ -98,7 +99,7 @@ def _root_runtime() -> SkillRuntime:
     return SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
 
 
-def _root_with_child_runtime(child_context_visibility: str = "isolated") -> SkillRuntime:
+def _root_with_child_runtime(child_context_visibility: str = "isolated", data_root=None) -> SkillRuntime:
     registry = SkillRegistry()
     registry.register(SkillManifest(
         id="system.root",
@@ -119,7 +120,11 @@ def _root_with_child_runtime(child_context_visibility: str = "isolated") -> Skil
         promote_to_parent=["result_summary", "structured_output"],
         context_visibility=child_context_visibility,
     ))
-    return SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+    return SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(data_root) if data_root is not None else None,
+    )
 
 
 def test_llm_agent_completes_skill_via_submit_tool():
@@ -1476,8 +1481,8 @@ def test_llm_agent_suspends_business_function_call(monkeypatch):
     assert approval_event.parent_frame_id == frame_id
 
 
-def test_llm_agent_bubbles_child_business_function_approval_to_root(monkeypatch):
-    runtime = _root_with_child_runtime(child_context_visibility="summary")
+def test_llm_agent_bubbles_child_business_function_approval_to_root(monkeypatch, tmp_path):
+    runtime = _root_with_child_runtime(child_context_visibility="summary", data_root=tmp_path)
     root_frame_id = runtime.invoke_skill(
         task_id="task_child_business_suspend_001",
         skill_id="system.root",
@@ -1540,6 +1545,21 @@ def test_llm_agent_bubbles_child_business_function_approval_to_root(monkeypatch)
     assert child.status == FrameStatus.AWAITING_APPROVAL
     assert function_frame.status == FrameStatus.AWAITING_APPROVAL
     assert any(event.type == "approval_required" for event in events)
+    skill_tool_result = next(
+        event
+        for event in events
+        if event.type == "tool_result" and event.tool_name == "invoke_business_skill"
+    )
+    skill_tool_payload = json.loads(skill_tool_result.content)
+    assert skill_tool_payload["approval_wait"] is True
+    assert skill_tool_payload["execution_report_ref"] == (
+        f"frame-report://task_child_business_suspend_001/{child_frame_id}"
+    )
+    assert skill_tool_payload["execution_report_digest"]["status"] == "AWAITING_APPROVAL"
+    assert skill_tool_result.execution_report_ref == (
+        f"frame-report://task_child_business_suspend_001/{child_frame_id}"
+    )
+    assert skill_tool_result.execution_report_digest["status"] == "AWAITING_APPROVAL"
     assert not any(event.type == "error" for event in events)
     assert model.calls == 2
 

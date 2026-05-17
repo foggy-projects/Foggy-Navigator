@@ -13,7 +13,13 @@ export type {
   ConfirmationRequestPayload,
 } from './types/aip'
 export type { EventAdapter } from './types/adapter'
-export type { ChatMessage, ConnectionStatus, ExecutionReportDigest } from './types/chat'
+export type {
+  ChatMessage,
+  ConnectionStatus,
+  ExecutionReportDigest,
+  ExecutionReportMarkdownLoader,
+  ExecutionReportMarkdownPayload,
+} from './types/chat'
 export type {
   BusinessSuspensionDecision,
   BusinessSuspensionDecisionPayload,

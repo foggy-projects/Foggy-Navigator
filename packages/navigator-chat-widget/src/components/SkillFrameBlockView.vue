@@ -21,6 +21,7 @@
       <ExecutionReportInline
         :report-ref="frame.executionReportRef"
         :digest="frame.executionReportDigest"
+        :load-markdown="loadMarkdown"
       />
 
       <div v-if="frame.toolExecutions.length" class="nc-frame-tools">
@@ -49,6 +50,7 @@
             <ExecutionReportInline
               :report-ref="tool.executionReportRef"
               :digest="tool.executionReportDigest"
+              :load-markdown="loadMarkdown"
             />
             <details class="nc-nested">
               <summary>参数</summary>
@@ -75,6 +77,7 @@
           v-for="child in frame.children"
           :key="child.frameId"
           :frame="child"
+          :load-markdown="loadMarkdown"
         />
       </div>
 
@@ -90,12 +93,13 @@
 import { ElIcon } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import { ExecutionReportInline } from '@foggy/chat'
-import type { SkillFrameBlock, ToolExecutionBlock } from '../types'
+import type { ExecutionReportMarkdownLoader, SkillFrameBlock, ToolExecutionBlock } from '../types'
 
 defineOptions({ name: 'SkillFrameBlockView' })
 
 defineProps<{
   frame: SkillFrameBlock
+  loadMarkdown?: ExecutionReportMarkdownLoader
 }>()
 
 function frameStatusLabel(status: SkillFrameBlock['status']): string {

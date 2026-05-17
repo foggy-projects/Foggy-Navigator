@@ -48,6 +48,7 @@
             <ExecutionReportInline
               :report-ref="msg.executionReportRef"
               :digest="msg.executionReportDigest"
+              :load-markdown="executionReportMarkdownLoader"
             />
             <div v-if="msg.durationMs || msg.costUsd" class="nc-meta">
               <span v-if="msg.durationMs">{{ (msg.durationMs / 1000).toFixed(1) }}s</span>
@@ -55,7 +56,11 @@
             </div>
           </div>
           <div v-else class="nc-content nc-content--system">
-            <SkillFrameBlockView v-if="msg.skillFrame" :frame="msg.skillFrame" />
+            <SkillFrameBlockView
+              v-if="msg.skillFrame"
+              :frame="msg.skillFrame"
+              :load-markdown="executionReportMarkdownLoader"
+            />
             <details v-else-if="msg.toolExecution" class="nc-process nc-tool-execution" open>
               <summary>
                 <span class="nc-tool-title">
@@ -76,6 +81,7 @@
                 <ExecutionReportInline
                   :report-ref="msg.toolExecution.executionReportRef"
                   :digest="msg.toolExecution.executionReportDigest"
+                  :load-markdown="executionReportMarkdownLoader"
                 />
                 <details class="nc-nested">
                   <summary>参数</summary>
@@ -179,6 +185,7 @@ import type {
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
   ChatMessage,
+  ExecutionReportMarkdownLoader,
   NavigatorAction,
   NavigatorChatConfig,
   NavigatorChatMode,
@@ -208,6 +215,8 @@ const props = withDefaults(defineProps<{
   showToolCalls?: boolean
   /** 是否展示工具结果 */
   showToolResults?: boolean
+  /** 完整执行报告 Markdown 加载器 */
+  executionReportMarkdownLoader?: ExecutionReportMarkdownLoader
   /** 轮询间隔，兼容 poll-interval-ms 写法 */
   pollIntervalMs?: number
   /** 轮询间隔，兼容原 config 字段 */
@@ -282,6 +291,7 @@ const resolvedConfig = computed<NavigatorChatConfig>(() => ({
   ...(props.timeout != null ? { timeout: props.timeout } : {}),
   ...(props.maxTurns != null ? { maxTurns: props.maxTurns } : {}),
   ...(props.fetch ? { fetch: props.fetch } : {}),
+  ...(props.executionReportMarkdownLoader ? { executionReportMarkdownLoader: props.executionReportMarkdownLoader } : {}),
   mode: props.mode ?? props.config?.mode ?? 'business',
   debugMode: props.debugMode ?? props.config?.debugMode,
   showRuntimeEvents: props.showRuntimeEvents ?? props.config?.showRuntimeEvents,
@@ -292,6 +302,7 @@ const resolvedConfig = computed<NavigatorChatConfig>(() => ({
 const chat = useNavigatorChat(resolvedConfig.value)
 const inputText = ref('')
 const messagesRef = ref<HTMLElement>()
+const executionReportMarkdownLoader = computed(() => resolvedConfig.value.executionReportMarkdownLoader)
 
 // 暴露 composable 给父组件
 defineExpose({

@@ -34,6 +34,18 @@
           <code class="report-ref">{{ resolvedReportRef }}</code>
         </div>
       </div>
+
+      <div v-if="canShowMarkdownEntry" class="report-markdown">
+        <button type="button" class="report-markdown-trigger" @click="toggleMarkdown">
+          {{ markdownVisible ? '收起完整 Markdown' : '查看完整 Markdown' }}
+        </button>
+        <div v-if="markdownVisible" class="report-markdown-panel">
+          <div v-if="markdownLoading" class="report-markdown-state">加载中...</div>
+          <div v-else-if="markdownError" class="report-markdown-error">{{ markdownError }}</div>
+          <pre v-else-if="markdownText" class="report-markdown-content">{{ markdownText }}</pre>
+          <div v-else class="report-markdown-state">暂无 Markdown 内容</div>
+        </div>
+      </div>
     </ElDialog>
   </div>
 </template>
@@ -41,14 +53,24 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElDialog } from 'element-plus'
-import type { ExecutionReportDigest } from '../types/chat'
+import type {
+  ExecutionReportDigest,
+  ExecutionReportMarkdownLoader,
+  ExecutionReportMarkdownPayload,
+} from '../types/chat'
 
 const props = defineProps<{
   reportRef?: string
   digest?: ExecutionReportDigest
+  markdown?: string
+  loadMarkdown?: ExecutionReportMarkdownLoader
 }>()
 
 const dialogVisible = ref(false)
+const markdownVisible = ref(false)
+const markdownLoading = ref(false)
+const markdownError = ref('')
+const loadedMarkdown = ref('')
 
 const resolvedReportRef = computed(() =>
   stringValue(
@@ -59,6 +81,8 @@ const resolvedReportRef = computed(() =>
 
 const hasReport = computed(() => !!resolvedReportRef.value || !!props.digest)
 const statusText = computed(() => stringValue(digestValue('status', 'state')))
+const markdownText = computed(() => stringValue(props.markdown, loadedMarkdown.value))
+const canShowMarkdownEntry = computed(() => !!markdownText.value || (!!props.loadMarkdown && !!resolvedReportRef.value))
 
 const statusClass = computed(() => {
   const value = statusText.value.toLowerCase()
@@ -73,8 +97,52 @@ const digestRows = computed(() => [
   { key: 'error', label: 'error', value: stringValue(digestValue('error', 'errorMessage', 'error_message')), emptyText: '无' },
   { key: 'skill_id', label: 'skill_id', value: stringValue(digestValue('skillId', 'skill_id')), emptyText: '未提供' },
   { key: 'frame_kind', label: 'frame_kind', value: stringValue(digestValue('frameKind', 'frame_kind')), emptyText: '未提供' },
+  { key: 'tool_call_count', label: 'tool_call_count', value: stringValue(digestValue('toolCallCount', 'tool_call_count')), emptyText: '未提供' },
+  { key: 'child_frame_count', label: 'child_frame_count', value: stringValue(digestValue('childFrameCount', 'child_frame_count')), emptyText: '未提供' },
   { key: 'generated_at', label: 'generated_at', value: stringValue(digestValue('generatedAt', 'generated_at')), emptyText: '未提供' },
 ])
+
+async function toggleMarkdown() {
+  markdownVisible.value = !markdownVisible.value
+  if (markdownVisible.value) {
+    await ensureMarkdownLoaded()
+  }
+}
+
+async function ensureMarkdownLoaded() {
+  if (markdownText.value || markdownLoading.value || !props.loadMarkdown || !resolvedReportRef.value) return
+  markdownLoading.value = true
+  markdownError.value = ''
+  try {
+    const payload = await props.loadMarkdown(resolvedReportRef.value)
+    const text = markdownFromPayload(payload)
+    if (text) {
+      loadedMarkdown.value = text
+    } else {
+      markdownError.value = '未读取到 Markdown 内容'
+    }
+  } catch (error) {
+    markdownError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    markdownLoading.value = false
+  }
+}
+
+function markdownFromPayload(payload: string | ExecutionReportMarkdownPayload): string {
+  if (typeof payload === 'string') return payload
+  if (!payload || typeof payload !== 'object') return ''
+  const ok = payload.ok
+  if (ok === false) {
+    throw new Error(stringValue(payload.error, payload.message) || '执行报告读取失败')
+  }
+  return stringValue(
+    payload.markdown,
+    payload.content,
+    payload.text,
+    payload.markdownExcerpt,
+    payload.markdown_excerpt,
+  )
+}
 
 function digestValue(...keys: string[]): unknown {
   if (!props.digest) return undefined
@@ -182,5 +250,60 @@ function stringValue(...values: unknown[]): string {
   font-size: 12px;
   word-break: break-all;
   white-space: normal;
+}
+
+.report-markdown {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter, #ebeef5);
+}
+
+.report-markdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  border-radius: 4px;
+  background: var(--el-fill-color-blank, #fff);
+  color: var(--el-color-primary, #409eff);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.report-markdown-trigger:hover {
+  border-color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary-light-9, #ecf5ff);
+}
+
+.report-markdown-panel {
+  margin-top: 10px;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 6px;
+  background: var(--el-fill-color-extra-light, #fafafa);
+}
+
+.report-markdown-content {
+  margin: 0;
+  padding: 12px;
+  color: var(--el-text-color-primary, #303133);
+  font-family: 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.report-markdown-state,
+.report-markdown-error {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary, #909399);
+}
+
+.report-markdown-error {
+  color: var(--el-color-danger, #f56c6c);
 }
 </style>

@@ -303,6 +303,56 @@ class TestResumeEndpoint:
         )
         assert data["resume_message"]["execution_report_digest"]["status"] == "COMPLETED"
 
+    async def test_resume_restores_function_frame_before_report_enrichment(self, client):
+        caller_frame_id = self.runtime.invoke_skill("task_resume_report_restore", "system.root")
+        function_frame_id = self.runtime.invoke_function_call(
+            parent_frame_id=caller_frame_id,
+            function_id="tms.vehicle.create",
+            version="v1",
+            arguments={"plateNo": "A-001"},
+        )
+        approval_request = {
+            "approval_type": "business_function",
+            "function_id": "tms.vehicle.create",
+            "version": "v1",
+            "suspend_id": "sus_resume_report_restore",
+            "summary": {"title": "Create vehicle approval"},
+            "payload": {
+                "function_frame_id": function_frame_id,
+                "input": {
+                    "plateNo": "A-001",
+                    "post_approval_message": {
+                        "approved": "审批已通过，已继续提交车辆创建申请。",
+                    },
+                },
+            },
+            "resolved": False,
+        }
+        self.runtime.suspend_function_call(function_frame_id, approval_request)
+        self.runtime.mark_awaiting_approval(caller_frame_id, approval_request)
+
+        self.runtime.store.clear()
+        assert self.runtime.get_frame(caller_frame_id) is None
+        assert self.runtime.get_frame(function_frame_id) is None
+
+        resp = await client.post("/api/v1/resume", json={
+            "taskId": "task_resume_report_restore",
+            "approvalResult": "approved",
+            "comment": "同意",
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["frame_id"] == caller_frame_id
+        assert data["resume_message"]["content"] == "审批已通过，已继续提交车辆创建申请。"
+        assert data["resume_message"]["execution_report_ref"] == (
+            f"frame-report://task_resume_report_restore/{function_frame_id}"
+        )
+        assert data["resume_message"]["function_execution_report_ref"] == (
+            f"frame-report://task_resume_report_restore/{function_frame_id}"
+        )
+        assert data["resume_message"]["execution_report_digest"]["status"] == "COMPLETED"
+
     async def test_resume_not_found(self, client):
         resp = await client.post("/api/v1/resume", json={
             "taskId": "nonexistent_task",

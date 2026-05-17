@@ -105,6 +105,168 @@ Two gaps are likely involved:
   - `LanggraphStreamRelayTest`: 7 passed
   - `LanggraphWorkerResumeEventListenerTest`: 11 passed
 
+## Follow-up Revalidation: 2026-05-17
+
+TMS reported BUG-023 still failed in local E2E after BUG-021 follow-up passed:
+
+- deterministic `post_approval_message` and `business_function_result_message` were written back to visible `lgt_*`
+- terminal `langgraph_tasks` and `session_tasks` statuses converged correctly
+- visible messages still missed report refs/digests
+- child/root reports remained stale
+- no deterministic `skill_frame_close` was observed
+
+Local inspection found a packaging/runtime mismatch. Source and `target/classes` contained
+`LanggraphBusinessFunctionExecutionReportBridge`, but the running packaged `launcher-1.0.0-SNAPSHOT.jar`
+and nested `langgraph-biz-worker-1.0.0-SNAPSHOT.jar` were older and did not contain the bridge class.
+In that state Java cannot call the Worker reconciliation API, so the observed E2E failure is expected even
+though source-level tests pass.
+
+Additional hardening:
+
+- log bridge bean installation at startup
+- warn when report reconciliation is skipped or returns empty
+- add Worker resume regression for post-approval report enrichment after in-memory frame store is cleared
+
+Artifact verification before upstream handoff must include:
+
+```powershell
+mvn clean package -pl launcher -am -DskipTests
+jar tf addons\langgraph-biz-worker\target\langgraph-biz-worker-1.0.0-SNAPSHOT.jar |
+  Select-String -Pattern "LanggraphBusinessFunctionExecutionReportBridge|BusinessFunctionExecutionReport"
+```
+
+The running backend logs should include:
+
+```text
+Business function execution report bridge configured: com.foggy.navigator.langgraph.worker.service.LanggraphBusinessFunctionExecutionReportBridge
+```
+
+## Follow-up Revalidation 2: 2026-05-17
+
+TMS revalidated with the rebuilt Java artifact and confirmed the nested jar contains
+`LanggraphBusinessFunctionExecutionReportBridge`. The latest failure changed shape:
+
+- `invoke_business_function` `TOOL_RESULT` has report ref/digest
+- `approval_required` has report ref/digest
+- `post_approval_message`, `business_function_result_message`, promoted child result, and `skill_frame_close` are still missing report metadata
+- child/root report digests remain stale
+
+Local runtime inspection found the Java bridge was loaded, but Worker reconciliation calls returned HTTP 404:
+
+```text
+POST /api/v1/frames/business-function-result -> 404
+```
+
+The frame journal already contained the expected function frames and suspend IDs, so the stale report state was
+not caused by missing frame data. The running Python Worker process had loaded an older package/runtime that did
+not register the new frame report route. Before restarting the Worker:
+
+```text
+OpenAPI paths under /api/v1/frames:
+- /api/v1/frames/interruption
+```
+
+After restarting through `tools/langgraph-biz-worker/start.ps1`, the route was registered and empty-body calls
+returned validation errors instead of 404:
+
+```text
+OpenAPI paths under /api/v1/frames:
+- /api/v1/frames/business-function-result
+- /api/v1/frames/interruption
+
+POST /api/v1/frames/business-function-result {} -> 422
+```
+
+Direct reconciliation against TMS-provided local samples then succeeded:
+
+- success sample `lgt_4c4c5af5c6a348f0 / sus_caeb9608e4c9488fbf7d19dae4685db5`
+  - function/child/root digests all converged to `COMPLETED`
+  - response included `function_execution_report_*`, `child_execution_report_*`, `root_execution_report_*`
+  - response included `closed_skill_frames`
+- failure sample `lgt_0f297c68edf84d89 / sus_64b4ed7bf8374b9db35ffe3a992fe8f2`
+  - function/child/root digests all converged to `FAILED`
+  - response included the same report metadata and `closed_skill_frames`
+
+Additional regression added:
+
+- `tools/langgraph-biz-worker/tests/test_frame_report_route.py`
+  - asserts `/api/v1/frames/business-function-result` is registered in OpenAPI
+  - verifies HTTP endpoint restores frames from the journal after in-memory store is cleared
+  - verifies success and failure paths converge function/child/root report digests
+
+Latest local verification:
+
+- `PYTHONPATH=src .\.venv\Scripts\python.exe -m pytest tests/test_frame_report_route.py tests/test_resume.py tests/test_frame_execution_report.py`
+  - `32 passed`
+- `mvn -pl addons/langgraph-biz-worker,business-agent-module -am "-Dtest=LanggraphBusinessFunctionExecutionReportBridgeTest,LanggraphStreamRelayTest,LanggraphWorkerResumeEventListenerTest,BusinessFunctionSuspensionServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  - `19 passed`
+- runtime health:
+  - backend `/actuator/health`: `UP`
+  - Worker `/health`: `UP`
+  - Worker OpenAPI includes `/api/v1/frames/business-function-result`
+
+## Follow-up Revalidation 3: 2026-05-17
+
+TMS revalidated after backend and Python Worker restart and confirmed the core BUG-023 chain is restored:
+
+- success and adapter-failure paths both reconcile through Worker `/api/v1/frames/business-function-result`
+- deterministic `post_approval_message` is written to visible `lgt_*` with report ref/digest
+- deterministic `business_function_result_message` is written to visible `lgt_*` with root/function/child report refs/digests
+- deterministic `skill_frame_close` is emitted with child skill frame report ref/digest
+- function, child skill, and root report digests converge to `COMPLETED` or `FAILED`
+- `langgraph_tasks` and `session_tasks` converge to terminal status
+
+One residual propagation gap remained:
+
+- pre-approval `invoke_business_skill` tool result returned only
+  `{"ok": true, "approval_wait": true, "child_frame_id": "..."}`
+- that event did not include `execution_report_ref/digest`
+
+Decision: treat this as a required but narrow propagation follow-up. The event represents the parent/root frame
+receiving the child skill's approval wait state, so it should expose the child frame's current
+`AWAITING_APPROVAL` report.
+
+Implementation:
+
+- enrich `invoke_business_skill` approval-wait results with the child frame report payload
+- include both top-level `execution_report_ref/digest` and `child_execution_report_ref/digest`
+- apply the same enrichment to resumed recoverable child skill approval-wait results
+
+Additional regression:
+
+- `tests/test_llm_skill_agent.py::test_llm_agent_bubbles_child_business_function_approval_to_root`
+  - now runs with a journal-backed runtime so report generation matches the real Worker
+  - asserts the pre-approval `invoke_business_skill` tool result carries the child frame
+    `AWAITING_APPROVAL` report ref/digest
+
+Latest local verification:
+
+- `PYTHONPATH=src .\.venv\Scripts\python.exe -m pytest tests/test_llm_skill_agent.py::test_llm_agent_bubbles_child_business_function_approval_to_root`
+  - `1 passed`
+- `PYTHONPATH=src .\.venv\Scripts\python.exe -m pytest tests/test_llm_skill_agent.py tests/test_frame_report_route.py tests/test_resume.py tests/test_frame_execution_report.py`
+  - `62 passed`
+
+Upstream spot revalidation passed on 2026-05-17:
+
+- sample task `lgt_6345c0c0469f4062`, context `20260517-9f18`, suspend `sus_1a1a41296c564e71887809c36b64d911`
+- pre-approval `invoke_business_skill` promoted child result includes:
+  - `ok=true`
+  - `approval_wait=true`
+  - `child_frame_id=frm_24834867381d`
+  - `execution_report_ref=frame-report://lgt_6345c0c0469f4062/frm_24834867381d`
+  - `child_execution_report_ref=frame-report://lgt_6345c0c0469f4062/frm_24834867381d`
+  - `execution_report_digest.status=AWAITING_APPROVAL`
+  - `child_execution_report_digest.status=AWAITING_APPROVAL`
+- event metadata also includes top-level `execution_report_ref/digest`
+- post-approval regression remained green:
+  - `post_approval_message` includes report ref/digest
+  - `business_function_result_message` includes root/function/child report refs/digests
+  - `skill_frame_close` includes child report ref/digest
+  - suspension, business execution, `langgraph_tasks`, and `session_tasks` all converged to `COMPLETED`
+  - function, child, and root reports all converged to `COMPLETED`
+  - no post/result message fell back to `obt_*`
+  - no legacy approval resume errors recurred
+
 ## Fix Plan
 
 1. Add a Worker API that records final business function result against the suspended frame by `taskId + suspendId`.
@@ -116,5 +278,5 @@ Two gaps are likely involved:
 
 ## Status
 
-- Status: implemented, pending upstream E2E verification
+- Status: closed; core E2E and residual pre-approval `invoke_business_skill` report propagation both passed upstream revalidation
 - Owner: Navi

@@ -46,6 +46,11 @@ class FileFrameJournal:
     def __init__(self, data_root: str | Path) -> None:
         self._root = Path(data_root) / "frames"
 
+    @property
+    def data_root(self) -> Path:
+        """Base directory that contains both frame snapshots and reports."""
+        return self._root.parent
+
     # -- write ---------------------------------------------------------------
 
     def save(self, frame: SkillFrameState) -> Path:

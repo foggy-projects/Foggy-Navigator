@@ -65,6 +65,26 @@ export interface ExecutionReportDigest {
   [key: string]: unknown
 }
 
+export interface ExecutionReportMarkdownPayload {
+  ok?: boolean
+  mode?: string
+  reportRef?: string
+  report_ref?: string
+  markdown?: string
+  markdownExcerpt?: string
+  markdown_excerpt?: string
+  content?: string
+  text?: string
+  error?: string
+  message?: string
+  truncated?: boolean
+  [key: string]: unknown
+}
+
+export type ExecutionReportMarkdownLoader = (
+  reportRef: string,
+) => Promise<string | ExecutionReportMarkdownPayload>
+
 /** Debug 模式下的一次工具执行块 */
 export interface ToolExecutionBlock {
   toolCallId: string
@@ -245,6 +265,8 @@ export interface NavigatorChatConfig {
   showToolCalls?: boolean
   /** 是否展示工具结果 */
   showToolResults?: boolean
+  /** 完整 Frame 执行报告 Markdown 加载器；通常由上游 BFF 代理 Worker 只读接口 */
+  executionReportMarkdownLoader?: ExecutionReportMarkdownLoader
   /**
    * 自定义请求函数（用于上游后端代理模式）
    *

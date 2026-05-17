@@ -590,10 +590,12 @@ class LlmSkillAgent:
                     child_frame_id,
                     approval_request,
                 )
+                report_payload = _child_approval_report_payload(child)
                 return {
                     "ok": True,
                     "approval_wait": True,
                     "child_frame_id": child_frame_id,
+                    **report_payload,
                     "_events": child_events,
                     "_suspended": True,
                 }
@@ -669,10 +671,12 @@ class LlmSkillAgent:
                     child.frame_id,
                     approval_request,
                 )
+                report_payload = _child_approval_report_payload(refreshed_child)
                 return {
                     "ok": True,
                     "approval_wait": True,
                     "child_frame_id": child.frame_id,
+                    **report_payload,
                     "_events": child_events,
                     "_suspended": True,
                 }
@@ -1860,6 +1864,17 @@ def _execution_report_payload_from_frame(frame: Any | None) -> dict[str, Any]:
     report_digest = state.get("execution_report_digest")
     if isinstance(report_digest, dict) and report_digest:
         payload["execution_report_digest"] = _safe_content(report_digest)
+    return payload
+
+
+def _child_approval_report_payload(child_frame: Any | None) -> dict[str, Any]:
+    payload = _execution_report_payload_from_frame(child_frame)
+    report_ref = payload.get("execution_report_ref")
+    if report_ref:
+        payload["child_execution_report_ref"] = report_ref
+    report_digest = payload.get("execution_report_digest")
+    if report_digest:
+        payload["child_execution_report_digest"] = report_digest
     return payload
 
 

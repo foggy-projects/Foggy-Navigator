@@ -39,16 +39,19 @@ public class LanggraphBusinessFunctionExecutionReportBridge implements BusinessF
         if (request == null || !StringUtils.hasText(request.getWorkerTaskId())) {
             return null;
         }
+        log.info("Reconciling frame execution report after business function result: taskId={}, suspendId={}, "
+                        + "functionId={}, success={}",
+                request.getWorkerTaskId(), request.getSuspendId(), request.getFunctionId(), request.isSuccess());
         Optional<LanggraphTaskEntity> taskOpt = taskRepository.findByTaskId(request.getWorkerTaskId());
         if (taskOpt.isEmpty()) {
-            log.debug("Skip frame report reconciliation; langgraph task not found: taskId={}",
-                    request.getWorkerTaskId());
+            log.warn("Skip frame report reconciliation; langgraph task not found: taskId={}, suspendId={}",
+                    request.getWorkerTaskId(), request.getSuspendId());
             return null;
         }
         LanggraphTaskEntity task = taskOpt.get();
         if (!StringUtils.hasText(task.getWorkerId())) {
-            log.debug("Skip frame report reconciliation; workerId is blank: taskId={}",
-                    request.getWorkerTaskId());
+            log.warn("Skip frame report reconciliation; workerId is blank: taskId={}, suspendId={}",
+                    request.getWorkerTaskId(), request.getSuspendId());
             return null;
         }
 
@@ -56,8 +59,8 @@ public class LanggraphBusinessFunctionExecutionReportBridge implements BusinessF
         var client = workerService.createClient(worker);
         Map<String, Object> response = requestReconciliationWithRetry(client, request);
         if (response == null || !Boolean.TRUE.equals(response.get("ok"))) {
-            log.debug("Frame report reconciliation did not return ok=true: taskId={}, response={}",
-                    request.getWorkerTaskId(), response);
+            log.warn("Frame report reconciliation did not return ok=true: taskId={}, suspendId={}, response={}",
+                    request.getWorkerTaskId(), request.getSuspendId(), response);
             return null;
         }
 

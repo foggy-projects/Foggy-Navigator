@@ -78,6 +78,8 @@ public class BusinessFunctionSuspensionService {
     public void setExecutionReportBridge(BusinessFunctionExecutionReportBridge executionReportBridge) {
         if (executionReportBridge != null) {
             this.executionReportBridge = executionReportBridge;
+            log.info("Business function execution report bridge configured: {}",
+                    executionReportBridge.getClass().getName());
         }
     }
 
@@ -621,10 +623,14 @@ public class BusinessFunctionSuspensionService {
             boolean hasOutputData) {
         if (!StringUtils.hasText(suspension.getWorkerTaskId())
                 || !StringUtils.hasText(suspension.getSuspendId())) {
+            log.warn("Skip business function execution report update because workerTaskId or suspendId is blank: "
+                            + "suspendId={}, workerTaskId={}, functionId={}, version={}",
+                    suspension.getSuspendId(), suspension.getWorkerTaskId(), suspension.getFunctionId(),
+                    suspension.getVersion());
             return null;
         }
         try {
-            return executionReportBridge.updateAfterBusinessFunctionResult(
+            BusinessFunctionExecutionReportUpdate update = executionReportBridge.updateAfterBusinessFunctionResult(
                     BusinessFunctionExecutionReportRequest.builder()
                             .workerTaskId(suspension.getWorkerTaskId())
                             .workerSessionId(suspension.getWorkerSessionId())
@@ -642,6 +648,13 @@ public class BusinessFunctionSuspensionService {
                             .outputCode(outputCode)
                             .hasOutputData(hasOutputData)
                             .build());
+            if (update == null) {
+                log.warn("Business function execution report update returned empty result: suspendId={}, "
+                                + "workerTaskId={}, functionId={}, version={}",
+                        suspension.getSuspendId(), suspension.getWorkerTaskId(), suspension.getFunctionId(),
+                        suspension.getVersion());
+            }
+            return update;
         } catch (Exception e) {
             log.warn("Failed to update business function execution report: suspendId={}",
                     suspension.getSuspendId(), e);

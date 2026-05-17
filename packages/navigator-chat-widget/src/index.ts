@@ -13,6 +13,8 @@ export type {
   NavigatorChatConfig,
   NavigatorChatMode,
   ExecutionReportDigest,
+  ExecutionReportMarkdownLoader,
+  ExecutionReportMarkdownPayload,
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
   BusinessSuspensionStatus,
