@@ -393,6 +393,83 @@ class SkillRegistryServiceTest {
     }
 
     @Test
+    void syncSkillBundle_materializeSkipsEmptyBundleWithoutCallingWorker() {
+        ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "http://localhost:1");
+
+        SyncSkillBundleForm form = new SyncSkillBundleForm();
+        form.setClientAppId("tms_app");
+        form.setScope("client-app-public");
+        form.setSkillId("bootstrap_skill");
+        form.setName("Bootstrap Skill");
+        form.setMaterialize(true);
+
+        when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+        when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                "tenant_1", "tms_app", "CLIENT_APP_PUBLIC", "", "bootstrap_skill")).thenReturn(Optional.empty());
+        when(skillBundleRepository.save(any(SkillBundleEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(skillRepository.findByTenantIdAndSkillId("tenant_1", "bootstrap_skill")).thenReturn(Optional.empty());
+        when(skillRepository.save(any(SkillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "bootstrap_skill")).thenReturn(Optional.empty());
+        when(grantRepository.save(any(ClientAppSkillGrantEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var dto = skillRegistryService.syncSkillBundle("tenant_1", "user_1", form);
+
+        assertNotNull(dto.getMaterializeResult());
+        assertEquals("SKIPPED_NO_CONTENT", dto.getMaterializeResult().getStatus());
+        assertNull(dto.getMaterializeResult().getWorkerStatusCode());
+        assertEquals("bootstrap_skill", dto.getSkillId());
+        verify(skillRepository).save(any(SkillEntity.class));
+        verify(grantRepository).save(any(ClientAppSkillGrantEntity.class));
+    }
+
+    @Test
+    void syncSkillBundle_materializeWorkerFailureDoesNotRollbackBundleSync() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/api/v1/skills/materialize", exchange -> {
+            byte[] response = "{\"error\":\"not ready\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(503, response.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response);
+            }
+        });
+        server.start();
+        try {
+            ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "http://localhost:" + server.getAddress().getPort());
+
+            SyncSkillBundleForm form = new SyncSkillBundleForm();
+            form.setClientAppId("tms_app");
+            form.setScope("client-app-public");
+            form.setSkillId("bootstrap_skill");
+            form.setName("Bootstrap Skill");
+            form.setMarkdownBody("Bootstrap placeholder.");
+            form.setMaterialize(true);
+
+            when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+            when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                    "tenant_1", "tms_app", "CLIENT_APP_PUBLIC", "", "bootstrap_skill")).thenReturn(Optional.empty());
+            when(skillBundleRepository.save(any(SkillBundleEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(skillRepository.findByTenantIdAndSkillId("tenant_1", "bootstrap_skill")).thenReturn(Optional.empty());
+            when(skillRepository.save(any(SkillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "bootstrap_skill")).thenReturn(Optional.empty());
+            when(grantRepository.save(any(ClientAppSkillGrantEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            var dto = skillRegistryService.syncSkillBundle("tenant_1", "user_1", form);
+
+            assertEquals("bootstrap_skill", dto.getSkillId());
+            assertNotNull(dto.getMaterializeResult());
+            assertEquals("FAILED", dto.getMaterializeResult().getStatus());
+            assertEquals(503, dto.getMaterializeResult().getWorkerStatusCode());
+            assertTrue(dto.getMaterializeResult().getWorkerResponse().contains("not ready"));
+            verify(skillBundleRepository).save(any(SkillBundleEntity.class));
+            verify(skillRepository).save(any(SkillEntity.class));
+            verify(grantRepository).save(any(ClientAppSkillGrantEntity.class));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void syncMyAccountSkillBundle_materializesAccountScope() throws Exception {
         AtomicReference<String> bodyRef = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);

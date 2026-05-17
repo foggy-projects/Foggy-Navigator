@@ -2,6 +2,7 @@
 host.env
 release.env
 *.local
+*.local.env
 *.secret
 runtime/release.env
 runtime/*.env
