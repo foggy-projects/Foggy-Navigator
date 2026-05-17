@@ -188,6 +188,7 @@ Write-Host "  codex-worker status    Check status & health" -ForegroundColor Cya
 Write-Host "  codex-worker version   Show version" -ForegroundColor Cyan
 Write-Host "  codex-worker logs      Tail log output" -ForegroundColor Cyan
 Write-Host "  codex-worker upgrade   Upgrade to new version" -ForegroundColor Cyan
+Write-Host "  codex-worker upgrade-sdk   Upgrade Codex SDK only" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Config:  $EnvPath"
 Write-Host "Logs:    $LogDir\"
