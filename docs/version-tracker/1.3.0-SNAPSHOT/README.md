@@ -19,6 +19,10 @@
 - [13-biz-worker-root-skill-context-design.md](./13-biz-worker-root-skill-context-design.md) - BizWorker root skill、业务函数虚拟 frame、上下文穿透与暂停授权设计
 - [14-biz-worker-root-skill-upstream-e2e-regression-bug.md](./14-biz-worker-root-skill-upstream-e2e-regression-bug.md) - TMS X6 upstream validation found contextVisibility materialize and approval suspend/resume regressions
 - [15-client-app-upstream-route-registry.md](./15-client-app-upstream-route-registry.md) - ClientApp-scoped upstream_ref route registry and CLI commands for issue #115
+- [16-history-session-page-content-overflow-bug.md](./16-history-session-page-content-overflow-bug.md)
+- [17-biz-worker-complex-task-plan-observer-design.md](./17-biz-worker-complex-task-plan-observer-design.md) - BizWorker complex task active_plan and read-only plan observer design
+- [18-biz-worker-complex-task-session-sample-audit.md](./18-biz-worker-complex-task-session-sample-audit.md) - Desensitized Codex/Claude session sample audit for complex task planning
+- [workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md](./workitems/BUG-021-follow-up-3-langgraph-terminal-status-after-approval-result.md) - BUG-021 follow-up terminal status persistence after approval result
 - [workitems/BUG-issue-115-world-sim-route-smoke-blocked.md](./workitems/BUG-issue-115-world-sim-route-smoke-blocked.md) - issue #115 live smoke is blocked by CLI release and control credential scope
 - [quality/biz-worker-root-skill-implementation-quality.md](./quality/biz-worker-root-skill-implementation-quality.md)
 - [coverage/biz-worker-root-skill-coverage-audit.md](./coverage/biz-worker-root-skill-coverage-audit.md)
