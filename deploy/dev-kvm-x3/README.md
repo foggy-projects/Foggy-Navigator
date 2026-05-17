@@ -132,6 +132,13 @@ dev/demo 或目标服务器部署：
 bash deploy/dev-kvm-x3/scripts/30-deploy-by-image.sh
 ```
 
+部署脚本会在 `docker compose up -d` 后等待前端和后端容器进入 healthy，并验证 HTTP 探针。默认等待窗口由远端 `release.env` 控制：
+
+```bash
+NAVIGATOR_DEPLOY_HEALTH_RETRIES=45
+NAVIGATOR_DEPLOY_HEALTH_INTERVAL_SECONDS=2
+```
+
 dev/demo 节点安装或升级 Worker：
 
 ```bash
@@ -166,6 +173,14 @@ bash deploy/dev-kvm-x3/scripts/53-smoke-tms-openapi.sh
 ```bash
 bash deploy/dev-kvm-x3/scripts/32-status-check.sh
 ```
+
+`32-status-check.sh` 默认只执行一次。需要等待启动完成时可临时设置：
+
+```bash
+NAVIGATOR_STATUS_RETRIES=45 NAVIGATOR_STATUS_INTERVAL_SECONDS=2 bash deploy/dev-kvm-x3/scripts/32-status-check.sh
+```
+
+部署脚本内部会把重试过程中的临时 HTTP 失败显示为 `waiting`；只有等待窗口耗尽后才输出最终 `FAILED`。
 
 回滚到上一个 tag：
 
@@ -212,6 +227,7 @@ bash remote/status-check.sh
 `remote/status-check.sh` 会检查：
 
 - Docker Compose 容器状态。
+- 应用容器 Docker health，`starting` 和 `unhealthy` 会被视为未就绪。
 - `http://127.0.0.1/health`
 - `http://127.0.0.1:8112/actuator/health`
 - 关键容器最近日志中的启动失败模式。
