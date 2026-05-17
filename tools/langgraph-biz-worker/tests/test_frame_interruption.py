@@ -154,6 +154,11 @@ async def test_user_cancelled_waiting_child_records_child_and_reuses_root(
     assert root.private_working_state["continuation_state"] == "INTERRUPTED"
     assert root.private_working_state["pending_recoverable_child_frame_id"] == child_frame_id
     assert root.private_working_state["pending_recoverable_child"]["skill_id"] == "child_skill"
+    assert root.private_working_state["recoverable_focus_frame_id"] == child_frame_id
+    assert root.private_working_state["recoverable_focus_kind"] == "CHILD_SKILL"
+    assert root.private_working_state["recoverable_focus_summary"]["skill_id"] == "child_skill"
+    focus_stack = root.private_working_state["recoverable_focus_stack"]
+    assert [entry["frame_id"] for entry in focus_stack] == [root_frame_id, child_frame_id]
     assert child.status == FrameStatus.RUNNING
     assert child.private_working_state["continuation_state"] == "INTERRUPTED"
     assert child.private_working_state["last_error"] == "User aborted while child skill was running"
@@ -168,3 +173,81 @@ async def test_returns_not_found_without_failing_cancel_path(client):
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "not_found"
+
+
+async def test_nested_waiting_child_records_deepest_recoverable_focus(
+    client,
+    _setup_frame_interruption_service,
+):
+    runtime = _setup_frame_interruption_service
+    root_frame_id = runtime.invoke_skill(
+        task_id="lgt_nested_cancel",
+        skill_id="system.root",
+        conversation_id="ctx-nested-child",
+        session_id="session-5",
+    )
+    child_frame_id = runtime.invoke_child_skill(
+        root_frame_id,
+        "child_skill",
+        {"order_id": "ORD-1"},
+    )
+    grandchild_frame_id = runtime.invoke_child_skill(
+        child_frame_id,
+        "grandchild_skill",
+        {"order_id": "ORD-1", "step": "deep"},
+    )
+
+    resp = await client.post("/api/v1/frames/interruption", json={
+        "taskId": "lgt_nested_cancel",
+        "session_id": "session-5",
+        "context_id": "ctx-nested-child",
+        "reason": "user_cancelled",
+        "error": "User aborted while nested child skill was running",
+    })
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "recorded"
+
+    root = runtime.get_frame(root_frame_id)
+    child = runtime.get_frame(child_frame_id)
+    grandchild = runtime.get_frame(grandchild_frame_id)
+    assert root is not None
+    assert child is not None
+    assert grandchild is not None
+    assert root.private_working_state["pending_recoverable_child_frame_id"] == child_frame_id
+    assert root.private_working_state["recoverable_focus_frame_id"] == grandchild_frame_id
+    assert root.private_working_state["recoverable_focus_kind"] == "NESTED_SKILL"
+    assert [entry["frame_id"] for entry in root.private_working_state["recoverable_focus_stack"]] == [
+        root_frame_id,
+        child_frame_id,
+        grandchild_frame_id,
+    ]
+
+    validation = runtime.shelve_recoverable_interruption(
+        frame_id=root_frame_id,
+        summary="Start an unrelated task and shelve the nested work.",
+        abandoned_interruption={"summary": "Nested child work was interrupted by the user."},
+        decision="START_UNRELATED_NEW_TASK",
+        intent_resolution="START_UNRELATED_NEW_TASK",
+    )
+
+    child = runtime.get_frame(child_frame_id)
+    grandchild = runtime.get_frame(grandchild_frame_id)
+    root = runtime.get_frame(root_frame_id)
+    assert validation.ok
+    assert root is not None
+    assert child is not None
+    assert grandchild is not None
+    assert "recoverable_focus_frame_id" not in root.private_working_state
+    assert "pending_recoverable_child_frame_id" not in root.private_working_state
+    assert child.status == FrameStatus.CANCELLED
+    assert grandchild.status == FrameStatus.CANCELLED
+    assert child.private_working_state["continuation_state"] == "SHELVED"
+    assert grandchild.private_working_state["continuation_state"] == "SHELVED"
+    history = root.private_working_state["root_context_summary"]["interruption_history"]
+    assert history[-1]["resolution"] == "START_UNRELATED_NEW_TASK"
+    assert [entry["frame_id"] for entry in history[-1]["recoverable_focus_stack"]] == [
+        root_frame_id,
+        child_frame_id,
+        grandchild_frame_id,
+    ]

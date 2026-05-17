@@ -24,6 +24,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -259,7 +260,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         });
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void completeTask(String taskId, String resultText, String structuredOutput, Long durationMs) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setStatus("COMPLETED");
@@ -271,7 +272,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         });
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void failTask(String taskId, String errorMessage) {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setStatus("FAILED");

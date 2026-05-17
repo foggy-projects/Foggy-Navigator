@@ -115,9 +115,13 @@ class LlmSkillAgent:
             return [QueryEvent(type="error", task_id=task_id, error=f"Frame not found: {frame_id}")]
         runtime_context = dict(runtime_context or {})
         if persistent_frame:
+            runtime_context["_persistent_frame"] = True
             interruption_context = _recoverable_interruption_context(frame.private_working_state)
             if interruption_context:
                 runtime_context["_recoverable_interruption"] = interruption_context
+            active_plan = _active_plan_context(frame.private_working_state)
+            if active_plan:
+                runtime_context["_active_plan"] = active_plan
 
         manifest = _manifest_for_frame(self._runtime, frame)
         if manifest is None:
@@ -668,7 +672,13 @@ class LlmSkillAgent:
                 skill_id=child.skill_id,
                 content=f"Frame closed: {child.skill_id}",
             ))
-            return {"ok": True, "result": promoted, "child_frame_id": child.frame_id, "_events": child_events}
+            return {
+                "ok": True,
+                "intent_resolution": "CONTINUE_PREVIOUS",
+                "result": promoted,
+                "child_frame_id": child.frame_id,
+                "_events": child_events,
+            }
 
         if name == "shelve_interrupted_frame":
             if not persistent_frame:
@@ -678,6 +688,7 @@ class LlmSkillAgent:
                 summary=args.get("summary", ""),
                 abandoned_interruption=args.get("abandoned_interruption"),
                 decision=args.get("decision") or "START_UNRELATED_NEW_TASK",
+                intent_resolution=args.get("intent_resolution"),
                 new_task=args.get("new_task") if isinstance(args.get("new_task"), dict) else None,
                 artifact_refs=args.get("artifact_refs"),
                 evidence_refs=args.get("evidence_refs"),
@@ -883,6 +894,8 @@ class LlmSkillAgent:
             f"SKILL_AGENT_START {skill_id}",
             _build_runtime_time_context_prompt(runtime_context),
             _build_recoverable_interruption_prompt(runtime_context, prompt),
+            _build_active_plan_prompt(runtime_context),
+            _build_root_planning_policy_prompt(runtime_context, skill_id),
             f"User request: {prompt}",
             f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}",
             _build_visible_context_prompt(runtime_context),
@@ -967,7 +980,20 @@ def _recoverable_interruption_context(working_state: dict[str, Any]) -> dict[str
     pending_child = working_state.get("pending_recoverable_child")
     if isinstance(pending_child, dict):
         context["pending_child_skill"] = _safe_content(pending_child)
+    recoverable_focus = working_state.get("recoverable_focus_summary")
+    if isinstance(recoverable_focus, dict):
+        context["recoverable_focus"] = _safe_content(recoverable_focus)
+    recoverable_focus_stack = working_state.get("recoverable_focus_stack")
+    if isinstance(recoverable_focus_stack, list):
+        context["recoverable_focus_stack"] = _safe_content(recoverable_focus_stack)
     return context
+
+
+def _active_plan_context(working_state: dict[str, Any]) -> Any | None:
+    active_plan = working_state.get("active_plan")
+    if isinstance(active_plan, (dict, list)) and active_plan:
+        return _safe_content(active_plan)
+    return None
 
 
 def _build_recoverable_interruption_prompt(
@@ -995,22 +1021,76 @@ def _build_recoverable_interruption_prompt(
             "Pending child skill: "
             f"{json.dumps(pending_child, ensure_ascii=False, sort_keys=True)}"
         )
+    recoverable_focus = interruption.get("recoverable_focus")
+    if isinstance(recoverable_focus, dict):
+        parts.append(
+            "Recoverable focus: "
+            f"{json.dumps(recoverable_focus, ensure_ascii=False, sort_keys=True)}"
+        )
+    recoverable_focus_stack = interruption.get("recoverable_focus_stack")
+    if isinstance(recoverable_focus_stack, list):
+        parts.append(
+            "Recoverable focus stack: "
+            f"{json.dumps(recoverable_focus_stack, ensure_ascii=False, sort_keys=True)}"
+        )
     parts.append(f"User's new instruction: {prompt}")
     parts.append(
         "The interrupted work is a recoverable candidate, not a mandatory "
-        "continuation. If the new instruction explicitly continues, corrects, "
-        "or supplements the interrupted work, continue from the existing frame "
-        "context. If there is a pending child skill, use "
-        "resume_recoverable_child_skill so the same child frame continues. "
-        "If the user explicitly stops/cancels it, or asks for an "
-        "unrelated new task, do not continue the interrupted work; summarize "
-        "what is being abandoned, then use shelve_interrupted_frame with "
-        "decision set to ABANDON_PREVIOUS or START_UNRELATED_NEW_TASK and "
-        "include an abandoned_interruption summary. "
+        "continuation. First resolve intent_resolution as one of "
+        "CONTINUE_PREVIOUS, ABANDON_PREVIOUS, START_UNRELATED_NEW_TASK, or "
+        "ASK_CLARIFICATION. If the new instruction explicitly continues, "
+        "corrects, or supplements the interrupted work, use CONTINUE_PREVIOUS "
+        "and continue from the existing frame context. If there is a pending "
+        "child skill, use resume_recoverable_child_skill so the same child "
+        "frame continues. If the user explicitly stops/cancels it, use "
+        "ABANDON_PREVIOUS. If the user asks for an unrelated new task, use "
+        "START_UNRELATED_NEW_TASK. For either shelving case, summarize what "
+        "is being abandoned, then use shelve_interrupted_frame with decision "
+        "set to ABANDON_PREVIOUS or START_UNRELATED_NEW_TASK, include "
+        "intent_resolution, and include an abandoned_interruption summary. "
         "If the intent is ambiguous and the interrupted work involves approval "
-        "or business side effects, ask for clarification via submit_skill_result."
+        "or business side effects, use ASK_CLARIFICATION and ask for "
+        "clarification via submit_skill_result."
     )
     return "\n".join(parts)
+
+
+def _build_active_plan_prompt(runtime_context: dict[str, Any] | None) -> str:
+    if not runtime_context:
+        return ""
+    active_plan = runtime_context.get("_active_plan")
+    if not isinstance(active_plan, (dict, list)):
+        return ""
+    return "\n".join([
+        "Active task plan:",
+        json.dumps(active_plan, ensure_ascii=False, sort_keys=True),
+        (
+            "Rule: Treat active_plan as the current persistent root working plan. "
+            "Before finalizing this turn, compare the intended result against the "
+            "plan. If the plan is still useful, preserve or update it in "
+            "submit_skill_result.structured_output.active_plan. If the user "
+            "explicitly abandons it or starts an unrelated task, set "
+            "intent_resolution to ABANDON_PREVIOUS or START_UNRELATED_NEW_TASK "
+            "and summarize the abandoned plan."
+        ),
+    ])
+
+
+def _build_root_planning_policy_prompt(
+    runtime_context: dict[str, Any] | None,
+    skill_id: str,
+) -> str:
+    if skill_id != "system.root":
+        return ""
+    if not runtime_context or runtime_context.get("_persistent_frame") is not True:
+        return ""
+    return (
+        "Persistent root planning policy: For complex, multi-intent, multi-skill, "
+        "or externally coordinated work, maintain an active_plan in "
+        "submit_skill_result.structured_output.active_plan. The plan should be "
+        "compact, structured, and updated as work progresses; it is working "
+        "state for future turns, not user-facing narration."
+    )
 
 
 def _build_visible_context_prompt(runtime_context: dict[str, Any] | None) -> str:
@@ -1392,7 +1472,14 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string"},
-                    "structured_output": {"type": "object"},
+                    "structured_output": {
+                        "type": "object",
+                        "description": (
+                            "Skill result payload. Persistent root may include "
+                            "active_plan for compact multi-turn working state "
+                            "and intent_resolution for interruption handling."
+                        ),
+                    },
                     "artifact_refs": {"type": "array", "items": {"type": "string"}},
                     "evidence_refs": {"type": "array", "items": {"type": "string"}},
                 },
@@ -1415,6 +1502,14 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "decision": {
                         "type": "string",
                         "enum": ["ABANDON_PREVIOUS", "START_UNRELATED_NEW_TASK"],
+                    },
+                    "intent_resolution": {
+                        "type": "string",
+                        "enum": ["ABANDON_PREVIOUS", "START_UNRELATED_NEW_TASK"],
+                        "description": (
+                            "Normalized intent after comparing the user's new "
+                            "instruction with the interrupted focus."
+                        ),
                     },
                     "abandoned_interruption": {
                         "type": "object",

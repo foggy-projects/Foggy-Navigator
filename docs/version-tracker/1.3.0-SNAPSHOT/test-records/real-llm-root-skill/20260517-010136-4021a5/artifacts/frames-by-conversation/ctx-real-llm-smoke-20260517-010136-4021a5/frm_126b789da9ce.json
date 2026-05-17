@@ -1,0 +1,38 @@
+{
+  "frame_id": "frm_126b789da9ce",
+  "task_id": "lgt_real_smoke_20260517-010136-4021a5_001",
+  "skill_id": "exception_triage",
+  "frame_kind": "SKILL",
+  "parent_frame_id": "frm_4ebd0b6c37b9",
+  "status": "COMPLETED",
+  "conversation_id": "ctx-real-llm-smoke-20260517-010136-4021a5",
+  "session_id": "sess-real-llm-smoke-20260517-010136-4021a5",
+  "current_task_id": "lgt_real_smoke_20260517-010136-4021a5_001",
+  "origin_task_id": "lgt_real_smoke_20260517-010136-4021a5_001",
+  "last_task_ids": [
+    "lgt_real_smoke_20260517-010136-4021a5_001"
+  ],
+  "input": {
+    "order_id": "ORD-REAL-SMOKE-001"
+  },
+  "private_messages": [],
+  "private_working_state": {},
+  "tool_calls": [],
+  "child_frame_ids": [],
+  "output": {
+    "classification": "vehicle_delay",
+    "confidence": 0.9,
+    "recommended_action": "manual_dispatch"
+  },
+  "result_summary": "异常订单 ORD-REAL-SMOKE-001 分析完成。订单状态为延迟（45分钟），关联车辆 V09 发生抛锚故障，位于 highway_section_3，错误代码为 E_MOTOR_OVERHEAT（电机过热），电池电量仅 15%。判定为车辆故障导致的延迟异常，建议手动调度替换车辆进行处置。",
+  "artifact_refs": [],
+  "evidence_refs": [
+    "mock_get_order:ORD-REAL-SMOKE-001",
+    "mock_get_vehicle_status:V09"
+  ],
+  "approval_request": null,
+  "started_at": "2026-05-16T17:01:44.471000+00:00",
+  "ended_at": "2026-05-16T17:02:08.490784+00:00",
+  "submit_attempts": 1,
+  "max_submit_attempts": 3
+}

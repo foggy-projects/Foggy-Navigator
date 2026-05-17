@@ -17,6 +17,8 @@
 | --- | --- |
 | `host.env.example` | 本地操作端 SSH、远端目录、Registry 模板。实际 `host.env` 或 `.env` 不提交。 |
 | `release.env.example` | 远端发布和运行配置模板。实际 `runtime/release.env` 不提交。 |
+| `platform-bootstrap.env.example` | 首次平台 bootstrap 模板。实际 `/opt/foggy/navigator/runtime/platform-bootstrap.env` 不提交。 |
+| `tms-upstream.env.example` | TMS 接入 Navigator 的 env 模板，不含敏感值。真实值在远端 runtime env。 |
 | `images/backend/Dockerfile` | Launcher Spring Boot 镜像。 |
 | `images/frontend/Dockerfile` | Navigator 前端 Nginx 镜像。 |
 | `runtime/docker-compose.navigator.yml` | pull + run 运行态 Compose 文件。 |
@@ -30,6 +32,10 @@
 | `scripts/40-install-workers-from-obs.sh` | 从 OBS 安装并启动启用的 Worker。 |
 | `scripts/41-update-workers-from-obs.sh` | 从 OBS 升级并重启启用的 Worker。 |
 | `scripts/42-check-workers.sh` | 检查启用的 Worker CLI 状态和健康探针。 |
+| `scripts/50-start-langgraph-biz-worker.sh` | 启动 Navigator Business Agent 使用的 LangGraph Biz Worker。 |
+| `scripts/51-bootstrap-platform.sh` | 首次平台 bootstrap：租户、管理员、LLM、Biz Worker、Worker Pool、ClientApp、TMS env。 |
+| `scripts/52-check-platform-bootstrap.sh` | 检查主应用和 LangGraph Biz Worker 健康状态。 |
+| `scripts/53-smoke-tms-openapi.sh` | 用 TMS ClientApp runtime credential 执行 runtime-token、preflight、ask、messages 烟测。 |
 | `inventory.md` | 当前部署资产、端口、依赖、密钥清单。 |
 | `deployment-report-image-release-2026-05-15.md` | 本次部署流程改造报告。 |
 
@@ -82,6 +88,9 @@ chmod 0600 /opt/foggy/navigator/runtime/release.env
 - `deploy/dev-kvm-x3/.env`
 - `deploy/dev-kvm-x3/host.env`
 - `/opt/foggy/navigator/runtime/release.env`
+- `/opt/foggy/navigator/runtime/platform-bootstrap.env`
+- `/opt/foggy/navigator/runtime/langgraph-biz-worker.env`
+- `/opt/foggy/navigator/runtime/tms-upstream.env`
 
 不要提交数据库密码、Harbor 密码、Worker token、JWT secret、凭证加密 key、TMS token、私钥。
 
@@ -129,6 +138,28 @@ dev/demo 节点安装或升级 Worker：
 bash deploy/dev-kvm-x3/scripts/40-install-workers-from-obs.sh
 bash deploy/dev-kvm-x3/scripts/42-check-workers.sh
 ```
+
+首次平台 bootstrap 或更新 TMS 接入配置：
+
+```bash
+cp deploy/dev-kvm-x3/platform-bootstrap.env.example /opt/foggy/navigator/runtime/platform-bootstrap.env
+chmod 0600 /opt/foggy/navigator/runtime/platform-bootstrap.env
+# 在 dev-kvm-x3 上填入 root 密码、LLM API key 等敏感配置后执行：
+bash deploy/dev-kvm-x3/scripts/51-bootstrap-platform.sh
+bash deploy/dev-kvm-x3/scripts/52-check-platform-bootstrap.sh
+bash deploy/dev-kvm-x3/scripts/53-smoke-tms-openapi.sh
+```
+
+该流程会在远端生成：
+
+- `/opt/foggy/navigator/runtime/langgraph-biz-worker.env`
+- `/opt/foggy/navigator/runtime/tms-upstream.env`
+- `/opt/foggy/navigator/runtime/platform-bootstrap-report.json`
+- `/opt/foggy/navigator/runtime/tms-openapi-smoke-report.json`
+
+`tms-upstream.env` 给 TMS BFF/runner 使用，包含 ClientApp runtime credential、control key、model config 和 worker pool 信息，必须只在服务器或 secret 管理系统中保存。
+
+当前 dev/demo bootstrap 默认 `NAVIGATOR_TMS_MATERIALIZE_AGENT_BUNDLE=false`：先完成 ClientApp、Business Agent、public skill 索引、model grant 和 upstream user grant。TMS 侧同步真实 function manifest / skill bundle 后，再按需打开 materialize 或通过 CLI/SDK 执行 materialize，避免首次空 bundle 依赖 Worker 文件落地能力。
 
 只检查状态：
 
@@ -191,6 +222,13 @@ Worker 由 `remote/check-workers.sh` 单独检查：
 - `http://127.0.0.1:3051/health`
 - `http://127.0.0.1:3071/health`
 
+平台 bootstrap 由 `remote/check-platform-bootstrap.sh` 单独检查：
+
+- `http://127.0.0.1:8112/actuator/health`
+- `http://127.0.0.1:3061/health`
+- `/opt/foggy/navigator/runtime/platform-bootstrap-report.json`
+- `/opt/foggy/navigator/runtime/tms-openapi-smoke-report.json`
+
 对外访问入口仍是：
 
 - 前端：`http://192.168.31.81`
@@ -201,4 +239,5 @@ Worker 由 `remote/check-workers.sh` 单独检查：
 - 前端仍依赖 monorepo workspace：`@foggy/navigator-frontend` 使用 `@foggy/chat: workspace:*`，`@foggy/chat` 使用 `@foggy/chat-core: workspace:*`。当前 build-and-push 在同一个 Git checkout 内执行 `pnpm install --no-frozen-lockfile`，并按 `chat-core -> chat -> navigator-frontend` 顺序构建。
 - 根目录 `pnpm-lock.yaml` 当前未跟踪，生产前需要决定是否提交锁文件，或将内部包发布到 Verdaccio 后切换成普通版本依赖。
 - Claude/Codex/Gemini Worker 继续使用 OBS 安装脚本分发，节点级运行态位于 `~/.claude-worker`、`~/.codex-worker`、`~/.gemini-worker`。生产前需要固化 Worker 配置、升级策略和账号/token 注入方式。
+- LangGraph Biz Worker 当前作为 Business Agent 的 Python 节点级运行态，从 `/opt/foggy/navigator/current/tools/langgraph-biz-worker` 创建 venv 启动；生产前需要决定是否改为独立镜像或 OBS 包，并固化 systemd/自启动、token 注入和回滚策略。
 - `dev-kvm-x3` 可继续启用本地 MySQL/RabbitMQ；生产建议改为外部托管依赖并设置 `NAVIGATOR_LOCAL_INFRA=false`。

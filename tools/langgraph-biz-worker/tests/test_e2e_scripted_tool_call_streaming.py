@@ -25,6 +25,8 @@ from langgraph_biz_worker.models import FrameStatus, QueryEvent
 from langgraph_biz_worker.routes import frame_interruption as frame_interruption_module
 from mock_llm.main import app as mock_llm_app
 
+LLM_SCRIPT_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "llm_scripts"
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -75,6 +77,13 @@ def _parse_worker_sse(raw_text: str) -> list[QueryEvent]:
             if payload:
                 events.append(QueryEvent(**json.loads(payload)))
     return events
+
+
+def _load_script_fixture(name: str, trace_id: str) -> dict:
+    text = (LLM_SCRIPT_FIXTURE_DIR / name).read_text(encoding="utf-8")
+    script = json.loads(text.replace("__TRACE_ID__", trace_id))
+    script["traceId"] = trace_id
+    return script
 
 
 @pytest.mark.anyio
@@ -314,6 +323,150 @@ async def test_scripted_root_skill_reuses_frame_across_tasks(monkeypatch, mock_l
     assert frame.origin_task_id == first_task_id
     assert frame.current_task_id == second_task_id
     assert frame.last_task_ids[-2:] == [first_task_id, second_task_id]
+
+
+@pytest.mark.anyio
+async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch, mock_llm_server):
+    """Root active_plan should be persisted and injected into the next mock LLM request."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-active-plan-{run_id}"
+    session_id = f"sess-e2e-active-plan-{run_id}"
+    context_id = f"ctx-e2e-active-plan-{run_id}"
+    first_task_id = f"task_e2e_active_plan_001_{run_id}"
+    second_task_id = f"task_e2e_active_plan_002_{run_id}"
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-active-plan",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Root plan created.",
+                                        "structured_output": {
+                                            "active_plan": {
+                                                "goal": "handle multi-skill shipment issue",
+                                                "status": "IN_PROGRESS",
+                                                "steps": [
+                                                    {"id": "inspect", "status": "DONE"},
+                                                    {"id": "execute", "status": "PENDING"},
+                                                ],
+                                            },
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Root plan continued.",
+                                        "structured_output": {
+                                            "active_plan": {
+                                                "goal": "handle multi-skill shipment issue",
+                                                "status": "IN_PROGRESS",
+                                                "steps": [
+                                                    {"id": "inspect", "status": "DONE"},
+                                                    {"id": "execute", "status": "DONE"},
+                                                    {"id": "summarize", "status": "PENDING"},
+                                                ],
+                                            },
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"先分析再处理运输异常 next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+        second_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"继续 next:{trace_id}:002",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    second_events = _parse_worker_sse(second_response.text)
+    first_open = next(event for event in first_events if event.type == "skill_frame_open")
+    second_open = next(event for event in second_events if event.type == "skill_frame_open")
+    assert first_open.skill_frame_id == second_open.skill_frame_id
+    assert second_open.content == "Reusing frame for skill: system.root"
+
+    frame = root_graph_module.get_runtime().get_frame(first_open.skill_frame_id)
+    assert frame is not None
+    assert frame.private_working_state["active_plan"]["steps"][1]["id"] == "execute"
+    assert frame.private_working_state["active_plan"]["steps"][1]["status"] == "DONE"
+    assert frame.private_working_state["root_context_summary"]["active_plan"]["goal"] == (
+        "handle multi-skill shipment issue"
+    )
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+    ]
+    second_user_messages = [
+        message["content"]
+        for message in records[1]["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("Active task plan:" in content for content in second_user_messages)
+    assert any("handle multi-skill shipment issue" in content for content in second_user_messages)
+    assert any("Persistent root planning policy:" in content for content in second_user_messages)
+    assert any("submit_skill_result.structured_output.active_plan" in content for content in second_user_messages)
 
 
 @pytest.mark.anyio
@@ -719,6 +872,7 @@ async def test_scripted_root_skill_shelves_interruption_for_unrelated_task(
     result = next(event for event in unrelated_events if event.type == "result")
     assert result.content == "Previous vehicle task was shelved; handled the new lookup."
     assert result.structured_output["continuation_decision"] == "START_UNRELATED_NEW_TASK"
+    assert result.structured_output["intent_resolution"] == "START_UNRELATED_NEW_TASK"
 
     frame = root_graph_module.get_runtime().get_frame(first_open.skill_frame_id)
     assert frame is not None
@@ -745,7 +899,12 @@ async def test_scripted_root_skill_shelves_interruption_for_unrelated_task(
         if message["role"] == "user"
     ]
     assert any("recoverable candidate, not a mandatory continuation" in content for content in user_messages)
+    assert any("Recoverable focus:" in content for content in user_messages)
+    assert any("Recoverable focus stack:" in content for content in user_messages)
+    assert any("CONTINUE_PREVIOUS" in content for content in user_messages)
+    assert any("ASK_CLARIFICATION" in content for content in user_messages)
     assert any("START_UNRELATED_NEW_TASK" in content for content in user_messages)
+    assert any("intent_resolution" in content for content in user_messages)
     assert any("abandoned_interruption" in content for content in user_messages)
     assert any("shelve_interrupted_frame" in content for content in user_messages)
 
@@ -893,6 +1052,7 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
     assert root.status == FrameStatus.RUNNING
     assert child.status == FrameStatus.COMPLETED
     assert "pending_recoverable_child_frame_id" not in root.private_working_state
+    assert "recoverable_focus_frame_id" not in root.private_working_state
     assert root.private_working_state["child_results"][child_frame_id]["structured_output"] == {
         "classification": "vehicle_delay",
         "recommended_action": "manual_dispatch",
@@ -914,4 +1074,179 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
         if message["role"] == "user"
     ]
     assert any("Pending child skill:" in content for content in root_user_messages)
+    assert any("Recoverable focus:" in content for content in root_user_messages)
+    assert any("Recoverable focus stack:" in content for content in root_user_messages)
+    assert any("CONTINUE_PREVIOUS" in content for content in root_user_messages)
+    assert any("ASK_CLARIFICATION" in content for content in root_user_messages)
     assert any("resume_recoverable_child_skill" in content for content in root_user_messages)
+
+
+@pytest.mark.anyio
+async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_server):
+    """Replay the accepted real-LLM smoke trace through the mock LLM service."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-real-smoke-{run_id}"
+    session_id = f"sess-e2e-real-smoke-{run_id}"
+    context_id = f"ctx-e2e-real-smoke-{run_id}"
+    first_task_id = f"task_e2e_real_smoke_001_{run_id}"
+    second_task_id = f"task_e2e_real_smoke_002_{run_id}"
+    third_task_id = f"task_e2e_real_smoke_003_{run_id}"
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json=_load_script_fixture("root_skill_real_smoke.json", trace_id),
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    frame_interruption_module.configure(
+        root_graph_module.get_runtime(),
+        root_graph_module.get_journal(),
+    )
+
+    base_context = {
+        "contextId": context_id,
+        "smokeRunId": run_id,
+        "available_skills": [
+            {
+                "id": "exception_triage",
+                "description": "Analyze exception orders using mock order and vehicle evidence.",
+            }
+        ],
+        "order_id": "ORD-REAL-SMOKE-001",
+    }
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": (
+                    "请通过 exception_triage skill 分析异常订单 ORD-REAL-SMOKE-001，"
+                    f"先收集证据，再给出处置建议。 next:{trace_id}:001"
+                ),
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": base_context,
+            },
+        )
+        first_interruption = await worker_client.post(
+            "/api/v1/frames/interruption",
+            json={
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "context_id": context_id,
+                "reason": "user_cancelled",
+                "error": "Real smoke synthetic cancellation after first turn.",
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"继续刚才被中断的异常订单处理，沿用已有上下文给出下一步。 next:{trace_id}:006",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": base_context,
+            },
+        )
+        second_interruption = await worker_client.post(
+            "/api/v1/frames/interruption",
+            json={
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "context_id": context_id,
+                "reason": "user_cancelled",
+                "error": "Real smoke synthetic cancellation before unrelated turn.",
+            },
+        )
+        unrelated_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": (
+                    "先不用处理刚才那个异常了。帮我看一个新的异常订单 "
+                    f"ORD-REAL-SMOKE-NEW 是否需要人工介入。 next:{trace_id}:012"
+                ),
+                "taskId": third_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {**base_context, "order_id": "ORD-REAL-SMOKE-NEW"},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert first_interruption.status_code == 200
+    assert first_interruption.json()["status"] == "recorded"
+    assert continued_response.status_code == 200
+    assert second_interruption.status_code == 200
+    assert second_interruption.json()["status"] == "recorded"
+    assert unrelated_response.status_code == 200
+
+    first_events = _parse_worker_sse(first_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+    unrelated_events = _parse_worker_sse(unrelated_response.text)
+
+    first_root_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    continued_root_open = next(
+        event for event in continued_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    unrelated_root_open = next(
+        event for event in unrelated_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    assert continued_root_open.skill_frame_id == first_root_open.skill_frame_id
+    assert unrelated_root_open.skill_frame_id == first_root_open.skill_frame_id
+    assert continued_root_open.content == "Reusing frame for skill: system.root"
+    assert unrelated_root_open.content == "Reusing frame for skill: system.root"
+
+    first_result = next(event for event in first_events if event.type == "result")
+    assert first_result.structured_output["classification"] == "vehicle_delay"
+    assert first_result.structured_output["recommended_action"] == "manual_dispatch"
+    assert "frm_" not in (first_result.content or "")
+    assert "lgt_" not in (first_result.content or "")
+
+    continued_result = next(event for event in continued_events if event.type == "result")
+    assert continued_result.structured_output["confidence"] == 0.95
+    assert any(
+        event.type == "tool_result" and "\"ok\": true" in (event.content or "")
+        for event in continued_events
+    )
+
+    unrelated_result = next(event for event in unrelated_events if event.type == "result")
+    assert unrelated_result.structured_output["intent_resolution"] == "START_UNRELATED_NEW_TASK"
+    assert unrelated_result.structured_output["continuation_decision"] == "START_UNRELATED_NEW_TASK"
+    assert unrelated_result.structured_output["abandoned_interruption"]["previous_order_id"] == "ORD-REAL-SMOKE-001"
+
+    frame = root_graph_module.get_runtime().get_frame(first_root_open.skill_frame_id)
+    assert frame is not None
+    assert frame.status == FrameStatus.RUNNING
+    assert frame.current_task_id == third_task_id
+    history = frame.private_working_state["root_context_summary"]["interruption_history"]
+    assert history[-2]["resolution"] == "TURN_COMPLETED"
+    assert history[-1]["resolution"] == "START_UNRELATED_NEW_TASK"
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:{index:03d}"
+        for index in range(1, 13)
+    ]

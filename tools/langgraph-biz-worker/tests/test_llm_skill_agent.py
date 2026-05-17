@@ -205,6 +205,87 @@ def test_llm_agent_persistent_frame_submit_keeps_frame_running():
     assert events[-1].type == "skill_result_submit"
 
 
+def test_llm_agent_persistent_frame_submit_persists_active_plan():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_plan_001",
+        skill_id="system.root",
+        skill_input={"request": "multi-step work"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Plan created.",
+                "structured_output": {
+                    "answer": "ok",
+                    "active_plan": {
+                        "goal": "handle multi-step work",
+                        "status": "IN_PROGRESS",
+                        "steps": [
+                            {"id": "1", "status": "DONE", "summary": "triage"},
+                            {"id": "2", "status": "PENDING", "summary": "execute"},
+                        ],
+                    },
+                },
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_plan_001",
+        frame_id=frame_id,
+        prompt="multi-step work",
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert frame.private_working_state["active_plan"]["goal"] == "handle multi-step work"
+    assert frame.private_working_state["root_context_summary"]["active_plan"]["status"] == "IN_PROGRESS"
+
+
+def test_llm_agent_persistent_frame_prompt_includes_active_plan():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_plan_prompt_001",
+        skill_id="system.root",
+        skill_input={"request": "continue plan"},
+    )
+    frame = runtime.get_frame(frame_id)
+    frame.private_working_state["active_plan"] = {
+        "goal": "deliver complex task",
+        "status": "IN_PROGRESS",
+        "steps": [{"id": "step-1", "status": "DONE"}],
+    }
+    runtime.store.save(frame)
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Plan continued.",
+                "structured_output": {"answer": "ok"},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_plan_prompt_002",
+        frame_id=frame_id,
+        prompt="继续",
+        persistent_frame=True,
+    )
+
+    user_prompt = model.seen_messages[0][1].content
+    assert "Active task plan:" in user_prompt
+    assert "deliver complex task" in user_prompt
+    assert "step-1" in user_prompt
+    assert "Persistent root planning policy:" in user_prompt
+    assert "submit_skill_result.structured_output.active_plan" in user_prompt
+    assert "intent_resolution" in user_prompt
+
+
 def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_context():
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
@@ -244,7 +325,12 @@ def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_con
     assert "upstream model timed out" in user_prompt
     assert "User's new instruction: 继续" in user_prompt
     assert "recoverable candidate, not a mandatory continuation" in user_prompt
+    assert "Recoverable focus:" in user_prompt
+    assert "Recoverable focus stack:" in user_prompt
+    assert "CONTINUE_PREVIOUS" in user_prompt
+    assert "ASK_CLARIFICATION" in user_prompt
     assert "START_UNRELATED_NEW_TASK" in user_prompt
+    assert "intent_resolution" in user_prompt
     assert "abandoned_interruption" in user_prompt
     assert "shelve_interrupted_frame" in user_prompt
 
@@ -290,6 +376,8 @@ def test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child():
 
     user_prompt = model.seen_messages[0][1].content
     assert "Pending child skill:" in user_prompt
+    assert "Recoverable focus:" in user_prompt
+    assert "Recoverable focus stack:" in user_prompt
     assert child_frame_id in user_prompt
     assert "child_skill" in user_prompt
     assert "resume_recoverable_child_skill" in user_prompt
@@ -309,6 +397,12 @@ def test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool():
         error="Cancelled by user",
         task_id="task_root_shelve_tools_001",
     )
+    frame = runtime.get_frame(frame_id)
+    frame.private_working_state["active_plan"] = {
+        "goal": "create vehicle",
+        "status": "IN_PROGRESS",
+    }
+    runtime.store.save(frame)
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_shelve",
@@ -339,12 +433,17 @@ def test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool():
     assert frame.status == FrameStatus.RUNNING
     assert frame.result_summary == "Previous vehicle task was shelved."
     assert frame.output["continuation_decision"] == "START_UNRELATED_NEW_TASK"
+    assert frame.output["intent_resolution"] == "START_UNRELATED_NEW_TASK"
     assert "continuation_state" not in frame.private_working_state
     history = frame.private_working_state["root_context_summary"]["interruption_history"]
     assert history[-1]["resolution"] == "START_UNRELATED_NEW_TASK"
     assert history[-1]["abandoned_interruption"] == {
         "summary": "Vehicle creation was cancelled before completion.",
     }
+    assert "active_plan" not in frame.private_working_state
+    plan_history = frame.private_working_state["root_context_summary"]["plan_history"]
+    assert plan_history[-1]["resolution"] == "START_UNRELATED_NEW_TASK"
+    assert plan_history[-1]["plan"]["goal"] == "create vehicle"
 
 
 def test_llm_agent_root_resumes_pending_recoverable_child_frame():
@@ -412,7 +511,13 @@ def test_llm_agent_root_resumes_pending_recoverable_child_frame():
     assert root.output == {"root_continued_child": True}
     assert child_frame_id in root.private_working_state["child_results"]
     assert "pending_recoverable_child_frame_id" not in root.private_working_state
+    assert "recoverable_focus_frame_id" not in root.private_working_state
     assert any(event.tool_name == "resume_recoverable_child_skill" for event in events)
+    assert any(
+        event.tool_name == "resume_recoverable_child_skill"
+        and '"intent_resolution": "CONTINUE_PREVIOUS"' in event.content
+        for event in events
+    )
     assert any(
         event.type == "skill_frame_open"
         and event.skill_frame_id == child_frame_id
@@ -467,8 +572,55 @@ def test_llm_agent_shelve_clears_pending_recoverable_child_frame():
     assert child is not None
     assert "pending_recoverable_child_frame_id" not in root.private_working_state
     assert "pending_recoverable_child" not in root.private_working_state
+    assert "recoverable_focus_frame_id" not in root.private_working_state
     assert child.status == FrameStatus.CANCELLED
     assert child.private_working_state["continuation_state"] == "SHELVED"
+
+
+def test_llm_agent_ask_clarification_keeps_recoverable_focus():
+    runtime = _root_with_child_runtime()
+    root_frame_id = runtime.invoke_skill(
+        task_id="task_root_clarify_child_001",
+        skill_id="system.root",
+        conversation_id="sess_clarify_child",
+        session_id="sess_clarify_child",
+    )
+    child_frame_id = runtime.invoke_child_skill(root_frame_id, "child_skill", {"order_id": "ORD-3"})
+    runtime.record_recoverable_child_interruption(
+        root_frame_id,
+        reason="user_cancelled",
+        error="Cancelled during child",
+        task_id="task_root_clarify_child_001",
+    )
+    runtime.record_recoverable_interruption(
+        root_frame_id,
+        reason="user_cancelled",
+        error="Cancelled during child",
+        task_id="task_root_clarify_child_001",
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Need clarification before continuing.",
+                "structured_output": {"intent_resolution": "ASK_CLARIFICATION"},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_clarify_child_002",
+        frame_id=root_frame_id,
+        prompt="随便吧",
+        persistent_frame=True,
+    )
+
+    root = runtime.get_frame(root_frame_id)
+    assert root is not None
+    assert root.private_working_state["continuation_state"] == "INTERRUPTED"
+    assert root.private_working_state["pending_recoverable_child_frame_id"] == child_frame_id
+    assert root.private_working_state["recoverable_focus_frame_id"] == child_frame_id
 
 
 def test_llm_agent_non_persistent_frame_does_not_expose_shelve_tool():

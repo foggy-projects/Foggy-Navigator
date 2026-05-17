@@ -1,0 +1,312 @@
+{
+  "run_id": "20260517-010136-4021a5",
+  "started_at": "2026-05-17T01:01:36.915024+08:00",
+  "completed_at": "2026-05-17T01:03:37.630943+08:00",
+  "base_url": "http://localhost:3061",
+  "session_id": "sess-real-llm-smoke-20260517-010136-4021a5",
+  "context_id": "ctx-real-llm-smoke-20260517-010136-4021a5",
+  "data_root": "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\tools\\langgraph-biz-worker\\data",
+  "health": {
+    "hostname": "foggy",
+    "version": "0.1.0",
+    "active_tasks": 0,
+    "worker_name": ""
+  },
+  "steps": [
+    {
+      "name": "01-root-delegate-exception-triage",
+      "task_id": "lgt_real_smoke_20260517-010136-4021a5_001",
+      "prompt": "请通过 exception_triage skill 分析异常订单 ORD-REAL-SMOKE-001，先收集证据，再给出处置建议。",
+      "interruption": null,
+      "event_count": 15,
+      "terminal_events": [
+        {
+          "type": "result",
+          "content": "异常订单 ORD-REAL-SMOKE-001 分析完成。\n\n**证据收集：**\n- 订单证据：订单状态为延迟（已延迟45分钟）\n- 车辆证据：关联车辆 V09 在 highway_section_3 发生抛锚故障\n\n**异常诊断：**\n- 错误代码：E_MOTOR_OVERHEAT（电机过热）\n- 电池电量：仅 15%\n- 异常分类：vehicle_delay（车辆故障导致的延迟）\n- 置信度：90%\n\n**处置建议：**\n- 推荐操作：manual_dispatch（手动调度替换车辆）\n- 建议立即调度备用车辆前往 highway_section_3 替换故障车辆 V09，以恢复订单配送。",
+          "error": null,
+          "structured_output": {
+            "order_id": "ORD-REAL-SMOKE-001",
+            "status": "delayed",
+            "delay_minutes": 45,
+            "vehicle_id": "V09",
+            "location": "highway_section_3",
+            "error_code": "E_MOTOR_OVERHEAT",
+            "error_description": "电机过热",
+            "battery_level": 15,
+            "classification": "vehicle_delay",
+            "confidence": 0.9,
+            "recommended_action": "manual_dispatch",
+            "disposal_suggestion": "立即调度备用车辆前往 highway_section_3 替换故障车辆 V09，以恢复订单配送"
+          }
+        }
+      ],
+      "tool_events": [
+        {
+          "type": "tool_use",
+          "tool_name": "invoke_business_skill",
+          "skill_id": "system.root",
+          "content": "invoke_business_skill",
+          "error": null
+        },
+        {
+          "type": "tool_use",
+          "tool_name": "mock_get_order",
+          "skill_id": "exception_triage",
+          "content": "mock_get_order",
+          "error": null
+        },
+        {
+          "type": "tool_result",
+          "tool_name": "mock_get_order",
+          "skill_id": "exception_triage",
+          "content": "{\"ok\": true, \"result\": {\"order_id\": \"ORD-REAL-SMOKE-001\", \"status\": \"delayed\", \"delay_minutes\": 45, \"vehicle_id\": \"V09\", \"origin\": \"warehouse_A\", \"destination\": \"customer_B\", \"created_at\": \"2026-04-13T08:00:00Z\"}}",
+          "error": null
+        },
+        {
+          "type": "tool_use",
+          "tool_name": "mock_get_vehicle_status",
+          "skill_id": "exception_triage",
+          "content": "mock_get_vehicle_status",
+          "error": null
+        },
+        {
+          "type": "tool_result",
+          "tool_name": "mock_get_vehicle_status",
+          "skill_id": "exception_triage",
+          "content": "{\"ok\": true, \"result\": {\"vehicle_id\": \"V09\", \"status\": \"breakdown\", \"location\": \"highway_section_3\", \"last_heartbeat\": \"2026-04-13T08:30:00Z\", \"battery_level\": 0.15, \"error_code\": \"E_MOTOR_OVERHEAT\"}}",
+          "error": null
+        },
+        {
+          "type": "tool_use",
+          "tool_name": "submit_skill_result",
+          "skill_id": "exception_triage",
+          "content": "submit_skill_result",
+          "error": null
+        },
+        {
+          "type": "tool_result",
+          "tool_name": "invoke_business_skill",
+          "skill_id": "system.root",
+          "content": "{\"ok\": true, \"result\": {\"frame_id\": \"frm_126b789da9ce\", \"skill_id\": \"exception_triage\", \"result_summary\": \"异常订单 ORD-REAL-SMOKE-001 分析完成。订单状态为延迟（45分钟），关联车辆 V09 发生抛锚故障，位于 highway_section_3，错误代码为 E_MOTOR_OVERHEAT（电机过热），电池电量仅 15%。判定为车辆故障导致的延迟异常，建议手动调度替换车辆进行处置。\", \"structured_output\": {\"classification\": \"vehicle_delay\", \"confidence\": 0.9, \"recommended_action\": \"manual_dispatch\"}, \"evidence_refs\": [\"mock_get_order:ORD-REAL-SMOKE-001\", \"mock_get_vehicle_status:V09\"]}}",
+          "error": null
+        },
+        {
+          "type": "skill_frame_open",
+          "tool_name": null,
+          "skill_id": "exception_triage",
+          "content": "Opening frame for skill: exception_triage",
+          "error": null
+        },
+        {
+          "type": "skill_frame_close",
+          "tool_name": null,
+          "skill_id": "exception_triage",
+          "content": "Frame closed: exception_triage",
+          "error": null
+        },
+        {
+          "type": "tool_use",
+          "tool_name": "submit_skill_result",
+          "skill_id": "system.root",
+          "content": "submit_skill_result",
+          "error": null
+        },
+        {
+          "type": "skill_frame_open",
+          "tool_name": null,
+          "skill_id": "system.root",
+          "content": "Opening frame for skill: system.root",
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "02-root-continue-after-interruption",
+      "task_id": "lgt_real_smoke_20260517-010136-4021a5_002",
+      "prompt": "继续刚才被中断的异常订单处理，沿用已有上下文给出下一步。",
+      "interruption": {
+        "task_id": "lgt_real_smoke_20260517-010136-4021a5_001",
+        "frame_id": "frm_4ebd0b6c37b9",
+        "status": "recorded",
+        "message": "Recoverable interruption recorded"
+      },
+      "event_count": 17,
+      "terminal_events": [
+        {
+          "type": "result",
+          "content": "异常订单 ORD-REAL-SMOKE-001 诊断完成。\n\n**异常原因：** 配送车辆 V09 发生电机过热故障（E_MOTOR_OVERHEAT），且电量仅剩15%，导致订单延迟45分钟。\n\n**异常分类：** vehicle_delay（车辆延迟）\n**置信度：** 95%\n**建议措施：** manual_dispatch（人工调度替换车辆）\n\n**证据来源：** mock_get_order:ORD-REAL-SMOKE-001, mock_get_vehicle_status:V09",
+          "error": null,
+          "structured_output": {
+            "order_id": "ORD-REAL-SMOKE-001",
+            "classification": "vehicle_delay",
+            "confidence": 0.95,
+            "root_cause": "Vehicle V09 motor overheating (E_MOTOR_OVERHEAT) with critically low battery (15%)",
+            "delay_minutes": 45,
+            "recommended_action": "manual_dispatch",
+            "evidence_refs": [
+              "mock_get_order:ORD-REAL-SMOKE-001",
+              "mock_get_vehicle_status:V09"
+            ]
+          }
+        }
+      ],
+      "tool_events": [
+        {
+          "type": "tool_use",
+          "tool_name": "invoke_business_skill",
+          "skill_id": "system.root",
+          "content": "invoke_business_skill",
+          "error": null
+        },
+        {
+          "type": "tool_use",
+          "tool_name": "mock_get_order",
+          "skill_id": "exception_triage",
+          "content": "mock_get_order",
+          "error": null
+        },
+        {
+          "type": "tool_result",
+          "tool_name": "mock_get_order",
+          "skill_id": "exception_triage",
+          "content": "{\"ok\": true, \"result\": {\"order_id\": \"ORD-REAL-SMOKE-001\", \"status\": \"delayed\", \"delay_minutes\": 45, \"vehicle_id\": \"V09\", \"origin\": \"warehouse_A\", \"destination\": \"customer_B\", \"created_at\": \"2026-04-13T08:00:00Z\"}}",
+          "error": null
+        },
+        {
+          "type": "tool_use",
+          "tool_name": "mock_get_vehicle_status",
+          "skill_id": "exception_triage",
+          "content": "mock_get_vehicle_status",
+          "error": null
+        },
+        {
+          "type": "tool_result",
+          "tool_name": "mock_get_vehicle_status",
+          "skill_id": "exception_triage",
+          "content": "{\"ok\": true, \"result\": {\"vehicle_id\": \"V09\", \"status\": \"breakdown\", \"location\": \"highway_section_3\", \"last_heartbeat\": \"2026-04-13T08:30:00Z\", \"battery_level\": 0.15, \"error_code\": \"E_MOTOR_OVERHEAT\"}}",
+          "error": null
+        },
+        {
+          "type": "tool_use",
+          "tool_name": "submit_skill_result",
+          "skill_id": "exception_triage",
+          "content": "submit_skill_result",
+          "error": null
+        },
+        {
+          "type": "tool_use",
+          "tool_name": "submit_skill_result",
+          "skill_id": "exception_triage",
+          "content": "submit_skill_result",
+          "error": null
+        },
+        {
+          "type": "tool_result",
+          "tool_name": "invoke_business_skill",
+          "skill_id": "system.root",
+          "content": "{\"ok\": true, \"result\": {\"frame_id\": \"frm_c84099f9119b\", \"skill_id\": \"exception_triage\", \"result_summary\": \"订单 ORD-REAL-SMOKE-001 异常诊断完成：车辆 V09 发生电机过热故障（E_MOTOR_OVERHEAT）且电量极低（15%），导致订单延迟45分钟。分类为 vehicle_delay，建议采取 manual_dispatch（人工调度替换车辆）。\", \"structured_output\": {\"classification\": \"vehicle_delay\", \"confidence\": 0.95, \"recommended_action\": \"manual_dispatch\"}, \"evidence_refs\": [\"mock_get_order:ORD-REAL-SMOKE-001\", \"mock_get_vehicle_status:V09\"]}}",
+          "error": null
+        },
+        {
+          "type": "skill_frame_open",
+          "tool_name": null,
+          "skill_id": "exception_triage",
+          "content": "Opening frame for skill: exception_triage",
+          "error": null
+        },
+        {
+          "type": "skill_frame_close",
+          "tool_name": null,
+          "skill_id": "exception_triage",
+          "content": "Frame closed: exception_triage",
+          "error": null
+        },
+        {
+          "type": "tool_use",
+          "tool_name": "submit_skill_result",
+          "skill_id": "system.root",
+          "content": "submit_skill_result",
+          "error": null
+        },
+        {
+          "type": "skill_frame_open",
+          "tool_name": null,
+          "skill_id": "system.root",
+          "content": "Reusing frame for skill: system.root",
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "03-root-shelve-for-unrelated-task",
+      "task_id": "lgt_real_smoke_20260517-010136-4021a5_003",
+      "prompt": "先不用处理刚才那个异常了。帮我看一个新的异常订单 ORD-REAL-SMOKE-NEW 是否需要人工介入。",
+      "interruption": {
+        "task_id": "lgt_real_smoke_20260517-010136-4021a5_002",
+        "frame_id": "frm_4ebd0b6c37b9",
+        "status": "recorded",
+        "message": "Recoverable interruption recorded"
+      },
+      "event_count": 5,
+      "terminal_events": [
+        {
+          "type": "result",
+          "content": "User requested to abandon previous exception analysis (ORD-REAL-SMOKE-001) and start a new task to analyze a different exception order (ORD-REAL-SMOKE-NEW) for manual intervention needs.",
+          "error": null,
+          "structured_output": {
+            "continuation_decision": "START_UNRELATED_NEW_TASK",
+            "intent_resolution": "START_UNRELATED_NEW_TASK",
+            "abandoned_interruption": {
+              "previous_order_id": "ORD-REAL-SMOKE-001",
+              "task": "Analyze exception order for manual intervention",
+              "status": "Interrupted by user cancellation"
+            },
+            "new_task": {
+              "order_id": "ORD-REAL-SMOKE-NEW",
+              "task": "Analyze new exception order for manual intervention needs"
+            }
+          }
+        }
+      ],
+      "tool_events": [
+        {
+          "type": "tool_use",
+          "tool_name": "shelve_interrupted_frame",
+          "skill_id": "system.root",
+          "content": "shelve_interrupted_frame",
+          "error": null
+        },
+        {
+          "type": "tool_result",
+          "tool_name": "shelve_interrupted_frame",
+          "skill_id": "system.root",
+          "content": "{\"ok\": true, \"errors\": [], \"structured_output\": {\"continuation_decision\": \"START_UNRELATED_NEW_TASK\", \"intent_resolution\": \"START_UNRELATED_NEW_TASK\", \"abandoned_interruption\": {\"previous_order_id\": \"ORD-REAL-SMOKE-001\", \"task\": \"Analyze exception order for manual intervention\", \"status\": \"Interrupted by user cancellation\"}, \"new_task\": {\"order_id\": \"ORD-REAL-SMOKE-NEW\", \"task\": \"Analyze new exception order for manual intervention needs\"}}}",
+          "error": null
+        },
+        {
+          "type": "skill_frame_open",
+          "tool_name": null,
+          "skill_id": "system.root",
+          "content": "Reusing frame for skill: system.root",
+          "error": null
+        }
+      ]
+    }
+  ],
+  "artifacts": {
+    "frames_by_task": [
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\real-llm-root-skill\\20260517-010136-4021a5\\artifacts\\frames-by-task\\lgt_real_smoke_20260517-010136-4021a5_001",
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\real-llm-root-skill\\20260517-010136-4021a5\\artifacts\\frames-by-task\\lgt_real_smoke_20260517-010136-4021a5_002",
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\real-llm-root-skill\\20260517-010136-4021a5\\artifacts\\frames-by-task\\lgt_real_smoke_20260517-010136-4021a5_003"
+    ],
+    "frames_by_conversation": [
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\real-llm-root-skill\\20260517-010136-4021a5\\artifacts\\frames-by-conversation\\ctx-real-llm-smoke-20260517-010136-4021a5"
+    ],
+    "tool_audit": [
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\real-llm-root-skill\\20260517-010136-4021a5\\artifacts\\tool-audit\\lgt_real_smoke_20260517-010136-4021a5_001.jsonl",
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\real-llm-root-skill\\20260517-010136-4021a5\\artifacts\\tool-audit\\lgt_real_smoke_20260517-010136-4021a5_002.jsonl",
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\real-llm-root-skill\\20260517-010136-4021a5\\artifacts\\tool-audit\\lgt_real_smoke_20260517-010136-4021a5_003.jsonl"
+    ],
+    "conversation_logs": []
+  }
+}

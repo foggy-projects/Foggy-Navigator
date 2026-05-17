@@ -279,7 +279,7 @@ public class SkillRegistryService {
 
         SkillBundleDTO dto = SkillBundleDTO.fromEntity(saved);
         if (Boolean.TRUE.equals(form.getMaterialize())) {
-            dto.setMaterializeResult(materializeSkillBundleInternal(tenantId, saved));
+            dto.setMaterializeResult(materializeSkillBundleBestEffort(tenantId, saved));
         }
         return dto;
     }
@@ -660,7 +660,9 @@ public class SkillRegistryService {
             result.setWorkerResponse(response.body());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 result.setStatus("FAILED");
-                throw new IllegalStateException("Worker skill materialize failed: HTTP " + response.statusCode() + " " + response.body());
+                throw new MaterializeFailedException(
+                        "Worker skill materialize failed: HTTP " + response.statusCode() + " " + response.body(),
+                        result);
             }
 
             result.setStatus("MATERIALIZED");
@@ -673,7 +675,74 @@ public class SkillRegistryService {
             if (e instanceof IllegalStateException) {
                 throw (IllegalStateException) e;
             }
-            throw new IllegalStateException("Worker skill materialize failed", e);
+            result.setStatus("FAILED");
+            result.setWorkerResponse(e.getMessage());
+            throw new MaterializeFailedException("Worker skill materialize failed", e, result);
+        }
+    }
+
+    private SkillMaterializeResultDTO materializeSkillBundleBestEffort(String tenantId, SkillBundleEntity bundle) {
+        if (!hasMaterializableBundlePayload(bundle)) {
+            SkillMaterializeResultDTO result = newBundleMaterializeResult(bundle);
+            result.setStatus("SKIPPED_NO_CONTENT");
+            result.setWorkerResponse("skill bundle has no markdown, resources, or functions to materialize");
+            log.warn("Skip skill bundle materialize for skill {} clientApp {} scope {}: no markdown, resources, or functions",
+                    bundle.getSkillId(), bundle.getClientAppId(), bundle.getScope());
+            return result;
+        }
+
+        try {
+            return materializeSkillBundleInternal(tenantId, bundle);
+        } catch (MaterializeFailedException e) {
+            log.warn("Skill bundle materialize best-effort failed for skill {} clientApp {} scope {}: {}",
+                    bundle.getSkillId(), bundle.getClientAppId(), bundle.getScope(), e.getMessage());
+            return e.getResult() != null ? e.getResult() : failedBundleMaterializeResult(bundle, e.getMessage());
+        } catch (Exception e) {
+            log.warn("Skill bundle materialize best-effort failed for skill {} clientApp {} scope {}: {}",
+                    bundle.getSkillId(), bundle.getClientAppId(), bundle.getScope(), e.getMessage());
+            return failedBundleMaterializeResult(bundle, e.getMessage());
+        }
+    }
+
+    private boolean hasMaterializableBundlePayload(SkillBundleEntity bundle) {
+        return StringUtils.hasText(bundle.getMarkdownBody())
+                || !parseResourcesJson(bundle.getResourcesJson()).isEmpty()
+                || !parseFunctionsJson(bundle.getFunctionsJson()).isEmpty();
+    }
+
+    private SkillMaterializeResultDTO newBundleMaterializeResult(SkillBundleEntity bundle) {
+        boolean accountScope = SCOPE_ACCOUNT_PRIVATE.equals(bundle.getScope());
+        SkillMaterializeResultDTO result = new SkillMaterializeResultDTO();
+        result.setSkillId(bundle.getSkillId());
+        result.setScope(accountScope ? "account" : "public");
+        result.setClientAppId(bundle.getClientAppId());
+        result.setAccountId(accountScope ? bundle.getAccountId() : null);
+        result.setWorkerUrl(devSyncWorkerUrl);
+        return result;
+    }
+
+    private SkillMaterializeResultDTO failedBundleMaterializeResult(SkillBundleEntity bundle, String message) {
+        SkillMaterializeResultDTO result = newBundleMaterializeResult(bundle);
+        result.setStatus("FAILED");
+        result.setWorkerResponse(message);
+        return result;
+    }
+
+    private static class MaterializeFailedException extends IllegalStateException {
+        private final SkillMaterializeResultDTO result;
+
+        MaterializeFailedException(String message, SkillMaterializeResultDTO result) {
+            super(message);
+            this.result = result;
+        }
+
+        MaterializeFailedException(String message, Throwable cause, SkillMaterializeResultDTO result) {
+            super(message, cause);
+            this.result = result;
+        }
+
+        SkillMaterializeResultDTO getResult() {
+            return result;
         }
     }
 

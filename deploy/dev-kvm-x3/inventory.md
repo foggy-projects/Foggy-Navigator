@@ -24,6 +24,7 @@
 | Claude Agent Worker | OBS 安装包 / `claude-worker` CLI | 不进入 Navigator 镜像链路 | `3031` | `/health` |
 | Codex Worker | OBS 安装包 / `codex-worker` CLI | 不进入 Navigator 镜像链路 | `3051` | `/health` |
 | Gemini Worker | OBS 安装包 / `gemini-worker` CLI | 不进入 Navigator 镜像链路 | `3071` | `/health` |
+| LangGraph Biz Worker | `tools/langgraph-biz-worker` + venv | 不进入主应用镜像链路 | `3061` | `/health` |
 | MySQL | Docker Compose | `mysql:8.0` | `13309 -> 3306` | `mysqladmin ping` |
 | RabbitMQ | Docker Compose override | `rabbitmq:3-management-alpine` | `5672`, `15672` | `rabbitmq-diagnostics ping` |
 
@@ -47,6 +48,9 @@
 | `WORKER_INSTALL_CLAUDE` / `WORKER_INSTALL_CODEX` / `WORKER_INSTALL_GEMINI` | dev/demo 节点启用哪些 OBS Worker | 否 |
 | `CLAUDE_WORKER_URL` / `CODEX_WORKER_URL` / `GEMINI_WORKER_URL` | OBS Worker 安装包地址 | 否 |
 | Worker 本地 `.env` | Worker token、模型账号、工作目录等节点级配置 | 是 |
+| `platform-bootstrap.env` | 首次平台 bootstrap 输入：root 密码、LLM API key、租户、ClientApp、worker pool | 是 |
+| `langgraph-biz-worker.env` | LangGraph Biz Worker runtime env、worker token、LLM key | 是 |
+| `tms-upstream.env` | TMS 接入 Navigator 的 ClientApp runtime credential、control key、model/workerPool | 是 |
 | `NAVIGATOR_STOP_LEGACY_SOURCE` | 首次镜像切换时停止旧源码部署占用的 app 端口 | 否 |
 
 ## 远端目录
@@ -71,6 +75,10 @@
 | Worker 注册目标 | `http://dev-kvm-jdk17.foggysource.com/` 对应 Navi，当前 DNS 指向 `192.168.31.22` |
 | Worker 记录 | `dev-kvm-x3-worker` / `93bf1a65` / `ONLINE` |
 | Claude 工作目录 | Navigator 记录 `dev-kvm-x3-root` -> `/`；远端 Claude Worker 白名单 `AGENT_WORKER_ALLOWED_CWDS=["/"]` |
+| 平台 bootstrap env | `/opt/foggy/navigator/runtime/platform-bootstrap.env` |
+| TMS upstream env | `/opt/foggy/navigator/runtime/tms-upstream.env` |
+| 平台 bootstrap 报告 | `/opt/foggy/navigator/runtime/platform-bootstrap-report.json` |
+| TMS OpenAPI smoke 报告 | `/opt/foggy/navigator/runtime/tms-openapi-smoke-report.json` |
 
 ## Docker 命名
 
@@ -93,6 +101,9 @@
 | `@foggy/chat-core` / `@foggy/chat` workspace 依赖 | dev/demo 可 monorepo 构建；生产发布前建议发布内部包到 Verdaccio 或保留 `chat-core -> chat -> navigator-frontend` 的 release 构建规范。 |
 | Maven 私服依赖 | dev-kvm-x3 已可构建；生产构建节点需要复用 Maven settings，不应依赖开发者本机 `.m2`。 |
 | Worker 节点运行态 | 当前沿用 OBS 安装包；生产前需要确认 Worker 安装目录、systemd/自启动、账号/token 注入和升级回滚策略。 |
+| LangGraph Biz Worker 运行态 | 当前由源码目录创建 Python venv 并由脚本启动；生产前需要确认是否改为镜像或 OBS 包，以及 systemd、token 注入、升级回滚策略。 |
+| Agent bundle materialize | dev/demo 当前默认只在 Navigator 侧注册 bundle/grant，不立即 materialize 到 Worker；TMS 同步真实 skill/function bundle 后再按需启用。 |
+| Git provider | 未提供 GitHub token 时不要伪造平台 Git 配置；Business Agent/TMS 接入可先运行，生产前补齐平台 Git Provider。 |
 | 本地 MySQL/RabbitMQ | dev/demo 可继续使用；生产应切到外部数据库/消息队列并关闭本地 infra profile。 |
 | Harbor HTTP | 所有 build/run 节点都要配置 Docker `insecure-registries`。 |
 | Codex Worker 认证 | dev-kvm-x3 上 Codex Worker 已启动，但当前 health 显示 `codex_auth_configured=false`；生产或正式 demo 前需要固化 Codex CLI/API 认证。 |

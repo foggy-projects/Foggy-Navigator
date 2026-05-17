@@ -654,6 +654,506 @@ User's new instruction: <new prompt>
 18. `tools/langgraph-biz-worker` 全量 pytest：`388 passed, 6 skipped`
 19. Java reactor 到 `addons/langgraph-biz-worker`：`mvn -pl addons/langgraph-biz-worker -am -Dsurefire.failIfNoSpecifiedTests=false test` 通过
 
+### Stage 5: recoverable focus frame and intent resolution
+
+Stage 4 已经解决了 root frame 复用、child skill 中断后继续、以及用户切换任务时搁置旧 child 的基础问题。Stage 5 的目标是把这些能力从“child skill 专用分支”提升为更通用的 frame focus 机制，并让 root prompt 明确区分用户新输入到底是在继续旧任务、放弃旧任务、开启无关新任务，还是需要澄清。
+
+#### 1. 通用 recoverable focus frame
+
+当前实现以 `pending_recoverable_child_frame_id` 和 `pending_recoverable_child` 表达“当前可恢复 child”。该字段可以保留为兼容层，但后续主语义应迁移到 `recoverable_focus_*`：
+
+1. `recoverable_focus_frame_id`：当前最值得恢复的 frame ID。
+2. `recoverable_focus_kind`：`ROOT | CHILD_SKILL | FUNCTION_CALL | APPROVAL | NESTED_SKILL`。
+3. `recoverable_focus_status`：`INTERRUPTED | AWAITING_USER | AWAITING_APPROVAL | FAILED | SHELVED | RESUMED`。
+4. `recoverable_focus_interrupted_at`：中断发生时间。
+5. `recoverable_focus_summary`：给 root LLM 使用的压缩摘要，包含 skill/function、reason、error、last tool call、pending action、用户可见风险。
+6. `recoverable_focus_stack`：从 root 到最深 active frame 的 stack 快照，用于后续支持嵌套 skill 恢复。
+
+短期实现要求：
+
+1. child skill 中断时，同时写入旧字段和新字段。
+2. `resume_recoverable_child_skill` 继续使用旧字段兼容现有 E2E，但 prompt 优先展示 `recoverable_focus_summary`。
+3. 搁置、完成、恢复 focus 时，同时清理旧字段和新字段。
+4. 不在 Stage 5 直接删除任何 `pending_recoverable_child_*` 字段，避免破坏上游验证脚本和旧 journal。
+
+#### 2. 显式 intent resolution
+
+用户在中断后输入新内容时，root LLM 需要先判断新输入与上一个 focus frame 的关系。Stage 5 固化以下枚举：
+
+1. `CONTINUE_PREVIOUS`：用户明确继续、补充、修正上一任务。执行策略是恢复 `recoverable_focus_frame_id`，child skill 场景调用 `resume_recoverable_child_skill`。
+2. `ABANDON_PREVIOUS`：用户明确中止、放弃、不再处理上一任务。执行策略是总结旧 focus 并调用 `shelve_interrupted_frame`。
+3. `START_UNRELATED_NEW_TASK`：用户提出明显无关的新任务。执行策略是先搁置旧 focus，再按新任务继续 root loop。
+4. `ASK_CLARIFICATION`：用户意图不明，且继续可能触发审批、业务副作用或错误业务动作。执行策略是向用户澄清，不恢复旧 focus，也不擅自搁置。
+
+实现口径：
+
+1. root prompt 明示这四种 intent，并要求模型在调用 `shelve_interrupted_frame` 或提交 persistent result 时写入 `intent_resolution`。
+2. `shelve_interrupted_frame` 继续接受旧的 `decision = ABANDON_PREVIOUS | START_UNRELATED_NEW_TASK`，并可附加 `intent_resolution`，runtime 内部归一后写入 `structured_output.intent_resolution`。
+3. 对 `CONTINUE_PREVIOUS`，工具结果需要回写 `intent_resolution=CONTINUE_PREVIOUS`，方便审计和 E2E 断言。
+4. 对 `ASK_CLARIFICATION`，不新增强制工具；模型可以直接通过 `submit_skill_result` 回复澄清问题，但结构化输出中应保留该 intent。
+
+#### 3. 分层 context summary
+
+root frame 会长期存在，不能简单把所有历史全部注入每次 LLM prompt。Stage 5 将 root 侧可压缩上下文明确分层：
+
+1. `root_context_summary.recent_turns`：最近若干轮用户输入、root 输出和关键 tool result。
+2. `root_context_summary.business_facts`：已确认的业务实体、参数、约束、用户偏好。
+3. `root_context_summary.pending_actions`：待用户确认、待审批、待恢复、待重试的动作。
+4. `root_context_summary.focus_history`：曾经中断、恢复、搁置、完成的 focus 摘要。
+5. `root_context_summary.artifact_refs` / `evidence_refs`：大对象、附件、执行证据只保留引用，不重复灌入 prompt。
+6. `root_context_summary.audit_refs`：审批、授权、业务函数执行记录的审计引用。
+
+实现口径：
+
+1. Stage 5 先补 focus 相关 summary 写入，不立刻实现完整 token-budget 收敛器。
+2. 之后当 root prompt 超预算时，按上述层级做压缩：recent window 优先保留，旧 turn 收敛为 business facts、pending actions、focus history 和 refs。
+3. Java 侧仍保留完整会话、事件、审批与业务执行记录；Worker summary 只作为模型工作上下文，不作为权威历史。
+
+#### 4. 嵌套 focus stack
+
+由于 skill 支持嵌套，未来中断点可能不是 root 的直接 child，而是 `root -> skill A -> skill B -> function/approval`。Stage 5 明确以下路线：
+
+1. 中断发生时，runtime 应寻找最深的 non-terminal active descendant，作为 `recoverable_focus_frame_id`。
+2. `recoverable_focus_stack` 记录 root 到该 frame 的路径，每一层包含 `frame_id`、`skill_id`、`frame_kind`、`status`、`input` 摘要和 `parent_frame_id`。
+3. 继续时，root prompt 看到的是“当前 focus 在某个嵌套 frame 内”，而不是只看到直接 child。
+4. 第一阶段恢复执行仍可沿用“恢复 root 的直接 child frame”的实现，只要 stack 元数据已经存在；真正递归恢复到最深 frame 可以作为后续 Stage。
+5. 搁置时，需要把 stack 上未完成 frame 都标记为已搁置或可审计的取消状态，防止后续旧 frame 被误恢复。
+
+#### Stage 5 完成标准
+
+1. child skill 中断后，root working state 同时具备 `pending_recoverable_child_*` 和 `recoverable_focus_*` 字段。
+2. root 新 turn prompt 能看到 `recoverable_focus_summary`、`recoverable_focus_stack` 和四类 `intent_resolution` 规则。
+3. 用户输入“继续”时，mock LLM 可基于 prompt 调用 `resume_recoverable_child_skill`，同一个 child frame 被恢复，完成后新旧 focus 字段都被清理。
+4. 用户明确中止或提出无关任务时，mock LLM 可调用 `shelve_interrupted_frame`，structured output 记录归一后的 `intent_resolution`，新旧 focus 字段都被清理。
+5. waiting-child 中断的 frame interruption 回归测试断言 focus stack 存在，且至少包含 root 和 child。
+6. 不破坏 BUG-021 及 follow-up 的审批恢复、业务函数结果回写和 task terminal status 收敛逻辑。
+
+#### Stage 5 实现进展
+
+已完成：
+
+1. Python Worker runtime 新增 `recoverable_focus_frame_id`、`recoverable_focus_kind`、`recoverable_focus_status`、`recoverable_focus_interrupted_at`、`recoverable_focus_summary`、`recoverable_focus_stack` 写入和清理逻辑。
+2. waiting-child 中断时，root 会同时保留旧的 `pending_recoverable_child_*` 字段和新的 `recoverable_focus_*` 字段；`record_recoverable_interruption` 不再覆盖 child interruption 已写入的 focus。
+3. `recoverable_focus_stack` 已按 root 到最深 active descendant 生成。当前恢复执行仍保持兼容：`resume_recoverable_child_skill` 恢复 root 的直接 child frame；stack 元数据为后续深层递归恢复做准备。
+4. `resume_recoverable_child_skill` 成功工具结果回写 `intent_resolution=CONTINUE_PREVIOUS`。
+5. `shelve_interrupted_frame` 支持并归一 `intent_resolution`，structured output 同时保留旧的 `continuation_decision`，兼容现有前端和上游断言。
+6. `submit_persistent_turn_result` 对 `intent_resolution=ASK_CLARIFICATION` 保留 recoverable focus 和 pending child，避免用户澄清后无法继续旧 frame。
+7. root recoverable prompt 已注入 `Recoverable focus`、`Recoverable focus stack` 和四类 intent policy：`CONTINUE_PREVIOUS`、`ABANDON_PREVIOUS`、`START_UNRELATED_NEW_TASK`、`ASK_CLARIFICATION`。
+8. root context summary 的 `interruption_history` 会记录 focus 摘要；同时维护 `focus_history`，作为后续分层上下文收敛的起点。
+
+测试证据：
+
+1. `tests/test_frame_interruption.py::test_user_cancelled_waiting_child_records_child_and_reuses_root`
+   - 断言 waiting-child 中断后 root 具备 `recoverable_focus_*`，且 stack 包含 root 和 child。
+2. `tests/test_llm_skill_agent.py::test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_context`
+   - 断言 root prompt 包含 focus、focus stack、四类 intent 和 `intent_resolution`。
+3. `tests/test_llm_skill_agent.py::test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child`
+   - 断言 pending child 与 recoverable focus 同时出现在 prompt。
+4. `tests/test_llm_skill_agent.py::test_llm_agent_root_resumes_pending_recoverable_child_frame`
+   - 断言继续后同一个 child frame 被恢复，且新旧 focus 字段清理。
+5. `tests/test_llm_skill_agent.py::test_llm_agent_shelve_clears_pending_recoverable_child_frame`
+   - 断言搁置后 pending child 和 recoverable focus 均清理，child 标记为 `CANCELLED + SHELVED`。
+6. `tests/test_llm_skill_agent.py::test_llm_agent_ask_clarification_keeps_recoverable_focus`
+   - 断言 `ASK_CLARIFICATION` 不丢失中断 focus，用户后续仍可继续。
+7. `tests/test_frame_interruption.py::test_nested_waiting_child_records_deepest_recoverable_focus`
+   - 断言嵌套 skill 中断时 focus 指向最深 active descendant，搁置时 stack 上未完成 frame 均进入 `CANCELLED + SHELVED`。
+8. `tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_root_skill_shelves_interruption_for_unrelated_task`
+   - mock LLM E2E 断言无关新任务搁置旧 focus，result 带 `intent_resolution`。
+9. `tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_root_skill_resumes_interrupted_child_frame`
+   - mock LLM E2E 断言“继续”恢复同一个 child frame，prompt 具备 focus 与 intent 信息。
+10. 相关定向回归：`40 passed, 3 warnings`。
+11. `tools/langgraph-biz-worker` 全量 pytest：`390 passed, 6 skipped, 10 warnings`。
+
+#### Stage 5 收口验证（2026-05-17）
+
+本轮收口重点验证“用户中止 / 模型调用失败 / 审批拒绝后，下一轮用户输入可以在当前 recoverable frame 上继续规划”，并确认 Java 可见任务链路与 Python Worker frame runtime 的契约一致。
+
+代码链路复核：
+
+1. Java `LanggraphTaskService.cancelTask(...)` 会在任务标记 `ABORTED` 后调用 Worker `/api/v1/frames/interruption`，reason 为 `user_cancelled`。
+2. Java `LanggraphStreamRelay.handleStreamError(...)` 会在任务 `FAILED` 前记录 recoverable interruption，reason 为 `stream_error`。
+3. Java `LanggraphWorkerClient.recordInterruption(...)` 发送 `taskId`、`session_id`、`context_id`、`reason`、`error` 和上下文快照。
+4. Python Worker `/api/v1/frames/interruption` 会优先按 `taskId`，再按 conversation/context/session 查找 `system.root`，并支持 `RUNNING`、`WAITING_CHILD`、`AWAITING_APPROVAL` root frame。
+5. `WAITING_CHILD` root 会记录 child recoverable focus；`AWAITING_APPROVAL` root 在 `user_cancelled` / `approval_rejected` 下先归一为 rejected，再记录 root recoverable interruption。
+
+验证结果：
+
+1. Java reactor：`mvn -pl addons/langgraph-biz-worker -am '-Dsurefire.failIfNoSpecifiedTests=false' test`
+   - `820` tests, `0` failures, `0` errors, `0` skipped。
+   - 覆盖 `LanggraphWorkerClientTest.recordInterruption_postsRecoverableFramePayload`、`LanggraphTaskServiceTest.cancelTask_records_recoverable_interruption_on_worker`、`LanggraphStreamRelayTest.streamErrorRecordsRecoverableInterruptionBeforeFailingTask`、approval resume/result listener 相关回归。
+2. Python Worker：`.\.venv\Scripts\python.exe -m pytest`
+   - `390 passed, 6 skipped, 10 warnings`。
+   - 覆盖 mock LLM E2E：继续同一 interrupted child、无关任务搁置旧 focus、root prompt 注入 focus stack 与 intent policy。
+3. `git diff --check` 已纳入收口检查；当前仅文档文件在 Windows 下提示 LF/CRLF 转换风险，无代码空白错误。
+
+质量自检结论：
+
+1. 本轮实现保持在 Python Worker runtime / root LLM prompt / mock E2E 测试范围，Java 侧未改业务代码，只做契约复核和测试验证。
+2. `pending_recoverable_child_*` 仍保留，避免破坏现有上游脚本和旧 journal；新增 `recoverable_focus_*` 作为通用机制承载后续演进。
+3. `ASK_CLARIFICATION` 明确保留 recoverable focus，避免用户澄清阶段丢失中断 frame。
+4. 自检发现并修复一个嵌套 focus 清理边界：`shelve_recoverable_interruption` 先提交 turn result 会清掉 focus 字段，导致后续只清直接 child。修复后会在提交前捕获 focus frame ids，再清理整条 stack；`test_nested_waiting_child_records_deepest_recoverable_focus` 已改为走真实 shelve 路径验证。
+5. 嵌套 frame 当前已能记录最深 active descendant 并在搁置时清理 stack；递归恢复到最深 frame 仍是后续增强项，当前恢复执行仍兼容恢复 root 的直接 child。
+6. 本轮未执行真实 TMS 上游链路；真实环境复验仍需在包含本 Worker 代码的运行产物发布/重启后，由上游按 CLI + mock/真实 adapter 场景复测。
+
+### Stage 6: agent delegation frame design
+
+本节仅做设计落档，不进入本轮实现。当前系统进入 frame 的主要方式是 `SKILL` 和 `FUNCTION_CALL`。后续可以补一个受控的 agent delegation 能力，让 root skill 或普通 skill 在需要时主动创建“子 agent frame”，用于开放式分析、计划拆解、代码审查、并行资料核对等不适合建成固定业务 skill 的任务。
+
+#### 设计结论
+
+建议支持，但不应让 LLM 任意创建裸 frame。模型只能通过平台暴露的 delegation tool 创建受控 frame，例如：
+
+1. `invoke_agent_frame`：同步调用一个子 agent，父 frame 进入等待，子 agent 结束后 promoted result 回到父 frame。
+2. `invoke_parallel_agent_frames`：后续扩展，用一个 delegation group 并发创建多个子 agent frame，父 frame 等待聚合结果。
+3. `create_detached_agent_run`：后续扩展，在当前会话外创建独立 agent run/session，通过 correlation ID 与当前 root frame 关联，完成后以结果消息、artifact refs 或 follow-up task 的方式回流。
+
+这类能力与 `invoke_business_skill` 的关系：
+
+1. `invoke_business_skill` 适合稳定、可注册、可授权、可复用的业务能力。
+2. `invoke_agent_frame` 适合临时的、开放式的、偏推理/分析/审查/拆解的子任务。
+3. 业务函数仍只应通过 skill/agent frame 内的受控工具调用，不能因为 agent delegation 绕过授权、审批和审计。
+
+#### 两种执行域
+
+这里必须区分两个容易混淆的能力：
+
+1. `IN_SESSION_FRAME`：在当前 root/skill 会话内进入一个 child frame。
+2. `DETACHED_SESSION`：创建一个独立于当前会话上下文的 agent run/session，但通过 delegation 关系与当前会话关联。
+
+二者不是同一种实现的同步/异步版本，而是不同的上下文与生命周期模型。
+
+##### IN_SESSION_FRAME
+
+`IN_SESSION_FRAME` 适合“当前任务内的子推理/子执行”：
+
+1. 子 agent 是当前 frame stack 的一部分。
+2. 父 frame 通常进入 `WAITING_CHILD`。
+3. 子 agent 只能看到父 frame 按 `context_visibility` 暴露的 summary / refs / passthrough 内容。
+4. 子 agent 结果通过 close/promote 回到父 frame。
+5. 中断、继续、搁置直接复用 `recoverable_focus_stack`。
+6. 可见消息、tool audit、审批恢复默认归属当前 `lgt_*` task/context。
+
+它的优点是语义强、上下文连续、结果确定性回到当前 loop。缺点是会占住当前 root/skill loop，不适合长时间后台任务或大量并发探索。
+
+##### DETACHED_SESSION
+
+`DETACHED_SESSION` 适合“委派一个独立 agent 去后台处理，然后把结果带回当前会话”：
+
+1. runtime 创建新的 worker task/session/conversation，或调用平台现有 Agent 任务接口创建独立执行。
+2. 当前 root frame 不必进入 `WAITING_CHILD`，可以继续响应用户。
+3. 当前 root frame 只记录 `delegation_run_id`、`correlation_id`、`delegation_summary`、`handoff_artifact_refs` 和期望结果 schema。
+4. detached agent 不默认看到当前 root private context，只能收到显式 handoff bundle：
+   - task instruction
+   - 必要业务事实
+   - artifact/evidence refs
+   - 权限快照
+   - 输出契约
+   - 回调/结果投递目标
+5. detached agent 完成后，通过 deterministic result message 写回当前可见 context，或创建一条可被 root 下轮 prompt 读取的 `delegated_agent_result_message`。
+6. 如果用户之后输入“继续”，root LLM 可以看到 delegation run 状态，再决定等待、读取结果、取消 detached run，或继续当前任务。
+
+它的优点是可以长时间运行、并发运行、隔离上下文污染。缺点是结果回流、取消、权限快照、审计和 UI 展示都更复杂。
+
+#### 推荐边界
+
+1. “进入当前任务的子上下文”使用 `invoke_agent_frame`，属于 `IN_SESSION_FRAME`。
+2. “开一个独立 agent 会话去办事”使用 `create_detached_agent_run`，属于 `DETACHED_SESSION`。
+3. `invoke_parallel_agent_frames` 第一阶段应只表示当前会话内的并发 child frames；如果要后台并发，应另设 `create_parallel_detached_agent_runs` 或让 `create_detached_agent_run` 支持 batch。
+4. detached run 不能继承完整主上下文，只能继承显式 handoff bundle。
+5. detached run 的业务函数权限必须使用用户授权快照和函数级 policy，不允许因为独立会话而扩大权限。
+6. detached run 的审批如果需要用户参与，应把 approval request 回写到原 visible context，避免审批卡在用户看不到的后台会话里。
+7. detached run 完成、失败、取消都必须写一条 deterministic result message 回原 context；是否让 LLM 再总结是后续策略，不作为结果投递的前提。
+
+#### FrameKind 规划
+
+后续可扩展：
+
+```text
+FrameKind = SKILL | FUNCTION_CALL | AGENT_CALL | AGENT_GROUP
+```
+
+其中：
+
+1. `AGENT_CALL` 表示一次子 agent 委派，拥有独立 system prompt、input、private messages、working state、tool audit 和 output contract。
+2. `AGENT_GROUP` 表示一组并发 `AGENT_CALL` 的父级聚合 frame，也可以只作为 root/parent working state 中的 `delegation_group` 记录，是否实体化留到实现阶段决定。
+3. `recoverable_focus_kind` 后续可扩展 `AGENT_CALL | AGENT_GROUP`，复用 Stage 5 的 focus stack、中断、继续、搁置机制。
+4. `DETACHED_SESSION` 不一定要实体化为 `FrameKind`；更合理的是新增 `DelegationRun` / `AgentRunRef` 记录，并在 root frame summary 中保存引用。如果为了统一 UI 和审计，也可以在父 frame 下创建一个轻量 `AGENT_RUN_REF` proxy frame，但不应把 detached run 的完整私有上下文塞回当前 root frame。
+
+#### Agent manifest / profile
+
+子 agent 不应完全自由生成，应来自注册的 agent profile 或由 root 在受控 schema 下临时创建：
+
+1. `agent_id` / `agent_name`
+2. `instruction`：该 agent 的职责和边界。
+3. `context_visibility`：默认 `summary`，只有平台内置或显式授权才能 `passthrough`。
+4. `allowed_tools`：必须是父 frame allowlist 的子集，不能提权。
+5. `allowed_business_functions`：必须继承用户授权和父 frame 授权，不能扩大权限。
+6. `output_schema`：子 agent 必须提交结构化结果。
+7. `max_turns` / `timeout` / `token_budget`
+8. `side_effect_policy`：`read_only | approval_required | side_effect_allowed`。
+9. `concurrency_policy`：是否允许与其他 agent 并发执行。
+
+默认策略：
+
+1. 临时 agent 默认 `read_only`。
+2. 并发 agent 默认不能直接执行有副作用业务函数；如需执行，必须走 approvalRequired 或由父 frame 串行确认。
+3. 子 agent 只能看到任务 prompt、父 frame 可见 summary、必要 artifact/evidence refs；不默认看到完整主上下文。
+
+#### 同步调用语义
+
+第一阶段建议只实现同步单子 agent：
+
+1. 父 frame 调用 `invoke_agent_frame`。
+2. runtime 创建 `AGENT_CALL` child frame。
+3. 父 frame 进入 `WAITING_CHILD`。
+4. 子 agent 在独立 loop 中运行，调用 `submit_agent_result` 或复用 `submit_skill_result` 提交结果。
+5. runtime close child frame，按 output contract promote 到父 frame。
+6. 父 frame 恢复 RUNNING，继续原 root/skill loop。
+
+这一路径可最大化复用现有 child skill 生命周期、journal、recoverable focus 和审批恢复能力。
+
+#### 并发调用语义
+
+并发能力建议作为第二阶段，不直接混入同步实现：
+
+1. 父 frame 调用 `invoke_parallel_agent_frames`，传入多个 agent spec。
+2. runtime 创建 `delegation_group_id`，并创建多个 `AGENT_CALL` child frame。
+3. 每个 child frame 独立运行，输出 `agent_result`。
+4. 聚合策略必须显式声明：
+   - `all_settled`：等待全部完成，失败也收集。
+   - `fail_fast`：任一失败即停止剩余未完成 agent。
+   - `first_success`：首个成功结果返回，其余取消。
+   - `quorum`：达到 N 个成功后返回。
+5. 父 frame 不直接读取 child private context，只接收 promoted result、artifact refs、evidence refs 和审计引用。
+6. 并发子 agent 的 stream progress 统一归属到可见 root task/context，消息 metadata 需带 `delegation_group_id` 和 `agent_frame_id`。
+
+需要注意：如果子 agent 可执行副作用函数，并发会引入幂等、重复审批、资源争用和顺序依赖问题。因此并发第一阶段应限制为 read-only 或 approvalRequired，禁止无审批副作用并发。
+
+#### 中断、继续和搁置
+
+agent delegation 必须复用 Stage 5：
+
+1. 单个子 agent 中断时，root/parent 记录 `recoverable_focus_kind=AGENT_CALL`。
+2. 并发组中断时，root/parent 记录 `recoverable_focus_kind=AGENT_GROUP`，summary 中列出每个 child 的状态。
+3. 用户输入“继续”时，先按 intent resolution 判断是否恢复 agent frame/group。
+4. 用户明确切换任务时，搁置 agent frame/group；未完成 child frame 进入 `CANCELLED + SHELVED`，已完成结果保留在 focus history。
+5. `ASK_CLARIFICATION` 继续保持 recoverable focus，直到用户明确继续或搁置。
+6. detached run 被取消或失败时，root frame 记录的是 delegation run 状态，而不是直接恢复 detached run 的内部 loop；用户要求继续时，可以选择重新派发、读取已有 partial artifacts，或转为当前会话内 frame 继续。
+
+#### 非目标
+
+1. 本轮不实现 `AGENT_CALL` / `AGENT_GROUP`。
+2. 本轮不实现 `DETACHED_SESSION` / `DelegationRun`。
+3. 不把模型升级成可任意创建 frame 或任意创建独立任务的低层 runtime controller。
+4. 不允许子 agent 或 detached agent 绕过 user grant、function allowlist、approvalRequired 和 business audit。
+5. 不在第一阶段支持无审批副作用函数并发执行。
+6. 不要求并发 agent 共享私有上下文；共享只通过父 frame summary、artifact refs 和 promoted result。
+7. 不把 detached run 的完整消息历史自动灌回当前 root prompt。
+
+#### 后续实施建议
+
+1. Stage 6A：实现同步 `AGENT_CALL`，复用 child skill 生命周期，只新增 agent profile、tool schema 和 output contract。
+2. Stage 6B：接入 recoverable focus，对 `AGENT_CALL` 的中断、继续、搁置做单测和 mock LLM E2E。
+3. Stage 6C：实现 `DETACHED_SESSION` 单 agent run，只支持显式 handoff bundle、deterministic result message 和取消。
+4. Stage 6D：实现 read-only 并发 `AGENT_GROUP`，先不允许副作用业务函数。
+5. Stage 6E：补 detached/parallel 的聚合策略、资源上限、UI/SSE 展示和审计查询。
+
+## 真实冒烟与 Mock 固化计划
+
+### 目标
+
+本轮交付前需要做一次真实 LLM 冒烟采样，先确认模型在真实 prompt 下能按 root skill 设计自然选择工具、复用 frame、处理“继续/切换任务”意图。真实 LLM 采样通过后，再把模型返回的 tool-call 序列固化为 LLM Mock 脚本，后续 E2E 默认只依赖 Mock，不依赖真实模型可用性。
+
+真实冒烟不直接替代自动化 E2E。它的定位是：
+
+1. 采集真实模型返回。
+2. 验证提示词和工具契约是否足够清晰。
+3. 产出可审核的 SSE、frame journal、tool audit 证据。
+4. 从通过样本中提炼稳定的 mock `turns`。
+
+### 真实冒烟用例
+
+#### RS-01：root skill 调用子 skill 并提交结果
+
+输入：用户要求通过 `exception_triage` 分析异常订单 `ORD-REAL-SMOKE-001`。
+
+预期：
+
+1. Worker 打开 `system.root` frame。
+2. root LLM 调用 `invoke_business_skill(skill_id=exception_triage)`。
+3. child skill 调用 `mock_get_order`、`mock_get_vehicle_status` 收集证据。
+4. child skill 调用 `submit_skill_result`，输出 `classification/recommended_action/confidence`。
+5. root skill 收到 child promoted result 后调用 `submit_skill_result` 完成本轮。
+
+采集重点：
+
+1. root LLM 的 `invoke_business_skill` 参数。
+2. child LLM 的证据工具调用顺序。
+3. root final summary 是否未泄漏内部 frame/task id。
+
+#### RS-02：同一 context 下 root frame 复用
+
+输入：在同一 `session_id/contextId` 下发起第二个 task。
+
+预期：
+
+1. 第二个 task 的 `skill_frame_open` 为 `Reusing frame for skill: system.root`。
+2. frame journal 中 `system.root` 的 `frame_id` 保持不变。
+3. `current_task_id` 更新为新 task，root 私有上下文继续保留。
+
+采集重点：
+
+1. 两次 SSE 的 `skill_frame_id`。
+2. `data/frames/by-conversation/<contextId>` 的 root frame 快照。
+
+#### RS-03：用户输入“继续”后沿用 recoverable 上下文
+
+输入：在第一轮后通过 `POST /api/v1/frames/interruption` 记录一次 `user_cancelled`，随后用户输入“继续刚才被中断的异常订单处理”。
+
+预期：
+
+1. interruption endpoint 返回 `recorded`。
+2. root prompt 中注入 recoverable interruption 描述。
+3. LLM 将意图识别为继续前一任务；若存在 child focus，使用 `resume_recoverable_child_skill`，否则在当前 root frame 中继续规划并 `submit_skill_result`。
+4. `ASK_CLARIFICATION` 也可接受，但必须是有业务副作用或意图不清时的明确澄清，而不是丢失上下文。
+
+采集重点：
+
+1. root LLM 对“继续”的真实意图判断。
+2. 是否保留中断前 root/child 上下文。
+3. 终态是否仍保持 root frame 可复用。
+
+#### RS-04：用户切换到不相关任务时搁置中断上下文
+
+输入：再次记录 `user_cancelled` 后，用户明确说“先不用处理刚才那个异常了”，并提出新异常订单。
+
+预期：
+
+1. root LLM 调用 `shelve_interrupted_frame`。
+2. `decision/intent_resolution` 为 `START_UNRELATED_NEW_TASK` 或 `ABANDON_PREVIOUS`。
+3. `abandoned_interruption` 包含被搁置工作的摘要。
+4. root frame 的 `interruption_history` 留存搁置记录，新任务继续使用当前 root frame。
+
+采集重点：
+
+1. `shelve_interrupted_frame` 参数质量。
+2. `interruption_history` 是否可用于后续“再继续刚才那个”类需求。
+
+#### RS-05：真实业务函数审批链路
+
+输入：通过 TMS public skill 触发 `tms.vehicle.create v1` approvalRequired 链路。
+
+预期：
+
+1. root skill -> TMS child skill -> `invoke_business_function`。
+2. 审批前 root/child/function frame 状态正确。
+3. 审批后 deterministic `post_approval_message` 与 `business_function_result_message` 写回可见 `lgt_*` task/context。
+4. adapter 成功和失败均能触发 task terminal status 收敛。
+
+说明：此用例依赖 Java 后端、TMS grant、adapter token 和上游服务状态，作为第二阶段真实集成冒烟；第一阶段先用 builtin mock business tools 采集真实 LLM tool-call 行为。
+
+### 采集脚本
+
+新增脚本：
+
+```text
+tools/langgraph-biz-worker/scripts/real_llm_smoke_capture.py
+```
+
+默认调用 `http://localhost:3061` 上已经运行的 Worker，输出到：
+
+```text
+docs/version-tracker/1.3.0-SNAPSHOT/test-records/real-llm-root-skill/<run-id>/
+```
+
+每次采集保存：
+
+1. 每个 step 的原始 SSE 文本。
+2. 每个 step 解析后的 SSE events。
+3. interruption endpoint 响应。
+4. `data/frames/<taskId>` 与 `data/frames/by-conversation/<contextId>` frame journal 快照。
+5. `data/logs/skill-tool-calls/<taskId>.jsonl` 工具调用审计。
+6. `summary.json`，汇总 terminal events、tool events、artifact 路径。
+
+### Mock 固化规则
+
+真实样本只有同时满足以下条件才允许固化为 LLM Mock：
+
+1. 通过 RS-01 至 RS-04 的核心断言。
+2. LLM tool-call 参数符合当前工具 schema。
+3. 最终 summary 不暴露内部 frame/task/session id。
+4. `intent_resolution` 明确，且与用户输入一致。
+5. 工具调用链可复现，没有依赖随机文本或真实外部状态。
+
+固化时只保留必要的 LLM 返回：
+
+1. root turn 的 `invoke_business_skill` / `submit_skill_result` / `shelve_interrupted_frame` / `resume_recoverable_child_skill`。
+2. child skill 的 `mock_get_order` / `mock_get_vehicle_status` / `submit_skill_result`。
+3. 每个 turn 使用 `next:<traceId>:NNN` cursor 注册到 mock-llm-service。
+
+后续 E2E 启动前先注册这些 mock turns，再执行 Worker API 测试，避免真实 LLM 波动影响回归。
+
+### 2026-05-17 真实冒烟采样结果
+
+采样环境：
+
+1. Worker：`tools/langgraph-biz-worker`，使用 `.env.real-llm.local` 重启后执行。
+2. LLM：真实 OpenAI-compatible endpoint，模型配置来自本地 real LLM env。
+3. 采样脚本：`tools/langgraph-biz-worker/scripts/real_llm_smoke_capture.py`。
+4. 证据目录：`docs/version-tracker/1.3.0-SNAPSHOT/test-records/real-llm-root-skill/20260517-010136-4021a5/`。
+
+执行结果：
+
+1. RS-01 通过：root LLM 调用 `invoke_business_skill(exception_triage)`；child LLM 依次调用 `mock_get_order`、`mock_get_vehicle_status`、`submit_skill_result`；root 最终 `submit_skill_result`。
+2. RS-02 通过：三次 task 在同一 `contextId` 下复用同一个 `system.root` frame：`frm_4ebd0b6c37b9`；后续 SSE 为 `Reusing frame for skill: system.root`。
+3. RS-03 通过：记录 `user_cancelled` 后，用户输入“继续”时 root 沿用 recoverable 上下文继续处理，并最终提交 `TURN_COMPLETED`；本轮无 pending child focus，因此模型选择重新委派 `exception_triage`，没有丢失上下文。
+4. RS-04 通过：用户明确说“先不用处理刚才那个异常了”时，root 调用 `shelve_interrupted_frame`，`intent_resolution=START_UNRELATED_NEW_TASK`，并在 `interruption_history` 留存 `abandoned_interruption`。
+5. 额外观察：第二轮 child skill 第一次 `submit_skill_result` 漏传 `evidence_refs`，runtime 返回校验错误后，真实 LLM 自动补齐 `evidence_refs` 并重新提交成功。这说明 tool-call loop 的 validation feedback 自纠错链路有效，已纳入 Mock 回归。
+6. RS-05 未在本轮执行：真实 TMS approvalRequired 依赖 Java 后端、TMS grant、adapter token 和上游服务状态，留作第二阶段真实集成冒烟。
+
+采样产物：
+
+1. `summary.json`：本次 run 的 step、terminal events、tool events、artifact 路径汇总。
+2. `*.events.json`：每个 Worker query 的解析后 SSE。
+3. `artifacts/tool-audit/*.jsonl`：真实 LLM tool-call request/response。
+4. `artifacts/frames-by-conversation/*`：root frame 与 child frame journal 快照。
+
+### 2026-05-17 Mock E2E 固化结果
+
+已将通过采样中的 LLM tool-call 序列固化为：
+
+```text
+tools/langgraph-biz-worker/tests/fixtures/llm_scripts/root_skill_real_smoke.json
+```
+
+新增回归：
+
+```text
+tools/langgraph-biz-worker/tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_root_skill_real_smoke_fixture
+```
+
+覆盖内容：
+
+1. E2E 启动时注册 fixture 到 mock-llm-service 的 `POST /__e2e/scripts`。
+2. 通过 cursor `next:<traceId>:001..012` 重放真实采样中的 root/child tool-call loop。
+3. 断言 root frame 复用。
+4. 断言 root final summary 不泄漏 `frm_`、`lgt_` 等内部 ID。
+5. 断言继续后能完成前一任务。
+6. 断言用户切换任务时 `START_UNRELATED_NEW_TASK` 被写入 root `interruption_history`。
+
+验证命令：
+
+```powershell
+cd tools/langgraph-biz-worker
+.\.venv\Scripts\python.exe -m pytest tests\test_e2e_scripted_tool_call_streaming.py::test_scripted_root_skill_real_smoke_fixture -q
+.\.venv\Scripts\python.exe -m pytest tests\test_e2e_scripted_tool_call_streaming.py -q
+```
+
+验证结果：
+
+1. 单条新增 E2E：`1 passed, 3 warnings`。
+2. scripted tool-call E2E 文件：`7 passed, 3 warnings`。
+
 ## 待确认问题
 
 1. root skill ID 决定使用 `system.root`。`system.*` 命名空间为平台内置保留，普通 ClientApp 不能创建、覆盖或删除。
