@@ -3508,8 +3508,13 @@ watch(() => taskForm.value.model, () => {
  * 这样点击不同会话时，"API: xxx" 和 "模型: xxx" 标签会跟随切换。
  */
 function findSessionModelConfig(task: ClaudeTask): LlmModelConfig | null {
-  const configId = task.modelConfigId
-  if (configId) {
+  const sessionConfig = workerState.conversationConfigs.value.get(task.sessionId)
+  const configIds = [
+    sessionConfig?.authBound ? sessionConfig.authModelConfigId : undefined,
+    task.modelConfigId,
+  ].filter(Boolean) as string[]
+
+  for (const configId of configIds) {
     const config = platformModels.value.find((m) => m.id === configId)
     if (config) return config
   }

@@ -214,6 +214,23 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
     updatedAt: '2026-02-16T00:00:00Z',
   }
 
+  const mockCodexModelConfig: LlmModelConfig = {
+    id: 'config-codex',
+    tenantId: 'tenant-1',
+    name: 'Codex API Key',
+    category: 'CODING',
+    baseUrl: 'https://codex.example.test/v1',
+    modelName: 'codex-latest',
+    isDefault: false,
+    hasApiKey: true,
+    scope: 'GLOBAL',
+    availableModels: ['codex-latest', 'codex-fast'],
+    workerBackend: 'OPENAI_CODEX',
+    sortOrder: 3,
+    createdAt: '2026-02-16T00:00:00Z',
+    updatedAt: '2026-02-16T00:00:00Z',
+  }
+
   const mockResumedTask: ClaudeTask = {
     taskId: 'task-2',
     sessionId: 'session-2',
@@ -404,6 +421,41 @@ describe('ClaudeWorkerView - Resume Task Integration', () => {
 
       expect(vm.platformModelConfigId).toBe('config-gemini')
       expect(vm.taskForm.model).toBe('gemini-pro')
+    })
+
+    it('should prefer conversation auth model config over stale task modelConfigId when opening history', async () => {
+      vi.mocked(platformApi.listModelConfigs).mockResolvedValue([
+        mockClaudeModelConfig,
+        mockCodexModelConfig,
+      ])
+
+      const wrapper = mount(ClaudeWorkerView, { global: commonGlobal })
+      await flushPromises()
+
+      const vm = wrapper.vm as any
+      vm.selectedWorkerId = 'worker-1'
+      await vm.loadPlatformModelConfig()
+      await flushPromises()
+
+      expect(vm.platformModelConfigId).toBe('config-claude')
+
+      vm.workerState.conversationConfigs.value.set('session-1', {
+        sessionId: 'session-1',
+        pinned: false,
+        authBound: true,
+        authMode: 'CUSTOM_ENDPOINT',
+        authModelConfigId: 'config-codex',
+      })
+
+      vm.restoreSessionModelSelection({
+        ...mockCompletedTask,
+        modelConfigId: 'config-claude',
+        model: 'opus[1m]',
+      })
+      await flushPromises()
+
+      expect(vm.platformModelConfigId).toBe('config-codex')
+      expect(vm.taskForm.model).toBe('codex-latest')
     })
   })
 
