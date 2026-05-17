@@ -144,6 +144,51 @@ class TestPersistentTurnResult:
         assert summary["artifact_refs"] == ["art_1"]
         assert summary["evidence_refs"] == ["ev_1"]
 
+    def test_persistent_turn_result_persists_active_plan(self, runtime: SkillRuntime):
+        fid = runtime.invoke_skill("t", "test_skill")
+
+        result = runtime.submit_persistent_turn_result(
+            fid,
+            "plan started",
+            {
+                "result": "success",
+                "active_plan": {
+                    "goal": "complete several steps",
+                    "status": "IN_PROGRESS",
+                    "steps": [{"id": "1", "status": "DONE"}],
+                },
+            },
+        )
+
+        frame = runtime.get_frame(fid)
+        summary = frame.private_working_state["root_context_summary"]
+        assert result.ok
+        assert frame.private_working_state["active_plan"]["goal"] == "complete several steps"
+        assert summary["active_plan"]["status"] == "IN_PROGRESS"
+
+    def test_persistent_turn_result_archives_terminal_active_plan(self, runtime: SkillRuntime):
+        fid = runtime.invoke_skill("t", "test_skill")
+
+        result = runtime.submit_persistent_turn_result(
+            fid,
+            "plan completed",
+            {
+                "result": "success",
+                "active_plan": {
+                    "goal": "complete several steps",
+                    "status": "COMPLETED",
+                },
+            },
+        )
+
+        frame = runtime.get_frame(fid)
+        summary = frame.private_working_state["root_context_summary"]
+        assert result.ok
+        assert "active_plan" not in frame.private_working_state
+        assert "active_plan" not in summary
+        assert summary["plan_history"][-1]["resolution"] == "COMPLETED"
+        assert summary["plan_history"][-1]["plan"]["goal"] == "complete several steps"
+
     def test_persistent_turn_result_compacts_growth(self, runtime: SkillRuntime):
         fid = runtime.invoke_skill("t", "test_skill")
         frame = runtime.get_frame(fid)

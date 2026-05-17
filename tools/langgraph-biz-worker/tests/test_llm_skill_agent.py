@@ -205,6 +205,87 @@ def test_llm_agent_persistent_frame_submit_keeps_frame_running():
     assert events[-1].type == "skill_result_submit"
 
 
+def test_llm_agent_persistent_frame_submit_persists_active_plan():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_plan_001",
+        skill_id="system.root",
+        skill_input={"request": "multi-step work"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Plan created.",
+                "structured_output": {
+                    "answer": "ok",
+                    "active_plan": {
+                        "goal": "handle multi-step work",
+                        "status": "IN_PROGRESS",
+                        "steps": [
+                            {"id": "1", "status": "DONE", "summary": "triage"},
+                            {"id": "2", "status": "PENDING", "summary": "execute"},
+                        ],
+                    },
+                },
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_plan_001",
+        frame_id=frame_id,
+        prompt="multi-step work",
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert frame.private_working_state["active_plan"]["goal"] == "handle multi-step work"
+    assert frame.private_working_state["root_context_summary"]["active_plan"]["status"] == "IN_PROGRESS"
+
+
+def test_llm_agent_persistent_frame_prompt_includes_active_plan():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_plan_prompt_001",
+        skill_id="system.root",
+        skill_input={"request": "continue plan"},
+    )
+    frame = runtime.get_frame(frame_id)
+    frame.private_working_state["active_plan"] = {
+        "goal": "deliver complex task",
+        "status": "IN_PROGRESS",
+        "steps": [{"id": "step-1", "status": "DONE"}],
+    }
+    runtime.store.save(frame)
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Plan continued.",
+                "structured_output": {"answer": "ok"},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_plan_prompt_002",
+        frame_id=frame_id,
+        prompt="继续",
+        persistent_frame=True,
+    )
+
+    user_prompt = model.seen_messages[0][1].content
+    assert "Active task plan:" in user_prompt
+    assert "deliver complex task" in user_prompt
+    assert "step-1" in user_prompt
+    assert "Persistent root planning policy:" in user_prompt
+    assert "submit_skill_result.structured_output.active_plan" in user_prompt
+    assert "intent_resolution" in user_prompt
+
+
 def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_context():
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
@@ -316,6 +397,12 @@ def test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool():
         error="Cancelled by user",
         task_id="task_root_shelve_tools_001",
     )
+    frame = runtime.get_frame(frame_id)
+    frame.private_working_state["active_plan"] = {
+        "goal": "create vehicle",
+        "status": "IN_PROGRESS",
+    }
+    runtime.store.save(frame)
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_shelve",
@@ -353,6 +440,10 @@ def test_llm_agent_persistent_root_exposes_shelve_interrupted_frame_tool():
     assert history[-1]["abandoned_interruption"] == {
         "summary": "Vehicle creation was cancelled before completion.",
     }
+    assert "active_plan" not in frame.private_working_state
+    plan_history = frame.private_working_state["root_context_summary"]["plan_history"]
+    assert plan_history[-1]["resolution"] == "START_UNRELATED_NEW_TASK"
+    assert plan_history[-1]["plan"]["goal"] == "create vehicle"
 
 
 def test_llm_agent_root_resumes_pending_recoverable_child_frame():

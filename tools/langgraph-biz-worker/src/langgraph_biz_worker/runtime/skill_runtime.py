@@ -64,6 +64,7 @@ PERSISTENT_FRAME_MAX_TURN_RESULTS = 20
 PERSISTENT_FRAME_MAX_RECENT_SUMMARIES = 10
 PERSISTENT_FRAME_MAX_PRIVATE_MESSAGES = 40
 PERSISTENT_FRAME_MAX_INTERRUPTION_HISTORY = 10
+PERSISTENT_FRAME_MAX_PLAN_HISTORY = 10
 RECOVERABLE_FOCUS_KEYS = (
     "recoverable_focus_frame_id",
     "recoverable_focus_kind",
@@ -366,7 +367,8 @@ class SkillRuntime:
             if frame.private_working_state.get("continuation_state") == "INTERRUPTED"
             else None
         )
-        keep_recoverable_focus = _continuation_resolution(structured_output) == "ASK_CLARIFICATION"
+        intent_resolution = _continuation_resolution(structured_output)
+        keep_recoverable_focus = intent_resolution == "ASK_CLARIFICATION"
 
         if result.ok:
             if not keep_recoverable_focus:
@@ -377,6 +379,12 @@ class SkillRuntime:
                 frame.private_working_state.pop("recoverable", None)
                 frame.private_working_state.pop("interrupted_at", None)
                 _clear_recoverable_focus_fields(frame.private_working_state)
+            _sync_active_plan_after_persistent_turn(
+                frame,
+                structured_output,
+                summary,
+                intent_resolution,
+            )
             turn_results = frame.private_working_state.setdefault("turn_results", [])
             turn_entry = {
                 "summary": summary,
@@ -1384,6 +1392,121 @@ def _append_interruption_history(
         del focus_history[:-PERSISTENT_FRAME_MAX_INTERRUPTION_HISTORY]
 
 
+def _sync_active_plan_after_persistent_turn(
+    frame: SkillFrameState,
+    structured_output: dict[str, Any],
+    summary: str,
+    intent_resolution: str,
+) -> None:
+    """Persist or shelve root active_plan from a persistent turn result."""
+    if intent_resolution in {"ABANDON_PREVIOUS", "START_UNRELATED_NEW_TASK"}:
+        _archive_active_plan(
+            frame,
+            resolution=intent_resolution,
+            summary=summary,
+        )
+        frame.private_working_state.pop("active_plan", None)
+        _sync_active_plan_summary(frame)
+
+    has_plan, plan_value = _extract_present_value(
+        structured_output,
+        "active_plan",
+        "activePlan",
+    )
+    if not has_plan:
+        return
+
+    active_plan = _normalize_active_plan(plan_value)
+    if active_plan is None:
+        _archive_active_plan(
+            frame,
+            resolution="CLEARED",
+            summary=summary,
+        )
+        frame.private_working_state.pop("active_plan", None)
+        _sync_active_plan_summary(frame)
+        return
+
+    terminal_status = _active_plan_terminal_status(active_plan)
+    if terminal_status:
+        frame.private_working_state["active_plan"] = active_plan
+        _archive_active_plan(
+            frame,
+            resolution=terminal_status,
+            summary=summary,
+        )
+        frame.private_working_state.pop("active_plan", None)
+        _sync_active_plan_summary(frame)
+        return
+
+    frame.private_working_state["active_plan"] = active_plan
+    _sync_active_plan_summary(frame)
+
+
+def _archive_active_plan(
+    frame: SkillFrameState,
+    *,
+    resolution: str,
+    summary: str,
+) -> None:
+    active_plan = frame.private_working_state.get("active_plan")
+    if not isinstance(active_plan, (dict, list)) or not active_plan:
+        return
+    root_summary = frame.private_working_state.setdefault("root_context_summary", {})
+    history = root_summary.setdefault("plan_history", [])
+    if not isinstance(history, list):
+        history = []
+        root_summary["plan_history"] = history
+    history.append({
+        "plan": _safe_json_value_copy(active_plan),
+        "resolution": resolution,
+        "summary": summary,
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+    })
+    del history[:-PERSISTENT_FRAME_MAX_PLAN_HISTORY]
+
+
+def _sync_active_plan_summary(frame: SkillFrameState) -> None:
+    root_summary = frame.private_working_state.get("root_context_summary")
+    if not isinstance(root_summary, dict):
+        if "active_plan" not in frame.private_working_state:
+            return
+        root_summary = frame.private_working_state.setdefault("root_context_summary", {})
+    active_plan = frame.private_working_state.get("active_plan")
+    if isinstance(active_plan, (dict, list)) and active_plan:
+        root_summary["active_plan"] = _safe_json_value_copy(active_plan)
+    else:
+        root_summary.pop("active_plan", None)
+
+
+def _normalize_active_plan(value: Any) -> dict[str, Any] | list[Any] | None:
+    if isinstance(value, dict) and value:
+        return _safe_json_value_copy(value)
+    if isinstance(value, list) and value:
+        return _safe_json_value_copy(value)
+    if isinstance(value, str) and value.strip():
+        return {"summary": value.strip()}
+    return None
+
+
+def _active_plan_terminal_status(value: dict[str, Any] | list[Any]) -> str:
+    if not isinstance(value, dict):
+        return ""
+    status = _extract_value(value, "status", "state", "plan_status", "planStatus")
+    normalized = str(status or "").strip().upper()
+    if normalized in {
+        "COMPLETED",
+        "COMPLETE",
+        "DONE",
+        "CANCELLED",
+        "CANCELED",
+        "ABANDONED",
+        "SHELVED",
+    }:
+        return normalized
+    return ""
+
+
 def _continuation_resolution(structured_output: dict[str, Any]) -> str:
     value = _extract_value(
         structured_output,
@@ -1421,6 +1544,25 @@ def _extract_value(value: Any, *keys: str) -> Any:
             if nested is not None:
                 return nested
     return None
+
+
+def _extract_present_value(value: Any, *keys: str) -> tuple[bool, Any]:
+    if isinstance(value, dict):
+        for key in keys:
+            if key in value:
+                return True, value[key]
+        for nested_key in ("result", "output", "data", "structured_output", "structuredOutput"):
+            present, nested = _extract_present_value(value.get(nested_key), *keys)
+            if present:
+                return True, nested
+    return False, None
+
+
+def _safe_json_value_copy(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return {"summary": str(value)}
 
 
 def _safe_json_copy(value: dict[str, Any]) -> dict[str, Any]:

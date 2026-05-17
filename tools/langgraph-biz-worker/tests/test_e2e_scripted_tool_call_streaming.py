@@ -326,6 +326,150 @@ async def test_scripted_root_skill_reuses_frame_across_tasks(monkeypatch, mock_l
 
 
 @pytest.mark.anyio
+async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch, mock_llm_server):
+    """Root active_plan should be persisted and injected into the next mock LLM request."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-active-plan-{run_id}"
+    session_id = f"sess-e2e-active-plan-{run_id}"
+    context_id = f"ctx-e2e-active-plan-{run_id}"
+    first_task_id = f"task_e2e_active_plan_001_{run_id}"
+    second_task_id = f"task_e2e_active_plan_002_{run_id}"
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-active-plan",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Root plan created.",
+                                        "structured_output": {
+                                            "active_plan": {
+                                                "goal": "handle multi-skill shipment issue",
+                                                "status": "IN_PROGRESS",
+                                                "steps": [
+                                                    {"id": "inspect", "status": "DONE"},
+                                                    {"id": "execute", "status": "PENDING"},
+                                                ],
+                                            },
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Root plan continued.",
+                                        "structured_output": {
+                                            "active_plan": {
+                                                "goal": "handle multi-skill shipment issue",
+                                                "status": "IN_PROGRESS",
+                                                "steps": [
+                                                    {"id": "inspect", "status": "DONE"},
+                                                    {"id": "execute", "status": "DONE"},
+                                                    {"id": "summarize", "status": "PENDING"},
+                                                ],
+                                            },
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"先分析再处理运输异常 next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+        second_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"继续 next:{trace_id}:002",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    second_events = _parse_worker_sse(second_response.text)
+    first_open = next(event for event in first_events if event.type == "skill_frame_open")
+    second_open = next(event for event in second_events if event.type == "skill_frame_open")
+    assert first_open.skill_frame_id == second_open.skill_frame_id
+    assert second_open.content == "Reusing frame for skill: system.root"
+
+    frame = root_graph_module.get_runtime().get_frame(first_open.skill_frame_id)
+    assert frame is not None
+    assert frame.private_working_state["active_plan"]["steps"][1]["id"] == "execute"
+    assert frame.private_working_state["active_plan"]["steps"][1]["status"] == "DONE"
+    assert frame.private_working_state["root_context_summary"]["active_plan"]["goal"] == (
+        "handle multi-skill shipment issue"
+    )
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+    ]
+    second_user_messages = [
+        message["content"]
+        for message in records[1]["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("Active task plan:" in content for content in second_user_messages)
+    assert any("handle multi-skill shipment issue" in content for content in second_user_messages)
+    assert any("Persistent root planning policy:" in content for content in second_user_messages)
+    assert any("submit_skill_result.structured_output.active_plan" in content for content in second_user_messages)
+
+
+@pytest.mark.anyio
 async def test_scripted_root_skill_continues_after_recoverable_model_loop_failure(
     monkeypatch,
     mock_llm_server,
