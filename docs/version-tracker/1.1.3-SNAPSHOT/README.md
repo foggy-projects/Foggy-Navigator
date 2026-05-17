@@ -64,6 +64,7 @@
   - [31-openapi-model-config-and-attachment-e2e-bug.md](./upstream-integration/31-openapi-model-config-and-attachment-e2e-bug.md) - 缺陷复现与修复 / OpenAPI ask modelConfigId 合同与附件 E2E 透传问题
   - [32-e2e-scripted-tool-call-streaming-bug.md](./upstream-integration/32-e2e-scripted-tool-call-streaming-bug.md) - 缺陷复现与修复 / E2E scripted tool-call streaming 归一化问题
   - [33-upstream-client-app-admin-key-request.md](./upstream-integration/33-upstream-client-app-admin-key-request.md) - 需求记录 / 上游系统级 ClientApp 管理凭证申请、Navigator operator 审批工具与多租户 control key 生成边界
+  - [34-upstream-client-app-admin-key-implementation-plan.md](./upstream-integration/34-upstream-client-app-admin-key-implementation-plan.md) - 实施计划 / 上游系统级 ClientApp 管理凭证申请的安全底座、后端状态机、CLI、隔离测试与验收阶段拆解
 
 ## Acceptance Status
 

@@ -9,6 +9,7 @@
 - priority: P0
 - source_type: requirement
 - source_issue: https://github.com/foggy-projects/Foggy-Navigator/issues/121
+- implementation_plan: [34-upstream-client-app-admin-key-implementation-plan.md](./34-upstream-client-app-admin-key-implementation-plan.md)
 - intended_for: Navigator maintainer | upstream backend developer | upstream LLM coding agent | reviewer
 - purpose: 记录上游按系统/租户申请 ClientApp 管理凭证的需求、审批权限边界、CLI/API 契约与验收标准
 
