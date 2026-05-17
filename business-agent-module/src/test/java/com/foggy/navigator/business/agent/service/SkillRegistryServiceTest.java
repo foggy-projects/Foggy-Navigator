@@ -1,6 +1,7 @@
 package com.foggy.navigator.business.agent.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.foggy.navigator.business.agent.model.dto.ClientAppSkillGrantDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillClearResultDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillDTO;
@@ -390,6 +391,158 @@ class SkillRegistryServiceTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void syncSkillBundle_materializesSchemaPlaceholdersAsPublicContracts() throws Exception {
+        AtomicReference<String> bodyRef = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/api/v1/skills/materialize", exchange -> {
+            bodyRef.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = "{\"status\":\"success\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response);
+            }
+        });
+        server.start();
+        try {
+            ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "http://localhost:" + server.getAddress().getPort());
+
+            SyncSkillBundleForm form = new SyncSkillBundleForm();
+            form.setClientAppId("tms_app");
+            form.setScope("client-app-public");
+            form.setSkillId("tms_skill");
+            form.setName("TMS Skill");
+            form.setMarkdownBody("## Function Contracts\n\n${@schema.tms.order.createOpeningDraft}");
+            form.setMaterialize(true);
+            SkillResourceForm resource = new SkillResourceForm();
+            resource.setPath("references/opening-draft.md");
+            resource.setContent("Resource copy:\n${@schema.tms.order.createOpeningDraft}");
+            resource.setSha256("placeholder-hash");
+            form.setResources(List.of(resource));
+            SkillBundleFunctionForm functionForm = new SkillBundleFunctionForm();
+            functionForm.setFunctionId("tms.order.createOpeningDraft");
+            functionForm.setVersion("v1");
+            form.setFunctions(List.of(functionForm));
+
+            when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+            BusinessFunctionEntity function = new BusinessFunctionEntity();
+            function.setFunctionId("tms.order.createOpeningDraft");
+            function.setCurrentVersion("v1");
+            function.setName("Create opening draft");
+            function.setDescription("Create order opening draft from clues");
+            function.setStatus("ENABLED");
+            when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "tms.order.createOpeningDraft")).thenReturn(Optional.of(function));
+            ClientAppFunctionGrantEntity functionGrant = new ClientAppFunctionGrantEntity();
+            functionGrant.setFunctionId("tms.order.createOpeningDraft");
+            functionGrant.setVersion("v1");
+            functionGrant.setStatus("ENABLED");
+            when(functionGrantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(
+                    "tenant_1", "tms_app", "tms.order.createOpeningDraft", "v1")).thenReturn(Optional.of(functionGrant));
+            BusinessFunctionVersionEntity version = new BusinessFunctionVersionEntity();
+            version.setStatus("ENABLED");
+            version.setInputSchemaJson("""
+                    {"type":"object","properties":{"requestIntent":{"enum":["OPEN_EMPTY","PREFILL_FROM_CLUES"]},"sourceText":{"type":"string"}},"required":["requestIntent"]}
+                    """);
+            version.setOutputSchemaJson("""
+                    {"type":"object","properties":{"structured_output":{"type":"object"},"openUrl":{"type":"string"}}}
+                    """);
+            version.setLlmVisibleSummary("Use PREFILL_FROM_CLUES when order clues exist.");
+            version.setSchemaVisibleSummary("Public contract only; do not expose adapter internals.");
+            version.setAdapterConfigJson("{\"url\":\"/internal/function/execute\",\"token\":\"secret\"}");
+            version.setManifestJson("{\"gatewayPath\":\"/private\"}");
+            when(versionRepository.findByTenantIdAndFunctionIdAndVersion(
+                    "tenant_1", "tms.order.createOpeningDraft", "v1")).thenReturn(Optional.of(version));
+            when(skillBundleRepository.findByTenantIdAndClientAppIdAndScopeAndAccountIdAndSkillId(
+                    "tenant_1", "tms_app", "CLIENT_APP_PUBLIC", "", "tms_skill")).thenReturn(Optional.empty());
+            when(skillBundleRepository.save(any(SkillBundleEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(skillRepository.findByTenantIdAndSkillId("tenant_1", "tms_skill")).thenReturn(Optional.empty());
+            when(skillRepository.save(any(SkillEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(grantRepository.findByTenantIdAndClientAppIdAndSkillId("tenant_1", "tms_app", "tms_skill")).thenReturn(Optional.empty());
+            when(grantRepository.save(any(ClientAppSkillGrantEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(allowlistRepository.findByTenantIdAndSkillIdAndFunctionId(
+                    "tenant_1", "tms_skill", "tms.order.createOpeningDraft")).thenReturn(Optional.empty());
+            when(allowlistRepository.save(any(SkillFunctionAllowlistEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            var dto = skillRegistryService.syncSkillBundle("tenant_1", "user_1", form);
+
+            assertEquals("MATERIALIZED", dto.getMaterializeResult().getStatus());
+            assertNotNull(bodyRef.get());
+            assertTrue(bodyRef.get().contains("### tms.order.createOpeningDraft@v1"));
+            assertTrue(bodyRef.get().contains("requestIntent"));
+            assertTrue(bodyRef.get().contains("PREFILL_FROM_CLUES"));
+            assertTrue(bodyRef.get().contains("structured_output"));
+            assertTrue(bodyRef.get().contains("Use PREFILL_FROM_CLUES when order clues exist."));
+            assertFalse(bodyRef.get().contains("${@schema."));
+            assertFalse(bodyRef.get().contains("adapterConfigJson"));
+            assertFalse(bodyRef.get().contains("gatewayPath"));
+            assertFalse(bodyRef.get().contains("secret"));
+            JsonNode payload = objectMapper.readTree(bodyRef.get());
+            assertTrue(payload.get("resources").get(0).get("content").asText()
+                    .contains("### tms.order.createOpeningDraft@v1"));
+            assertNotEquals("placeholder-hash", payload.get("resources").get(0).get("sha256").asText());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void syncSkillBundle_schemaPlaceholderOutsideFunctionAllowlistFailsClosed() {
+        ReflectionTestUtils.setField(skillRegistryService, "devSyncWorkerUrl", "http://localhost:1");
+
+        SyncSkillBundleForm form = new SyncSkillBundleForm();
+        form.setClientAppId("tms_app");
+        form.setScope("client-app-public");
+        form.setSkillId("tms_skill");
+        form.setName("TMS Skill");
+        form.setMarkdownBody("${@schema.tms.order.hidden}");
+        form.setMaterialize(true);
+
+        when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> skillRegistryService.syncSkillBundle("tenant_1", "user_1", form));
+        assertTrue(error.getMessage().contains("not allowlisted"));
+        verify(skillBundleRepository, never()).save(any(SkillBundleEntity.class));
+    }
+
+    @Test
+    void syncSkillBundle_schemaPlaceholderWithMissingSchemaFailsClosedBeforePersisting() {
+        SyncSkillBundleForm form = new SyncSkillBundleForm();
+        form.setClientAppId("tms_app");
+        form.setScope("client-app-public");
+        form.setSkillId("tms_skill");
+        form.setName("TMS Skill");
+        form.setMarkdownBody("${@schema.tms.order.createOpeningDraft}");
+        SkillBundleFunctionForm functionForm = new SkillBundleFunctionForm();
+        functionForm.setFunctionId("tms.order.createOpeningDraft");
+        functionForm.setVersion("v1");
+        form.setFunctions(List.of(functionForm));
+
+        when(clientAppService.requireActiveClientApp("tenant_1", "tms_app")).thenReturn(new ClientAppEntity());
+        BusinessFunctionEntity function = new BusinessFunctionEntity();
+        function.setFunctionId("tms.order.createOpeningDraft");
+        function.setCurrentVersion("v1");
+        function.setStatus("ENABLED");
+        when(functionRepository.findByTenantIdAndFunctionId("tenant_1", "tms.order.createOpeningDraft")).thenReturn(Optional.of(function));
+        ClientAppFunctionGrantEntity functionGrant = new ClientAppFunctionGrantEntity();
+        functionGrant.setFunctionId("tms.order.createOpeningDraft");
+        functionGrant.setVersion("v1");
+        functionGrant.setStatus("ENABLED");
+        when(functionGrantRepository.findByTenantIdAndClientAppIdAndFunctionIdAndVersion(
+                "tenant_1", "tms_app", "tms.order.createOpeningDraft", "v1")).thenReturn(Optional.of(functionGrant));
+        BusinessFunctionVersionEntity version = new BusinessFunctionVersionEntity();
+        version.setStatus("ENABLED");
+        when(versionRepository.findByTenantIdAndFunctionIdAndVersion(
+                "tenant_1", "tms.order.createOpeningDraft", "v1")).thenReturn(Optional.of(version));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> skillRegistryService.syncSkillBundle("tenant_1", "user_1", form));
+
+        assertTrue(error.getMessage().contains("schema is missing"));
+        verify(skillBundleRepository, never()).save(any(SkillBundleEntity.class));
     }
 
     @Test
