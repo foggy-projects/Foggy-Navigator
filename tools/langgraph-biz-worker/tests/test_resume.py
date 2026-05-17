@@ -298,6 +298,10 @@ class TestResumeEndpoint:
         assert data["resume_message"]["comment"] == "同意"
         assert data["resume_message"]["function_id"] == "tms.order.close"
         assert data["resume_message"]["suspend_id"] == "sus_msg_1"
+        assert data["resume_message"]["execution_report_ref"] == (
+            f"frame-report://task_resume_msg/{function_frame_id}"
+        )
+        assert data["resume_message"]["execution_report_digest"]["status"] == "COMPLETED"
 
     async def test_resume_not_found(self, client):
         resp = await client.post("/api/v1/resume", json={

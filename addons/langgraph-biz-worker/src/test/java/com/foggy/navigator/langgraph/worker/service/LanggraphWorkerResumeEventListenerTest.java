@@ -225,7 +225,9 @@ class LanggraphWorkerResumeEventListenerTest {
                 .thenReturn(Mono.just(Map.of(
                         "resume_message", Map.of(
                                 "content", "审批已通过，已继续提交关单申请。",
-                                "source", "function_input.approved"
+                                "source", "function_input.approved",
+                                "execution_report_ref", "frame-report://lgt_1/fn_1",
+                                "execution_report_digest", Map.of("status", "COMPLETED")
                         )
                 )));
 
@@ -247,6 +249,8 @@ class LanggraphWorkerResumeEventListenerTest {
         assertEquals("lgt_1", payload.get("taskId"));
         assertEquals("sus_1", payload.get("suspendId"));
         assertEquals("approved", payload.get("approvalResult"));
+        assertEquals("frame-report://lgt_1/fn_1", payload.get("execution_report_ref"));
+        assertEquals("COMPLETED", ((Map<?, ?>) payload.get("execution_report_digest")).get("status"));
     }
 
     @Test

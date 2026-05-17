@@ -181,8 +181,12 @@ public class LanggraphStreamRelay {
                     Long durationMs = node.has("duration_ms") && !node.get("duration_ms").isNull()
                             ? node.get("duration_ms").asLong() : null;
 
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("content", content);
+                    payload.put("taskId", taskId);
+                    copyExecutionReportFields(payload, node);
                     publishMessage(sessionId, MessageType.TASK_COMPLETED,
-                            Map.of("content", content, "taskId", taskId));
+                            payload);
 
                     taskService.completeTask(taskId, content, structuredOutput, durationMs);
                 }
@@ -215,6 +219,7 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
+        copyExecutionReportFields(payload, node);
         return payload;
     }
 
@@ -238,6 +243,7 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
+        copyExecutionReportFields(payload, node);
         publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
     }
 
@@ -268,6 +274,7 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
+        copyExecutionReportFields(payload, node);
         payload.put("data", parseJsonOrText(content));
         payload.put("success", success);
         String error = node.path("error").asText("");
@@ -348,6 +355,7 @@ public class LanggraphStreamRelay {
         payload.put("suspendId", node.path("suspend_id").asText(""));
         payload.put("reason", node.path("reason").asText(""));
         payload.put("timeoutAt", node.path("timeout_at").asText(""));
+        copyExecutionReportFields(payload, node);
 
         publishMessage(sessionId, MessageType.STATE_SYNC, payload);
     }
@@ -361,6 +369,30 @@ public class LanggraphStreamRelay {
         if (!text.isBlank()) {
             payload.put(targetKey, text);
         }
+    }
+
+    private void copyExecutionReportFields(Map<String, Object> payload, JsonNode node) {
+        JsonNode reportRef = firstPresent(node, "execution_report_ref", "executionReportRef");
+        if (reportRef != null && !reportRef.isNull()) {
+            String text = reportRef.asText("");
+            if (!text.isBlank()) {
+                payload.put("execution_report_ref", text);
+            }
+        }
+        JsonNode reportDigest = firstPresent(node, "execution_report_digest", "executionReportDigest");
+        if (reportDigest != null && reportDigest.isObject()) {
+            payload.put("execution_report_digest", toObject(reportDigest));
+        }
+    }
+
+    private JsonNode firstPresent(JsonNode node, String... keys) {
+        for (String key : keys) {
+            JsonNode value = node.get(key);
+            if (value != null && !value.isNull()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private void handleStreamComplete(String taskId, String sessionId) {

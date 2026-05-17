@@ -59,6 +59,9 @@ export interface ExecutionReportDigest {
   reportRef?: string
   taskId?: string
   frameId?: string
+  skillId?: string
+  frameKind?: string
+  generatedAt?: string
   [key: string]: unknown
 }
 

@@ -14,6 +14,7 @@ import com.foggy.navigator.business.agent.model.form.WorkerGatewayResumeForm;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionSuspensionRepository;
 import com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker;
 import com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterResult;
+import com.foggy.navigator.business.agent.service.report.BusinessFunctionExecutionReportUpdate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -471,6 +472,18 @@ class BusinessFunctionSuspensionServiceTest {
                 .thenReturn(context);
         when(adapterInvoker.invoke(any(BusinessFunctionRuntimeContextDTO.class), eq("{\"key\":\"value\"}")))
                 .thenReturn(BusinessFunctionAdapterResult.success("{\"code\":200,\"data\":{}}"));
+        suspensionService.setExecutionReportBridge(request -> BusinessFunctionExecutionReportUpdate.builder()
+                .executionReportRef("frame-report://lgt_1/root")
+                .executionReportDigest(Map.of("status", "COMPLETED"))
+                .functionFrameId("fn_1")
+                .functionExecutionReportRef("frame-report://lgt_1/fn_1")
+                .functionExecutionReportDigest(Map.of("status", "COMPLETED"))
+                .rootFrameId("root")
+                .rootExecutionReportRef("frame-report://lgt_1/root")
+                .rootExecutionReportDigest(Map.of("status", "COMPLETED"))
+                .childExecutionReportRef("frame-report://lgt_1/child")
+                .childExecutionReportDigest(Map.of("status", "COMPLETED"))
+                .build());
 
         WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
                 .source(this)
@@ -522,6 +535,12 @@ class BusinessFunctionSuspensionServiceTest {
         assertEquals("worker_session1", payload.get("workerSessionId"));
         assertEquals("200", payload.get("outputCode"));
         assertEquals(true, payload.get("hasOutputData"));
+        assertEquals("frame-report://lgt_1/root", payload.get("execution_report_ref"));
+        assertEquals("COMPLETED", ((Map<?, ?>) payload.get("execution_report_digest")).get("status"));
+        assertEquals("fn_1", payload.get("function_frame_id"));
+        assertEquals("frame-report://lgt_1/fn_1", payload.get("function_execution_report_ref"));
+        assertEquals("frame-report://lgt_1/root", payload.get("root_execution_report_ref"));
+        assertEquals("frame-report://lgt_1/child", payload.get("child_execution_report_ref"));
     }
 
     @Test

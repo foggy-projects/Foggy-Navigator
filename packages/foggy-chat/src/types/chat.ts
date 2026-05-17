@@ -1,1 +1,1 @@
-export type { ChatMessage, ConnectionStatus } from '@foggy/chat-core'
+export type { ChatMessage, ConnectionStatus, ExecutionReportDigest } from '@foggy/chat-core'

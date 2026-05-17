@@ -31,6 +31,23 @@ export interface ChatMessage {
   reconnectable?: boolean
   /** Image attachments (preview URLs) for user messages */
   images?: Array<{ name: string; url: string }>
+  /** Stable Frame Execution Report reference, never parsed as a business ID */
+  executionReportRef?: string
+  /** Compact Frame Execution Report digest for audit/debug display */
+  executionReportDigest?: ExecutionReportDigest
+}
+
+export interface ExecutionReportDigest {
+  status?: string
+  summary?: string
+  error?: string | null
+  reportRef?: string
+  taskId?: string
+  frameId?: string
+  skillId?: string
+  frameKind?: string
+  generatedAt?: string
+  [key: string]: unknown
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

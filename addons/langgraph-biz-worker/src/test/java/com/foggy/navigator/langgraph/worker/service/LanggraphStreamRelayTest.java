@@ -69,7 +69,9 @@ class LanggraphStreamRelayTest {
                     "script_run_id": "sr_001",
                     "suspend_id": "sp_001",
                     "reason": "order.close_apply.submit"
-                  }
+                  },
+                  "execution_report_ref": "frame-report://lgt-task-1/fn-1",
+                  "execution_report_digest": {"status": "AWAITING_APPROVAL"}
                 }
                 """;
 
@@ -98,6 +100,8 @@ class LanggraphStreamRelayTest {
         assertEquals("sp_001", payload.get("suspendId"));
         assertEquals("order.close_apply.submit", payload.get("reason"));
         assertEquals("2026-05-01T10:00:00Z", payload.get("timeoutAt"));
+        assertEquals("frame-report://lgt-task-1/fn-1", payload.get("execution_report_ref"));
+        assertEquals("AWAITING_APPROVAL", ((Map<?, ?>) payload.get("execution_report_digest")).get("status"));
     }
 
     @Test
@@ -153,7 +157,9 @@ class LanggraphStreamRelayTest {
                   "content": "{\\"ok\\":true,\\"count\\":19}",
                   "skill_frame_id": "frm-1",
                   "parent_frame_id": "frm-parent",
-                  "skill_id": "foggy-query-agent"
+                  "skill_id": "foggy-query-agent",
+                  "execution_report_ref": "frame-report://lgt-task-3/frm-1",
+                  "execution_report_digest": {"status": "COMPLETED"}
                 }
                 """;
 
@@ -182,6 +188,35 @@ class LanggraphStreamRelayTest {
         assertEquals("tool_result", resultPayload.get("subtype"));
         assertEquals("frm-1", resultPayload.get("skillFrameId"));
         assertEquals("frm-parent", resultPayload.get("parentFrameId"));
+        assertEquals("frame-report://lgt-task-3/frm-1", resultPayload.get("execution_report_ref"));
+        assertEquals("COMPLETED", ((Map<?, ?>) resultPayload.get("execution_report_digest")).get("status"));
+    }
+
+    @Test
+    void skillFrameClosePublishesExecutionReportFields() throws Exception {
+        String taskId = "lgt-task-close";
+        String sessionId = "session-close";
+        String data = """
+                {
+                  "type": "skill_frame_close",
+                  "content": "child done",
+                  "skill_frame_id": "frm-child",
+                  "parent_frame_id": "frm-root",
+                  "skill_id": "tms-fulfillment-agent",
+                  "execution_report_ref": "frame-report://lgt-task-close/frm-child",
+                  "execution_report_digest": {"status": "COMPLETED"}
+                }
+                """;
+
+        invokeHandleEvent(ServerSentEvent.<String>builder().data(data).build(), taskId, sessionId);
+
+        ArgumentCaptor<AgentMessage> captor = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener).handleMessage(captor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) captor.getValue().getPayload();
+        assertEquals("skill_frame_close", payload.get("subtype"));
+        assertEquals("frame-report://lgt-task-close/frm-child", payload.get("execution_report_ref"));
+        assertEquals("COMPLETED", ((Map<?, ?>) payload.get("execution_report_digest")).get("status"));
     }
 
     @Test
@@ -193,7 +228,9 @@ class LanggraphStreamRelayTest {
                   "type": "result",
                   "content": "done",
                   "duration_ms": 42,
-                  "structured_output": {"ok": true}
+                  "structured_output": {"ok": true},
+                  "execution_report_ref": "frame-report://lgt-task-4/root",
+                  "execution_report_digest": {"status": "COMPLETED"}
                 }
                 """;
 
@@ -203,6 +240,8 @@ class LanggraphStreamRelayTest {
         inOrder.verify(sessionEventListener).handleMessage(org.mockito.ArgumentMatchers.argThat(message ->
                 message.getType() == MessageType.TASK_COMPLETED
                         && taskId.equals(message.getTaskId())
+                        && message.getPayload() instanceof Map<?, ?> payload
+                        && "frame-report://lgt-task-4/root".equals(payload.get("execution_report_ref"))
         ));
         inOrder.verify(taskService).completeTask(
                 taskId,

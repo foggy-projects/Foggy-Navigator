@@ -1070,13 +1070,25 @@ function extractExecutionReport(
     if (directRef) ref = directRef
 
     const directDigest = normalizeExecutionReportDigest(
-      source.executionReportDigest ?? source.execution_report_digest ?? source.reportDigest ?? source.report_digest
+      source.executionReportDigest
+        ?? source.execution_report_digest
+        ?? source.reportDigest
+        ?? source.report_digest
+        ?? source.frameExecutionReportDigest
+        ?? source.frame_execution_report_digest
     )
     if (directDigest) digest = mergeExecutionReportDigest(digest, directDigest)
 
     const nestedReport = objectValue(source.executionReport ?? source.execution_report ?? source.report)
-    if (nestedReport) {
+    if (nestedReport && nestedReport !== source) {
       const nested = extractExecutionReport({ ref, digest }, nestedReport)
+      ref = nested.ref
+      digest = nested.digest
+    }
+    for (const nestedValue of [source.result, source.data, source.payload]) {
+      const nestedObject = objectValue(nestedValue)
+      if (!nestedObject || nestedObject === source) continue
+      const nested = extractExecutionReport({ ref, digest }, nestedObject)
       ref = nested.ref
       digest = nested.digest
     }
@@ -1099,7 +1111,7 @@ function normalizeExecutionReportDigest(value: unknown): ExecutionReportDigest |
   const sanitized = sanitizeValue(object) as Record<string, unknown>
   const digest: ExecutionReportDigest = { ...sanitized }
   const status = firstString(sanitized.status, sanitized.state)
-  const summary = firstString(sanitized.summary, sanitized.text, sanitized.message)
+  const summary = firstString(sanitized.summary, sanitized.resultSummary, sanitized.result_summary, sanitized.text, sanitized.message)
   const error = firstString(sanitized.error, sanitized.errorMessage, sanitized.error_message)
   const reportRef = firstString(
     sanitized.reportRef,
@@ -1109,12 +1121,18 @@ function normalizeExecutionReportDigest(value: unknown): ExecutionReportDigest |
   )
   const taskId = firstString(sanitized.taskId, sanitized.task_id)
   const frameId = firstString(sanitized.frameId, sanitized.frame_id)
+  const skillId = firstString(sanitized.skillId, sanitized.skill_id)
+  const frameKind = firstString(sanitized.frameKind, sanitized.frame_kind)
+  const generatedAt = firstString(sanitized.generatedAt, sanitized.generated_at)
   if (status) digest.status = status
   if (summary) digest.summary = summary
   if (error) digest.error = error
   if (reportRef) digest.reportRef = reportRef
   if (taskId) digest.taskId = taskId
   if (frameId) digest.frameId = frameId
+  if (skillId) digest.skillId = skillId
+  if (frameKind) digest.frameKind = frameKind
+  if (generatedAt) digest.generatedAt = generatedAt
   return digest
 }
 

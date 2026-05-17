@@ -239,5 +239,5 @@ Worker 由 `remote/check-workers.sh` 单独检查：
 - 前端仍依赖 monorepo workspace：`@foggy/navigator-frontend` 使用 `@foggy/chat: workspace:*`，`@foggy/chat` 使用 `@foggy/chat-core: workspace:*`。当前 build-and-push 在同一个 Git checkout 内执行 `pnpm install --no-frozen-lockfile`，并按 `chat-core -> chat -> navigator-frontend` 顺序构建。
 - 根目录 `pnpm-lock.yaml` 当前未跟踪，生产前需要决定是否提交锁文件，或将内部包发布到 Verdaccio 后切换成普通版本依赖。
 - Claude/Codex/Gemini Worker 继续使用 OBS 安装脚本分发，节点级运行态位于 `~/.claude-worker`、`~/.codex-worker`、`~/.gemini-worker`。生产前需要固化 Worker 配置、升级策略和账号/token 注入方式。
-- LangGraph Biz Worker 当前作为 Business Agent 的 Python 节点级运行态，从 `/opt/foggy/navigator/current/tools/langgraph-biz-worker` 创建 venv 启动；生产前需要决定是否改为独立镜像或 OBS 包，并固化 systemd/自启动、token 注入和回滚策略。
+- LangGraph Biz Worker 当前作为 Business Agent 的 Python 节点级运行态，默认从 `/opt/foggy/navigator/build/source/<IMAGE_TAG>/tools/langgraph-biz-worker` 创建 venv 启动，保证与镜像 tag 对齐。`BIZ_WORKER_SOURCE_DIR` 只作为应急兼容开关使用；生产前需要决定是否改为独立镜像或 OBS 包，并固化 systemd/自启动、token 注入和回滚策略。
 - `dev-kvm-x3` 可继续启用本地 MySQL/RabbitMQ；生产建议改为外部托管依赖并设置 `NAVIGATOR_LOCAL_INFRA=false`。

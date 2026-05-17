@@ -649,6 +649,124 @@ class SkillRuntime:
             self._save(parent)
             self._generate_frame_report(parent)
 
+    def finalize_business_function_result(
+        self,
+        task_id: str,
+        suspend_id: str,
+        *,
+        success: bool,
+        result: dict[str, Any] | None = None,
+        summary: str = "",
+        error_message: str = "",
+    ) -> dict[str, Any]:
+        """Finalize a Java-owned business function result into frame reports.
+
+        Approval-required business functions resume the Python frame first, but
+        Java owns the actual adapter execution.  When Java publishes the final
+        adapter result, this method updates the durable FUNCTION_CALL frame and
+        then closes the active skill stack for the task so report digests match
+        the visible task terminal state.
+        """
+        self._restore_task_frames_from_journal(task_id)
+        function_frame = self._find_function_frame_by_suspend_id(task_id, suspend_id)
+        if function_frame is None:
+            return {
+                "ok": False,
+                "retryable": False,
+                "error": f"No function frame found for suspend_id={suspend_id}",
+            }
+        if function_frame.status == FrameStatus.AWAITING_APPROVAL:
+            return {
+                "ok": False,
+                "retryable": True,
+                "error": "Function frame is still awaiting approval resume",
+                "function_frame_id": function_frame.frame_id,
+            }
+
+        final_status = FrameStatus.COMPLETED if success else FrameStatus.FAILED
+        now = datetime.now(timezone.utc).isoformat()
+        result_payload = _safe_json_copy(result or {})
+        result_payload.setdefault("suspend_id", suspend_id)
+        result_payload.setdefault("function_id", function_frame.input.get("function_id"))
+        result_payload.setdefault("version", function_frame.input.get("version"))
+        if error_message:
+            result_payload.setdefault("error_message", error_message)
+
+        final_summary = (
+            summary
+            or result_payload.get("content")
+            or result_payload.get("message")
+            or ("Business function execution completed." if success else "Business function execution failed.")
+        )
+        function_frame.result_summary = str(final_summary)
+        function_frame.output = result_payload
+        function_frame.ended_at = now
+        function_frame.approval_request = None
+        function_frame.private_working_state["approval_state"] = "COMPLETED" if success else "FAILED"
+        if error_message:
+            function_frame.private_working_state["fail_reason"] = error_message
+        self._force_terminal_status(function_frame, final_status)
+        self._save(function_frame)
+        self._generate_frame_report(function_frame)
+
+        closed_skill_frames: list[dict[str, Any]] = []
+        root_report_payload: dict[str, Any] | None = None
+        child_report_payload: dict[str, Any] | None = None
+        previous_frame = function_frame
+        for frame in self._parent_stack(function_frame):
+            self._record_child_result_on_parent(frame, previous_frame)
+            self._clear_business_function_wait_state(frame, function_frame.frame_id)
+            frame.result_summary = str(final_summary)
+            frame.output = result_payload
+            frame.ended_at = now
+            frame.approval_request = None
+            if error_message:
+                frame.private_working_state["fail_reason"] = error_message
+            self._force_terminal_status(frame, final_status)
+            self._save(frame)
+            self._generate_frame_report(frame)
+
+            report_payload = self._execution_report_payload_for_frame(frame)
+            if frame.parent_frame_id:
+                closed_skill_frames.append({
+                    "frame_id": frame.frame_id,
+                    "parent_frame_id": frame.parent_frame_id,
+                    "skill_id": frame.skill_id,
+                    "status": frame.status.value,
+                    "summary": frame.result_summary,
+                    **report_payload,
+                })
+                child_report_payload = report_payload
+            else:
+                root_report_payload = report_payload
+            previous_frame = frame
+
+        function_report_payload = self._execution_report_payload_for_frame(function_frame)
+        response: dict[str, Any] = {
+            "ok": True,
+            "task_id": task_id,
+            "suspend_id": suspend_id,
+            "function_frame_id": function_frame.frame_id,
+            "status": final_status.value,
+            "closed_skill_frames": closed_skill_frames,
+            "execution_report_ref": (
+                root_report_payload or child_report_payload or function_report_payload
+            ).get("execution_report_ref"),
+            "execution_report_digest": (
+                root_report_payload or child_report_payload or function_report_payload
+            ).get("execution_report_digest"),
+            "function_execution_report_ref": function_report_payload.get("execution_report_ref"),
+            "function_execution_report_digest": function_report_payload.get("execution_report_digest"),
+        }
+        if root_report_payload:
+            response["root_frame_id"] = previous_frame.frame_id
+            response["root_execution_report_ref"] = root_report_payload.get("execution_report_ref")
+            response["root_execution_report_digest"] = root_report_payload.get("execution_report_digest")
+        if child_report_payload:
+            response["child_execution_report_ref"] = child_report_payload.get("execution_report_ref")
+            response["child_execution_report_digest"] = child_report_payload.get("execution_report_digest")
+        return response
+
     def suspend_function_call(
         self,
         function_frame_id: str,
@@ -1001,6 +1119,120 @@ class SkillRuntime:
         return None
 
     # -- Internal helpers ----------------------------------------------------
+
+    def _restore_task_frames_from_journal(self, task_id: str) -> None:
+        if self._journal is None:
+            return
+        for frame in self._journal.load_by_task(task_id):
+            self.restore_frame(frame)
+
+    def _find_function_frame_by_suspend_id(
+        self,
+        task_id: str,
+        suspend_id: str,
+    ) -> SkillFrameState | None:
+        for frame in reversed(self.store.get_by_task(task_id)):
+            if frame.frame_kind != FrameKind.FUNCTION_CALL:
+                continue
+            state_suspend_id = frame.private_working_state.get("suspend_id")
+            request_suspend_id = (
+                frame.approval_request.get("suspend_id")
+                if isinstance(frame.approval_request, dict)
+                else None
+            )
+            if suspend_id in {state_suspend_id, request_suspend_id}:
+                return frame
+        return None
+
+    def _parent_stack(self, frame: SkillFrameState) -> list[SkillFrameState]:
+        stack: list[SkillFrameState] = []
+        parent_frame_id = frame.parent_frame_id
+        visited = {frame.frame_id}
+        while parent_frame_id and parent_frame_id not in visited:
+            visited.add(parent_frame_id)
+            parent = self.store.get(parent_frame_id)
+            if parent is None and self._journal:
+                parent = self._journal.load(frame.task_id, parent_frame_id)
+                if parent is not None:
+                    self.restore_frame(parent)
+            if parent is None:
+                break
+            stack.append(parent)
+            parent_frame_id = parent.parent_frame_id
+        return stack
+
+    def _force_terminal_status(
+        self,
+        frame: SkillFrameState,
+        target: FrameStatus,
+    ) -> None:
+        if frame.status == target:
+            return
+        if frame.status in TERMINAL_STATES:
+            frame.status = target
+            return
+        if target in VALID_TRANSITIONS.get(frame.status, frozenset()):
+            self._transition(frame, target)
+            return
+        frame.status = target
+
+    def _record_child_result_on_parent(
+        self,
+        parent: SkillFrameState,
+        child: SkillFrameState,
+    ) -> None:
+        if child.frame_kind == FrameKind.FUNCTION_CALL:
+            function_results = parent.private_working_state.setdefault("function_results", {})
+            entry = {
+                "function_id": child.input.get("function_id"),
+                "version": child.input.get("version"),
+                "result": _safe_json_copy(child.output or {}),
+                "completed_at": child.ended_at,
+            }
+            entry.update(self._execution_report_payload_for_frame(child))
+            function_results[child.frame_id] = entry
+            self._link_execution_report_to_parent_context(parent, entry)
+            return
+
+        child_results = parent.private_working_state.setdefault("child_results", {})
+        promoted = {
+            "frame_id": child.frame_id,
+            "skill_id": child.skill_id,
+            "status": child.status.value,
+            "result_summary": child.result_summary,
+            "structured_output": _safe_json_copy(child.output or {}),
+            "artifact_refs": list(child.artifact_refs),
+            "evidence_refs": list(child.evidence_refs),
+        }
+        promoted.update(self._execution_report_payload_for_frame(child))
+        child_results[child.frame_id] = promoted
+        self._link_execution_report_to_parent_context(parent, promoted)
+
+    def _clear_business_function_wait_state(
+        self,
+        frame: SkillFrameState,
+        function_frame_id: str,
+    ) -> None:
+        if frame.private_working_state.get("pending_function_call_frame_id") == function_frame_id:
+            frame.private_working_state.pop("pending_function_call_frame_id", None)
+            frame.private_working_state.pop("pending_function_call", None)
+        frame.private_working_state.pop("pending_child_approval_frame_id", None)
+        frame.private_working_state.pop("pending_recoverable_child_frame_id", None)
+        frame.private_working_state.pop("pending_recoverable_child", None)
+        _clear_recoverable_focus_fields(frame.private_working_state)
+
+    def _execution_report_payload_for_frame(
+        self,
+        frame: SkillFrameState,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        report_ref = _execution_report_ref_from_frame(frame)
+        if report_ref:
+            payload["execution_report_ref"] = report_ref
+        report_digest = _execution_report_digest_from_frame(frame)
+        if report_digest:
+            payload["execution_report_digest"] = report_digest
+        return payload
 
     def _get_frame(self, frame_id: str) -> SkillFrameState:
         frame = self.store.get(frame_id)

@@ -279,6 +279,9 @@ describe('useNavigatorChat business action UX', () => {
             execution_report_digest: {
               status: 'COMPLETED',
               summary: '履约技能执行完成',
+              skill_id: 'tms-fulfillment-agent',
+              frame_kind: 'SKILL',
+              generated_at: '2026-05-17T12:00:00Z',
             },
           },
         },
@@ -318,6 +321,9 @@ describe('useNavigatorChat business action UX', () => {
       status: 'COMPLETED',
       summary: '履约技能执行完成',
       reportRef: 'frame-report://task-1/frame-1',
+      skillId: 'tms-fulfillment-agent',
+      frameKind: 'SKILL',
+      generatedAt: '2026-05-17T12:00:00Z',
     })
   })
 
@@ -343,6 +349,9 @@ describe('useNavigatorChat business action UX', () => {
             execution_report_digest: {
               status: 'COMPLETED',
               summary: '业务函数执行完成',
+              skill_id: 'tms-vehicle-agent',
+              frame_kind: 'FUNCTION',
+              generated_at: '2026-05-17T12:00:01Z',
             },
           },
         },
@@ -356,6 +365,9 @@ describe('useNavigatorChat business action UX', () => {
             execution_report_digest: {
               status: 'COMPLETED',
               summary: '根任务执行完成',
+              skill_id: 'root-agent',
+              frame_kind: 'ROOT',
+              generated_at: '2026-05-17T12:00:02Z',
             },
           },
           terminal: true,
@@ -389,6 +401,9 @@ describe('useNavigatorChat business action UX', () => {
       status: 'COMPLETED',
       summary: '业务函数执行完成',
       reportRef: 'frame-report://task-1/function-frame',
+      skillId: 'tms-vehicle-agent',
+      frameKind: 'FUNCTION',
+      generatedAt: '2026-05-17T12:00:01Z',
     })
 
     const reply = chat.messages.value.find((message) => message.messageType === 'RESULT')
@@ -397,6 +412,9 @@ describe('useNavigatorChat business action UX', () => {
       status: 'COMPLETED',
       summary: '根任务执行完成',
       reportRef: 'frame-report://task-1/root-frame',
+      skillId: 'root-agent',
+      frameKind: 'ROOT',
+      generatedAt: '2026-05-17T12:00:02Z',
     })
   })
 })

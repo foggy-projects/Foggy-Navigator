@@ -136,6 +136,7 @@ async def resume(request: ResumeRequest) -> ResumeResponse:
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         )
+    resume_message = _enrich_resume_message_with_execution_report(resume_message)
 
     return ResumeResponse(
         task_id=request.task_id,
@@ -277,6 +278,27 @@ def _build_resume_message(
         "suspend_id": approval_request.get("suspend_id"),
         "function_frame_id": payload.get("function_frame_id"),
     }
+
+
+def _enrich_resume_message_with_execution_report(message: dict[str, Any]) -> dict[str, Any]:
+    if _runtime is None:
+        return message
+    function_frame_id = message.get("function_frame_id")
+    if not isinstance(function_frame_id, str) or not function_frame_id:
+        return message
+    function_frame = _runtime.get_frame(function_frame_id)
+    if function_frame is None:
+        return message
+    state = function_frame.private_working_state
+    report_ref = state.get("execution_report_ref")
+    if isinstance(report_ref, str) and report_ref:
+        message["execution_report_ref"] = report_ref
+        message["function_execution_report_ref"] = report_ref
+    report_digest = state.get("execution_report_digest")
+    if isinstance(report_digest, dict):
+        message["execution_report_digest"] = report_digest
+        message["function_execution_report_digest"] = report_digest
+    return message
 
 
 def _fallback_resume_message(approval_result: str) -> str:

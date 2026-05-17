@@ -14,8 +14,12 @@ import com.foggy.navigator.business.agent.model.form.WorkerGatewayResumeForm;
 import com.foggy.navigator.business.agent.repository.BusinessFunctionSuspensionRepository;
 import com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterInvoker;
 import com.foggy.navigator.business.agent.service.adapter.BusinessFunctionAdapterResult;
+import com.foggy.navigator.business.agent.service.report.BusinessFunctionExecutionReportBridge;
+import com.foggy.navigator.business.agent.service.report.BusinessFunctionExecutionReportRequest;
+import com.foggy.navigator.business.agent.service.report.BusinessFunctionExecutionReportUpdate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
@@ -68,6 +72,14 @@ public class BusinessFunctionSuspensionService {
     private final BusinessFunctionRuntimeAuditService auditService;
     private final BusinessFunctionAuthorizationService authorizationService;
     private final BusinessFunctionAdapterInvoker adapterInvoker;
+    private BusinessFunctionExecutionReportBridge executionReportBridge = BusinessFunctionExecutionReportBridge.noop();
+
+    @Autowired(required = false)
+    public void setExecutionReportBridge(BusinessFunctionExecutionReportBridge executionReportBridge) {
+        if (executionReportBridge != null) {
+            this.executionReportBridge = executionReportBridge;
+        }
+    }
 
     @Transactional
     public BusinessFunctionSuspensionEntity createSuspension(BusinessTaskScopedTokenDTO token, String functionId, String version, String inputJson, String idempotencyKey) {
@@ -554,11 +566,28 @@ public class BusinessFunctionSuspensionService {
             return;
         }
 
+        String content = buildBusinessExecutionResultContent(success, adapterResult, errorMessage);
+        String statusValue = success ? WorkerGatewayInvokeResponseDTO.STATUS_SUCCESS : "FAILED";
+        String executionStatusValue = success ? EXECUTION_COMPLETED : EXECUTION_FAILED;
+        String adapterOutputJson = adapterResult != null ? adapterResult.getOutputJson() : null;
+        String outputCode = success ? extractOutputCode(adapterOutputJson) : null;
+        boolean hasOutputData = success && hasOutputData(adapterOutputJson);
+        BusinessFunctionExecutionReportUpdate reportUpdate = updateExecutionReportSafely(
+                suspension,
+                success,
+                statusValue,
+                executionStatusValue,
+                content,
+                errorMessage,
+                adapterOutputJson,
+                outputCode,
+                hasOutputData);
+
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("subtype", SUBTYPE_BUSINESS_FUNCTION_RESULT_MESSAGE);
-        payload.put("content", buildBusinessExecutionResultContent(success, adapterResult, errorMessage));
-        payload.put("status", success ? WorkerGatewayInvokeResponseDTO.STATUS_SUCCESS : "FAILED");
-        payload.put("executionStatus", success ? EXECUTION_COMPLETED : EXECUTION_FAILED);
+        payload.put("content", content);
+        payload.put("status", statusValue);
+        payload.put("executionStatus", executionStatusValue);
         payload.put("suspendId", suspension.getSuspendId());
         payload.put("functionId", suspension.getFunctionId());
         payload.put("version", suspension.getVersion());
@@ -568,15 +597,87 @@ public class BusinessFunctionSuspensionService {
         payload.put("workerSessionId", suspension.getWorkerSessionId());
         if (success && adapterResult != null) {
             payload.put("adapterMessage", adapterResult.getMessage());
-            payload.put("outputCode", extractOutputCode(adapterResult.getOutputJson()));
-            payload.put("hasOutputData", hasOutputData(adapterResult.getOutputJson()));
+            payload.put("outputCode", outputCode);
+            payload.put("hasOutputData", hasOutputData);
         } else if (!success && StringUtils.hasText(errorMessage)) {
             payload.put("errorMessage", truncate(errorMessage, 500));
         }
+        applyExecutionReportPayload(payload, reportUpdate);
 
         AgentMessage message = AgentMessage.of(sessionId, BUSINESS_AGENT_ID, MessageType.TEXT_COMPLETE, payload);
         message.setTaskId(resolveConversationTaskId(suspension));
         publishBusinessExecutionResultMessageAfterCommit(suspension.getSuspendId(), message);
+    }
+
+    private BusinessFunctionExecutionReportUpdate updateExecutionReportSafely(
+            BusinessFunctionSuspensionEntity suspension,
+            boolean success,
+            String status,
+            String executionStatus,
+            String content,
+            String errorMessage,
+            String adapterOutputJson,
+            String outputCode,
+            boolean hasOutputData) {
+        if (!StringUtils.hasText(suspension.getWorkerTaskId())
+                || !StringUtils.hasText(suspension.getSuspendId())) {
+            return null;
+        }
+        try {
+            return executionReportBridge.updateAfterBusinessFunctionResult(
+                    BusinessFunctionExecutionReportRequest.builder()
+                            .workerTaskId(suspension.getWorkerTaskId())
+                            .workerSessionId(suspension.getWorkerSessionId())
+                            .suspendId(suspension.getSuspendId())
+                            .functionId(suspension.getFunctionId())
+                            .version(suspension.getVersion())
+                            .success(success)
+                            .status(status)
+                            .executionStatus(executionStatus)
+                            .content(content)
+                            .errorMessage(errorMessage)
+                            .businessTaskId(suspension.getTaskId())
+                            .businessSessionId(suspension.getSessionId())
+                            .adapterOutputJson(adapterOutputJson)
+                            .outputCode(outputCode)
+                            .hasOutputData(hasOutputData)
+                            .build());
+        } catch (Exception e) {
+            log.warn("Failed to update business function execution report: suspendId={}",
+                    suspension.getSuspendId(), e);
+            return null;
+        }
+    }
+
+    private void applyExecutionReportPayload(
+            Map<String, Object> payload,
+            BusinessFunctionExecutionReportUpdate reportUpdate) {
+        if (reportUpdate == null) {
+            return;
+        }
+        putTextIfPresent(payload, "execution_report_ref", reportUpdate.getExecutionReportRef());
+        putObjectIfPresent(payload, "execution_report_digest", reportUpdate.getExecutionReportDigest());
+        putTextIfPresent(payload, "function_frame_id", reportUpdate.getFunctionFrameId());
+        putTextIfPresent(payload, "functionFrameId", reportUpdate.getFunctionFrameId());
+        putTextIfPresent(payload, "function_execution_report_ref", reportUpdate.getFunctionExecutionReportRef());
+        putObjectIfPresent(payload, "function_execution_report_digest", reportUpdate.getFunctionExecutionReportDigest());
+        putTextIfPresent(payload, "root_frame_id", reportUpdate.getRootFrameId());
+        putTextIfPresent(payload, "root_execution_report_ref", reportUpdate.getRootExecutionReportRef());
+        putObjectIfPresent(payload, "root_execution_report_digest", reportUpdate.getRootExecutionReportDigest());
+        putTextIfPresent(payload, "child_execution_report_ref", reportUpdate.getChildExecutionReportRef());
+        putObjectIfPresent(payload, "child_execution_report_digest", reportUpdate.getChildExecutionReportDigest());
+    }
+
+    private void putTextIfPresent(Map<String, Object> payload, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            payload.put(key, value);
+        }
+    }
+
+    private void putObjectIfPresent(Map<String, Object> payload, String key, Object value) {
+        if (value != null) {
+            payload.put(key, value);
+        }
     }
 
     private String buildBusinessExecutionResultContent(boolean success,

@@ -132,4 +132,19 @@ public class LanggraphWorkerClient {
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
                 .doOnError(e -> log.warn("Record interruption failed for task {}: {}", taskId, e.getMessage()));
     }
+
+    /**
+     * Reconcile a Java-owned business function terminal result back into
+     * Python Worker frame execution reports.
+     */
+    public Mono<Map<String, Object>> recordBusinessFunctionResult(Map<String, Object> body) {
+        return webClient.post()
+                .uri("/api/v1/frames/business-function-result")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnError(e -> log.warn("Business function report reconciliation failed for task {}: {}",
+                        body != null ? body.get("taskId") : null, e.getMessage()));
+    }
 }

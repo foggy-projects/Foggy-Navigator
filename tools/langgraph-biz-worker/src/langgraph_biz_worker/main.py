@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
-from .routes import account_context, frame_interruption, health, query, resume, skills
+from .routes import account_context, frame_interruption, frame_reports, health, query, resume, skills
 
 logger = logging.getLogger("langgraph_biz_worker")
 
@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI):
     from .runtime.fsscript_bridge import get_fsscript_bridge
     resume.configure(get_runtime(), get_journal(), get_fsscript_bridge())
     frame_interruption.configure(get_runtime(), get_journal())
+    frame_reports.configure(get_runtime(), get_journal())
     logger.info("Resume endpoint configured with shared runtime and journal")
 
     # Wire up skills route with sync callback (Doc 34 §4)
@@ -73,6 +74,7 @@ app.include_router(health.router)
 app.include_router(query.router)
 app.include_router(resume.router)
 app.include_router(frame_interruption.router)
+app.include_router(frame_reports.router)
 app.include_router(skills.router)
 app.include_router(account_context.router)
 

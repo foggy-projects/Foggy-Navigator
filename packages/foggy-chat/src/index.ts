@@ -13,7 +13,7 @@ export type {
   ConfirmationRequestPayload,
 } from './types/aip'
 export type { EventAdapter } from './types/adapter'
-export type { ChatMessage, ConnectionStatus } from './types/chat'
+export type { ChatMessage, ConnectionStatus, ExecutionReportDigest } from './types/chat'
 export type {
   BusinessSuspensionDecision,
   BusinessSuspensionDecisionPayload,
@@ -35,6 +35,7 @@ export { default as MessageBubble } from './components/MessageBubble.vue'
 export { default as MessageInput } from './components/MessageInput.vue'
 export { default as ToolCallBlock } from './components/ToolCallBlock.vue'
 export { default as ToolCallGroup } from './components/ToolCallGroup.vue'
+export { default as ExecutionReportInline } from './components/ExecutionReportInline.vue'
 export { default as ThinkingIndicator } from './components/ThinkingIndicator.vue'
 export { default as ErrorBlock } from './components/ErrorBlock.vue'
 export { default as StatusBadge } from './components/StatusBadge.vue'

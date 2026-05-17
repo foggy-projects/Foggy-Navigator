@@ -89,8 +89,8 @@
 <script setup lang="ts">
 import { ElIcon } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
+import { ExecutionReportInline } from '@foggy/chat'
 import type { SkillFrameBlock, ToolExecutionBlock } from '../types'
-import ExecutionReportInline from './ExecutionReportInline.vue'
 
 defineOptions({ name: 'SkillFrameBlockView' })
 

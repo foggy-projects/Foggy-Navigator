@@ -91,6 +91,10 @@
         </div>
       </template>
     </template>
+    <ExecutionReportInline
+      :report-ref="props.message.executionReportRef"
+      :digest="props.message.executionReportDigest"
+    />
   </div>
 </template>
 
@@ -98,6 +102,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElDialog } from 'element-plus'
 import type { ChatMessage } from '../types/chat'
+import ExecutionReportInline from './ExecutionReportInline.vue'
 
 const props = defineProps<{
   message: ChatMessage

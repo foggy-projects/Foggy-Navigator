@@ -5,6 +5,10 @@
       <span class="timestamp">{{ formattedTime }}</span>
     </div>
     <div ref="contentRef" class="bubble-content markdown-body" v-html="renderedContent"></div>
+    <ExecutionReportInline
+      :report-ref="props.message.executionReportRef"
+      :digest="props.message.executionReportDigest"
+    />
     <div v-if="props.message.images && props.message.images.length > 0" class="bubble-images">
       <img
         v-for="(img, idx) in props.message.images"
@@ -49,6 +53,7 @@ import { AipMessageType } from '../types/aip'
 import type { ChatMessage } from '../types/chat'
 import { copyToClipboard } from '../utils/clipboard'
 import { renderMarkdown } from '../utils/markdownRenderer'
+import ExecutionReportInline from './ExecutionReportInline.vue'
 
 const props = defineProps<{
   message: ChatMessage

@@ -307,6 +307,105 @@ def test_function_call_approval_report_is_readable(tmp_path):
     assert result["summary"]["approval"]["suspend_id"] == "sus_report"
 
 
+def test_business_function_result_finalizes_child_and_root_reports(tmp_path):
+    runtime = _runtime_with_journal(tmp_path)
+    root_id = runtime.invoke_skill("task_business_result_report", "system.root")
+    child_id = runtime.invoke_child_skill(root_id, "child_skill")
+    function_frame_id = runtime.invoke_function_call(
+        child_id,
+        "tms.vehicle.create",
+        "v1",
+        arguments={"vehicleType": 1},
+    )
+    approval_request = {
+        "approval_type": "business_function",
+        "function_id": "tms.vehicle.create",
+        "version": "v1",
+        "suspend_id": "sus_business_result",
+        "summary": {"title": "Approval required"},
+        "payload": {"function_frame_id": function_frame_id},
+    }
+    runtime.suspend_function_call(function_frame_id, approval_request)
+    runtime.mark_awaiting_approval(child_id, approval_request)
+    runtime.mark_child_awaiting_approval(root_id, child_id, approval_request)
+    runtime.resume_from_approval(root_id, "approved", "ok")
+
+    update = runtime.finalize_business_function_result(
+        "task_business_result_report",
+        "sus_business_result",
+        success=True,
+        result={"status": "SUCCESS", "executionStatus": "COMPLETED"},
+        summary="Business function execution completed.",
+    )
+
+    assert update["ok"] is True
+    assert update["function_execution_report_digest"]["status"] == "COMPLETED"
+    assert update["child_execution_report_digest"]["status"] == "COMPLETED"
+    assert update["root_execution_report_digest"]["status"] == "COMPLETED"
+    assert update["closed_skill_frames"][0]["frame_id"] == child_id
+    assert update["closed_skill_frames"][0]["execution_report_ref"] == (
+        f"frame-report://task_business_result_report/{child_id}"
+    )
+    assert runtime.get_frame(function_frame_id).status == FrameStatus.COMPLETED
+    assert runtime.get_frame(child_id).status == FrameStatus.COMPLETED
+    assert runtime.get_frame(root_id).status == FrameStatus.COMPLETED
+
+    root_report = read_frame_execution_report(
+        tmp_path,
+        task_id="task_business_result_report",
+        frame_id=root_id,
+        mode="summary",
+    )
+    assert root_report["summary"]["status"] == "COMPLETED"
+    assert root_report["summary"]["child_reports"][0]["status"] == "COMPLETED"
+
+
+def test_business_function_result_failure_finalizes_root_report(tmp_path):
+    runtime = _runtime_with_journal(tmp_path)
+    root_id = runtime.invoke_skill("task_business_failure_report", "system.root")
+    function_frame_id = runtime.invoke_function_call(
+        root_id,
+        "tms.vehicle.create",
+        "v1",
+        arguments={"vehicleType": 1},
+    )
+    approval_request = {
+        "approval_type": "business_function",
+        "function_id": "tms.vehicle.create",
+        "version": "v1",
+        "suspend_id": "sus_business_failure",
+        "summary": {"title": "Approval required"},
+        "payload": {"function_frame_id": function_frame_id},
+    }
+    runtime.suspend_function_call(function_frame_id, approval_request)
+    runtime.mark_awaiting_approval(root_id, approval_request)
+    runtime.resume_from_approval(root_id, "approved", "ok")
+
+    update = runtime.finalize_business_function_result(
+        "task_business_failure_report",
+        "sus_business_failure",
+        success=False,
+        result={"status": "FAILED", "executionStatus": "FAILED"},
+        summary="Business function execution failed.",
+        error_message="adapter failed",
+    )
+
+    assert update["ok"] is True
+    assert update["function_execution_report_digest"]["status"] == "FAILED"
+    assert update["root_execution_report_digest"]["status"] == "FAILED"
+    assert runtime.get_frame(function_frame_id).status == FrameStatus.FAILED
+    assert runtime.get_frame(root_id).status == FrameStatus.FAILED
+
+    root_report = read_frame_execution_report(
+        tmp_path,
+        task_id="task_business_failure_report",
+        frame_id=root_id,
+        mode="summary",
+    )
+    assert root_report["summary"]["status"] == "FAILED"
+    assert root_report["summary"]["summary"] == "Business function execution failed."
+
+
 def test_llm_tool_reads_frame_execution_report(tmp_path):
     runtime = _runtime_with_journal(tmp_path)
     frame_id = runtime.invoke_skill("task_tool_report", "test_skill")

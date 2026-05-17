@@ -172,10 +172,9 @@
 import { ref, computed, watch, nextTick, type CSSProperties } from 'vue'
 import { ElInput, ElButton, ElTag, ElEmpty, ElAlert, ElIcon } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
-import { BusinessSuspensionDialog } from '@foggy/chat'
+import { BusinessSuspensionDialog, ExecutionReportInline } from '@foggy/chat'
 import { useNavigatorChat } from '../composables/useNavigatorChat'
 import SkillFrameBlockView from './SkillFrameBlockView.vue'
-import ExecutionReportInline from './ExecutionReportInline.vue'
 import type {
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,

@@ -95,6 +95,8 @@
               :error="item.msg.error || item.msg.content"
               :reconnectable="item.msg.reconnectable"
               :task-id="(item.msg.raw as Record<string, unknown>)?.taskId as string"
+              :report-ref="item.msg.executionReportRef"
+              :digest="item.msg.executionReportDigest"
               @reconnect="(taskId: string) => emit('reconnect', taskId)"
             />
             <TaskCompletionCard
