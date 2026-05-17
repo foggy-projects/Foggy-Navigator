@@ -36,6 +36,7 @@
 | `scripts/51-bootstrap-platform.sh` | 首次平台 bootstrap：租户、管理员、LLM、Biz Worker、Worker Pool、ClientApp、TMS env。 |
 | `scripts/52-check-platform-bootstrap.sh` | 检查主应用和 LangGraph Biz Worker 健康状态。 |
 | `scripts/53-smoke-tms-openapi.sh` | 用 TMS ClientApp runtime credential 执行 runtime-token、preflight、ask、messages 烟测。 |
+| `scripts/54-check-business-agent-materialize-env.sh` | 检查 backend 容器 Business Agent materialize worker URL 和 token 配置状态，token 只输出 configured。 |
 | `inventory.md` | 当前部署资产、端口、依赖、密钥清单。 |
 | `deployment-report-image-release-2026-05-15.md` | 本次部署流程改造报告。 |
 
@@ -116,6 +117,7 @@ GIT_REF=<tag-or-release-branch>
 IMAGE_TAG=dev-kvm-x3-20260515-1
 HARBOR_USERNAME=<harbor-user>
 HARBOR_PASSWORD=<harbor-password>
+BUSINESS_AGENT_DEV_SYNC_WORKER_URL=http://192.168.31.81:3061
 ```
 
 构建并推送：
@@ -167,6 +169,18 @@ bash deploy/dev-kvm-x3/scripts/53-smoke-tms-openapi.sh
 `tms-upstream.env` 给 TMS BFF/runner 使用，包含 ClientApp runtime credential、control key、model config 和 worker pool 信息，必须只在服务器或 secret 管理系统中保存。
 
 当前 dev/demo bootstrap 默认 `NAVIGATOR_TMS_MATERIALIZE_AGENT_BUNDLE=false`：先完成 ClientApp、Business Agent、public skill 索引、model grant 和 upstream user grant。TMS 侧同步真实 function manifest / skill bundle 后，再按需打开 materialize 或通过 CLI/SDK 执行 materialize，避免首次空 bundle 依赖 Worker 文件落地能力。
+
+Business Agent materialize worker 固定使用：
+
+```bash
+BUSINESS_AGENT_DEV_SYNC_WORKER_URL=http://192.168.31.81:3061
+```
+
+对应 token 只能放在远端 `/opt/foggy/navigator/runtime/release.env` 或服务器 secret 管理系统中，不提交、不打印。验证时使用：
+
+```bash
+bash deploy/dev-kvm-x3/scripts/54-check-business-agent-materialize-env.sh
+```
 
 只检查状态：
 
