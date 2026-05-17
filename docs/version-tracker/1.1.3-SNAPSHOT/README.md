@@ -63,6 +63,7 @@
   - [30-tms-e2e-agent-tenant-scope-bug.md](./upstream-integration/30-tms-e2e-agent-tenant-scope-bug.md) - 缺陷复现与修复 / TMS E2E Agent tenant scope 与 CLI body missing 问题
   - [31-openapi-model-config-and-attachment-e2e-bug.md](./upstream-integration/31-openapi-model-config-and-attachment-e2e-bug.md) - 缺陷复现与修复 / OpenAPI ask modelConfigId 合同与附件 E2E 透传问题
   - [32-e2e-scripted-tool-call-streaming-bug.md](./upstream-integration/32-e2e-scripted-tool-call-streaming-bug.md) - 缺陷复现与修复 / E2E scripted tool-call streaming 归一化问题
+  - [33-upstream-client-app-admin-key-request.md](./upstream-integration/33-upstream-client-app-admin-key-request.md) - 需求记录 / 上游系统级 ClientApp 管理凭证申请、Navigator operator 审批工具与多租户 control key 生成边界
 
 ## Acceptance Status
 
