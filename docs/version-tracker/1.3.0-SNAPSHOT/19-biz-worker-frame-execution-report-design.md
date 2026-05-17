@@ -12,7 +12,7 @@
 
 ## Status
 
-`DESIGN_ONLY`
+`PHASE_1_IMPLEMENTED`
 
 ## Priority
 
@@ -369,6 +369,19 @@ UI 可以在以下位置展示“查看执行报告”：
 4. 支持 child frame 递归摘要。
 5. 支持 redaction、payload truncation。
 6. 增加 CLI 或测试 helper，能对示例目录生成报告。
+
+Implementation status on 2026-05-17:
+
+1. 已新增 `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/frame_execution_report.py`。
+2. 已支持从 `FileFrameJournal` 按 `task_id + frame_id` 生成报告。
+3. 已支持从 frame JSON path 直接生成报告。
+4. 已输出：
+   - `frame-reports/<task-id>/<frame-id>.md`
+   - `frame-reports/<task-id>/<frame-id>.digest.json`
+   - `frame-reports/by-conversation/<conversation-id>/...`
+5. `report_ref` 已采用 `frame-report://<task-id>/<frame-id>`，避免只有 frame_id 时跨任务歧义。
+6. 已覆盖 child frame recursive report、approval pending、redaction、large payload truncation。
+7. `read_frame_execution_report` 工具、runtime hook、active_plan 写回仍留在 Phase 2/3，不纳入 Phase 1 完成口径。
 
 ### Phase 2 - Runtime Hooks
 
