@@ -27,7 +27,7 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class LanggraphBusinessFunctionExecutionReportBridge implements BusinessFunctionExecutionReportBridge {
 
-    private static final int MAX_ATTEMPTS = 3;
+    private static final int MAX_ATTEMPTS = 10;
 
     private final LanggraphTaskRepository taskRepository;
     private final LanggraphWorkerService workerService;
@@ -181,7 +181,7 @@ public class LanggraphBusinessFunctionExecutionReportBridge implements BusinessF
 
     private void sleepBeforeRetry(int attempt) {
         try {
-            Thread.sleep(150L * attempt);
+            Thread.sleep(200L * attempt);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
