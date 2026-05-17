@@ -16,6 +16,7 @@ import type {
   SkillFrameBlock,
   ToolExecutionBlock,
   NavigatorAction,
+  ExecutionReportDigest,
 } from '../types'
 
 let _seq = 0
@@ -301,6 +302,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       const content = openMessageContent(message)
       const sanitizedMessage = sanitizeValue(message) as OpenTaskMessage
       const actions = extractActions(sanitizedMessage)
+      const payload = normalizedPayload(message)
       if (message.type === 'USER') {
         if (options.includeUserMessages && content) {
           rawMessages.value.push({
@@ -323,6 +325,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
         if (!visibleContent) {
           continue
         }
+        const report = extractExecutionReport(undefined, payload)
         rawMessages.value.push({
           id,
           role: 'assistant',
@@ -334,8 +337,11 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           terminal: message.terminal,
           terminalStatus: message.terminalStatus ?? null,
           actions: messageActions.length > 0 ? messageActions : undefined,
+          executionReportRef: report.ref,
+          executionReportDigest: report.digest,
         })
       } else if (message.type === 'ERROR') {
+        const report = extractExecutionReport(undefined, payload)
         const errMsg = display.mode === 'business'
           ? sanitizeErrorSummary(content || '任务执行失败')
           : sanitizeText(content || '任务执行失败')
@@ -351,9 +357,10 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           terminal: message.terminal,
           terminalStatus: message.terminalStatus ?? null,
           error: errMsg,
+          executionReportRef: report.ref,
+          executionReportDigest: report.digest,
         })
       } else if (message.type === 'STATE') {
-        const payload = normalizedPayload(message)
         const subtype = firstString(payload.subtype, payload.stateType, payload.state_type)
         if (subtype === 'skill_frame_open' || subtype === 'skill_frame_close') {
           progressText.value = subtype === 'skill_frame_open' ? '正在执行技能...' : '技能执行完成'
@@ -665,6 +672,12 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     frame.skillId = skillId ?? frame.skillId
     frame.displayName = skillFrameDisplayName(frame)
     frame.trace = extractTrace(payload)
+    const report = extractExecutionReport({
+      ref: frame.executionReportRef,
+      digest: frame.executionReportDigest,
+    }, payload)
+    frame.executionReportRef = report.ref
+    frame.executionReportDigest = report.digest
 
     attachSkillFrame(taskId, frame, messageId, timestamp, status, message)
     touchMessages()
@@ -986,6 +999,10 @@ function mergeToolExecution(
   const finishedAt = phase === 'result' ? timestamp : existing?.finishedAt
   const durationMs = numberValue(payload.durationMs, payload.duration_ms, resultObject?.durationMs, resultObject?.duration_ms)
     ?? (startedAt && finishedAt ? Math.max(0, finishedAt - startedAt) : existing?.durationMs)
+  const report = extractExecutionReport({
+    ref: existing?.executionReportRef,
+    digest: existing?.executionReportDigest,
+  }, payload, resultObject, nestedResult)
 
   const block: ToolExecutionBlock = {
     toolCallId,
@@ -1004,6 +1021,8 @@ function mergeToolExecution(
     rawResult: phase === 'result' ? sanitizeValue(message) : existing?.rawResult,
     summary: [],
     trace: extractTrace(payload, resultObject, nestedResult),
+    executionReportRef: report.ref,
+    executionReportDigest: report.digest,
   }
   block.summary = buildToolSummary(block, payload, resultObject, nestedResult)
   return block
@@ -1026,6 +1045,91 @@ function buildToolSummary(
   if (errorType) parts.push(`errorType=${errorType}`)
   if (block.error && typeof block.error === 'string') parts.push(block.error)
   return parts.length > 0 ? parts : [block.status === 'running' ? '执行中' : statusLabel(block.status)]
+}
+
+interface ExecutionReportFields {
+  ref?: string
+  digest?: ExecutionReportDigest
+}
+
+function extractExecutionReport(
+  existing: ExecutionReportFields | undefined,
+  ...sources: Array<Record<string, unknown> | undefined>
+): ExecutionReportFields {
+  let ref = existing?.ref
+  let digest = existing?.digest
+
+  for (const source of sources) {
+    if (!source) continue
+    const directRef = firstString(
+      source.executionReportRef,
+      source.execution_report_ref,
+      source.reportRef,
+      source.report_ref
+    )
+    if (directRef) ref = directRef
+
+    const directDigest = normalizeExecutionReportDigest(
+      source.executionReportDigest ?? source.execution_report_digest ?? source.reportDigest ?? source.report_digest
+    )
+    if (directDigest) digest = mergeExecutionReportDigest(digest, directDigest)
+
+    const nestedReport = objectValue(source.executionReport ?? source.execution_report ?? source.report)
+    if (nestedReport) {
+      const nested = extractExecutionReport({ ref, digest }, nestedReport)
+      ref = nested.ref
+      digest = nested.digest
+    }
+  }
+
+  const digestRef = firstString(digest?.reportRef, digest?.['report_ref'], digest?.['executionReportRef'], digest?.['execution_report_ref'])
+  if (!ref && digestRef) ref = digestRef
+  if (ref && digest?.reportRef !== ref) digest = mergeExecutionReportDigest(digest, { reportRef: ref })
+  return { ref, digest }
+}
+
+function normalizeExecutionReportDigest(value: unknown): ExecutionReportDigest | undefined {
+  const parsed = parseMaybeJson(value)
+  if (typeof parsed === 'string' && parsed.trim()) {
+    return { summary: parsed.trim() }
+  }
+  const object = objectValue(parsed)
+  if (!object) return undefined
+
+  const sanitized = sanitizeValue(object) as Record<string, unknown>
+  const digest: ExecutionReportDigest = { ...sanitized }
+  const status = firstString(sanitized.status, sanitized.state)
+  const summary = firstString(sanitized.summary, sanitized.text, sanitized.message)
+  const error = firstString(sanitized.error, sanitized.errorMessage, sanitized.error_message)
+  const reportRef = firstString(
+    sanitized.reportRef,
+    sanitized.report_ref,
+    sanitized.executionReportRef,
+    sanitized.execution_report_ref
+  )
+  const taskId = firstString(sanitized.taskId, sanitized.task_id)
+  const frameId = firstString(sanitized.frameId, sanitized.frame_id)
+  if (status) digest.status = status
+  if (summary) digest.summary = summary
+  if (error) digest.error = error
+  if (reportRef) digest.reportRef = reportRef
+  if (taskId) digest.taskId = taskId
+  if (frameId) digest.frameId = frameId
+  return digest
+}
+
+function mergeExecutionReportDigest(
+  previous: ExecutionReportDigest | undefined,
+  next: ExecutionReportDigest
+): ExecutionReportDigest {
+  return { ...(previous ?? {}), ...next }
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return undefined
 }
 
 function extractTrace(...sources: Array<Record<string, unknown> | undefined>): Record<string, unknown> {

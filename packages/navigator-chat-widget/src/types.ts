@@ -32,6 +32,10 @@ export interface ChatMessage {
   costUsd?: number
   /** 错误信息 */
   error?: string
+  /** Navigator frame execution report 引用 */
+  executionReportRef?: string
+  /** Navigator frame execution report 摘要 */
+  executionReportDigest?: ExecutionReportDigest
 }
 
 /** Widget 展示模式 */
@@ -45,6 +49,17 @@ export interface NavigatorAction {
   url?: string
   payload?: unknown
   raw?: unknown
+}
+
+/** Navigator Frame Execution Report 精简摘要 */
+export interface ExecutionReportDigest {
+  status?: string
+  summary?: string
+  error?: string | null
+  reportRef?: string
+  taskId?: string
+  frameId?: string
+  [key: string]: unknown
 }
 
 /** Debug 模式下的一次工具执行块 */
@@ -65,6 +80,8 @@ export interface ToolExecutionBlock {
   rawResult?: unknown
   summary: string[]
   trace: Record<string, unknown>
+  executionReportRef?: string
+  executionReportDigest?: ExecutionReportDigest
 }
 
 /** Debug 模式下的 Skill Frame 执行块 */
@@ -84,6 +101,8 @@ export interface SkillFrameBlock {
   toolExecutions: ToolExecutionBlock[]
   children: SkillFrameBlock[]
   trace: Record<string, unknown>
+  executionReportRef?: string
+  executionReportDigest?: ExecutionReportDigest
 }
 
 /** 任务状态 */

@@ -256,4 +256,147 @@ describe('useNavigatorChat business action UX', () => {
     expect(frameMessage?.content).not.toContain('frm_622f67035042')
     expect(frameMessage?.skillFrame?.displayName).toBe('执行步骤')
   })
+
+  it('keeps execution report fields on skill frames', async () => {
+    const task: AgentTask = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'frame-close',
+          type: 'STATE',
+          content: 'skill frame close',
+          timestamp: 1_000,
+          metadata: {
+            subtype: 'skill_frame_close',
+            skillFrameId: 'frame-1',
+            skillId: 'tms-fulfillment-agent',
+            execution_report_ref: 'frame-report://task-1/frame-1',
+            execution_report_digest: {
+              status: 'COMPLETED',
+              summary: '履约技能执行完成',
+            },
+          },
+        },
+        {
+          id: 'final-result',
+          type: 'RESULT',
+          content: '已完成操作。',
+          timestamp: 2_000,
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+        },
+      ],
+    }
+
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          showRuntimeEvents: true,
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('创建车辆')
+    await nextTick()
+
+    const frame = chat.messages.value.find((message) => message.skillFrame)?.skillFrame
+    expect(frame?.executionReportRef).toBe('frame-report://task-1/frame-1')
+    expect(frame?.executionReportDigest).toMatchObject({
+      status: 'COMPLETED',
+      summary: '履约技能执行完成',
+      reportRef: 'frame-report://task-1/frame-1',
+    })
+  })
+
+  it('keeps execution report fields on tool results and final replies', async () => {
+    const task: AgentTask = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'tool-result',
+          type: 'TOOL_RESULT',
+          content: JSON.stringify({ status: 'COMPLETED', success: true }),
+          timestamp: 1_000,
+          metadata: {
+            toolName: 'invoke_business_function',
+            toolCallId: 'tool-1',
+            functionId: 'tms.vehicle.create',
+            execution_report_ref: 'frame-report://task-1/function-frame',
+            execution_report_digest: {
+              status: 'COMPLETED',
+              summary: '业务函数执行完成',
+            },
+          },
+        },
+        {
+          id: 'final-result',
+          type: 'RESULT',
+          content: '车辆创建完成。',
+          timestamp: 2_000,
+          metadata: {
+            execution_report_ref: 'frame-report://task-1/root-frame',
+            execution_report_digest: {
+              status: 'COMPLETED',
+              summary: '根任务执行完成',
+            },
+          },
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+        },
+      ],
+    }
+
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          showToolResults: true,
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('创建车辆')
+    await nextTick()
+
+    const tool = chat.messages.value.find((message) => message.toolExecution)?.toolExecution
+    expect(tool?.executionReportRef).toBe('frame-report://task-1/function-frame')
+    expect(tool?.executionReportDigest).toMatchObject({
+      status: 'COMPLETED',
+      summary: '业务函数执行完成',
+      reportRef: 'frame-report://task-1/function-frame',
+    })
+
+    const reply = chat.messages.value.find((message) => message.messageType === 'RESULT')
+    expect(reply?.executionReportRef).toBe('frame-report://task-1/root-frame')
+    expect(reply?.executionReportDigest).toMatchObject({
+      status: 'COMPLETED',
+      summary: '根任务执行完成',
+      reportRef: 'frame-report://task-1/root-frame',
+    })
+  })
 })

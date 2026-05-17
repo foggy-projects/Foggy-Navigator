@@ -18,6 +18,11 @@
         {{ frame.closeContent || frame.openContent }}
       </div>
 
+      <ExecutionReportInline
+        :report-ref="frame.executionReportRef"
+        :digest="frame.executionReportDigest"
+      />
+
       <div v-if="frame.toolExecutions.length" class="nc-frame-tools">
         <details
           v-for="tool in frame.toolExecutions"
@@ -41,6 +46,10 @@
             <div class="nc-tool-summary-text">
               摘要：{{ tool.summary.join(', ') }}
             </div>
+            <ExecutionReportInline
+              :report-ref="tool.executionReportRef"
+              :digest="tool.executionReportDigest"
+            />
             <details class="nc-nested">
               <summary>参数</summary>
               <pre>{{ formatJson(tool.args) }}</pre>
@@ -81,6 +90,7 @@
 import { ElIcon } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import type { SkillFrameBlock, ToolExecutionBlock } from '../types'
+import ExecutionReportInline from './ExecutionReportInline.vue'
 
 defineOptions({ name: 'SkillFrameBlockView' })
 

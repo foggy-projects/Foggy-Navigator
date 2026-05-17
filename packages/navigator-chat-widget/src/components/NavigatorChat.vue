@@ -45,6 +45,10 @@
                 {{ action.label }}
               </el-button>
             </div>
+            <ExecutionReportInline
+              :report-ref="msg.executionReportRef"
+              :digest="msg.executionReportDigest"
+            />
             <div v-if="msg.durationMs || msg.costUsd" class="nc-meta">
               <span v-if="msg.durationMs">{{ (msg.durationMs / 1000).toFixed(1) }}s</span>
               <span v-if="msg.costUsd"> · ${{ msg.costUsd.toFixed(4) }}</span>
@@ -69,6 +73,10 @@
                 <div class="nc-tool-summary">
                   摘要：{{ msg.toolExecution.summary.join(', ') }}
                 </div>
+                <ExecutionReportInline
+                  :report-ref="msg.toolExecution.executionReportRef"
+                  :digest="msg.toolExecution.executionReportDigest"
+                />
                 <details class="nc-nested">
                   <summary>参数</summary>
                   <pre>{{ formatJson(msg.toolExecution.args) }}</pre>
@@ -167,6 +175,7 @@ import { Loading } from '@element-plus/icons-vue'
 import { BusinessSuspensionDialog } from '@foggy/chat'
 import { useNavigatorChat } from '../composables/useNavigatorChat'
 import SkillFrameBlockView from './SkillFrameBlockView.vue'
+import ExecutionReportInline from './ExecutionReportInline.vue'
 import type {
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
