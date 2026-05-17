@@ -76,6 +76,8 @@ class QueryEvent(BaseModel):
 
     # Result metadata (populated on type="result")
     duration_ms: int | None = None
+    execution_report_ref: str | None = None
+    execution_report_digest: dict[str, Any] | None = None
 
     # Structured output (populated on type="result")
     structured_output: dict[str, Any] | None = None

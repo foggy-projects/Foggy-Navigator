@@ -31,6 +31,7 @@ from ..tools.business_function_tools import (
 from .account_file_tools import AccountFileTools, FileToolError
 from .account_context_files import build_account_context_prompt
 from .artifact_store import ArtifactError, ArtifactStore
+from .frame_execution_report import read_frame_execution_report
 from .public_skill_resource_tools import PublicSkillResourceTools
 from .skill_runtime import SkillRuntime
 
@@ -296,6 +297,7 @@ class LlmSkillAgent:
         if name == "submit_skill_result" and not result.get("ok"):
             event_type = "skill_result_reject"
 
+        report_payload = _execution_report_payload_from_result(result)
         result_event = QueryEvent(
             type=event_type,
             task_id=task_id,
@@ -308,6 +310,8 @@ class LlmSkillAgent:
             tool_name=name,
             function_id=_tool_function_id(name, safe_args, result),
             args=safe_args,
+            execution_report_ref=report_payload.get("execution_report_ref"),
+            execution_report_digest=report_payload.get("execution_report_digest"),
         )
         events.append(result_event)
         events.extend(extra_events)
@@ -426,10 +430,12 @@ class LlmSkillAgent:
                 )
             except BusinessFunctionToolError as exc:
                 self._runtime.fail_frame(function_frame_id, str(exc))
+                function_frame = self._runtime.get_frame(function_frame_id)
                 return {
                     "ok": False,
                     "error": str(exc),
                     "function_frame_id": function_frame_id,
+                    **_execution_report_payload_from_frame(function_frame),
                 }
 
         if _looks_like_business_function_id(name):
@@ -470,11 +476,25 @@ class LlmSkillAgent:
                 )
             except BusinessFunctionToolError as exc:
                 self._runtime.fail_frame(function_frame_id, str(exc))
+                function_frame = self._runtime.get_frame(function_frame_id)
                 return {
                     "ok": False,
                     "error": str(exc),
                     "function_frame_id": function_frame_id,
+                    **_execution_report_payload_from_frame(function_frame),
                 }
+
+        if name == "read_frame_execution_report":
+            if self._data_root is None:
+                return {"ok": False, "error": "Frame execution report data root is not configured"}
+            return read_frame_execution_report(
+                self._data_root,
+                report_ref=args.get("report_ref") or args.get("reportRef"),
+                task_id=args.get("task_id") or args.get("taskId"),
+                frame_id=args.get("frame_id") or args.get("frameId"),
+                mode=args.get("mode", "summary"),
+                max_chars=args.get("max_chars") or args.get("maxChars") or 6000,
+            )
 
         # --- Artifact tools ---
         if name == "create_artifact":
@@ -592,6 +612,8 @@ class LlmSkillAgent:
                 parent_frame_id=frame_id,
                 skill_id=child_skill_id,
                 content=f"Frame closed: {child_skill_id}",
+                execution_report_ref=promoted.get("execution_report_ref"),
+                execution_report_digest=promoted.get("execution_report_digest"),
             ))
             return {"ok": True, "result": promoted, "_events": child_events}
 
@@ -671,6 +693,8 @@ class LlmSkillAgent:
                 parent_frame_id=frame_id,
                 skill_id=child.skill_id,
                 content=f"Frame closed: {child.skill_id}",
+                execution_report_ref=promoted.get("execution_report_ref"),
+                execution_report_digest=promoted.get("execution_report_digest"),
             ))
             return {
                 "ok": True,
@@ -719,7 +743,12 @@ class LlmSkillAgent:
                 artifact_refs=args.get("artifact_refs"),
                 evidence_refs=args.get("evidence_refs"),
             )
-            return {"ok": validation.ok, "errors": validation.errors}
+            frame = self._runtime.get_frame(frame_id)
+            return {
+                "ok": validation.ok,
+                "errors": validation.errors,
+                **_execution_report_payload_from_frame(frame),
+            }
 
         return {"ok": False, "error": f"Unknown tool: {name}"}
 
@@ -757,6 +786,8 @@ class LlmSkillAgent:
             self._runtime.suspend_function_call(function_frame_id, approval_request)
             self._runtime.mark_awaiting_approval(caller_frame_id, approval_request)
             caller_frame = self._runtime.get_frame(caller_frame_id)
+            function_frame = self._runtime.get_frame(function_frame_id)
+            report_payload = _execution_report_payload_from_frame(function_frame)
             approval_event = QueryEvent(
                 type="approval_required",
                 task_id=task_id,
@@ -771,12 +802,15 @@ class LlmSkillAgent:
                 reason=summary.get("reason") or "approval_required",
                 summary=summary,
                 timeout_at=_business_function_timeout_at(gateway_result),
+                execution_report_ref=report_payload.get("execution_report_ref"),
+                execution_report_digest=report_payload.get("execution_report_digest"),
             )
             return {
                 **result,
                 "approval_wait": True,
                 "suspend_id": suspend_id,
                 "function_frame_id": function_frame_id,
+                **report_payload,
                 "_events": [approval_event],
                 "_suspended": True,
             }
@@ -785,10 +819,12 @@ class LlmSkillAgent:
             function_frame_id,
             result=gateway_result,
         )
+        function_frame = self._runtime.get_frame(function_frame_id)
         return {
             **result,
             "approval_wait": False,
             "function_frame_id": function_frame_id,
+            **_execution_report_payload_from_frame(function_frame),
         }
 
     def _append_private_message(self, frame_id: str, role: str, content: Any) -> None:
@@ -1309,6 +1345,7 @@ _GLOBAL_TOOL_NAMES = [
     "invoke_business_function",
     "list_skill_resources",
     "read_skill_resource",
+    "read_frame_execution_report",
 ]
 
 _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES = {
@@ -1460,6 +1497,35 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "max_lines": {"type": "integer"},
                 },
                 "required": ["skill_id", "relative_path"],
+            },
+        },
+    },
+    "read_frame_execution_report": {
+        "type": "function",
+        "function": {
+            "name": "read_frame_execution_report",
+            "description": (
+                "Read a persisted Frame execution report by report_ref or by "
+                "task_id/frame_id. Use this for debugging or reviewing prior "
+                "frame work instead of re-reading raw frame JSON."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "report_ref": {
+                        "type": "string",
+                        "description": "Frame report reference, e.g. frame-report://task_id/frame_id.",
+                    },
+                    "task_id": {"type": "string"},
+                    "frame_id": {"type": "string"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["summary", "metadata", "markdown"],
+                        "description": "summary is compact; markdown returns capped human-readable report text.",
+                    },
+                    "max_chars": {"type": "integer"},
+                },
+                "required": [],
             },
         },
     },
@@ -1779,6 +1845,45 @@ def _safe_content(content: Any) -> Any:
         return json.loads(json.dumps(content))
     except Exception:
         return str(content)
+
+
+def _execution_report_payload_from_frame(frame: Any | None) -> dict[str, Any]:
+    if frame is None:
+        return {}
+    state = getattr(frame, "private_working_state", {}) or {}
+    if not isinstance(state, dict):
+        return {}
+    payload: dict[str, Any] = {}
+    report_ref = state.get("execution_report_ref")
+    if isinstance(report_ref, str) and report_ref:
+        payload["execution_report_ref"] = report_ref
+    report_digest = state.get("execution_report_digest")
+    if isinstance(report_digest, dict) and report_digest:
+        payload["execution_report_digest"] = _safe_content(report_digest)
+    return payload
+
+
+def _execution_report_payload_from_result(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    payload: dict[str, Any] = {}
+    report_ref = (
+        result.get("execution_report_ref")
+        or result.get("executionReportRef")
+        or result.get("report_ref")
+        or result.get("reportRef")
+    )
+    if isinstance(report_ref, str) and report_ref:
+        payload["execution_report_ref"] = report_ref
+    report_digest = result.get("execution_report_digest") or result.get("executionReportDigest")
+    if isinstance(report_digest, dict) and report_digest:
+        payload["execution_report_digest"] = _safe_content(report_digest)
+    nested_result = result.get("result")
+    if isinstance(nested_result, dict):
+        nested_payload = _execution_report_payload_from_result(nested_result)
+        payload.setdefault("execution_report_ref", nested_payload.get("execution_report_ref"))
+        payload.setdefault("execution_report_digest", nested_payload.get("execution_report_digest"))
+    return {key: value for key, value in payload.items() if value is not None}
 
 
 def _safe_tool_call_args(args: dict[str, Any]) -> dict[str, Any]:

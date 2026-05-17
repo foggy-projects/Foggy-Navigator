@@ -6,9 +6,16 @@ import json
 
 import pytest
 
-from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillFrameState
+from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillFrameState, SkillManifest
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
-from langgraph_biz_worker.runtime.frame_execution_report import FrameExecutionReportGenerator
+from langgraph_biz_worker.runtime.frame_execution_report import (
+    FrameExecutionReportGenerator,
+    read_frame_execution_report,
+)
+from langgraph_biz_worker.runtime.frame_store import FrameStore
+from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
+from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
+from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
 
 
 def _make_frame(
@@ -33,6 +40,34 @@ def _make_frame(
         started_at="2026-05-17T01:00:00+00:00",
         ended_at="2026-05-17T01:01:00+00:00",
     )
+
+
+def _runtime_with_journal(data_root) -> SkillRuntime:
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="test_skill",
+        name="Test Skill",
+        output_schema={
+            "type": "object",
+            "required": ["result"],
+            "properties": {"result": {"type": "string"}},
+        },
+        allowed_tools=["submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output"],
+    ))
+    return SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=FileFrameJournal(data_root),
+    )
+
+
+class _NoopModel:
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        raise AssertionError("model should not be invoked")
 
 
 def test_generate_report_from_completed_skill_frame(tmp_path):
@@ -160,3 +195,132 @@ def test_generate_report_for_awaiting_approval_includes_suspend_id(tmp_path):
 def test_generate_report_missing_frame_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         FrameExecutionReportGenerator(tmp_path).generate_for_frame("task_missing", "frm_missing")
+
+
+def test_read_frame_execution_report_generates_missing_report(tmp_path):
+    journal = FileFrameJournal(tmp_path)
+    journal.save(_make_frame())
+
+    result = read_frame_execution_report(
+        tmp_path,
+        report_ref="frame-report://task_001/frm_parent",
+        mode="summary",
+    )
+
+    assert result["ok"] is True
+    assert result["summary"]["status"] == "COMPLETED"
+    assert result["summary"]["summary"] == "Collected evidence for order 501."
+    assert (tmp_path / "frame-reports" / "task_001" / "frm_parent.md").exists()
+
+
+def test_runtime_generates_report_and_promotes_ref_on_close(tmp_path):
+    runtime = _runtime_with_journal(tmp_path)
+    frame_id = runtime.invoke_skill("task_runtime_report", "test_skill")
+    frame = runtime.get_frame(frame_id)
+    frame.private_messages.append({
+        "role": "tool_call",
+        "content": {
+            "name": "invoke_business_function",
+            "args": {"function_id": "demo.create", "token": "must-redact"},
+        },
+    })
+    runtime.store.save(frame)
+
+    result = runtime.submit_result(frame_id, "runtime report done", {"result": "success"})
+    frame = runtime.get_frame(frame_id)
+
+    assert result.ok
+    assert frame.private_working_state["execution_report_ref"] == (
+        f"frame-report://task_runtime_report/{frame_id}"
+    )
+    assert (tmp_path / "frame-reports" / "task_runtime_report" / f"{frame_id}.md").exists()
+
+    promoted = runtime.close_frame(frame_id)
+    assert promoted["execution_report_ref"] == f"frame-report://task_runtime_report/{frame_id}"
+    assert promoted["execution_report_digest"]["status"] == "COMPLETED"
+    assert runtime.get_frame(frame_id).private_working_state == {}
+
+    report_text = (tmp_path / "frame-reports" / "task_runtime_report" / f"{frame_id}.md").read_text(
+        encoding="utf-8",
+    )
+    assert "invoke_business_function" in report_text
+    assert "must-redact" not in report_text
+
+
+def test_runtime_links_child_report_to_active_plan_step(tmp_path):
+    runtime = _runtime_with_journal(tmp_path)
+    parent_id = runtime.invoke_skill("task_plan_report", "test_skill")
+    parent = runtime.get_frame(parent_id)
+    parent.private_working_state["active_plan"] = {
+        "goal": "finish child work",
+        "status": "IN_PROGRESS",
+        "steps": [{"step_id": "collect", "status": "IN_PROGRESS"}],
+    }
+    parent.private_working_state["root_context_summary"] = {}
+    runtime.store.save(parent)
+    child_id = runtime.invoke_skill("task_plan_report", "test_skill", parent_frame_id=parent_id)
+    runtime.submit_result(child_id, "child report done", {"result": "success", "step_id": "collect"})
+
+    promoted = runtime.close_frame(child_id)
+    runtime.write_child_result_to_parent(parent_id, child_id, promoted)
+    parent = runtime.get_frame(parent_id)
+    step = parent.private_working_state["active_plan"]["steps"][0]
+
+    assert step["execution_report_ref"] == f"frame-report://task_plan_report/{child_id}"
+    assert step["execution_report_digest"]["summary"] == "child report done"
+    assert parent.private_working_state["root_context_summary"]["execution_reports"][-1]["report_ref"] == (
+        f"frame-report://task_plan_report/{child_id}"
+    )
+
+
+def test_function_call_approval_report_is_readable(tmp_path):
+    runtime = _runtime_with_journal(tmp_path)
+    parent_id = runtime.invoke_skill("task_function_report", "test_skill")
+    function_frame_id = runtime.invoke_function_call(
+        parent_id,
+        "tms.vehicle.create",
+        "v1",
+        arguments={"vehicleType": 1},
+    )
+    runtime.suspend_function_call(
+        function_frame_id,
+        {
+            "suspend_id": "sus_report",
+            "approval_type": "business_function",
+            "reason": "approval required",
+        },
+    )
+    function_frame = runtime.get_frame(function_frame_id)
+
+    assert function_frame.private_working_state["execution_report_ref"] == (
+        f"frame-report://task_function_report/{function_frame_id}"
+    )
+
+    result = read_frame_execution_report(
+        tmp_path,
+        task_id="task_function_report",
+        frame_id=function_frame_id,
+        mode="summary",
+    )
+    assert result["ok"] is True
+    assert result["summary"]["status"] == "AWAITING_APPROVAL"
+    assert result["summary"]["approval"]["suspend_id"] == "sus_report"
+
+
+def test_llm_tool_reads_frame_execution_report(tmp_path):
+    runtime = _runtime_with_journal(tmp_path)
+    frame_id = runtime.invoke_skill("task_tool_report", "test_skill")
+    runtime.submit_result(frame_id, "tool readable", {"result": "success"})
+    report_ref = runtime.get_frame(frame_id).private_working_state["execution_report_ref"]
+
+    agent = LlmSkillAgent(_NoopModel(), runtime, data_root=tmp_path)
+    result = agent._call_tool(
+        frame_id,
+        "read_frame_execution_report",
+        {"report_ref": report_ref, "mode": "metadata"},
+        task_id="task_tool_report",
+    )
+
+    assert result["ok"] is True
+    assert result["digest"]["status"] == "COMPLETED"
+    assert result["digest"]["summary"] == "tool readable"

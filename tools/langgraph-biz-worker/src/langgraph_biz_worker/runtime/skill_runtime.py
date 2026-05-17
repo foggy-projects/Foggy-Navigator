@@ -24,6 +24,7 @@ from ..models import (
     ValidationResult,
 )
 from .file_frame_journal import FileFrameJournal
+from .frame_execution_report import FrameExecutionReport, FrameExecutionReportGenerator
 from .frame_store import FrameStore
 from .output_contract import validate_output_contract
 from .skill_registry import SkillRegistry
@@ -93,11 +94,13 @@ class SkillRuntime:
         frame_store: FrameStore | None = None,
         skill_registry: SkillRegistry | None = None,
         journal: FileFrameJournal | None = None,
+        report_generator: FrameExecutionReportGenerator | None = None,
         max_nesting_depth: int = DEFAULT_MAX_NESTING_DEPTH,
     ) -> None:
         self.store = frame_store or FrameStore()
         self.registry = skill_registry or SkillRegistry()
         self._journal = journal
+        self._report_generator = report_generator or _report_generator_from_journal(journal)
         self._max_nesting_depth = max_nesting_depth
 
     # -- Frame creation ------------------------------------------------------
@@ -188,6 +191,7 @@ class SkillRuntime:
         self._transition(frame, FrameStatus.AWAITING_APPROVAL)
         frame.approval_request = approval_request
         self._save(frame)
+        self._generate_frame_report(frame)
         logger.info("Frame %s awaiting approval: %s", frame_id, approval_request.get("approval_type", ""))
 
     def mark_child_awaiting_approval(
@@ -216,6 +220,7 @@ class SkillRuntime:
         parent.approval_request = approval_request
         parent.private_working_state["pending_child_approval_frame_id"] = child_frame_id
         self._save(parent)
+        self._generate_frame_report(parent)
         logger.info(
             "Frame %s awaiting approval from child frame %s",
             parent_frame_id,
@@ -249,6 +254,7 @@ class SkillRuntime:
         frame.ended_at = datetime.now(timezone.utc).isoformat()
         frame.private_working_state["fail_reason"] = reason
         self._save(frame)
+        self._generate_frame_report(frame)
         logger.warning("Frame %s failed: %s", frame_id, reason)
 
     def cancel_frame(self, frame_id: str) -> None:
@@ -257,6 +263,7 @@ class SkillRuntime:
         self._transition(frame, FrameStatus.CANCELLED)
         frame.ended_at = datetime.now(timezone.utc).isoformat()
         self._save(frame)
+        self._generate_frame_report(frame)
         logger.info("Frame %s cancelled", frame_id)
 
     # -- Completion protocol -------------------------------------------------
@@ -304,6 +311,7 @@ class SkillRuntime:
             self._transition(frame, FrameStatus.COMPLETED)
             frame.ended_at = datetime.now(timezone.utc).isoformat()
             self._save(frame)
+            self._generate_frame_report(frame)
             logger.info("Frame %s completed", frame_id)
             return result
         else:
@@ -315,6 +323,7 @@ class SkillRuntime:
                     f"Max submit attempts ({frame.max_submit_attempts}) exceeded"
                 )
                 self._save(frame)
+                self._generate_frame_report(frame)
                 logger.warning(
                     "Frame %s failed after %d submit attempts",
                     frame_id, frame.submit_attempts,
@@ -402,6 +411,8 @@ class SkillRuntime:
             frame.result_summary = None
 
         self._save(frame)
+        if result.ok:
+            self._generate_frame_report(frame)
         return result
 
     def shelve_recoverable_interruption(
@@ -477,6 +488,8 @@ class SkillRuntime:
                 f"close_frame requires COMPLETED, got {frame.status.value}"
             )
 
+        report = self._generate_frame_report(frame)
+
         # Build promoted result
         promoted: dict[str, Any] = {
             "frame_id": frame.frame_id,
@@ -499,6 +512,15 @@ class SkillRuntime:
             if field_key in field_map:
                 promoted[field_key] = field_map[field_key]
 
+        report_ref = _execution_report_ref_from_frame(frame)
+        if report_ref:
+            promoted["execution_report_ref"] = report_ref
+        report_digest = _execution_report_digest_from_frame(frame)
+        if report_digest:
+            promoted["execution_report_digest"] = report_digest
+        elif report:
+            promoted["execution_report_digest"] = _compact_execution_report_digest(report.digest)
+
         # Destroy private context (Doc 31 §13.3)
         frame.private_messages.clear()
         frame.private_working_state.clear()
@@ -520,7 +542,9 @@ class SkillRuntime:
         parent = self._get_frame(parent_frame_id)
         child_results = parent.private_working_state.setdefault("child_results", {})
         child_results[child_frame_id] = child_promoted
+        self._link_execution_report_to_parent_context(parent, child_promoted)
         self._save(parent)
+        self._generate_frame_report(parent)
 
     # -- Business function call frames --------------------------------------
 
@@ -603,17 +627,27 @@ class SkillRuntime:
         self._transition(frame, FrameStatus.COMPLETED)
         frame.ended_at = datetime.now(timezone.utc).isoformat()
         self._save(frame)
+        self._generate_frame_report(frame)
 
         if frame.parent_frame_id:
             parent = self._get_frame(frame.parent_frame_id)
             function_results = parent.private_working_state.setdefault("function_results", {})
-            function_results[function_frame_id] = {
+            result_entry = {
                 "function_id": frame.input.get("function_id"),
                 "version": frame.input.get("version"),
                 "result": result,
                 "completed_at": frame.ended_at,
             }
+            report_ref = _execution_report_ref_from_frame(frame)
+            if report_ref:
+                result_entry["execution_report_ref"] = report_ref
+            report_digest = _execution_report_digest_from_frame(frame)
+            if report_digest:
+                result_entry["execution_report_digest"] = report_digest
+            function_results[function_frame_id] = result_entry
+            self._link_execution_report_to_parent_context(parent, result_entry)
             self._save(parent)
+            self._generate_frame_report(parent)
 
     def suspend_function_call(
         self,
@@ -634,18 +668,28 @@ class SkillRuntime:
         frame.private_working_state["approval_state"] = "PENDING"
         frame.private_working_state["suspend_id"] = approval_request.get("suspend_id")
         self._save(frame)
+        self._generate_frame_report(frame)
 
         if frame.parent_frame_id:
             parent = self._get_frame(frame.parent_frame_id)
             parent.private_working_state["pending_function_call_frame_id"] = function_frame_id
-            parent.private_working_state["pending_function_call"] = {
+            pending_call = {
                 "function_frame_id": function_frame_id,
                 "function_id": frame.input.get("function_id"),
                 "version": frame.input.get("version"),
                 "argument_hash": frame.input.get("argument_hash"),
                 "suspend_id": approval_request.get("suspend_id"),
             }
+            report_ref = _execution_report_ref_from_frame(frame)
+            if report_ref:
+                pending_call["execution_report_ref"] = report_ref
+            report_digest = _execution_report_digest_from_frame(frame)
+            if report_digest:
+                pending_call["execution_report_digest"] = report_digest
+            parent.private_working_state["pending_function_call"] = pending_call
+            self._link_execution_report_to_parent_context(parent, pending_call)
             self._save(parent)
+            self._generate_frame_report(parent)
 
     # -- Composite child Skill operations (Doc 31a §4.1) ---------------------
 
@@ -802,6 +846,7 @@ class SkillRuntime:
                 stack=[frame],
             )
         self._save(frame)
+        self._generate_frame_report(frame)
 
     def record_recoverable_child_interruption(
         self,
@@ -838,6 +883,7 @@ class SkillRuntime:
             interrupted_frame.private_working_state["recoverable"] = True
             interrupted_frame.private_working_state["interrupted_at"] = now
             self._save(interrupted_frame)
+            self._generate_frame_report(interrupted_frame)
 
         parent.private_working_state["pending_recoverable_child_frame_id"] = child.frame_id
         parent.private_working_state["pending_recoverable_child"] = {
@@ -864,6 +910,7 @@ class SkillRuntime:
             stack=focus_stack,
         )
         self._save(parent)
+        self._generate_frame_report(parent)
         if parent.status == FrameStatus.WAITING_CHILD:
             self.resume_from_child(parent.frame_id)
         return child.frame_id
@@ -929,6 +976,7 @@ class SkillRuntime:
                 self._transition(frame, FrameStatus.CANCELLED)
                 frame.ended_at = shelved_at
             self._save(frame)
+            self._generate_frame_report(frame)
         self._clear_recoverable_child_reference(parent.frame_id, child_frame_id)
 
     def set_evidence_refs(self, frame_id: str, evidence_refs: list[str]) -> None:
@@ -975,6 +1023,63 @@ class SkillRuntime:
         self.store.save(frame)
         if self._journal:
             self._journal.save(frame)
+
+    def _generate_frame_report(self, frame: SkillFrameState) -> FrameExecutionReport | None:
+        """Generate and link an execution report without changing frame status."""
+        if self._report_generator is None or self._journal is None:
+            return None
+        try:
+            report = self._report_generator.generate_for_frame(frame.task_id, frame.frame_id)
+        except FileNotFoundError:
+            logger.debug(
+                "Skipping frame execution report; frame snapshot missing: task=%s frame=%s",
+                frame.task_id,
+                frame.frame_id,
+            )
+            return None
+        except Exception:
+            logger.warning(
+                "Failed to generate frame execution report: task=%s frame=%s",
+                frame.task_id,
+                frame.frame_id,
+                exc_info=True,
+            )
+            return None
+
+        self._attach_execution_report_metadata(frame, report)
+        return report
+
+    def _attach_execution_report_metadata(
+        self,
+        frame: SkillFrameState,
+        report: FrameExecutionReport,
+    ) -> None:
+        digest = _compact_execution_report_digest(report.digest)
+        frame.private_working_state["execution_report_ref"] = report.report_ref
+        frame.private_working_state["execution_report_digest"] = digest
+        if frame.skill_id == "system.root":
+            summary = frame.private_working_state.setdefault("root_context_summary", {})
+            _append_execution_report_to_summary(summary, report.report_ref, digest)
+            summary["latest_execution_report_ref"] = report.report_ref
+        self.store.save(frame)
+        if self._journal:
+            self._journal.save(frame)
+
+    def _link_execution_report_to_parent_context(
+        self,
+        parent: SkillFrameState,
+        payload: dict[str, Any],
+    ) -> None:
+        report_ref = _execution_report_ref_from_payload(payload)
+        if not report_ref:
+            return
+        digest = _execution_report_digest_from_payload(payload)
+        summary = parent.private_working_state.setdefault("root_context_summary", {})
+        _append_execution_report_to_summary(summary, report_ref, digest)
+        if digest:
+            summary["latest_execution_report_ref"] = report_ref
+        if _attach_execution_report_to_active_plan(parent.private_working_state, payload, report_ref, digest):
+            _sync_active_plan_summary(parent)
 
     def _transition(self, frame: SkillFrameState, target: FrameStatus) -> None:
         """Validate and apply a state transition."""
@@ -1203,6 +1308,7 @@ class SkillRuntime:
             self._transition(function_frame, FrameStatus.CANCELLED)
             function_frame.ended_at = datetime.now(timezone.utc).isoformat()
             self._save(function_frame)
+            self._generate_frame_report(function_frame)
             caller_frame.private_working_state["continuation_state"] = "INTERRUPTED"
             caller_frame.private_working_state["interrupt_reason"] = "approval_rejected"
             caller_frame.private_working_state["last_error"] = comment
@@ -1215,6 +1321,165 @@ class SkillRuntime:
         caller_frame.private_working_state.pop("pending_function_call_frame_id", None)
         caller_frame.private_working_state.pop("pending_function_call", None)
         self._save(caller_frame)
+        self._generate_frame_report(caller_frame)
+
+
+def _report_generator_from_journal(
+    journal: FileFrameJournal | None,
+) -> FrameExecutionReportGenerator | None:
+    if journal is None:
+        return None
+    root = getattr(journal, "_root", None)
+    if root is None:
+        return None
+    try:
+        return FrameExecutionReportGenerator(root.parent)
+    except Exception:
+        logger.warning("Failed to initialize frame execution report generator", exc_info=True)
+        return None
+
+
+def _execution_report_ref_from_frame(frame: SkillFrameState) -> str | None:
+    value = frame.private_working_state.get("execution_report_ref")
+    return value if isinstance(value, str) and value else None
+
+
+def _execution_report_digest_from_frame(frame: SkillFrameState) -> dict[str, Any] | None:
+    value = frame.private_working_state.get("execution_report_digest")
+    return _safe_json_copy(value) if isinstance(value, dict) else None
+
+
+def _execution_report_ref_from_payload(payload: dict[str, Any]) -> str | None:
+    value = _extract_value(
+        payload,
+        "execution_report_ref",
+        "executionReportRef",
+        "report_ref",
+        "reportRef",
+    )
+    return value if isinstance(value, str) and value else None
+
+
+def _execution_report_digest_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    value = _extract_value(
+        payload,
+        "execution_report_digest",
+        "executionReportDigest",
+        "digest",
+    )
+    return _compact_execution_report_digest(value) if isinstance(value, dict) else None
+
+
+def _compact_execution_report_digest(digest: dict[str, Any]) -> dict[str, Any]:
+    child_reports = digest.get("child_reports")
+    compact_child_reports = child_reports[-10:] if isinstance(child_reports, list) else None
+    compact = {
+        "report_ref": digest.get("report_ref"),
+        "frame_id": digest.get("frame_id"),
+        "task_id": digest.get("task_id"),
+        "skill_id": digest.get("skill_id"),
+        "frame_kind": digest.get("frame_kind"),
+        "status": digest.get("status"),
+        "summary": digest.get("summary"),
+        "started_at": digest.get("started_at"),
+        "ended_at": digest.get("ended_at"),
+        "tool_call_count": digest.get("tool_call_count"),
+        "child_frame_count": digest.get("child_frame_count"),
+        "approval_required": digest.get("approval_required"),
+        "error": digest.get("error"),
+        "artifact_refs": digest.get("artifact_refs"),
+        "evidence_refs": digest.get("evidence_refs"),
+        "child_reports": compact_child_reports,
+        "generated_at": digest.get("generated_at"),
+        "generator_version": digest.get("generator_version"),
+    }
+    return {
+        key: _safe_json_value_copy(value)
+        for key, value in compact.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _append_execution_report_to_summary(
+    summary: dict[str, Any],
+    report_ref: str,
+    digest: dict[str, Any] | None,
+) -> None:
+    reports = summary.setdefault("execution_reports", [])
+    if not isinstance(reports, list):
+        reports = []
+        summary["execution_reports"] = reports
+    reports[:] = [
+        item for item in reports
+        if not isinstance(item, dict) or item.get("report_ref") != report_ref
+    ]
+    entry = {"report_ref": report_ref}
+    if digest:
+        entry.update(_compact_execution_report_digest(digest))
+    reports.append(entry)
+    del reports[:-PERSISTENT_FRAME_MAX_TURN_RESULTS]
+
+
+def _attach_execution_report_to_active_plan(
+    working_state: dict[str, Any],
+    payload: dict[str, Any],
+    report_ref: str,
+    digest: dict[str, Any] | None,
+) -> bool:
+    active_plan = working_state.get("active_plan")
+    if not isinstance(active_plan, (dict, list)):
+        return False
+    steps = list(_iter_active_plan_steps(active_plan))
+    if not steps:
+        return False
+    step_id = _extract_plan_step_id(payload)
+    if step_id:
+        candidates = [step for step in steps if _plan_step_matches_id(step, step_id)]
+    else:
+        candidates = [
+            step for step in steps
+            if not _execution_report_ref_from_payload(step)
+        ]
+    if len(candidates) != 1:
+        return False
+    target = candidates[0]
+    target["execution_report_ref"] = report_ref
+    if digest:
+        target["execution_report_digest"] = _compact_execution_report_digest(digest)
+    return True
+
+
+def _iter_active_plan_steps(active_plan: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+    if isinstance(active_plan, list):
+        return [item for item in active_plan if isinstance(item, dict)]
+    for key in ("steps", "items", "tasks", "subtasks"):
+        value = active_plan.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _extract_plan_step_id(payload: dict[str, Any]) -> str | None:
+    value = _extract_value(
+        payload,
+        "active_plan_step_id",
+        "activePlanStepId",
+        "plan_step_id",
+        "planStepId",
+        "step_id",
+        "stepId",
+    )
+    if isinstance(value, (str, int, float)) and str(value).strip():
+        return str(value).strip()
+    return None
+
+
+def _plan_step_matches_id(step: dict[str, Any], step_id: str) -> bool:
+    for key in ("active_plan_step_id", "activePlanStepId", "plan_step_id", "planStepId", "step_id", "stepId", "id"):
+        value = step.get(key)
+        if isinstance(value, (str, int, float)) and str(value).strip() == step_id:
+            return True
+    return False
 
 
 def _function_result_summary(frame: SkillFrameState, result: dict[str, Any]) -> str:

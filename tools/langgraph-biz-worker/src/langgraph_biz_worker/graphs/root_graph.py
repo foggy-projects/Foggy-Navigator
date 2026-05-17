@@ -797,6 +797,8 @@ def close_skill_frame(state: RootState) -> dict:
             skill_frame_id=frame_id,
             skill_id=frame.skill_id,
             content=f"Frame closed: {frame.skill_id}",
+            execution_report_ref=promoted.get("execution_report_ref"),
+            execution_report_digest=promoted.get("execution_report_digest"),
         ))
         events.append(QueryEvent(
             type="result",
@@ -805,6 +807,8 @@ def close_skill_frame(state: RootState) -> dict:
             model=state.get("model"),
             structured_output=structured_output,
             duration_ms=int((time.time() - state["started_at"]) * 1000),
+            execution_report_ref=promoted.get("execution_report_ref"),
+            execution_report_digest=promoted.get("execution_report_digest"),
         ))
     elif (
         frame
@@ -821,6 +825,8 @@ def close_skill_frame(state: RootState) -> dict:
             model=state.get("model"),
             structured_output=frame.output,
             duration_ms=int((time.time() - state["started_at"]) * 1000),
+            execution_report_ref=_execution_report_ref_from_frame(frame),
+            execution_report_digest=_execution_report_digest_from_frame(frame),
         ))
     elif frame and frame.status == FrameStatus.AWAITING_APPROVAL:
         # The approval_required event has already been emitted by the runtime
@@ -847,6 +853,22 @@ def _summary_from_structured_output(output: Any) -> str | None:
     if isinstance(error, str) and error.strip():
         return error
     return None
+
+
+def _execution_report_ref_from_frame(frame: Any) -> str | None:
+    state = getattr(frame, "private_working_state", {}) or {}
+    if not isinstance(state, dict):
+        return None
+    value = state.get("execution_report_ref")
+    return value if isinstance(value, str) and value else None
+
+
+def _execution_report_digest_from_frame(frame: Any) -> dict[str, Any] | None:
+    state = getattr(frame, "private_working_state", {}) or {}
+    if not isinstance(state, dict):
+        return None
+    value = state.get("execution_report_digest")
+    return value if isinstance(value, dict) and value else None
 
 
 def should_run_skill(state: RootState) -> str:

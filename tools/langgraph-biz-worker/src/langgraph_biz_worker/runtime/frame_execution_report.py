@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlsplit
 
 from ..models import SkillFrameState
 from .file_frame_journal import FileFrameJournal
@@ -279,12 +280,161 @@ class FrameExecutionReportGenerator:
         return self.data_root / "frames" / frame.task_id / f"{frame.frame_id}.json"
 
 
+def frame_report_ref(task_id: str, frame_id: str) -> str:
+    """Return the stable external reference for a Frame report."""
+    return f"frame-report://{task_id}/{frame_id}"
+
+
+def parse_frame_report_ref(report_ref: str) -> tuple[str, str]:
+    """Parse ``frame-report://<task-id>/<frame-id>`` into identifiers."""
+    parsed = urlsplit(report_ref)
+    if parsed.scheme != "frame-report":
+        raise ValueError("report_ref must use frame-report:// scheme")
+    task_id = parsed.netloc
+    frame_id = parsed.path.lstrip("/")
+    if not task_id or not frame_id or "/" in frame_id:
+        raise ValueError("report_ref must be frame-report://<task-id>/<frame-id>")
+    return task_id, frame_id
+
+
+def read_frame_execution_report(
+    data_root: str | Path,
+    *,
+    report_ref: str | None = None,
+    task_id: str | None = None,
+    frame_id: str | None = None,
+    mode: str = "summary",
+    max_chars: int = 6000,
+) -> dict[str, Any]:
+    """Read a generated Frame report, generating it from the journal if needed.
+
+    ``mode=summary`` returns a compact review payload. ``metadata`` returns the
+    digest JSON. ``markdown`` returns report Markdown capped by ``max_chars``.
+    """
+    try:
+        resolved_task_id, resolved_frame_id = _resolve_report_identity(
+            report_ref=report_ref,
+            task_id=task_id,
+            frame_id=frame_id,
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    safe_mode = (mode or "summary").strip().lower()
+    if safe_mode not in {"summary", "metadata", "markdown"}:
+        return {"ok": False, "error": "mode must be one of: summary, metadata, markdown"}
+
+    safe_max_chars = _normalize_max_chars(max_chars)
+    root = Path(data_root)
+    markdown_path, digest_path = _report_paths(root, resolved_task_id, resolved_frame_id)
+    if not markdown_path.exists() or not digest_path.exists():
+        try:
+            FrameExecutionReportGenerator(root).generate_for_frame(resolved_task_id, resolved_frame_id)
+        except FileNotFoundError:
+            return {
+                "ok": False,
+                "error": (
+                    "Frame report not found and frame snapshot is unavailable: "
+                    f"task_id={resolved_task_id}, frame_id={resolved_frame_id}"
+                ),
+                "report_ref": frame_report_ref(resolved_task_id, resolved_frame_id),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": f"Failed to generate frame report: {exc}"}
+
+    try:
+        digest = json.loads(digest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"ok": False, "error": f"Failed to read frame report digest: {exc}"}
+
+    payload: dict[str, Any] = {
+        "ok": True,
+        "mode": safe_mode,
+        "report_ref": digest.get("report_ref") or frame_report_ref(resolved_task_id, resolved_frame_id),
+        "task_id": resolved_task_id,
+        "frame_id": resolved_frame_id,
+        "markdown_path": str(markdown_path),
+        "digest_path": str(digest_path),
+    }
+    if safe_mode == "metadata":
+        payload["digest"] = _compact_payload(_redact(digest), safe_max_chars)
+        return payload
+
+    if safe_mode == "markdown":
+        markdown = markdown_path.read_text(encoding="utf-8")
+        payload.update(_capped_text_payload("markdown", markdown, safe_max_chars))
+        return payload
+
+    summary = {
+        key: digest.get(key)
+        for key in (
+            "summary",
+            "skill_id",
+            "frame_kind",
+            "status",
+            "started_at",
+            "ended_at",
+            "tool_call_count",
+            "child_frame_count",
+            "approval_required",
+            "approval",
+            "error",
+            "artifact_refs",
+            "evidence_refs",
+            "child_reports",
+            "generated_at",
+            "generator_version",
+        )
+        if digest.get(key) not in (None, "", [], {})
+    }
+    payload["summary"] = _compact_payload(_redact(summary), safe_max_chars)
+    return payload
+
+
 def _read_frame(path: Path) -> SkillFrameState:
     return SkillFrameState(**json.loads(path.read_text(encoding="utf-8")))
 
 
 def _report_ref(task_id: str, frame_id: str) -> str:
-    return f"frame-report://{task_id}/{frame_id}"
+    return frame_report_ref(task_id, frame_id)
+
+
+def _resolve_report_identity(
+    *,
+    report_ref: str | None,
+    task_id: str | None,
+    frame_id: str | None,
+) -> tuple[str, str]:
+    if report_ref:
+        return parse_frame_report_ref(report_ref)
+    if not task_id or not frame_id:
+        raise ValueError("Either report_ref or both task_id and frame_id are required")
+    return task_id, frame_id
+
+
+def _report_paths(data_root: Path, task_id: str, frame_id: str) -> tuple[Path, Path]:
+    task_dir = data_root / "frame-reports" / _safe_path_segment(task_id)
+    frame_stem = _safe_path_segment(frame_id)
+    return task_dir / f"{frame_stem}.md", task_dir / f"{frame_stem}.digest.json"
+
+
+def _normalize_max_chars(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = 6000
+    return max(500, min(parsed, 30000))
+
+
+def _capped_text_payload(key: str, text: str, max_chars: int) -> dict[str, Any]:
+    if len(text) <= max_chars:
+        return {key: text, "truncated": False, "char_count": len(text)}
+    return {
+        key: text[:max_chars],
+        "truncated": True,
+        "char_count": len(text),
+        "omitted_char_count": len(text) - max_chars,
+    }
 
 
 def _child_report_digest(digest: dict[str, Any]) -> dict[str, Any]:
