@@ -223,6 +223,45 @@ class LanggraphStreamRelayTest {
     }
 
     @Test
+    void taskProgressPublishesStateSyncForRetryVisibility() throws Exception {
+        String taskId = "lgt-task-progress";
+        String sessionId = "session-progress";
+        String data = """
+                {
+                  "type": "task_progress",
+                  "content": "LLM call retrying after LLM_REQUEST_TIMEOUT (1/2)",
+                  "progress_type": "llm_retrying",
+                  "reason": "LLM_REQUEST_TIMEOUT",
+                  "attempt": 1,
+                  "max_attempts": 2,
+                  "next_retry_after_ms": 1000,
+                  "remaining_ms": 120000,
+                  "skill_frame_id": "frm-root",
+                  "presentation_hint": "debug_detail",
+                  "payload": {"operation": "skill_agent.invoke"}
+                }
+                """;
+
+        invokeHandleEvent(ServerSentEvent.<String>builder().data(data).build(), taskId, sessionId);
+
+        ArgumentCaptor<AgentMessage> captor = ArgumentCaptor.forClass(AgentMessage.class);
+        verify(sessionEventListener).handleMessage(captor.capture());
+        AgentMessage message = captor.getValue();
+        assertEquals(MessageType.STATE_SYNC, message.getType());
+        assertEquals(taskId, message.getTaskId());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) message.getPayload();
+        assertEquals("task_progress", payload.get("subtype"));
+        assertEquals("llm_retrying", payload.get("progressType"));
+        assertEquals("LLM_REQUEST_TIMEOUT", payload.get("reason"));
+        assertEquals(1, payload.get("attempt"));
+        assertEquals(2, payload.get("maxAttempts"));
+        assertEquals("frm-root", payload.get("skillFrameId"));
+        assertEquals("debug_detail", payload.get("presentationHint"));
+        assertEquals("skill_agent.invoke", ((Map<?, ?>) payload.get("payload")).get("operation"));
+    }
+
+    @Test
     void resultMessageIsHandledBeforeTaskIsCompleted() throws Exception {
         String taskId = "lgt-task-4";
         String sessionId = "session-4";
@@ -268,6 +307,33 @@ class LanggraphStreamRelayTest {
                 message.getType() == MessageType.ERROR
                         && taskId.equals(message.getTaskId())
         ));
+    }
+
+    @Test
+    void workerErrorRecordsProjectionWithoutCallingWorkerAgain() throws Exception {
+        String taskId = "lgt-task-worker-error";
+        String sessionId = "session-worker-error";
+        String data = """
+                {
+                  "type": "error",
+                  "reason": "llm_retry_exhausted",
+                  "error": "LLM request timed out"
+                }
+                """;
+
+        invokeHandleEvent(ServerSentEvent.<String>builder().data(data).build(), taskId, sessionId);
+
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(taskService, sessionEventListener);
+        inOrder.verify(taskService).recordTaskInterruptionProjection(
+                taskId,
+                "llm_retry_exhausted",
+                "LLM request timed out"
+        );
+        inOrder.verify(sessionEventListener).handleMessage(org.mockito.ArgumentMatchers.argThat(message ->
+                message.getType() == MessageType.ERROR
+                        && taskId.equals(message.getTaskId())
+        ));
+        inOrder.verify(taskService).failTask(taskId, "LLM request timed out");
     }
 
 

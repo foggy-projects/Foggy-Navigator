@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +36,14 @@ class QueryRequest(BaseModel):
     task_id: str | None = Field(None, alias="taskId")
     user_id: str | None = Field(None, alias="userId")
     tenant_id: str | None = Field(None, alias="tenantId")
+    task_deadline_at: str | None = Field(
+        None,
+        validation_alias=AliasChoices("taskDeadlineAt", "task_deadline_at"),
+    )
+    task_timeout_ms: int | None = Field(
+        None,
+        validation_alias=AliasChoices("taskTimeoutMs", "task_timeout_ms"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +101,12 @@ class QueryEvent(BaseModel):
     reason: str | None = None
     summary: dict[str, Any] | None = None
     timeout_at: str | None = None
+    progress_type: str | None = None
+    attempt: int | None = None
+    max_attempts: int | None = None
+    next_retry_after_ms: int | None = None
+    remaining_ms: int | None = None
+    presentation_hint: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +205,8 @@ class SkillFrameState(BaseModel):
 
     started_at: str = ""
     ended_at: str = ""
+    journal_seq: int | None = None
+    journal_updated_at: str | None = None
 
     # Retry tracking for submit_result rejections
     submit_attempts: int = 0

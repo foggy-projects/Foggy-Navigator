@@ -227,6 +227,20 @@ def _get_or_create_system_root_frame(
     """Return the persistent root frame for this conversation, restoring it if needed."""
     conversation_id = _conversation_id_for_root_frame(task_id, session_id, context)
 
+    recoverable = _runtime.select_latest_recoverable_root(
+        conversation_id=conversation_id,
+        task_id=task_id,
+        root_skill_id=ROOT_SKILL_ID,
+    )
+    if recoverable is not None:
+        rebound = _runtime.rebind_frame_to_task(
+            recoverable.frame_id,
+            task_id,
+            session_id=session_id,
+            conversation_id=conversation_id,
+        )
+        return rebound.frame_id, False
+
     for frame in _runtime.get_frames_by_conversation(conversation_id):
         if frame.skill_id == ROOT_SKILL_ID and frame.status == FrameStatus.RUNNING:
             rebound = _runtime.rebind_frame_to_task(

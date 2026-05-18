@@ -11,14 +11,17 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from ..config import settings
+from ..models import QueryEvent
 
 logger = logging.getLogger(__name__)
 
 _DEADLINE_KEY = "_llm_deadline_monotonic"
+_PROGRESS_EVENT_SINK_KEY = "_progress_event_sink"
 
 
 class LlmRequestTimeoutError(TimeoutError):
@@ -147,6 +150,17 @@ def invoke_chat_model(
                 attempts,
                 _safe_error(exc),
             )
+            _emit_retry_progress(
+                context,
+                operation=operation,
+                task_id=task_id,
+                frame_id=frame_id,
+                exc=exc,
+                attempt=attempt,
+                attempts=attempts,
+                sleep_seconds=sleep_seconds,
+                deadline_at=deadline_at,
+            )
             if sleep_seconds > 0:
                 time.sleep(sleep_seconds)
 
@@ -163,6 +177,55 @@ def reset_llm_call_guard_state_for_tests() -> None:
     with _semaphore_lock:
         _semaphore = None
         _semaphore_capacity = 0
+
+
+def _emit_retry_progress(
+    context: dict[str, Any],
+    *,
+    operation: str,
+    task_id: str,
+    frame_id: str,
+    exc: BaseException,
+    attempt: int,
+    attempts: int,
+    sleep_seconds: float,
+    deadline_at: float,
+) -> None:
+    sink = context.get(_PROGRESS_EVENT_SINK_KEY)
+    if not callable(sink):
+        return
+    reason = _retry_progress_reason(exc)
+    retry_after_ms = int(max(0.0, sleep_seconds) * 1000)
+    remaining_ms = int(_remaining_seconds(deadline_at) * 1000)
+    payload = {
+        "progressType": "llm_retrying",
+        "reason": reason,
+        "operation": operation,
+        "taskId": task_id,
+        "frameId": frame_id,
+        "attempt": attempt,
+        "maxAttempts": attempts,
+        "nextRetryAfterMs": retry_after_ms,
+        "remainingMs": remaining_ms,
+        "presentationHint": "debug_detail",
+    }
+    try:
+        sink(QueryEvent(
+            type="task_progress",
+            content=f"LLM call retrying after {reason} ({attempt}/{attempts})",
+            task_id=task_id,
+            skill_frame_id=frame_id or None,
+            reason=reason,
+            progress_type="llm_retrying",
+            attempt=attempt,
+            max_attempts=attempts,
+            next_retry_after_ms=retry_after_ms,
+            remaining_ms=remaining_ms,
+            presentation_hint="debug_detail",
+            payload=payload,
+        ))
+    except Exception:
+        logger.debug("Failed to emit LLM retry progress event", exc_info=True)
 
 
 def _call_with_timeout(
@@ -265,8 +328,34 @@ def _ensure_deadline(context: dict[str, Any], policy: LlmCallPolicy) -> float:
     if isinstance(existing, (int, float)) and existing > time.monotonic():
         return float(existing)
     deadline_at = time.monotonic() + policy.execution_deadline_seconds
+    task_deadline_at = _task_deadline_from_context(context)
+    if task_deadline_at is not None:
+        deadline_at = min(deadline_at, task_deadline_at)
     context[_DEADLINE_KEY] = deadline_at
     return deadline_at
+
+
+def _task_deadline_from_context(context: dict[str, Any]) -> float | None:
+    timeout_ms = _non_negative_float(
+        _first_present(context, "task_timeout_ms", "taskTimeoutMs"),
+        0.0,
+    )
+    if timeout_ms > 0:
+        return time.monotonic() + timeout_ms / 1000.0
+
+    raw_deadline = _first_present(context, "task_deadline_at", "taskDeadlineAt")
+    if not isinstance(raw_deadline, str) or not raw_deadline.strip():
+        return None
+    deadline_text = raw_deadline.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(deadline_text)
+    except ValueError:
+        logger.debug("Ignoring invalid task deadline: %s", raw_deadline)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    remaining = parsed.timestamp() - time.time()
+    return time.monotonic() + max(0.0, remaining)
 
 
 def _remaining_seconds(deadline_at: float) -> float:
@@ -344,6 +433,21 @@ def _is_retryable_exception(exc: BaseException) -> bool:
         "429",
     )
     return any(part in name for part in retryable_names) or any(part in text for part in retryable_text)
+
+
+def _retry_progress_reason(exc: BaseException) -> str:
+    if isinstance(exc, LlmRequestTimeoutError):
+        return "LLM_REQUEST_TIMEOUT"
+    if isinstance(exc, LlmConcurrencyLimitError):
+        return "LLM_CONCURRENCY_LIMIT"
+    if isinstance(exc, LlmCircuitOpenError):
+        return "LLM_CIRCUIT_OPEN"
+    code = str(exc).split(";", 1)[0].strip()
+    if code.startswith("LLM_"):
+        return code[:80]
+    if isinstance(exc, TimeoutError):
+        return "LLM_PROVIDER_TIMEOUT"
+    return "LLM_RETRYABLE_ERROR"
 
 
 def _provider_key(model: Any) -> str:

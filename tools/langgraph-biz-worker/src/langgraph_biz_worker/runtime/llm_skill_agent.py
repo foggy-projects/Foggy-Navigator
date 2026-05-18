@@ -200,10 +200,11 @@ class LlmSkillAgent:
                     frame_id=frame_id,
                 )
             except Exception as exc:
+                interruption_reason = _model_exception_interruption_reason(exc)
                 if persistent_frame:
                     self._runtime.record_recoverable_interruption(
                         frame_id,
-                        reason="model_error",
+                        reason=interruption_reason,
                         error=str(exc),
                         task_id=task_id,
                     )
@@ -213,6 +214,7 @@ class LlmSkillAgent:
                     type="error",
                     task_id=task_id,
                     skill_frame_id=frame_id,
+                    reason=interruption_reason,
                     error=str(exc),
                 )]
             messages.append(response)
@@ -582,6 +584,18 @@ class LlmSkillAgent:
             "name": name,
             "args": args,
         })
+
+
+def _model_exception_interruption_reason(exc: Exception) -> str:
+    text = str(exc)
+    if "LLM_REQUEST_TIMEOUT" in text:
+        return "llm_retry_exhausted"
+    if "LLM_CONCURRENCY_LIMIT" in text:
+        return "llm_concurrency_limit"
+    if "LLM_CIRCUIT_OPEN" in text:
+        return "llm_circuit_open"
+    return "model_error"
+
 
 # ---------------------------------------------------------------------------
 # Tool schema registry

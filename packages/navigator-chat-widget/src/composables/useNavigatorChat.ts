@@ -181,13 +181,18 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       if (Date.now() - pollStartTime > timeout) {
         stopPolling()
         isLoading.value = false
-        error.value = '等待超时'
+        error.value = null
+        progressText.value = '任务仍在后台处理'
         rawMessages.value.push({
           id: nextId(),
           role: 'system',
-          content: `等待响应超时（${Math.round(timeout / 1000)}秒）`,
+          content: `连接等待已超过 ${Math.round(timeout / 1000)} 秒，任务仍可能在后台处理。`,
           timestamp: Date.now(),
-          error: 'timeout',
+          taskId,
+          status: taskStatus.value ?? undefined,
+          process: true,
+          processKind: 'state',
+          transient: true,
         })
         return
       }
@@ -367,6 +372,26 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
         })
       } else if (message.type === 'STATE') {
         const subtype = firstString(payload.subtype, payload.stateType, payload.state_type)
+        const progressType = firstString(payload.progressType, payload.progress_type)
+        if (subtype === 'task_progress' || progressType) {
+          progressText.value = taskProgressText(payload, content)
+          if (display.showRuntimeEvents) {
+            rawMessages.value.push({
+              id,
+              role: 'system',
+              content: taskProgressDisplayContent(payload, content, display.mode),
+              timestamp: openMessageTimestamp(message),
+              taskId: messageTaskId,
+              status,
+              messageType: message.type,
+              terminal: message.terminal,
+              terminalStatus: message.terminalStatus ?? null,
+              process: true,
+              processKind: 'state',
+            })
+          }
+          continue
+        }
         if (subtype === 'skill_frame_open' || subtype === 'skill_frame_close') {
           progressText.value = skillFrameProgressText(
             firstString(payload.skillId, payload.skill_id),
@@ -1219,6 +1244,36 @@ function stateProgressText(content: string): string {
   if (lower.includes('tool') || lower.includes('query') || lower.includes('查询')) return '正在查询数据...'
   if (lower.includes('generat') || lower.includes('answer') || lower.includes('回答')) return '正在生成回答...'
   return '正在处理...'
+}
+
+function taskProgressText(payload: Record<string, unknown>, content: string): string {
+  const progressType = firstString(payload.progressType, payload.progress_type)
+  const reason = firstString(payload.reason)
+  const lowerType = (progressType ?? '').toLowerCase()
+  if (lowerType.includes('retry')) {
+    const attempt = numberValue(payload.attempt)
+    const maxAttempts = numberValue(payload.maxAttempts, payload.max_attempts)
+    if (attempt != null && maxAttempts != null) return `模型调用重试中 ${attempt}/${maxAttempts}`
+    return '模型调用重试中'
+  }
+  if (reason?.toLowerCase().includes('timeout')) return '正在恢复超时步骤'
+  return stateProgressText(content)
+}
+
+function taskProgressDisplayContent(
+  payload: Record<string, unknown>,
+  content: string,
+  mode: DisplayOptions['mode']
+): string {
+  if (mode === 'debug') return stateDisplayContent(content || stringifySafe(payload), mode)
+  const progress = taskProgressText(payload, content)
+  const reason = firstString(payload.reason)
+  const attempt = numberValue(payload.attempt)
+  const maxAttempts = numberValue(payload.maxAttempts, payload.max_attempts)
+  const suffix = attempt != null && maxAttempts != null && !progress.includes(`${attempt}/${maxAttempts}`)
+    ? `（${attempt}/${maxAttempts}）`
+    : ''
+  return reason ? `${progress}${suffix}: ${reason}` : `${progress}${suffix}`
 }
 
 function stateDisplayContent(content: string, mode: DisplayOptions['mode']): string {

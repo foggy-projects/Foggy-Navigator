@@ -735,4 +735,62 @@ describe('useNavigatorChat business action UX', () => {
       generatedAt: '2026-05-17T12:00:02Z',
     })
   })
+
+  it('shows task progress retry events in details mode', async () => {
+    const task: AgentTask = {
+      taskId: 'task-progress',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'retry-progress',
+          type: 'STATE',
+          content: 'LLM call retrying after LLM_REQUEST_TIMEOUT (1/2)',
+          timestamp: 1_000,
+          metadata: {
+            subtype: 'task_progress',
+            progressType: 'llm_retrying',
+            reason: 'LLM_REQUEST_TIMEOUT',
+            attempt: 1,
+            maxAttempts: 2,
+          },
+        },
+        {
+          id: 'final-result',
+          type: 'RESULT',
+          content: '处理完成。',
+          timestamp: 2_000,
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+        },
+      ],
+    }
+
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'details',
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('处理一下')
+    await nextTick()
+
+    expect(chat.progressText.value).toBe('模型调用重试中 1/2')
+    const progressMessage = chat.messages.value.find((message) =>
+      message.processKind === 'state' && message.content.includes('LLM_REQUEST_TIMEOUT')
+    )
+    expect(progressMessage?.process).toBe(true)
+  })
 })

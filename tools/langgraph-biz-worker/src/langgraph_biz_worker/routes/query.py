@@ -65,6 +65,10 @@ async def _event_generator(
             loop.call_soon_threadsafe(queue.put_nowait, event)
 
         runtime_context = dict(request.runtime_context or {})
+        if request.task_deadline_at:
+            runtime_context.setdefault("task_deadline_at", request.task_deadline_at)
+        if request.task_timeout_ms is not None:
+            runtime_context.setdefault("task_timeout_ms", request.task_timeout_ms)
         runtime_context[_PROGRESS_EVENT_SINK_KEY] = enqueue_progress_event
 
         initial_state: RootState = {

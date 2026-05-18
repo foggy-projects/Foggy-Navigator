@@ -225,6 +225,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         entity.setDirectoryId(form.getDirectoryId());
         entity.setCwd(form.getCwd());
         entity.setContextId(form.getContextId());
+        entity.setTaskDeadlineAt(runtimeContextText(form.getRuntimeContext(), "taskDeadlineAt", "task_deadline_at"));
         persistTask(entity);
         persistUserPrompt(sessionId, taskId, form.getPrompt());
 
@@ -357,6 +358,10 @@ public class LanggraphTaskService implements TaskQueryProvider {
             entity.setResultText(resultText);
             entity.setStructuredOutput(structuredOutput);
             entity.setDurationMs(durationMs);
+            entity.setTaskSubStatus(null);
+            entity.setInterruptionReason(null);
+            entity.setInterruptionMessage(null);
+            entity.setRecoverable(false);
             persistTask(entity);
             log.info("Task completed: taskId={}", taskId);
         });
@@ -367,6 +372,9 @@ public class LanggraphTaskService implements TaskQueryProvider {
         taskRepository.findByTaskId(taskId).ifPresent(entity -> {
             entity.setStatus("FAILED");
             entity.setErrorMessage(errorMessage);
+            if (!StringUtils.hasText(entity.getTaskSubStatus())) {
+                entity.setTaskSubStatus("FAILED");
+            }
             persistTask(entity);
             log.warn("Task failed: taskId={}, error={}", taskId, errorMessage);
         });
@@ -381,6 +389,10 @@ public class LanggraphTaskService implements TaskQueryProvider {
             return;
         }
         entity.setStatus("ABORTED");
+        entity.setTaskSubStatus("INTERRUPTED");
+        entity.setInterruptionReason("user_cancelled");
+        entity.setInterruptionMessage("Cancelled by user");
+        entity.setRecoverable(true);
         entity.setErrorMessage("Cancelled by user");
         persistTask(entity);
         recordRecoverableInterruption(entity, "user_cancelled", "Cancelled by user");
@@ -388,8 +400,29 @@ public class LanggraphTaskService implements TaskQueryProvider {
     }
 
     public void recordTaskInterruption(String taskId, String reason, String errorMessage) {
-        taskRepository.findByTaskId(taskId).ifPresent(entity ->
-                recordRecoverableInterruption(entity, reason, errorMessage));
+        recordTaskInterruption(taskId, reason, errorMessage, true);
+    }
+
+    public void recordTaskInterruptionProjection(String taskId, String reason, String errorMessage) {
+        recordTaskInterruption(taskId, reason, errorMessage, false);
+    }
+
+    private void recordTaskInterruption(
+            String taskId,
+            String reason,
+            String errorMessage,
+            boolean recordWorkerInterruption
+    ) {
+        taskRepository.findByTaskId(taskId).ifPresent(entity -> {
+            entity.setTaskSubStatus("INTERRUPTED");
+            entity.setInterruptionReason(reason);
+            entity.setInterruptionMessage(errorMessage);
+            entity.setRecoverable(true);
+            persistTask(entity);
+            if (recordWorkerInterruption) {
+                recordRecoverableInterruption(entity, reason, errorMessage);
+            }
+        });
     }
 
     @Override
@@ -528,6 +561,13 @@ public class LanggraphTaskService implements TaskQueryProvider {
         Map<String, Object> state = new LinkedHashMap<>();
         putIfNotBlank(state, "contextId", entity.getContextId());
         putIfNotBlank(state, "structuredOutput", entity.getStructuredOutput());
+        putIfNotBlank(state, "taskSubStatus", entity.getTaskSubStatus());
+        putIfNotBlank(state, "interruptionReason", entity.getInterruptionReason());
+        putIfNotBlank(state, "interruptionMessage", entity.getInterruptionMessage());
+        putIfNotBlank(state, "taskDeadlineAt", entity.getTaskDeadlineAt());
+        if (entity.getRecoverable() != null) {
+            state.put("recoverable", entity.getRecoverable());
+        }
         if (state.isEmpty()) {
             return null;
         }
@@ -706,6 +746,19 @@ public class LanggraphTaskService implements TaskQueryProvider {
         if (value != null && !value.isBlank()) {
             target.put(key, value);
         }
+    }
+
+    private static String runtimeContextText(Map<String, Object> runtimeContext, String... keys) {
+        if (runtimeContext == null || runtimeContext.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = runtimeContext.get(key);
+            if (value instanceof String text && !text.isBlank()) {
+                return text.trim();
+            }
+        }
+        return null;
     }
 
     @SuppressWarnings("unchecked")

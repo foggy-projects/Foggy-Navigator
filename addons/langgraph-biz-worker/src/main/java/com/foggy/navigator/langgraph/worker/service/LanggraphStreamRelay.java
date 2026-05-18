@@ -194,6 +194,9 @@ public class LanggraphStreamRelay {
                 case "skill_frame_close" -> publishMessage(sessionId, MessageType.STATE_SYNC,
                         buildSkillScopedPayload(node, taskId, "skill_frame_close"));
 
+                case "task_progress" -> publishMessage(sessionId, MessageType.STATE_SYNC,
+                        buildTaskProgressPayload(node, taskId));
+
                 case "tool_use" -> publishToolUse(sessionId, taskId, node);
 
                 case "tool_result", "skill_result_submit", "skill_result_reject" ->
@@ -221,6 +224,10 @@ public class LanggraphStreamRelay {
 
                 case "error" -> {
                     String error = node.path("error").asText(node.path("content").asText("Unknown error"));
+                    String reason = node.path("reason").asText("");
+                    if (StringUtils.hasText(reason)) {
+                        taskService.recordTaskInterruptionProjection(taskId, reason, error);
+                    }
                     publishMessage(sessionId, MessageType.ERROR,
                             Map.of("content", error, "taskId", taskId));
                     taskService.failTask(taskId, error);
@@ -245,6 +252,34 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
         copyExecutionReportFields(payload, node);
+        return payload;
+    }
+
+    private Map<String, Object> buildTaskProgressPayload(JsonNode node, String taskId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("content", node.path("content").asText(""));
+        payload.put("subtype", "task_progress");
+        payload.put("taskId", taskId);
+        putTextIfPresent(payload, "progressType", firstText(
+                node.path("progress_type").asText(""),
+                node.path("progressType").asText("")));
+        putTextIfPresent(payload, "reason", firstText(
+                node.path("reason").asText(""),
+                node.path("error").asText("")));
+        putTextIfPresent(payload, "skillFrameId", node, "skill_frame_id");
+        putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
+        putTextIfPresent(payload, "skillId", node, "skill_id");
+        putNumberIfPresent(payload, "attempt", node, "attempt");
+        putNumberIfPresent(payload, "maxAttempts", node, "max_attempts");
+        putNumberIfPresent(payload, "nextRetryAfterMs", node, "next_retry_after_ms");
+        putNumberIfPresent(payload, "remainingMs", node, "remaining_ms");
+        putTextIfPresent(payload, "presentationHint", firstText(
+                node.path("presentation_hint").asText(""),
+                node.path("presentationHint").asText("")));
+        JsonNode nestedPayload = node.get("payload");
+        if (nestedPayload != null && !nestedPayload.isNull()) {
+            payload.put("payload", toObject(nestedPayload));
+        }
         return payload;
     }
 
@@ -330,6 +365,13 @@ public class LanggraphStreamRelay {
     private static void putTextIfPresent(Map<String, Object> payload, String key, String value) {
         if (StringUtils.hasText(value)) {
             payload.put(key, value);
+        }
+    }
+
+    private void putNumberIfPresent(Map<String, Object> payload, String targetKey, JsonNode node, String sourceKey) {
+        JsonNode value = node.get(sourceKey);
+        if (value != null && value.isNumber()) {
+            payload.put(targetKey, value.numberValue());
         }
     }
 

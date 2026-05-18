@@ -270,6 +270,51 @@ class TestPersistentTurnResult:
             "summary": "Vehicle creation was interrupted before completion.",
         }
 
+    def test_latest_recoverable_root_is_selected_and_older_focus_superseded(self, tmp_path):
+        from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
+
+        journal = FileFrameJournal(tmp_path)
+        runtime = SkillRuntime(journal=journal)
+        old_frame_id = runtime.invoke_skill(
+            "task-old",
+            "system.root",
+            conversation_id="conv-1",
+            current_task_id="task-old",
+        )
+        runtime.record_recoverable_interruption(
+            old_frame_id,
+            reason="user_cancelled",
+            error="cancelled",
+            task_id="task-old",
+        )
+        new_frame_id = runtime.invoke_skill(
+            "task-new",
+            "system.root",
+            conversation_id="conv-1",
+            current_task_id="task-new",
+        )
+        runtime.record_recoverable_interruption(
+            new_frame_id,
+            reason="llm_retry_exhausted",
+            error="timeout",
+            task_id="task-new",
+        )
+
+        restored = SkillRuntime(journal=journal)
+        selected = restored.select_latest_recoverable_root(
+            conversation_id="conv-1",
+            task_id="task-next",
+            root_skill_id="system.root",
+        )
+
+        assert selected is not None
+        assert selected.frame_id == new_frame_id
+        old_frame = restored.get_frame(old_frame_id)
+        assert old_frame is not None
+        assert old_frame.private_working_state["continuation_state"] == "SUPERSEDED"
+        assert old_frame.private_working_state["recoverable"] is False
+        assert old_frame.private_working_state["superseded_by_frame_id"] == new_frame_id
+
 
 class TestCloseFrame:
     def test_close_returns_promoted_result(self, runtime: SkillRuntime):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import datetime
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -194,12 +195,18 @@ class LlmToolDispatcher:
                 return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
             function_id = args.get("function_id", "")
             version = args.get("version")
+            input_data = args.get("input") if isinstance(args.get("input"), dict) else {}
+            idempotency_key = args.get("idempotency_key") or _auto_business_function_idempotency_key(
+                context.frame_id,
+                function_id,
+                input_data,
+            )
             function_frame_id = self._runtime.invoke_function_call(
                 parent_frame_id=context.frame_id,
                 function_id=function_id,
                 version=version,
-                arguments=args.get("input") if isinstance(args.get("input"), dict) else {},
-                idempotency_key=args.get("idempotency_key"),
+                arguments=input_data,
+                idempotency_key=idempotency_key,
                 tool_call_id=args.get("tool_call_id"),
             )
             try:
@@ -207,8 +214,8 @@ class LlmToolDispatcher:
                     token,
                     function_id=function_id,
                     version=version,
-                    input_data=args.get("input"),
-                    idempotency_key=args.get("idempotency_key"),
+                    input_data=input_data,
+                    idempotency_key=idempotency_key,
                 )
                 result = {"ok": True, "result": gateway_result}
                 return finalize_business_function_call(
@@ -217,7 +224,7 @@ class LlmToolDispatcher:
                     function_frame_id=function_frame_id,
                     function_id=function_id,
                     version=version,
-                    call_args=args,
+                    call_args={**args, "input": input_data, "idempotency_key": idempotency_key},
                     result=result,
                 )
             except BusinessFunctionToolError as exc:
@@ -240,12 +247,17 @@ class LlmToolDispatcher:
                 if key not in {"version", "idempotency_key"}
             }
             resolved_version = args.get("version") or version
+            idempotency_key = args.get("idempotency_key") or _auto_business_function_idempotency_key(
+                context.frame_id,
+                function_id,
+                input_data,
+            )
             function_frame_id = self._runtime.invoke_function_call(
                 parent_frame_id=context.frame_id,
                 function_id=function_id,
                 version=resolved_version,
                 arguments=input_data,
-                idempotency_key=args.get("idempotency_key"),
+                idempotency_key=idempotency_key,
                 tool_call_id=args.get("tool_call_id"),
             )
             try:
@@ -254,7 +266,7 @@ class LlmToolDispatcher:
                     function_id=function_id,
                     version=resolved_version,
                     input_data=input_data,
-                    idempotency_key=args.get("idempotency_key"),
+                    idempotency_key=idempotency_key,
                 )
                 result = {"ok": True, "result": gateway_result}
                 return finalize_business_function_call(
@@ -263,7 +275,7 @@ class LlmToolDispatcher:
                     function_frame_id=function_frame_id,
                     function_id=function_id,
                     version=resolved_version,
-                    call_args={**args, "input": input_data},
+                    call_args={**args, "input": input_data, "idempotency_key": idempotency_key},
                     result=result,
                 )
             except BusinessFunctionToolError as exc:
@@ -412,6 +424,16 @@ def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None
         return None
     value = runtime_context.get("client_app_id") or runtime_context.get("clientAppId")
     return value if isinstance(value, str) and value else None
+
+
+def _auto_business_function_idempotency_key(
+    frame_id: str,
+    function_id: str,
+    input_data: dict[str, Any],
+) -> str:
+    canonical = json.dumps(input_data or {}, ensure_ascii=False, sort_keys=True, default=str)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return f"navigator:{frame_id}:{function_id}:{digest}"
 
 
 def _tool_function_id(

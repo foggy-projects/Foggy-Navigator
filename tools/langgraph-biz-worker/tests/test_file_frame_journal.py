@@ -15,12 +15,14 @@ def _make_frame(
     task_id: str = "task_aaa",
     skill_id: str = "test_skill",
     status: FrameStatus = FrameStatus.RUNNING,
+    conversation_id: str | None = None,
 ) -> SkillFrameState:
     return SkillFrameState(
         frame_id=frame_id,
         task_id=task_id,
         skill_id=skill_id,
         status=status,
+        conversation_id=conversation_id,
         started_at="2026-01-01T00:00:00Z",
     )
 
@@ -66,6 +68,21 @@ class TestSaveAndLoad:
         assert loaded is not None
         assert loaded.status == FrameStatus.COMPLETED
         assert loaded.result_summary == "done"
+        assert loaded.journal_seq is not None
+
+    def test_save_assigns_monotonic_journal_sequence(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        first = _make_frame(frame_id="frm_001", conversation_id="conv-1")
+        second = _make_frame(frame_id="frm_002", conversation_id="conv-1")
+
+        journal.save(first)
+        journal.save(second)
+
+        assert first.journal_seq == 1
+        assert second.journal_seq == 2
+        assert first.journal_updated_at
+        frames = journal.load_by_conversation("conv-1")
+        assert [frame.frame_id for frame in frames] == ["frm_001", "frm_002"]
 
 
 class TestLoadByTask:

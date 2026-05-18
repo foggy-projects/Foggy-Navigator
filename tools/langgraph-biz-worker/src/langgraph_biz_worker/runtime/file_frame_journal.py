@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,10 @@ class FileFrameJournal:
 
         Returns the path of the written file.
         """
+        self._root.mkdir(parents=True, exist_ok=True)
+        frame.journal_seq = self._next_journal_seq()
+        frame.journal_updated_at = datetime.now(timezone.utc).isoformat()
+
         task_dir = self._root / frame.task_id
         task_dir.mkdir(parents=True, exist_ok=True)
 
@@ -89,20 +94,18 @@ class FileFrameJournal:
         task_dir = self._root / task_id
         if not task_dir.is_dir():
             return []
-        frames: list[SkillFrameState] = []
-        for file_path in sorted(task_dir.glob("*.json")):
-            frame = self._read_file(file_path)
-            if frame:
-                frames.append(frame)
-        return frames
+        return _sort_frames_by_journal_order(self._read_frames(task_dir))
 
     def load_by_conversation(self, conversation_id: str) -> list[SkillFrameState]:
         """Load all Frame snapshots for a conversation/session."""
         conversation_dir = self._root / "by-conversation" / _safe_path_segment(conversation_id)
         if not conversation_dir.is_dir():
             return []
+        return _sort_frames_by_journal_order(self._read_frames(conversation_dir))
+
+    def _read_frames(self, directory: Path) -> list[SkillFrameState]:
         frames: list[SkillFrameState] = []
-        for file_path in sorted(conversation_dir.glob("*.json")):
+        for file_path in sorted(directory.glob("*.json")):
             frame = self._read_file(file_path)
             if frame:
                 frames.append(frame)
@@ -165,6 +168,30 @@ class FileFrameJournal:
             logger.warning("Failed to parse frame file: %s", file_path, exc_info=True)
             return None
 
+    def _next_journal_seq(self) -> int:
+        sequence_file = self._root / ".journal-seq"
+        current = 0
+        if sequence_file.is_file():
+            try:
+                current = int(sequence_file.read_text(encoding="utf-8").strip() or "0")
+            except ValueError:
+                logger.warning("Invalid frame journal sequence file: %s", sequence_file)
+        next_value = current + 1
+        tmp_file = self._root / ".journal-seq.tmp"
+        tmp_file.write_text(str(next_value), encoding="utf-8")
+        tmp_file.replace(sequence_file)
+        return next_value
+
 
 def _safe_path_segment(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value) or "_"
+
+
+def _sort_frames_by_journal_order(frames: list[SkillFrameState]) -> list[SkillFrameState]:
+    return sorted(frames, key=_journal_sort_key)
+
+
+def _journal_sort_key(frame: SkillFrameState) -> tuple[int, str, str]:
+    sequence = frame.journal_seq if isinstance(frame.journal_seq, int) else -1
+    updated_at = frame.journal_updated_at or frame.ended_at or frame.started_at or ""
+    return sequence, updated_at, frame.frame_id

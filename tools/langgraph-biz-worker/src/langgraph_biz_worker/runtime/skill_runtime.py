@@ -959,6 +959,47 @@ class SkillRuntime:
     def get_frames_by_conversation(self, conversation_id: str) -> list[SkillFrameState]:
         return self.store.get_by_conversation(conversation_id)
 
+    def select_latest_recoverable_root(
+        self,
+        *,
+        conversation_id: str | None,
+        task_id: str | None = None,
+        root_skill_id: str = "system.root",
+    ) -> SkillFrameState | None:
+        """Select the latest recoverable root frame for a conversation.
+
+        The file journal is the recovery source of truth. In-memory frames are
+        included for hot-path continuity, but journal ordering decides ties and
+        supersedes older active recoverable roots.
+        """
+        candidates: list[SkillFrameState] = []
+        if conversation_id:
+            candidates.extend(self.store.get_by_conversation(conversation_id))
+            if self._journal:
+                candidates.extend(self._journal.load_by_conversation(conversation_id))
+        if task_id:
+            candidates.extend(self.store.get_by_task(task_id))
+            if self._journal:
+                candidates.extend(self._journal.load_by_task(task_id))
+
+        recoverable_roots = [
+            frame for frame in _dedupe_latest_frame_snapshots(candidates)
+            if _is_active_recoverable_root(frame, root_skill_id)
+        ]
+        if not recoverable_roots:
+            return None
+
+        recoverable_roots.sort(key=_recoverable_root_sort_key)
+        latest = recoverable_roots[-1]
+        self.restore_frame(latest)
+        latest = self._get_frame(latest.frame_id)
+        self._supersede_recoverable_roots(
+            recoverable_roots[:-1],
+            latest=latest,
+            root_skill_id=root_skill_id,
+        )
+        return latest
+
     def rebind_frame_to_task(
         self,
         frame_id: str,
@@ -1196,6 +1237,31 @@ class SkillRuntime:
             return
         for frame in self._journal.load_by_task(task_id):
             self.restore_frame(frame)
+
+    def _supersede_recoverable_roots(
+        self,
+        frames: list[SkillFrameState],
+        *,
+        latest: SkillFrameState,
+        root_skill_id: str,
+    ) -> None:
+        if not frames:
+            return
+        superseded_at = datetime.now(timezone.utc).isoformat()
+        for snapshot in frames:
+            if snapshot.frame_id == latest.frame_id:
+                continue
+            self.restore_frame(snapshot)
+            frame = self._get_frame(snapshot.frame_id)
+            if not _is_active_recoverable_root(frame, root_skill_id):
+                continue
+            frame.private_working_state["continuation_state"] = "SUPERSEDED"
+            frame.private_working_state["recoverable"] = False
+            frame.private_working_state["superseded_by_frame_id"] = latest.frame_id
+            frame.private_working_state["superseded_at"] = superseded_at
+            frame.private_working_state["supersede_reason"] = "newer_recoverable_focus_selected"
+            _clear_recoverable_focus_fields(frame.private_working_state)
+            self._save(frame)
 
     def _find_function_frame_by_suspend_id(
         self,
@@ -1879,6 +1945,47 @@ def _recoverable_focus_frame_ids(
         seen.add(frame_id)
         deduped.append(frame_id)
     return deduped
+
+
+def _dedupe_latest_frame_snapshots(frames: list[SkillFrameState]) -> list[SkillFrameState]:
+    latest_by_id: dict[str, SkillFrameState] = {}
+    for frame in frames:
+        previous = latest_by_id.get(frame.frame_id)
+        if previous is None or _recoverable_root_sort_key(frame) >= _recoverable_root_sort_key(previous):
+            latest_by_id[frame.frame_id] = frame
+    return list(latest_by_id.values())
+
+
+def _is_active_recoverable_root(frame: SkillFrameState, root_skill_id: str) -> bool:
+    if frame.skill_id != root_skill_id or frame.parent_frame_id:
+        return False
+    state = frame.private_working_state
+    continuation_state = str(state.get("continuation_state") or "").upper()
+    if continuation_state in {"SUPERSEDED", "SHELVED"}:
+        return False
+    recoverable = state.get("recoverable") is True and continuation_state == "INTERRUPTED"
+    focus_frame_id = state.get("recoverable_focus_frame_id")
+    pending_child_frame_id = state.get("pending_recoverable_child_frame_id")
+    has_focus = isinstance(focus_frame_id, str) and bool(focus_frame_id)
+    has_pending_child = isinstance(pending_child_frame_id, str) and bool(pending_child_frame_id)
+    if frame.status == FrameStatus.COMPLETED and not (recoverable or has_focus or has_pending_child):
+        return False
+    return recoverable or has_focus or has_pending_child
+
+
+def _recoverable_root_sort_key(frame: SkillFrameState) -> tuple[int, str, str, str]:
+    sequence = frame.journal_seq if isinstance(frame.journal_seq, int) else -1
+    state = frame.private_working_state
+    timestamp = (
+        str(state.get("interrupted_at") or "")
+        or str(state.get("recoverable_focus_interrupted_at") or "")
+        or frame.journal_updated_at
+        or frame.ended_at
+        or frame.started_at
+        or ""
+    )
+    task_id = frame.current_task_id or frame.task_id or ""
+    return sequence, timestamp, task_id, frame.frame_id
 
 
 def _interruption_history_entry(

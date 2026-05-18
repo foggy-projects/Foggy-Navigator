@@ -178,6 +178,19 @@ class LanggraphTaskServiceTest {
         }
 
         @Test
+        void projects_task_deadline_from_runtime_context() {
+            CreateLanggraphTaskForm form = makeForm();
+            form.setRuntimeContext(Map.of("taskDeadlineAt", "2026-05-18T10:00:00Z"));
+
+            service.createTask(USER_ID, TENANT_ID, form);
+
+            verify(sessionTaskRepository).save(argThat((SessionTaskEntity projection) ->
+                    projection.getTaskStateJson() != null
+                            && projection.getTaskStateJson().contains("\"taskDeadlineAt\":\"2026-05-18T10:00:00Z\"")
+            ));
+        }
+
+        @Test
         void forwards_recent_conversation_and_persists_current_user_prompt() {
             when(sessionMessageRepository.findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any()))
                     .thenReturn(List.of(
@@ -256,6 +269,7 @@ class LanggraphTaskServiceTest {
             service.failTask("lgt_existing", "connection timeout");
 
             assertEquals("FAILED", existingTask.getStatus());
+            assertEquals("FAILED", existingTask.getTaskSubStatus());
             assertEquals("connection timeout", existingTask.getErrorMessage());
             verify(taskRepository).save(existingTask);
         }
@@ -265,6 +279,9 @@ class LanggraphTaskServiceTest {
             service.cancelTask("lgt_existing", USER_ID);
 
             assertEquals("ABORTED", existingTask.getStatus());
+            assertEquals("INTERRUPTED", existingTask.getTaskSubStatus());
+            assertEquals("user_cancelled", existingTask.getInterruptionReason());
+            assertEquals(true, existingTask.getRecoverable());
             assertEquals("Cancelled by user", existingTask.getErrorMessage());
             verify(taskRepository).save(existingTask);
         }
