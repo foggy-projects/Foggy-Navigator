@@ -274,3 +274,4 @@ Result: `1 passed` in `4.0s`. The test selects `image.png` through the real chat
 - `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/25-tms-attachment-upload-on-submit-and-worker-pass-through.md`
 - `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/31-openapi-model-config-and-attachment-e2e-bug.md`
 - `docs/version-tracker/1.3.0-SNAPSHOT/workitems/BUG-027-biz-worker-llm-call-timeout-fuse-missing.md`
+- `docs/version-tracker/1.3.0-SNAPSHOT/workitems/OPT-032-attachment-preprocessing-governance-follow-up.md`
