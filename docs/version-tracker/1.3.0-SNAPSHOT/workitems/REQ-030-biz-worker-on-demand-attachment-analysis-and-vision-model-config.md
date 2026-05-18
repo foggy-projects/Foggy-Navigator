@@ -117,6 +117,7 @@
 - 2026-05-18 BizWorker 业务级 E2E：`tools/langgraph-biz-worker/.venv/Scripts/python.exe -m pytest tests/test_attachment_analysis.py tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_tms_ticket_child_receives_attachment_context tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_ticket_with_attachment_does_not_analyze_image_by_default tests/test_e2e_scripted_tool_call_streaming.py::test_scripted_ticket_from_image_content_analyzes_then_uses_result -q`，7 passed。
 - 2026-05-18 Mock LLM 回归：`PYTHONPATH=src python -m pytest tests/test_openai_api.py tests/test_strategies.py -q`，22 passed；同时补齐 mock OpenAI ChatMessage 对多模态 content list 的接收、cursor 匹配和 token 估算。
 - 2026-05-18 Java relay 复跑：`mvn -pl addons/langgraph-biz-worker -am -Dtest=LanggraphStreamRelayTest,LanggraphWorkerClientTest,LanggraphBusinessAgentWorkerTaskLauncherTest -Dsurefire.failIfNoSpecifiedTests=false test`，15 tests passed。前端本轮未改动，未复跑前端 typecheck。
+- 2026-05-18 真实视觉模型冒烟：`qwen3.5-plus` 通过 `http://test.synthoflow.com:3061/v1` OpenAI 兼容接口支持 `image_url` 多模态协议；BizWorker `analyze_attachment` 使用公网图片 URL 调用成功，记录见 `test-records/real-llm-attachment-ticket/20260518-qwen35-vision-smoke.md`。API Key 未落档。
 
 ## 非目标
 
