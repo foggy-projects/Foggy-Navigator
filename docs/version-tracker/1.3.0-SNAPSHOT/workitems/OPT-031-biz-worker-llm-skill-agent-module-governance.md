@@ -183,11 +183,11 @@ Existing focused tests that should be treated as the Stage A characterization ba
 
 ### Stage B - Low-Risk Extraction
 
-- [ ] Extract prompt builders to `llm_agent_prompts.py`.
-- [ ] Extract tool schema definitions and `_tool_specs` to `llm_tool_schemas.py`.
-- [ ] Extract tool-call normalization and safe audit helpers to `llm_tool_call_codec.py`.
-- [ ] Keep compatibility imports in `llm_skill_agent.py` until all tests pass.
-- [ ] Risk control: do not edit `LlmSkillAgent.run`, `_execute_tool_call`, `_call_tool`, or child recovery branches in this stage.
+- [x] Extract prompt builders to `llm_agent_prompts.py`.
+- [x] Extract tool schema definitions and `_tool_specs` to `llm_tool_schemas.py`.
+- [x] Extract tool-call normalization and safe audit helpers to `llm_tool_call_codec.py`.
+- [x] Keep compatibility imports in `llm_skill_agent.py` until all tests pass.
+- [x] Risk control: do not edit `LlmSkillAgent.run`, `_execute_tool_call`, `_call_tool`, or child recovery branches in this stage.
 
 ### Stage C - Tool Dispatch Split
 
@@ -274,7 +274,12 @@ $env:PYTHONPATH='src'
 - [x] Stage A responsibility map completed.
 - [x] Stage A extraction target classification completed.
 - [x] Stage A focused safety test inventory identified.
-- [ ] Stage B low-risk extraction completed.
+- [x] Stage B/P1 low-risk extraction completed.
+  - Extracted prompt construction and runtime time/recoverable context prompt helpers to `runtime/llm_agent_prompts.py`.
+  - Extracted `_KNOWN_TOOL_SCHEMAS`, tool spec assembly, global/hidden tool sets, and schema dedupe to `runtime/llm_tool_schemas.py`.
+  - Extracted tool-call normalization, artifact-content scrub, safe content copy, execution-report payload helpers, and safe tool args to `runtime/llm_tool_call_codec.py`.
+  - Kept compatibility imports and `LlmSkillAgent._build_system_prompt/_build_user_prompt` aliases in `llm_skill_agent.py`.
+  - Current local line counts after P1: `llm_skill_agent.py` 1,368 lines; prompt module 295 lines; schema module 463 lines; codec module 160 lines.
 - [ ] Stage C tool dispatch split completed.
 - [ ] Stage D recovery boundary extracted.
 - [ ] Stage E cleanup completed.
@@ -282,13 +287,37 @@ $env:PYTHONPATH='src'
 ### Test Progress
 
 - [x] Focused safety tests identified for Stage A characterization.
-- [ ] Baseline targeted tests captured before first extraction.
+- [ ] Baseline targeted tests captured before first extraction. Not captured before P1 started; use the post-P1 targeted run below as the first recorded extraction safety evidence.
+- [x] Post-P1 targeted tests passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py tests/test_artifact_context_governance.py -q`
+  - Result: 42 passed in 1.67s.
+- [x] Post-P1 stage safety set passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py tests/test_llm_call_guard.py tests/test_frame_interruption.py tests/test_frame_lifecycle.py tests/test_artifact_context_governance.py -q`
+  - Result: 73 passed in 2.46s.
 - [ ] Full Python worker test suite captured before first extraction.
 - [ ] Full Python worker test suite passes after final extraction.
 
 ### Experience Progress
 
 - [x] N/A for Stage A. This work item is backend Python runtime/module governance only and has no UI workflow change in the characterization stage.
+- [x] N/A for P1. The change is pure Python runtime module extraction with no UI workflow or display change.
+
+### Execution Check-in - 2026-05-18 P1
+
+- Completed work: P1 pure extraction only; no dispatcher split, child recovery rewrite, business function behavior change, or prompt content rewrite.
+- Touched code paths:
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_skill_agent.py`
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_agent_prompts.py`
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_tool_schemas.py`
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_tool_call_codec.py`
+- Self-check:
+  - [x] BUG-027 timeout/retry/deadline/fuse entry point remains in `LlmSkillAgent.run` through `invoke_chat_model`.
+  - [x] `invoke_business_skill`, `resume_recoverable_child_skill`, `shelve_interrupted_frame`, and business function suspension branches were not moved.
+  - [x] Existing private helper names remain importable from `llm_skill_agent.py` during the compatibility period.
+  - [x] No public API payload or SSE event contract was intentionally changed.
+- Test status: pass for the post-P1 targeted and stage safety commands listed above.
+- Remaining risks: Stage C/D still carry the real behavior risk because tool dispatch and child recovery are still inside `llm_skill_agent.py`.
+- Acceptance readiness: P1 is ready for review as a scoped extraction; the overall OPT-031 item remains open.
 
 ## Related Work
 
