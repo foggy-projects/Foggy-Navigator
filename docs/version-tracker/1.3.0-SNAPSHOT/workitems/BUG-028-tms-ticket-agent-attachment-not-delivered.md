@@ -4,11 +4,11 @@ bug_source: user-report
 version: 1.3.0-SNAPSHOT
 ticket: BUG-028
 severity: major
-status: in-progress
-reproduction_status: partial
+status: closed
+reproduction_status: confirmed
 test_strategy: e2e-test
 automation_decision: required
-owner: upstream-integration + biz-worker-runtime
+owner: upstream-integration + biz-worker-runtime + navigator-business-agent
 ---
 
 # BUG-028: TMS Ticket Agent Attachment Not Delivered
@@ -88,7 +88,20 @@ Result: PASS.
 - 未调用 `invoke_business_function`，未创建工单
 - 敏感串扫描未命中 `token=secret`、`accessToken`、`hidden`
 
-同日执行既有 `navigator-ticket-skill.e2e.test.ts` 时，REST adapter 用例通过；真实创建工单链路失败于环境授权配置：`Unauthorized or unconfigured upstream_ref: local-smoke-2026-05-18`。该失败说明工单业务函数授权另有环境缺口，不影响本 BUG 对附件上下文透传的判断。
+同日早期执行既有 `navigator-ticket-skill.e2e.test.ts` 时，REST adapter 用例通过，但真实创建工单链路曾失败于环境授权配置：`Unauthorized or unconfigured upstream_ref: local-smoke-2026-05-18`。
+
+2026-05-18 后续在 Navigator 修复 public skill materialization 后，重新执行同一 TMS E2E，REST adapter 与真实创建工单链路均通过。真实链路中 `tms-ticket-agent` 调用了 `tms.ticket.createPlatformFeedback`，消息流包含 `BUG_REPORT` 与测试图片 URL，最终创建的 TMS 工单 `attachmentRefs` 包含同一图片 URL。
+
+## 2026-05-18 Navigator Closure Update
+
+Navigator side confirmed and fixed the final real-LLM failure:
+
+- Worker launch previously sent raw public skill markdown with `${@schema...}` placeholders, so the real LLM did not reliably see the `attachmentRefs[].attachmentUrl` contract.
+- `SkillRegistryService` now builds materialized public skill markdown for worker launches, and schema rendering resolves local JSON Schema `$ref` such as `#/definitions/attachmentRef`.
+- REST adapter now treats 2xx HTTP responses with business envelope `code` outside `0` or `2xx` as fail-closed instead of success.
+- OpenAPI readiness preflight now accepts `context.requiredUpstreamRefs` / `upstreamRefs` / `upstream_ref`; it checks the required upstream route and, when a route defines a user-token header, checks the upstream user token binding before the real LLM run.
+
+Core BUG-028 is closed by real TMS BFF + Navigator + Worker + LLM + TMS ticket creation evidence. Remaining observability/governance items are non-blocking hardening follow-ups.
 
 ## Impact Scope
 
@@ -129,21 +142,24 @@ Automation is required because this issue spans widget、TMS BFF、OpenAPI、Jav
 - [x] 检查 LangGraph Java relay 是否把附件放入 Worker HTTP body。
 - [x] 检查 Python Worker 是否把 `attachments` 写入 root state。
 - [x] 检查 root-to-child `invoke_business_skill` 是否把附件上下文传给 child frame。
-- [ ] 明确 `tms-ticket-agent` 与 `tms-attachment-agent` 的职责边界：附件是由 root 先路由到附件技能，还是由工单技能消费附件上下文。
+- [x] 明确 `tms-ticket-agent` 与 `tms-attachment-agent` 的职责边界：BUG-028 以 `tms-ticket-agent` 直接消费附件 URL/ref 创建工单闭环；附件技能预处理作为后续能力治理。
 - [x] 补齐 Worker scripted E2E 回归测试，防止 Worker 收到附件但 child skill 不可见。
 - [x] 执行真实 TMS BFF 到 Navigator/Worker/child skill 的现场 smoke，防止 BFF 后链路再次丢附件。
 - [x] 补齐 TMS BFF 到 Navigator/Worker/child skill 的 Vitest E2E 回归。
 - [x] 补齐 browser/widget 到 TMS BFF 的 E2E，防止 UI 显示附件但 ask payload 未携带附件。
+- [x] Navigator Worker launch 使用 materialized public skill markdown，避免真实 LLM 看到未展开的 schema placeholder。
+- [x] REST adapter 对 2xx business error envelope fail-closed，避免业务失败被当作工具成功。
+- [x] OpenAPI readiness 支持 required upstream route/token binding 预检，避免真实 LLM E2E 被环境漂移阻塞到最后一步。
 
 ## Verification
 
 - [x] TMS BFF ask 携带顶层图片附件后，`tms-ticket-agent` child result 能看到脱敏附件元数据。
 - [x] TMS BFF 附件透传 Vitest E2E 通过。
 - [x] TMS 本地 UI 发送图片附件后，Navigator ask body 能看到顶层附件对象。
-- [ ] Worker task data 能看到附件数组或 attachment refs。
+- [x] 真实 TMS Navigator ticket E2E 中，任务消息流能看到附件 URL，最终 TMS 工单 `attachmentRefs` 保留附件 URL。
 - [x] Worker scripted E2E 中，`tms-ticket-agent` child prompt context 能看到脱敏附件摘要/ref。
 - [x] Worker direct real-LLM smoke 中，`system.root` 真实调用 `tms-ticket-agent`，child frame 返回脱敏附件 ref。
-- [ ] 若路由到 `tms-attachment-agent`，对应 child frame 能看到附件并产出可供工单技能引用的结果。
+- [x] 本 BUG 闭环不要求先路由到 `tms-attachment-agent`；已确认 `tms-ticket-agent` 可直接消费附件 URL/ref 创建工单。
 
 ### Verification Evidence 2026-05-18
 
@@ -202,7 +218,40 @@ Result: PASS. Task `lgt_f0527a861d054b75` completed; root called `tms-ticket-age
 npx vitest run tests/e2e/navigator-ticket-skill.e2e.test.ts --no-file-parallelism
 ```
 
-Result: partial. REST adapter test passed; Navigator-to-ticket creation test reached `tms-ticket-agent` and attempted `tms.ticket.createPlatformFeedback`, then failed with `Unauthorized or unconfigured upstream_ref: local-smoke-2026-05-18`.
+Initial result: partial. REST adapter test passed; Navigator-to-ticket creation test reached `tms-ticket-agent` and attempted `tms.ticket.createPlatformFeedback`, then failed with `Unauthorized or unconfigured upstream_ref: local-smoke-2026-05-18`.
+
+Final result after Navigator fix: PASS. `2 passed` in about `70.58s`.
+
+Post-hardening rerun on 2026-05-18 18:48:33: PASS. `2 passed` in `50.71s`.
+
+- REST adapter endpoint exposed via TMS BFF passed.
+- `tms-ticket-agent` was synced and created a BUG report ticket via Navigator.
+- Navigator task messages contained `tms.ticket.createPlatformFeedback`, `BUG_REPORT`, and the test image URL.
+- TMS ticket detail confirmed `attachmentRefs` contains the same image URL.
+
+- Navigator materialized skill / schema regression:
+
+```powershell
+mvn -pl business-agent-module -am "-Dtest=BusinessAgentTaskServiceTest,SkillRegistryServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+Result: `32` tests passed. Code commit: `b7fe5349 fix: materialize public skill markdown for worker launches`.
+
+- Navigator REST adapter and readiness hardening regression:
+
+```powershell
+mvn -pl addons/claude-worker-agent,business-agent-module -am "-Dtest=RestBusinessFunctionAdapterInvokerTest,OpenApiAgentReadinessServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+Result: `31` tests passed. Coverage includes REST adapter business envelope fail-closed and OpenAPI readiness `requiredUpstreamRefs` route/token binding checks.
+
+Broader Navigator regression also passed:
+
+```powershell
+mvn -pl addons/claude-worker-agent,business-agent-module -am "-Dtest=RestBusinessFunctionAdapterInvokerTest,OpenApiAgentReadinessServiceTest,BusinessAgentTaskServiceTest,SkillRegistryServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+Result: `63` tests passed. `mvn -pl launcher -am "-DskipTests" package` also completed with `BUILD SUCCESS`; the rebuilt launcher started on port `8112` before the final real TMS E2E rerun.
 
 - TMS BFF attachment handoff Vitest E2E:
 

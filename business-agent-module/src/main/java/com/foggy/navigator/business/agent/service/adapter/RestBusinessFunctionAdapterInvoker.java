@@ -188,6 +188,7 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
                 throw new IllegalArgumentException("Rest adapter execution failed with HTTP "
                         + response.getStatusCode() + ": " + response.getBody());
             }
+            validateBusinessEnvelopeSuccess(response.getBody());
 
             return BusinessFunctionAdapterResult.success(response.getBody());
 
@@ -286,6 +287,71 @@ public class RestBusinessFunctionAdapterInvoker implements BusinessFunctionAdapt
             return StringUtils.hasText(template) && template.startsWith("$.") ? null : template;
         }
         return objectMapper.convertValue(resolvedNode, Object.class);
+    }
+
+    private void validateBusinessEnvelopeSuccess(String responseBody) {
+        if (!StringUtils.hasText(responseBody)) {
+            return;
+        }
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(responseBody);
+        } catch (Exception ignored) {
+            return;
+        }
+        if (root == null || !root.isObject()) {
+            return;
+        }
+        Integer code = parseBusinessEnvelopeCode(root.get("code"));
+        if (code == null || isBusinessEnvelopeSuccessCode(code)) {
+            return;
+        }
+        String exCode = firstText(root, "exCode", "errorCode");
+        String message = firstText(root, "msg", "message", "error", "errorMessage");
+        StringBuilder builder = new StringBuilder("Rest adapter execution failed with business code ")
+                .append(code);
+        if (StringUtils.hasText(exCode)) {
+            builder.append(" (").append(exCode).append(")");
+        }
+        if (StringUtils.hasText(message)) {
+            builder.append(": ").append(message);
+        }
+        throw new IllegalArgumentException(builder.toString());
+    }
+
+    private Integer parseBusinessEnvelopeCode(JsonNode codeNode) {
+        if (codeNode == null || codeNode.isNull()) {
+            return null;
+        }
+        if (codeNode.canConvertToInt()) {
+            return codeNode.asInt();
+        }
+        if (codeNode.isTextual()) {
+            String value = codeNode.asText();
+            if (!StringUtils.hasText(value)) {
+                return null;
+            }
+            try {
+                return Integer.parseInt(value.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private boolean isBusinessEnvelopeSuccessCode(int code) {
+        return code == 0 || (code >= 200 && code < 300);
+    }
+
+    private String firstText(JsonNode root, String... fields) {
+        for (String field : fields) {
+            JsonNode value = root.get(field);
+            if (value != null && value.isValueNode() && StringUtils.hasText(value.asText())) {
+                return value.asText();
+            }
+        }
+        return null;
     }
 
     private Map<String, List<String>> sanitizeHeaders(HttpHeaders headers) {
