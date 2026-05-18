@@ -158,6 +158,23 @@ def _context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _recent_conversation_for_runtime(context: dict[str, Any]) -> list[dict[str, Any]]:
+    history = context.get("recentConversation") or context.get("recent_conversation")
+    if not isinstance(history, list):
+        return []
+    visible: list[dict[str, Any]] = []
+    for item in history[-12:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "message").strip().lower()
+        if role not in {"user", "assistant", "tool", "system"}:
+            role = "message"
+        content = item.get("content")
+        if isinstance(content, str) and content.strip():
+            visible.append({"role": role, "content": content.strip()[:1200]})
+    return visible
+
+
 def _system_root_manifest() -> SkillManifest:
     return SkillManifest(
         id=ROOT_SKILL_ID,
@@ -695,6 +712,9 @@ def run_skill(state: RootState) -> dict:
     runtime_context = dict(state.get("runtime_context") or {})
     runtime_context["task_id"] = task_id
     runtime_context["frame_id"] = frame_id
+    recent_conversation = _recent_conversation_for_runtime(context)
+    if recent_conversation:
+        runtime_context["_visible_recent_conversation"] = recent_conversation
     client_app_id = context.get("client_app_id") or context.get("clientAppId")
     if client_app_id:
         runtime_context.setdefault("client_app_id", client_app_id)

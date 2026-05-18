@@ -153,6 +153,36 @@ def test_run_skill_passes_raw_prompt_and_runtime_attachments_to_llm_agent(monkey
     assert captured["runtime_context"]["attachments"] == state["attachments"]
 
 
+def test_run_skill_passes_recent_conversation_to_persistent_root_agent(monkeypatch, tmp_path):
+    _install_isolated_runtime(monkeypatch, tmp_path)
+    state = _state("task_root_recent_prompt_001")
+    state["context"] = {
+        "contextId": "ctx-recent",
+        "recentConversation": [
+            {"role": "user", "content": "我刚才问了工单 1001"},
+            {"role": "assistant", "content": "工单 1001 当前待处理"},
+        ],
+    }
+    routed = root_graph_module.route_skill(state)
+    state["active_frame_id"] = routed["active_frame_id"]
+
+    captured = {}
+
+    class FakeAgent:
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return []
+
+    monkeypatch.setattr(root_graph_module, "_llm_skill_agent_for_state", lambda current_state: FakeAgent())
+
+    root_graph_module.run_skill(state)
+
+    assert captured["runtime_context"]["_visible_recent_conversation"] == [
+        {"role": "user", "content": "我刚才问了工单 1001"},
+        {"role": "assistant", "content": "工单 1001 当前待处理"},
+    ]
+
+
 def test_agentic_routing_prompt_includes_recent_conversation(monkeypatch, tmp_path):
     registry = SkillRegistry(skills_root=tmp_path / "skills", data_root=tmp_path / "data")
     journal = FileFrameJournal(tmp_path / "data")

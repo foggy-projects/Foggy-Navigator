@@ -754,6 +754,44 @@ def test_llm_agent_persistent_frame_prompt_includes_active_plan():
     assert "intent_resolution" in user_prompt
 
 
+def test_llm_agent_prompt_includes_visible_recent_conversation():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_recent_prompt_001",
+        skill_id="system.root",
+        skill_input={"contextId": "ctx-recent"},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Used recent conversation.",
+                "structured_output": {"answer": "ok"},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_recent_prompt_002",
+        frame_id=frame_id,
+        prompt="我上一个消息是什么",
+        runtime_context={
+            "_visible_recent_conversation": [
+                {"role": "user", "content": "我刚才问了工单 1001"},
+                {"role": "assistant", "content": "工单 1001 当前待处理"},
+            ],
+        },
+        persistent_frame=True,
+    )
+
+    user_prompt = model.seen_messages[0][1].content
+    assert "Recent conversation before this turn:" in user_prompt
+    assert "user: 我刚才问了工单 1001" in user_prompt
+    assert "assistant: 工单 1001 当前待处理" in user_prompt
+    assert "User request: 我上一个消息是什么" in user_prompt
+
+
 def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_context():
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
