@@ -34,6 +34,7 @@ import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO
 import com.foggy.navigator.sdk.model.businessagent.CreateUpstreamBootstrapRequestForm;
 import com.foggy.navigator.sdk.model.businessagent.DenyUpstreamBootstrapRequestForm;
 import com.foggy.navigator.sdk.model.businessagent.EnsureUpstreamClientAppForm;
+import com.foggy.navigator.sdk.model.businessagent.EnsureUpstreamTenantClientAppForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantBusinessFunctionForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
@@ -49,6 +50,7 @@ import com.foggy.navigator.sdk.model.businessagent.SyncBusinessAgentBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncSkillBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamAdminCredentialClaimDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamAdminCredentialDTO;
+import com.foggy.navigator.sdk.model.businessagent.UpstreamTenantClientAppProvisioningDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamBootstrapRequestCreatedDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpstreamBootstrapRequestDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpsertClientAppUpstreamRouteForm;
@@ -146,6 +148,7 @@ public class UpstreamCli {
             case "client-app", "client-app help" -> clientAppUsage();
             case "client-app list" -> upstreamClientAppList(args);
             case "client-app ensure" -> upstreamClientAppEnsure(args);
+            case "client-app ensure-tenant" -> upstreamTenantClientAppEnsure(args);
             case "client-app issue-control-key" -> upstreamClientAppIssueControlKey(args);
             case "account-context list" -> accountContextList(args);
             case "account-context read" -> accountContextRead(args);
@@ -159,7 +162,7 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app issue-control-key, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app ensure-tenant, client-app issue-control-key, account-context list, account-context read, account-context write-policy");
         return 0;
     }
 
@@ -178,9 +181,10 @@ public class UpstreamCli {
 
     private int clientAppUsage() {
         out.println("Usage: navi upstream client-app <command> [options]");
-        out.println("Commands: list, ensure, issue-control-key");
+        out.println("Commands: list, ensure, ensure-tenant, issue-control-key");
         out.println("  list [--target-tenant-id <tenantId>]");
         out.println("  ensure --target-tenant-id <tenantId> --upstream-ref <ref> [--name <name>] [--tenant-profile <path>] [--write-profile]");
+        out.println("  ensure-tenant --source-system <system> --source-tenant-id <id> [--name <name>] [--tenant-profile <path>] [--rotate-credentials] --write-profile");
         out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] [--tenant-profile <path>] --write-profile");
         return 0;
     }
@@ -445,6 +449,43 @@ public class UpstreamCli {
             out.println("stored=NAVI_CLIENT_APP_ID");
         }
         printClientApp("clientApp", app);
+        return 0;
+    }
+
+    private int upstreamTenantClientAppEnsure(CliArguments args) {
+        if (!args.flag("write-profile")) {
+            throw new UpstreamCliException("client-app ensure-tenant requires --write-profile to store one-time credentials without printing them");
+        }
+        Path targetProfile = tenantProfilePath(args);
+        config.assertProfileWritable(targetProfile);
+
+        String sourceSystem = requiredOptionOrConfig(args, "source-system", "NAVI_UPSTREAM_SYSTEM_ID", "source system");
+        String sourceTenantId = sourceTenantId(args);
+        EnsureUpstreamTenantClientAppForm form = new EnsureUpstreamTenantClientAppForm();
+        form.setSourceSystem(sourceSystem);
+        form.setSourceTenantId(sourceTenantId);
+        form.setClientAppName(args.option("name"));
+        form.setCapabilityDomain(args.option("capability-domain"));
+        form.setTenantName(args.option("tenant-name"));
+        form.setAgentRole(args.option("agent-role"));
+        form.setAgentBundleCode(args.option("agent-bundle-code"));
+        form.setModelProfileCode(optionalOptionOrConfig(args, "model-profile-code", "NAVI_MODEL_PROFILE_CODE"));
+        form.setModelConfigId(optionalOptionOrConfig(args, "model-config-id", "NAVI_MODEL_CONFIG_ID"));
+        form.setSkillId(optionalOptionOrConfig(args, "skill-id", "NAVI_SKILL_ID"));
+        form.setWorkerPoolId(optionalOptionOrConfig(args, "worker-pool-id", "NAVI_WORKER_POOL_ID"));
+        form.setRotateCredentials(args.flag("rotate-credentials"));
+
+        UpstreamTenantClientAppProvisioningDTO dto = tenantAdminApi().ensureUpstreamTenantClientApp(form);
+        if (dto == null || !hasText(dto.getClientAppId())) {
+            throw new UpstreamCliException("client-app ensure-tenant response did not include clientAppId");
+        }
+
+        writeProvisionedTenantProfile(targetProfile, dto, sourceSystem, sourceTenantId);
+
+        out.println("client-app ensure-tenant ok");
+        out.println("profileUpdated=" + targetProfile);
+        out.println("stored=" + provisionedTenantStoredKeys(dto));
+        printUpstreamTenantClientAppProvisioning(dto);
         return 0;
     }
 
@@ -1108,6 +1149,20 @@ public class UpstreamCli {
                 Duration.ofSeconds(30)));
     }
 
+    private BusinessAgentApi tenantAdminApi() {
+        String adminToken = config.get("NAVI_ADMIN_TOKEN");
+        String userApiKey = config.get("NAVI_USER_API_KEY");
+        if (!hasText(adminToken) && !hasText(userApiKey)) {
+            throw new UpstreamCliException("tenant admin credential is required (NAVI_ADMIN_TOKEN or NAVI_USER_API_KEY)");
+        }
+        return new BusinessAgentApi(new HttpHelper(
+                config.required("NAVI_BASE_URL", "Navigator base URL"),
+                userApiKey,
+                adminToken,
+                config.get("NAVI_TENANT_ID"),
+                Duration.ofSeconds(30)));
+    }
+
     private BusinessAgentApi businessAgentControlApi() {
         String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
         String adminToken = config.get("NAVI_ADMIN_TOKEN");
@@ -1178,6 +1233,22 @@ public class UpstreamCli {
 
     private String upstreamUserId(CliArguments args) {
         return requiredOptionOrConfig(args, "upstream-user-id", "NAVI_UPSTREAM_USER_ID", "upstream user id");
+    }
+
+    private String sourceTenantId(CliArguments args) {
+        String value = args.option("source-tenant-id");
+        if (hasText(value)) {
+            return value;
+        }
+        value = config.get("NAVI_SOURCE_TENANT_ID");
+        if (hasText(value)) {
+            return value;
+        }
+        value = config.get("NAVI_UPSTREAM_REF");
+        if (hasText(value)) {
+            return value;
+        }
+        throw new UpstreamCliException("source tenant id is required (--source-tenant-id or NAVI_SOURCE_TENANT_ID)");
     }
 
     private String adminKeyRequestCode(CliArguments args) {
@@ -1373,6 +1444,77 @@ public class UpstreamCli {
                 + " upstreamSystemId=" + valueOrEmpty(app != null ? app.getUpstreamSystemId() : null)
                 + " namespace=" + valueOrEmpty(app != null ? app.getUpstreamClientAppNamespace() : null)
                 + " upstreamRef=" + valueOrEmpty(app != null ? app.getUpstreamRef() : null));
+    }
+
+    private void writeProvisionedTenantProfile(Path targetProfile,
+                                               UpstreamTenantClientAppProvisioningDTO dto,
+                                               String sourceSystem,
+                                               String sourceTenantId) {
+        config.writeProfileValue(targetProfile, "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
+        config.writeProfileValue(targetProfile, "NAVI_TENANT_ID", emptyIfNull(dto.getNavigatorTenantId()));
+        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ID", emptyIfNull(dto.getClientAppId()));
+        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_SYSTEM_ID", emptyIfNull(sourceSystem));
+        config.writeProfileValue(targetProfile, "NAVI_SOURCE_TENANT_ID", emptyIfNull(sourceTenantId));
+        config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_REF", emptyIfNull(sourceTenantId));
+        config.writeProfileValue(targetProfile, "NAVI_AGENT_CODE", emptyIfNull(dto.getRootAgentId()));
+        config.writeProfileValue(targetProfile, "NAVI_MODEL_CONFIG_ID", emptyIfNull(dto.getModelConfigId()));
+        config.writeProfileValue(targetProfile, "NAVI_SKILL_ID", emptyIfNull(dto.getSkillId()));
+        config.writeProfileValue(targetProfile, "NAVI_WORKER_POOL_ID", emptyIfNull(dto.getWorkerPoolId()));
+        if (hasText(dto.getClientAppKey())) {
+            config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_KEY", dto.getClientAppKey());
+        }
+        if (hasText(dto.getClientAppSecret())) {
+            config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_SECRET", dto.getClientAppSecret());
+        }
+        if (hasText(dto.getControlApiKey())) {
+            config.writeProfileValue(targetProfile, "NAVI_CONTROL_API_KEY", dto.getControlApiKey());
+        }
+    }
+
+    private String provisionedTenantStoredKeys(UpstreamTenantClientAppProvisioningDTO dto) {
+        List<String> keys = new ArrayList<>(List.of(
+                "NAVI_BASE_URL",
+                "NAVI_TENANT_ID",
+                "NAVI_CLIENT_APP_ID",
+                "NAVI_UPSTREAM_SYSTEM_ID",
+                "NAVI_SOURCE_TENANT_ID",
+                "NAVI_UPSTREAM_REF",
+                "NAVI_AGENT_CODE",
+                "NAVI_MODEL_CONFIG_ID",
+                "NAVI_SKILL_ID",
+                "NAVI_WORKER_POOL_ID"));
+        if (hasText(dto.getClientAppKey())) {
+            keys.add("NAVI_CLIENT_APP_KEY");
+        }
+        if (hasText(dto.getClientAppSecret())) {
+            keys.add("NAVI_CLIENT_APP_SECRET");
+        }
+        if (hasText(dto.getControlApiKey())) {
+            keys.add("NAVI_CONTROL_API_KEY");
+        }
+        return String.join(",", keys);
+    }
+
+    private void printUpstreamTenantClientAppProvisioning(UpstreamTenantClientAppProvisioningDTO dto) {
+        out.println("navigatorTenantId=" + valueOrEmpty(dto != null ? dto.getNavigatorTenantId() : null));
+        out.println("clientAppId=" + valueOrEmpty(dto != null ? dto.getClientAppId() : null));
+        out.println("clientAppName=" + redact(dto != null ? dto.getClientAppName() : null));
+        out.println("capabilityDomain=" + valueOrEmpty(dto != null ? dto.getCapabilityDomain() : null));
+        out.println("clientAppKey=" + SecretMasker.mask(dto != null ? dto.getClientAppKey() : null));
+        out.println("clientAppSecret=" + SecretMasker.mask(dto != null ? dto.getClientAppSecret() : null));
+        out.println("controlApiKey=" + SecretMasker.mask(dto != null ? dto.getControlApiKey() : null));
+        out.println("rootAgentId=" + valueOrEmpty(dto != null ? dto.getRootAgentId() : null));
+        out.println("modelConfigId=" + valueOrEmpty(dto != null ? dto.getModelConfigId() : null));
+        out.println("skillId=" + valueOrEmpty(dto != null ? dto.getSkillId() : null));
+        out.println("workerPoolId=" + valueOrEmpty(dto != null ? dto.getWorkerPoolId() : null));
+        out.println("bindingVersion=" + valueOrEmpty(dto != null ? dto.getBindingVersion() : null));
+        out.println("created=" + (dto != null && Boolean.TRUE.equals(dto.getCreated())));
+        out.println("rotated=" + (dto != null && Boolean.TRUE.equals(dto.getRotated())));
+        if (dto != null && dto.getBlockers() != null) {
+            for (String blocker : dto.getBlockers()) {
+                out.println("blocker=" + redact(blocker));
+            }
+        }
     }
 
     private void printAccountContextFileMetadata(AccountContextFileDTO file) {

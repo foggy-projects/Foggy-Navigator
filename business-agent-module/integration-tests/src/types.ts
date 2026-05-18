@@ -26,6 +26,24 @@ export interface IssuedCredential {
   expiresAt?: string;
 }
 
+export interface UpstreamTenantClientAppProvisioning {
+  navigatorTenantId: string;
+  clientAppId: string;
+  clientAppName: string;
+  capabilityDomain: string;
+  clientAppKey?: string;
+  clientAppSecret?: string;
+  controlApiKey?: string;
+  rootAgentId?: string;
+  modelConfigId?: string;
+  skillId?: string;
+  workerPoolId?: string;
+  bindingVersion: string;
+  created: boolean;
+  rotated: boolean;
+  blockers: string[];
+}
+
 export interface ClientApp {
   clientAppId: string;
   tenantId: string;

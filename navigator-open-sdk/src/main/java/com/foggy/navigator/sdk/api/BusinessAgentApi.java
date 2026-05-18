@@ -53,6 +53,12 @@ public class BusinessAgentApi {
         return http.put("/api/v1/client-apps/" + clientAppId + "/status", form, new TypeReference<>() {});
     }
 
+    public UpstreamTenantClientAppProvisioningDTO ensureUpstreamTenantClientApp(
+            EnsureUpstreamTenantClientAppForm form) {
+        return http.post("/api/v1/admin/upstream-tenants/client-apps/ensure",
+                form, new TypeReference<>() {});
+    }
+
     // ===== Upstream Admin ClientApp Management =====
 
     public List<ClientAppDTO> listUpstreamManagedClientApps(String tenantId) {

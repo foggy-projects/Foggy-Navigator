@@ -583,6 +583,106 @@ class UpstreamCliTest {
     }
 
     @Test
+    void clientAppEnsureTenantUsesTenantAdminTokenAndStoresOneShotCredentials() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path upstreamProfile = profileDir.resolve("upstream.env");
+        Files.writeString(upstreamProfile, """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_TOKEN=tenant-admin-token-secret
+                NAVI_UPSTREAM_SYSTEM_ID=TMS
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+
+        responseOverride = """
+                {"code":0,"data":{
+                  "navigatorTenantId":"nav_tms_3",
+                  "clientAppId":"capp-tms-3",
+                  "clientAppName":"TMS 3",
+                  "capabilityDomain":"tms.ops",
+                  "clientAppKey":"cak-secret-key",
+                  "clientAppSecret":"cas-secret-value",
+                  "controlApiKey":"cac-secret-control-key",
+                  "rootAgentId":"tms-root-agent",
+                  "modelConfigId":"model-live",
+                  "skillId":"tms.navigator.agent",
+                  "workerPoolId":"pool-1",
+                  "bindingVersion":"bind-v1",
+                  "created":true,
+                  "rotated":true,
+                  "blockers":["worker route should be verified"]
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "client-app", "ensure-tenant",
+                "--profile", ".navigator/upstream.env",
+                "--source-tenant-id", "3",
+                "--name", "TMS 3",
+                "--capability-domain", "tms.ops",
+                "--model-config-id", "model-live",
+                "--skill-id", "tms.navigator.agent",
+                "--worker-pool-id", "pool-1",
+                "--rotate-credentials",
+                "--tenant-profile", ".navigator/tenants/tms-3.env",
+                "--write-profile"}, Map.of());
+
+        Path tenantProfile = profileDir.resolve("tenants").resolve("tms-3.env");
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tenantProfile, StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/admin/upstream-tenants/client-apps/ensure", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastApiKeyHeader);
+        assertEquals("Bearer tenant-admin-token-secret", lastAuthorizationHeader);
+        assertNull(lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"sourceSystem\":\"TMS\""));
+        assertTrue(lastBody.contains("\"sourceTenantId\":\"3\""));
+        assertTrue(lastBody.contains("\"clientAppName\":\"TMS 3\""));
+        assertTrue(lastBody.contains("\"rotateCredentials\":true"));
+        assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
+        assertTrue(profile.contains("NAVI_TENANT_ID=nav_tms_3"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_ID=capp-tms-3"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_KEY=cak-secret-key"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_SECRET=cas-secret-value"));
+        assertTrue(profile.contains("NAVI_CONTROL_API_KEY=cac-secret-control-key"));
+        assertTrue(profile.contains("NAVI_AGENT_CODE=tms-root-agent"));
+        assertTrue(profile.contains("NAVI_MODEL_CONFIG_ID=model-live"));
+        assertTrue(profile.contains("NAVI_SKILL_ID=tms.navigator.agent"));
+        assertTrue(profile.contains("NAVI_WORKER_POOL_ID=pool-1"));
+        assertTrue(profile.contains("NAVI_SOURCE_TENANT_ID=3"));
+        assertTrue(profile.contains("NAVI_UPSTREAM_REF=3"));
+        assertTrue(output.contains("client-app ensure-tenant ok"));
+        assertTrue(output.contains("stored=NAVI_BASE_URL"));
+        assertTrue(output.contains("created=true"));
+        assertTrue(output.contains("rotated=true"));
+        assertTrue(output.contains("blocker=worker route should be verified"));
+        assertFalse(output.contains("tenant-admin-token-secret"));
+        assertFalse(output.contains("cak-secret-key"));
+        assertFalse(output.contains("cas-secret-value"));
+        assertFalse(output.contains("cac-secret-control-key"));
+    }
+
+    @Test
+    void clientAppEnsureTenantRejectsUnignoredTenantProfileBeforeProvisioning() throws Exception {
+        Path upstreamProfile = tempDir.resolve("upstream.env");
+        Files.writeString(upstreamProfile, """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_TOKEN=tenant-admin-token-secret
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+
+        int code = run(new String[]{"upstream", "client-app", "ensure-tenant",
+                "--profile", upstreamProfile.toString(),
+                "--source-system", "TMS",
+                "--source-tenant-id", "3",
+                "--tenant-profile", "tenant.env",
+                "--write-profile"}, Map.of());
+
+        assertEquals(2, code);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("not git-ignored"));
+        assertNull(lastPath);
+    }
+
+    @Test
     void clientAppIssueControlKeyUsesUpstreamAdminKeyAndStoresSecretOnlyInTenantProfile() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
         Path profileDir = tempDir.resolve(".navigator");

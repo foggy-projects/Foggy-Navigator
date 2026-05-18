@@ -11,7 +11,8 @@ import type {
   IssuedCredential,
   LoginResultDTO,
   RXResponse,
-  Skill
+  Skill,
+  UpstreamTenantClientAppProvisioning
 } from './types.js';
 
 type RequestBody = Record<string, unknown>;
@@ -94,6 +95,14 @@ export class BusinessAgentClient {
       body
     );
     return unwrapData<IssuedCredential>(response.data);
+  }
+
+  async ensureUpstreamTenantClientApp(body: RequestBody): Promise<UpstreamTenantClientAppProvisioning> {
+    const response = await this.client.post(
+      '/api/v1/admin/upstream-tenants/client-apps/ensure',
+      body
+    );
+    return unwrapData<UpstreamTenantClientAppProvisioning>(response.data);
   }
 
   async createClientApp(body: RequestBody): Promise<ClientApp> {
