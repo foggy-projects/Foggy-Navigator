@@ -77,6 +77,7 @@ public class LanggraphStreamRelay {
                     runtimeContextText(runtimeContext, "vision_model_config_id", "visionModelConfigId"),
                     workerId
             );
+            Integer maxTurns = positiveInteger(firstPresent(event.getProviderConfig(), "maxTurns", "max_turns"));
 
             Disposable subscription = client.streamQuery(
                     event.getPrompt(),
@@ -90,6 +91,7 @@ public class LanggraphStreamRelay {
                     sessionId,
                     event.getUserId(),
                     event.getTenantId(),
+                    maxTurns,
                     attachments
             ).doOnNext(sse -> handleEvent(sse, taskId, sessionId))
               .doOnError(e -> handleStreamError(e, taskId, sessionId))
@@ -147,6 +149,34 @@ public class LanggraphStreamRelay {
             Object value = runtimeContext.get(key);
             if (value instanceof String text && StringUtils.hasText(text)) {
                 return text.trim();
+            }
+        }
+        return null;
+    }
+
+    private Object firstPresent(Map<String, Object> values, String... keys) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            if (values.containsKey(key)) {
+                return values.get(key);
+            }
+        }
+        return null;
+    }
+
+    private Integer positiveInteger(Object value) {
+        if (value instanceof Number number) {
+            int parsed = number.intValue();
+            return parsed > 0 ? parsed : null;
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                int parsed = Integer.parseInt(text.trim());
+                return parsed > 0 ? parsed : null;
+            } catch (NumberFormatException ignored) {
+                return null;
             }
         }
         return null;

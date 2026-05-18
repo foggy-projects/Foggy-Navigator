@@ -321,14 +321,46 @@ def _chat_model_for_state(state: RootState):
 
 def _llm_skill_agent_for_state(state: RootState) -> LlmSkillAgent | None:
     llm_config = state.get("llm_config")
+    max_iterations = _llm_skill_max_iterations_for_state(state)
     if not llm_config:
-        return _llm_skill_agent
+        if max_iterations == settings.llm_skill_max_iterations:
+            return _llm_skill_agent
+        if not settings.llm_execute_skills or not _chat_model:
+            return None
+        return LlmSkillAgent(_chat_model, _runtime, max_iterations, data_root=Path(_data_root))
     if not settings.llm_execute_skills:
         return None
     chat_model = create_chat_model_from_config(llm_config)
     if not chat_model:
         return None
-    return LlmSkillAgent(chat_model, _runtime, settings.llm_skill_max_iterations, data_root=Path(_data_root))
+    return LlmSkillAgent(chat_model, _runtime, max_iterations, data_root=Path(_data_root))
+
+
+def _llm_skill_max_iterations_for_state(state: RootState) -> int:
+    runtime_context = state.get("runtime_context") or {}
+    for key in ("llm_skill_max_iterations", "llmSkillMaxIterations", "max_turns", "maxTurns"):
+        value = runtime_context.get(key)
+        parsed = _positive_int(value)
+        if parsed is not None:
+            return parsed
+    return settings.llm_skill_max_iterations
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+    return None
 
 
 def get_runtime() -> SkillRuntime:

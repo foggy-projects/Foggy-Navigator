@@ -69,6 +69,8 @@ async def _event_generator(
             runtime_context.setdefault("task_deadline_at", request.task_deadline_at)
         if request.task_timeout_ms is not None:
             runtime_context.setdefault("task_timeout_ms", request.task_timeout_ms)
+        if request.max_turns is not None and request.max_turns > 0:
+            runtime_context.setdefault("max_turns", request.max_turns)
         runtime_context[_PROGRESS_EVENT_SINK_KEY] = enqueue_progress_event
 
         initial_state: RootState = {

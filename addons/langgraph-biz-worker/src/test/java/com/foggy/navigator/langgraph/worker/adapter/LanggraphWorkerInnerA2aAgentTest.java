@@ -76,7 +76,7 @@ class LanggraphWorkerInnerA2aAgentTest {
 
         LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService);
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
-        message.setMetadata(Map.of("modelConfigId", "model_override", "model", "opus"));
+        message.setMetadata(Map.of("modelConfigId", "model_override", "model", "opus", "maxTurns", 12));
 
         agent.sendTask(A2aContext.builder()
                 .message(message)
@@ -88,5 +88,6 @@ class LanggraphWorkerInnerA2aAgentTest {
         verify(taskService).createTask(eq("admin_01"), eq("tenant_01"), captor.capture());
         assertEquals("model_override", captor.getValue().getModelConfigId());
         assertEquals("opus", captor.getValue().getModel());
+        assertEquals(12, captor.getValue().getMaxTurns());
     }
 }

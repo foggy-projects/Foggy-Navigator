@@ -125,7 +125,9 @@ class LanggraphTaskServiceTest {
 
         @Test
         void publishes_worker_task_start_event() {
-            service.createTask(USER_ID, TENANT_ID, makeForm());
+            CreateLanggraphTaskForm form = makeForm();
+            form.setMaxTurns(12);
+            service.createTask(USER_ID, TENANT_ID, form);
 
             ArgumentCaptor<WorkerTaskStartEvent> captor =
                     ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
@@ -138,6 +140,7 @@ class LanggraphTaskServiceTest {
             assertEquals("langgraph-biz-worker", event.getProviderType());
             assertEquals("claude-sonnet", event.getModel());
             assertEquals("cfg-langgraph", event.getProviderConfigString("modelConfigId"));
+            assertEquals(Integer.valueOf(12), event.getProviderConfigValue("maxTurns"));
         }
 
         @Test

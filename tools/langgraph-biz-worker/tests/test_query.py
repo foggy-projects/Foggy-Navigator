@@ -94,6 +94,14 @@ def test_query_request_accepts_url_attachment_metadata():
     assert request.vision_llm_config == {"provider": "openai", "model": "vision-model"}
 
 
+def test_query_request_accepts_max_turns_aliases():
+    camel = QueryRequest.model_validate({"prompt": "test", "maxTurns": 9})
+    snake = QueryRequest.model_validate({"prompt": "test", "max_turns": 10})
+
+    assert camel.max_turns == 9
+    assert snake.max_turns == 10
+
+
 def test_attachment_context_prompt_sanitizes_url_and_keeps_metadata():
     prompt = _build_attachment_context_prompt([
         {
@@ -262,6 +270,28 @@ async def test_query_generator_preserves_model_config_id_and_attachments_in_stat
     assert captured_state["model_config_id"] == "cfg-e2e"
     assert captured_state["vision_llm_config"] == {"provider": "openai", "model": "vision-model"}
     assert captured_state["attachments"] == attachments
+
+
+@pytest.mark.asyncio
+async def test_query_generator_forwards_max_turns_to_runtime_context():
+    captured_state = {}
+
+    def invoke_and_capture(state):
+        captured_state.update(state)
+        return {"events": [QueryEvent(type="result", task_id="task-max-turns", content="done")]}
+
+    with patch("langgraph_biz_worker.routes.query.root_graph") as mock_graph:
+        mock_graph.invoke.side_effect = invoke_and_capture
+        generator = _event_generator(
+            "task-max-turns",
+            QueryRequest.model_validate({"prompt": "use budget", "maxTurns": 11}),
+        )
+        events = []
+        async for item in generator:
+            events.append(json.loads(item["data"]))
+
+    assert events[-1]["type"] == "result"
+    assert captured_state["runtime_context"]["max_turns"] == 11
 
 
 @pytest.mark.asyncio

@@ -52,11 +52,13 @@ class LanggraphWorkerClientTest {
                     "session-1",
                     "user-1",
                     "tenant-1",
+                    8,
                     attachments
             ).blockFirst(Duration.ofSeconds(5));
 
             Map<String, Object> body = objectMapper.readValue(server.body(),
                     new TypeReference<>() {});
+            assertEquals(8, body.get("max_turns"));
             assertEquals(attachments, body.get("attachments"));
             @SuppressWarnings("unchecked")
             Map<String, Object> llmConfig = (Map<String, Object>) body.get("llm_config");
@@ -120,6 +122,7 @@ class LanggraphWorkerClientTest {
                     "session-timeout",
                     "user-1",
                     "tenant-1",
+                    null,
                     List.of()
             ).blockFirst(Duration.ofSeconds(3)));
 

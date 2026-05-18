@@ -49,6 +49,14 @@ def _install_isolated_runtime(monkeypatch, tmp_path) -> SkillRuntime:
     return runtime
 
 
+def test_llm_skill_max_iterations_uses_runtime_context(monkeypatch):
+    monkeypatch.setattr(root_graph_module.settings, "llm_skill_max_iterations", 6)
+    state = _state("task_runtime_max_turns_001")
+    state["runtime_context"] = {"max_turns": "14"}
+
+    assert root_graph_module._llm_skill_max_iterations_for_state(state) == 14
+
+
 def test_route_skill_creates_and_reuses_persistent_system_root_frame(monkeypatch, tmp_path):
     runtime = _install_isolated_runtime(monkeypatch, tmp_path)
     state = _state("task_root_reuse_001")

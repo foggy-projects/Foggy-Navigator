@@ -14,6 +14,7 @@ public class CreateLanggraphTaskForm {
     private String cwd;
     private String model;
     private String modelConfigId;
+    private Integer maxTurns;
     private String contextId;
     private String sessionId;
     /** Business context passed to Python Worker (serialized as JSON in request) */

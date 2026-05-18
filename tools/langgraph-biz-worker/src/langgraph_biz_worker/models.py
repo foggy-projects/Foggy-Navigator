@@ -44,6 +44,10 @@ class QueryRequest(BaseModel):
         None,
         validation_alias=AliasChoices("taskTimeoutMs", "task_timeout_ms"),
     )
+    max_turns: int | None = Field(
+        None,
+        validation_alias=AliasChoices("maxTurns", "max_turns"),
+    )
 
 
 # ---------------------------------------------------------------------------

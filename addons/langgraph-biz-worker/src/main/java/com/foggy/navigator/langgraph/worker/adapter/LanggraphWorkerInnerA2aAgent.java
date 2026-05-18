@@ -50,6 +50,7 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
         form.setDirectoryId(entity.getDefaultDirectoryId());
         form.setModel(firstText(meta.get("model"), entity.getDefaultModel()));
         form.setModelConfigId(firstText(meta.get("modelConfigId"), entity.getDefaultModelConfigId()));
+        form.setMaxTurns(positiveInteger(firstPresent(meta, "maxTurns", "max_turns")));
         form.setAttachments(attachmentsMeta(meta.get("attachments")));
         form.setContextId(context.getContextId());
         form.setSessionId(context.getNavigatorSessionId());
@@ -144,6 +145,31 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             return value;
         }
         return fallback;
+    }
+
+    private Object firstPresent(Map<String, Object> meta, String... keys) {
+        for (String key : keys) {
+            if (meta.containsKey(key)) {
+                return meta.get(key);
+            }
+        }
+        return null;
+    }
+
+    private Integer positiveInteger(Object value) {
+        if (value instanceof Number number) {
+            int parsed = number.intValue();
+            return parsed > 0 ? parsed : null;
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                int parsed = Integer.parseInt(text.trim());
+                return parsed > 0 ? parsed : null;
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private Map<String, Object> taskMetadata(LanggraphTaskDTO task) {

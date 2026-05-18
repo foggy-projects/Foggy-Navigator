@@ -103,6 +103,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
         form.setCwd((String) params.get("cwd"));
         form.setModel((String) params.get("model"));
         form.setModelConfigId((String) params.get("modelConfigId"));
+        form.setMaxTurns(positiveInteger(firstPresent(params, "maxTurns", "max_turns")));
         form.setContextId((String) params.get("contextId"));
         form.setSessionId((String) params.get("sessionId"));
         form.setAttachments(attachmentsParam(params.get("attachments")));
@@ -241,6 +242,9 @@ public class LanggraphTaskService implements TaskQueryProvider {
             providerConfig.put("attachments", form.getAttachments());
         }
         putIfNotBlank(providerConfig, "modelConfigId", form.getModelConfigId());
+        if (form.getMaxTurns() != null && form.getMaxTurns() > 0) {
+            providerConfig.put("maxTurns", form.getMaxTurns());
+        }
 
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId)
@@ -756,6 +760,34 @@ public class LanggraphTaskService implements TaskQueryProvider {
             Object value = runtimeContext.get(key);
             if (value instanceof String text && !text.isBlank()) {
                 return text.trim();
+            }
+        }
+        return null;
+    }
+
+    private static Object firstPresent(Map<String, Object> values, String... keys) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            if (values.containsKey(key)) {
+                return values.get(key);
+            }
+        }
+        return null;
+    }
+
+    private static Integer positiveInteger(Object value) {
+        if (value instanceof Number number) {
+            int parsed = number.intValue();
+            return parsed > 0 ? parsed : null;
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                int parsed = Integer.parseInt(text.trim());
+                return parsed > 0 ? parsed : null;
+            } catch (NumberFormatException ignored) {
+                return null;
             }
         }
         return null;

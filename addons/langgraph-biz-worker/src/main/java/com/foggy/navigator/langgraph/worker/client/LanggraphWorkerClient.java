@@ -78,6 +78,7 @@ public class LanggraphWorkerClient {
             String sessionId,
             String userId,
             String tenantId,
+            Integer maxTurns,
             List<Map<String, Object>> attachments
     ) {
         Map<String, Object> body = new HashMap<>();
@@ -92,6 +93,7 @@ public class LanggraphWorkerClient {
         if (sessionId != null) body.put("session_id", sessionId);
         if (userId != null) body.put("userId", userId);
         if (tenantId != null) body.put("tenantId", tenantId);
+        if (maxTurns != null && maxTurns > 0) body.put("max_turns", maxTurns);
         if (attachments != null && !attachments.isEmpty()) body.put("attachments", attachments);
 
         return webClient.post()
