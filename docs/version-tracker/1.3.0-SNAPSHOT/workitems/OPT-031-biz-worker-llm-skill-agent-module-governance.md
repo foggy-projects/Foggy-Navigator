@@ -280,6 +280,11 @@ $env:PYTHONPATH='src'
   - Extracted tool-call normalization, artifact-content scrub, safe content copy, execution-report payload helpers, and safe tool args to `runtime/llm_tool_call_codec.py`.
   - Kept compatibility imports and `LlmSkillAgent._build_system_prompt/_build_user_prompt` aliases in `llm_skill_agent.py`.
   - Current local line counts after P1: `llm_skill_agent.py` 1,368 lines; prompt module 295 lines; schema module 463 lines; codec module 160 lines.
+- [x] Stage C/P2 low-risk helper extraction completed.
+  - Extracted business function id parsing, suspension/approval summary helpers, and final-summary guardrail helpers to `runtime/llm_business_function_adapter.py`.
+  - Extracted progress event sink emission, file/public resource dispatch helpers, and tool `function_id` metadata resolution to `runtime/llm_tool_dispatcher.py`.
+  - Kept `_execute_tool_call`, `_call_tool`, `_finalize_business_function_call`, child recovery branches, and BUG-027 recovery control flow in `llm_skill_agent.py`.
+  - Current local line counts after P2: `llm_skill_agent.py` 1,058 lines; prompt module 295 lines; schema module 463 lines; codec module 160 lines; business adapter 231 lines; dispatcher helper module 117 lines.
 - [ ] Stage C tool dispatch split completed.
 - [ ] Stage D recovery boundary extracted.
 - [ ] Stage E cleanup completed.
@@ -294,13 +299,29 @@ $env:PYTHONPATH='src'
 - [x] Post-P1 stage safety set passed on 2026-05-18:
   - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py tests/test_llm_call_guard.py tests/test_frame_interruption.py tests/test_frame_lifecycle.py tests/test_artifact_context_governance.py -q`
   - Result: 73 passed in 2.46s.
-- [ ] Full Python worker test suite captured before first extraction.
+- [x] Pre-P2 full Python worker baseline passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests -q`
+  - Result: 436 passed, 6 skipped, 10 warnings in 20.62s.
+  - Note: this was captured before P2 extraction, not before the first P1 extraction.
+- [x] Post-P2 business adapter focused test passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py -q`
+  - Result: 38 passed in 1.62s.
+- [x] Post-P2 stage safety set passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py tests/test_llm_call_guard.py tests/test_frame_interruption.py tests/test_frame_lifecycle.py tests/test_artifact_context_governance.py -q`
+  - Result: 73 passed in 2.43s.
+- [x] Post-P2 Stage C add-on passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py tests/test_e2e_scripted_tool_call_streaming.py -q`
+  - Result: 49 passed, 3 warnings in 13.09s.
+- [x] Post-P2 full Python worker test suite passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests -q`
+  - Result: 436 passed, 6 skipped, 10 warnings in 19.54s.
 - [ ] Full Python worker test suite passes after final extraction.
 
 ### Experience Progress
 
 - [x] N/A for Stage A. This work item is backend Python runtime/module governance only and has no UI workflow change in the characterization stage.
 - [x] N/A for P1. The change is pure Python runtime module extraction with no UI workflow or display change.
+- [x] N/A for P2. The change is Python runtime helper extraction only and has no UI workflow or display change.
 
 ### Execution Check-in - 2026-05-18 P1
 
@@ -318,6 +339,24 @@ $env:PYTHONPATH='src'
 - Test status: pass for the post-P1 targeted and stage safety commands listed above.
 - Remaining risks: Stage C/D still carry the real behavior risk because tool dispatch and child recovery are still inside `llm_skill_agent.py`.
 - Acceptance readiness: P1 is ready for review as a scoped extraction; the overall OPT-031 item remains open.
+
+### Execution Check-in - 2026-05-18 P2
+
+- Completed work: P2 helper extraction only; no dispatcher class rewrite, no child recovery extraction, and no business function lifecycle behavior change.
+- Touched code paths:
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_skill_agent.py`
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_business_function_adapter.py`
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_tool_dispatcher.py`
+- Self-check:
+  - [x] BUG-027 timeout/retry/deadline/fuse entry point remains in `LlmSkillAgent.run` through `invoke_chat_model`.
+  - [x] `_execute_tool_call`, `_call_tool`, `_finalize_business_function_call`, `invoke_business_skill`, `resume_recoverable_child_skill`, and recoverable child interruption recording were not moved.
+  - [x] User "继续" recovery remains on the existing failed child frame path; no frame lifecycle mutation logic was rewritten.
+  - [x] Business function approval/suspension payload construction remains called from `_finalize_business_function_call` with unchanged field names.
+  - [x] Existing private helper names remain importable from `llm_skill_agent.py` through compatibility imports.
+  - [x] No public API payload or SSE event contract was intentionally changed.
+- Test status: pass for the pre-P2 baseline, post-P2 focused/stage/add-on commands, and post-P2 full suite listed above.
+- Remaining risks: full `LlmToolDispatcher` extraction and `llm_child_recovery.py` boundary are still pending; these are the high-risk Stage C/D parts.
+- Acceptance readiness: P2 is ready for review as a scoped helper extraction; the overall OPT-031 item remains open.
 
 ## Related Work
 
