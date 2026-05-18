@@ -24,6 +24,9 @@ class QueryRequest(BaseModel):
     # Internal model routing data resolved by Navigator Java from model_config_id.
     # Never include this in prompts or user-visible context.
     llm_config: dict[str, Any] | None = None
+    # Optional vision model routing data resolved by Navigator Java.
+    # This is consumed only by attachment analysis tools.
+    vision_llm_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     # Hidden runtime data from Navigator Java. Never include this in LLM prompts.
     runtime_context: dict[str, Any] | None = None

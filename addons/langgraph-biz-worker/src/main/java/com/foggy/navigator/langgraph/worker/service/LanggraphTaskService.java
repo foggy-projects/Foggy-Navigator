@@ -1,8 +1,11 @@
 package com.foggy.navigator.langgraph.worker.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.agent.framework.event.WorkerTaskStartEvent;
+import com.foggy.navigator.agent.framework.session.Message;
+import com.foggy.navigator.agent.framework.session.MessageRole;
 import com.foggy.navigator.agent.framework.session.SessionCreateRequest;
 import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.dto.DispatchTaskDTO;
@@ -23,11 +26,14 @@ import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -204,6 +210,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
 
         // 2. Persist task entity
         String taskId = "lgt_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        Map<String, Object> providerContext = buildProviderContext(form, sessionId);
         LanggraphTaskEntity entity = new LanggraphTaskEntity();
         entity.setTaskId(taskId);
         entity.setSessionId(sessionId);
@@ -219,11 +226,12 @@ public class LanggraphTaskService implements TaskQueryProvider {
         entity.setCwd(form.getCwd());
         entity.setContextId(form.getContextId());
         persistTask(entity);
+        persistUserPrompt(sessionId, taskId, form.getPrompt());
 
         // 3. Publish WorkerTaskStartEvent → LanggraphStreamRelay listens
         Map<String, Object> providerConfig = new LinkedHashMap<>();
-        if (form.getContext() != null) {
-            providerConfig.put("context", form.getContext());
+        if (!providerContext.isEmpty()) {
+            providerConfig.put("context", providerContext);
         }
         if (form.getRuntimeContext() != null && !form.getRuntimeContext().isEmpty()) {
             providerConfig.put("runtimeContext", form.getRuntimeContext());
@@ -250,6 +258,88 @@ public class LanggraphTaskService implements TaskQueryProvider {
                 taskId, sessionId, form.getWorkerId());
 
         return toDTO(entity);
+    }
+
+    private Map<String, Object> buildProviderContext(CreateLanggraphTaskForm form, String sessionId) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        if (form.getContext() != null) {
+            context.putAll(form.getContext());
+        }
+        putIfNotBlank(context, "contextId", form.getContextId());
+        putIfNotBlank(context, "context_id", form.getContextId());
+        putIfNotBlank(context, "session_id", sessionId);
+
+        List<Map<String, Object>> recentConversation = recentConversation(sessionId);
+        if (!recentConversation.isEmpty()) {
+            context.put("recentConversation", recentConversation);
+        }
+        return context;
+    }
+
+    private List<Map<String, Object>> recentConversation(String sessionId) {
+        if (!StringUtils.hasText(sessionId) || sessionMessageRepository == null) {
+            return List.of();
+        }
+        List<SessionMessageEntity> messages = sessionMessageRepository
+                .findBySessionIdOrderByCreatedAtDesc(sessionId, PageRequest.of(0, 12));
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+        messages = new ArrayList<>(messages);
+        Collections.reverse(messages);
+        return messages.stream()
+                .map(this::toConversationMessage)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private Map<String, Object> toConversationMessage(SessionMessageEntity message) {
+        if (message == null || !StringUtils.hasText(message.getContent())) {
+            return null;
+        }
+        String role = message.getRole() != null ? message.getRole().toLowerCase() : "";
+        if (!"user".equals(role) && !"assistant".equals(role)) {
+            return null;
+        }
+        if ("assistant".equals(role) && !isConversationalAssistantMessage(message)) {
+            return null;
+        }
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("role", role);
+        item.put("content", truncate(message.getContent(), 1200));
+        putIfNotBlank(item, "taskId", message.getTaskId());
+        return item;
+    }
+
+    private boolean isConversationalAssistantMessage(SessionMessageEntity message) {
+        String type = messageType(message);
+        return type == null || "TEXT_COMPLETE".equals(type) || "TASK_COMPLETED".equals(type);
+    }
+
+    private String messageType(SessionMessageEntity message) {
+        if (message == null || !StringUtils.hasText(message.getMetadata())) {
+            return null;
+        }
+        try {
+            JsonNode node = OBJECT_MAPPER.readTree(message.getMetadata());
+            JsonNode type = node.get("type");
+            return type != null && type.isTextual() ? type.asText() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void persistUserPrompt(String sessionId, String taskId, String prompt) {
+        if (!StringUtils.hasText(sessionId) || !StringUtils.hasText(prompt)) {
+            return;
+        }
+        sessionManager.addMessage(sessionId, Message.builder()
+                .sessionId(sessionId)
+                .taskId(taskId)
+                .role(MessageRole.USER)
+                .content(prompt)
+                .metadata(Map.of("type", "USER", "taskId", taskId))
+                .build());
     }
 
     @Transactional

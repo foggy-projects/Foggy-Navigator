@@ -73,6 +73,7 @@ def test_query_prefers_foggy_session_id_for_platform_session():
 def test_query_request_accepts_url_attachment_metadata():
     request = QueryRequest(
         prompt="describe",
+        vision_llm_config={"provider": "openai", "model": "vision-model"},
         attachments=[
             {
                 "name": "pod-photo.png",
@@ -89,6 +90,7 @@ def test_query_request_accepts_url_attachment_metadata():
             "kind": "image",
         }
     ]
+    assert request.vision_llm_config == {"provider": "openai", "model": "vision-model"}
 
 
 def test_attachment_context_prompt_sanitizes_url_and_keeps_metadata():
@@ -189,6 +191,7 @@ async def test_query_generator_preserves_model_config_id_and_attachments_in_stat
             QueryRequest(
                 prompt="describe attachment",
                 model_config_id="cfg-e2e",
+                vision_llm_config={"provider": "openai", "model": "vision-model"},
                 attachments=attachments,
             ),
         )
@@ -198,6 +201,7 @@ async def test_query_generator_preserves_model_config_id_and_attachments_in_stat
 
     assert events[-1]["type"] == "result"
     assert captured_state["model_config_id"] == "cfg-e2e"
+    assert captured_state["vision_llm_config"] == {"provider": "openai", "model": "vision-model"}
     assert captured_state["attachments"] == attachments
 
 

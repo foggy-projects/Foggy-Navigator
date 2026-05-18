@@ -11,7 +11,9 @@ import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepo
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
+import com.foggy.navigator.common.enums.LlmModelCategory;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -23,6 +25,7 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class BusinessAgentTaskService {
 
     public static final String STATUS_CREATED = "CREATED";
@@ -65,6 +68,7 @@ public class BusinessAgentTaskService {
         skillRegistryService.checkClientAppSkillAccess(tenantId, form.getClientAppId(), form.getSkillId());
 
         String finalModelConfigId;
+        String finalVisionModelConfigId;
 
         if (StringUtils.hasText(form.getResumeFromTaskId())) {
             BusinessAgentTaskEntity existingTask = taskRepository.findByTaskId(form.getResumeFromTaskId())
@@ -80,9 +84,11 @@ public class BusinessAgentTaskService {
                 throw new IllegalArgumentException("cannot change modelConfigId when resuming task");
             }
             finalModelConfigId = existingTask.getModelConfigId();
+            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
         } else {
             // 4, 5, 6. 新建 task 时必须调用 resolveEffectiveModelConfigId
             finalModelConfigId = grantService.resolveEffectiveModelConfigId(tenantId, form.getClientAppId(), form.getRequestedModelConfigId());
+            finalVisionModelConfigId = resolveOptionalVisionModelConfigId(tenantId, form.getClientAppId());
         }
 
         // 7. task 创建后固定最终 modelConfigId
@@ -125,7 +131,7 @@ public class BusinessAgentTaskService {
                 .getContextId();
 
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
-                tenantId, actorUserId, task, workerPool, plainToken);
+                tenantId, actorUserId, task, workerPool, plainToken, finalVisionModelConfigId, contextId);
         if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
             task.setWorkerTaskId(launchResult.getWorkerTaskId());
             task.setWorkerSessionId(launchResult.getWorkerSessionId());
@@ -295,7 +301,9 @@ public class BusinessAgentTaskService {
             String actorUserId,
             BusinessAgentTaskEntity task,
             BizWorkerPoolEntity workerPool,
-            String taskScopedToken) {
+            String taskScopedToken,
+            String visionModelConfigId,
+            String contextId) {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
@@ -310,15 +318,26 @@ public class BusinessAgentTaskService {
                         .actorUserId(actorUserId)
                         .businessTaskId(task.getTaskId())
                         .sessionId(task.getSessionId())
+                        .contextId(contextId)
                         .clientAppId(task.getClientAppId())
                         .upstreamUserId(task.getUpstreamUserId())
                         .skillId(task.getSkillId())
                         .workerPoolId(task.getWorkerPoolId())
                         .workerBackend(workerPool.getWorkerBackend())
                         .modelConfigId(task.getModelConfigId())
+                        .visionModelConfigId(visionModelConfigId)
                         .markdownBody(markdownBody)
                         .taskScopedToken(taskScopedToken)
                         .build()))
                 .orElse(null);
+    }
+
+    private String resolveOptionalVisionModelConfigId(String tenantId, String clientAppId) {
+        try {
+            return grantService.resolveEffectiveModelConfigId(tenantId, clientAppId, null, LlmModelCategory.VISION);
+        } catch (Exception e) {
+            log.debug("Vision model config not resolved for clientAppId={}: {}", clientAppId, e.getMessage());
+            return null;
+        }
     }
 }

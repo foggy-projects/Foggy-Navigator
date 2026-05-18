@@ -169,6 +169,7 @@ class BusinessAgentTaskServiceTest {
                 ArgumentCaptor.forClass(BusinessAgentWorkerTaskLaunchRequest.class);
         verify(workerTaskLauncher).launch(requestCaptor.capture());
         assertEquals(result.getTaskScopedToken(), requestCaptor.getValue().getTaskScopedToken());
+        assertEquals("ctx_01", requestCaptor.getValue().getContextId());
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor = ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
         verify(tokenRepository, atLeastOnce()).save(tokenCaptor.capture());

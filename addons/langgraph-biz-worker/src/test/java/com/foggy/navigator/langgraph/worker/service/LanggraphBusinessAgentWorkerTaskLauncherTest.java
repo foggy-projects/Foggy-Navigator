@@ -76,8 +76,12 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("skill_01", form.getAgentId());
         assertEquals("worker_01", form.getWorkerId());
         assertEquals("session_01", form.getSessionId());
+        assertEquals("ctx_01", form.getContextId());
         assertEquals("model_01", form.getModelConfigId());
         assertEquals("bt_01", form.getContext().get("businessTaskId"));
+        assertEquals("ctx_01", form.getContext().get("contextId"));
+        assertEquals("ctx_01", form.getContext().get("context_id"));
+        assertEquals("session_01", form.getContext().get("session_id"));
         assertEquals("app_01", form.getContext().get("clientAppId"));
         assertEquals("user_01", form.getContext().get("upstreamUserId"));
         assertEquals("user_01", form.getContext().get("accountId"));
@@ -85,6 +89,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertFalse(form.getContext().containsKey("task_scoped_token"));
         Map<String, Object> runtimeContext = form.getRuntimeContext();
         assertEquals("rt_token", runtimeContext.get("task_scoped_token"));
+        assertEquals("vision_model_01", runtimeContext.get("vision_model_config_id"));
         assertDoesNotThrow(() -> OffsetDateTime.parse((String) runtimeContext.get("current_time")));
         assertDoesNotThrow(() -> LocalDate.parse((String) runtimeContext.get("business_date")));
         assertTrue(((String) runtimeContext.get("timezone")).length() > 0);
@@ -123,12 +128,14 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
                 .actorUserId("actor_01")
                 .businessTaskId("bt_01")
                 .sessionId("session_01")
+                .contextId("ctx_01")
                 .clientAppId("app_01")
                 .upstreamUserId("user_01")
                 .skillId("skill_01")
                 .workerPoolId("pool_01")
                 .workerBackend("LANGGRAPH_BIZ")
                 .modelConfigId("model_01")
+                .visionModelConfigId("vision_model_01")
                 .taskScopedToken("rt_token")
                 .build();
     }

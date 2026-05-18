@@ -135,7 +135,19 @@ async def chat_completions(request: ChatCompletionRequest):
 
 def _estimate_tokens(messages: list) -> int:
     """估算 token 数量"""
-    return sum(len(m.content or "") // 4 for m in messages)
+    return sum(_content_length(m.content) // 4 for m in messages)
+
+
+def _content_length(content) -> int:
+    if content is None:
+        return 0
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(_content_length(item) for item in content)
+    if isinstance(content, dict):
+        return sum(_content_length(value) for value in content.values())
+    return len(str(content))
 
 
 def _response_tool_calls(script_match: ScriptMatch, rule):

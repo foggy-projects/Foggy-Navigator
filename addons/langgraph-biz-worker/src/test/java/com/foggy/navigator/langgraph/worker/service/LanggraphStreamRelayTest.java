@@ -12,12 +12,15 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.codec.ServerSentEvent;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -288,6 +291,23 @@ class LanggraphStreamRelayTest {
         assertEquals("mock-key", config.get("api_key"));
     }
 
+    @Test
+    void resolveVisionLlmConfigReturnsNullWhenVisionModelIdIsBlank() throws Exception {
+        assertNull(invokeResolveVisionLlmConfig(" ", "worker-1"));
+    }
+
+    @Test
+    void resolveVisionLlmConfigRethrowsConfiguredVisionModelFailure() throws Exception {
+        when(llmModelManager.getModelConfig("vision-missing")).thenReturn(Optional.empty());
+
+        InvocationTargetException ex = assertThrows(
+                InvocationTargetException.class,
+                () -> invokeResolveVisionLlmConfig("vision-missing", "worker-1")
+        );
+
+        assertEquals("Model config not found: vision-missing", ex.getCause().getMessage());
+    }
+
     private void invokeHandleEvent(
             ServerSentEvent<String> event,
             String taskId,
@@ -306,6 +326,16 @@ class LanggraphStreamRelayTest {
     private Object invokeResolveLlmConfig(String modelConfigId, String workerId) throws Exception {
         Method method = LanggraphStreamRelay.class.getDeclaredMethod(
                 "resolveLlmConfig",
+                String.class,
+                String.class
+        );
+        method.setAccessible(true);
+        return method.invoke(relay, modelConfigId, workerId);
+    }
+
+    private Object invokeResolveVisionLlmConfig(String modelConfigId, String workerId) throws Exception {
+        Method method = LanggraphStreamRelay.class.getDeclaredMethod(
+                "resolveVisionLlmConfig",
                 String.class,
                 String.class
         );

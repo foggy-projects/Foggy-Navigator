@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import time
 
 from langchain_core.messages import AIMessage
 
 from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillManifest
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.frame_store import FrameStore
+from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_state_for_tests
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
@@ -38,6 +40,112 @@ class FailingModel:
 
     def invoke(self, messages):
         raise RuntimeError("upstream model timed out")
+
+
+class HangingModel:
+    def __init__(self, sleep_seconds: float = 0.2) -> None:
+        self.sleep_seconds = sleep_seconds
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        time.sleep(self.sleep_seconds)
+        return AIMessage(content="")
+
+
+class TransientTimeoutModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self.calls += 1
+        if self.calls == 1:
+            raise TimeoutError("temporary model timeout")
+        return AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Recovered after retry.",
+                "structured_output": {
+                    "classification": "other",
+                    "recommended_action": "ignore",
+                    "confidence": 0.5,
+                },
+                "evidence_refs": ["retry:test"],
+            },
+        }])
+
+
+class RootChildTimeoutModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self.calls += 1
+        if self.calls == 1:
+            return AIMessage(content="", tool_calls=[{
+                "id": "call_child",
+                "name": "invoke_business_skill",
+                "args": {
+                    "skill_id": "child_skill",
+                    "instruction": "Handle the ticket request.",
+                },
+            }])
+        time.sleep(0.2)
+        return AIMessage(content="")
+
+
+class RecoverableChildTimeoutThenContinueModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self.calls += 1
+        if self.calls == 1:
+            return AIMessage(content="", tool_calls=[{
+                "id": "call_child",
+                "name": "invoke_business_skill",
+                "args": {
+                    "skill_id": "child_skill",
+                    "instruction": "Handle the ticket request.",
+                },
+            }])
+        if self.calls == 2:
+            time.sleep(0.2)
+            return AIMessage(content="")
+        if self.calls == 3:
+            return AIMessage(content="", tool_calls=[{
+                "id": "call_resume_child",
+                "name": "resume_recoverable_child_skill",
+                "args": {"instruction": "继续完成失败的子技能"},
+            }])
+        if self.calls == 4:
+            return AIMessage(content="", tool_calls=[{
+                "id": "call_child_submit",
+                "name": "submit_skill_result",
+                "args": {
+                    "summary": "Child completed after timeout retry.",
+                    "structured_output": {"child_continued": True},
+                },
+            }])
+        return AIMessage(content="", tool_calls=[{
+            "id": "call_root_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Root completed after failed child resume.",
+                "structured_output": {"root_continued_child": True},
+            },
+        }])
 
 
 def _manifest() -> SkillManifest:
@@ -81,6 +189,19 @@ def _artifact_runtime() -> SkillRuntime:
         output_schema={"type": "object"},
         allowed_tools=["create_artifact", "read_artifact", "submit_skill_result"],
         promote_to_parent=["result_summary", "structured_output", "artifact_refs"],
+    ))
+    return SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
+
+
+def _attachment_runtime() -> SkillRuntime:
+    registry = SkillRegistry()
+    registry.register(SkillManifest(
+        id="attachment_skill",
+        name="attachment_skill",
+        description="Analyze an attachment.",
+        output_schema={"type": "object"},
+        allowed_tools=["analyze_attachment", "submit_skill_result"],
+        promote_to_parent=["result_summary", "structured_output", "evidence_refs"],
     ))
     return SkillRuntime(frame_store=FrameStore(), skill_registry=registry)
 
@@ -175,6 +296,348 @@ def test_llm_agent_completes_skill_via_submit_tool():
     promoted = runtime.close_frame(frame_id)
     assert promoted["structured_output"]["recommended_action"] == "manual_dispatch"
     assert runtime.get_frame(frame_id).private_messages == []
+
+
+def test_llm_agent_times_out_hung_model_and_fails_frame():
+    reset_llm_call_guard_state_for_tests()
+    runtime = _runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_llm_timeout_001",
+        skill_id="exception_triage",
+        skill_input={"order_id": "ORD-TIMEOUT-001"},
+    )
+
+    events = LlmSkillAgent(HangingModel(), runtime).run(
+        task_id="task_llm_timeout_001",
+        frame_id=frame_id,
+        prompt="analyze order",
+        runtime_context={
+            "llm_request_timeout_seconds": 0.02,
+            "llm_max_retries": 0,
+            "llm_circuit_failure_threshold": 99,
+        },
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert frame.status == FrameStatus.FAILED
+    assert "LLM_REQUEST_TIMEOUT" in frame.private_working_state["fail_reason"]
+    assert events[0].type == "error"
+    assert "LLM_REQUEST_TIMEOUT" in events[0].error
+
+
+def test_llm_agent_retries_transient_timeout_and_completes_frame():
+    reset_llm_call_guard_state_for_tests()
+    runtime = _runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_llm_retry_001",
+        skill_id="exception_triage",
+        skill_input={"order_id": "ORD-RETRY-001"},
+    )
+    model = TransientTimeoutModel()
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_llm_retry_001",
+        frame_id=frame_id,
+        prompt="analyze order",
+        runtime_context={
+            "llm_request_timeout_seconds": 1,
+            "llm_max_retries": 1,
+            "llm_retry_backoff_seconds": 0,
+            "llm_circuit_failure_threshold": 99,
+        },
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert model.calls == 2
+    assert frame.status == FrameStatus.COMPLETED
+    assert events[-1].type == "skill_result_submit"
+
+
+def test_persistent_root_child_timeout_records_recoverable_interruption(tmp_path):
+    reset_llm_call_guard_state_for_tests()
+    runtime = _root_with_child_runtime(data_root=tmp_path / "data")
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_child_timeout_001",
+        skill_id="system.root",
+        skill_input={},
+        conversation_id="sess_child_timeout",
+        session_id="sess_child_timeout",
+    )
+
+    events = LlmSkillAgent(RootChildTimeoutModel(), runtime).run(
+        task_id="task_root_child_timeout_001",
+        frame_id=frame_id,
+        prompt="create a ticket",
+        persistent_frame=True,
+        runtime_context={
+            "llm_request_timeout_seconds": 0.02,
+            "llm_max_retries": 0,
+            "llm_circuit_failure_threshold": 99,
+        },
+    )
+
+    root = runtime.get_frame(frame_id)
+    child = runtime.get_frame(root.child_frame_ids[-1])
+    assert child.status == FrameStatus.FAILED
+    assert root.status == FrameStatus.RUNNING
+    assert root.private_working_state["continuation_state"] == "INTERRUPTED"
+    assert root.private_working_state["interrupt_reason"] == "child_skill_failed"
+    assert root.private_working_state["pending_recoverable_child_frame_id"] == child.frame_id
+    assert child.private_working_state["continuation_state"] == "INTERRUPTED"
+    assert any(event.type == "error" and "LLM_REQUEST_TIMEOUT" in event.error for event in events)
+
+
+def test_persistent_root_continue_reopens_failed_child_frame_after_timeout(tmp_path):
+    reset_llm_call_guard_state_for_tests()
+    runtime = _root_with_child_runtime(data_root=tmp_path / "data")
+    root_frame_id = runtime.invoke_skill(
+        task_id="task_root_failed_child_continue_001",
+        skill_id="system.root",
+        skill_input={},
+        conversation_id="sess_failed_child_continue",
+        session_id="sess_failed_child_continue",
+    )
+    model = RecoverableChildTimeoutThenContinueModel()
+    agent = LlmSkillAgent(model, runtime)
+
+    first_events = agent.run(
+        task_id="task_root_failed_child_continue_001",
+        frame_id=root_frame_id,
+        prompt="create a ticket",
+        persistent_frame=True,
+        runtime_context={
+            "llm_request_timeout_seconds": 0.02,
+            "llm_max_retries": 0,
+            "llm_circuit_failure_threshold": 99,
+        },
+    )
+
+    root = runtime.get_frame(root_frame_id)
+    child_frame_id = root.child_frame_ids[-1]
+    child = runtime.get_frame(child_frame_id)
+    assert child.status == FrameStatus.FAILED
+    assert root.status == FrameStatus.RUNNING
+    assert root.private_working_state["pending_recoverable_child_frame_id"] == child_frame_id
+    assert child.private_working_state["recoverable"] is True
+    assert any(event.type == "error" and "LLM_REQUEST_TIMEOUT" in event.error for event in first_events)
+
+    time.sleep(0.25)
+    second_events = agent.run(
+        task_id="task_root_failed_child_continue_002",
+        frame_id=root_frame_id,
+        prompt="继续",
+        persistent_frame=True,
+        runtime_context={
+            "llm_request_timeout_seconds": 1,
+            "llm_max_retries": 0,
+            "llm_circuit_failure_threshold": 99,
+        },
+    )
+
+    root = runtime.get_frame(root_frame_id)
+    child = runtime.get_frame(child_frame_id)
+    assert child.status == FrameStatus.COMPLETED
+    assert root.status == FrameStatus.RUNNING
+    assert root.output == {"root_continued_child": True}
+    assert child_frame_id in root.private_working_state["child_results"]
+    assert "pending_recoverable_child_frame_id" not in root.private_working_state
+    assert "recoverable_focus_frame_id" not in root.private_working_state
+    assert any(
+        event.type == "skill_frame_open"
+        and event.skill_frame_id == child_frame_id
+        and event.content == "Resuming frame for skill: child_skill"
+        for event in second_events
+    )
+    assert any(
+        event.tool_name == "resume_recoverable_child_skill"
+        and '"intent_resolution": "CONTINUE_PREVIOUS"' in event.content
+        for event in second_events
+    )
+
+
+def test_llm_agent_analyzes_attachment_with_vision_config(monkeypatch):
+    runtime = _attachment_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_attachment_001",
+        skill_id="attachment_skill",
+        skill_input={},
+    )
+
+    class FakeVisionModel:
+        def invoke(self, messages):
+            return AIMessage(content=json.dumps({
+                "summary": "damaged pallet visible",
+                "extracted_text": "FRAGILE",
+                "extracted_fields": {"exception_type": "cargo_damage"},
+                "confidence": 0.88,
+                "warnings": [],
+            }))
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.tools.attachment_analysis.create_chat_model_from_config",
+        lambda config: FakeVisionModel(),
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_analyze",
+            "name": "analyze_attachment",
+            "args": {
+                "attachment_id": "att-1",
+                "purpose": "Extract exception details.",
+                "expected_fields": ["exception_type"],
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Attachment analyzed.",
+                "structured_output": {"exception_type": "cargo_damage"},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_attachment_001",
+        frame_id=frame_id,
+        prompt="Look at the image and create an exception summary.",
+        runtime_context={
+            "vision_llm_config": {"provider": "openai", "model": "vision-model"},
+            "attachments": [{
+                "id": "att-1",
+                "kind": "image",
+                "mimeType": "image/png",
+                "url": "https://example.test/files/att-1.png?signature=secret",
+            }],
+        },
+    )
+
+    analyze_result = next(
+        event for event in events
+        if event.type == "tool_result" and event.tool_name == "analyze_attachment"
+    )
+    payload = json.loads(analyze_result.content)
+    assert payload["ok"] is True
+    assert payload["summary"] == "damaged pallet visible"
+    assert payload["extracted_fields"]["exception_type"] == "cargo_damage"
+    assert runtime.get_frame(frame_id).status == FrameStatus.COMPLETED
+
+
+def test_llm_agent_attachment_analysis_falls_back_to_reasoning_config(monkeypatch):
+    runtime = _attachment_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_attachment_reasoning_fallback_001",
+        skill_id="attachment_skill",
+        skill_input={},
+    )
+
+    class FakeReasoningVisionModel:
+        def invoke(self, messages):
+            return AIMessage(content=json.dumps({
+                "summary": "fallback model saw the image",
+                "extracted_text": "",
+                "extracted_fields": {"has_exception": True},
+                "confidence": 0.7,
+                "warnings": [],
+            }))
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.tools.attachment_analysis.create_chat_model_from_config",
+        lambda config: FakeReasoningVisionModel(),
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_analyze",
+            "name": "analyze_attachment",
+            "args": {
+                "attachment_id": "att-1",
+                "purpose": "Inspect the image.",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Image analyzed.",
+                "structured_output": {"has_exception": True},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_attachment_reasoning_fallback_001",
+        frame_id=frame_id,
+        prompt="Look at the image.",
+        runtime_context={
+            "llm_config": {"provider": "openai", "model": "multimodal-reasoning-model"},
+            "attachments": [{
+                "id": "att-1",
+                "kind": "image",
+                "mimeType": "image/png",
+                "url": "https://example.test/files/att-1.png",
+            }],
+        },
+    )
+
+    analyze_result = next(
+        event for event in events
+        if event.type == "tool_result" and event.tool_name == "analyze_attachment"
+    )
+    payload = json.loads(analyze_result.content)
+    assert payload["ok"] is True
+    assert payload["model_source"] == "reasoning_fallback"
+    assert payload["summary"] == "fallback model saw the image"
+
+
+def test_llm_agent_attachment_analysis_requires_some_model_config():
+    runtime = _attachment_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_attachment_no_model_001",
+        skill_id="attachment_skill",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_analyze",
+            "name": "analyze_attachment",
+            "args": {
+                "attachment_id": "att-1",
+                "purpose": "Inspect the image.",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Model missing.",
+                "structured_output": {"status": "missing_model"},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_attachment_no_model_001",
+        frame_id=frame_id,
+        prompt="Look at the image.",
+        runtime_context={
+            "attachments": [{
+                "id": "att-1",
+                "kind": "image",
+                "mimeType": "image/png",
+                "url": "https://example.test/files/att-1.png",
+            }],
+        },
+    )
+
+    analyze_result = next(
+        event for event in events
+        if event.type == "tool_result" and event.tool_name == "analyze_attachment"
+    )
+    payload = json.loads(analyze_result.content)
+    assert payload["ok"] is False
+    assert "MODEL_NOT_CONFIGURED" in payload["error"]
 
 
 def test_llm_agent_persistent_frame_submit_keeps_frame_running():
@@ -984,6 +1447,62 @@ def test_llm_agent_child_skill_isolated_visibility_hides_root_context_summary():
     child_user_prompt = model.seen_messages[1][1].content
     assert "Visible parent/root context summary:" not in child_user_prompt
     assert "This should not be visible." not in child_user_prompt
+
+
+def test_llm_agent_child_skill_receives_sanitized_attachment_context():
+    runtime = _root_with_child_runtime(child_context_visibility="isolated")
+    frame_id = runtime.invoke_skill(
+        task_id="task_child_attachment_context_001",
+        skill_id="system.root",
+        skill_input={},
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child",
+            "name": "invoke_business_skill",
+            "args": {"skill_id": "child_skill", "instruction": "create a TMS ticket"},
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_submit",
+            "name": "submit_skill_result",
+            "args": {"summary": "Child saw attachment.", "structured_output": {"ok": True}},
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_root_submit",
+            "name": "submit_skill_result",
+            "args": {"summary": "Root done.", "structured_output": {"ok": True}},
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_child_attachment_context_001",
+        frame_id=frame_id,
+        prompt="你可以帮我提个工单吗",
+        runtime_context={
+            "attachments": [{
+                "id": "att-1",
+                "name": "image.png",
+                "mimeType": "image/png",
+                "size": 33485,
+                "kind": "image",
+                "provider": "tms-bff",
+                "url": "https://tms.example.com/files/image.png?token=secret",
+                "metadata": {"traceId": "trace-1", "accessToken": "hidden"},
+            }],
+        },
+        persistent_frame=True,
+    )
+
+    child_user_prompt = model.seen_messages[1][1].content
+    assert "Attachments provided by upstream system:" in child_user_prompt
+    assert "att-1" in child_user_prompt
+    assert "image.png" in child_user_prompt
+    assert "tms-bff" in child_user_prompt
+    assert "https://tms.example.com/files/image.png" in child_user_prompt
+    assert "trace-1" in child_user_prompt
+    assert "token=secret" not in child_user_prompt
+    assert "accessToken" not in child_user_prompt
+    assert "hidden" not in child_user_prompt
 
 
 def test_llm_agent_child_skill_passthrough_visibility_is_system_only():

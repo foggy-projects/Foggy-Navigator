@@ -5,6 +5,7 @@ import com.foggy.navigator.business.agent.model.entity.ClientAppModelConfigGrant
 import com.foggy.navigator.business.agent.model.form.GrantModelConfigForm;
 import com.foggy.navigator.business.agent.repository.ClientAppModelConfigGrantRepository;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
+import com.foggy.navigator.common.enums.LlmModelCategory;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -185,6 +186,75 @@ class ClientAppModelConfigGrantServiceTest {
                 () -> service.resolveEffectiveModelConfigId("tenant-1", "capp-1", "cfg-dirty"));
     }
 
+    @Test
+    void grantModelConfig_as_default_only_clears_same_category_defaults() {
+        ClientAppModelConfigGrantEntity textDefault =
+                grant("cfg-general", true, ClientAppModelConfigGrantService.STATUS_ENABLED);
+        ClientAppModelConfigGrantEntity oldVisionDefault =
+                grant("cfg-vision-old", true, ClientAppModelConfigGrantService.STATUS_ENABLED);
+        when(llmModelManager.getModelConfig("cfg-vision-new"))
+                .thenReturn(Optional.of(model("cfg-vision-new", "tenant-1", "LANGGRAPH_BIZ", LlmModelCategory.VISION)));
+        when(llmModelManager.getModelConfig("cfg-general"))
+                .thenReturn(Optional.of(model("cfg-general", "tenant-1", "LANGGRAPH_BIZ", LlmModelCategory.GENERAL)));
+        when(llmModelManager.getModelConfig("cfg-vision-old"))
+                .thenReturn(Optional.of(model("cfg-vision-old", "tenant-1", "LANGGRAPH_BIZ", LlmModelCategory.VISION)));
+        when(grantRepository.findByClientAppIdAndStatusAndIsDefaultTrueOrderByUpdatedAtDesc(
+                "capp-1", ClientAppModelConfigGrantService.STATUS_ENABLED))
+                .thenReturn(List.of(textDefault, oldVisionDefault));
+
+        service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-vision-new", true));
+
+        assertTrue(textDefault.getIsDefault());
+        assertFalse(oldVisionDefault.getIsDefault());
+        verify(grantRepository).saveAll(List.of(oldVisionDefault));
+    }
+
+    @Test
+    void resolveEffectiveModelConfigId_uses_category_specific_default() {
+        when(llmModelManager.getModelConfig("cfg-general"))
+                .thenReturn(Optional.of(model("cfg-general", "tenant-1", "LANGGRAPH_BIZ", LlmModelCategory.GENERAL)));
+        when(llmModelManager.getModelConfig("cfg-vision"))
+                .thenReturn(Optional.of(model("cfg-vision", "tenant-1", "LANGGRAPH_BIZ", LlmModelCategory.VISION)));
+        when(grantRepository.findByClientAppIdAndStatusAndIsDefaultTrueOrderByUpdatedAtDesc(
+                "capp-1", ClientAppModelConfigGrantService.STATUS_ENABLED))
+                .thenReturn(List.of(
+                        grant("cfg-general", true, ClientAppModelConfigGrantService.STATUS_ENABLED),
+                        grant("cfg-vision", true, ClientAppModelConfigGrantService.STATUS_ENABLED)));
+
+        String result = service.resolveEffectiveModelConfigId("tenant-1", "capp-1", null, LlmModelCategory.VISION);
+
+        assertEquals("cfg-vision", result);
+    }
+
+    @Test
+    void resolveEffectiveModelConfigId_without_category_ignores_vision_default() {
+        when(llmModelManager.getModelConfig("cfg-general"))
+                .thenReturn(Optional.of(model("cfg-general", "tenant-1", "LANGGRAPH_BIZ", LlmModelCategory.GENERAL)));
+        when(llmModelManager.getModelConfig("cfg-vision"))
+                .thenReturn(Optional.of(model("cfg-vision", "tenant-1", "LANGGRAPH_BIZ", LlmModelCategory.VISION)));
+        when(grantRepository.findByClientAppIdAndStatusAndIsDefaultTrueOrderByUpdatedAtDesc(
+                "capp-1", ClientAppModelConfigGrantService.STATUS_ENABLED))
+                .thenReturn(List.of(
+                        grant("cfg-vision", true, ClientAppModelConfigGrantService.STATUS_ENABLED),
+                        grant("cfg-general", true, ClientAppModelConfigGrantService.STATUS_ENABLED)));
+
+        String result = service.resolveEffectiveModelConfigId("tenant-1", "capp-1", null);
+
+        assertEquals("cfg-general", result);
+    }
+
+    @Test
+    void resolveEffectiveModelConfigId_rejects_requested_category_mismatch() {
+        when(llmModelManager.getModelConfig("cfg-general"))
+                .thenReturn(Optional.of(model("cfg-general", "tenant-1", "LANGGRAPH_BIZ", LlmModelCategory.GENERAL)));
+        when(grantRepository.findByClientAppIdAndModelConfigIdAndStatus(
+                "capp-1", "cfg-general", ClientAppModelConfigGrantService.STATUS_ENABLED))
+                .thenReturn(Optional.of(grant("cfg-general", false, ClientAppModelConfigGrantService.STATUS_ENABLED)));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.resolveEffectiveModelConfigId("tenant-1", "capp-1", "cfg-general", LlmModelCategory.VISION));
+    }
+
     private GrantModelConfigForm grantForm(String modelConfigId, boolean isDefault) {
         GrantModelConfigForm form = new GrantModelConfigForm();
         form.setModelConfigId(modelConfigId);
@@ -212,11 +282,16 @@ class ClientAppModelConfigGrantServiceTest {
     }
 
     private LlmModelConfigDTO model(String id, String tenantId, String workerBackend) {
+        return model(id, tenantId, workerBackend, null);
+    }
+
+    private LlmModelConfigDTO model(String id, String tenantId, String workerBackend, LlmModelCategory category) {
         LlmModelConfigDTO dto = new LlmModelConfigDTO();
         dto.setId(id);
         dto.setTenantId(tenantId);
         dto.setName(id + "-name");
         dto.setWorkerBackend(workerBackend);
+        dto.setCategory(category);
         return dto;
     }
 }

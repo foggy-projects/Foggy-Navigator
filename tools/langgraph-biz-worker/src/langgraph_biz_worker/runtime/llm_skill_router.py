@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from ..config import Settings
 from ..models import SkillManifest
+from .llm_call_guard import invoke_chat_model
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,8 @@ def create_chat_model(settings: Settings) -> BaseChatModel | None:
             "model": settings.llm_model or "claude-sonnet-4-20250514",
             "temperature": settings.llm_temperature,
             "max_tokens": 64,
+            "timeout": settings.llm_request_timeout_seconds,
+            "max_retries": max(0, settings.llm_provider_max_retries),
         }
         if settings.llm_api_key:
             kwargs["api_key"] = settings.llm_api_key
@@ -70,6 +73,8 @@ def create_chat_model(settings: Settings) -> BaseChatModel | None:
             "model": settings.llm_model or "gpt-4o",
             "temperature": settings.llm_temperature,
             "max_tokens": 64,
+            "timeout": settings.llm_request_timeout_seconds,
+            "max_retries": max(0, settings.llm_provider_max_retries),
         }
         if settings.llm_api_key:
             kwargs["api_key"] = settings.llm_api_key
@@ -96,13 +101,25 @@ def create_chat_model_from_config(config: dict[str, Any] | None) -> BaseChatMode
     except (TypeError, ValueError):
         temperature = 0.0
 
-    request_settings = Settings(
-        llm_provider=provider,
-        llm_api_key=_text(config.get("api_key")),
-        llm_base_url=_text(config.get("base_url")),
-        llm_model=_text(config.get("model")),
-        llm_temperature=temperature,
+    settings_kwargs: dict[str, Any] = {
+        "llm_provider": provider,
+        "llm_api_key": _text(config.get("api_key")),
+        "llm_base_url": _text(config.get("base_url")),
+        "llm_model": _text(config.get("model")),
+        "llm_temperature": temperature,
+    }
+    request_timeout = _optional_float(
+        config,
+        "request_timeout_seconds",
+        "timeout_seconds",
+        "timeout",
     )
+    if request_timeout is not None:
+        settings_kwargs["llm_request_timeout_seconds"] = request_timeout
+    provider_max_retries = _optional_int(config, "provider_max_retries", "llm_provider_max_retries")
+    if provider_max_retries is not None:
+        settings_kwargs["llm_provider_max_retries"] = provider_max_retries
+    request_settings = Settings(**settings_kwargs)
     return create_chat_model(request_settings)
 
 
@@ -111,6 +128,32 @@ def _text(value: Any) -> str:
         return ""
     text = str(value).strip()
     return text
+
+
+def _optional_float(source: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = source.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _optional_int(source: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = source.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return max(0, parsed)
+    return None
 
 
 class LlmSkillRouter:
@@ -142,10 +185,15 @@ class LlmSkillRouter:
         human = "\n".join(human_parts)
 
         try:
-            response = self._model.invoke([
-                SystemMessage(content=system),
-                HumanMessage(content=human),
-            ])
+            response = invoke_chat_model(
+                self._model,
+                [
+                    SystemMessage(content=system),
+                    HumanMessage(content=human),
+                ],
+                runtime_context=dict(context or {}),
+                operation="skill_router.invoke",
+            )
             raw = response.content.strip().strip('"').strip("'")
             logger.info("LLM skill routing: prompt=%s → %s", prompt[:80], raw)
 

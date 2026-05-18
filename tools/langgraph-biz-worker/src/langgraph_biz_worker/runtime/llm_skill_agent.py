@@ -28,10 +28,13 @@ from ..tools.business_function_tools import (
     invoke_business_function,
     list_business_functions,
 )
+from ..tools.attachment_analysis import analyze_attachment
 from .account_file_tools import AccountFileTools, FileToolError
 from .account_context_files import build_account_context_prompt
 from .artifact_store import ArtifactError, ArtifactStore
+from .attachment_context import build_attachment_context_prompt as _build_attachment_context_prompt
 from .frame_execution_report import read_frame_execution_report
+from .llm_call_guard import invoke_chat_model
 from .public_skill_resource_tools import PublicSkillResourceTools
 from .skill_runtime import SkillRuntime
 
@@ -159,7 +162,14 @@ class LlmSkillAgent:
 
         for _ in range(self._max_iterations):
             try:
-                response = model.invoke(messages)
+                response = invoke_chat_model(
+                    model,
+                    messages,
+                    runtime_context=runtime_context,
+                    operation="skill_agent.invoke",
+                    task_id=task_id,
+                    frame_id=frame_id,
+                )
             except Exception as exc:
                 if persistent_frame:
                     self._runtime.record_recoverable_interruption(
@@ -363,6 +373,9 @@ class LlmSkillAgent:
         # --- Navigator worker-gateway business function tools ---
         if name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES:
             return {"ok": False, "error": f"Tool not available: {name}"}
+
+        if name == "analyze_attachment":
+            return analyze_attachment(args, runtime_context)
 
         if name == "list_business_functions":
             token = _runtime_task_scoped_token(runtime_context)
@@ -600,9 +613,27 @@ class LlmSkillAgent:
                     "_suspended": True,
                 }
             if not child or child.status != FrameStatus.COMPLETED:
+                error = f"Child skill ended in {child.status.value if child else 'MISSING'}"
+                if persistent_frame:
+                    _record_parent_child_recoverable_interruption(
+                        self._runtime,
+                        parent_frame_id=frame_id,
+                        child_frame_id=child.frame_id if child else child_frame_id,
+                        reason="child_skill_failed",
+                        error=error,
+                        task_id=task_id,
+                    )
+                    return {
+                        "ok": False,
+                        "error": error,
+                        "_events": child_events,
+                        "_suspended": True,
+                    }
+                _resume_parent_if_waiting(self._runtime, frame_id)
+                self._runtime.fail_frame(frame_id, error)
                 return {
                     "ok": False,
-                    "error": f"Child skill ended in {child.status.value if child else 'MISSING'}",
+                    "error": error,
                     "_events": child_events,
                 }
 
@@ -681,12 +712,21 @@ class LlmSkillAgent:
                     "_suspended": True,
                 }
             if not refreshed_child or refreshed_child.status != FrameStatus.COMPLETED:
-                _resume_parent_if_waiting(self._runtime, frame_id)
+                error = f"Child skill ended in {refreshed_child.status.value if refreshed_child else 'MISSING'}"
+                _record_parent_child_recoverable_interruption(
+                    self._runtime,
+                    parent_frame_id=frame_id,
+                    child_frame_id=refreshed_child.frame_id if refreshed_child else child.frame_id,
+                    reason="child_skill_failed",
+                    error=error,
+                    task_id=task_id,
+                )
                 return {
                     "ok": False,
-                    "error": f"Child skill ended in {refreshed_child.status.value if refreshed_child else 'MISSING'}",
+                    "error": error,
                     "child_frame_id": child.frame_id,
                     "_events": child_events,
+                    "_suspended": True,
                 }
 
             promoted = self._runtime.complete_child_and_resume_parent(child.frame_id)
@@ -938,6 +978,7 @@ class LlmSkillAgent:
             _build_root_planning_policy_prompt(runtime_context, skill_id),
             f"User request: {prompt}",
             f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}",
+            _build_attachment_context_prompt(_runtime_attachments(runtime_context)),
             _build_visible_context_prompt(runtime_context),
         ]
         return "\n".join(part for part in parts if part)
@@ -970,6 +1011,13 @@ def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None
     return value if isinstance(value, str) and value else None
 
 
+def _runtime_attachments(runtime_context: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    if not runtime_context:
+        return None
+    value = runtime_context.get("attachments")
+    return value if isinstance(value, list) else None
+
+
 def _runtime_context_for_child_skill(
     runtime_context: dict[str, Any] | None,
     root_context_summary: dict[str, Any] | None,
@@ -988,6 +1036,33 @@ def _resume_parent_if_waiting(runtime: SkillRuntime, parent_frame_id: str) -> No
     parent = runtime.get_frame(parent_frame_id)
     if parent and parent.status == FrameStatus.WAITING_CHILD:
         runtime.resume_from_child(parent_frame_id)
+
+
+def _record_parent_child_recoverable_interruption(
+    runtime: SkillRuntime,
+    *,
+    parent_frame_id: str,
+    child_frame_id: str | None,
+    reason: str,
+    error: str,
+    task_id: str,
+) -> None:
+    if child_frame_id:
+        runtime.record_recoverable_child_interruption(
+            parent_frame_id,
+            reason=reason,
+            error=error,
+            task_id=task_id,
+            child_frame_id=child_frame_id,
+            allow_terminal_child=True,
+        )
+    _resume_parent_if_waiting(runtime, parent_frame_id)
+    runtime.record_recoverable_interruption(
+        parent_frame_id,
+        reason=reason,
+        error=error,
+        task_id=task_id,
+    )
 
 
 def _context_visibility_for_child_manifest(manifest: SkillManifest) -> str:
@@ -1467,6 +1542,38 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "input": {"type": "object"},
                 },
                 "required": ["skill_id", "instruction"],
+            },
+        },
+    },
+    "analyze_attachment": {
+        "type": "function",
+        "function": {
+            "name": "analyze_attachment",
+            "description": (
+                "Analyze a user-provided attachment on demand using the configured "
+                "vision model. Use this only when the user asks to inspect image/file "
+                "contents or when attachment-derived fields are required before a "
+                "business function call. Do not use it when the user only asks to "
+                "submit or attach the original file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "attachment_id": {
+                        "type": "string",
+                        "description": "Attachment id from the upstream attachment metadata.",
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": "Business reason for analysis, e.g. extract exception type or read damaged cargo text.",
+                    },
+                    "expected_fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional field names to extract from the attachment.",
+                    },
+                },
+                "required": ["attachment_id", "purpose"],
             },
         },
     },

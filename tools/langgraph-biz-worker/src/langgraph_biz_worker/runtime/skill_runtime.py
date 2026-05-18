@@ -257,6 +257,55 @@ class SkillRuntime:
         self._generate_frame_report(frame)
         logger.warning("Frame %s failed: %s", frame_id, reason)
 
+    def reopen_recoverable_frame(
+        self,
+        frame_id: str,
+        task_id: str | None = None,
+    ) -> SkillFrameState:
+        """Reopen an interrupted terminal frame so a user "continue" can retry it."""
+        frame = self._get_frame(frame_id)
+        if frame.status not in {FrameStatus.FAILED, FrameStatus.CANCELLED}:
+            return frame
+        if (
+            frame.private_working_state.get("continuation_state") != "INTERRUPTED"
+            or not frame.private_working_state.get("recoverable")
+        ):
+            raise IllegalStateTransition(
+                f"Frame {frame_id} is terminal and not marked recoverable"
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        previous_status = frame.status.value
+        previous_fail_reason = frame.private_working_state.get("fail_reason")
+        history = frame.private_working_state.setdefault("terminal_resume_history", [])
+        if not isinstance(history, list):
+            history = []
+            frame.private_working_state["terminal_resume_history"] = history
+        history.append({
+            "status": previous_status,
+            "fail_reason": previous_fail_reason or "",
+            "resumed_at": now,
+            "task_id": task_id or frame.current_task_id or frame.task_id,
+        })
+        del history[:-PERSISTENT_FRAME_MAX_INTERRUPTION_HISTORY]
+
+        frame.status = FrameStatus.RUNNING
+        frame.ended_at = ""
+        if task_id:
+            frame.task_id = task_id
+            frame.current_task_id = task_id
+            if not frame.last_task_ids:
+                frame.last_task_ids.append(frame.origin_task_id or task_id)
+            if frame.last_task_ids[-1] != task_id:
+                frame.last_task_ids.append(task_id)
+        frame.private_working_state["resumed_from_terminal_status"] = previous_status
+        frame.private_working_state["resumed_at"] = now
+        frame.private_working_state.pop("fail_reason", None)
+        self._save(frame)
+        self._generate_frame_report(frame)
+        logger.info("Reopened recoverable frame %s from %s", frame_id, previous_status)
+        return frame
+
     def cancel_frame(self, frame_id: str) -> None:
         """Transition to CANCELLED from any non-terminal state."""
         frame = self._get_frame(frame_id)
@@ -972,6 +1021,8 @@ class SkillRuntime:
         reason: str,
         error: str = "",
         task_id: str | None = None,
+        child_frame_id: str | None = None,
+        allow_terminal_child: bool = False,
     ) -> str | None:
         """Mark the active child of a waiting parent as recoverable.
 
@@ -980,11 +1031,20 @@ class SkillRuntime:
         as a recoverable candidate until root either resumes or shelves it.
         """
         parent = self._get_frame(parent_frame_id)
-        child = self._find_active_child_frame(parent)
-        if child is None:
+        child = (
+            self._load_related_child_frame(parent, child_frame_id)
+            if child_frame_id
+            else self._find_active_child_frame(parent)
+        )
+        if (
+            child is None
+            or (child.status in TERMINAL_STATES and not allow_terminal_child)
+        ):
             if parent.status == FrameStatus.WAITING_CHILD:
                 self.resume_from_child(parent.frame_id)
             return None
+        if child.parent_frame_id != parent.frame_id:
+            raise IllegalStateTransition("recoverable child frame does not belong to parent")
 
         now = datetime.now(timezone.utc).isoformat()
         last_task_id = task_id or parent.current_task_id or parent.task_id
@@ -1044,11 +1104,22 @@ class SkillRuntime:
         if not isinstance(child_frame_id, str) or not child_frame_id:
             return None
         child = self._load_related_child_frame(parent, child_frame_id)
-        if child is None or child.status in TERMINAL_STATES:
+        if child is None:
             self._clear_recoverable_child_reference(parent.frame_id, child_frame_id)
             return None
         if child.parent_frame_id != parent.frame_id:
             raise IllegalStateTransition("recoverable child frame does not belong to parent")
+        if child.status in TERMINAL_STATES:
+            if (
+                child.private_working_state.get("continuation_state") != "INTERRUPTED"
+                or not child.private_working_state.get("recoverable")
+            ):
+                self._clear_recoverable_child_reference(parent.frame_id, child_frame_id)
+                return None
+            child = self.reopen_recoverable_frame(
+                child.frame_id,
+                task_id=parent.current_task_id or parent.task_id,
+            )
         if child.status == FrameStatus.WAITING_CHILD:
             self.resume_from_child(child.frame_id)
             refreshed = self.get_frame(child.frame_id)

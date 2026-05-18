@@ -51,6 +51,7 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         form.setAgentId(request.getSkillId());
         form.setWorkerId(member.getWorkerId());
         form.setSessionId(request.getSessionId());
+        form.setContextId(request.getContextId());
         form.setModelConfigId(request.getModelConfigId());
         form.setPrompt("Business Agent task " + request.getBusinessTaskId()
                 + " for skill " + request.getSkillId()
@@ -70,6 +71,9 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
     private Map<String, Object> buildContext(BusinessAgentWorkerTaskLaunchRequest request) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("businessTaskId", request.getBusinessTaskId());
+        putText(context, "contextId", request.getContextId());
+        putText(context, "context_id", request.getContextId());
+        putText(context, "session_id", request.getSessionId());
         context.put("clientAppId", request.getClientAppId());
         context.put("upstreamUserId", request.getUpstreamUserId());
         context.put("accountId", request.getUpstreamUserId());
@@ -83,12 +87,21 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         return context;
     }
 
+    private void putText(Map<String, Object> target, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            target.put(key, value);
+        }
+    }
+
     private Map<String, Object> buildRuntimeContext(BusinessAgentWorkerTaskLaunchRequest request) {
         ZoneId zoneId = ZoneId.systemDefault();
         ZonedDateTime now = ZonedDateTime.now(zoneId);
         Map<String, Object> runtimeContext = new LinkedHashMap<>();
         if (StringUtils.hasText(request.getTaskScopedToken())) {
             runtimeContext.put("task_scoped_token", request.getTaskScopedToken());
+        }
+        if (StringUtils.hasText(request.getVisionModelConfigId())) {
+            runtimeContext.put("vision_model_config_id", request.getVisionModelConfigId());
         }
         runtimeContext.put("current_time", now.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
         runtimeContext.put("timezone", zoneId.getId());

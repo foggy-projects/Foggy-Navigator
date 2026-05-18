@@ -213,6 +213,451 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
 
 
 @pytest.mark.anyio
+async def test_scripted_tms_ticket_child_receives_attachment_context(monkeypatch, mock_llm_server):
+    """A TMS ticket child skill must see redacted attachments even if the tool call only has instruction."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-tms-ticket-attachment-{run_id}"
+    task_id = f"task_e2e_tms_ticket_attachment_{run_id}"
+    session_id = f"sess-e2e-tms-ticket-attachment-{run_id}"
+    context_id = f"ctx-e2e-tms-ticket-attachment-{run_id}"
+    client_app_id = "capp_2852124a-48f7-4098-9d5e-33eb736c4375"
+    attachment = {
+        "id": "att-028",
+        "name": "image.png",
+        "mimeType": "image/png",
+        "size": 33485,
+        "kind": "image",
+        "provider": "tms-bff",
+        "url": "https://tms.example.com/files/image.png?token=secret",
+        "metadata": {
+            "traceId": "trace-028",
+            "accessToken": "hidden",
+        },
+    }
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-tms-ticket-attachment",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_skill",
+                                    "args": {
+                                        "skill_id": "tms-ticket-agent",
+                                        "instruction": f"请创建一个平台反馈工单 next:{trace_id}:002",
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": f"TMS ticket child received attachment context next:{trace_id}:003",
+                                        "structured_output": {
+                                            "ticket_ready": True,
+                                            "attachment_id": "att-028",
+                                        },
+                                        "evidence_refs": ["attachment:att-028"],
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Root completed TMS ticket attachment handoff.",
+                                        "structured_output": {
+                                            "child_skill": "tms-ticket-agent",
+                                            "attachment_handoff": True,
+                                        },
+                                        "evidence_refs": ["e2e:tms-ticket-attachment"],
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"你可以帮我提个工单吗 next:{trace_id}:001",
+                "taskId": task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {
+                    "contextId": context_id,
+                    "client_app_id": client_app_id,
+                },
+                "attachments": [attachment],
+            },
+        )
+
+    assert response.status_code == 200
+    events = _parse_worker_sse(response.text)
+    assert any(
+        event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+        for event in events
+    )
+    result = next(event for event in events if event.type == "result")
+    assert result.content == "Root completed TMS ticket attachment handoff."
+    assert result.structured_output["attachment_handoff"] is True
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+    ]
+
+    child_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:002")
+    child_user_prompt = "\n".join(
+        message["content"] or ""
+        for message in child_turn["request"]["messages"]
+        if message["role"] == "user"
+    )
+    assert "SKILL_AGENT_START tms-ticket-agent" in child_user_prompt
+    assert "Attachments provided by upstream system:" in child_user_prompt
+    assert "att-028" in child_user_prompt
+    assert "image.png" in child_user_prompt
+    assert "tms-bff" in child_user_prompt
+    assert "https://tms.example.com/files/image.png" in child_user_prompt
+    assert "trace-028" in child_user_prompt
+    assert "token=secret" not in child_user_prompt
+    assert "accessToken" not in child_user_prompt
+    assert "hidden" not in child_user_prompt
+
+
+@pytest.mark.anyio
+async def test_scripted_ticket_with_attachment_does_not_analyze_image_by_default(monkeypatch, mock_llm_server):
+    """Attaching an image to a business operation should not trigger image analysis unless requested."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-ticket-attach-no-analysis-{run_id}"
+    task_id = f"task_e2e_ticket_attach_no_analysis_{run_id}"
+    session_id = f"sess-e2e-ticket-attach-no-analysis-{run_id}"
+    context_id = f"ctx-e2e-ticket-attach-no-analysis-{run_id}"
+    attachment = {
+        "id": "att-no-analysis",
+        "name": "exception-photo.png",
+        "url": "https://tms.example.com/files/exception-photo.png?token=secret",
+        "kind": "image",
+    }
+    captured_inputs = []
+
+    def fake_invoke_business_function(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        captured_inputs.append(input_data)
+        return {
+            "functionId": function_id,
+            "status": "OK",
+            "summary": f"ticket accepted next:{trace_id}:002",
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke_business_function,
+    )
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-ticket-attach-no-analysis",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_function",
+                                    "args": {
+                                        "function_id": "tms.ticket.create",
+                                        "input": {
+                                            "title": "异常工单",
+                                            "description": "用户要求附图提交异常工单",
+                                            "attachments": [{"id": "att-no-analysis"}],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Ticket submitted with original attachment.",
+                                        "structured_output": {
+                                            "ticket_submitted": True,
+                                            "attachment_handoff": True,
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"帮我提交一个异常工单，然后附上图片 next:{trace_id}:001",
+                "taskId": task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id, "client_app_id": "capp-e2e-attachment"},
+                "runtime_context": {"task_scoped_token": "btt-e2e"},
+                "attachments": [attachment],
+            },
+        )
+
+    assert response.status_code == 200
+    events = _parse_worker_sse(response.text)
+    assert not any(event.type == "tool_use" and event.tool_name == "analyze_attachment" for event in events)
+    assert any(event.type == "tool_use" and event.tool_name == "invoke_business_function" for event in events)
+    assert captured_inputs == [{
+        "title": "异常工单",
+        "description": "用户要求附图提交异常工单",
+        "attachments": [{"id": "att-no-analysis"}],
+    }]
+    result = next(event for event in events if event.type == "result")
+    assert result.structured_output["attachment_handoff"] is True
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    records = debug.json()
+    assert [record["responseSummary"]["toolCalls"] for record in records] == [
+        ["invoke_business_function"],
+        ["submit_skill_result"],
+    ]
+
+
+@pytest.mark.anyio
+async def test_scripted_ticket_from_image_content_analyzes_then_uses_result(monkeypatch, mock_llm_server):
+    """When the user asks to use image content, the agent can analyze first and pass derived fields onward."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-ticket-image-analysis-{run_id}"
+    task_id = f"task_e2e_ticket_image_analysis_{run_id}"
+    session_id = f"sess-e2e-ticket-image-analysis-{run_id}"
+    context_id = f"ctx-e2e-ticket-image-analysis-{run_id}"
+    attachment = {
+        "id": "att-vision",
+        "name": "cargo-damage.JPG",
+        "url": "https://tms.example.com/files/cargo-damage.JPG?token=secret",
+    }
+    captured_inputs = []
+
+    def fake_invoke_business_function(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        captured_inputs.append(input_data)
+        return {
+            "functionId": function_id,
+            "status": "OK",
+            "summary": f"ticket accepted next:{trace_id}:004",
+        }
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke_business_function,
+    )
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-ticket-image-analysis",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "analyze_attachment",
+                                    "args": {
+                                        "attachment_id": "att-vision",
+                                        "purpose": f"识别异常照片并提取工单字段 next:{trace_id}:002",
+                                        "expected_fields": ["exception_type", "damage_visible"],
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "content": json.dumps({
+                                "summary": f"图片显示货物外包装破损 next:{trace_id}:003",
+                                "extracted_text": "",
+                                "extracted_fields": {
+                                    "exception_type": "cargo_damage",
+                                    "damage_visible": True,
+                                },
+                                "confidence": 0.91,
+                                "warnings": [],
+                            }, ensure_ascii=False),
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_function",
+                                    "args": {
+                                        "function_id": "tms.ticket.create",
+                                        "input": {
+                                            "title": "货损异常工单",
+                                            "exception_type": "cargo_damage",
+                                            "analysis_summary": "图片显示货物外包装破损",
+                                            "attachments": [{"id": "att-vision"}],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:004",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Ticket submitted from image analysis.",
+                                        "structured_output": {
+                                            "ticket_submitted": True,
+                                            "exception_type": "cargo_damage",
+                                            "used_attachment_analysis": True,
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"根据图片内容提交异常工单 next:{trace_id}:001",
+                "taskId": task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "vision_llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-vision-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-vision",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id, "client_app_id": "capp-e2e-attachment"},
+                "runtime_context": {"task_scoped_token": "btt-e2e"},
+                "attachments": [attachment],
+            },
+        )
+
+    assert response.status_code == 200
+    events = _parse_worker_sse(response.text)
+    assert any(event.type == "tool_use" and event.tool_name == "analyze_attachment" for event in events)
+    assert any(event.type == "tool_use" and event.tool_name == "invoke_business_function" for event in events)
+    assert captured_inputs == [{
+        "title": "货损异常工单",
+        "exception_type": "cargo_damage",
+        "analysis_summary": "图片显示货物外包装破损",
+        "attachments": [{"id": "att-vision"}],
+    }]
+    result = next(event for event in events if event.type == "result")
+    assert result.structured_output["used_attachment_analysis"] is True
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+        f"next:{trace_id}:004",
+    ]
+    vision_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:002")
+    assert vision_turn["model"] == "navigator-e2e-vision"
+    vision_user_message = next(
+        message for message in vision_turn["request"]["messages"] if message["role"] == "user"
+    )
+    assert isinstance(vision_user_message["content"], list)
+    assert vision_user_message["content"][1]["type"] == "image_url"
+    assert vision_user_message["content"][1]["image_url"]["url"] == (
+        "https://tms.example.com/files/cargo-damage.JPG?token=secret"
+    )
+
+
+@pytest.mark.anyio
 async def test_scripted_root_skill_reuses_frame_across_tasks(monkeypatch, mock_llm_server):
     """Same session/context should reuse one persistent system.root frame."""
     run_id = uuid.uuid4().hex[:8]

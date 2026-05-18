@@ -191,9 +191,23 @@ def hash_request(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _find_cursor(value: Optional[str]) -> Optional[str]:
+def _find_cursor(value: Any) -> Optional[str]:
     if not value:
         return None
+    if isinstance(value, list):
+        for item in reversed(value):
+            cursor = _find_cursor(item)
+            if cursor:
+                return cursor
+        return None
+    if isinstance(value, dict):
+        for item in reversed(list(value.values())):
+            cursor = _find_cursor(item)
+            if cursor:
+                return cursor
+        return None
+    if not isinstance(value, str):
+        value = str(value)
     match = CURSOR_PATTERN.search(value)
     return match.group(0) if match else None
 

@@ -23,6 +23,7 @@ import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantServi
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUserGrantService;
 import com.foggy.navigator.business.agent.service.SkillRegistryService;
+import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
 import com.foggy.navigator.common.repository.SessionEntityRepository;
 import com.foggy.navigator.common.repository.SessionTaskRepository;
@@ -158,13 +159,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
         stubBusinessAgentAccess();
         stubLanggraphWorkerPool();
 
-        CreateBusinessAgentTaskForm form = new CreateBusinessAgentTaskForm();
-        form.setClientAppId(CLIENT_APP_ID);
-        form.setSessionId(SESSION_ID);
-        form.setContextId(CONTEXT_ID);
-        form.setWorkerPoolId(WORKER_POOL_ID);
-        form.setSkillId(SKILL_ID);
-        form.setUpstreamUserId(UPSTREAM_USER_ID);
+        CreateBusinessAgentTaskForm form = makeTaskForm();
 
         CreatedBusinessAgentTaskDTO created = businessAgentTaskService.createTask(TENANT, ACTOR, form);
 
@@ -199,6 +194,9 @@ class BusinessAgentLanggraphLaunchE2ETest {
         Map<String, Object> context = (Map<String, Object>) event.getProviderConfig().get("context");
         assertNotNull(context);
         assertEquals(created.getTaskId(), context.get("businessTaskId"));
+        assertEquals(CONTEXT_ID, context.get("contextId"));
+        assertEquals(CONTEXT_ID, context.get("context_id"));
+        assertEquals(SESSION_ID, context.get("session_id"));
         assertEquals(CLIENT_APP_ID, context.get("clientAppId"));
         assertEquals(UPSTREAM_USER_ID, context.get("upstreamUserId"));
         assertEquals(UPSTREAM_USER_ID, context.get("accountId"));
@@ -231,6 +229,66 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 eq(created.getTaskScopedToken()), any());
         verify(tokenRuntimeStore).registerToken(eq(TENANT), eq(SESSION_ID), eq(created.getWorkerTaskId()),
                 eq(created.getTaskScopedToken()), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void createBusinessAgentTask_secondTurnReusesContextAndForwardsRecentConversation() {
+        stubBusinessAgentAccess();
+        stubLanggraphWorkerPool();
+        when(sessionMessageRepository.findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any()))
+                .thenReturn(List.of())
+                .thenReturn(List.of(
+                        sessionMessage("message-3", "assistant", "Opening frame should be ignored",
+                                LocalDateTime.now().minusMinutes(1), "{\"type\":\"STATE_SYNC\"}"),
+                        sessionMessage("message-2", "assistant", "Ticket A is available",
+                                LocalDateTime.now().minusMinutes(2), "{\"type\":\"TEXT_COMPLETE\"}"),
+                        sessionMessage("message-1", "user", "Look up ticket A",
+                                LocalDateTime.now().minusMinutes(3), "{\"type\":\"USER\"}")));
+
+        CreatedBusinessAgentTaskDTO first = businessAgentTaskService.createTask(TENANT, ACTOR, makeTaskForm());
+        CreatedBusinessAgentTaskDTO second = businessAgentTaskService.createTask(TENANT, ACTOR, makeTaskForm());
+
+        assertNotEquals(first.getTaskId(), second.getTaskId());
+        assertEquals(CONTEXT_ID, second.getContextId());
+
+        ArgumentCaptor<WorkerTaskStartEvent> eventCaptor = ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
+        verify(eventPublisher, times(2)).publishEvent(eventCaptor.capture());
+        WorkerTaskStartEvent secondEvent = eventCaptor.getAllValues().get(1);
+
+        Map<String, Object> context = (Map<String, Object>) secondEvent.getProviderConfig().get("context");
+        assertNotNull(context);
+        assertEquals(second.getTaskId(), context.get("businessTaskId"));
+        assertEquals(CONTEXT_ID, context.get("contextId"));
+        assertEquals(CONTEXT_ID, context.get("context_id"));
+        assertEquals(SESSION_ID, context.get("session_id"));
+
+        List<Map<String, Object>> recentConversation = (List<Map<String, Object>>) context.get("recentConversation");
+        assertNotNull(recentConversation);
+        assertEquals(2, recentConversation.size());
+        assertEquals("user", recentConversation.get(0).get("role"));
+        assertEquals("Look up ticket A", recentConversation.get(0).get("content"));
+        assertEquals("assistant", recentConversation.get(1).get("role"));
+        assertEquals("Ticket A is available", recentConversation.get(1).get("content"));
+        assertFalse(recentConversation.toString().contains("Opening frame should be ignored"));
+
+        verify(sessionManager, times(2)).addMessage(eq(SESSION_ID), argThat(message ->
+                message.getRole() != null
+                        && "USER".equals(message.getRole().name())
+                        && message.getTaskId() != null
+                        && message.getContent() != null
+                        && message.getContent().contains("Business Agent task")));
+    }
+
+    private CreateBusinessAgentTaskForm makeTaskForm() {
+        CreateBusinessAgentTaskForm form = new CreateBusinessAgentTaskForm();
+        form.setClientAppId(CLIENT_APP_ID);
+        form.setSessionId(SESSION_ID);
+        form.setContextId(CONTEXT_ID);
+        form.setWorkerPoolId(WORKER_POOL_ID);
+        form.setSkillId(SKILL_ID);
+        form.setUpstreamUserId(UPSTREAM_USER_ID);
+        return form;
     }
 
     private void stubBusinessAgentAccess() {
@@ -282,6 +340,19 @@ class BusinessAgentLanggraphLaunchE2ETest {
                 .tenantId(TENANT)
                 .agentId(SKILL_ID)
                 .build());
+    }
+
+    private static SessionMessageEntity sessionMessage(String id, String role, String content, LocalDateTime createdAt,
+                                                       String metadata) {
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId(id);
+        entity.setSessionId(SESSION_ID);
+        entity.setTaskId("lgt_previous");
+        entity.setRole(role);
+        entity.setContent(content);
+        entity.setMetadata(metadata);
+        entity.setCreatedAt(createdAt);
+        return entity;
     }
 
     private static String sha256(String value) {

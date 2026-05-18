@@ -20,6 +20,7 @@ def _state(task_id: str, session_id: str = "sess_root") -> dict[str, Any]:
         "model": "test-model",
         "model_config_id": None,
         "llm_config": None,
+        "vision_llm_config": None,
         "context": {"client_app_id": "capp_001"},
         "runtime_context": {},
         "attachments": None,
@@ -123,3 +124,85 @@ def test_route_skill_restores_system_root_frame_by_session_for_new_task(monkeypa
     assert frame is not None
     assert frame.conversation_id == "sess_restore"
     assert frame.current_task_id == "task_root_session_restore_002"
+
+
+def test_run_skill_passes_raw_prompt_and_runtime_attachments_to_llm_agent(monkeypatch, tmp_path):
+    _install_isolated_runtime(monkeypatch, tmp_path)
+    state = _state("task_root_attachment_prompt_001")
+    state["attachments"] = [{
+        "id": "att-1",
+        "name": "photo.png",
+        "url": "https://example.test/photo.png?token=secret",
+        "kind": "image",
+    }]
+    routed = root_graph_module.route_skill(state)
+    state["active_frame_id"] = routed["active_frame_id"]
+
+    captured = {}
+
+    class FakeAgent:
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return []
+
+    monkeypatch.setattr(root_graph_module, "_llm_skill_agent_for_state", lambda current_state: FakeAgent())
+
+    root_graph_module.run_skill(state)
+
+    assert captured["prompt"] == "handle the request"
+    assert captured["runtime_context"]["attachments"] == state["attachments"]
+
+
+def test_agentic_routing_prompt_includes_recent_conversation(monkeypatch, tmp_path):
+    registry = SkillRegistry(skills_root=tmp_path / "skills", data_root=tmp_path / "data")
+    journal = FileFrameJournal(tmp_path / "data")
+    runtime = SkillRuntime(
+        frame_store=FrameStore(),
+        skill_registry=registry,
+        journal=journal,
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeChunk:
+        content = "No skill needed"
+        tool_calls = None
+
+        def __add__(self, other):
+            return self
+
+    class FakeChatModel:
+        def bind_tools(self, tools):
+            captured["tools"] = tools
+            return self
+
+        def stream(self, messages):
+            captured["messages"] = messages
+            yield FakeChunk()
+
+    monkeypatch.setattr(root_graph_module, "_skill_registry", registry)
+    monkeypatch.setattr(root_graph_module, "_journal", journal)
+    monkeypatch.setattr(root_graph_module, "_runtime", runtime)
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", False)
+    monkeypatch.setattr(root_graph_module.settings, "llm_agentic_routing", True)
+    monkeypatch.setattr(root_graph_module, "_chat_model_for_state", lambda state: FakeChatModel())
+
+    state = _state("task_recent_conversation_prompt_001")
+    state["prompt"] = "continue handling it"
+    state["context"] = {
+        "contextId": "ctx-001",
+        "recentConversation": [
+            {"role": "user", "content": "look up ticket A"},
+            {"role": "assistant", "content": "ticket A is available"},
+        ],
+    }
+
+    result = root_graph_module.route_skill(state)
+
+    assert result["events"][-1].content == "No skill needed"
+    human_prompt = captured["messages"][1].content
+    assert "Recent conversation before the current user message:" in human_prompt
+    assert "user: look up ticket A" in human_prompt
+    assert "assistant: ticket A is available" in human_prompt
+    assert "Current user message:\ncontinue handling it" in human_prompt
+    assert '"contextId": "ctx-001"' in human_prompt
+    assert "recentConversation" not in human_prompt.split("\nContext:", 1)[1]

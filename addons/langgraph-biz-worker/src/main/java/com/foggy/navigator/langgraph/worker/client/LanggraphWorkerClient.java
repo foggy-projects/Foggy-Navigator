@@ -59,6 +59,7 @@ public class LanggraphWorkerClient {
             String model,
             String modelConfigId,
             Map<String, Object> llmConfig,
+            Map<String, Object> visionLlmConfig,
             String taskId,
             String sessionId,
             String userId,
@@ -72,6 +73,7 @@ public class LanggraphWorkerClient {
         if (model != null) body.put("model", model);
         if (modelConfigId != null) body.put("model_config_id", modelConfigId);
         if (llmConfig != null && !llmConfig.isEmpty()) body.put("llm_config", llmConfig);
+        if (visionLlmConfig != null && !visionLlmConfig.isEmpty()) body.put("vision_llm_config", visionLlmConfig);
         if (taskId != null) body.put("taskId", taskId);
         if (sessionId != null) body.put("session_id", sessionId);
         if (userId != null) body.put("userId", userId);

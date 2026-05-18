@@ -133,10 +133,19 @@ class TestCreateChatModel:
     @patch("langchain_openai.ChatOpenAI")
     def test_openai_provider(self, mock_cls):
         from langgraph_biz_worker.config import Settings
-        s = Settings(llm_provider="openai", llm_api_key="sk-test", llm_model="gpt-4o")
+        s = Settings(
+            llm_provider="openai",
+            llm_api_key="sk-test",
+            llm_model="gpt-4o",
+            llm_request_timeout_seconds=45,
+            llm_provider_max_retries=0,
+        )
         result = create_chat_model(s)
         assert result is not None
         mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["timeout"] == 45
+        assert kwargs["max_retries"] == 0
 
     @patch("langchain_openai.ChatOpenAI")
     def test_request_config_openai_provider(self, mock_cls):
@@ -145,6 +154,8 @@ class TestCreateChatModel:
             "api_key": "sk-test",
             "base_url": "http://mock-llm:8000",
             "model": "navigator-e2e-scripted",
+            "request_timeout_seconds": 12,
+            "provider_max_retries": 0,
         })
 
         assert result is not None
@@ -153,6 +164,8 @@ class TestCreateChatModel:
         assert kwargs["api_key"] == "sk-test"
         assert kwargs["base_url"] == "http://mock-llm:8000"
         assert kwargs["model"] == "navigator-e2e-scripted"
+        assert kwargs["timeout"] == 12
+        assert kwargs["max_retries"] == 0
 
 
 class TestRouteSkillIntegration:

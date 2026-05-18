@@ -40,6 +40,12 @@ class LanggraphWorkerClientTest {
                             "model", "navigator-e2e-scripted",
                             "api_key", "test-key"
                     ),
+                    Map.of(
+                            "provider", "openai",
+                            "base_url", "http://mock-vision-llm",
+                            "model", "navigator-vision-scripted",
+                            "api_key", "vision-key"
+                    ),
                     "task-1",
                     "session-1",
                     "user-1",
@@ -54,6 +60,10 @@ class LanggraphWorkerClientTest {
             Map<String, Object> llmConfig = (Map<String, Object>) body.get("llm_config");
             assertEquals("http://mock-llm", llmConfig.get("base_url"));
             assertEquals("navigator-e2e-scripted", llmConfig.get("model"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> visionLlmConfig = (Map<String, Object>) body.get("vision_llm_config");
+            assertEquals("http://mock-vision-llm", visionLlmConfig.get("base_url"));
+            assertEquals("navigator-vision-scripted", visionLlmConfig.get("model"));
         }
     }
 

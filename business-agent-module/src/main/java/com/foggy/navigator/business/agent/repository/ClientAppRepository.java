@@ -13,4 +13,15 @@ public interface ClientAppRepository extends JpaRepository<ClientAppEntity, Long
     Optional<ClientAppEntity> findByClientAppIdAndTenantId(String clientAppId, String tenantId);
 
     List<ClientAppEntity> findByTenantIdOrderByCreatedAtDesc(String tenantId);
+
+    Optional<ClientAppEntity> findByTenantIdAndUpstreamSystemIdAndUpstreamClientAppNamespaceAndUpstreamRef(
+            String tenantId,
+            String upstreamSystemId,
+            String upstreamClientAppNamespace,
+            String upstreamRef);
+
+    List<ClientAppEntity> findByUpstreamSystemIdAndUpstreamClientAppNamespaceAndTenantIdInOrderByCreatedAtDesc(
+            String upstreamSystemId,
+            String upstreamClientAppNamespace,
+            List<String> tenantIds);
 }

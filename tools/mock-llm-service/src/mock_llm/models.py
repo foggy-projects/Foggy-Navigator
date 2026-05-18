@@ -17,7 +17,7 @@ class ToolCall(BaseModel):
 
 class ChatMessage(BaseModel):
     role: str  # system / user / assistant / tool
-    content: Optional[str] = None
+    content: Optional[Any] = None
     name: Optional[str] = None
     tool_call_id: Optional[str] = None
     tool_calls: Optional[List[ToolCall]] = None

@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     llm_agentic_routing: bool = True  # Enable Tool Calling agent mode instead of standalone LLM router
     llm_execute_skills: bool = False  # when true, Skill frames run through LLM tool-call loop
     llm_skill_max_iterations: int = 6
+    llm_request_timeout_seconds: float = 120.0
+    llm_execution_deadline_seconds: float = 240.0
+    llm_max_retries: int = 1
+    llm_retry_backoff_seconds: float = 1.0
+    llm_provider_max_retries: int = 0
+    llm_circuit_failure_threshold: int = 3
+    llm_circuit_open_seconds: float = 60.0
+    llm_max_concurrent_requests: int = 5
 
     # Public Skill sync from GitLab (leave skill_git_repo empty to disable)
     skill_git_repo: str = ""            # GitLab repo URL, e.g. https://gitlab.example.com/foggy/foggy-skills.git

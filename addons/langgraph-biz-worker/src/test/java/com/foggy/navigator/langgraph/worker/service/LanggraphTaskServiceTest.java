@@ -158,6 +158,7 @@ class LanggraphTaskServiceTest {
         @Test
         void forwards_context_in_event_provider_config() {
             CreateLanggraphTaskForm form = makeForm();
+            form.setContextId("ctx-1");
             form.setContext(Map.of("order_id", "ORD-001"));
 
             service.createTask(USER_ID, TENANT_ID, form);
@@ -171,6 +172,45 @@ class LanggraphTaskServiceTest {
                     (Map<String, Object>) captor.getValue().getProviderConfig().get("context");
             assertNotNull(context);
             assertEquals("ORD-001", context.get("order_id"));
+            assertEquals("ctx-1", context.get("contextId"));
+            assertEquals("ctx-1", context.get("context_id"));
+            assertEquals(SESSION_ID, context.get("session_id"));
+        }
+
+        @Test
+        void forwards_recent_conversation_and_persists_current_user_prompt() {
+            when(sessionMessageRepository.findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any()))
+                    .thenReturn(List.of(
+                            sessionMessage("m3", "assistant", "Opening frame", LocalDateTime.of(2026, 4, 1, 10, 2),
+                                    "{\"type\":\"STATE_SYNC\"}"),
+                            sessionMessage("m2", "assistant", "工单状态正常", LocalDateTime.of(2026, 4, 1, 10, 1),
+                                    "{\"type\":\"TEXT_COMPLETE\"}"),
+                            sessionMessage("m1", "user", "之前查工单", LocalDateTime.of(2026, 4, 1, 10, 0),
+                                    "{\"type\":\"USER\"}")
+                    ));
+
+            service.createTask(USER_ID, TENANT_ID, makeForm());
+
+            ArgumentCaptor<WorkerTaskStartEvent> eventCaptor =
+                    ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> context =
+                    (Map<String, Object>) eventCaptor.getValue().getProviderConfig().get("context");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> recentConversation =
+                    (List<Map<String, Object>>) context.get("recentConversation");
+            assertEquals(2, recentConversation.size());
+            assertEquals("之前查工单", recentConversation.get(0).get("content"));
+            assertEquals("工单状态正常", recentConversation.get(1).get("content"));
+
+            verify(sessionManager).addMessage(eq(SESSION_ID), argThat(message ->
+                    message.getRole() != null
+                            && "USER".equals(message.getRole().name())
+                            && "分析异常订单".equals(message.getContent())
+                            && eventCaptor.getValue().getTaskId().equals(message.getTaskId())
+            ));
         }
     }
 
@@ -390,12 +430,18 @@ class LanggraphTaskServiceTest {
     }
 
     private SessionMessageEntity sessionMessage(String id, String role, String content, LocalDateTime createdAt) {
+        return sessionMessage(id, role, content, createdAt, null);
+    }
+
+    private SessionMessageEntity sessionMessage(String id, String role, String content, LocalDateTime createdAt,
+                                                String metadata) {
         SessionMessageEntity entity = new SessionMessageEntity();
         entity.setId(id);
         entity.setSessionId(SESSION_ID);
         entity.setTaskId("lgt_task");
         entity.setRole(role);
         entity.setContent(content);
+        entity.setMetadata(metadata);
         entity.setCreatedAt(createdAt);
         return entity;
     }

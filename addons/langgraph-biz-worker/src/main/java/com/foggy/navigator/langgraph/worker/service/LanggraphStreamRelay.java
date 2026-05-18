@@ -72,6 +72,10 @@ public class LanggraphStreamRelay {
             List<Map<String, Object>> attachments = event.getProviderConfigValue("attachments");
             String modelConfigId = event.getProviderConfigString("modelConfigId");
             Map<String, Object> llmConfig = resolveLlmConfig(modelConfigId, workerId);
+            Map<String, Object> visionLlmConfig = resolveVisionLlmConfig(
+                    runtimeContextText(runtimeContext, "vision_model_config_id", "visionModelConfigId"),
+                    workerId
+            );
 
             Disposable subscription = client.streamQuery(
                     event.getPrompt(),
@@ -80,6 +84,7 @@ public class LanggraphStreamRelay {
                     event.getModel(),
                     modelConfigId,
                     llmConfig,
+                    visionLlmConfig,
                     taskId,
                     sessionId,
                     event.getUserId(),
@@ -124,6 +129,26 @@ public class LanggraphStreamRelay {
             config.put("env_vars", model.getEnvVars());
         }
         return config;
+    }
+
+    private Map<String, Object> resolveVisionLlmConfig(String modelConfigId, String workerId) {
+        if (!StringUtils.hasText(modelConfigId)) {
+            return null;
+        }
+        return resolveLlmConfig(modelConfigId, workerId);
+    }
+
+    private String runtimeContextText(Map<String, Object> runtimeContext, String... keys) {
+        if (runtimeContext == null || runtimeContext.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = runtimeContext.get(key);
+            if (value instanceof String text && StringUtils.hasText(text)) {
+                return text.trim();
+            }
+        }
+        return null;
     }
 
     private String resolveProvider(LlmModelConfigDTO model) {

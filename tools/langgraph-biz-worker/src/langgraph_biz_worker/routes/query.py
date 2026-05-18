@@ -74,6 +74,7 @@ async def _event_generator(
             "model": request.model,
             "model_config_id": request.model_config_id,
             "llm_config": request.llm_config,
+            "vision_llm_config": request.vision_llm_config,
             "context": request.context,
             "runtime_context": runtime_context,
             "attachments": request.attachments,

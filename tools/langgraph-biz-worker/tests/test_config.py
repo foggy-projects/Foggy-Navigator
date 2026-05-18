@@ -29,6 +29,15 @@ class TestSettingsDefaults:
         s = Settings(_env_file=None)
         assert s.max_concurrent_tasks == 5
 
+    def test_default_llm_timeout_governance(self):
+        from langgraph_biz_worker.config import Settings
+        s = Settings(_env_file=None)
+        assert s.llm_request_timeout_seconds == 120.0
+        assert s.llm_execution_deadline_seconds == 240.0
+        assert s.llm_max_retries == 1
+        assert s.llm_provider_max_retries == 0
+        assert s.llm_circuit_failure_threshold == 3
+
 
 class TestSettingsEnvOverride:
     def test_port_from_env(self):
@@ -49,6 +58,18 @@ class TestSettingsEnvOverride:
             # Should not raise thanks to extra="ignore"
             s = Settings(_env_file=None)
             assert not hasattr(s, "unknown_field")
+
+    def test_llm_timeout_governance_from_env(self):
+        from langgraph_biz_worker.config import Settings
+        with patch.dict(os.environ, {
+            "BIZ_WORKER_LLM_REQUEST_TIMEOUT_SECONDS": "42",
+            "BIZ_WORKER_LLM_MAX_RETRIES": "2",
+            "BIZ_WORKER_LLM_CIRCUIT_FAILURE_THRESHOLD": "4",
+        }):
+            s = Settings(_env_file=None)
+            assert s.llm_request_timeout_seconds == 42
+            assert s.llm_max_retries == 2
+            assert s.llm_circuit_failure_threshold == 4
 
     def test_biz_worker_env_file_selects_env_file(self, tmp_path):
         env_file = tmp_path / "real.env"

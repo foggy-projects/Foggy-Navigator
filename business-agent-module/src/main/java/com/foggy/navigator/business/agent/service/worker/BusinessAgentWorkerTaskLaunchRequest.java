@@ -10,12 +10,14 @@ public class BusinessAgentWorkerTaskLaunchRequest {
     private String actorUserId;
     private String businessTaskId;
     private String sessionId;
+    private String contextId;
     private String clientAppId;
     private String upstreamUserId;
     private String skillId;
     private String workerPoolId;
     private String workerBackend;
     private String modelConfigId;
+    private String visionModelConfigId;
     private String markdownBody;
     private String taskScopedToken;
 }
