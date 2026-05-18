@@ -68,6 +68,40 @@ def mock_llm_server():
         thread.join(timeout=5)
 
 
+@pytest.fixture
+def worker_http_server():
+    port = _free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(
+            worker_app,
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+        )
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    async def wait_ready() -> None:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            for _ in range(50):
+                try:
+                    response = await client.get("/health")
+                    if response.status_code == 200:
+                        return
+                except httpx.HTTPError:
+                    pass
+                await asyncio.sleep(0.1)
+        raise AssertionError("worker HTTP server did not become ready")
+
+    asyncio.run(wait_ready())
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+
+
 def _parse_worker_sse(raw_text: str) -> list[QueryEvent]:
     events: list[QueryEvent] = []
     for line in raw_text.splitlines():
@@ -210,6 +244,141 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
     assert first_turn["responseSummary"]["toolCalls"] == ["invoke_business_skill"]
     assert second_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
     assert third_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
+
+
+@pytest.mark.anyio
+async def test_client_detach_then_next_turn_reuses_persistent_frame(
+    monkeypatch,
+    mock_llm_server,
+    worker_http_server,
+):
+    """A client read timeout must not cancel server work; next turn reuses the same root frame."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-detach-reattach-{run_id}"
+    session_id = f"sess-e2e-detach-reattach-{run_id}"
+    context_id = f"ctx-e2e-detach-reattach-{run_id}"
+    first_task_id = f"task_e2e_detach_first_{run_id}"
+    second_task_id = f"task_e2e_detach_second_{run_id}"
+    first_summary = "First turn completed after client detach."
+    second_summary = "Second turn reused the persistent root frame."
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-client-detach-reattach",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "delay_ms": 650,
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": first_summary,
+                                        "structured_output": {
+                                            "server_completed_after_detach": True,
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": second_summary,
+                                        "structured_output": {
+                                            "next_turn_reused_context": True,
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+    common_context = {"contextId": context_id}
+
+    async with httpx.AsyncClient(
+        base_url=worker_http_server,
+        timeout=httpx.Timeout(connect=2.0, read=0.2, write=2.0, pool=2.0),
+    ) as worker_client:
+        with pytest.raises(httpx.TimeoutException):
+            await worker_client.post(
+                "/api/v1/query",
+                json={
+                    "prompt": f"simulate client detach while server continues next:{trace_id}:001",
+                    "taskId": first_task_id,
+                    "session_id": session_id,
+                    "model": "navigator-e2e-scripted",
+                    "llm_config": llm_config,
+                    "context": common_context,
+                },
+            )
+
+    frame = None
+    for _ in range(40):
+        frames = root_graph_module.get_runtime().get_frames_by_conversation(context_id)
+        frame = next((item for item in frames if item.skill_id == "system.root"), None)
+        if frame and frame.result_summary == first_summary:
+            break
+        await asyncio.sleep(0.1)
+
+    assert frame is not None
+    assert frame.result_summary == first_summary
+    assert frame.output["server_completed_after_detach"] is True
+    first_frame_id = frame.frame_id
+
+    async with httpx.AsyncClient(base_url=worker_http_server, timeout=5.0) as worker_client:
+        response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"continue after detach next:{trace_id}:002",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": common_context,
+            },
+        )
+
+    assert response.status_code == 200
+    events = _parse_worker_sse(response.text)
+    frame_event = next(event for event in events if event.type == "skill_frame_open")
+    assert frame_event.skill_frame_id == first_frame_id
+    assert frame_event.content == "Reusing frame for skill: system.root"
+    result = next(event for event in events if event.type == "result")
+    assert result.content == second_summary
+    assert result.structured_output["next_turn_reused_context"] is True
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+    ]
+    assert records[0]["responseSummary"]["responseDelayMs"] == 650
 
 
 @pytest.mark.anyio
