@@ -3,7 +3,7 @@ type: optimization
 version: 1.3.0-SNAPSHOT
 ticket: OPT-032
 severity: medium
-status: open
+status: in_progress
 owner: biz-worker-runtime + navigator-business-agent + upstream-integration
 source: BUG-028 follow-up
 ---
@@ -26,15 +26,23 @@ Related item:
 
 - `REQ-030-biz-worker-on-demand-attachment-analysis-and-vision-model-config.md` covers explicit on-demand image analysis through `analyze_attachment`.
 
+## Terminology
+
+- Canonical attachments: the top-level OpenAPI `attachments` field sent by an upstream caller.
+- Compatibility metadata attachments: legacy `metadata.attachments` values accepted at the OpenAPI boundary for older callers.
+- Direct handoff: attachment refs are forwarded to the business skill/function without image/content analysis.
+- Explicit preprocessing/analysis: attachment content is inspected only when the user request, skill policy, or required business fields need derived content.
+- Per-hop evidence: sanitized propagation evidence such as counts, ids, names, media type, provider/ref type, and redacted URL path or digest.
+
 ## Problem Statement
 
 Attachment handling now works for the direct ticket path, but the platform still needs clearer governance for cases where attachments should be observed, merged, or preprocessed before a downstream business skill runs.
 
-Open questions:
+Governance questions:
 
 1. When should root route to an attachment preprocessing skill before a domain skill?
 2. How should per-hop attachment visibility be observed without leaking signed URLs or secrets?
-3. Should legacy or upstream-specific `metadata.attachments` be merged into top-level `attachments`, or should callers be required to send only the normalized top-level field?
+3. How should compatibility `metadata.attachments` be normalized with canonical top-level `attachments`?
 4. How should derived attachment analysis results be linked back to the original attachment ref in later business function calls?
 
 ## Target Outcome
@@ -42,7 +50,30 @@ Open questions:
 - Direct attachment handoff remains the default for "create/submit with attachment" workflows.
 - Explicit preprocessing is used only when user intent, skill policy, or required business fields need attachment content analysis.
 - TMS BFF, Navigator OpenAPI, Java relay, Python Worker root, child skill, and business function dispatch each have a safe way to observe attachment presence and counts.
-- Any merge rule for `metadata.attachments` is documented, tested, and does not create duplicate or conflicting refs.
+- Compatibility `metadata.attachments` is accepted at the OpenAPI boundary, normalized into one canonical attachment list for Worker dispatch, and does not create duplicate or conflicting refs.
+
+## Phased Plan
+
+Phase 1: policy boundary.
+
+- Direct handoff is the default for "create/submit/update with attachment" workflows.
+- Automatic image analysis is not introduced.
+- Explicit preprocessing uses the REQ-030 `analyze_attachment` capability only when the user asks for content analysis or a skill requires derived fields from the attachment content.
+
+Phase 2: OpenAPI compatibility contract.
+
+- Top-level OpenAPI `attachments` is canonical.
+- Legacy `metadata.attachments` is accepted for compatibility.
+- At dispatch time, Navigator emits a single normalized attachment list in message metadata.
+- Duplicate refs are deduped by stable attachment id/ref, URL/href, then name + media type.
+- When canonical and compatibility attachments conflict, top-level `attachments` wins.
+- Unsupported compatibility shapes are ignored instead of being forwarded as raw conflicting metadata.
+
+Phase 3: safe evidence.
+
+- Add per-hop evidence fields for attachment propagation without storing raw signed URLs, tokens, or image bytes.
+- Prefer URL digest or redacted path over full URL.
+- Keep evidence attached to test records or structured runtime diagnostics, not normal task prompts.
 
 ## Scope
 
@@ -50,7 +81,7 @@ In scope:
 
 - Define routing rules for direct attachment handoff vs `tms-attachment-agent` / `analyze_attachment` preprocessing.
 - Add sanitized per-hop evidence points: attachment count, ids, names, provider/ref type, and redacted URL path or digest.
-- Decide and implement the `metadata.attachments` compatibility rule if still needed by upstream callers.
+- Keep the `metadata.attachments` compatibility rule explicit and covered by regression tests.
 - Ensure derived analysis output keeps a stable link to the original attachment id/ref.
 - Add targeted tests for direct handoff, explicit preprocessing, and metadata merge behavior.
 
@@ -73,15 +104,29 @@ Out of scope:
 
 Development progress:
 
-- [ ] Decide whether `metadata.attachments` compatibility is required for current upstream callers.
+- [x] Reuse REQ-030 as the explicit on-demand image analysis policy source.
+- [x] Decide `metadata.attachments` compatibility rule: supported only as legacy input, normalized before Worker dispatch.
+- [x] Implement OpenAPI attachment normalization and dedupe with top-level `attachments` as canonical.
 - [ ] Define per-hop sanitized attachment evidence fields.
-- [ ] Implement merge/preprocessing routing only after policy is confirmed.
+- [ ] Extend explicit preprocessing evidence for analysis-result-to-original-ref linkage.
 
 Testing progress:
 
-- [ ] Add unit tests for merge/dedupe rules if `metadata.attachments` support is retained.
+- [x] Add unit tests for OpenAPI compatibility merge/dedupe rules.
 - [ ] Add scripted Worker E2E for explicit preprocessing before ticket creation.
 - [ ] Keep existing BUG-028 real LLM ticket E2E as the direct-handoff regression.
+
+Validation:
+
+- 2026-05-18: `mvn -pl .\addons\claude-worker-agent -am "-Dtest=OpenApiAttachmentNormalizerTest,OpenApiControllerMessageMappingTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
+- Result: passed, 16 tests run, 0 failures, 0 errors.
+
+Implementation references:
+
+- `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiAttachmentNormalizer.java`
+- `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java`
+- `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiAttachmentNormalizerTest.java`
+- `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiControllerMessageMappingTest.java`
 
 Experience progress:
 

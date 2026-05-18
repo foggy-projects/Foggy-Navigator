@@ -40,7 +40,6 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -128,23 +127,37 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
-    void askAgent_topLevelAttachmentsOverrideMetadataAttachments() {
+    void askAgent_topLevelAttachmentsOverrideMetadataAttachmentsAndDedupes() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
         A2aAgent agent = mock(A2aAgent.class);
         OpenApiController controller = newController(agentResolver, credentialResolver);
 
         Map<String, Object> metadataAttachment = new LinkedHashMap<>();
+        metadataAttachment.put("id", "att-1");
         metadataAttachment.put("name", "old.png");
         metadataAttachment.put("url", "https://tms.example.com/old.png");
+        Map<String, Object> metadataOnlyAttachment = new LinkedHashMap<>();
+        metadataOnlyAttachment.put("id", "att-2");
+        metadataOnlyAttachment.put("name", "metadata-only.png");
+        metadataOnlyAttachment.put("url", "https://tms.example.com/metadata-only.png");
         Map<String, Object> topLevelAttachment = new LinkedHashMap<>();
+        topLevelAttachment.put("id", "att-1");
         topLevelAttachment.put("name", "pod-photo.png");
         topLevelAttachment.put("url", "https://tms.example.com/pod-photo.png");
-        List<Map<String, Object>> topLevelAttachments = List.of(topLevelAttachment);
+        Map<String, Object> topLevelOnlyAttachment = new LinkedHashMap<>();
+        topLevelOnlyAttachment.put("id", "att-3");
+        topLevelOnlyAttachment.put("name", "top-level-only.png");
+        topLevelOnlyAttachment.put("url", "https://tms.example.com/top-level-only.png");
+        List<Map<String, Object>> topLevelAttachments = List.of(topLevelAttachment, topLevelOnlyAttachment);
 
         OpenApiQueryForm form = new OpenApiQueryForm();
         form.setMessage("结合附件分析表单");
-        form.setMetadata(Map.of("attachments", List.of(metadataAttachment), "modelConfigId", "cfg-1"));
+        form.setMetadata(Map.of(
+                "attachments",
+                List.of(metadataAttachment, metadataOnlyAttachment),
+                "modelConfigId",
+                "cfg-1"));
         form.setAttachments(topLevelAttachments);
 
         when(credentialResolver.resolveAccessTokenForSkill(
@@ -161,7 +174,10 @@ class OpenApiControllerMessageMappingTest {
 
         var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
         verify(agent).sendTask(captor.capture());
-        assertSame(topLevelAttachments, captor.getValue().getMetadata().get("attachments"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> attachments =
+                (List<Map<String, Object>>) captor.getValue().getMetadata().get("attachments");
+        assertEquals(List.of(topLevelAttachment, topLevelOnlyAttachment, metadataOnlyAttachment), attachments);
     }
 
     @Test
@@ -194,7 +210,7 @@ class OpenApiControllerMessageMappingTest {
 
         var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
         verify(agent).sendTask(captor.capture());
-        assertSame(metadataAttachments, captor.getValue().getMetadata().get("attachments"));
+        assertEquals(metadataAttachments, captor.getValue().getMetadata().get("attachments"));
     }
 
     @Test

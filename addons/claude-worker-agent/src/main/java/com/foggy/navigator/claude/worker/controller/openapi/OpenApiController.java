@@ -511,8 +511,12 @@ public class OpenApiController {
         }
         metadata.remove("runtimeContext");
         metadata.remove("runtime_context");
-        if (form.getAttachments() != null && !form.getAttachments().isEmpty()) {
-            metadata.put("attachments", form.getAttachments());
+        Object metadataAttachments = metadata.remove("attachments");
+        List<Map<String, Object>> normalizedAttachments = OpenApiAttachmentNormalizer.normalize(
+                metadataAttachments,
+                form.getAttachments());
+        if (!normalizedAttachments.isEmpty()) {
+            metadata.put("attachments", normalizedAttachments);
         }
         if (form.getMaxTurns() != null) {
             metadata.put("maxTurns", form.getMaxTurns());
