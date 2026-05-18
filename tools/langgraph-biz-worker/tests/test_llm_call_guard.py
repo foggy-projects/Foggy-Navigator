@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -151,3 +152,69 @@ def test_retry_progress_event_is_emitted_before_retry():
     assert event.max_attempts == 2
     assert event.task_id == "task-retry"
     assert event.skill_frame_id == "frm-retry"
+
+
+def test_provider_hang_soak_releases_slots_and_worker_threads():
+    reset_llm_call_guard_state_for_tests()
+    baseline_threads = _llm_call_thread_count()
+    hanging_model = SlowModel(sleep_seconds=0.08)
+
+    for round_index in range(3):
+        context = {
+            "llm_request_timeout_seconds": 0.01,
+            "llm_execution_deadline_seconds": 1,
+            "llm_max_retries": 0,
+            "llm_circuit_failure_threshold": 99,
+            "llm_max_concurrent_requests": 2,
+        }
+
+        for call_index in range(2):
+            with pytest.raises(TimeoutError):
+                invoke_chat_model(
+                    hanging_model,
+                    [],
+                    runtime_context=dict(context),
+                    operation="test.invoke",
+                    task_id=f"task-hang-soak-{round_index}-{call_index}",
+                )
+
+        with pytest.raises(LlmConcurrencyLimitError):
+            invoke_chat_model(
+                hanging_model,
+                [],
+                runtime_context=dict(context),
+                operation="test.invoke",
+                task_id=f"task-hang-soak-{round_index}-blocked",
+            )
+
+        assert _eventually(lambda: _llm_call_thread_count() <= baseline_threads)
+
+        assert invoke_chat_model(
+            SlowModel(sleep_seconds=0.005),
+            [],
+            runtime_context={
+                "llm_request_timeout_seconds": 0.2,
+                "llm_execution_deadline_seconds": 1,
+                "llm_max_retries": 0,
+                "llm_circuit_failure_threshold": 99,
+                "llm_max_concurrent_requests": 2,
+            },
+            operation="test.invoke",
+            task_id=f"task-hang-soak-{round_index}-recovered",
+        ) == "ok"
+
+    assert hanging_model.calls == 6
+    assert _llm_call_thread_count() <= baseline_threads
+
+
+def _llm_call_thread_count() -> int:
+    return sum(1 for thread in threading.enumerate() if thread.name.startswith("llm-call"))
+
+
+def _eventually(predicate, *, timeout_seconds: float = 1.0, interval_seconds: float = 0.01) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval_seconds)
+    return predicate()
