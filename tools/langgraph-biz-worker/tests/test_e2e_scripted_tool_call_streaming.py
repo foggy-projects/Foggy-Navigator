@@ -949,6 +949,134 @@ async def test_scripted_root_skill_reuses_frame_across_tasks(monkeypatch, mock_l
 
 
 @pytest.mark.anyio
+async def test_scripted_root_skill_second_turn_injects_recent_conversation(
+    monkeypatch,
+    mock_llm_server,
+):
+    """Second turn should expose Navigator-provided recent conversation to the root LLM."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-recent-conversation-{run_id}"
+    session_id = f"sess-e2e-root-recent-{run_id}"
+    context_id = f"ctx-e2e-root-recent-{run_id}"
+    first_task_id = f"task_e2e_root_recent_001_{run_id}"
+    second_task_id = f"task_e2e_root_recent_002_{run_id}"
+    previous_user_message = "我刚才提到工单 TMS-1001"
+    previous_assistant_message = "工单 TMS-1001 当前需要继续处理"
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-recent-conversation",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": previous_assistant_message,
+                                        "structured_output": {"turn": 1},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Second turn saw prior conversation.",
+                                        "structured_output": {"turn": 2},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"{previous_user_message} next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+        second_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"我上一个消息是什么 next:{trace_id}:002",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {
+                    "contextId": context_id,
+                    "recentConversation": [
+                        {"role": "user", "content": previous_user_message},
+                        {"role": "assistant", "content": previous_assistant_message},
+                    ],
+                },
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    second_events = _parse_worker_sse(second_response.text)
+    first_open = next(event for event in first_events if event.type == "skill_frame_open")
+    second_open = next(event for event in second_events if event.type == "skill_frame_open")
+    assert first_open.skill_frame_id == second_open.skill_frame_id
+    assert second_open.content == "Reusing frame for skill: system.root"
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+    ]
+    second_user_messages = [
+        message["content"]
+        for message in records[1]["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("Recent conversation before this turn:" in content for content in second_user_messages)
+    assert any(f"user: {previous_user_message}" in content for content in second_user_messages)
+    assert any(f"assistant: {previous_assistant_message}" in content for content in second_user_messages)
+    assert any("User request: 我上一个消息是什么" in content for content in second_user_messages)
+
+
+@pytest.mark.anyio
 async def test_scripted_root_skill_active_plan_survives_across_tasks(monkeypatch, mock_llm_server):
     """Root active_plan should be persisted and injected into the next mock LLM request."""
     run_id = uuid.uuid4().hex[:8]
