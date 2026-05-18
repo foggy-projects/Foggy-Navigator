@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, defineComponent, h, nextTick, type App } from 'vue'
 import ElementPlus from 'element-plus'
 import NavigatorChat from '../components/NavigatorChat.vue'
@@ -11,6 +11,7 @@ let app: App<Element> | undefined
 afterEach(() => {
   app?.unmount()
   app = undefined
+  vi.useRealTimers()
 })
 
 function okResponse(data: unknown): Response {
@@ -204,6 +205,90 @@ describe('useNavigatorChat business action UX', () => {
       role: 'user',
       content: '请识别这张回单',
       attachments,
+    })
+  })
+
+  it('treats UI wait timeout as detach and keeps context for the next send', async () => {
+    vi.useFakeTimers()
+    const askBodies: unknown[] = []
+    let cancelCalls = 0
+    let chat: UseNavigatorChat | undefined
+
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          pollInterval: 10,
+          timeout: 25,
+          fetch: async (url, init) => {
+            const textUrl = String(url)
+            if (textUrl.includes('/cancel')) {
+              cancelCalls += 1
+              return okResponse({})
+            }
+            if (textUrl.includes('/messages')) {
+              return okResponse({
+                taskId: 'task-slow',
+                contextId: 'ctx-slow',
+                status: 'RUNNING',
+                terminal: false,
+                messages: [],
+                nextCursor: null,
+                hasMore: false,
+              })
+            }
+            askBodies.push(init.body ? JSON.parse(String(init.body)) : undefined)
+            if (askBodies.length === 1) {
+              return okResponse({
+                taskId: 'task-slow',
+                agentId: 'agent-1',
+                status: 'RUNNING',
+                contextId: 'ctx-slow',
+                terminal: false,
+                messages: [],
+              })
+            }
+            return okResponse({
+              taskId: 'task-next',
+              agentId: 'agent-1',
+              status: 'COMPLETED',
+              contextId: 'ctx-slow',
+              terminal: true,
+              terminalStatus: 'COMPLETED',
+              messages: [],
+            })
+          },
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('慢任务')
+    await vi.advanceTimersByTimeAsync(30)
+    await nextTick()
+
+    expect(cancelCalls).toBe(0)
+    expect(chat.isLoading.value).toBe(false)
+    expect(chat.error.value).toBeNull()
+    expect(chat.contextId.value).toBe('ctx-slow')
+    expect(chat.progressText.value).toBe('任务仍在后台处理')
+    expect(chat.messages.value.some((message) =>
+      message.role === 'system'
+        && message.processKind === 'state'
+        && message.content.includes('后台处理')
+    )).toBe(true)
+
+    await chat.send('继续')
+    await nextTick()
+
+    expect(cancelCalls).toBe(0)
+    expect(askBodies[1]).toMatchObject({
+      question: '继续',
+      contextId: 'ctx-slow',
     })
   })
 

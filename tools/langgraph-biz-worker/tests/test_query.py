@@ -10,6 +10,7 @@ import pytest
 from langgraph_biz_worker.models import QueryEvent, QueryRequest
 from langgraph_biz_worker.graphs.root_graph import _build_attachment_context_prompt
 from langgraph_biz_worker.routes.query import _event_generator, _resolve_session_id
+from langgraph_biz_worker.routes.health import active_tasks
 
 
 @pytest.mark.asyncio
@@ -163,6 +164,64 @@ async def test_query_generator_streams_tool_progress_before_graph_finishes():
     all_events = [first_event, *remaining]
     assert [event["type"] for event in all_events].count("tool_use") == 1
     assert any(event["type"] == "result" for event in all_events)
+
+
+@pytest.mark.asyncio
+async def test_query_generator_fsscript_slow_task_stays_active_after_initial_progress():
+    release_fsscript = asyncio.Event()
+
+    class SlowFsscriptBridge:
+        async def stream_events(self, **kwargs):
+            yield QueryEvent(
+                type="system",
+                task_id=kwargs["task_id"],
+                session_id=kwargs["session_id"],
+                content="FSScript started",
+            )
+            await release_fsscript.wait()
+            yield QueryEvent(
+                type="result",
+                task_id=kwargs["task_id"],
+                session_id=kwargs["session_id"],
+                content="FSScript completed",
+            )
+
+    with patch(
+        "langgraph_biz_worker.routes.query.get_fsscript_bridge",
+        return_value=SlowFsscriptBridge(),
+    ):
+        task_id = "slow-fsscript-task-001"
+        generator = _event_generator(
+            task_id,
+            QueryRequest(
+                prompt="run slow fsscript",
+                session_id="session-slow-fsscript",
+                context={"fsscript": "return slow();"},
+            ),
+        )
+        try:
+            first = await asyncio.wait_for(generator.__anext__(), timeout=1)
+            first_event = json.loads(first["data"])
+            assert first_event["type"] == "system"
+            assert task_id in active_tasks
+
+            pending_result = asyncio.create_task(generator.__anext__())
+            await asyncio.sleep(0.05)
+            assert not pending_result.done()
+            assert task_id in active_tasks
+
+            release_fsscript.set()
+            second = await asyncio.wait_for(pending_result, timeout=1)
+            second_event = json.loads(second["data"])
+            assert second_event["type"] == "result"
+
+            with pytest.raises(StopAsyncIteration):
+                await asyncio.wait_for(generator.__anext__(), timeout=1)
+            assert task_id not in active_tasks
+        finally:
+            release_fsscript.set()
+            await generator.aclose()
+            active_tasks.discard(task_id)
 
 
 @pytest.mark.asyncio
