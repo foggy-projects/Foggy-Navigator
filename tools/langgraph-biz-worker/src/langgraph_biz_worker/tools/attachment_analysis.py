@@ -10,6 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from ..runtime.attachment_context import build_attachment_evidence
 from ..runtime.llm_call_guard import invoke_chat_model
 from ..runtime.llm_skill_router import create_chat_model_from_config
 
@@ -88,6 +89,7 @@ def analyze_attachment(args: dict[str, Any], runtime_context: dict[str, Any] | N
     return {
         "ok": True,
         "attachment_id": attachment_id,
+        "attachment_evidence": build_attachment_evidence([attachment]),
         "model_source": model_source,
         "summary": summary,
         "extracted_text": parsed.get("extracted_text") if parsed else None,

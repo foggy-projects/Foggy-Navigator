@@ -54,6 +54,9 @@ def test_analyze_attachment_accepts_image_url_without_kind_or_mime(monkeypatch):
     assert result["ok"] is True
     assert result["summary"] == "image accepted"
     assert result["model_source"] == "vision"
+    assert result["attachment_evidence"]["attachment_ids"] == ["att-url"]
+    assert result["attachment_evidence"]["attachment_url_digests"][0].startswith("sha256:")
+    assert "token=secret" not in str(result["attachment_evidence"])
     image_part = fake_model.seen_messages[0][1].content[1]
     assert image_part["image_url"]["url"] == "https://example.test/files/photo.JPG?token=secret"
 

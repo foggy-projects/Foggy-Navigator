@@ -107,8 +107,8 @@ Development progress:
 - [x] Reuse REQ-030 as the explicit on-demand image analysis policy source.
 - [x] Decide `metadata.attachments` compatibility rule: supported only as legacy input, normalized before Worker dispatch.
 - [x] Implement OpenAPI attachment normalization and dedupe with top-level `attachments` as canonical.
-- [ ] Define per-hop sanitized attachment evidence fields.
-- [ ] Extend explicit preprocessing evidence for analysis-result-to-original-ref linkage.
+- [x] Define Worker-side sanitized attachment evidence fields for count, ids, names, media types, ref types, and URL digests.
+- [x] Extend explicit preprocessing output with analysis-result-to-original-ref evidence.
 
 Testing progress:
 
@@ -120,6 +120,8 @@ Validation:
 
 - 2026-05-18: `mvn -pl .\addons\claude-worker-agent -am "-Dtest=OpenApiAttachmentNormalizerTest,OpenApiControllerMessageMappingTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 - Result: passed, 16 tests run, 0 failures, 0 errors.
+- 2026-05-18: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_attachment_context.py tests/test_attachment_analysis.py`
+- Result: passed, 6 tests run, 0 failures, 0 errors.
 
 Implementation references:
 
@@ -127,6 +129,8 @@ Implementation references:
 - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java`
 - `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiAttachmentNormalizerTest.java`
 - `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiControllerMessageMappingTest.java`
+- `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/attachment_context.py`
+- `tools/langgraph-biz-worker/src/langgraph_biz_worker/tools/attachment_analysis.py`
 
 Experience progress:
 
