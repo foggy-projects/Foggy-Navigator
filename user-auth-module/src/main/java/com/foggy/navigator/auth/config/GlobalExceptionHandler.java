@@ -9,6 +9,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import java.util.Locale;
+
 /**
  * 全局异常处理器
  * 将业务异常和安全异常映射为正确的 HTTP 状态码
@@ -35,10 +37,30 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(SecurityException.class)
     public ResponseEntity<RX<?>> handleSecurityException(SecurityException ex) {
-        log.warn("Security exception: {}", ex.getMessage());
+        HttpStatus status = isAuthenticationFailure(ex.getMessage())
+                ? HttpStatus.UNAUTHORIZED
+                : HttpStatus.FORBIDDEN;
+        log.warn("Security exception: status={}, message={}", status.value(), ex.getMessage());
 
         RX<?> rx = RX.error(ex.getMessage());
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(rx);
+        return ResponseEntity.status(status).body(rx);
+    }
+
+    private boolean isAuthenticationFailure(String message) {
+        if (message == null || message.isBlank()) {
+            return true;
+        }
+
+        String lowerMessage = message.toLowerCase(Locale.ROOT);
+        return message.contains("未登录")
+                || lowerMessage.contains("not authenticated")
+                || lowerMessage.contains("not logged in")
+                || lowerMessage.contains("credential is required")
+                || lowerMessage.contains("token is required")
+                || (lowerMessage.contains("invalid") && lowerMessage.contains("credential"))
+                || (lowerMessage.contains("invalid") && lowerMessage.contains("token"))
+                || lowerMessage.contains("credential expired")
+                || lowerMessage.contains("credential is not active");
     }
 
     /**
