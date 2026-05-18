@@ -119,6 +119,7 @@ public class NavigatorClient {
         private String controlApiKey;
         private String tenantId;
         private Duration timeout;
+        private boolean noDefaultAuth;
 
         private Builder() {}
 
@@ -167,6 +168,18 @@ public class NavigatorClient {
             return this;
         }
 
+        /**
+         * Build a client without a default API key or bearer token.
+         * <p>
+         * Use this for ClientApp runtime flows where every request supplies
+         * request-scoped headers such as {@code X-Client-App-Key} and
+         * {@code X-Client-App-Access-Token}.
+         */
+        public Builder noDefaultAuth() {
+            this.noDefaultAuth = true;
+            return this;
+        }
+
         public Builder tenantId(String tenantId) {
             this.tenantId = tenantId;
             return this;
@@ -187,8 +200,8 @@ public class NavigatorClient {
             boolean hasApiKey = apiKey != null && !apiKey.isBlank();
             boolean hasBearerToken = bearerToken != null && !bearerToken.isBlank();
             boolean hasControlApiKey = controlApiKey != null && !controlApiKey.isBlank();
-            if (!hasApiKey && !hasBearerToken && !hasControlApiKey) {
-                throw new IllegalArgumentException("apiKey, bearerToken, or controlApiKey is required");
+            if (!hasApiKey && !hasBearerToken && !hasControlApiKey && !noDefaultAuth) {
+                throw new IllegalArgumentException("apiKey, bearerToken, controlApiKey, or noDefaultAuth is required");
             }
             return new NavigatorClient(new HttpHelper(baseUrl, apiKey, bearerToken, tenantId, controlApiKey, timeout));
         }

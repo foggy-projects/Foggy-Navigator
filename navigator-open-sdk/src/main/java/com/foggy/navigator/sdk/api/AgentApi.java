@@ -98,6 +98,16 @@ public class AgentApi {
                 body, new TypeReference<>() {});
     }
 
+    public AgentTask askWithAttachments(String agentId, String question, String contextId, Integer maxTurns,
+                                        Map<String, Object> clientContext,
+                                        String modelConfigId,
+                                        List<Map<String, Object>> attachments) {
+        Map<String, Object> body = buildAskBody(question, contextId, maxTurns,
+                null, null, clientContext, modelConfigId, attachments);
+        return http.post("/api/v1/open/agents/" + agentId + "/ask",
+                body, new TypeReference<>() {});
+    }
+
     public AgentTask askWithClientAppAccessToken(
             String agentId,
             String question,
@@ -133,7 +143,23 @@ public class AgentApi {
             String clientAppKey,
             String clientAppAccessToken,
             String upstreamUserId) {
-        Map<String, Object> body = buildAskBody(question, contextId, maxTurns, null, null, clientContext, modelConfigId);
+        return askWithClientAppAccessToken(agentId, question, contextId, maxTurns,
+                clientContext, modelConfigId, null, clientAppKey, clientAppAccessToken, upstreamUserId);
+    }
+
+    public AgentTask askWithClientAppAccessToken(
+            String agentId,
+            String question,
+            String contextId,
+            Integer maxTurns,
+            Map<String, Object> clientContext,
+            String modelConfigId,
+            List<Map<String, Object>> attachments,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        Map<String, Object> body = buildAskBody(question, contextId, maxTurns,
+                null, null, clientContext, modelConfigId, attachments);
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("X-Client-App-Key", clientAppKey);
         headers.put("X-Client-App-Access-Token", clientAppAccessToken);
@@ -248,6 +274,15 @@ public class AgentApi {
                                              String systemPrompt, String firstMsg,
                                              Map<String, Object> clientContext,
                                              String modelConfigId) {
+        return buildAskBody(question, contextId, maxTurns, systemPrompt, firstMsg,
+                clientContext, modelConfigId, null);
+    }
+
+    private Map<String, Object> buildAskBody(String question, String contextId, Integer maxTurns,
+                                             String systemPrompt, String firstMsg,
+                                             Map<String, Object> clientContext,
+                                             String modelConfigId,
+                                             List<Map<String, Object>> attachments) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("message", question);    // 合同字段
         body.put("question", question);   // 兼容字段
@@ -259,6 +294,9 @@ public class AgentApi {
         if (modelConfigId != null && !modelConfigId.isBlank()) {
             body.put("modelConfigId", modelConfigId);
             body.put("metadata", Map.of("modelConfigId", modelConfigId));
+        }
+        if (attachments != null && !attachments.isEmpty()) {
+            body.put("attachments", attachments);
         }
         return body;
     }
@@ -290,11 +328,33 @@ public class AgentApi {
                 null, new TypeReference<String>() {});
     }
 
+    public void cancelTaskWithClientAppAccessToken(
+            String agentId,
+            String taskId,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        http.post("/api/v1/open/agents/" + agentId + "/tasks/" + taskId + "/cancel",
+                null,
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
+                new TypeReference<String>() {});
+    }
+
     /**
      * 列出活跃任务
      */
     public List<AgentTask> listTasks(String agentId) {
         return http.get("/api/v1/open/agents/" + agentId + "/tasks",
+                new TypeReference<>() {});
+    }
+
+    public List<AgentTask> listTasksWithClientAppAccessToken(
+            String agentId,
+            String clientAppKey,
+            String clientAppAccessToken,
+            String upstreamUserId) {
+        return http.get("/api/v1/open/agents/" + agentId + "/tasks",
+                clientAppHeaders(clientAppKey, clientAppAccessToken, upstreamUserId),
                 new TypeReference<>() {});
     }
 

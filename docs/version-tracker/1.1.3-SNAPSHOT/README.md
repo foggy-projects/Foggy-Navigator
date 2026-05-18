@@ -65,6 +65,7 @@
   - [32-e2e-scripted-tool-call-streaming-bug.md](./upstream-integration/32-e2e-scripted-tool-call-streaming-bug.md) - 缺陷复现与修复 / E2E scripted tool-call streaming 归一化问题
   - [33-upstream-client-app-admin-key-request.md](./upstream-integration/33-upstream-client-app-admin-key-request.md) - 需求记录 / 上游系统级 ClientApp 管理凭证申请、Navigator operator 审批工具与多租户 control key 生成边界
   - [34-upstream-client-app-admin-key-implementation-plan.md](./upstream-integration/34-upstream-client-app-admin-key-implementation-plan.md) - 实施计划 / 上游系统级 ClientApp 管理凭证申请的安全底座、后端状态机、CLI、隔离测试与验收阶段拆解
+  - [35-navigator-chat-observer-bff-real-mode.md](./upstream-integration/35-navigator-chat-observer-bff-real-mode.md) - 联调工具 / Navigator Chat Widget 本地观测页通过 SDK BFF 接入 Real Navigator 的启动、接口与安全边界
 
 ## Acceptance Status
 

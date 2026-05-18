@@ -46,6 +46,8 @@
         <module>monitoring-module</module>
         <!-- Open API SDK（独立模块，供第三方系统引入） -->
         <module>navigator-open-sdk</module>
+        <!-- 本地观测/上游集成 BFF（供 Chat Widget Real Navigator 模式调试） -->
+        <module>tools/navigator-chat-observer-bff</module>
         <!-- 启动器模块（最后编译，依赖其他所有模块） -->
         <module>launcher</module>
     </modules>
