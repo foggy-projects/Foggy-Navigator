@@ -118,6 +118,7 @@
 - 2026-05-18 Mock LLM 回归：`PYTHONPATH=src python -m pytest tests/test_openai_api.py tests/test_strategies.py -q`，22 passed；同时补齐 mock OpenAI ChatMessage 对多模态 content list 的接收、cursor 匹配和 token 估算。
 - 2026-05-18 Java relay 复跑：`mvn -pl addons/langgraph-biz-worker -am -Dtest=LanggraphStreamRelayTest,LanggraphWorkerClientTest,LanggraphBusinessAgentWorkerTaskLauncherTest -Dsurefire.failIfNoSpecifiedTests=false test`，15 tests passed。前端本轮未改动，未复跑前端 typecheck。
 - 2026-05-18 真实视觉模型冒烟：`qwen3.5-plus` 通过 `http://test.synthoflow.com:3061/v1` OpenAI 兼容接口支持 `image_url` 多模态协议；BizWorker `analyze_attachment` 使用公网图片 URL 调用成功，记录见 `test-records/real-llm-attachment-ticket/20260518-qwen35-vision-smoke.md`。API Key 未落档。
+- 2026-05-18 OBS 签名 URL 冒烟：本地生成异常包裹 PNG，使用 obsutil 上传到 `obs://sd-files/images/biz-worker-damaged-package-20260518.png`；签名 URL GET 验证 HTTP 200；BizWorker `analyze_attachment` 识别出 `DAMAGED BOX`、`BROKEN PACKAGE`、`damage_visible=true`。签名参数未落档。
 
 ## 非目标
 
