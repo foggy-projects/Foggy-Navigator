@@ -132,11 +132,13 @@ Automation is required because this issue spans widget、TMS BFF、OpenAPI、Jav
 - [ ] 明确 `tms-ticket-agent` 与 `tms-attachment-agent` 的职责边界：附件是由 root 先路由到附件技能，还是由工单技能消费附件上下文。
 - [x] 补齐 Worker scripted E2E 回归测试，防止 Worker 收到附件但 child skill 不可见。
 - [x] 执行真实 TMS BFF 到 Navigator/Worker/child skill 的现场 smoke，防止 BFF 后链路再次丢附件。
+- [x] 补齐 TMS BFF 到 Navigator/Worker/child skill 的 Vitest E2E 回归。
 - [ ] 补齐 browser/widget 到 TMS BFF 的 E2E，防止 UI 显示附件但 ask payload 未携带附件。
 
 ## Verification
 
 - [x] TMS BFF ask 携带顶层图片附件后，`tms-ticket-agent` child result 能看到脱敏附件元数据。
+- [x] TMS BFF 附件透传 Vitest E2E 通过。
 - [ ] TMS 本地 UI 发送图片附件后，Navigator ask body 能看到脱敏附件计数。
 - [ ] Worker task data 能看到附件数组或 attachment refs。
 - [x] Worker scripted E2E 中，`tms-ticket-agent` child prompt context 能看到脱敏附件摘要/ref。
@@ -201,6 +203,14 @@ npx vitest run tests/e2e/navigator-ticket-skill.e2e.test.ts --no-file-parallelis
 ```
 
 Result: partial. REST adapter test passed; Navigator-to-ticket creation test reached `tms-ticket-agent` and attempted `tms.ticket.createPlatformFeedback`, then failed with `Unauthorized or unconfigured upstream_ref: local-smoke-2026-05-18`.
+
+- TMS BFF attachment handoff Vitest E2E:
+
+```powershell
+npx vitest run tests/e2e/bug-028-tms-bff-attachment-handoff.e2e.test.ts --no-file-parallelism
+```
+
+Result: `1 passed` in `82.18s`. The test sends top-level `attachments` through TMS BFF, verifies `invoke_business_skill` enters `tms-ticket-agent`, verifies child-visible `att-bug028-tms-bff` / `image.png` / `tms-bff` / sanitized URL path / `traceId`, and asserts `invoke_business_function` plus sensitive patterns are absent.
 
 ## References
 
