@@ -113,7 +113,7 @@ Development progress:
 Testing progress:
 
 - [x] Add unit tests for OpenAPI compatibility merge/dedupe rules.
-- [ ] Add scripted Worker E2E for explicit preprocessing before ticket creation.
+- [x] Add scripted Worker E2E for explicit preprocessing before ticket creation.
 - [ ] Keep existing BUG-028 real LLM ticket E2E as the direct-handoff regression.
 
 Validation:
@@ -122,6 +122,8 @@ Validation:
 - Result: passed, 16 tests run, 0 failures, 0 errors.
 - 2026-05-18: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_attachment_context.py tests/test_attachment_analysis.py`
 - Result: passed, 6 tests run, 0 failures, 0 errors.
+- 2026-05-18: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -k "ticket_from_image_content"`
+- Result: passed, 1 test selected, 11 deselected, 0 failures, 0 errors.
 
 Implementation references:
 

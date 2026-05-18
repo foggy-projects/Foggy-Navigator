@@ -796,6 +796,15 @@ async def test_scripted_ticket_from_image_content_analyzes_then_uses_result(monk
     events = _parse_worker_sse(response.text)
     assert any(event.type == "tool_use" and event.tool_name == "analyze_attachment" for event in events)
     assert any(event.type == "tool_use" and event.tool_name == "invoke_business_function" for event in events)
+    analysis_result_event = next(
+        event for event in events if event.type == "tool_result" and event.tool_name == "analyze_attachment"
+    )
+    analysis_result = json.loads(analysis_result_event.content or "{}")
+    assert analysis_result["attachment_id"] == "att-vision"
+    assert analysis_result["attachment_evidence"]["attachment_ids"] == ["att-vision"]
+    assert analysis_result["attachment_evidence"]["attachment_url_digests"][0].startswith("sha256:")
+    assert "token=secret" not in str(analysis_result["attachment_evidence"])
+    assert "https://tms.example.com/files/cargo-damage.JPG" not in str(analysis_result["attachment_evidence"])
     assert captured_inputs == [{
         "title": "货损异常工单",
         "exception_type": "cargo_damage",
