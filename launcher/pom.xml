@@ -98,6 +98,12 @@
             <artifactId>monitoring-module</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <!-- Runtime health endpoint for Docker Compose and release checks -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
