@@ -171,8 +171,7 @@ public class NavigatorObserverService {
         int resolvedLimit = normalizeLimit(limit, 20);
         ObserverRuntimeCredential runtime = activeClientAppRuntime();
         if (runtime != null) {
-            return runtimeClient(runtime).agents().listSessionsWithClientAppAccessToken(
-                    agentId,
+            return runtimeClient(runtime).agents().listBusinessAgentSessionsWithClientAppAccessToken(
                     resolvedLimit,
                     cursor,
                     runtime.clientAppKey(),
@@ -187,8 +186,7 @@ public class NavigatorObserverService {
         int resolvedLimit = normalizeLimit(limit, 50);
         ObserverRuntimeCredential runtime = activeClientAppRuntime();
         if (runtime != null) {
-            return runtimeClient(runtime).agents().getSessionMessagesWithClientAppAccessToken(
-                    agentId,
+            return runtimeClient(runtime).agents().getBusinessAgentSessionMessagesWithClientAppAccessToken(
                     contextId,
                     resolvedLimit,
                     cursor,
