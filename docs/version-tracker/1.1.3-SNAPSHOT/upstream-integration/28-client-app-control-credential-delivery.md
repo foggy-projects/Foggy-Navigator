@@ -8,11 +8,11 @@
 - date: 2026-05-13
 - source_type: upstream-delivery-hardening
 - intended_for: Navigator maintainer | upstream backend developer | upstream LLM coding agent
-- purpose: 用 ClientApp 绑定的控制面凭证替代上游项目持有租户级 `NAVI_ADMIN_API_KEY`
+- purpose: 用 ClientApp 绑定的控制面凭证替代上游项目持有租户级管理员凭证或普通 `X-API-Key` fallback
 
 ## 结论
 
-上游项目正式交付不再使用租户级 admin key。Navigator 侧给每个 ClientApp 发放一个项目本地控制面凭证：
+上游项目正式交付不再使用租户级 admin key 或普通 `X-API-Key` fallback。Navigator 侧给每个 ClientApp 发放一个项目本地控制面凭证：
 
 ```properties
 NAVI_CONTROL_API_KEY=<client-app-scoped-control-key>
@@ -132,8 +132,9 @@ CLI 控制面命令优先使用 `NAVI_CONTROL_API_KEY`，仍保留以下内部 f
 
 ```properties
 NAVI_ADMIN_TOKEN=<internal-only>
-NAVI_ADMIN_API_KEY=<internal-only>
 ```
+
+`NAVI_ADMIN_API_KEY` 是上游系统级 ClientApp 管理凭证，仅用于多租户上游 bootstrap 阶段创建/复用 ClientApp 和签发该 ClientApp 的控制面凭证；不再作为控制面命令的普通 `X-API-Key` fallback。
 
 涉及命令：
 
@@ -168,6 +169,7 @@ NAVI_ADMIN_API_KEY=<internal-only>
 | ClientApp scope enforcement | completed | cross-clientApp reject |
 | Function import/grant control key support | completed | SDK 使用 `controlApiKey(...)` |
 | SDK/CLI header support | completed | `NAVI_CONTROL_API_KEY` |
+| Multi-tenant bootstrap handoff | completed | `NAVI_ADMIN_API_KEY` 通过 `X-Navi-Admin-Key` 签发 tenant profile 中的 `NAVI_CONTROL_API_KEY` |
 | CLI `upstream agent sync` | completed | manifest driven, uses control key |
 | CLI `upstream model` | completed | `grants` / `grant` / `set-default` / `create` / `update` / `rotate-key` |
 | Tests | completed | service boundary + module tests |

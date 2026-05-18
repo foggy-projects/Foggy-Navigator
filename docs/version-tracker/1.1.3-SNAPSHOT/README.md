@@ -66,6 +66,10 @@
   - [33-upstream-client-app-admin-key-request.md](./upstream-integration/33-upstream-client-app-admin-key-request.md) - 需求记录 / 上游系统级 ClientApp 管理凭证申请、Navigator operator 审批工具与多租户 control key 生成边界
   - [34-upstream-client-app-admin-key-implementation-plan.md](./upstream-integration/34-upstream-client-app-admin-key-implementation-plan.md) - 实施计划 / 上游系统级 ClientApp 管理凭证申请的安全底座、后端状态机、CLI、隔离测试与验收阶段拆解
   - [35-navigator-chat-observer-bff-real-mode.md](./upstream-integration/35-navigator-chat-observer-bff-real-mode.md) - 联调工具 / Navigator Chat Widget 本地观测页通过 SDK BFF 接入 Real Navigator 的启动、接口与安全边界
+- [coverage/upstream-client-app-admin-key-coverage-audit.md](./coverage/upstream-client-app-admin-key-coverage-audit.md) - 覆盖审计 / 上游系统级 ClientApp 管理凭证申请的测试证据映射、缺口和验收建议
+- [coverage/upstream-client-app-admin-key-live-http-cli-smoke.md](./coverage/upstream-client-app-admin-key-live-http-cli-smoke.md) - Live smoke / 重启 launcher 后通过真实 HTTP/CLI 验证 request、approve、claim、ensure ClientApp 与 issue control key 全链路
+- [coverage/upstream-client-app-admin-key-cli-release-smoke.md](./coverage/upstream-client-app-admin-key-cli-release-smoke.md) - Release smoke / 从 OBS 安装 Navigator Upstream CLI 1.0.4 并验证 admin-key、client-app 与多租户 control key 全链路
+- [acceptance/upstream-client-app-admin-key-acceptance.md](./acceptance/upstream-client-app-admin-key-acceptance.md) - 功能验收 / issue #121 上游系统级 ClientApp 管理凭证申请与多租户 control key 生成链路正式签收
 
 ## Acceptance Status
 

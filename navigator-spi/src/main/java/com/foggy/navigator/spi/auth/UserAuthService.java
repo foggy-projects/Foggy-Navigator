@@ -64,6 +64,13 @@ public interface UserAuthService {
     ApiKeyDTO createApiKey(String userId, ApiKeyCreateForm form);
 
     /**
+     * 根据 API Key ID 查询 API Key 元信息。
+     *
+     * 不返回明文 API Key，仅用于管理端权限判断和列表展示。
+     */
+    Optional<ApiKeyDTO> getApiKey(String apiKeyId);
+
+    /**
      * 撤销API Key
      */
     void revokeApiKey(String apiKeyId);

@@ -80,17 +80,18 @@ single upstream system -> Navigator ClientApp -> NAVI_CONTROL_API_KEY
 
 ```bash
 navi upstream admin-key request \
-  --upstream-system tms-x3 \
-  --multi-tenant true \
-  --tenant <navigator-tenant-code-or-id> \
-  --reason "bootstrap TMS tenant ClientApps"
+  --upstream-system-id tms-x3 \
+  --requested-tenant-id <navigator-tenant-code-or-id> \
+  --multi-tenant \
+  --reason "bootstrap TMS tenant ClientApps" \
+  --write-profile
 ```
 
-响应只返回非密钥信息：
+响应一次性返回申请引用和 claim token；CLI 默认将 claim token 写入 gitignored profile，不打印完整明文：
 
 ```text
 requestCode
-claimToken 或 claimChallenge
+claimToken
 status=PENDING
 expiresAt
 nextStep
@@ -105,16 +106,21 @@ nextStep
 推荐工具：
 
 ```bash
-navi admin upstream-bootstrap requests list
-navi admin upstream-bootstrap requests show --request-code <requestCode>
-navi admin upstream-bootstrap requests approve \
+navi upstream admin-key list --status PENDING
+navi upstream admin-key status --request-code <requestCode>
+navi upstream admin-key approve \
   --request-code <requestCode> \
-  --upstream-system tms-x3 \
-  --authorized-tenant <tenantId> \
-  --admin-scope CLIENT_APP_MANAGE \
-  --ttl 24h
-navi admin upstream-bootstrap requests deny --request-code <requestCode> --reason "..."
+  --authorized-tenant-ids <tenantId> \
+  --namespace tms-x3 \
+  --scopes CLIENT_APP_ADMIN,CONTROL_KEY_ISSUE \
+  --credential-expires-at 2026-05-19T10:00:00 \
+  --claim-ttl-minutes 1440
+navi upstream admin-key deny --request-code <requestCode> --reason "..."
+navi upstream admin-key revoke --credential-id <credentialId>
+navi upstream admin-key rotate --credential-id <credentialId> --write-profile
 ```
+
+`CLIENT_APP_ADMIN` 与 `CONTROL_KEY_ISSUE` 是 operator/CLI 侧友好别名，服务端保存前会规范化为实际鉴权 scope：`CLIENT_APP_MANAGE` 与 `CLIENT_APP_CONTROL_KEY_ISSUE`。若审批时未显式设置 `--credential-expires-at`，服务端默认按 24 小时 TTL 签发 `NAVI_ADMIN_API_KEY`；长期有效必须由 operator 显式传入到期时间。
 
 对应后端 API 应位于 Navigator admin/control plane，例如：
 
@@ -123,6 +129,8 @@ GET  /api/v1/admin/upstream-bootstrap-requests
 GET  /api/v1/admin/upstream-bootstrap-requests/{requestCode}
 POST /api/v1/admin/upstream-bootstrap-requests/{requestCode}/approve
 POST /api/v1/admin/upstream-bootstrap-requests/{requestCode}/deny
+POST /api/v1/admin/upstream-admin-credentials/{credentialId}/revoke
+POST /api/v1/admin/upstream-admin-credentials/{credentialId}/rotate
 ```
 
 ### LLM 用什么工具和凭证审批
@@ -165,15 +173,34 @@ navi upstream admin-key status --request-code <requestCode>
 navi upstream admin-key claim \
   --request-code <requestCode> \
   --claim-token-env NAVI_ADMIN_KEY_CLAIM_TOKEN \
-  --write-profile .navigator/upstream.env
+  --write-profile
 ```
 
 多租户上游系统拿到 `NAVI_ADMIN_API_KEY` 后，应继续为每个租户创建或复用 ClientApp，并签发该租户自己的 `NAVI_CONTROL_API_KEY`。长期运行和控制面同步优先使用 `NAVI_CONTROL_API_KEY`，而不是继续扩大 `NAVI_ADMIN_API_KEY` 的使用面。
 
+租户级 ClientApp bootstrap 示例：
+
+```bash
+navi upstream client-app ensure \
+  --target-tenant-id <navigator-tenant-id> \
+  --upstream-ref <upstream-tenant-code> \
+  --name "<display-name>" \
+  --tenant-profile .navigator/tenants/<upstream-tenant-code>.env \
+  --write-profile
+
+navi upstream client-app issue-control-key \
+  --client-app-id <clientAppId> \
+  --scopes SKILL_SYNC,MODEL_GRANT \
+  --tenant-profile .navigator/tenants/<upstream-tenant-code>.env \
+  --write-profile
+```
+
+这两个命令使用 `NAVI_ADMIN_API_KEY`，通过 `X-Navi-Admin-Key` 发送，不使用普通 `X-API-Key`。`issue-control-key` 返回的完整 `NAVI_CONTROL_API_KEY` 只写入目标租户 profile，控制台只显示脱敏摘要。
+
 ## 安全约束
 
 1. `NAVI_ADMIN_API_KEY` 必须绑定 upstream system 与授权租户范围，不能是完整租户管理员 key。
-2. `NAVI_ADMIN_API_KEY` 必须支持 TTL、撤销、轮换和审计；默认 TTL 应短，例如 24h，长期有效必须显式审批。
+2. `NAVI_ADMIN_API_KEY` 必须支持 TTL、撤销、轮换和审计；未显式传入到期时间时默认 24h，长期有效必须显式审批。
 3. `NAVI_OPERATOR_API_KEY` 只存在于 Navigator 侧管理员 Agent 或安全运维环境，不允许进入上游项目。
 4. request code 不应被当作唯一领取凭证；批准后领取必须一次性消费。
 5. CLI、API、日志、LLM 输出不得打印任何完整 key。
@@ -186,7 +213,7 @@ navi upstream admin-key claim \
 2. 安全底座：复核用户/API Key 管理接口权限、API Key 存储方式、脱敏日志和一次性展示规则。
 3. 后端申请生命周期：新增申请实体、状态机、审批 API、领取 API、审计记录。
 4. Operator 工具：新增 Navigator admin CLI/API 能力，用 operator 凭证审批或拒绝申请。
-5. 上游 CLI：新增 request/status/claim/bootstrap 命令，支持多租户 profile。
+5. 上游 CLI：新增 request/status/claim 与 operator approve/deny/list 命令；多租户 ClientApp bootstrap 进入后续阶段。
 6. Bootstrap 流程：多租户系统使用 `NAVI_ADMIN_API_KEY` 管理多个 ClientApp；非多租户系统直接接收 `NAVI_CONTROL_API_KEY`。
 7. 测试与验收：补安全、状态机、CLI profile、跨租户隔离、日志脱敏和端到端 bootstrap 测试。
 
@@ -208,19 +235,29 @@ navi upstream admin-key claim \
 | Item | Status | Notes |
 | --- | --- | --- |
 | Requirement recorded | completed | 本文记录 issue #121 的修订语义和审批凭证模型 |
-| API/CLI implementation | pending | 待后续开发 |
-| Security hardening | pending | 需先复核用户/API Key 管理接口和 key 存储 |
+| API/CLI implementation | completed | Stage 1 后端闭环、Stage 2 SDK/CLI、Stage 3 多租户 ClientApp 管理已完成；Stage 4 质量修复已补齐 scope 别名、默认 TTL、撤销/轮换与 SDK 专用鉴权路径 |
+| Security hardening | completed | Stage 0 已完成用户/API Key 管理面权限收口；高权限 key 按 hash 存储、一次性明文交付、默认 24h TTL，并支持撤销/轮换审计 |
 
 ### Testing Progress
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Unit tests | pending | 状态机、权限、TTL、一次性领取 |
-| Integration tests | pending | request -> approve -> claim -> bootstrap |
-| CLI tests | pending | profile 写入、gitignore 检查、脱敏输出 |
+| Unit tests | passed | `mvn test -pl user-auth-module -am` 68 tests；`mvn test -pl business-agent-module -am` 284 tests；覆盖权限、状态机、operator key、TTL、撤销/轮换、一次性领取、scope 别名、授权范围和跨 upstream/tenant 拒绝 |
+| Integration tests | passed | 新增服务级 bootstrap evidence：request -> approve -> claim -> ensure ClientApp -> issue `NAVI_CONTROL_API_KEY` 已通过；live HTTP/CLI smoke 已在重启 launcher 后通过 |
+| CLI tests | passed | `mvn test -pl navigator-open-sdk`，78 tests passed；覆盖 admin-key request/claim/approve/revoke/rotate、client-app ensure/issue-control-key profile 写入、脱敏输出，以及 upstream admin 专用 header 不混入 `X-API-Key` |
 
 ### Experience Progress
 
 experience: N/A
 
 原因：本文是后端/API/CLI 契约记录，当前不包含 UI 改动。若后续实现 Navigator 管理台审批页面，需要单独补 experience checklist 和 Playwright evidence。
+
+## Acceptance Status
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted
+- signed_off_by: Codex execution-agent
+- signed_off_at: 2026-05-18
+- acceptance_record: docs/version-tracker/1.1.3-SNAPSHOT/acceptance/upstream-client-app-admin-key-acceptance.md
+- blocking_items: none
+- follow_up_required: no

@@ -19,33 +19,50 @@ import com.foggy.navigator.sdk.model.TaskMessagesPage;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileTreeDTO;
 import com.foggy.navigator.sdk.model.businessagent.AccountContextFileWriteForm;
+import com.foggy.navigator.sdk.model.businessagent.ApproveUpstreamBootstrapRequestForm;
 import com.foggy.navigator.sdk.model.businessagent.BusinessAgentBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.BusinessFunctionSummaryDTO;
+import com.foggy.navigator.sdk.model.businessagent.ClaimUpstreamAdminCredentialForm;
 import com.foggy.navigator.sdk.model.businessagent.ClearSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.ClientAppDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppFunctionGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppModelConfigGrantDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppRuntimeAccessTokenDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamRouteDTO;
 import com.foggy.navigator.sdk.model.businessagent.ClientAppUpstreamUserGrantDTO;
+import com.foggy.navigator.sdk.model.businessagent.CreateUpstreamBootstrapRequestForm;
+import com.foggy.navigator.sdk.model.businessagent.DenyUpstreamBootstrapRequestForm;
+import com.foggy.navigator.sdk.model.businessagent.EnsureUpstreamClientAppForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantBusinessFunctionForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantModelConfigForm;
 import com.foggy.navigator.sdk.model.businessagent.GrantUpstreamUserForm;
 import com.foggy.navigator.sdk.model.businessagent.ImportBusinessFunctionManifestForm;
+import com.foggy.navigator.sdk.model.businessagent.IssueControlCredentialForm;
+import com.foggy.navigator.sdk.model.businessagent.IssuedCredentialDTO;
 import com.foggy.navigator.sdk.model.businessagent.RotateModelConfigKeyForm;
+import com.foggy.navigator.sdk.model.businessagent.RotateUpstreamAdminCredentialForm;
 import com.foggy.navigator.sdk.model.businessagent.SkillClearResultDTO;
 import com.foggy.navigator.sdk.model.businessagent.SkillBundleDTO;
 import com.foggy.navigator.sdk.model.businessagent.SyncAccountSkillBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncBusinessAgentBundleForm;
 import com.foggy.navigator.sdk.model.businessagent.SyncSkillBundleForm;
+import com.foggy.navigator.sdk.model.businessagent.UpstreamAdminCredentialClaimDTO;
+import com.foggy.navigator.sdk.model.businessagent.UpstreamAdminCredentialDTO;
+import com.foggy.navigator.sdk.model.businessagent.UpstreamBootstrapRequestCreatedDTO;
+import com.foggy.navigator.sdk.model.businessagent.UpstreamBootstrapRequestDTO;
 import com.foggy.navigator.sdk.model.businessagent.UpsertClientAppUpstreamRouteForm;
 
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -117,6 +134,19 @@ public class UpstreamCli {
             case "model create" -> modelCreate(args);
             case "model update" -> modelUpdate(args);
             case "model rotate-key" -> modelRotateKey(args);
+            case "admin-key", "admin-key help" -> adminKeyUsage();
+            case "admin-key request" -> adminKeyRequest(args);
+            case "admin-key status" -> adminKeyStatus(args);
+            case "admin-key claim" -> adminKeyClaim(args);
+            case "admin-key list" -> adminKeyList(args);
+            case "admin-key approve" -> adminKeyApprove(args);
+            case "admin-key deny" -> adminKeyDeny(args);
+            case "admin-key revoke" -> adminKeyRevoke(args);
+            case "admin-key rotate" -> adminKeyRotate(args);
+            case "client-app", "client-app help" -> clientAppUsage();
+            case "client-app list" -> upstreamClientAppList(args);
+            case "client-app ensure" -> upstreamClientAppEnsure(args);
+            case "client-app issue-control-key" -> upstreamClientAppIssueControlKey(args);
             case "account-context list" -> accountContextList(args);
             case "account-context read" -> accountContextRead(args);
             case "account-context write-policy" -> accountContextWritePolicy(args);
@@ -129,7 +159,29 @@ public class UpstreamCli {
 
     private int usage() {
         out.println("Usage: navi upstream <command> [options]");
-        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, account-context list, account-context read, account-context write-policy");
+        out.println("Commands: config check, runtime-token, verify-agent-readiness, verify-agent-grant, ensure-grant, ask, messages, sessions, session-messages, skill tree, skill read, skill sync, skill clear-public, skill clear-account, agent sync, function import, function grant, function grant-status, function visible, route list, route set, route status, model grants, model grant, model set-default, model create, model update, model rotate-key, admin-key request, admin-key status, admin-key claim, admin-key list, admin-key approve, admin-key deny, admin-key revoke, admin-key rotate, client-app list, client-app ensure, client-app issue-control-key, account-context list, account-context read, account-context write-policy");
+        return 0;
+    }
+
+    private int adminKeyUsage() {
+        out.println("Usage: navi upstream admin-key <command> [options]");
+        out.println("Commands: request, status, claim, list, approve, deny, revoke, rotate");
+        out.println("  request --upstream-system-id <id> --requested-tenant-id <tenantId> [--multi-tenant] --write-profile");
+        out.println("  status  [--request-code <code>]");
+        out.println("  claim   [--request-code <code>] [--claim-token-env <env>] --write-profile");
+        out.println("  approve --request-code <code> --authorized-tenant-ids <tenantId[,tenantId]> [--namespace <prefix>] [--scopes <scope[,scope]>] [--credential-expires-at <yyyy-MM-ddTHH:mm:ss>]");
+        out.println("  deny    --request-code <code> --reason <text>");
+        out.println("  revoke  --credential-id <id>");
+        out.println("  rotate  --credential-id <id> [--credential-expires-at <yyyy-MM-ddTHH:mm:ss>] --write-profile");
+        return 0;
+    }
+
+    private int clientAppUsage() {
+        out.println("Usage: navi upstream client-app <command> [options]");
+        out.println("Commands: list, ensure, issue-control-key");
+        out.println("  list [--target-tenant-id <tenantId>]");
+        out.println("  ensure --target-tenant-id <tenantId> --upstream-ref <ref> [--name <name>] [--tenant-profile <path>] [--write-profile]");
+        out.println("  issue-control-key --client-app-id <id> [--scopes <scope[,scope]>] [--tenant-profile <path>] --write-profile");
         return 0;
     }
 
@@ -188,6 +240,248 @@ public class UpstreamCli {
         out.println("accessToken=" + SecretMasker.mask(token.getAccessToken()));
         out.println("expiresInSeconds=" + valueOrEmpty(token.getExpiresInSeconds()));
         out.println("expiresAt=" + valueOrEmpty(token.getExpiresAt()));
+        return 0;
+    }
+
+    private int adminKeyRequest(CliArguments args) {
+        if (!args.flag("write-profile")) {
+            throw new UpstreamCliException("admin-key request requires --write-profile to store the one-time claim token without printing it");
+        }
+        config.assertProfileWritable();
+
+        CreateUpstreamBootstrapRequestForm form = new CreateUpstreamBootstrapRequestForm();
+        form.setUpstreamSystemId(requiredOptionOrConfig(args, "upstream-system-id", "NAVI_UPSTREAM_SYSTEM_ID", "upstream system id"));
+        form.setRequestedTenantId(requiredOptionOrConfig(args, "requested-tenant-id", "NAVI_REQUESTED_TENANT_ID", "requested tenant id"));
+        form.setMultiTenant(args.flag("multi-tenant") || Boolean.parseBoolean(config.get("NAVI_UPSTREAM_MULTI_TENANT")));
+        form.setReason(args.option("reason"));
+        form.setApplicantLabel(args.option("applicant-label"));
+
+        UpstreamBootstrapRequestCreatedDTO created = bootstrapApi().requestUpstreamAdminKey(form);
+        if (created == null || !hasText(created.getRequestCode()) || !hasText(created.getClaimToken())) {
+            throw new UpstreamCliException("admin-key request response did not include requestCode and claimToken");
+        }
+
+        config.writeProfileValue("NAVI_ADMIN_KEY_REQUEST_CODE", created.getRequestCode());
+        config.writeProfileValue("NAVI_ADMIN_KEY_CLAIM_TOKEN", created.getClaimToken());
+        config.writeProfileValue("NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
+        config.writeProfileValue("NAVI_UPSTREAM_SYSTEM_ID", form.getUpstreamSystemId());
+        config.writeProfileValue("NAVI_REQUESTED_TENANT_ID", form.getRequestedTenantId());
+        config.writeProfileValue("NAVI_UPSTREAM_MULTI_TENANT", String.valueOf(Boolean.TRUE.equals(form.getMultiTenant())));
+
+        out.println("admin-key request ok");
+        out.println("profileUpdated=" + config.profilePath());
+        out.println("stored=NAVI_ADMIN_KEY_REQUEST_CODE,NAVI_ADMIN_KEY_CLAIM_TOKEN");
+        out.println("requestCode=" + valueOrEmpty(created.getRequestCode()));
+        out.println("requestCodeSuffix=" + valueOrEmpty(created.getRequestCodeSuffix()));
+        out.println("claimToken=" + SecretMasker.mask(created.getClaimToken()));
+        out.println("status=" + valueOrEmpty(created.getStatus()));
+        out.println("requestExpiresAt=" + valueOrEmpty(created.getRequestExpiresAt()));
+        return 0;
+    }
+
+    private int adminKeyStatus(CliArguments args) {
+        UpstreamBootstrapRequestDTO request = bootstrapApi()
+                .getUpstreamAdminKeyRequestStatus(adminKeyRequestCode(args));
+        out.println("admin-key status ok");
+        printUpstreamBootstrapRequest("request", request);
+        return 0;
+    }
+
+    private int adminKeyClaim(CliArguments args) {
+        if (!args.flag("write-profile")) {
+            throw new UpstreamCliException("admin-key claim requires --write-profile to store NAVI_ADMIN_API_KEY without printing it");
+        }
+        config.assertProfileWritable();
+
+        ClaimUpstreamAdminCredentialForm form = new ClaimUpstreamAdminCredentialForm();
+        form.setClaimToken(config.required("NAVI_ADMIN_KEY_CLAIM_TOKEN", "admin key claim token"));
+
+        UpstreamAdminCredentialClaimDTO claim = bootstrapApi()
+                .claimUpstreamAdminKey(adminKeyRequestCode(args), form);
+        if (claim == null || !hasText(claim.getNaviAdminApiKey())) {
+            throw new UpstreamCliException("admin-key claim response did not include NAVI_ADMIN_API_KEY");
+        }
+
+        config.writeProfileValue("NAVI_ADMIN_API_KEY", claim.getNaviAdminApiKey());
+        config.writeProfileValue("NAVI_ADMIN_KEY_CLAIM_TOKEN", "");
+
+        out.println("admin-key claim ok");
+        out.println("profileUpdated=" + config.profilePath());
+        out.println("stored=NAVI_ADMIN_API_KEY");
+        out.println("credentialId=" + valueOrEmpty(claim.getCredentialId()));
+        out.println("naviAdminApiKey=" + SecretMasker.mask(claim.getNaviAdminApiKey()));
+        out.println("upstreamSystemId=" + valueOrEmpty(claim.getUpstreamSystemId()));
+        out.println("authorizedTenantIds=" + joinList(claim.getAuthorizedTenantIds()));
+        out.println("authorizedClientAppNamespace=" + valueOrEmpty(claim.getAuthorizedClientAppNamespace()));
+        out.println("scopes=" + joinList(claim.getScopes()));
+        out.println("expiresAt=" + valueOrEmpty(claim.getExpiresAt()));
+        return 0;
+    }
+
+    private int adminKeyList(CliArguments args) {
+        List<UpstreamBootstrapRequestDTO> requests = operatorOrAdminApi()
+                .listUpstreamBootstrapRequests(args.option("status"));
+        out.println("admin-key list ok");
+        out.println("requestCount=" + (requests == null ? 0 : requests.size()));
+        if (requests != null) {
+            for (UpstreamBootstrapRequestDTO request : requests) {
+                printUpstreamBootstrapRequest("request", request);
+            }
+        }
+        return 0;
+    }
+
+    private int adminKeyApprove(CliArguments args) {
+        ApproveUpstreamBootstrapRequestForm form = new ApproveUpstreamBootstrapRequestForm();
+        String tenantIds = args.option("authorized-tenant-ids");
+        if (!hasText(tenantIds)) {
+            tenantIds = args.option("authorized-tenant-id");
+        }
+        form.setAuthorizedTenantIds(parseCsv(requiredValue(tenantIds, "authorized tenant ids are required (--authorized-tenant-ids)")));
+        String namespace = args.option("namespace");
+        if (!hasText(namespace)) {
+            namespace = args.option("authorized-client-app-namespace");
+        }
+        form.setAuthorizedClientAppNamespace(namespace);
+        form.setScopes(parseCsv(args.option("scopes")));
+        form.setClaimTtlMinutes(parseLongOption(args.option("claim-ttl-minutes"), "claim ttl minutes"));
+        form.setCredentialExpiresAt(parseLocalDateTimeOption(args.option("credential-expires-at"), "credential expires at"));
+
+        UpstreamBootstrapRequestDTO request = operatorOrAdminApi()
+                .approveUpstreamBootstrapRequest(adminKeyRequestCode(args), form);
+        out.println("admin-key approve ok");
+        printUpstreamBootstrapRequest("request", request);
+        return 0;
+    }
+
+    private int adminKeyDeny(CliArguments args) {
+        DenyUpstreamBootstrapRequestForm form = new DenyUpstreamBootstrapRequestForm();
+        form.setDeniedReason(requiredOption(args, "reason", "denied reason"));
+
+        UpstreamBootstrapRequestDTO request = operatorOrAdminApi()
+                .denyUpstreamBootstrapRequest(adminKeyRequestCode(args), form);
+        out.println("admin-key deny ok");
+        printUpstreamBootstrapRequest("request", request);
+        return 0;
+    }
+
+    private int adminKeyRevoke(CliArguments args) {
+        UpstreamAdminCredentialDTO credential = operatorOrAdminApi()
+                .revokeUpstreamAdminCredential(requiredOption(args, "credential-id", "credential id"));
+        out.println("admin-key revoke ok");
+        printUpstreamAdminCredential("credential", credential);
+        return 0;
+    }
+
+    private int adminKeyRotate(CliArguments args) {
+        if (!args.flag("write-profile")) {
+            throw new UpstreamCliException("admin-key rotate requires --write-profile to store the new NAVI_ADMIN_API_KEY without printing it");
+        }
+        config.assertProfileWritable();
+
+        RotateUpstreamAdminCredentialForm form = new RotateUpstreamAdminCredentialForm();
+        form.setCredentialExpiresAt(parseLocalDateTimeOption(args.option("credential-expires-at"), "credential expires at"));
+        UpstreamAdminCredentialClaimDTO claim = operatorOrAdminApi()
+                .rotateUpstreamAdminCredential(requiredOption(args, "credential-id", "credential id"), form);
+        if (claim == null || !hasText(claim.getNaviAdminApiKey())) {
+            throw new UpstreamCliException("admin-key rotate response did not include NAVI_ADMIN_API_KEY");
+        }
+
+        config.writeProfileValue("NAVI_ADMIN_API_KEY", claim.getNaviAdminApiKey());
+
+        out.println("admin-key rotate ok");
+        out.println("profileUpdated=" + config.profilePath());
+        out.println("stored=NAVI_ADMIN_API_KEY");
+        out.println("credentialId=" + valueOrEmpty(claim.getCredentialId()));
+        out.println("naviAdminApiKey=" + SecretMasker.mask(claim.getNaviAdminApiKey()));
+        out.println("upstreamSystemId=" + valueOrEmpty(claim.getUpstreamSystemId()));
+        out.println("authorizedTenantIds=" + joinList(claim.getAuthorizedTenantIds()));
+        out.println("authorizedClientAppNamespace=" + valueOrEmpty(claim.getAuthorizedClientAppNamespace()));
+        out.println("scopes=" + joinList(claim.getScopes()));
+        out.println("expiresAt=" + valueOrEmpty(claim.getExpiresAt()));
+        return 0;
+    }
+
+    private int upstreamClientAppList(CliArguments args) {
+        String tenantId = optionalOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID");
+        List<ClientAppDTO> apps = upstreamAdminApi().listUpstreamManagedClientApps(tenantId);
+        out.println("client-app list ok");
+        out.println("clientAppCount=" + (apps == null ? 0 : apps.size()));
+        if (apps != null) {
+            for (ClientAppDTO app : apps) {
+                printClientApp("clientApp", app);
+            }
+        }
+        return 0;
+    }
+
+    private int upstreamClientAppEnsure(CliArguments args) {
+        EnsureUpstreamClientAppForm form = new EnsureUpstreamClientAppForm();
+        form.setTargetTenantId(requiredOptionOrConfig(args, "target-tenant-id", "NAVI_TARGET_TENANT_ID", "target tenant id"));
+        form.setUpstreamRef(requiredOptionOrConfig(args, "upstream-ref", "NAVI_UPSTREAM_REF", "upstream ref"));
+        form.setName(args.option("name"));
+        form.setDescription(args.option("description"));
+        form.setOwnerUserId(args.option("owner-user-id"));
+        form.setCapabilityDomain(args.option("capability-domain"));
+
+        ClientAppDTO app = upstreamAdminApi().ensureUpstreamClientApp(form);
+        if (app == null || !hasText(app.getClientAppId())) {
+            throw new UpstreamCliException("client-app ensure response did not include clientAppId");
+        }
+
+        Path targetProfile = tenantProfilePath(args);
+        if (args.flag("write-profile")) {
+            config.assertProfileWritable(targetProfile);
+            config.writeProfileValue(targetProfile, "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
+            config.writeProfileValue(targetProfile, "NAVI_TENANT_ID", emptyIfNull(app.getTenantId()));
+            config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ID", emptyIfNull(app.getClientAppId()));
+            config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_SYSTEM_ID", emptyIfNull(app.getUpstreamSystemId()));
+            config.writeProfileValue(targetProfile, "NAVI_UPSTREAM_REF", emptyIfNull(app.getUpstreamRef()));
+        }
+
+        out.println("client-app ensure ok");
+        if (args.flag("write-profile")) {
+            out.println("profileUpdated=" + targetProfile);
+            out.println("stored=NAVI_CLIENT_APP_ID");
+        }
+        printClientApp("clientApp", app);
+        return 0;
+    }
+
+    private int upstreamClientAppIssueControlKey(CliArguments args) {
+        if (!args.flag("write-profile")) {
+            throw new UpstreamCliException("client-app issue-control-key requires --write-profile to store NAVI_CONTROL_API_KEY without printing it");
+        }
+        Path targetProfile = tenantProfilePath(args);
+        config.assertProfileWritable(targetProfile);
+
+        IssueControlCredentialForm form = new IssueControlCredentialForm();
+        form.setDescription(args.option("description"));
+        form.setEffectiveUserId(args.option("effective-user-id"));
+        form.setScopes(parseCsv(args.option("scopes")));
+        form.setExpiresAt(parseLocalDateTimeOption(args.option("expires-at"), "expires at"));
+
+        String clientAppId = requiredOptionOrConfig(args, "client-app-id", "NAVI_CLIENT_APP_ID", "client app id");
+        IssuedCredentialDTO credential = upstreamAdminApi()
+                .issueUpstreamClientAppControlCredential(clientAppId, form);
+        if (credential == null || !hasText(credential.getControlApiKey())) {
+            throw new UpstreamCliException("client-app issue-control-key response did not include NAVI_CONTROL_API_KEY");
+        }
+
+        config.writeProfileValue(targetProfile, "NAVI_BASE_URL", config.required("NAVI_BASE_URL", "Navigator base URL"));
+        config.writeProfileValue(targetProfile, "NAVI_TENANT_ID", emptyIfNull(credential.getTenantId()));
+        config.writeProfileValue(targetProfile, "NAVI_CLIENT_APP_ID", emptyIfNull(credential.getClientAppId()));
+        config.writeProfileValue(targetProfile, "NAVI_CONTROL_API_KEY", credential.getControlApiKey());
+
+        out.println("client-app issue-control-key ok");
+        out.println("profileUpdated=" + targetProfile);
+        out.println("stored=NAVI_CONTROL_API_KEY");
+        out.println("credentialId=" + valueOrEmpty(credential.getCredentialId()));
+        out.println("clientAppId=" + valueOrEmpty(credential.getClientAppId()));
+        out.println("tenantId=" + valueOrEmpty(credential.getTenantId()));
+        out.println("controlApiKey=" + SecretMasker.mask(credential.getControlApiKey()));
+        out.println("scopes=" + joinList(credential.getScopes()));
+        out.println("expiresAt=" + valueOrEmpty(credential.getExpiresAt()));
         return 0;
     }
 
@@ -707,13 +1001,14 @@ public class UpstreamCli {
     }
 
     private List<String> parseCsv(String value) {
-        List<String> list = new ArrayList<>();
-        for (String item : value.split(",")) {
-            if (hasText(item)) {
-                list.add(item.trim());
-            }
+        if (!hasText(value)) {
+            return null;
         }
-        return list;
+        List<String> values = Arrays.stream(value.split(","))
+                .map(String::trim)
+                .filter(UpstreamCli::hasText)
+                .toList();
+        return values.isEmpty() ? null : values;
     }
 
     private int accountContextList(CliArguments args) {
@@ -777,16 +1072,51 @@ public class UpstreamCli {
         return new AgentApi(openHttp());
     }
 
-    private BusinessAgentApi businessAgentControlApi() {
-        String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
+    private BusinessAgentApi bootstrapApi() {
+        return new BusinessAgentApi(openHttp());
+    }
+
+    private BusinessAgentApi operatorOrAdminApi() {
+        String operatorApiKey = config.get("NAVI_OPERATOR_API_KEY");
         String adminToken = config.get("NAVI_ADMIN_TOKEN");
-        String adminApiKey = config.get("NAVI_ADMIN_API_KEY");
-        if (!hasText(controlApiKey) && !hasText(adminToken) && !hasText(adminApiKey)) {
-            throw new UpstreamCliException("control-plane credential is required (NAVI_CONTROL_API_KEY; admin fallback: NAVI_ADMIN_TOKEN or NAVI_ADMIN_API_KEY)");
+        if (!hasText(operatorApiKey) && !hasText(adminToken)) {
+            throw new UpstreamCliException("operator/admin credential is required (NAVI_OPERATOR_API_KEY or NAVI_ADMIN_TOKEN)");
         }
         return new BusinessAgentApi(new HttpHelper(
                 config.required("NAVI_BASE_URL", "Navigator base URL"),
+                null,
+                adminToken,
+                config.get("NAVI_TENANT_ID"),
+                null,
+                operatorApiKey,
+                Duration.ofSeconds(30)));
+    }
+
+    private BusinessAgentApi upstreamAdminApi() {
+        String adminApiKey = config.get("NAVI_ADMIN_API_KEY");
+        if (!hasText(adminApiKey)) {
+            throw new UpstreamCliException("upstream admin credential is required (NAVI_ADMIN_API_KEY)");
+        }
+        return new BusinessAgentApi(new HttpHelper(
+                config.required("NAVI_BASE_URL", "Navigator base URL"),
+                null,
+                null,
+                config.get("NAVI_TENANT_ID"),
+                null,
+                null,
                 adminApiKey,
+                Duration.ofSeconds(30)));
+    }
+
+    private BusinessAgentApi businessAgentControlApi() {
+        String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
+        String adminToken = config.get("NAVI_ADMIN_TOKEN");
+        if (!hasText(controlApiKey) && !hasText(adminToken)) {
+            throw new UpstreamCliException("control-plane credential is required (NAVI_CONTROL_API_KEY; admin fallback: NAVI_ADMIN_TOKEN)");
+        }
+        return new BusinessAgentApi(new HttpHelper(
+                config.required("NAVI_BASE_URL", "Navigator base URL"),
+                null,
                 adminToken,
                 config.get("NAVI_TENANT_ID"),
                 controlApiKey,
@@ -848,6 +1178,10 @@ public class UpstreamCli {
 
     private String upstreamUserId(CliArguments args) {
         return requiredOptionOrConfig(args, "upstream-user-id", "NAVI_UPSTREAM_USER_ID", "upstream user id");
+    }
+
+    private String adminKeyRequestCode(CliArguments args) {
+        return requiredOptionOrConfig(args, "request-code", "NAVI_ADMIN_KEY_REQUEST_CODE", "admin key request code");
     }
 
     private String optionalUpstreamUserId(CliArguments args) {
@@ -989,6 +1323,58 @@ public class UpstreamCli {
                 + " scope=" + valueOrEmpty(grant != null ? grant.getGrantScope() : null));
     }
 
+    private void printUpstreamBootstrapRequest(String prefix, UpstreamBootstrapRequestDTO request) {
+        out.println(prefix
+                + " requestId=" + valueOrEmpty(request != null ? request.getRequestId() : null)
+                + " codeSuffix=" + valueOrEmpty(request != null ? request.getRequestCodeSuffix() : null)
+                + " upstreamSystemId=" + valueOrEmpty(request != null ? request.getUpstreamSystemId() : null)
+                + " requestedTenantId=" + valueOrEmpty(request != null ? request.getRequestedTenantId() : null)
+                + " multiTenant=" + (request != null && Boolean.TRUE.equals(request.getMultiTenant()))
+                + " status=" + valueOrEmpty(request != null ? request.getStatus() : null));
+        if (request == null) {
+            return;
+        }
+        if (hasText(request.getDeniedReason())) {
+            out.println(prefix + " deniedReason=" + redact(request.getDeniedReason()));
+        }
+        out.println(prefix + " authorizedTenantIds=" + joinList(request.getAuthorizedTenantIds()));
+        out.println(prefix + " authorizedClientAppNamespace=" + valueOrEmpty(request.getAuthorizedClientAppNamespace()));
+        out.println(prefix + " scopes=" + joinList(request.getScopes()));
+        out.println(prefix + " requestExpiresAt=" + valueOrEmpty(request.getRequestExpiresAt()));
+        out.println(prefix + " claimExpiresAt=" + valueOrEmpty(request.getClaimExpiresAt()));
+        out.println(prefix + " adminCredentialExpiresAt=" + valueOrEmpty(request.getAdminCredentialExpiresAt()));
+        out.println(prefix + " approvedAt=" + valueOrEmpty(request.getApprovedAt()));
+        out.println(prefix + " deniedAt=" + valueOrEmpty(request.getDeniedAt()));
+        out.println(prefix + " consumedAt=" + valueOrEmpty(request.getConsumedAt()));
+    }
+
+    private void printUpstreamAdminCredential(String prefix, UpstreamAdminCredentialDTO credential) {
+        out.println(prefix
+                + " credentialId=" + valueOrEmpty(credential != null ? credential.getCredentialId() : null)
+                + " upstreamSystemId=" + valueOrEmpty(credential != null ? credential.getUpstreamSystemId() : null)
+                + " status=" + valueOrEmpty(credential != null ? credential.getStatus() : null));
+        if (credential == null) {
+            return;
+        }
+        out.println(prefix + " authorizedTenantIds=" + joinList(credential.getAuthorizedTenantIds()));
+        out.println(prefix + " authorizedClientAppNamespace=" + valueOrEmpty(credential.getAuthorizedClientAppNamespace()));
+        out.println(prefix + " scopes=" + joinList(credential.getScopes()));
+        out.println(prefix + " expiresAt=" + valueOrEmpty(credential.getExpiresAt()));
+        out.println(prefix + " revokedAt=" + valueOrEmpty(credential.getRevokedAt()));
+        out.println(prefix + " lastUsedAt=" + valueOrEmpty(credential.getLastUsedAt()));
+    }
+
+    private void printClientApp(String prefix, ClientAppDTO app) {
+        out.println(prefix
+                + " clientAppId=" + valueOrEmpty(app != null ? app.getClientAppId() : null)
+                + " tenantId=" + valueOrEmpty(app != null ? app.getTenantId() : null)
+                + " name=" + redact(app != null ? app.getName() : null)
+                + " status=" + valueOrEmpty(app != null ? app.getStatus() : null)
+                + " upstreamSystemId=" + valueOrEmpty(app != null ? app.getUpstreamSystemId() : null)
+                + " namespace=" + valueOrEmpty(app != null ? app.getUpstreamClientAppNamespace() : null)
+                + " upstreamRef=" + valueOrEmpty(app != null ? app.getUpstreamRef() : null));
+    }
+
     private void printAccountContextFileMetadata(AccountContextFileDTO file) {
         out.println("file name=" + valueOrEmpty(file != null ? file.getFileName() : null)
                 + " exists=" + (file != null && file.isExists())
@@ -1051,6 +1437,26 @@ public class UpstreamCli {
         return config.required(key, description);
     }
 
+    private String optionalOptionOrConfig(CliArguments args, String option, String key) {
+        String value = args.option(option);
+        if (hasText(value)) {
+            return value;
+        }
+        return config.get(key);
+    }
+
+    private Path tenantProfilePath(CliArguments args) {
+        String profile = args.option("tenant-profile");
+        if (!hasText(profile)) {
+            return config.profilePath();
+        }
+        Path path = Path.of(profile);
+        if (!path.isAbsolute()) {
+            path = cwd.resolve(path);
+        }
+        return path.normalize();
+    }
+
     private Integer parseInteger(String value) {
         if (!hasText(value)) {
             return null;
@@ -1077,6 +1483,38 @@ public class UpstreamCli {
         }
     }
 
+    private Long parseLongOption(String value, String description) {
+        if (!hasText(value)) {
+            return null;
+        }
+        return parseLong(value, description);
+    }
+
+    private LocalDateTime parseLocalDateTimeOption(String value, String description) {
+        if (!hasText(value)) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(value);
+        } catch (DateTimeParseException e) {
+            throw new UpstreamCliException("Expected ISO-8601 " + description + " but got: " + value);
+        }
+    }
+
+    private String joinList(Collection<String> values) {
+        if (values == null || values.isEmpty()) {
+            return "(empty)";
+        }
+        return String.join(",", values);
+    }
+
+    private String requiredValue(String value, String message) {
+        if (!hasText(value)) {
+            throw new UpstreamCliException(message);
+        }
+        return value;
+    }
+
     private static boolean isSensitiveKey(String key) {
         return key.endsWith("_SECRET") || key.endsWith("_TOKEN")
                 || key.endsWith("_API_KEY") || key.endsWith("_KEY");
@@ -1084,6 +1522,10 @@ public class UpstreamCli {
 
     private static String valueOrEmpty(Object value) {
         return value == null ? "(empty)" : String.valueOf(value);
+    }
+
+    private static String emptyIfNull(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     private static String truncate(String value, int maxLength) {

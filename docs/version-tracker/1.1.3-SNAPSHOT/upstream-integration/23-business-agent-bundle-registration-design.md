@@ -98,7 +98,7 @@ CLI 增加：
 .\tools\navigator-upstream\navi.ps1 upstream agent sync --manifest .\agent-bundle.json
 ```
 
-该命令优先使用 `NAVI_CONTROL_API_KEY`，即 ClientApp-scoped 控制面凭证；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部管理员 fallback。普通上游调用 ask/readiness 仍只使用 project-local runtime profile。
+该命令优先使用 `NAVI_CONTROL_API_KEY`，即 ClientApp-scoped 控制面凭证；`NAVI_ADMIN_TOKEN` 仅作为 Navigator 内部管理员 fallback。`NAVI_ADMIN_API_KEY` 不再作为普通 `X-API-Key` fallback。普通上游调用 ask/readiness 仍只使用 project-local runtime profile。
 
 ## 验收标准
 

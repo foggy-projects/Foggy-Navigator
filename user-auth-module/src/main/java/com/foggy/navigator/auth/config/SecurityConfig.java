@@ -100,6 +100,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/notifications/stream", "/api/v1/notifications/stream/", "/api/v1/notifications/stream/**").permitAll()
                         .requestMatchers("/api/v1/sse/", "/api/v1/sse/**").permitAll()
                         .requestMatchers("/api/v1/monitoring/", "/api/v1/monitoring/**").permitAll()
+                        // UserController uses AuthInterceptor + @RequireAuth for user/API key management.
                         .requestMatchers("/api/v1/users", "/api/v1/users/**").permitAll()
                         .requestMatchers("/api/v1/auth/me").permitAll()
                         // Open API（第三方系统集成）
@@ -107,6 +108,12 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/open", "/api/v1/open/**").permitAll()
                         // Business Agent 控制面由 AuthInterceptor + @RequireAuth 做鉴权。
                         // Spring Security 这里放行，避免无自定义 JWT filter 时提前 403。
+                        .requestMatchers("/api/v1/upstream-bootstrap", "/api/v1/upstream-bootstrap/**").permitAll()
+                        .requestMatchers("/api/v1/upstream-admin", "/api/v1/upstream-admin/**").permitAll()
+                        .requestMatchers("/api/v1/admin/upstream-bootstrap-requests",
+                                "/api/v1/admin/upstream-bootstrap-requests/**").permitAll()
+                        .requestMatchers("/api/v1/admin/upstream-admin-credentials",
+                                "/api/v1/admin/upstream-admin-credentials/**").permitAll()
                         .requestMatchers("/api/v1/admin/client-apps", "/api/v1/admin/client-apps/**").permitAll()
                         .requestMatchers("/api/v1/client-apps", "/api/v1/client-apps/**").permitAll()
                         .requestMatchers("/api/v1/business-agent", "/api/v1/business-agent/**").permitAll()

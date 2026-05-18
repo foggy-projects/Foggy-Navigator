@@ -104,6 +104,21 @@ class UserAuthServiceTest {
     }
 
     @Test
+    void testGetApiKeyDoesNotReturnPlaintext() {
+        String userId = createTestUser("apikeymetadatasuser", "password");
+        ApiKeyCreateForm form = new ApiKeyCreateForm();
+        form.setName("Metadata Test Key");
+        ApiKeyDTO created = userAuthService.createApiKey(userId, form);
+
+        Optional<ApiKeyDTO> fetched = userAuthService.getApiKey(created.getId());
+
+        assertTrue(fetched.isPresent());
+        assertEquals(userId, fetched.get().getUserId());
+        assertNull(fetched.get().getApiKey());
+        assertNotNull(fetched.get().getMaskedApiKey());
+    }
+
+    @Test
     void testGetUserByApiKey() {
         // 创建用户和API Key
         String userId = createTestUser("apikeyauthuser", "password");

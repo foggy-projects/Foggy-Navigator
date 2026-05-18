@@ -65,7 +65,9 @@ $features = @(
     "model-grant",
     "model-owned-config",
     "account-context",
-    "deterministic-e2e"
+    "deterministic-e2e",
+    "admin-key-bootstrap",
+    "client-app-bootstrap"
 )
 
 Push-Location $RepoRoot

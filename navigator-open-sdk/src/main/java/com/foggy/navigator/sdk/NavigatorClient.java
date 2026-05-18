@@ -117,6 +117,8 @@ public class NavigatorClient {
         private String apiKey;
         private String bearerToken;
         private String controlApiKey;
+        private String operatorApiKey;
+        private String upstreamAdminApiKey;
         private String tenantId;
         private Duration timeout;
         private boolean noDefaultAuth;
@@ -169,6 +171,28 @@ public class NavigatorClient {
         }
 
         /**
+         * Navigator-internal operator key for approval/bootstrap administration.
+         * <p>
+         * This is sent as {@code X-Navi-Operator-Key}; it is not the upstream
+         * {@code NAVI_ADMIN_API_KEY} used to manage ClientApps after approval.
+         */
+        public Builder operatorApiKey(String operatorApiKey) {
+            this.operatorApiKey = operatorApiKey;
+            return this;
+        }
+
+        /**
+         * Upstream system-level ClientApp admin key issued after bootstrap approval.
+         * <p>
+         * This is sent as {@code X-Navi-Admin-Key}; it is scoped to the approved
+         * upstream system, tenant list, and ClientApp namespace.
+         */
+        public Builder upstreamAdminApiKey(String upstreamAdminApiKey) {
+            this.upstreamAdminApiKey = upstreamAdminApiKey;
+            return this;
+        }
+
+        /**
          * Build a client without a default API key or bearer token.
          * <p>
          * Use this for ClientApp runtime flows where every request supplies
@@ -200,10 +224,14 @@ public class NavigatorClient {
             boolean hasApiKey = apiKey != null && !apiKey.isBlank();
             boolean hasBearerToken = bearerToken != null && !bearerToken.isBlank();
             boolean hasControlApiKey = controlApiKey != null && !controlApiKey.isBlank();
-            if (!hasApiKey && !hasBearerToken && !hasControlApiKey && !noDefaultAuth) {
-                throw new IllegalArgumentException("apiKey, bearerToken, controlApiKey, or noDefaultAuth is required");
+            boolean hasOperatorApiKey = operatorApiKey != null && !operatorApiKey.isBlank();
+            boolean hasUpstreamAdminApiKey = upstreamAdminApiKey != null && !upstreamAdminApiKey.isBlank();
+            if (!hasApiKey && !hasBearerToken && !hasControlApiKey && !hasOperatorApiKey
+                    && !hasUpstreamAdminApiKey && !noDefaultAuth) {
+                throw new IllegalArgumentException("apiKey, bearerToken, controlApiKey, operatorApiKey, upstreamAdminApiKey, or noDefaultAuth is required");
             }
-            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, bearerToken, tenantId, controlApiKey, timeout));
+            return new NavigatorClient(new HttpHelper(baseUrl, apiKey, bearerToken, tenantId,
+                    controlApiKey, operatorApiKey, upstreamAdminApiKey, timeout));
         }
     }
 }

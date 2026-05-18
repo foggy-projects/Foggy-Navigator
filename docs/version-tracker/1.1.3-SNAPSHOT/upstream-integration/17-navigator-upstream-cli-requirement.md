@@ -118,7 +118,7 @@ NAVI_CLIENT_APP_SECRET=
 NAVI_CLIENT_APP_ACCESS_TOKEN=
 NAVI_CONTROL_API_KEY=
 # NAVI_ADMIN_TOKEN=        # Navigator maintainer fallback only
-# NAVI_ADMIN_API_KEY=      # Navigator maintainer fallback only
+# NAVI_ADMIN_API_KEY=      # upstream admin credential after approval; not a control-plane fallback
 TMS_STAFF_SESSION_TOKEN=
 ```
 
@@ -145,7 +145,7 @@ CLI 和配套 skill 必须继承以下约束：
 
 `ensure-grant` 授权身份规则：
 
-1. `ensure-grant` 属于控制面授权操作，必须显式使用 ClientApp-scoped 控制面凭据 `NAVI_CONTROL_API_KEY`；`NAVI_ADMIN_TOKEN` 或 `NAVI_ADMIN_API_KEY` 仅作为 Navigator 内部 fallback。
+1. `ensure-grant` 属于控制面授权操作，必须显式使用 ClientApp-scoped 控制面凭据 `NAVI_CONTROL_API_KEY`；`NAVI_ADMIN_TOKEN` 仅作为 Navigator 内部 fallback。`NAVI_ADMIN_API_KEY` 不再作为普通 `X-API-Key` fallback。
 2. `ensure-grant` 不得使用 ClientApp runtime access token 作为授权凭据；runtime access token 只用于 `ask`、`messages`、`sessions` 等 OpenAPI 调用。
 3. 授权范围必须绑定 `tenantId + clientAppId + upstreamUserId`，缺少任一关键输入时 fail-closed。
 4. 缺少授权凭据、授权失败、401/403 时，只输出非敏感错误摘要和下一步配置建议，不输出 token、secret 或上游用户 token。

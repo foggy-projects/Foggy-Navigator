@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class E2eCliTest {
@@ -26,6 +27,7 @@ class E2eCliTest {
     private static String lastMethod;
     private static String lastBody;
     private static String lastApiKey;
+    private static String lastControlKey;
     private static String lastTenantId;
     private static String lastContentLength;
 
@@ -44,6 +46,7 @@ class E2eCliTest {
             lastMethod = exchange.getRequestMethod();
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             lastApiKey = exchange.getRequestHeaders().getFirst("X-API-Key");
+            lastControlKey = exchange.getRequestHeaders().getFirst("X-Client-App-Control-Key");
             lastTenantId = exchange.getRequestHeaders().getFirst("X-Tenant-Id");
             lastContentLength = exchange.getRequestHeaders().getFirst("Content-Length");
 
@@ -100,6 +103,7 @@ class E2eCliTest {
         lastMethod = null;
         lastBody = null;
         lastApiKey = null;
+        lastControlKey = null;
         lastTenantId = null;
         lastContentLength = null;
         stdout = new ByteArrayOutputStream();
@@ -209,7 +213,7 @@ class E2eCliTest {
                 NAVI_BASE_URL=http://127.0.0.1:%d
                 NAVI_TENANT_ID=tenant-1
                 NAVI_CLIENT_APP_ID=capp-1
-                NAVI_ADMIN_API_KEY=sk-admin
+                NAVI_CONTROL_API_KEY=control-secret
                 NAVI_E2E_MOCK_LLM_URL=http://127.0.0.1:%d
                 """.formatted(port, port));
 
@@ -224,7 +228,8 @@ class E2eCliTest {
         assertEquals(0, code);
         assertEquals("POST", lastMethod);
         assertEquals("/api/v1/business-agent/client-apps/capp-1/e2e-model-config/ensure", lastPath);
-        assertEquals("sk-admin", lastApiKey);
+        assertNull(lastApiKey);
+        assertEquals("control-secret", lastControlKey);
         assertEquals("tenant-1", lastTenantId);
         assertTrue(lastBody.contains("\"mockBaseUrl\":\"http://127.0.0.1:" + port + "\""));
         assertTrue(lastBody.contains("\"setDefault\":true"));

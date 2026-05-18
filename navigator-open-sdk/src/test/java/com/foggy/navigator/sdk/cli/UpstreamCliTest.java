@@ -27,7 +27,10 @@ class UpstreamCliTest {
     private static String lastPath;
     private static String lastMethod;
     private static String lastBody;
+    private static String lastApiKeyHeader;
     private static String lastAuthorizationHeader;
+    private static String lastOperatorKeyHeader;
+    private static String lastUpstreamAdminKeyHeader;
     private static String lastClientAppKeyHeader;
     private static String lastClientAppSecretHeader;
     private static String lastClientAppAccessTokenHeader;
@@ -51,7 +54,10 @@ class UpstreamCliTest {
             requestPaths.add(lastPath);
             lastMethod = exchange.getRequestMethod();
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            lastApiKeyHeader = exchange.getRequestHeaders().getFirst("X-API-Key");
             lastAuthorizationHeader = exchange.getRequestHeaders().getFirst("Authorization");
+            lastOperatorKeyHeader = exchange.getRequestHeaders().getFirst("X-Navi-Operator-Key");
+            lastUpstreamAdminKeyHeader = exchange.getRequestHeaders().getFirst("X-Navi-Admin-Key");
             lastClientAppKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Key");
             lastClientAppSecretHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Secret");
             lastClientAppAccessTokenHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Access-Token");
@@ -131,7 +137,10 @@ class UpstreamCliTest {
         lastPath = null;
         lastMethod = null;
         lastBody = null;
+        lastApiKeyHeader = null;
         lastAuthorizationHeader = null;
+        lastOperatorKeyHeader = null;
+        lastUpstreamAdminKeyHeader = null;
         lastClientAppKeyHeader = null;
         lastClientAppSecretHeader = null;
         lastClientAppAccessTokenHeader = null;
@@ -234,6 +243,7 @@ class UpstreamCliTest {
                 CLIENT_APP_SECRET=cas-sensitive-secret
                 CLIENT_APP_RUNTIME_TOKEN=cat-sensitive-token
                 NAVIGATOR_ADMIN_TOKEN=admin-sensitive-token
+                NAVIGATOR_OPERATOR_API_KEY=operator-sensitive-key
                 """, StandardCharsets.UTF_8);
 
         int code = run(new String[]{"upstream", "config", "check", "--profile", externalProfile.toString()}, Map.of());
@@ -247,10 +257,12 @@ class UpstreamCliTest {
         assertTrue(output.contains("NAVI_CLIENT_APP_SECRET="));
         assertTrue(output.contains("NAVI_CLIENT_APP_ACCESS_TOKEN="));
         assertTrue(output.contains("NAVI_ADMIN_TOKEN="));
+        assertTrue(output.contains("NAVI_OPERATOR_API_KEY="));
         assertFalse(output.contains("cak-sensitive-key"));
         assertFalse(output.contains("cas-sensitive-secret"));
         assertFalse(output.contains("cat-sensitive-token"));
         assertFalse(output.contains("admin-sensitive-token"));
+        assertFalse(output.contains("operator-sensitive-key"));
     }
 
     @Test
@@ -318,6 +330,308 @@ class UpstreamCliTest {
         assertEquals(2, code);
         assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("not git-ignored"));
         assertTrue(requestPaths.isEmpty());
+    }
+
+    @Test
+    void adminKeyRequestWritesClaimTokenWithoutPrintingIt() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "requestCode":"nabr-secret-code",
+                  "requestCodeSuffix":"code",
+                  "claimToken":"nabt-secret-claim-token",
+                  "status":"PENDING",
+                  "requestExpiresAt":"2026-05-18T10:00:00"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "request",
+                "--base-url", baseUrl(),
+                "--upstream-system-id", "x6-tms",
+                "--requested-tenant-id", "tenant-1",
+                "--multi-tenant",
+                "--reason", "tenant bootstrap",
+                "--write-profile"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tempDir.resolve(".navigator").resolve("upstream.env"), StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-bootstrap/admin-key-requests", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastApiKeyHeader);
+        assertTrue(lastBody.contains("\"upstreamSystemId\":\"x6-tms\""));
+        assertTrue(lastBody.contains("\"requestedTenantId\":\"tenant-1\""));
+        assertTrue(lastBody.contains("\"multiTenant\":true"));
+        assertTrue(profile.contains("NAVI_ADMIN_KEY_REQUEST_CODE=nabr-secret-code"));
+        assertTrue(profile.contains("NAVI_ADMIN_KEY_CLAIM_TOKEN=nabt-secret-claim-token"));
+        assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
+        assertTrue(output.contains("admin-key request ok"));
+        assertFalse(output.contains("nabt-secret-claim-token"));
+    }
+
+    @Test
+    void adminKeyClaimWritesAdminKeyAndClearsClaimTokenWithoutPrintingIt() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path profilePath = profileDir.resolve("upstream.env");
+        Files.writeString(profilePath, """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_KEY_REQUEST_CODE=nabr-secret-code
+                NAVI_ADMIN_KEY_CLAIM_TOKEN=nabt-secret-claim-token
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"uac-1",
+                  "naviAdminApiKey":"naa-secret-admin-key",
+                  "upstreamSystemId":"x6-tms",
+                  "authorizedTenantIds":["tenant-1"],
+                  "authorizedClientAppNamespace":"tms",
+                  "scopes":["CLIENT_APP_ADMIN"],
+                  "expiresAt":"2026-05-19T10:00:00"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "claim", "--write-profile"}, Map.of());
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(profilePath, StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-bootstrap/admin-key-requests/nabr-secret-code/claim", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastApiKeyHeader);
+        assertTrue(lastBody.contains("\"claimToken\":\"nabt-secret-claim-token\""));
+        assertTrue(profile.contains("NAVI_ADMIN_API_KEY=naa-secret-admin-key"));
+        assertTrue(profile.contains("NAVI_ADMIN_KEY_CLAIM_TOKEN="));
+        assertFalse(output.contains("naa-secret-admin-key"));
+        assertFalse(output.contains("nabt-secret-claim-token"));
+        assertTrue(output.contains("stored=NAVI_ADMIN_API_KEY"));
+    }
+
+    @Test
+    void adminKeyApproveUsesOperatorKeyAndNotUpstreamAdminKey() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "requestId":"req-1",
+                  "requestCodeSuffix":"code",
+                  "upstreamSystemId":"x6-tms",
+                  "requestedTenantId":"tenant-1",
+                  "multiTenant":true,
+                  "status":"APPROVED",
+                  "authorizedTenantIds":["tenant-1","tenant-2"],
+                  "authorizedClientAppNamespace":"tms",
+                  "scopes":["CLIENT_APP_ADMIN","CONTROL_KEY_ISSUE"],
+                  "claimExpiresAt":"2026-05-18T11:00:00"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "approve",
+                "--base-url", baseUrl(),
+                "--tenant-id", "operator-tenant",
+                "--request-code", "nabr-secret-code",
+                "--authorized-tenant-ids", "tenant-1,tenant-2",
+                "--namespace", "tms",
+                "--scopes", "CLIENT_APP_ADMIN,CONTROL_KEY_ISSUE",
+                "--claim-ttl-minutes", "45"}, env(
+                "NAVI_OPERATOR_API_KEY", "operator-secret-key",
+                "NAVI_ADMIN_API_KEY", "upstream-admin-key-must-not-approve"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/admin/upstream-bootstrap-requests/nabr-secret-code/approve", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastApiKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("operator-secret-key", lastOperatorKeyHeader);
+        assertTrue(lastBody.contains("\"authorizedTenantIds\":[\"tenant-1\",\"tenant-2\"]"));
+        assertTrue(lastBody.contains("\"authorizedClientAppNamespace\":\"tms\""));
+        assertTrue(lastBody.contains("\"claimTtlMinutes\":45"));
+        assertTrue(output.contains("admin-key approve ok"));
+        assertFalse(output.contains("operator-secret-key"));
+        assertFalse(output.contains("upstream-admin-key-must-not-approve"));
+    }
+
+    @Test
+    void adminKeyRevokeUsesOperatorKeyAndNotUpstreamAdminKey() {
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"ucaac-1",
+                  "upstreamSystemId":"x6-tms",
+                  "authorizedTenantIds":["tenant-1"],
+                  "authorizedClientAppNamespace":"tms",
+                  "scopes":["CLIENT_APP_MANAGE"],
+                  "status":"REVOKED",
+                  "expiresAt":"2026-05-19T10:00:00",
+                  "revokedAt":"2026-05-18T10:00:00"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "revoke",
+                "--base-url", baseUrl(),
+                "--credential-id", "ucaac-1"}, env(
+                "NAVI_OPERATOR_API_KEY", "operator-secret-key",
+                "NAVI_ADMIN_API_KEY", "upstream-admin-key-must-not-manage-lifecycle"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/admin/upstream-admin-credentials/ucaac-1/revoke", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastApiKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("operator-secret-key", lastOperatorKeyHeader);
+        assertNull(lastUpstreamAdminKeyHeader);
+        assertTrue(output.contains("admin-key revoke ok"));
+        assertTrue(output.contains("status=REVOKED"));
+        assertFalse(output.contains("operator-secret-key"));
+        assertFalse(output.contains("upstream-admin-key-must-not-manage-lifecycle"));
+    }
+
+    @Test
+    void adminKeyRotateWritesNewAdminKeyWithoutPrintingIt() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/upstream.env\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path profilePath = profileDir.resolve("upstream.env");
+        Files.writeString(profilePath, """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-old-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"ucaac-2",
+                  "naviAdminApiKey":"naa-new-admin-key",
+                  "upstreamSystemId":"x6-tms",
+                  "authorizedTenantIds":["tenant-1"],
+                  "authorizedClientAppNamespace":"tms",
+                  "scopes":["CLIENT_APP_MANAGE","CLIENT_APP_CONTROL_KEY_ISSUE"],
+                  "expiresAt":"2026-05-19T10:00:00"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "admin-key", "rotate",
+                "--profile", ".navigator/upstream.env",
+                "--credential-id", "ucaac-1",
+                "--write-profile"}, env("NAVI_OPERATOR_API_KEY", "operator-secret-key"));
+
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(profilePath, StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/admin/upstream-admin-credentials/ucaac-1/rotate", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastApiKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("operator-secret-key", lastOperatorKeyHeader);
+        assertNull(lastUpstreamAdminKeyHeader);
+        assertTrue(profile.contains("NAVI_ADMIN_API_KEY=naa-new-admin-key"));
+        assertFalse(profile.contains("naa-old-admin-key"));
+        assertTrue(output.contains("admin-key rotate ok"));
+        assertTrue(output.contains("stored=NAVI_ADMIN_API_KEY"));
+        assertFalse(output.contains("naa-new-admin-key"));
+        assertFalse(output.contains("naa-old-admin-key"));
+        assertFalse(output.contains("operator-secret-key"));
+    }
+
+    @Test
+    void clientAppEnsureUsesUpstreamAdminKeyAndWritesTenantProfile() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path upstreamProfile = profileDir.resolve("upstream.env");
+        Files.writeString(upstreamProfile, """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+
+        responseOverride = """
+                {"code":0,"data":{
+                  "clientAppId":"capp-tenant-a",
+                  "tenantId":"tenant-a",
+                  "name":"Orders A",
+                  "upstreamSystemId":"x6-tms",
+                  "upstreamClientAppNamespace":"x6",
+                  "upstreamRef":"tms-a",
+                  "status":"ACTIVE"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "client-app", "ensure",
+                "--profile", ".navigator/upstream.env",
+                "--target-tenant-id", "tenant-a",
+                "--upstream-ref", "tms-a",
+                "--name", "Orders A",
+                "--tenant-profile", ".navigator/tenants/tms-a.env",
+                "--write-profile"}, Map.of());
+
+        Path tenantProfile = profileDir.resolve("tenants").resolve("tms-a.env");
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tenantProfile, StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/client-apps/ensure", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastApiKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"targetTenantId\":\"tenant-a\""));
+        assertTrue(lastBody.contains("\"upstreamRef\":\"tms-a\""));
+        assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
+        assertTrue(profile.contains("NAVI_TENANT_ID=tenant-a"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_ID=capp-tenant-a"));
+        assertTrue(profile.contains("NAVI_UPSTREAM_SYSTEM_ID=x6-tms"));
+        assertTrue(profile.contains("NAVI_UPSTREAM_REF=tms-a"));
+        assertTrue(output.contains("client-app ensure ok"));
+        assertFalse(output.contains("naa-secret-admin-key"));
+    }
+
+    @Test
+    void clientAppIssueControlKeyUsesUpstreamAdminKeyAndStoresSecretOnlyInTenantProfile() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path upstreamProfile = profileDir.resolve("upstream.env");
+        Files.writeString(upstreamProfile, """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"cred-1",
+                  "clientAppId":"capp-tenant-a",
+                  "tenantId":"tenant-a",
+                  "controlApiKey":"cac-secret-control-key",
+                  "scopes":["SKILL_SYNC","MODEL_GRANT"],
+                  "expiresAt":"2026-06-01T00:00:00"
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "client-app", "issue-control-key",
+                "--profile", ".navigator/upstream.env",
+                "--client-app-id", "capp-tenant-a",
+                "--scopes", "SKILL_SYNC,MODEL_GRANT",
+                "--description", "tenant bootstrap",
+                "--tenant-profile", ".navigator/tenants/tms-a.env",
+                "--write-profile"}, Map.of());
+
+        Path tenantProfile = profileDir.resolve("tenants").resolve("tms-a.env");
+        String output = stdout.toString(StandardCharsets.UTF_8);
+        String profile = Files.readString(tenantProfile, StandardCharsets.UTF_8);
+        assertEquals(0, code);
+        assertEquals("/api/v1/upstream-admin/client-apps/capp-tenant-a/control-credentials", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastApiKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"scopes\":[\"SKILL_SYNC\",\"MODEL_GRANT\"]"));
+        assertTrue(lastBody.contains("\"description\":\"tenant bootstrap\""));
+        assertTrue(profile.contains("NAVI_BASE_URL=" + baseUrl()));
+        assertTrue(profile.contains("NAVI_TENANT_ID=tenant-a"));
+        assertTrue(profile.contains("NAVI_CLIENT_APP_ID=capp-tenant-a"));
+        assertTrue(profile.contains("NAVI_CONTROL_API_KEY=cac-secret-control-key"));
+        assertTrue(output.contains("client-app issue-control-key ok"));
+        assertTrue(output.contains("stored=NAVI_CONTROL_API_KEY"));
+        assertTrue(output.contains("controlApiKey=cac-...-key sha256="));
+        assertFalse(output.contains("cac-secret-control-key"));
+        assertFalse(output.contains("naa-secret-admin-key"));
     }
 
     @Test

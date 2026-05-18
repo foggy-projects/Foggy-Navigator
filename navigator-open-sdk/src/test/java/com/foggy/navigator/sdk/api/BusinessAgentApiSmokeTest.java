@@ -30,6 +30,8 @@ public class BusinessAgentApiSmokeTest {
     private static String lastClientAppSecretHeader;
     private static String lastClientAppAccessTokenHeader;
     private static String lastClientAppControlKeyHeader;
+    private static String lastOperatorKeyHeader;
+    private static String lastUpstreamAdminKeyHeader;
     private static String lastUpstreamUserIdHeader;
     private static String lastBody;
     private static String responseOverride;
@@ -49,6 +51,8 @@ public class BusinessAgentApiSmokeTest {
             lastClientAppSecretHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Secret");
             lastClientAppAccessTokenHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Access-Token");
             lastClientAppControlKeyHeader = exchange.getRequestHeaders().getFirst("X-Client-App-Control-Key");
+            lastOperatorKeyHeader = exchange.getRequestHeaders().getFirst("X-Navi-Operator-Key");
+            lastUpstreamAdminKeyHeader = exchange.getRequestHeaders().getFirst("X-Navi-Admin-Key");
             lastUpstreamUserIdHeader = exchange.getRequestHeaders().getFirst("X-Upstream-User-Id");
             lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 
@@ -86,6 +90,8 @@ public class BusinessAgentApiSmokeTest {
         lastClientAppSecretHeader = null;
         lastClientAppAccessTokenHeader = null;
         lastClientAppControlKeyHeader = null;
+        lastOperatorKeyHeader = null;
+        lastUpstreamAdminKeyHeader = null;
         lastUpstreamUserIdHeader = null;
         lastBody = null;
         responseOverride = "{\"code\":0, \"data\":{}}";
@@ -147,6 +153,153 @@ public class BusinessAgentApiSmokeTest {
         assertNull(lastAuthHeader, "X-API-Key must not be present for control key auth");
         assertNull(lastAuthorizationHeader, "Authorization must not be present for control key auth");
         assertEquals("control-key-secret", lastClientAppControlKeyHeader);
+    }
+
+    @Test
+    public void testOperatorApiKeyAuthHeader() {
+        NavigatorClient operatorClient = NavigatorClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .tenantId("tenant-1")
+                .operatorApiKey("operator-key-secret")
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        responseOverride = "{\"code\":0,\"data\":[]}";
+        List<UpstreamBootstrapRequestDTO> requests = operatorClient.businessAgent()
+                .listUpstreamBootstrapRequests("PENDING");
+
+        assertNotNull(requests);
+        assertEquals("/api/v1/admin/upstream-bootstrap-requests?status=PENDING", lastPath);
+        assertEquals("GET", lastMethod);
+        assertNull(lastAuthHeader, "X-API-Key must not be present for operator key auth");
+        assertNull(lastAuthorizationHeader, "Authorization must not be present for operator key auth");
+        assertEquals("operator-key-secret", lastOperatorKeyHeader);
+    }
+
+    @Test
+    public void testUpstreamAdminApiKeyListsManagedClientApps() {
+        NavigatorClient upstreamAdminClient = NavigatorClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .tenantId("tenant-1")
+                .upstreamAdminApiKey("naa-secret-admin-key")
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        responseOverride = """
+                {"code":0,"data":[{
+                  "clientAppId":"capp-tenant-a",
+                  "tenantId":"tenant-a",
+                  "name":"Orders A",
+                  "upstreamSystemId":"x6-tms",
+                  "upstreamClientAppNamespace":"x6",
+                  "upstreamRef":"tms-a",
+                  "status":"ACTIVE"
+                }]}
+                """;
+        List<ClientAppDTO> apps = upstreamAdminClient.businessAgent().listUpstreamManagedClientApps("tenant-a");
+
+        assertNotNull(apps);
+        assertEquals(1, apps.size());
+        assertEquals("capp-tenant-a", apps.get(0).getClientAppId());
+        assertEquals("x6-tms", apps.get(0).getUpstreamSystemId());
+        assertEquals("/api/v1/upstream-admin/client-apps?tenantId=tenant-a", lastPath);
+        assertEquals("GET", lastMethod);
+        assertNull(lastAuthHeader, "upstream admin flow must not send X-API-Key");
+        assertNull(lastAuthorizationHeader, "upstream admin flow must not send Authorization");
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+    }
+
+    @Test
+    public void testUpstreamAdminApiKeyEnsuresClientAppAndIssuesControlCredential() {
+        NavigatorClient upstreamAdminClient = NavigatorClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .tenantId("tenant-1")
+                .upstreamAdminApiKey("naa-secret-admin-key")
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        EnsureUpstreamClientAppForm ensureForm = new EnsureUpstreamClientAppForm();
+        ensureForm.setTargetTenantId("tenant-a");
+        ensureForm.setUpstreamRef("tms-a");
+        ensureForm.setName("Orders A");
+        ensureForm.setCapabilityDomain("x6");
+
+        responseOverride = """
+                {"code":0,"data":{
+                  "clientAppId":"capp-tenant-a",
+                  "tenantId":"tenant-a",
+                  "name":"Orders A",
+                  "upstreamSystemId":"x6-tms",
+                  "upstreamClientAppNamespace":"x6",
+                  "upstreamRef":"tms-a",
+                  "status":"ACTIVE"
+                }}
+                """;
+        ClientAppDTO app = upstreamAdminClient.businessAgent().ensureUpstreamClientApp(ensureForm);
+
+        assertNotNull(app);
+        assertEquals("capp-tenant-a", app.getClientAppId());
+        assertEquals("/api/v1/upstream-admin/client-apps/ensure", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastAuthHeader, "upstream admin flow must not send X-API-Key");
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"targetTenantId\":\"tenant-a\""));
+        assertTrue(lastBody.contains("\"upstreamRef\":\"tms-a\""));
+
+        IssueControlCredentialForm credentialForm = new IssueControlCredentialForm();
+        credentialForm.setScopes(List.of("SKILL_SYNC", "MODEL_GRANT"));
+        credentialForm.setDescription("tenant bootstrap");
+
+        responseOverride = """
+                {"code":0,"data":{
+                  "credentialId":"cred-1",
+                  "clientAppId":"capp-tenant-a",
+                  "tenantId":"tenant-a",
+                  "controlApiKey":"cac-secret-control-key",
+                  "scopes":["SKILL_SYNC","MODEL_GRANT"],
+                  "expiresAt":"2026-06-01T00:00:00"
+                }}
+                """;
+        IssuedCredentialDTO credential = upstreamAdminClient.businessAgent()
+                .issueUpstreamClientAppControlCredential("capp-tenant-a", credentialForm);
+
+        assertNotNull(credential);
+        assertEquals("cac-secret-control-key", credential.getControlApiKey());
+        assertEquals("/api/v1/upstream-admin/client-apps/capp-tenant-a/control-credentials", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastAuthHeader, "upstream admin flow must not send X-API-Key");
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(lastBody.contains("\"scopes\":[\"SKILL_SYNC\",\"MODEL_GRANT\"]"));
+    }
+
+    @Test
+    public void testUpstreamAdminApiKeyDoesNotMixConfiguredApiKey() {
+        NavigatorClient mixedAuthClient = NavigatorClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .apiKey("sk-default-admin-key")
+                .tenantId("tenant-1")
+                .upstreamAdminApiKey("naa-builder-admin-key")
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        responseOverride = "{\"code\":0,\"data\":[]}";
+        mixedAuthClient.businessAgent().listUpstreamManagedClientApps("tenant-a");
+
+        assertEquals("/api/v1/upstream-admin/client-apps?tenantId=tenant-a", lastPath);
+        assertEquals("GET", lastMethod);
+        assertNull(lastAuthHeader, "upstream admin flow must not send configured X-API-Key");
+        assertEquals("naa-builder-admin-key", lastUpstreamAdminKeyHeader);
+
+        EnsureUpstreamClientAppForm form = new EnsureUpstreamClientAppForm();
+        form.setTargetTenantId("tenant-a");
+        form.setUpstreamRef("tms-a");
+        responseOverride = "{\"code\":0,\"data\":{\"clientAppId\":\"capp-tenant-a\"}}";
+        mixedAuthClient.businessAgent().ensureUpstreamClientApp(form, "naa-explicit-admin-key");
+
+        assertEquals("/api/v1/upstream-admin/client-apps/ensure", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastAuthHeader, "explicit upstream admin key must not mix configured X-API-Key");
+        assertEquals("naa-explicit-admin-key", lastUpstreamAdminKeyHeader);
     }
 
     @Test
@@ -219,6 +372,58 @@ public class BusinessAgentApiSmokeTest {
         assertEquals("POST", lastMethod);
         assertEquals("cak-test", lastClientAppKeyHeader);
         assertEquals("cas-secret", lastClientAppSecretHeader);
+        assertCommon();
+    }
+
+    @Test
+    public void testRequestUpstreamAdminKeyUsesNoAuthAndReturnsClaimToken() {
+        CreateUpstreamBootstrapRequestForm form = new CreateUpstreamBootstrapRequestForm();
+        form.setUpstreamSystemId("x6-tms");
+        form.setRequestedTenantId("tenant-1");
+        form.setMultiTenant(true);
+        form.setReason("tenant bootstrap");
+
+        responseOverride = """
+                {"code":0,"data":{
+                  "requestCode":"nabr-secret-code",
+                  "requestCodeSuffix":"code",
+                  "claimToken":"nabt-secret-token",
+                  "status":"PENDING",
+                  "requestExpiresAt":"2026-05-18T12:00:00"
+                }}
+                """;
+
+        UpstreamBootstrapRequestCreatedDTO created = client.businessAgent().requestUpstreamAdminKey(form);
+
+        assertNotNull(created);
+        assertEquals("nabr-secret-code", created.getRequestCode());
+        assertEquals("nabt-secret-token", created.getClaimToken());
+        assertEquals("/api/v1/upstream-bootstrap/admin-key-requests", lastPath);
+        assertEquals("POST", lastMethod);
+        assertNull(lastAuthHeader, "public bootstrap request must not send X-API-Key");
+        assertTrue(lastBody.contains("\"upstreamSystemId\":\"x6-tms\""));
+        assertTrue(lastBody.contains("\"requestedTenantId\":\"tenant-1\""));
+    }
+
+    @Test
+    public void testApproveUpstreamBootstrapRequestWithOperatorKey() {
+        ApproveUpstreamBootstrapRequestForm form = new ApproveUpstreamBootstrapRequestForm();
+        form.setAuthorizedTenantIds(List.of("tenant-1", "tenant-2"));
+        form.setAuthorizedClientAppNamespace("tms");
+        form.setScopes(List.of("CLIENT_APP_ADMIN"));
+        form.setClaimTtlMinutes(30L);
+
+        responseOverride = "{\"code\":0,\"data\":{\"requestId\":\"req-1\",\"status\":\"APPROVED\",\"authorizedTenantIds\":[\"tenant-1\",\"tenant-2\"]}}";
+        UpstreamBootstrapRequestDTO request = client.businessAgent()
+                .approveUpstreamBootstrapRequest("nabr-code", form, "operator-key-secret");
+
+        assertNotNull(request);
+        assertEquals("APPROVED", request.getStatus());
+        assertEquals("/api/v1/admin/upstream-bootstrap-requests/nabr-code/approve", lastPath);
+        assertEquals("POST", lastMethod);
+        assertEquals("operator-key-secret", lastOperatorKeyHeader);
+        assertTrue(lastBody.contains("\"authorizedTenantIds\":[\"tenant-1\",\"tenant-2\"]"));
+        assertTrue(lastBody.contains("\"claimTtlMinutes\":30"));
         assertCommon();
     }
 
