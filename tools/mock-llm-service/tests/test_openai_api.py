@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 from httpx import AsyncClient, ASGITransport
@@ -205,6 +206,53 @@ async def test_scripted_cursor_tool_call_and_debug_requests(client):
     assert records[0]["cursor"] == f"next:{trace_id}:001"
     assert records[0]["scenarioId"] == "tms-create-order"
     assert records[0]["responseSummary"]["toolCalls"] == ["tms.order.createOpeningDraft"]
+
+
+@pytest.mark.anyio
+async def test_scripted_response_can_delay_before_reply(client):
+    trace_id = "e2e-script-delay-001"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    register = await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "scenarioId": "slow-provider",
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:001",
+                    "response": {
+                        "content": "slow ok",
+                        "delay_ms": 120,
+                    },
+                }
+            ],
+        },
+    )
+    assert register.status_code == 200
+
+    started = time.monotonic()
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-scripted",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"run slow provider next:{trace_id}:001",
+                }
+            ],
+        },
+    )
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert elapsed >= 0.10
+    assert response.json()["choices"][0]["message"]["content"] == "slow ok"
+
+    debug = await client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert records[0]["responseSummary"]["responseDelayMs"] == 120
 
 
 @pytest.mark.anyio

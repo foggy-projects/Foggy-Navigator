@@ -106,6 +106,7 @@ class StreamConfig(BaseModel):
 class MockResponseConfig(BaseModel):
     content: str = ""  # 响应内容；tool-only scripted response 可省略
     tool_calls: Optional[List[Dict]] = None
+    delay_ms: int = 0  # 响应前延迟，用于 E2E 模拟 provider 慢响应/timeout
 
 
 class AnthropicResponseConfig(BaseModel):

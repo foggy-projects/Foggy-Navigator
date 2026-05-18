@@ -1,0 +1,149 @@
+{
+  "run_id": "20260518-203003-99163e",
+  "started_at": "2026-05-18T20:30:04.742506+08:00",
+  "completed_at": "2026-05-18T20:30:08.107150+08:00",
+  "base_url": "http://localhost:3061",
+  "mock_llm_base_url": "http://127.0.0.1:52676",
+  "mock_llm_api_base_url": "http://127.0.0.1:52676/v1",
+  "session_id": "sess-opt029-20260518-203003-99163e",
+  "context_id": "ctx-opt029-20260518-203003-99163e",
+  "data_root": "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\tools\\langgraph-biz-worker\\data",
+  "health_before": {
+    "hostname": "foggy",
+    "version": "0.1.0",
+    "active_tasks": 0,
+    "worker_name": "langgraph-biz-worker-qwen35-plus"
+  },
+  "health_after_detach_wait": {
+    "hostname": "foggy",
+    "version": "0.1.0",
+    "active_tasks": 0,
+    "worker_name": "langgraph-biz-worker-qwen35-plus"
+  },
+  "steps": [
+    {
+      "name": "01-llm-timeout-retry",
+      "task_id": "lgt_opt029_20260518-203003-99163e_timeout",
+      "event_count": 4,
+      "terminal_events": [
+        {
+          "type": "error",
+          "content": null,
+          "reason": "llm_retry_exhausted",
+          "error": "LLM_REQUEST_TIMEOUT; operation=skill_agent.invoke; provider=RunnableBinding|opt029-scripted|127.0.0.1:52676; task_id=lgt_opt029_20260518-203003-99163e_timeout; frame_id=frm_5c4877ef57e5; request timeout exceeded; timeout_seconds=0.15",
+          "structured_output": null
+        }
+      ],
+      "progress_events": [
+        {
+          "type": "task_progress",
+          "progress_type": "llm_retrying",
+          "reason": "LLM_REQUEST_TIMEOUT",
+          "attempt": 1,
+          "max_attempts": 2,
+          "next_retry_after_ms": 0,
+          "remaining_ms": 1827,
+          "task_id": "lgt_opt029_20260518-203003-99163e_timeout",
+          "frame_id": "frm_5c4877ef57e5"
+        }
+      ],
+      "frame_events": [
+        {
+          "type": "skill_frame_open",
+          "skill_id": "system.root",
+          "frame_id": "frm_5c4877ef57e5",
+          "content": "Opening frame for skill: system.root"
+        }
+      ]
+    },
+    {
+      "name": "02-continue-after-timeout",
+      "task_id": "lgt_opt029_20260518-203003-99163e_continue",
+      "event_count": 5,
+      "terminal_events": [
+        {
+          "type": "result",
+          "content": "OPT-029 recovery continuation completed in the interrupted frame context.",
+          "reason": null,
+          "error": null,
+          "structured_output": {
+            "scenario": "recoverable_continuation",
+            "continued": true
+          }
+        }
+      ],
+      "progress_events": [],
+      "frame_events": [
+        {
+          "type": "skill_frame_open",
+          "skill_id": "system.root",
+          "frame_id": "frm_5c4877ef57e5",
+          "content": "Reusing frame for skill: system.root"
+        }
+      ]
+    },
+    {
+      "name": "03-client-detach-probe",
+      "task_id": "lgt_opt029_20260518-203003-99163e_detach",
+      "client_observation": {
+        "client_timed_out": true,
+        "elapsed_ms": 250,
+        "error": "timed out"
+      },
+      "health_after_wait": {
+        "hostname": "foggy",
+        "version": "0.1.0",
+        "active_tasks": 0,
+        "worker_name": "langgraph-biz-worker-qwen35-plus"
+      }
+    }
+  ],
+  "verdicts": [
+    {
+      "name": "retry_progress_emitted",
+      "passed": true,
+      "details": "LLM timeout path should emit task_progress before retry."
+    },
+    {
+      "name": "timeout_interruption_recorded",
+      "passed": true,
+      "details": "Retry exhaustion should surface a reason-bearing error event."
+    },
+    {
+      "name": "next_turn_recovered",
+      "passed": true,
+      "details": "Next turn should complete using the recoverable frame context."
+    },
+    {
+      "name": "client_detach_observed",
+      "passed": true,
+      "details": "Short client timeout should detach without sending cancel."
+    },
+    {
+      "name": "server_completed_after_client_detach",
+      "passed": true,
+      "details": "Worker should continue and persist frame output after client detach."
+    },
+    {
+      "name": "worker_artifacts_collected",
+      "passed": true,
+      "details": "Frame artifacts should be copied for review."
+    }
+  ],
+  "mock_llm_request_count": 4,
+  "artifacts": {
+    "frames_by_task": [
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\opt-029-timeout-recovery\\20260518-203003-99163e\\artifacts\\frames-by-task\\lgt_opt029_20260518-203003-99163e_timeout",
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\opt-029-timeout-recovery\\20260518-203003-99163e\\artifacts\\frames-by-task\\lgt_opt029_20260518-203003-99163e_continue",
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\opt-029-timeout-recovery\\20260518-203003-99163e\\artifacts\\frames-by-task\\lgt_opt029_20260518-203003-99163e_detach"
+    ],
+    "frames_by_conversation": [
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\opt-029-timeout-recovery\\20260518-203003-99163e\\artifacts\\frames-by-conversation\\ctx-opt029-20260518-203003-99163e"
+    ],
+    "tool_audit": [
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\opt-029-timeout-recovery\\20260518-203003-99163e\\artifacts\\tool-audit\\lgt_opt029_20260518-203003-99163e_continue.jsonl",
+      "D:\\foggy-projects\\Foggy-Navigator-wt-qd-win11-dev\\docs\\version-tracker\\1.3.0-SNAPSHOT\\test-records\\opt-029-timeout-recovery\\20260518-203003-99163e\\artifacts\\tool-audit\\lgt_opt029_20260518-203003-99163e_detach.jsonl"
+    ],
+    "conversation_logs": []
+  }
+}

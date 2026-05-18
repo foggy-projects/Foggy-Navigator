@@ -1,0 +1,338 @@
+{
+  "frame_id": "frm_5c4877ef57e5",
+  "task_id": "lgt_opt029_20260518-203003-99163e_detach",
+  "skill_id": "system.root",
+  "frame_kind": "SKILL",
+  "parent_frame_id": null,
+  "status": "RUNNING",
+  "conversation_id": "ctx-opt029-20260518-203003-99163e",
+  "session_id": "sess-opt029-20260518-203003-99163e",
+  "current_task_id": "lgt_opt029_20260518-203003-99163e_detach",
+  "origin_task_id": "lgt_opt029_20260518-203003-99163e_timeout",
+  "last_task_ids": [
+    "lgt_opt029_20260518-203003-99163e_timeout",
+    "lgt_opt029_20260518-203003-99163e_continue",
+    "lgt_opt029_20260518-203003-99163e_detach"
+  ],
+  "input": {
+    "contextId": "ctx-opt029-20260518-203003-99163e",
+    "opt029RunId": "20260518-203003-99163e",
+    "scenario": "timeout-recovery-governance"
+  },
+  "private_messages": [
+    {
+      "role": "assistant",
+      "content": ""
+    },
+    {
+      "role": "tool_call",
+      "content": {
+        "name": "submit_skill_result",
+        "args": {
+          "summary": "OPT-029 recovery continuation completed in the interrupted frame context.",
+          "structured_output": {
+            "scenario": "recoverable_continuation",
+            "continued": true
+          },
+          "evidence_refs": [
+            "opt029:mock-llm-script"
+          ]
+        }
+      }
+    },
+    {
+      "role": "tool",
+      "content": {
+        "ok": true,
+        "errors": [],
+        "execution_report_ref": "frame-report://lgt_opt029_20260518-203003-99163e_continue/frm_5c4877ef57e5",
+        "execution_report_digest": {
+          "report_ref": "frame-report://lgt_opt029_20260518-203003-99163e_continue/frm_5c4877ef57e5",
+          "frame_id": "frm_5c4877ef57e5",
+          "task_id": "lgt_opt029_20260518-203003-99163e_continue",
+          "skill_id": "system.root",
+          "frame_kind": "SKILL",
+          "status": "RUNNING",
+          "summary": "OPT-029 recovery continuation completed in the interrupted frame context.",
+          "started_at": "2026-05-18T12:30:05.084785+00:00",
+          "tool_call_count": 1,
+          "child_frame_count": 0,
+          "approval_required": false,
+          "evidence_refs": [
+            "opt029:mock-llm-script"
+          ],
+          "generated_at": "2026-05-18T12:30:05.797935+00:00",
+          "generator_version": "frame-execution-report-v1"
+        }
+      }
+    },
+    {
+      "role": "assistant",
+      "content": ""
+    },
+    {
+      "role": "tool_call",
+      "content": {
+        "name": "submit_skill_result",
+        "args": {
+          "summary": "OPT-029 detach probe completed after client timeout.",
+          "structured_output": {
+            "scenario": "client_detach",
+            "server_completed": true
+          },
+          "evidence_refs": [
+            "opt029:mock-llm-script"
+          ]
+        }
+      }
+    }
+  ],
+  "private_working_state": {
+    "_skill_manifest": {
+      "id": "system.root",
+      "name": "system.root",
+      "description": "System root business skill for task-level orchestration.",
+      "markdown_body": "You are the system root skill for this business task. Handle the user's request directly when possible. Use invoke_business_function for authorized business functions when the needed function is described in the available context or skill material. Use invoke_business_skill to delegate bounded work to a specialized child skill. Attachments are metadata or URLs. Use analyze_attachment only when the user asks to inspect image/file contents or when required fields must be extracted from an attachment; if the user only asks to attach a file to a business operation, preserve the attachment without analysis. When the current user turn is ready to answer, call submit_skill_result. This root skill is persistent; submit_skill_result ends the current turn, not the root skill frame.",
+      "input_schema": {},
+      "output_schema": {},
+      "allowed_tools": [
+        "invoke_business_function",
+        "invoke_business_skill",
+        "analyze_attachment",
+        "submit_skill_result"
+      ],
+      "approval_tools": [],
+      "promote_to_parent": [
+        "result_summary",
+        "structured_output",
+        "artifact_refs",
+        "evidence_refs"
+      ],
+      "business_rules": {},
+      "subgraph": null,
+      "visibility": "builtin",
+      "context_visibility": "passthrough",
+      "client_app_id": null
+    },
+    "execution_report_ref": "frame-report://lgt_opt029_20260518-203003-99163e_detach/frm_5c4877ef57e5",
+    "execution_report_digest": {
+      "report_ref": "frame-report://lgt_opt029_20260518-203003-99163e_detach/frm_5c4877ef57e5",
+      "frame_id": "frm_5c4877ef57e5",
+      "task_id": "lgt_opt029_20260518-203003-99163e_detach",
+      "skill_id": "system.root",
+      "frame_kind": "SKILL",
+      "status": "RUNNING",
+      "summary": "OPT-029 detach probe completed after client timeout.",
+      "started_at": "2026-05-18T12:30:05.084785+00:00",
+      "tool_call_count": 2,
+      "child_frame_count": 0,
+      "approval_required": false,
+      "evidence_refs": [
+        "opt029:mock-llm-script"
+      ],
+      "generated_at": "2026-05-18T12:30:07.157874+00:00",
+      "generator_version": "frame-execution-report-v1"
+    },
+    "root_context_summary": {
+      "execution_reports": [
+        {
+          "report_ref": "frame-report://lgt_opt029_20260518-203003-99163e_timeout/frm_5c4877ef57e5",
+          "frame_id": "frm_5c4877ef57e5",
+          "task_id": "lgt_opt029_20260518-203003-99163e_timeout",
+          "skill_id": "system.root",
+          "frame_kind": "SKILL",
+          "status": "RUNNING",
+          "started_at": "2026-05-18T12:30:05.084785+00:00",
+          "tool_call_count": 0,
+          "child_frame_count": 0,
+          "approval_required": false,
+          "error": "LLM_REQUEST_TIMEOUT; operation=skill_agent.invoke; provider=RunnableBinding|opt029-scripted|127.0.0.1:52676; task_id=lgt_opt029_20260518-203003-99163e_timeout; frame_id=frm_5c4877ef57e5; request timeout exceeded; timeout_seconds=0.15",
+          "generated_at": "2026-05-18T12:30:05.471433+00:00",
+          "generator_version": "frame-execution-report-v1"
+        },
+        {
+          "report_ref": "frame-report://lgt_opt029_20260518-203003-99163e_continue/frm_5c4877ef57e5",
+          "frame_id": "frm_5c4877ef57e5",
+          "task_id": "lgt_opt029_20260518-203003-99163e_continue",
+          "skill_id": "system.root",
+          "frame_kind": "SKILL",
+          "status": "RUNNING",
+          "summary": "OPT-029 recovery continuation completed in the interrupted frame context.",
+          "started_at": "2026-05-18T12:30:05.084785+00:00",
+          "tool_call_count": 1,
+          "child_frame_count": 0,
+          "approval_required": false,
+          "evidence_refs": [
+            "opt029:mock-llm-script"
+          ],
+          "generated_at": "2026-05-18T12:30:05.797935+00:00",
+          "generator_version": "frame-execution-report-v1"
+        },
+        {
+          "report_ref": "frame-report://lgt_opt029_20260518-203003-99163e_detach/frm_5c4877ef57e5",
+          "frame_id": "frm_5c4877ef57e5",
+          "task_id": "lgt_opt029_20260518-203003-99163e_detach",
+          "skill_id": "system.root",
+          "frame_kind": "SKILL",
+          "status": "RUNNING",
+          "summary": "OPT-029 detach probe completed after client timeout.",
+          "started_at": "2026-05-18T12:30:05.084785+00:00",
+          "tool_call_count": 2,
+          "child_frame_count": 0,
+          "approval_required": false,
+          "evidence_refs": [
+            "opt029:mock-llm-script"
+          ],
+          "generated_at": "2026-05-18T12:30:07.157874+00:00",
+          "generator_version": "frame-execution-report-v1"
+        }
+      ],
+      "latest_execution_report_ref": "frame-report://lgt_opt029_20260518-203003-99163e_detach/frm_5c4877ef57e5",
+      "turn_count": 2,
+      "latest_summary": "OPT-029 detach probe completed after client timeout.",
+      "latest_structured_output": {
+        "scenario": "client_detach",
+        "server_completed": true
+      },
+      "recent_turns": [
+        {
+          "summary": "OPT-029 recovery continuation completed in the interrupted frame context.",
+          "structured_output": {
+            "scenario": "recoverable_continuation",
+            "continued": true
+          },
+          "artifact_refs": [],
+          "evidence_refs": [
+            "opt029:mock-llm-script"
+          ],
+          "submitted_at": "2026-05-18T12:30:05.796743+00:00"
+        },
+        {
+          "summary": "OPT-029 detach probe completed after client timeout.",
+          "structured_output": {
+            "scenario": "client_detach",
+            "server_completed": true
+          },
+          "artifact_refs": [],
+          "evidence_refs": [
+            "opt029:mock-llm-script"
+          ],
+          "submitted_at": "2026-05-18T12:30:07.155729+00:00"
+        }
+      ],
+      "artifact_refs": [],
+      "evidence_refs": [
+        "opt029:mock-llm-script"
+      ],
+      "private_messages_retained": 5,
+      "interruption_history": [
+        {
+          "reason": "llm_retry_exhausted",
+          "last_error": "LLM_REQUEST_TIMEOUT; operation=skill_agent.invoke; provider=RunnableBinding|opt029-scripted|127.0.0.1:52676; task_id=lgt_opt029_20260518-203003-99163e_timeout; frame_id=frm_5c4877ef57e5; request timeout exceeded; timeout_seconds=0.15",
+          "last_task_id": "lgt_opt029_20260518-203003-99163e_timeout",
+          "interrupted_at": "2026-05-18T12:30:05.469287+00:00",
+          "resolution": "TURN_COMPLETED",
+          "resolution_summary": "OPT-029 recovery continuation completed in the interrupted frame context.",
+          "abandoned_interruption": null,
+          "resolved_at": "2026-05-18T12:30:05.796743+00:00",
+          "recoverable_focus_summary": {
+            "frame_id": "frm_5c4877ef57e5",
+            "skill_id": "system.root",
+            "frame_kind": "SKILL",
+            "focus_kind": "ROOT",
+            "status": "RUNNING",
+            "input": {
+              "contextId": "ctx-opt029-20260518-203003-99163e",
+              "opt029RunId": "20260518-203003-99163e",
+              "scenario": "timeout-recovery-governance"
+            },
+            "reason": "llm_retry_exhausted",
+            "last_error": "LLM_REQUEST_TIMEOUT; operation=skill_agent.invoke; provider=RunnableBinding|opt029-scripted|127.0.0.1:52676; task_id=lgt_opt029_20260518-203003-99163e_timeout; frame_id=frm_5c4877ef57e5; request timeout exceeded; timeout_seconds=0.15",
+            "last_task_id": "lgt_opt029_20260518-203003-99163e_timeout",
+            "interrupted_at": "2026-05-18T12:30:05.469287+00:00"
+          },
+          "recoverable_focus_stack": [
+            {
+              "frame_id": "frm_5c4877ef57e5",
+              "parent_frame_id": null,
+              "skill_id": "system.root",
+              "frame_kind": "SKILL",
+              "status": "RUNNING",
+              "input": {
+                "contextId": "ctx-opt029-20260518-203003-99163e",
+                "opt029RunId": "20260518-203003-99163e",
+                "scenario": "timeout-recovery-governance"
+              }
+            }
+          ]
+        }
+      ],
+      "focus_history": [
+        {
+          "focus": {
+            "frame_id": "frm_5c4877ef57e5",
+            "skill_id": "system.root",
+            "frame_kind": "SKILL",
+            "focus_kind": "ROOT",
+            "status": "RUNNING",
+            "input": {
+              "contextId": "ctx-opt029-20260518-203003-99163e",
+              "opt029RunId": "20260518-203003-99163e",
+              "scenario": "timeout-recovery-governance"
+            },
+            "reason": "llm_retry_exhausted",
+            "last_error": "LLM_REQUEST_TIMEOUT; operation=skill_agent.invoke; provider=RunnableBinding|opt029-scripted|127.0.0.1:52676; task_id=lgt_opt029_20260518-203003-99163e_timeout; frame_id=frm_5c4877ef57e5; request timeout exceeded; timeout_seconds=0.15",
+            "last_task_id": "lgt_opt029_20260518-203003-99163e_timeout",
+            "interrupted_at": "2026-05-18T12:30:05.469287+00:00"
+          },
+          "resolution": "TURN_COMPLETED",
+          "resolved_at": "2026-05-18T12:30:05.796743+00:00"
+        }
+      ]
+    },
+    "turn_results": [
+      {
+        "summary": "OPT-029 recovery continuation completed in the interrupted frame context.",
+        "structured_output": {
+          "scenario": "recoverable_continuation",
+          "continued": true
+        },
+        "artifact_refs": [],
+        "evidence_refs": [
+          "opt029:mock-llm-script"
+        ],
+        "submitted_at": "2026-05-18T12:30:05.796743+00:00"
+      },
+      {
+        "summary": "OPT-029 detach probe completed after client timeout.",
+        "structured_output": {
+          "scenario": "client_detach",
+          "server_completed": true
+        },
+        "artifact_refs": [],
+        "evidence_refs": [
+          "opt029:mock-llm-script"
+        ],
+        "submitted_at": "2026-05-18T12:30:07.155729+00:00"
+      }
+    ]
+  },
+  "tool_calls": [],
+  "child_frame_ids": [],
+  "output": {
+    "scenario": "client_detach",
+    "server_completed": true
+  },
+  "result_summary": "OPT-029 detach probe completed after client timeout.",
+  "artifact_refs": [],
+  "evidence_refs": [
+    "opt029:mock-llm-script"
+  ],
+  "approval_request": null,
+  "started_at": "2026-05-18T12:30:05.084785+00:00",
+  "ended_at": "",
+  "journal_seq": 54,
+  "journal_updated_at": "2026-05-18T12:30:07.159414+00:00",
+  "submit_attempts": 0,
+  "max_submit_attempts": 3
+}
