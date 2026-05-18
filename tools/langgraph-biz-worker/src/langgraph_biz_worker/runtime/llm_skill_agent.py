@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import datetime
 from pathlib import Path
 from typing import Any
 
@@ -89,15 +88,18 @@ from .llm_tool_dispatcher import (
     _TOOL_UNHANDLED,
     LlmToolDispatchContext,
     LlmToolDispatcher,
+    _append_tool_audit,
     _dispatch_file_tool,
     _dispatch_public_resource_tool,
     _emit_progress_event,
+    _runtime_client_app_id,
     _runtime_task_scoped_token,
     _tool_function_id,
 )
 from .llm_tool_schemas import (
     _GLOBAL_TOOL_NAMES,
     _KNOWN_TOOL_SCHEMAS,
+    _bind_tools,
     _dedupe_tool_specs,
     _tool_specs,
 )
@@ -185,7 +187,7 @@ class LlmSkillAgent:
             )),
         ]
         events: list[QueryEvent] = []
-        model = self._bind_tools(self._model, manifest, persistent_frame=persistent_frame)
+        model = _bind_tools(self._model, manifest, persistent_frame=persistent_frame)
 
         for _ in range(self._max_iterations):
             try:
@@ -310,7 +312,7 @@ class LlmSkillAgent:
         events: list[QueryEvent] = [tool_use_event]
         _emit_progress_event(runtime_context, tool_use_event)
         self._append_tool_call_message(frame_id, name, safe_args)
-        self._append_tool_audit(task_id, frame_id, manifest.id, name, safe_args, phase="request")
+        _append_tool_audit(self._data_root, task_id, frame_id, manifest.id, name, safe_args, phase="request")
 
         try:
             result = self._call_tool(
@@ -328,7 +330,16 @@ class LlmSkillAgent:
             result = {"ok": False, "error": str(exc)}
         extra_events = result.pop("_events", []) if isinstance(result, dict) else []
         suspended = bool(result.pop("_suspended", False)) if isinstance(result, dict) else False
-        self._append_tool_audit(task_id, frame_id, manifest.id, name, safe_args, phase="response", result=result)
+        _append_tool_audit(
+            self._data_root,
+            task_id,
+            frame_id,
+            manifest.id,
+            name,
+            safe_args,
+            phase="response",
+            result=result,
+        )
 
         event_type = "skill_result_submit" if name == "submit_skill_result" and result.get("ok") else "tool_result"
         if name == "submit_skill_result" and not result.get("ok"):
@@ -571,56 +582,6 @@ class LlmSkillAgent:
             "name": name,
             "args": args,
         })
-
-    def _append_tool_audit(
-        self,
-        task_id: str,
-        frame_id: str,
-        skill_id: str,
-        name: str,
-        args: dict[str, Any],
-        *,
-        phase: str,
-        result: dict[str, Any] | None = None,
-    ) -> None:
-        if self._data_root is None:
-            return
-        try:
-            log_dir = Path(self._data_root) / "logs" / "skill-tool-calls"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            entry = {
-                "ts": datetime.datetime.now().isoformat(),
-                "task_id": task_id,
-                "frame_id": frame_id,
-                "skill_id": skill_id,
-                "tool": name,
-                "phase": phase,
-                "args": args,
-            }
-            if result is not None:
-                entry["result"] = _safe_content(result)
-            with open(log_dir / f"{task_id}.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except Exception:
-            logger.debug("Failed to write skill tool audit log", exc_info=True)
-
-    @staticmethod
-    def _bind_tools(
-        model: BaseChatModel,
-        manifest: SkillManifest,
-        persistent_frame: bool = False,
-    ) -> BaseChatModel:
-        if not hasattr(model, "bind_tools"):
-            return model
-        return model.bind_tools(_tool_specs(manifest, persistent_frame=persistent_frame))
-
-
-
-def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None:
-    if not runtime_context:
-        return None
-    value = runtime_context.get("client_app_id") or runtime_context.get("clientAppId")
-    return value if isinstance(value, str) and value else None
 
 # ---------------------------------------------------------------------------
 # Tool schema registry

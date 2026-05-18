@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.language_models import BaseChatModel
+
 from ..models import SkillManifest
 
 
@@ -20,6 +22,16 @@ def _tool_specs(manifest: SkillManifest, persistent_frame: bool = False) -> list
         specs.append(_KNOWN_TOOL_SCHEMAS["resume_recoverable_child_skill"])
         specs.append(_KNOWN_TOOL_SCHEMAS["shelve_interrupted_frame"])
     return _dedupe_tool_specs(specs)
+
+
+def _bind_tools(
+    model: BaseChatModel,
+    manifest: SkillManifest,
+    persistent_frame: bool = False,
+) -> BaseChatModel:
+    if not hasattr(model, "bind_tools"):
+        return model
+    return model.bind_tools(_tool_specs(manifest, persistent_frame=persistent_frame))
 
 
 _GLOBAL_TOOL_NAMES = [

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import datetime
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -27,7 +29,7 @@ from .llm_business_function_adapter import (
     _looks_like_business_function_id,
     _split_business_function_tool_name,
 )
-from .llm_tool_call_codec import _execution_report_payload_from_frame
+from .llm_tool_call_codec import _execution_report_payload_from_frame, _safe_content
 from .llm_tool_schemas import _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES
 from .public_skill_resource_tools import PublicSkillResourceTools
 from .skill_runtime import SkillRuntime
@@ -289,6 +291,39 @@ def _emit_progress_event(runtime_context: dict[str, Any] | None, event: QueryEve
         logger.debug("Failed to emit progress event", exc_info=True)
 
 
+def _append_tool_audit(
+    data_root: Path | None,
+    task_id: str,
+    frame_id: str,
+    skill_id: str,
+    name: str,
+    args: dict[str, Any],
+    *,
+    phase: str,
+    result: dict[str, Any] | None = None,
+) -> None:
+    if data_root is None:
+        return
+    try:
+        log_dir = Path(data_root) / "logs" / "skill-tool-calls"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": datetime.datetime.now().isoformat(),
+            "task_id": task_id,
+            "frame_id": frame_id,
+            "skill_id": skill_id,
+            "tool": name,
+            "phase": phase,
+            "args": args,
+        }
+        if result is not None:
+            entry["result"] = _safe_content(result)
+        with open(log_dir / f"{task_id}.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        logger.debug("Failed to write skill tool audit log", exc_info=True)
+
+
 def _dispatch_file_tool(
     tools: AccountFileTools,
     name: str,
@@ -370,6 +405,13 @@ def _runtime_task_scoped_token(runtime_context: dict[str, Any] | None) -> str | 
         return None
     token = runtime_context.get("task_scoped_token")
     return token if isinstance(token, str) and token else None
+
+
+def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None:
+    if not runtime_context:
+        return None
+    value = runtime_context.get("client_app_id") or runtime_context.get("clientAppId")
+    return value if isinstance(value, str) and value else None
 
 
 def _tool_function_id(
