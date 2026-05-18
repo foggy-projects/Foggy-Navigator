@@ -58,8 +58,38 @@
               <input v-model.trim="bffBaseUrl" type="url" placeholder="http://127.0.0.1:5181" />
             </label>
             <label class="field-row">
-              <span>Agent ID</span>
-              <input v-model.trim="bffAgentId" type="text" placeholder="agent-id" />
+              <span>Navi Base URL</span>
+              <input v-model.trim="navigatorBaseUrl" type="url" placeholder="http://127.0.0.1:8112" />
+            </label>
+            <label class="field-row">
+              <span>Target Tenant ID</span>
+              <input v-model.trim="targetTenantId" type="text" placeholder="root 登录时使用；如 tenant-tms-e3cf" />
+            </label>
+            <label class="field-row">
+              <span>Agent/Skill ID</span>
+              <input v-model.trim="bffAgentId" type="text" placeholder="如 tms.navigator.agent" />
+            </label>
+            <label class="field-row">
+              <span>Upstream User ID</span>
+              <input v-model.trim="bffUpstreamUserId" type="text" placeholder="observer-local-user" />
+            </label>
+            <label class="field-row">
+              <span>Model Config ID</span>
+              <input v-model.trim="bffModelConfigId" type="text" placeholder="可选，留空使用 BFF 默认值" />
+            </label>
+            <label class="field-row">
+              <span>Navi 用户名</span>
+              <input v-model.trim="naviUsername" type="text" autocomplete="username" placeholder="tenant admin" />
+            </label>
+            <label class="field-row">
+              <span>Navi 密码</span>
+              <input
+                v-model="naviPassword"
+                type="password"
+                autocomplete="current-password"
+                placeholder="仅提交给本地 BFF，不保存"
+                @keydown.enter.prevent="authorizeBff"
+              />
             </label>
             <label class="checkbox-row">
               <input v-model="bffUploadEnabled" type="checkbox" />
@@ -68,7 +98,12 @@
           </div>
           <div class="panel-actions compact">
             <button type="button" class="plain-button" @click="loadBffConfig">读取 BFF 配置</button>
+            <button type="button" class="plain-button primary" :disabled="bffAuthorizing" @click="authorizeBff">
+              {{ bffAuthorizing ? '授权中' : '生成调试授权' }}
+            </button>
           </div>
+          <div v-if="bffAuthMessage" class="inline-status ok">{{ bffAuthMessage }}</div>
+          <div v-if="bffError" class="inline-status warn">{{ bffError }}</div>
         </section>
 
         <section class="panel-section">
@@ -79,9 +114,13 @@
             <dt v-if="connectionMode === 'real'">BFF</dt>
             <dd v-if="connectionMode === 'real'">{{ normalizedBffBaseUrl }}</dd>
             <dt v-if="connectionMode === 'real'">BFF auth</dt>
-            <dd v-if="connectionMode === 'real'" :class="bffAuthMode === 'missing' || bffAuthMode === '读取失败' ? 'warn' : 'ok'">
+            <dd v-if="connectionMode === 'real'" :class="bffAuthStatusClass">
               {{ bffAuthMode }}
             </dd>
+            <dt v-if="connectionMode === 'real' && bffConfig?.clientAppId">ClientApp</dt>
+            <dd v-if="connectionMode === 'real' && bffConfig?.clientAppId">{{ bffConfig.clientAppName || bffConfig.clientAppId }}</dd>
+            <dt v-if="connectionMode === 'real' && bffConfig?.authUsername">授权用户</dt>
+            <dd v-if="connectionMode === 'real' && bffConfig?.authUsername">{{ bffConfig.authUsername }}</dd>
             <dt>uploadAttachment</dt>
             <dd :class="attachmentsInjected ? 'ok' : 'warn'">
               {{ attachmentsInjected ? 'present' : 'missing' }}
@@ -151,16 +190,29 @@ interface StoredSettings {
   connectionMode?: ConnectionMode
   hookMode?: HookMode
   bffBaseUrl?: string
+  navigatorBaseUrl?: string
+  targetTenantId?: string
   bffAgentId?: string
+  bffUpstreamUserId?: string
+  bffModelConfigId?: string
   bffUploadEnabled?: boolean
+  naviUsername?: string
 }
 
 interface ObserverBffConfig {
   authMode?: string
+  authSource?: string
+  navigatorBaseUrl?: string
   bffBaseUrl?: string
   agentId?: string
   upstreamUserId?: string
   modelConfigId?: string
+  clientAppId?: string
+  clientAppName?: string
+  authUsername?: string
+  authUserId?: string
+  tenantId?: string
+  grantSteps?: string[]
   attachmentUploadUrl?: string
 }
 
@@ -195,10 +247,18 @@ const storedSettings = readStoredSettings()
 const connectionMode = ref<ConnectionMode>(storedSettings.connectionMode ?? 'mock')
 const hookMode = ref<HookMode>(storedSettings.hookMode ?? 'enabled')
 const bffBaseUrl = ref(storedSettings.bffBaseUrl ?? 'http://127.0.0.1:5181')
+const navigatorBaseUrl = ref(storedSettings.navigatorBaseUrl ?? 'http://127.0.0.1:8112')
+const targetTenantId = ref(storedSettings.targetTenantId ?? '')
 const bffAgentId = ref(storedSettings.bffAgentId ?? 'observer-agent')
+const bffUpstreamUserId = ref(storedSettings.bffUpstreamUserId ?? 'observer-local-user')
+const bffModelConfigId = ref(storedSettings.bffModelConfigId ?? '')
 const bffUploadEnabled = ref(storedSettings.bffUploadEnabled ?? true)
+const naviUsername = ref(storedSettings.naviUsername ?? '')
+const naviPassword = ref('')
 const bffConfig = ref<ObserverBffConfig | null>(null)
 const bffError = ref('')
+const bffAuthMessage = ref('')
+const bffAuthorizing = ref(false)
 const resetSeed = ref(0)
 const taskSeed = ref(0)
 const uploadLogs = ref<UploadLog[]>([])
@@ -208,12 +268,27 @@ const sendEvents = ref<SendEventLog[]>([])
 const normalizedBffBaseUrl = computed(() => normalizeBaseUrl(bffBaseUrl.value))
 const connectionModeLabel = computed(() => (connectionMode.value === 'real' ? 'Real Navigator BFF' : 'Mock 本地回放'))
 const bffAuthMode = computed(() => (bffError.value ? '读取失败' : (bffConfig.value?.authMode ?? '未读取')))
+const bffAuthStatusClass = computed(() => (
+  bffAuthMode.value === 'missing' || bffAuthMode.value === '读取失败' || bffAuthMode.value === '未读取'
+    ? 'warn'
+    : 'ok'
+))
 const attachmentsInjected = computed(() => {
   if (hookMode.value !== 'enabled') return false
   return connectionMode.value === 'mock' || bffUploadEnabled.value
 })
 const expectedEntry = computed(() => (attachmentsInjected.value ? '显示回形针按钮' : '隐藏附件入口'))
-const chatKey = computed(() => `${connectionMode.value}-${hookMode.value}-${normalizedBffBaseUrl.value}-${bffAgentId.value}-${resetSeed.value}`)
+const chatKey = computed(() => [
+  connectionMode.value,
+  hookMode.value,
+  normalizedBffBaseUrl.value,
+  navigatorBaseUrl.value,
+  targetTenantId.value,
+  bffAgentId.value,
+  bffUpstreamUserId.value,
+  bffModelConfigId.value,
+  resetSeed.value,
+].join('-'))
 const chatPlaceholder = computed(() => {
   if (connectionMode.value === 'real') {
     return '输入消息，真实发送到 BFF；已注入时可粘贴/拖入/选择附件'
@@ -258,14 +333,30 @@ const chatConfig = computed<NavigatorChatConfig>(() => {
 })
 
 watch(
-  [connectionMode, hookMode, bffBaseUrl, bffAgentId, bffUploadEnabled],
+  [
+    connectionMode,
+    hookMode,
+    bffBaseUrl,
+    navigatorBaseUrl,
+    targetTenantId,
+    bffAgentId,
+    bffUpstreamUserId,
+    bffModelConfigId,
+    bffUploadEnabled,
+    naviUsername,
+  ],
   () => {
     saveStoredSettings({
       connectionMode: connectionMode.value,
       hookMode: hookMode.value,
       bffBaseUrl: bffBaseUrl.value,
+      navigatorBaseUrl: navigatorBaseUrl.value,
+      targetTenantId: targetTenantId.value,
       bffAgentId: bffAgentId.value,
+      bffUpstreamUserId: bffUpstreamUserId.value,
+      bffModelConfigId: bffModelConfigId.value,
       bffUploadEnabled: bffUploadEnabled.value,
+      naviUsername: naviUsername.value,
     })
   },
   { flush: 'post' },
@@ -317,16 +408,72 @@ async function loadBffConfig() {
       headers: { Accept: 'application/json' },
     })
     const data = await unwrapObserverResponse<ObserverBffConfig>(resp)
-    bffConfig.value = data
+    applyBffConfig(data)
     bffError.value = ''
-    if (data.agentId && (!bffAgentId.value || bffAgentId.value === 'observer-agent')) {
-      bffAgentId.value = data.agentId
-    }
-    if (data.bffBaseUrl && (!bffBaseUrl.value || bffBaseUrl.value === 'http://127.0.0.1:5181')) {
-      bffBaseUrl.value = data.bffBaseUrl
-    }
   } catch (error) {
     bffError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function authorizeBff() {
+  bffError.value = ''
+  bffAuthMessage.value = ''
+  if (!naviUsername.value || !naviPassword.value) {
+    bffError.value = '请填写 Navi 用户名和密码'
+    return
+  }
+  bffAuthorizing.value = true
+  try {
+    const resp = await window.fetch(`${normalizedBffBaseUrl.value}/api/v1/observer/auth/login`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        username: naviUsername.value,
+        password: naviPassword.value,
+        navigatorBaseUrl: navigatorBaseUrl.value,
+        targetTenantId: targetTenantId.value || undefined,
+        agentId: bffAgentId.value,
+        upstreamUserId: bffUpstreamUserId.value,
+        modelConfigId: bffModelConfigId.value || undefined,
+      }),
+    })
+    const data = await unwrapObserverResponse<ObserverBffConfig>(resp)
+    applyBffConfig(data, true)
+    naviPassword.value = ''
+    bffAuthMessage.value = `已生成调试授权：${data.authMode ?? 'runtime'}`
+    resetChat()
+  } catch (error) {
+    bffError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    bffAuthorizing.value = false
+  }
+}
+
+function applyBffConfig(data: ObserverBffConfig, force = false) {
+  bffConfig.value = data
+  if (data.agentId && (force || !bffAgentId.value || bffAgentId.value === 'observer-agent')) {
+    bffAgentId.value = data.agentId
+  }
+  if (data.upstreamUserId && (force || !bffUpstreamUserId.value || bffUpstreamUserId.value === 'observer-local-user')) {
+    bffUpstreamUserId.value = data.upstreamUserId
+  }
+  if (data.modelConfigId && (force || !bffModelConfigId.value)) {
+    bffModelConfigId.value = data.modelConfigId
+  }
+  if (data.navigatorBaseUrl && (force || !navigatorBaseUrl.value || navigatorBaseUrl.value === 'http://127.0.0.1:8112')) {
+    navigatorBaseUrl.value = data.navigatorBaseUrl
+  }
+  if (data.tenantId && (force || !targetTenantId.value)) {
+    targetTenantId.value = data.tenantId
+  }
+  if (data.authUsername && !naviUsername.value) {
+    naviUsername.value = data.authUsername
+  }
+  if (data.bffBaseUrl && (force || !bffBaseUrl.value || bffBaseUrl.value === 'http://127.0.0.1:5181')) {
+    bffBaseUrl.value = data.bffBaseUrl
   }
 }
 
@@ -505,8 +652,13 @@ function readStoredSettings(): StoredSettings {
       connectionMode: parsed.connectionMode === 'real' || parsed.connectionMode === 'mock' ? parsed.connectionMode : undefined,
       hookMode: parsed.hookMode === 'enabled' || parsed.hookMode === 'missing' ? parsed.hookMode : undefined,
       bffBaseUrl: typeof parsed.bffBaseUrl === 'string' ? parsed.bffBaseUrl : undefined,
+      navigatorBaseUrl: typeof parsed.navigatorBaseUrl === 'string' ? parsed.navigatorBaseUrl : undefined,
+      targetTenantId: typeof parsed.targetTenantId === 'string' ? parsed.targetTenantId : undefined,
       bffAgentId: typeof parsed.bffAgentId === 'string' ? parsed.bffAgentId : undefined,
+      bffUpstreamUserId: typeof parsed.bffUpstreamUserId === 'string' ? parsed.bffUpstreamUserId : undefined,
+      bffModelConfigId: typeof parsed.bffModelConfigId === 'string' ? parsed.bffModelConfigId : undefined,
       bffUploadEnabled: typeof parsed.bffUploadEnabled === 'boolean' ? parsed.bffUploadEnabled : undefined,
+      naviUsername: typeof parsed.naviUsername === 'string' ? parsed.naviUsername : undefined,
     }
   } catch {
     return {}
@@ -670,9 +822,40 @@ function saveStoredSettings(settings: StoredSettings) {
   background: #fff;
 }
 
+.plain-button.primary {
+  border-color: #2563eb;
+  color: #fff;
+  background: #2563eb;
+}
+
 .plain-button:hover {
   border-color: #2563eb;
   color: #1d4ed8;
+}
+
+.plain-button.primary:hover {
+  color: #fff;
+  background: #1d4ed8;
+}
+
+.plain-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.inline-status {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.inline-status.ok {
+  color: #047857;
+}
+
+.inline-status.warn {
+  color: #b45309;
+  overflow-wrap: anywhere;
 }
 
 .status-grid {
@@ -759,6 +942,9 @@ function saveStoredSettings(settings: StoredSettings) {
 }
 
 .panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 18px;
 }
 

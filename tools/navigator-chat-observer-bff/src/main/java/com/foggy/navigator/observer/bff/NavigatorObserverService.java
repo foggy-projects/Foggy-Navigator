@@ -22,43 +22,68 @@ import static org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE;
 public class NavigatorObserverService {
 
     private final ObserverBffProperties properties;
-    private final NavigatorClient client;
+    private final NavigatorAccountLoginBootstrapService loginBootstrapService;
+    private final NavigatorClient defaultClient;
+    private final NavigatorClient runtimeClient;
 
+    private volatile ObserverRuntimeCredential loginRuntimeCredential;
     private volatile String cachedAccessToken;
+    private volatile String cachedAccessTokenKey;
     private volatile Instant refreshTokenAt = Instant.EPOCH;
 
-    public NavigatorObserverService(ObserverBffProperties properties) {
+    public NavigatorObserverService(
+            ObserverBffProperties properties,
+            NavigatorAccountLoginBootstrapService loginBootstrapService) {
         this.properties = properties;
-        this.client = buildClient(properties);
+        this.loginBootstrapService = loginBootstrapService;
+        this.defaultClient = buildDefaultClient(properties);
+        this.runtimeClient = buildRuntimeClient(properties);
     }
 
     public Map<String, Object> observerConfig() {
+        ObserverRuntimeCredential runtime = activeClientAppRuntime();
         Map<String, Object> config = new LinkedHashMap<>();
-        config.put("authMode", properties.authMode());
-        config.put("navigatorBaseUrl", properties.navigatorBaseUrl());
+        config.put("authMode", authMode(runtime));
+        config.put("authSource", runtime == null ? null : runtime.source());
+        config.put("navigatorBaseUrl", runtime == null ? properties.navigatorBaseUrl() : runtime.navigatorBaseUrl());
         config.put("bffBaseUrl", properties.publicBaseUrl());
-        config.put("agentId", properties.agentId());
-        config.put("upstreamUserId", properties.upstreamUserId());
-        config.put("modelConfigId", properties.modelConfigId());
+        config.put("agentId", defaultAgentId(runtime));
+        config.put("upstreamUserId", defaultUpstreamUserId(runtime));
+        config.put("modelConfigId", defaultModelConfigId(runtime));
+        config.put("clientAppId", runtime == null ? properties.clientAppId() : runtime.clientAppId());
+        config.put("clientAppName", runtime == null ? null : runtime.clientAppName());
+        config.put("authUsername", runtime == null ? null : runtime.authUsername());
+        config.put("authUserId", runtime == null ? null : runtime.authUserId());
+        config.put("tenantId", runtime == null ? null : runtime.tenantId());
+        config.put("grantSteps", runtime == null ? List.of() : runtime.grantSteps());
+        config.put("issuedAt", runtime == null ? null : runtime.issuedAt().toString());
         config.put("attachmentUploadUrl", properties.publicBaseUrl() + "/api/v1/observer/attachments");
         config.put("attachmentStorageDir", properties.attachmentStorageDir().toString());
         return config;
     }
 
+    public Map<String, Object> loginWithNavigatorAccount(Map<String, Object> body) {
+        loginRuntimeCredential = loginBootstrapService.loginAndBootstrap(body);
+        clearRuntimeTokenCache();
+        return observerConfig();
+    }
+
     public AgentTask ask(String agentId, Map<String, Object> body) {
+        Map<String, Object> request = body == null ? Map.of() : body;
         requireNavigatorAuth();
-        String question = firstText(body, "question", "message");
+        String question = firstText(request, "question", "message");
         if (ObserverBffProperties.isBlank(question)) {
             throw new ResponseStatusException(BAD_REQUEST, "question or message is required");
         }
-        String contextId = text(body.get("contextId"));
-        Integer maxTurns = integer(body.get("maxTurns"));
-        Map<String, Object> clientContext = map(body.get("clientContext"));
-        String modelConfigId = resolveModelConfigId(body);
-        List<Map<String, Object>> attachments = listOfMaps(body.get("attachments"));
+        String contextId = text(request.get("contextId"));
+        Integer maxTurns = integer(request.get("maxTurns"));
+        Map<String, Object> clientContext = map(request.get("clientContext"));
+        String modelConfigId = resolveModelConfigId(request);
+        List<Map<String, Object>> attachments = listOfMaps(request.get("attachments"));
 
-        if (properties.hasClientAppRuntime()) {
-            return client.agents().askWithClientAppAccessToken(
+        ObserverRuntimeCredential runtime = activeClientAppRuntime();
+        if (runtime != null) {
+            return runtimeClient(runtime).agents().askWithClientAppAccessToken(
                     agentId,
                     question,
                     contextId,
@@ -66,12 +91,12 @@ public class NavigatorObserverService {
                     clientContext,
                     modelConfigId,
                     attachments,
-                    properties.clientAppKey(),
-                    runtimeAccessToken(),
-                    resolveUpstreamUserId(body));
+                    runtime.clientAppKey(),
+                    runtimeAccessToken(runtime),
+                    resolveUpstreamUserId(request));
         }
 
-        return client.agents().askWithAttachments(
+        return defaultClient.agents().askWithAttachments(
                 agentId,
                 question,
                 contextId,
@@ -83,115 +108,120 @@ public class NavigatorObserverService {
 
     public AgentTask getTask(String agentId, String taskId) {
         requireNavigatorAuth();
-        if (properties.hasClientAppRuntime()) {
-            return client.agents().getTaskWithClientAppAccessToken(
+        ObserverRuntimeCredential runtime = activeClientAppRuntime();
+        if (runtime != null) {
+            return runtimeClient(runtime).agents().getTaskWithClientAppAccessToken(
                     agentId,
                     taskId,
-                    properties.clientAppKey(),
-                    runtimeAccessToken(),
-                    properties.upstreamUserId());
+                    runtime.clientAppKey(),
+                    runtimeAccessToken(runtime),
+                    defaultUpstreamUserId(runtime));
         }
-        return client.agents().getTask(agentId, taskId);
+        return defaultClient.agents().getTask(agentId, taskId);
     }
 
     public TaskMessagesPage getTaskMessages(String agentId, String taskId, Integer limit, String cursor) {
         requireNavigatorAuth();
         int resolvedLimit = normalizeLimit(limit, 50);
-        if (properties.hasClientAppRuntime()) {
-            return client.agents().getTaskMessagesWithClientAppAccessToken(
+        ObserverRuntimeCredential runtime = activeClientAppRuntime();
+        if (runtime != null) {
+            return runtimeClient(runtime).agents().getTaskMessagesWithClientAppAccessToken(
                     agentId,
                     taskId,
                     resolvedLimit,
                     cursor,
-                    properties.clientAppKey(),
-                    runtimeAccessToken(),
-                    properties.upstreamUserId());
+                    runtime.clientAppKey(),
+                    runtimeAccessToken(runtime),
+                    defaultUpstreamUserId(runtime));
         }
-        return client.agents().getTaskMessages(agentId, taskId, resolvedLimit, cursor);
+        return defaultClient.agents().getTaskMessages(agentId, taskId, resolvedLimit, cursor);
     }
 
     public Map<String, Object> cancelTask(String agentId, String taskId) {
         requireNavigatorAuth();
-        if (properties.hasClientAppRuntime()) {
-            client.agents().cancelTaskWithClientAppAccessToken(
+        ObserverRuntimeCredential runtime = activeClientAppRuntime();
+        if (runtime != null) {
+            runtimeClient(runtime).agents().cancelTaskWithClientAppAccessToken(
                     agentId,
                     taskId,
-                    properties.clientAppKey(),
-                    runtimeAccessToken(),
-                    properties.upstreamUserId());
+                    runtime.clientAppKey(),
+                    runtimeAccessToken(runtime),
+                    defaultUpstreamUserId(runtime));
         } else {
-            client.agents().cancelTask(agentId, taskId);
+            defaultClient.agents().cancelTask(agentId, taskId);
         }
         return Map.of("cancelled", true);
     }
 
     public List<AgentTask> listTasks(String agentId) {
         requireNavigatorAuth();
-        if (properties.hasClientAppRuntime()) {
-            return client.agents().listTasksWithClientAppAccessToken(
+        ObserverRuntimeCredential runtime = activeClientAppRuntime();
+        if (runtime != null) {
+            return runtimeClient(runtime).agents().listTasksWithClientAppAccessToken(
                     agentId,
-                    properties.clientAppKey(),
-                    runtimeAccessToken(),
-                    properties.upstreamUserId());
+                    runtime.clientAppKey(),
+                    runtimeAccessToken(runtime),
+                    defaultUpstreamUserId(runtime));
         }
-        return client.agents().listTasks(agentId);
+        return defaultClient.agents().listTasks(agentId);
     }
 
     public SessionListPage listSessions(String agentId, Integer limit, String cursor) {
         requireNavigatorAuth();
         int resolvedLimit = normalizeLimit(limit, 20);
-        if (properties.hasClientAppRuntime()) {
-            return client.agents().listSessionsWithClientAppAccessToken(
+        ObserverRuntimeCredential runtime = activeClientAppRuntime();
+        if (runtime != null) {
+            return runtimeClient(runtime).agents().listSessionsWithClientAppAccessToken(
                     agentId,
                     resolvedLimit,
                     cursor,
-                    properties.clientAppKey(),
-                    runtimeAccessToken(),
-                    properties.upstreamUserId());
+                    runtime.clientAppKey(),
+                    runtimeAccessToken(runtime),
+                    defaultUpstreamUserId(runtime));
         }
-        return client.agents().listSessions(agentId, resolvedLimit, cursor);
+        return defaultClient.agents().listSessions(agentId, resolvedLimit, cursor);
     }
 
     public SessionMessagesPage getSessionMessages(String agentId, String contextId, Integer limit, String cursor) {
         requireNavigatorAuth();
         int resolvedLimit = normalizeLimit(limit, 50);
-        if (properties.hasClientAppRuntime()) {
-            return client.agents().getSessionMessagesWithClientAppAccessToken(
+        ObserverRuntimeCredential runtime = activeClientAppRuntime();
+        if (runtime != null) {
+            return runtimeClient(runtime).agents().getSessionMessagesWithClientAppAccessToken(
                     agentId,
                     contextId,
                     resolvedLimit,
                     cursor,
-                    properties.clientAppKey(),
-                    runtimeAccessToken(),
-                    properties.upstreamUserId());
+                    runtime.clientAppKey(),
+                    runtimeAccessToken(runtime),
+                    defaultUpstreamUserId(runtime));
         }
-        return client.agents().getSessionMessages(agentId, contextId, resolvedLimit, cursor);
+        return defaultClient.agents().getSessionMessages(agentId, contextId, resolvedLimit, cursor);
     }
 
     public Object preflight(String agentId, Map<String, Object> body) {
+        Map<String, Object> request = body == null ? Map.of() : body;
         requireNavigatorAuth();
-        if (properties.hasClientAppRuntime()) {
-            return client.agents().verifyReadinessWithClientAppAccessToken(
+        ObserverRuntimeCredential runtime = activeClientAppRuntime();
+        if (runtime != null) {
+            return runtimeClient(runtime).agents().verifyReadinessWithClientAppAccessToken(
                     agentId,
-                    resolveUpstreamUserId(body),
-                    resolveModelConfigId(body),
-                    properties.clientAppKey(),
-                    runtimeAccessToken());
+                    resolveUpstreamUserId(request),
+                    resolveModelConfigId(request),
+                    runtime.clientAppKey(),
+                    runtimeAccessToken(runtime));
         }
         return Map.of(
                 "ready", true,
-                "authMode", properties.authMode(),
-                "agent", client.agents().get(agentId));
+                "authMode", authMode(runtime),
+                "agent", defaultClient.agents().get(agentId));
     }
 
-    private NavigatorClient buildClient(ObserverBffProperties props) {
+    private NavigatorClient buildDefaultClient(ObserverBffProperties props) {
         NavigatorClient.Builder builder = NavigatorClient.builder()
                 .baseUrl(props.navigatorBaseUrl())
                 .timeout(props.sdkTimeout());
 
-        if (props.hasClientAppRuntime()) {
-            return builder.noDefaultAuth().build();
-        }
         if (!ObserverBffProperties.isBlank(props.apiKey())) {
             return builder.apiKey(props.apiKey()).build();
         }
@@ -201,21 +231,45 @@ public class NavigatorObserverService {
         return builder.noDefaultAuth().build();
     }
 
-    private synchronized String runtimeAccessToken() {
-        if (!ObserverBffProperties.isBlank(properties.clientAppAccessToken())) {
-            return properties.clientAppAccessToken();
+    private NavigatorClient buildRuntimeClient(ObserverBffProperties props) {
+        return NavigatorClient.builder()
+                .baseUrl(props.navigatorBaseUrl())
+                .timeout(props.sdkTimeout())
+                .noDefaultAuth()
+                .build();
+    }
+
+    private NavigatorClient runtimeClient(ObserverRuntimeCredential runtime) {
+        if (runtime == null
+                || ObserverBffProperties.isBlank(runtime.navigatorBaseUrl())
+                || properties.navigatorBaseUrl().equals(runtime.navigatorBaseUrl())) {
+            return runtimeClient;
         }
-        if (ObserverBffProperties.isBlank(properties.clientAppSecret())) {
+        return NavigatorClient.builder()
+                .baseUrl(runtime.navigatorBaseUrl())
+                .timeout(properties.sdkTimeout())
+                .noDefaultAuth()
+                .build();
+    }
+
+    private synchronized String runtimeAccessToken(ObserverRuntimeCredential runtime) {
+        if (!ObserverBffProperties.isBlank(runtime.clientAppAccessToken())) {
+            return runtime.clientAppAccessToken();
+        }
+        if (ObserverBffProperties.isBlank(runtime.clientAppSecret())) {
             throw new ResponseStatusException(SERVICE_UNAVAILABLE,
                     "NAVI_CLIENT_APP_SECRET or NAVI_CLIENT_APP_ACCESS_TOKEN is required");
         }
         Instant now = Instant.now();
-        if (!ObserverBffProperties.isBlank(cachedAccessToken) && now.isBefore(refreshTokenAt)) {
+        String tokenKey = runtime.authMode() + ":" + runtime.navigatorBaseUrl() + ":" + runtime.clientAppKey();
+        if (!ObserverBffProperties.isBlank(cachedAccessToken)
+                && tokenKey.equals(cachedAccessTokenKey)
+                && now.isBefore(refreshTokenAt)) {
             return cachedAccessToken;
         }
 
-        ClientAppRuntimeAccessTokenDTO token = client.businessAgent()
-                .exchangeRuntimeAccessToken(properties.clientAppKey(), properties.clientAppSecret());
+        ClientAppRuntimeAccessTokenDTO token = runtimeClient(runtime).businessAgent()
+                .exchangeRuntimeAccessToken(runtime.clientAppKey(), runtime.clientAppSecret());
         if (token == null || ObserverBffProperties.isBlank(token.getAccessToken())) {
             throw new ResponseStatusException(SERVICE_UNAVAILABLE, "Navigator returned empty runtime access token");
         }
@@ -223,18 +277,61 @@ public class NavigatorObserverService {
         long ttlSeconds = token.getExpiresInSeconds() == null ? 300 : token.getExpiresInSeconds();
         long refreshSeconds = ttlSeconds > 120 ? ttlSeconds - 60 : Math.max(1, ttlSeconds / 2);
         cachedAccessToken = token.getAccessToken();
+        cachedAccessTokenKey = tokenKey;
         refreshTokenAt = now.plusSeconds(refreshSeconds);
         return cachedAccessToken;
     }
 
     private void requireNavigatorAuth() {
-        if (properties.hasClientAppRuntime()
+        if (activeClientAppRuntime() != null
                 || !ObserverBffProperties.isBlank(properties.apiKey())
                 || !ObserverBffProperties.isBlank(properties.bearerToken())) {
             return;
         }
         throw new ResponseStatusException(SERVICE_UNAVAILABLE,
-                "Configure NAVI_CLIENT_APP_KEY with NAVI_CLIENT_APP_SECRET or NAVI_CLIENT_APP_ACCESS_TOKEN, or configure NAVI_API_KEY/NAVI_BEARER_TOKEN");
+                "Configure NAVI_CLIENT_APP_KEY with NAVI_CLIENT_APP_SECRET or NAVI_CLIENT_APP_ACCESS_TOKEN, configure NAVI_API_KEY/NAVI_BEARER_TOKEN, or authorize from the observer page with a Navi account");
+    }
+
+    private ObserverRuntimeCredential activeClientAppRuntime() {
+        if (properties.hasClientAppRuntime()) {
+            return ObserverRuntimeCredential.fromProperties(properties);
+        }
+        ObserverRuntimeCredential runtime = loginRuntimeCredential;
+        return runtime != null && runtime.hasRuntime() ? runtime : null;
+    }
+
+    private String authMode(ObserverRuntimeCredential runtime) {
+        if (runtime != null) {
+            return runtime.authMode();
+        }
+        if (!ObserverBffProperties.isBlank(properties.apiKey())) {
+            return "api-key";
+        }
+        if (!ObserverBffProperties.isBlank(properties.bearerToken())) {
+            return "bearer";
+        }
+        return "missing";
+    }
+
+    private String defaultAgentId(ObserverRuntimeCredential runtime) {
+        if (runtime != null && !ObserverBffProperties.isBlank(runtime.agentId())) {
+            return runtime.agentId();
+        }
+        return properties.agentId();
+    }
+
+    private String defaultUpstreamUserId(ObserverRuntimeCredential runtime) {
+        if (runtime != null && !ObserverBffProperties.isBlank(runtime.upstreamUserId())) {
+            return runtime.upstreamUserId();
+        }
+        return properties.upstreamUserId();
+    }
+
+    private String defaultModelConfigId(ObserverRuntimeCredential runtime) {
+        if (runtime != null && !ObserverBffProperties.isBlank(runtime.modelConfigId())) {
+            return runtime.modelConfigId();
+        }
+        return properties.modelConfigId();
     }
 
     private String resolveModelConfigId(Map<String, Object> body) {
@@ -244,12 +341,23 @@ public class NavigatorObserverService {
         }
         Map<String, Object> metadata = map(body.get("metadata"));
         modelConfigId = text(metadata.get("modelConfigId"));
-        return ObserverBffProperties.isBlank(modelConfigId) ? properties.modelConfigId() : modelConfigId;
+        if (!ObserverBffProperties.isBlank(modelConfigId)) {
+            return modelConfigId;
+        }
+        return defaultModelConfigId(activeClientAppRuntime());
     }
 
     private String resolveUpstreamUserId(Map<String, Object> body) {
         String upstreamUserId = text(body.get("upstreamUserId"));
-        return ObserverBffProperties.isBlank(upstreamUserId) ? properties.upstreamUserId() : upstreamUserId;
+        return ObserverBffProperties.isBlank(upstreamUserId)
+                ? defaultUpstreamUserId(activeClientAppRuntime())
+                : upstreamUserId;
+    }
+
+    private void clearRuntimeTokenCache() {
+        cachedAccessToken = null;
+        cachedAccessTokenKey = null;
+        refreshTokenAt = Instant.EPOCH;
     }
 
     private String firstText(Map<String, Object> body, String... keys) {

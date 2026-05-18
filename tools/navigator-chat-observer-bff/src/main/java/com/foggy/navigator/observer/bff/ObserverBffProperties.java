@@ -11,11 +11,14 @@ public class ObserverBffProperties {
     private final String clientAppKey;
     private final String clientAppSecret;
     private final String clientAppAccessToken;
+    private final String clientAppId;
     private final String upstreamUserId;
     private final String apiKey;
     private final String bearerToken;
     private final String agentId;
     private final String modelConfigId;
+    private final String debugClientAppName;
+    private final String debugCapabilityDomain;
     private final String publicBaseUrl;
     private final Path attachmentStorageDir;
     private final Duration sdkTimeout;
@@ -25,11 +28,14 @@ public class ObserverBffProperties {
             String clientAppKey,
             String clientAppSecret,
             String clientAppAccessToken,
+            String clientAppId,
             String upstreamUserId,
             String apiKey,
             String bearerToken,
             String agentId,
             String modelConfigId,
+            String debugClientAppName,
+            String debugCapabilityDomain,
             String publicBaseUrl,
             Path attachmentStorageDir,
             Duration sdkTimeout) {
@@ -37,11 +43,14 @@ public class ObserverBffProperties {
         this.clientAppKey = clean(clientAppKey);
         this.clientAppSecret = clean(clientAppSecret);
         this.clientAppAccessToken = clean(clientAppAccessToken);
+        this.clientAppId = clean(clientAppId);
         this.upstreamUserId = clean(upstreamUserId);
         this.apiKey = clean(apiKey);
         this.bearerToken = clean(bearerToken);
         this.agentId = clean(agentId);
         this.modelConfigId = clean(modelConfigId);
+        this.debugClientAppName = defaultIfBlank(debugClientAppName, "Navigator Chat Observer Debug BFF").trim();
+        this.debugCapabilityDomain = defaultIfBlank(debugCapabilityDomain, "navigator-chat-observer").trim();
         this.publicBaseUrl = trimTrailingSlash(publicBaseUrl);
         this.attachmentStorageDir = attachmentStorageDir;
         this.sdkTimeout = sdkTimeout;
@@ -72,10 +81,11 @@ public class ObserverBffProperties {
 
         return new ObserverBffProperties(
                 defaultIfBlank(first(env, "navigator.observer.navigator-base-url", "NAVIGATOR_BASE_URL", "NAVI_BASE_URL"),
-                        "http://127.0.0.1:8080"),
+                        "http://127.0.0.1:8112"),
                 first(env, "navigator.observer.client-app-key", "NAVI_CLIENT_APP_KEY", "CLIENT_APP_KEY"),
                 first(env, "navigator.observer.client-app-secret", "NAVI_CLIENT_APP_SECRET", "CLIENT_APP_SECRET"),
                 first(env, "navigator.observer.client-app-access-token", "NAVI_CLIENT_APP_ACCESS_TOKEN", "CLIENT_APP_ACCESS_TOKEN"),
+                first(env, "navigator.observer.client-app-id", "NAVIGATOR_OBSERVER_CLIENT_APP_ID", "NAVI_CLIENT_APP_ID", "CLIENT_APP_ID"),
                 defaultIfBlank(first(env, "navigator.observer.upstream-user-id", "NAVI_UPSTREAM_USER_ID", "UPSTREAM_USER_ID"),
                         "observer-local-user"),
                 first(env, "navigator.observer.api-key", "NAVI_API_KEY", "NAVIGATOR_API_KEY"),
@@ -83,6 +93,8 @@ public class ObserverBffProperties {
                 defaultIfBlank(first(env, "navigator.observer.agent-id", "NAVI_AGENT_ID", "NAVIGATOR_AGENT_ID"),
                         "observer-agent"),
                 first(env, "navigator.observer.model-config-id", "NAVI_MODEL_CONFIG_ID", "NAVIGATOR_MODEL_CONFIG_ID"),
+                first(env, "navigator.observer.debug-client-app-name", "NAVIGATOR_OBSERVER_CLIENT_APP_NAME"),
+                first(env, "navigator.observer.debug-capability-domain", "NAVIGATOR_OBSERVER_CAPABILITY_DOMAIN"),
                 publicBaseUrl,
                 Path.of(storageDir).toAbsolutePath().normalize(),
                 Duration.ofSeconds(timeoutSeconds));
@@ -104,6 +116,10 @@ public class ObserverBffProperties {
         return clientAppAccessToken;
     }
 
+    public String clientAppId() {
+        return clientAppId;
+    }
+
     public String upstreamUserId() {
         return upstreamUserId;
     }
@@ -122,6 +138,14 @@ public class ObserverBffProperties {
 
     public String modelConfigId() {
         return modelConfigId;
+    }
+
+    public String debugClientAppName() {
+        return debugClientAppName;
+    }
+
+    public String debugCapabilityDomain() {
+        return debugCapabilityDomain;
     }
 
     public String publicBaseUrl() {

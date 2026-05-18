@@ -38,6 +38,11 @@ public class ObserverBffController {
         return ApiResponse.ok(navigatorObserverService.observerConfig());
     }
 
+    @PostMapping("/api/v1/observer/auth/login")
+    public ApiResponse<Map<String, Object>> loginWithNavigatorAccount(@RequestBody Map<String, Object> body) {
+        return ApiResponse.ok(navigatorObserverService.loginWithNavigatorAccount(body));
+    }
+
     @PostMapping("/api/v1/observer/attachments")
     public ApiResponse<AttachmentDescriptor> uploadAttachment(@RequestPart("file") MultipartFile file) {
         return ApiResponse.ok(attachmentStorageService.store(file));
