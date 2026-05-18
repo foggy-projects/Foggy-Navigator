@@ -3,7 +3,7 @@ type: optimization
 version: 1.3.0-SNAPSHOT
 ticket: OPT-032
 severity: medium
-status: in_progress
+status: signed_off
 owner: biz-worker-runtime + navigator-business-agent + upstream-integration
 source: BUG-028 follow-up
 ---
@@ -114,7 +114,7 @@ Testing progress:
 
 - [x] Add unit tests for OpenAPI compatibility merge/dedupe rules.
 - [x] Add scripted Worker E2E for explicit preprocessing before ticket creation.
-- [ ] Keep existing BUG-028 real LLM ticket E2E as the direct-handoff regression.
+- [x] Keep existing BUG-028 real LLM ticket E2E as the direct-handoff regression.
 
 Validation:
 
@@ -124,6 +124,8 @@ Validation:
 - Result: passed, 6 tests run, 0 failures, 0 errors.
 - 2026-05-18: `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -k "ticket_from_image_content"`
 - Result: passed, 1 test selected, 11 deselected, 0 failures, 0 errors.
+- 2026-05-18: BUG-028 real LLM direct-handoff smoke evidence retained at `docs/version-tracker/1.3.0-SNAPSHOT/test-records/real-llm-attachment-ticket/20260518-162515-65bf00/`.
+- Result: PASS. Real LLM root invoked `tms-ticket-agent`; child result showed `att-028-real` / `image.png` / `tms-bff` / safe URL path; sensitive pattern scan over raw events, SSE, frames, and tool audit logs found no hits.
 
 Implementation references:
 
@@ -133,6 +135,9 @@ Implementation references:
 - `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiControllerMessageMappingTest.java`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/attachment_context.py`
 - `tools/langgraph-biz-worker/src/langgraph_biz_worker/tools/attachment_analysis.py`
+- `tools/langgraph-biz-worker/tests/test_attachment_context.py`
+- `tools/langgraph-biz-worker/tests/test_attachment_analysis.py`
+- `tools/langgraph-biz-worker/tests/test_e2e_scripted_tool_call_streaming.py`
 
 Experience progress:
 
@@ -142,3 +147,16 @@ Experience progress:
 
 - `BUG-028-tms-ticket-agent-attachment-not-delivered.md`
 - `REQ-030-biz-worker-on-demand-attachment-analysis-and-vision-model-config.md`
+- `docs/version-tracker/1.3.0-SNAPSHOT/quality/OPT-032-attachment-preprocessing-governance-implementation-quality.md`
+- `docs/version-tracker/1.3.0-SNAPSHOT/coverage/OPT-032-attachment-preprocessing-governance-coverage-audit.md`
+- `docs/version-tracker/1.3.0-SNAPSHOT/acceptance/OPT-032-attachment-preprocessing-governance-acceptance.md`
+
+## Signoff Marker
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted
+- signed_off_by: Codex
+- signed_off_at: 2026-05-18
+- acceptance_record: `docs/version-tracker/1.3.0-SNAPSHOT/acceptance/OPT-032-attachment-preprocessing-governance-acceptance.md`
+- blocking_items: none
+- follow_up_required: no

@@ -34,9 +34,13 @@
 - [workitems/OPT-029-upstream-timeout-governance.md](./workitems/OPT-029-upstream-timeout-governance.md) - cross-layer upstream timeout, deadline, cancel, retry and status convergence governance
 - [workitems/REQ-030-biz-worker-on-demand-attachment-analysis-and-vision-model-config.md](./workitems/REQ-030-biz-worker-on-demand-attachment-analysis-and-vision-model-config.md) - BizWorker on-demand attachment image analysis and VISION model configuration
 - [workitems/OPT-031-biz-worker-llm-skill-agent-module-governance.md](./workitems/OPT-031-biz-worker-llm-skill-agent-module-governance.md) - BizWorker LlmSkillAgent module boundary and refactor governance plan
+- [workitems/OPT-032-attachment-preprocessing-governance-follow-up.md](./workitems/OPT-032-attachment-preprocessing-governance-follow-up.md) - BUG-028 attachment direct-handoff, preprocessing evidence, and OpenAPI compatibility governance
 - [workitems/BUG-issue-115-world-sim-route-smoke-blocked.md](./workitems/BUG-issue-115-world-sim-route-smoke-blocked.md) - issue #115 live smoke is blocked by CLI release and control credential scope
 - [acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md](./acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md)
+- [acceptance/OPT-032-attachment-preprocessing-governance-acceptance.md](./acceptance/OPT-032-attachment-preprocessing-governance-acceptance.md)
 - [quality/OPT-031-llm-skill-agent-module-governance-implementation-quality.md](./quality/OPT-031-llm-skill-agent-module-governance-implementation-quality.md)
+- [quality/OPT-032-attachment-preprocessing-governance-implementation-quality.md](./quality/OPT-032-attachment-preprocessing-governance-implementation-quality.md)
 - [quality/biz-worker-root-skill-implementation-quality.md](./quality/biz-worker-root-skill-implementation-quality.md)
 - [coverage/OPT-031-llm-skill-agent-module-governance-coverage-audit.md](./coverage/OPT-031-llm-skill-agent-module-governance-coverage-audit.md)
+- [coverage/OPT-032-attachment-preprocessing-governance-coverage-audit.md](./coverage/OPT-032-attachment-preprocessing-governance-coverage-audit.md)
 - [coverage/biz-worker-root-skill-coverage-audit.md](./coverage/biz-worker-root-skill-coverage-audit.md)

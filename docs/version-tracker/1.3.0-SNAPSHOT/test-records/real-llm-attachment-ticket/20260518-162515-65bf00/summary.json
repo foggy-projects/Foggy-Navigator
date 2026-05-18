@@ -55,7 +55,7 @@
     ]
   },
   "raw_artifacts": {
-    "committed": false,
-    "reason": "Raw SSE, frame, and tool-audit logs are local debug artifacts and are intentionally omitted from the regression evidence commit."
+    "committed": true,
+    "reason": "Raw SSE, frame, and tool-audit logs were scanned for sensitive patterns and committed as sanitized regression evidence."
   }
 }

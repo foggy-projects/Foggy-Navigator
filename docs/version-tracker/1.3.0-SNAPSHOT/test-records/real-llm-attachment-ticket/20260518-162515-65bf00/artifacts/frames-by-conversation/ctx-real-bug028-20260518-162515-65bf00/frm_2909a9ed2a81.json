@@ -1,0 +1,54 @@
+{
+  "frame_id": "frm_2909a9ed2a81",
+  "task_id": "lgt_real_bug028_20260518-162515-65bf00",
+  "skill_id": "tms-ticket-agent",
+  "frame_kind": "SKILL",
+  "parent_frame_id": "frm_4cedd2b0fe2d",
+  "status": "COMPLETED",
+  "conversation_id": "ctx-real-bug028-20260518-162515-65bf00",
+  "session_id": "sess-real-bug028-20260518-162515-65bf00",
+  "current_task_id": "lgt_real_bug028_20260518-162515-65bf00",
+  "origin_task_id": "lgt_real_bug028_20260518-162515-65bf00",
+  "last_task_ids": [
+    "lgt_real_bug028_20260518-162515-65bf00"
+  ],
+  "input": {
+    "test_case": "BUG-028 real LLM attachment handoff smoke",
+    "contextId": "ctx-real-bug028-20260518-162515-65bf00",
+    "attachment_to_check": {
+      "id": "att-028-real",
+      "name": "image.png",
+      "mimeType": "image/png",
+      "size": 33485,
+      "kind": "image",
+      "provider": "tms-bff",
+      "url": "https://tms.example.com/files/image.png",
+      "metadata": {
+        "traceId": "trace-real-bug028",
+        "note": "safe-note"
+      }
+    }
+  },
+  "private_messages": [],
+  "private_working_state": {},
+  "tool_calls": [],
+  "child_frame_ids": [],
+  "output": {
+    "attachment_id": "att-028-real",
+    "name": "image.png",
+    "provider": "tms-bff",
+    "url_path": "https://tms.example.com/files/image.png",
+    "security_metadata": {
+      "traceId": "trace-real-bug028",
+      "note": "safe-note"
+    }
+  },
+  "result_summary": "Self-check for BUG-028 completed. Inspected attachment context provided by upstream system.",
+  "artifact_refs": [],
+  "evidence_refs": [],
+  "approval_request": null,
+  "started_at": "2026-05-18T08:25:31.933060+00:00",
+  "ended_at": "2026-05-18T08:25:39.730611+00:00",
+  "submit_attempts": 1,
+  "max_submit_attempts": 3
+}
