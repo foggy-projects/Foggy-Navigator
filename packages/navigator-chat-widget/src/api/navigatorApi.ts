@@ -31,6 +31,7 @@ export class NavigatorApi {
     if (this.config.maxTurns) body.maxTurns = this.config.maxTurns
     if (options.metadata && Object.keys(options.metadata).length > 0) body.metadata = options.metadata
     if (options.clientContext && Object.keys(options.clientContext).length > 0) body.clientContext = options.clientContext
+    if (options.attachments && options.attachments.length > 0) body.attachments = options.attachments
     return this.post(`/agents/${this.config.agentId}/ask`, body)
   }
 

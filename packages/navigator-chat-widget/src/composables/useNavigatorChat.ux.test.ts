@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp, defineComponent, h, nextTick, type App } from 'vue'
+import ElementPlus from 'element-plus'
+import NavigatorChat from '../components/NavigatorChat.vue'
 import { useNavigatorChat, type UseNavigatorChat } from './useNavigatorChat'
-import type { AgentTask } from '../types'
+import type { AgentTask, NavigatorAttachmentResult } from '../types'
 
 let app: App<Element> | undefined
 
@@ -18,6 +20,44 @@ function okResponse(data: unknown): Response {
 }
 
 describe('useNavigatorChat business action UX', () => {
+  it('keeps config enableAttachments when the direct boolean prop is absent', async () => {
+    const root = document.createElement('div')
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(NavigatorChat, {
+          config: {
+            baseUrl: 'http://navigator.test',
+            agentId: 'agent-1',
+            mode: 'business',
+            enableAttachments: true,
+            uploadAttachment: async (file: File) => ({
+              name: file.name,
+              size: file.size,
+              mimeType: file.type,
+              kind: 'file',
+            }),
+            fetch: async () => okResponse({
+              taskId: 'task-1',
+              agentId: 'agent-1',
+              status: 'COMPLETED',
+              contextId: 'ctx-1',
+              terminal: true,
+              terminalStatus: 'COMPLETED',
+              messages: [],
+            }),
+          },
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await nextTick()
+
+    const chatRoot = root.querySelector('.navigator-chat')
+    expect(chatRoot?.getAttribute('data-upload-hook')).toBe('present')
+    expect(chatRoot?.getAttribute('data-attachments-enabled')).toBe('true')
+    expect(root.querySelector('.nc-attachment-button')).not.toBeNull()
+  })
 
   it('loads historical messages and reuses contextId on the next send', async () => {
     const requests: Array<{ url: string; method?: string; body?: unknown }> = []
@@ -105,6 +145,64 @@ describe('useNavigatorChat business action UX', () => {
       question: '继续问',
       contextId: 'ctx-1',
       clientContext: { upstreamConversationId: 'tms-1' },
+    })
+  })
+
+  it('sends uploaded attachments as top-level ask payload', async () => {
+    const requests: Array<{ url: string; method?: string; body?: unknown }> = []
+    const attachments: NavigatorAttachmentResult[] = [
+      {
+        id: 'att-1',
+        name: '回单照片.jpg',
+        mimeType: 'image/jpeg',
+        size: 123456,
+        kind: 'image',
+        url: 'https://tms.example.com/attachments/att-1',
+        provider: 'tms',
+      },
+    ]
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async (url, init) => {
+            requests.push({
+              url,
+              method: init.method,
+              body: init.body ? JSON.parse(String(init.body)) : undefined,
+            })
+            return okResponse({
+              taskId: 'task-attachments',
+              agentId: 'agent-1',
+              status: 'COMPLETED',
+              contextId: 'ctx-attachments',
+              terminal: true,
+              terminalStatus: 'COMPLETED',
+              messages: [],
+            })
+          },
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('请识别这张回单', { attachments })
+    await nextTick()
+
+    const askRequest = requests.find((request) => request.url.includes('/ask'))
+    expect(askRequest?.body).toMatchObject({
+      question: '请识别这张回单',
+      attachments,
+    })
+    expect(chat.messages.value[0]).toMatchObject({
+      role: 'user',
+      content: '请识别这张回单',
+      attachments,
     })
   })
 

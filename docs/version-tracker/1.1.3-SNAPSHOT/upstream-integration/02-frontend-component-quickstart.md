@@ -235,12 +235,15 @@ import type {
   BusinessSuspensionDecisionPayload,
   BusinessSuspensionDialogModel,
   NavigatorChatConfig,
+  NavigatorAttachmentResult,
 } from '@foggy/navigator-chat-widget'
 
 const chatConfig: NavigatorChatConfig = {
   baseUrl: '/bff/api',    // 上游 BFF 代理地址
   agentId: 'your-agent-id',
   pollInterval: 4000,     // TMS 初始接入先使用 4s 轮询，后续按体验和服务负载再调整
+  uploadAttachment: uploadTmsAttachment,
+  acceptedAttachmentTypes: ['image/*', 'application/pdf', '.xlsx', '.xls', '.doc', '.docx', '.txt', '.csv', '.zip'],
   // 不在浏览器中配置 Navigator admin/provisioning/runtime credential。
   // 如需鉴权，推荐通过 cookie 或自定义 fetch 与上游 BFF 会话绑定。
 }
@@ -249,8 +252,22 @@ const suspensionVisible = ref(false)
 const submittingSuspension = ref(false)
 const currentSuspension = ref<BusinessSuspensionDialogModel | null>(null)
 
-function onSend(content: string) {
-  console.log('用户发送:', content)
+async function uploadTmsAttachment(file: File): Promise<NavigatorAttachmentResult> {
+  const form = new FormData()
+  form.append('file', file)
+  const resp = await fetch('/x3-web/tenant/attachment/upload', {
+    method: 'POST',
+    body: form,
+  })
+  const json = await resp.json()
+  if (!resp.ok || json.code !== 0) {
+    throw new Error(json.msg || '附件上传失败')
+  }
+  return json.data
+}
+
+function onSend(content: string, attachments?: NavigatorAttachmentResult[]) {
+  console.log('用户发送:', content, attachments)
 }
 
 function onStatusChange(status) {
@@ -276,6 +293,18 @@ async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) 
 ```
 
 `NavigatorChat` 默认采用 `ask -> poll task -> display result` 模式。TMS 初始接入建议显式传入 `pollInterval: 4000`，即浏览器轮询 TMS BFF，TMS BFF 再代理查询 Navigator task 状态。
+
+附件采用 upload-on-submit：用户选择、拖拽或粘贴文件时，组件只保留浏览器本地 `File` 和预览信息；点击发送后先调用 `uploadAttachment(file)`，上传成功后把返回的 `NavigatorAttachmentResult[]` 放入 ask 请求顶层 `attachments`。任一附件上传失败时不会发送 ask，附件会保留在输入区供用户重试或删除。
+
+本仓库提供本地观测页用于区分“上游未注入 hook”和“组件自身未显示入口”：
+
+```bash
+pnpm --dir packages/navigator-chat-widget dev:observe
+```
+
+打开页面后切换“已注入 / 未注入”模式。已注入模式应显示回形针按钮，并在发送后展示最近 ask body 中的顶层 `attachments`；未注入模式应隐藏附件入口。组件根节点同时带有 `data-upload-hook="present|missing"` 和 `data-attachments-enabled="true|false"`，可在浏览器 Elements 面板直接确认。
+
+观测页默认绑定 `0.0.0.0:5179`，本机可访问 `http://127.0.0.1:5179/`，局域网内其他设备可访问 `http://<本机IP>:5179/`。
 
 `NavigatorChat` 不会自动从普通轮询任务结果中推断 suspension。上游宿主应从自己的 BFF、SSE 或任务消息中解析出 `BusinessSuspensionDialogModel` 后传入 `currentSuspension`，再打开 `suspensionVisible`。
 
@@ -319,6 +348,7 @@ chatRef.value.clear()
 | 工具调用展示 | ✅ ToolCallBlock | — 需扩展 |
 | 审批卡片 | ✅ ChatPanel/MessageList 内置审批渲染 | — 需扩展 |
 | Suspension 弹窗 | ✅ BusinessSuspensionDialog | ✅ 可选默认弹窗 / slot 覆盖 |
+| 附件上传 | 宿主自定义 | ✅ 选择/粘贴/拖拽 + upload-on-submit |
 | 思考动画 | ✅ ThinkingIndicator | ✅ 内置 |
 | SSE 客户端 | ✅ createSseClient | ✅ 内置 |
 | 状态管理 | ✅ useChatStore (Pinia) | ✅ useNavigatorChat |

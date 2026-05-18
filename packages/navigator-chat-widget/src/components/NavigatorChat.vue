@@ -1,5 +1,10 @@
 <template>
-  <div class="navigator-chat" :style="containerStyle">
+  <div
+    class="navigator-chat"
+    :style="containerStyle"
+    :data-attachments-enabled="attachmentsEnabled ? 'true' : 'false'"
+    :data-upload-hook="resolvedConfig.uploadAttachment ? 'present' : 'missing'"
+  >
     <!-- Header -->
     <div v-if="showHeader" class="nc-header">
       <slot name="header">
@@ -28,7 +33,28 @@
       >
         <div class="nc-bubble">
           <div v-if="msg.role === 'user'" class="nc-content nc-content--user">
-            {{ msg.content }}
+            <div v-if="msg.content" class="nc-message-text">{{ msg.content }}</div>
+            <div v-if="msg.attachments?.length" class="nc-message-attachments">
+              <component
+                :is="attachment.url ? 'a' : 'div'"
+                v-for="attachment in msg.attachments"
+                :key="attachmentKey(attachment)"
+                class="nc-message-attachment"
+                :href="attachment.url || undefined"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <img
+                  v-if="isAttachmentImage(attachment) && attachmentPreviewUrl(attachment)"
+                  :src="attachmentPreviewUrl(attachment)"
+                  :alt="attachmentName(attachment)"
+                  class="nc-message-attachment-thumb"
+                />
+                <el-icon v-else class="nc-message-attachment-icon"><Document /></el-icon>
+                <span class="nc-message-attachment-name">{{ attachmentName(attachment) }}</span>
+                <span v-if="attachment.size" class="nc-message-attachment-size">{{ formatFileSize(attachment.size) }}</span>
+              </component>
+            </div>
           </div>
           <div v-else-if="msg.role === 'assistant'" class="nc-content nc-content--assistant">
             <!-- eslint-disable-next-line vue/no-v-html -->
@@ -122,35 +148,96 @@
     </div>
 
     <!-- Input -->
-    <div v-if="showInput" class="nc-input-area">
-      <el-input
-        v-model="inputText"
-        type="textarea"
-        :autosize="{ minRows: 1, maxRows: 4 }"
-        :placeholder="placeholder"
-        :disabled="chat.isLoading.value"
-        resize="none"
-        @keydown.enter.exact.prevent="handleSend"
-      />
-      <div class="nc-input-actions">
-        <el-button
-          v-if="chat.isLoading.value"
-          type="danger"
-          size="small"
-          plain
-          @click="chat.cancel()"
+    <div
+      v-if="showInput"
+      :class="['nc-input-area', { 'is-drag-over': isDragOver }]"
+      @paste="handlePaste"
+      @dragover.prevent="handleDragOver"
+      @dragleave="handleDragLeave"
+      @drop.prevent="handleDrop"
+    >
+      <div v-if="pendingAttachments.length" class="nc-pending-attachments">
+        <div
+          v-for="attachment in pendingAttachments"
+          :key="attachment.id"
+          :class="['nc-pending-attachment', `nc-pending-attachment--${attachment.status}`]"
         >
-          取消
-        </el-button>
-        <el-button
-          v-else
-          type="primary"
-          size="small"
-          :disabled="!inputText.trim()"
-          @click="handleSend"
-        >
-          发送
-        </el-button>
+          <img
+            v-if="attachment.isImage && attachment.previewUrl"
+            :src="attachment.previewUrl"
+            :alt="attachment.name"
+            class="nc-pending-thumb"
+          />
+          <el-icon v-else class="nc-pending-file-icon"><Document /></el-icon>
+          <div class="nc-pending-info">
+            <span class="nc-pending-name" :title="attachment.name">{{ attachment.name }}</span>
+            <span class="nc-pending-meta">
+              {{ attachmentKindLabel(attachment.kind) }} · {{ formatFileSize(attachment.size) }}
+            </span>
+            <span v-if="attachment.error" class="nc-pending-error">{{ attachment.error }}</span>
+          </div>
+          <el-icon v-if="attachment.status === 'uploading'" class="nc-pending-status is-loading"><Loading /></el-icon>
+          <button
+            v-else
+            type="button"
+            class="nc-pending-remove"
+            :disabled="isUploadingAttachments"
+            aria-label="移除附件"
+            @click="removePendingAttachment(attachment.id)"
+          >
+            <el-icon><Close /></el-icon>
+          </button>
+        </div>
+      </div>
+      <div class="nc-input-row">
+        <input
+          ref="fileInputRef"
+          class="nc-file-input"
+          type="file"
+          :accept="attachmentAcceptAttr"
+          multiple
+          @change="handleFileInputChange"
+        />
+        <el-tooltip v-if="attachmentsEnabled" content="添加附件" placement="top">
+          <el-button
+            class="nc-attachment-button"
+            size="small"
+            :disabled="chat.isLoading.value || isUploadingAttachments"
+            @click="openFileDialog"
+          >
+            <el-icon><Paperclip /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-input
+          v-model="inputText"
+          type="textarea"
+          :autosize="{ minRows: 1, maxRows: 4 }"
+          :placeholder="placeholder"
+          :disabled="chat.isLoading.value || isUploadingAttachments"
+          resize="none"
+          @keydown.enter.exact.prevent="handleSend"
+        />
+        <div class="nc-input-actions">
+          <el-button
+            v-if="chat.isLoading.value"
+            type="danger"
+            size="small"
+            plain
+            @click="chat.cancel()"
+          >
+            取消
+          </el-button>
+          <el-button
+            v-else
+            type="primary"
+            size="small"
+            :loading="isUploadingAttachments"
+            :disabled="!canSend"
+            @click="handleSend"
+          >
+            发送
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -175,9 +262,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, type CSSProperties } from 'vue'
-import { ElInput, ElButton, ElTag, ElEmpty, ElAlert, ElIcon } from 'element-plus'
-import { Loading } from '@element-plus/icons-vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount, getCurrentInstance, type CSSProperties } from 'vue'
+import { ElInput, ElButton, ElTag, ElEmpty, ElAlert, ElIcon, ElTooltip, ElMessage } from 'element-plus'
+import { Close, Document, Loading, Paperclip } from '@element-plus/icons-vue'
 import { BusinessSuspensionDialog, ExecutionReportInline } from '@foggy/chat'
 import { useNavigatorChat } from '../composables/useNavigatorChat'
 import SkillFrameBlockView from './SkillFrameBlockView.vue'
@@ -186,11 +273,15 @@ import type {
   BusinessSuspensionDialogModel,
   ChatMessage,
   ExecutionReportMarkdownLoader,
+  NavigatorAttachmentKind,
+  NavigatorAttachmentResult,
   NavigatorAction,
   NavigatorChatConfig,
   NavigatorChatMode,
+  PendingNavigatorAttachment,
   TaskStatus,
   ToolExecutionBlock,
+  UploadAttachmentHook,
 } from '../types'
 import MarkdownIt from 'markdown-it'
 
@@ -225,6 +316,16 @@ const props = withDefaults(defineProps<{
   timeout?: number
   /** 最大交互轮数 */
   maxTurns?: number
+  /** 发送前附件上传 hook，由宿主调用自己的上传接口 */
+  uploadAttachment?: UploadAttachmentHook
+  /** 是否启用默认附件入口；默认在提供 uploadAttachment 时启用 */
+  enableAttachments?: boolean
+  /** 单条消息最多附件数 */
+  maxAttachments?: number
+  /** 单个附件最大字节数 */
+  maxAttachmentSize?: number
+  /** 可接受附件类型，支持 MIME、image/* 和 .pdf */
+  acceptedAttachmentTypes?: string[]
   /** 自定义请求函数 */
   fetch?: (url: string, init: RequestInit) => Promise<Response>
   /** 标题 */
@@ -265,7 +366,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   /** 消息发送时触发 */
-  send: [content: string]
+  send: [content: string, attachments?: NavigatorAttachmentResult[]]
   /** 任务状态变化时触发 */
   statusChange: [status: TaskStatus | null]
   /** 收到 AI 回复时触发 */
@@ -277,6 +378,15 @@ const emit = defineEmits<{
   /** 用户点击业务动作按钮或链接 */
   action: [action: NavigatorAction]
 }>()
+
+const instance = getCurrentInstance()
+
+function hasExplicitProp(name: string): boolean {
+  const rawProps = instance?.vnode.props ?? {}
+  const kebabName = name.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)
+  return Object.prototype.hasOwnProperty.call(rawProps, name)
+    || Object.prototype.hasOwnProperty.call(rawProps, kebabName)
+}
 
 const resolvedConfig = computed<NavigatorChatConfig>(() => ({
   ...(props.config ?? {
@@ -290,18 +400,27 @@ const resolvedConfig = computed<NavigatorChatConfig>(() => ({
   ...(props.pollInterval != null ? { pollInterval: props.pollInterval } : {}),
   ...(props.timeout != null ? { timeout: props.timeout } : {}),
   ...(props.maxTurns != null ? { maxTurns: props.maxTurns } : {}),
+  ...(props.uploadAttachment ? { uploadAttachment: props.uploadAttachment } : {}),
+  ...(hasExplicitProp('enableAttachments') ? { enableAttachments: props.enableAttachments } : {}),
+  ...(props.maxAttachments != null ? { maxAttachments: props.maxAttachments } : {}),
+  ...(props.maxAttachmentSize != null ? { maxAttachmentSize: props.maxAttachmentSize } : {}),
+  ...(props.acceptedAttachmentTypes ? { acceptedAttachmentTypes: props.acceptedAttachmentTypes } : {}),
   ...(props.fetch ? { fetch: props.fetch } : {}),
   ...(props.executionReportMarkdownLoader ? { executionReportMarkdownLoader: props.executionReportMarkdownLoader } : {}),
   mode: props.mode ?? props.config?.mode ?? 'business',
-  debugMode: props.debugMode ?? props.config?.debugMode,
-  showRuntimeEvents: props.showRuntimeEvents ?? props.config?.showRuntimeEvents,
-  showToolCalls: props.showToolCalls ?? props.config?.showToolCalls,
-  showToolResults: props.showToolResults ?? props.config?.showToolResults,
+  debugMode: hasExplicitProp('debugMode') ? props.debugMode : props.config?.debugMode,
+  showRuntimeEvents: hasExplicitProp('showRuntimeEvents') ? props.showRuntimeEvents : props.config?.showRuntimeEvents,
+  showToolCalls: hasExplicitProp('showToolCalls') ? props.showToolCalls : props.config?.showToolCalls,
+  showToolResults: hasExplicitProp('showToolResults') ? props.showToolResults : props.config?.showToolResults,
 }))
 
 const chat = useNavigatorChat(resolvedConfig.value)
 const inputText = ref('')
 const messagesRef = ref<HTMLElement>()
+const fileInputRef = ref<HTMLInputElement>()
+const pendingAttachments = ref<PendingNavigatorAttachment[]>([])
+const isUploadingAttachments = ref(false)
+const isDragOver = ref(false)
 const executionReportMarkdownLoader = computed(() => resolvedConfig.value.executionReportMarkdownLoader)
 
 // 暴露 composable 给父组件
@@ -350,6 +469,16 @@ const statusLabel = computed(() => {
   }
 })
 
+const attachmentsEnabled = computed(() => Boolean(resolvedConfig.value.uploadAttachment) && (resolvedConfig.value.enableAttachments ?? true))
+const attachmentLimit = computed(() => resolvedConfig.value.maxAttachments ?? 6)
+const attachmentSizeLimit = computed(() => resolvedConfig.value.maxAttachmentSize ?? 20 * 1024 * 1024)
+const attachmentAcceptAttr = computed(() => (resolvedConfig.value.acceptedAttachmentTypes ?? []).join(','))
+const canSend = computed(() =>
+  !chat.isLoading.value
+  && !isUploadingAttachments.value
+  && (inputText.value.trim().length > 0 || pendingAttachments.value.length > 0)
+)
+
 function renderMarkdown(text: string): string {
   return md.render(text)
 }
@@ -380,16 +509,203 @@ function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2)
 }
 
-function handleSend() {
-  const content = inputText.value.trim()
-  if (!content || chat.isLoading.value) return
+async function handleSend() {
+  const text = inputText.value.trim()
+  const hasAttachments = pendingAttachments.value.length > 0
+  if ((!text && !hasAttachments) || chat.isLoading.value || isUploadingAttachments.value) return
+
+  let uploadedAttachments: NavigatorAttachmentResult[] | undefined
+  try {
+    uploadedAttachments = hasAttachments ? await uploadPendingAttachments() : undefined
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : '附件上传失败'
+    ElMessage.error(message)
+    return
+  }
+
+  const content = text || '请查看附件。'
   inputText.value = ''
-  emit('send', content)
-  chat.send(content)
+  clearPendingAttachments()
+  emit('send', content, uploadedAttachments)
+  chat.send(content, uploadedAttachments?.length ? { attachments: uploadedAttachments } : undefined)
 }
 
 function handleScroll() {
   // Reserved for future load-more
+}
+
+function openFileDialog() {
+  if (!attachmentsEnabled.value || chat.isLoading.value || isUploadingAttachments.value) return
+  fileInputRef.value?.click()
+}
+
+function handleFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  addFiles(input.files)
+  input.value = ''
+}
+
+function handlePaste(event: ClipboardEvent) {
+  if (!attachmentsEnabled.value) return
+  const files = Array.from(event.clipboardData?.files ?? [])
+  if (files.length === 0) return
+  event.preventDefault()
+  addFiles(files)
+}
+
+function handleDragOver(event: DragEvent) {
+  if (!attachmentsEnabled.value || !hasDraggedFiles(event)) return
+  isDragOver.value = true
+}
+
+function handleDragLeave(event: DragEvent) {
+  const current = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (!current || !related || !current.contains(related)) {
+    isDragOver.value = false
+  }
+}
+
+function handleDrop(event: DragEvent) {
+  if (!attachmentsEnabled.value) return
+  isDragOver.value = false
+  addFiles(event.dataTransfer?.files)
+}
+
+function hasDraggedFiles(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files')
+}
+
+function addFiles(fileList: FileList | File[] | null | undefined) {
+  if (!attachmentsEnabled.value || !fileList) return
+  const files = Array.from(fileList)
+  if (files.length === 0) return
+
+  const remaining = attachmentLimit.value - pendingAttachments.value.length
+  if (remaining <= 0) {
+    ElMessage.warning(`最多添加 ${attachmentLimit.value} 个附件`)
+    return
+  }
+
+  const acceptedFiles = files.slice(0, remaining)
+  if (files.length > remaining) {
+    ElMessage.warning(`最多添加 ${attachmentLimit.value} 个附件，已忽略多余文件`)
+  }
+
+  for (const file of acceptedFiles) {
+    const validationError = validateAttachmentFile(file)
+    if (validationError) {
+      ElMessage.warning(validationError)
+      continue
+    }
+    pendingAttachments.value.push(createPendingAttachment(file))
+  }
+}
+
+function validateAttachmentFile(file: File): string | null {
+  if (file.size > attachmentSizeLimit.value) {
+    return `${file.name || '附件'} 超过 ${formatFileSize(attachmentSizeLimit.value)}`
+  }
+  const accept = resolvedConfig.value.acceptedAttachmentTypes ?? []
+  if (accept.length > 0 && !matchesAcceptedType(file, accept)) {
+    return `${file.name || '附件'} 类型不支持`
+  }
+  return null
+}
+
+function matchesAcceptedType(file: File, accept: string[]): boolean {
+  const name = file.name.toLowerCase()
+  const type = file.type.toLowerCase()
+  return accept.some((item) => {
+    const normalized = item.trim().toLowerCase()
+    if (!normalized) return false
+    if (normalized.startsWith('.')) return name.endsWith(normalized)
+    if (normalized.endsWith('/*')) return type.startsWith(normalized.slice(0, -1))
+    return type === normalized
+  })
+}
+
+function createPendingAttachment(file: File): PendingNavigatorAttachment {
+  const kind = inferAttachmentKind(file)
+  const isImage = kind === 'image'
+  return {
+    id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    file,
+    name: file.name || defaultAttachmentName(kind),
+    mimeType: file.type || inferMimeTypeFromName(file.name),
+    size: file.size,
+    kind,
+    isImage,
+    previewUrl: isImage ? URL.createObjectURL(file) : undefined,
+    status: 'pending',
+  }
+}
+
+async function uploadPendingAttachments(): Promise<NavigatorAttachmentResult[]> {
+  const upload = resolvedConfig.value.uploadAttachment
+  if (!upload) throw new Error('未配置附件上传接口')
+
+  isUploadingAttachments.value = true
+  const uploaded: NavigatorAttachmentResult[] = []
+  let failedMessage: string | null = null
+
+  try {
+    for (const attachment of pendingAttachments.value) {
+      if (attachment.status === 'uploaded' && attachment.uploaded) {
+        uploaded.push(attachment.uploaded)
+        continue
+      }
+      attachment.status = 'uploading'
+      attachment.error = undefined
+      try {
+        const result = normalizeUploadResult(await upload(attachment.file), attachment)
+        attachment.uploaded = result
+        attachment.status = 'uploaded'
+        uploaded.push(result)
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : '上传失败'
+        attachment.status = 'error'
+        attachment.error = message
+        failedMessage = `${attachment.name} ${message}`
+      }
+    }
+  } finally {
+    isUploadingAttachments.value = false
+  }
+
+  if (failedMessage) {
+    throw new Error(failedMessage)
+  }
+  return uploaded
+}
+
+function normalizeUploadResult(
+  result: NavigatorAttachmentResult,
+  pending: PendingNavigatorAttachment
+): NavigatorAttachmentResult {
+  return {
+    ...result,
+    name: result.name || pending.name,
+    mimeType: result.mimeType || pending.mimeType,
+    size: result.size ?? pending.size,
+    kind: result.kind || pending.kind,
+  }
+}
+
+function removePendingAttachment(id: string) {
+  const index = pendingAttachments.value.findIndex((item) => item.id === id)
+  if (index < 0) return
+  const [removed] = pendingAttachments.value.splice(index, 1)
+  revokePendingAttachment(removed)
+}
+
+function clearPendingAttachments() {
+  pendingAttachments.value.forEach(revokePendingAttachment)
+  pendingAttachments.value = []
+}
+
+function revokePendingAttachment(attachment: PendingNavigatorAttachment) {
+  if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl)
 }
 
 function updateSuspensionDialogVisible(visible: boolean) {
@@ -403,6 +719,79 @@ function handleSuspensionDecision(payload: BusinessSuspensionDecisionPayload) {
 function handleAction(action: NavigatorAction) {
   emit('action', action)
 }
+
+function attachmentKey(attachment: NavigatorAttachmentResult): string {
+  return String(attachment.id || attachment.url || `${attachment.name}-${attachment.size ?? ''}`)
+}
+
+function attachmentName(attachment: NavigatorAttachmentResult): string {
+  return String(attachment.name || '附件')
+}
+
+function attachmentPreviewUrl(attachment: NavigatorAttachmentResult): string {
+  return String(attachment.thumbnailUrl || attachment.url || '')
+}
+
+function isAttachmentImage(attachment: NavigatorAttachmentResult): boolean {
+  const kind = typeof attachment.kind === 'string' ? attachment.kind.toLowerCase() : ''
+  const mimeType = typeof attachment.mimeType === 'string' ? attachment.mimeType.toLowerCase() : ''
+  return kind === 'image' || mimeType.startsWith('image/')
+}
+
+function inferAttachmentKind(file: File): NavigatorAttachmentKind {
+  const mimeType = (file.type || inferMimeTypeFromName(file.name)).toLowerCase()
+  const name = file.name.toLowerCase()
+  if (mimeType.startsWith('image/')) return 'image'
+  if (mimeType === 'application/pdf' || name.endsWith('.pdf')) return 'pdf'
+  if (mimeType.startsWith('text/') || /\.(txt|md|csv|json|xml|log)$/i.test(name)) return 'text'
+  if (/(spreadsheet|excel|csv)/i.test(mimeType) || /\.(xls|xlsx|csv)$/i.test(name)) return 'spreadsheet'
+  if (/(word|document|msword|officedocument)/i.test(mimeType) || /\.(doc|docx|rtf)$/i.test(name)) return 'document'
+  if (/(zip|rar|7z|tar|gzip)/i.test(mimeType) || /\.(zip|rar|7z|tar|gz)$/i.test(name)) return 'archive'
+  return 'file'
+}
+
+function inferMimeTypeFromName(name: string): string {
+  const lower = name.toLowerCase()
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  if (lower.endsWith('.pdf')) return 'application/pdf'
+  if (lower.endsWith('.csv')) return 'text/csv'
+  if (lower.endsWith('.txt')) return 'text/plain'
+  return ''
+}
+
+function defaultAttachmentName(kind: NavigatorAttachmentKind): string {
+  switch (kind) {
+    case 'image': return '粘贴图片.png'
+    case 'pdf': return '附件.pdf'
+    default: return '附件'
+  }
+}
+
+function attachmentKindLabel(kind: NavigatorAttachmentKind): string {
+  switch (kind) {
+    case 'image': return '图片'
+    case 'pdf': return 'PDF'
+    case 'text': return '文本'
+    case 'spreadsheet': return '表格'
+    case 'document': return '文档'
+    case 'archive': return '压缩包'
+    default: return '文件'
+  }
+}
+
+function formatFileSize(size: number): string {
+  if (!Number.isFinite(size) || size < 0) return ''
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+onBeforeUnmount(() => {
+  clearPendingAttachments()
+})
 
 // Auto-scroll to bottom when new messages arrive
 watch(
@@ -507,6 +896,54 @@ watch(
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 14px;
+}
+
+.nc-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.nc-message-text + .nc-message-attachments {
+  margin-top: 8px;
+}
+
+.nc-message-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.nc-message-attachment-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.nc-message-attachment-icon {
+  flex-shrink: 0;
+}
+
+.nc-message-attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-message-attachment-size {
+  flex-shrink: 0;
+  opacity: 0.8;
+  font-size: 12px;
 }
 
 .nc-content--assistant {
@@ -662,16 +1099,145 @@ watch(
 
 .nc-input-area {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid var(--el-border-color-lighter, #ebeef5);
   background: var(--el-bg-color, #fff);
 }
 
+.nc-input-area.is-drag-over {
+  background: var(--el-color-primary-light-9, #ecf5ff);
+}
+
+.nc-input-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.nc-input-row :deep(.el-textarea) {
+  flex: 1;
+  min-width: 0;
+}
+
 .nc-input-area :deep(.el-textarea__inner) {
   box-shadow: none;
   padding: 8px 12px;
+}
+
+.nc-file-input {
+  display: none;
+}
+
+.nc-attachment-button {
+  flex-shrink: 0;
+  width: 32px;
+  padding: 8px;
+  margin-bottom: 2px;
+}
+
+.nc-pending-attachments {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 116px;
+  overflow-y: auto;
+}
+
+.nc-pending-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(240px, 100%);
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 6px;
+  background: var(--el-fill-color-blank, #fff);
+}
+
+.nc-pending-attachment--error {
+  border-color: var(--el-color-danger-light-5, #fab6b6);
+  background: var(--el-color-danger-light-9, #fef0f0);
+}
+
+.nc-pending-thumb,
+.nc-pending-file-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--el-fill-color-light, #f4f4f5);
+  color: var(--el-text-color-secondary, #909399);
+}
+
+.nc-pending-file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.nc-pending-info {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nc-pending-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--el-text-color-primary, #303133);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.nc-pending-meta,
+.nc-pending-error {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.nc-pending-meta {
+  color: var(--el-text-color-secondary, #909399);
+}
+
+.nc-pending-error {
+  color: var(--el-color-danger, #f56c6c);
+}
+
+.nc-pending-status {
+  flex-shrink: 0;
+  color: var(--el-color-primary, #409eff);
+}
+
+.nc-pending-remove {
+  flex-shrink: 0;
+  border: 0;
+  padding: 2px;
+  background: transparent;
+  color: var(--el-text-color-secondary, #909399);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.nc-pending-remove:hover {
+  color: var(--el-color-danger, #f56c6c);
+}
+
+.nc-pending-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .nc-input-actions {

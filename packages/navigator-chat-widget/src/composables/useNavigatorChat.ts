@@ -105,6 +105,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
   async function send(content: string, options: NavigatorSendOptions = {}): Promise<void> {
     if (isLoading.value) return
     error.value = null
+    const submittedAttachments = options.attachments?.length ? [...options.attachments] : undefined
 
     // 添加用户消息
     rawMessages.value.push({
@@ -112,6 +113,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       role: 'user',
       content,
       timestamp: Date.now(),
+      attachments: submittedAttachments,
     })
 
     isLoading.value = true

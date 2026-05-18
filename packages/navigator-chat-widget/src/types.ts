@@ -36,6 +36,8 @@ export interface ChatMessage {
   executionReportRef?: string
   /** Navigator frame execution report 摘要 */
   executionReportDigest?: ExecutionReportDigest
+  /** 已随用户消息提交的附件 */
+  attachments?: NavigatorAttachmentResult[]
 }
 
 /** Widget 展示模式 */
@@ -187,6 +189,50 @@ export interface NavigatorSendOptions {
   clientContext?: Record<string, unknown>
   /** Agent 执行链路元数据 */
   metadata?: Record<string, unknown>
+  /** TMS/BFF 上传后返回并透传给 Navigator OpenAPI 的附件 */
+  attachments?: NavigatorAttachmentResult[]
+}
+
+export type NavigatorAttachmentKind =
+  | 'image'
+  | 'pdf'
+  | 'text'
+  | 'spreadsheet'
+  | 'document'
+  | 'archive'
+  | 'file'
+
+/** 上游附件上传接口返回并传给 Navigator 的通用附件元数据 */
+export interface NavigatorAttachmentResult {
+  id?: string
+  name?: string
+  mimeType?: string
+  size?: number
+  kind?: NavigatorAttachmentKind | string
+  url?: string
+  thumbnailUrl?: string
+  provider?: string
+  metadata?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type UploadAttachmentHook = (file: File) => Promise<NavigatorAttachmentResult>
+
+export type PendingAttachmentStatus = 'pending' | 'uploading' | 'uploaded' | 'error'
+
+/** 浏览器侧尚未或刚刚上传的本地附件 */
+export interface PendingNavigatorAttachment {
+  id: string
+  file: File
+  name: string
+  mimeType: string
+  size: number
+  kind: NavigatorAttachmentKind
+  isImage: boolean
+  previewUrl?: string
+  status: PendingAttachmentStatus
+  error?: string
+  uploaded?: NavigatorAttachmentResult
 }
 
 export interface PaginationOptions {
@@ -267,6 +313,16 @@ export interface NavigatorChatConfig {
   showToolResults?: boolean
   /** 完整 Frame 执行报告 Markdown 加载器；通常由上游 BFF 代理 Worker 只读接口 */
   executionReportMarkdownLoader?: ExecutionReportMarkdownLoader
+  /** 发送前上传附件；TMS 场景由宿主注入并调用自己的上传接口 */
+  uploadAttachment?: UploadAttachmentHook
+  /** 是否启用默认附件入口；默认在提供 uploadAttachment 时启用 */
+  enableAttachments?: boolean
+  /** 单条消息最多附件数，默认 6 */
+  maxAttachments?: number
+  /** 单个附件最大字节数，默认 20MB */
+  maxAttachmentSize?: number
+  /** 可接受的附件类型，支持 MIME、image/* 和 .pdf 这类扩展名 */
+  acceptedAttachmentTypes?: string[]
   /**
    * 自定义请求函数（用于上游后端代理模式）
    *
