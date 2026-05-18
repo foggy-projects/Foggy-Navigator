@@ -141,9 +141,8 @@ class BusinessAgentTaskServiceTest {
         when(grantService.resolveEffectiveModelConfigId("tenant_01", "app_01", null)).thenReturn("model_01");
         doNothing().when(userGrantService).checkUpstreamUserAccess(anyString(), anyString(), anyString());
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(anyString(), anyString(), anyString());
-        SkillEntity skill = new SkillEntity();
-        skill.setMarkdownBody("skill body");
-        when(skillRegistryService.getSkill("tenant_01", "skill_01")).thenReturn(skill);
+        when(skillRegistryService.buildMaterializedPublicSkillMarkdown("tenant_01", "skill_01", "app_01"))
+                .thenReturn("materialized skill body");
         when(workerTaskLauncher.getWorkerBackend()).thenReturn("LANGGRAPH_BIZ");
         when(workerTaskLauncher.launch(any(BusinessAgentWorkerTaskLaunchRequest.class))).thenReturn(
                 BusinessAgentWorkerTaskLaunchResult.builder()
@@ -170,6 +169,7 @@ class BusinessAgentTaskServiceTest {
         verify(workerTaskLauncher).launch(requestCaptor.capture());
         assertEquals(result.getTaskScopedToken(), requestCaptor.getValue().getTaskScopedToken());
         assertEquals("ctx_01", requestCaptor.getValue().getContextId());
+        assertEquals("materialized skill body", requestCaptor.getValue().getMarkdownBody());
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor = ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
         verify(tokenRepository, atLeastOnce()).save(tokenCaptor.capture());

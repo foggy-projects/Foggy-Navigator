@@ -444,7 +444,7 @@ class SkillRegistryServiceTest {
             BusinessFunctionVersionEntity version = new BusinessFunctionVersionEntity();
             version.setStatus("ENABLED");
             version.setInputSchemaJson("""
-                    {"type":"object","properties":{"requestIntent":{"enum":["OPEN_EMPTY","PREFILL_FROM_CLUES"]},"sourceText":{"type":"string"}},"required":["requestIntent"]}
+                    {"type":"object","definitions":{"attachmentRef":{"type":"object","properties":{"attachmentUrl":{"type":"string","description":"Already uploaded URL."},"attachmentType":{"type":"string","enum":["IMAGE","FILE"]}},"required":["attachmentUrl"]}},"properties":{"requestIntent":{"enum":["OPEN_EMPTY","PREFILL_FROM_CLUES"]},"sourceText":{"type":"string"},"attachmentRefs":{"type":"array","items":{"$ref":"#/definitions/attachmentRef"}}},"required":["requestIntent"]}
                     """);
             version.setOutputSchemaJson("""
                     {"type":"object","properties":{"structured_output":{"type":"object"},"openUrl":{"type":"string"}}}
@@ -473,6 +473,8 @@ class SkillRegistryServiceTest {
             assertTrue(bodyRef.get().contains("### tms.order.createOpeningDraft@v1"));
             assertTrue(bodyRef.get().contains("requestIntent"));
             assertTrue(bodyRef.get().contains("PREFILL_FROM_CLUES"));
+            assertTrue(bodyRef.get().contains("attachmentRefs[].attachmentUrl"));
+            assertTrue(bodyRef.get().contains("attachmentRefs[].attachmentType"));
             assertTrue(bodyRef.get().contains("structured_output"));
             assertTrue(bodyRef.get().contains("Use PREFILL_FROM_CLUES when order clues exist."));
             assertFalse(bodyRef.get().contains("${@schema."));

@@ -240,6 +240,24 @@ public class SkillRegistryService {
         return materializePublicSkillInternal(tenantId, skill, null);
     }
 
+    @Transactional(readOnly = true)
+    public String buildMaterializedPublicSkillMarkdown(String tenantId, String skillId, String clientAppId) {
+        Assert.hasText(tenantId, "tenantId is required");
+        Assert.hasText(skillId, "skillId is required");
+        Assert.hasText(clientAppId, "clientAppId is required");
+
+        SkillEntity skill = getSkill(tenantId, skillId);
+        if (!STATUS_ENABLED.equals(skill.getStatus())) {
+            throw new IllegalStateException("Skill is disabled");
+        }
+        SchemaPlaceholderContext schemaContext = buildPublicSkillSchemaPlaceholderContext(
+                tenantId,
+                skill.getSkillId(),
+                clientAppId
+        );
+        return buildMaterializedMarkdown(tenantId, skill, schemaContext);
+    }
+
     @Transactional
     public SkillBundleDTO syncSkillBundle(String tenantId, String actorUserId, SyncSkillBundleForm form) {
         Assert.hasText(tenantId, "tenantId is required");
@@ -1204,13 +1222,19 @@ public class SkillRegistryService {
         }
         md.append("\n#### ").append(heading).append("\n");
         int[] count = new int[] {0};
-        boolean appended = appendSchemaProperties(md, schema, "", 0, count);
+        boolean appended = appendSchemaProperties(md, schema, schema, "", 0, count);
         if (!appended) {
             md.append("- Registered schema has no top-level JSON Schema properties.\n");
         }
     }
 
-    private boolean appendSchemaProperties(StringBuilder md, JsonNode schema, String pathPrefix, int depth, int[] count) {
+    private boolean appendSchemaProperties(
+            StringBuilder md,
+            JsonNode rootSchema,
+            JsonNode schema,
+            String pathPrefix,
+            int depth,
+            int[] count) {
         JsonNode properties = schema == null ? null : schema.get("properties");
         if (properties == null || !properties.isObject()) {
             return false;
@@ -1225,7 +1249,7 @@ public class SkillRegistryService {
             }
             Map.Entry<String, JsonNode> field = fields.next();
             String name = field.getKey();
-            JsonNode fieldSchema = field.getValue();
+            JsonNode fieldSchema = resolveLocalSchemaRef(rootSchema, field.getValue());
             String fieldPath = StringUtils.hasText(pathPrefix) ? pathPrefix + "." + name : name;
             md.append("- `").append(fieldPath).append("` (")
                     .append(describeSchemaField(fieldSchema, required.contains(name)))
@@ -1239,14 +1263,31 @@ public class SkillRegistryService {
             appended = true;
 
             if (depth < 4) {
-                appendSchemaProperties(md, fieldSchema, fieldPath, depth + 1, count);
+                appendSchemaProperties(md, rootSchema, fieldSchema, fieldPath, depth + 1, count);
                 JsonNode items = fieldSchema == null ? null : fieldSchema.get("items");
                 if (items != null && items.isObject()) {
-                    appendSchemaProperties(md, items, fieldPath + "[]", depth + 1, count);
+                    appendSchemaProperties(md, rootSchema, resolveLocalSchemaRef(rootSchema, items),
+                            fieldPath + "[]", depth + 1, count);
                 }
             }
         }
         return appended;
+    }
+
+    private JsonNode resolveLocalSchemaRef(JsonNode rootSchema, JsonNode node) {
+        if (rootSchema == null || node == null || !node.isObject()) {
+            return node;
+        }
+        JsonNode ref = node.get("$ref");
+        if (ref == null || !ref.isTextual()) {
+            return node;
+        }
+        String pointer = ref.asText();
+        if (!pointer.startsWith("#/")) {
+            return node;
+        }
+        JsonNode resolved = rootSchema.at(pointer.substring(1));
+        return resolved.isMissingNode() ? node : resolved;
     }
 
     private Set<String> requiredNames(JsonNode schema) {

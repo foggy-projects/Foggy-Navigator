@@ -307,7 +307,11 @@ public class BusinessAgentTaskService {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
-        String markdownBody = skillRegistryService.getSkill(tenantId, task.getSkillId()).getMarkdownBody();
+        String markdownBody = skillRegistryService.buildMaterializedPublicSkillMarkdown(
+                tenantId,
+                task.getSkillId(),
+                task.getClientAppId()
+        );
 
         return workerTaskLaunchers.stream()
                 .filter(Objects::nonNull)
