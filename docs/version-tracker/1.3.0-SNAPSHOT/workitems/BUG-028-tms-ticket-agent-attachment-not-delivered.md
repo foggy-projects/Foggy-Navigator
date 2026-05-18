@@ -27,7 +27,7 @@ owner: upstream-integration + biz-worker-runtime
 
 Current reproduction was initially partial: the child boundary absence was confirmed, but early logs could not distinguish whether the attachment was lost before TMS BFF ask, in Navigator OpenAPI, Java relay, Python query state, or root-to-child handoff.
 
-2026-05-18 follow-up: Worker-side root-to-child handoff has been fixed and verified. A real TMS BFF ask smoke with top-level `attachments` also passed, proving the BFF-to-Navigator-to-Worker-to-child-skill path can deliver attachment metadata when the ask payload contains attachments. The remaining gap is browser/widget upload observability: confirm that a real user image upload creates the same top-level `attachments` payload before BFF forwards the ask.
+2026-05-18 follow-up: Worker-side root-to-child handoff has been fixed and verified. A real TMS BFF ask smoke with top-level `attachments` also passed, proving the BFF-to-Navigator-to-Worker-to-child-skill path can deliver attachment metadata when the ask payload contains attachments. A browser/widget Playwright regression now also confirms that selecting a real file in the TMS chat drawer uploads through the host hook and sends the returned attachment object in the BFF ask body top-level `attachments` field.
 
 ## Evidence
 
@@ -71,7 +71,7 @@ Actual:
 - child skill prompt 从 `runtime_context.attachments` 注入附件摘要，覆盖 `invoke_business_skill` 参数未带附件的场景。
 - 新增 Worker scripted E2E，覆盖带 `image.png` 附件的 query 经 root `invoke_business_skill` 进入 `tms-ticket-agent` 后，child LLM request 可见脱敏附件摘要/ref。
 
-剩余待验证：browser/widget 真实上传图片后，TMS BFF ask payload 是否包含顶层 `attachments`。
+Browser/widget 真实上传图片后的 ask body 已由 TMS Playwright regression 覆盖。剩余问题转为治理类收口：补充边界观测、确认 OpenAPI `metadata.attachments` 兼容归一化，以及明确 `tms-ticket-agent` 与 `tms-attachment-agent` 的职责边界。
 
 ## 2026-05-18 TMS BFF Real Smoke Update
 
@@ -124,7 +124,7 @@ Automation is required because this issue spans widget、TMS BFF、OpenAPI、Jav
 
 - [ ] 为每一跳补充脱敏附件观测：只记录 count、kind、name、size、provider 和 attachment id/ref，不记录完整 signed URL。
 - [x] 通过真实 TMS BFF ask smoke 确认顶层 `attachments` 可到达 Navigator/Worker/child skill。
-- [ ] 在 TMS widget / observer 页面确认真实用户上传图片后 ask body 是否包含顶层 `attachments`。
+- [x] 在 TMS widget / observer 页面确认真实用户上传图片后 ask body 是否包含顶层 `attachments`。
 - [ ] 检查 OpenAPI ask 是否正确合并 top-level `attachments` 与 `metadata.attachments`。
 - [x] 检查 LangGraph Java relay 是否把附件放入 Worker HTTP body。
 - [x] 检查 Python Worker 是否把 `attachments` 写入 root state。
@@ -133,13 +133,13 @@ Automation is required because this issue spans widget、TMS BFF、OpenAPI、Jav
 - [x] 补齐 Worker scripted E2E 回归测试，防止 Worker 收到附件但 child skill 不可见。
 - [x] 执行真实 TMS BFF 到 Navigator/Worker/child skill 的现场 smoke，防止 BFF 后链路再次丢附件。
 - [x] 补齐 TMS BFF 到 Navigator/Worker/child skill 的 Vitest E2E 回归。
-- [ ] 补齐 browser/widget 到 TMS BFF 的 E2E，防止 UI 显示附件但 ask payload 未携带附件。
+- [x] 补齐 browser/widget 到 TMS BFF 的 E2E，防止 UI 显示附件但 ask payload 未携带附件。
 
 ## Verification
 
 - [x] TMS BFF ask 携带顶层图片附件后，`tms-ticket-agent` child result 能看到脱敏附件元数据。
 - [x] TMS BFF 附件透传 Vitest E2E 通过。
-- [ ] TMS 本地 UI 发送图片附件后，Navigator ask body 能看到脱敏附件计数。
+- [x] TMS 本地 UI 发送图片附件后，Navigator ask body 能看到顶层附件对象。
 - [ ] Worker task data 能看到附件数组或 attachment refs。
 - [x] Worker scripted E2E 中，`tms-ticket-agent` child prompt context 能看到脱敏附件摘要/ref。
 - [x] Worker direct real-LLM smoke 中，`system.root` 真实调用 `tms-ticket-agent`，child frame 返回脱敏附件 ref。
@@ -211,6 +211,14 @@ npx vitest run tests/e2e/bug-028-tms-bff-attachment-handoff.e2e.test.ts --no-fil
 ```
 
 Result: `1 passed` in `82.18s`. The test sends top-level `attachments` through TMS BFF, verifies `invoke_business_skill` enters `tms-ticket-agent`, verifies child-visible `att-bug028-tms-bff` / `image.png` / `tms-bff` / sanitized URL path / `traceId`, and asserts `invoke_business_function` plus sensitive patterns are absent.
+
+- TMS browser/widget attachment payload Playwright E2E:
+
+```powershell
+pnpm exec playwright test tests/playwright/navigator-chat-attachment-payload.spec.ts --project=chromium
+```
+
+Result: `1 passed` in `4.0s`. The test selects `image.png` through the real chat widget file input, verifies `/x3-web/tenant/attachment/upload` receives `multipart/form-data` with `refType=NAVIGATOR_CHAT`, then verifies `/bff/navigator/agent/api/v1/open/agents/tms-root-router-agent/ask` receives top-level `attachments: [UPLOADED_ATTACHMENT]` and does not rely on `metadata.attachments`.
 
 ## References
 
