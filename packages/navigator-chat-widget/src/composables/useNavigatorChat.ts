@@ -16,6 +16,7 @@ import type {
   SkillFrameBlock,
   ToolExecutionBlock,
   NavigatorAction,
+  NavigatorChatMode,
   ExecutionReportDigest,
 } from '../types'
 
@@ -322,7 +323,9 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       if ((message.type === 'TEXT' || message.type === 'RESULT') && content) {
         const messageActions = mergeActions(pendingBusinessActions, actions)
         pendingBusinessActions = []
-        const businessContent = display.mode === 'business' ? stripRawJsonArtifact(content, messageActions) : sanitizeText(content)
+        const businessContent = display.mode === 'business'
+          ? userFacingMessageContent(stripRawJsonArtifact(content, messageActions), display.mode)
+          : userFacingMessageContent(content, display.mode)
         const visibleContent = businessContent || (messageActions.length > 0 ? businessActionIntro(messageActions) : '')
         if (!visibleContent) {
           continue
@@ -365,7 +368,10 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       } else if (message.type === 'STATE') {
         const subtype = firstString(payload.subtype, payload.stateType, payload.state_type)
         if (subtype === 'skill_frame_open' || subtype === 'skill_frame_close') {
-          progressText.value = subtype === 'skill_frame_open' ? '正在执行技能...' : '技能执行完成'
+          progressText.value = skillFrameProgressText(
+            firstString(payload.skillId, payload.skill_id),
+            subtype === 'skill_frame_open' ? 'open' : 'close'
+          )
           if (display.showRuntimeEvents || display.showToolCalls || display.showToolResults) {
             upsertSkillFrame(messageTaskId, message, subtype, id, status)
           }
@@ -377,7 +383,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
           rawMessages.value.push({
             id,
             role: 'system',
-            content: sanitizeText(content || stringifySafe(sanitizedMessage)),
+            content: stateDisplayContent(content || stringifySafe(sanitizedMessage), display.mode),
             timestamp: openMessageTimestamp(message),
             taskId: messageTaskId,
             status,
@@ -429,7 +435,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       rawMessages.value.push({
         id: nextId(),
         role: 'assistant',
-        content: task.result,
+        content: userFacingMessageContent(task.result, display.mode),
         timestamp: Date.now(),
         taskId: task.taskId,
         status: task.status,
@@ -708,7 +714,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       frameId,
       parentFrameId: options.parentFrameId,
       skillId: options.skillId,
-      displayName: options.skillId || '执行步骤',
+      displayName: skillDisplayName(options.skillId),
       status: options.phase === 'close' ? 'success' : 'running',
       openedAt: options.phase === 'open' ? options.timestamp : undefined,
       closedAt: options.phase === 'close' ? options.timestamp : undefined,
@@ -827,7 +833,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
 }
 
 interface DisplayOptions {
-  mode: 'business' | 'debug'
+  mode: NavigatorChatMode
   showRuntimeEvents: boolean
   showToolCalls: boolean
   showToolResults: boolean
@@ -845,22 +851,23 @@ function resolveSkillFrameId(message: OpenTaskMessage, payload: Record<string, u
 }
 
 function skillFrameDisplayName(frame: SkillFrameBlock): string {
-  return frame.skillId || '执行步骤'
+  return skillDisplayName(frame.skillId)
 }
 
 function skillFrameTitle(frame: SkillFrameBlock): string {
   const duration = frame.durationMs != null ? ` ${(frame.durationMs / 1000).toFixed(1)}s` : ''
-  return `技能 ${frame.displayName} ${frame.status === 'running' ? '执行中' : frame.status === 'success' ? '完成' : '失败'}${duration}`
+  return `${frame.displayName} ${frame.status === 'running' ? '执行中' : frame.status === 'success' ? '完成' : '失败'}${duration}`
 }
 
 function resolveDisplayOptions(config: NavigatorChatConfig): DisplayOptions {
   const mode = config.mode ?? (config.debugMode ? 'debug' : 'business')
   const debug = mode === 'debug'
+  const details = mode === 'details'
   return {
     mode,
-    showRuntimeEvents: config.showRuntimeEvents ?? debug,
-    showToolCalls: config.showToolCalls ?? debug,
-    showToolResults: config.showToolResults ?? debug,
+    showRuntimeEvents: config.showRuntimeEvents ?? (debug || details),
+    showToolCalls: config.showToolCalls ?? (debug || details),
+    showToolResults: config.showToolResults ?? (debug || details),
   }
 }
 
@@ -1011,7 +1018,12 @@ function mergeToolExecution(
     toolName,
     functionName,
     functionId,
-    displayName: functionId && functionId !== toolName ? `${functionId} via ${toolName}` : (functionName || toolName),
+    displayName: toolDisplayName({
+      toolName,
+      functionName,
+      functionId,
+      status: executionStatus,
+    }),
     status: executionStatus,
     startedAt,
     finishedAt,
@@ -1170,7 +1182,7 @@ function toSnakeCase(value: string): string {
 
 function toolExecutionTitle(block: ToolExecutionBlock): string {
   const duration = block.durationMs != null ? ` ${(block.durationMs / 1000).toFixed(1)}s` : ''
-  return `工具调用 ${block.displayName} ${statusLabel(block.status)}${duration}`
+  return `${block.displayName} ${statusLabel(block.status)}${duration}`
 }
 
 function statusLabel(status: ToolExecutionBlock['status']): string {
@@ -1201,10 +1213,65 @@ function numberValue(...values: unknown[]): number | undefined {
 
 function stateProgressText(content: string): string {
   const lower = content.toLowerCase()
-  if (lower.includes('connect')) return '正在连接服务...'
+  const connectionText = userFacingConnectionText(content)
+  if (connectionText) return connectionText
+  if (lower.includes('connect')) return '正在连接至道同。'
   if (lower.includes('tool') || lower.includes('query') || lower.includes('查询')) return '正在查询数据...'
   if (lower.includes('generat') || lower.includes('answer') || lower.includes('回答')) return '正在生成回答...'
   return '正在处理...'
+}
+
+function stateDisplayContent(content: string, mode: DisplayOptions['mode']): string {
+  if (mode === 'debug') return sanitizeText(content)
+  const connectionText = userFacingConnectionText(content)
+  if (connectionText) return connectionText
+  return sanitizeText(content)
+}
+
+function userFacingMessageContent(content: string, mode: DisplayOptions['mode']): string {
+  if (mode === 'debug') return sanitizeText(content)
+  const connectionText = userFacingConnectionText(content)
+  if (connectionText) return connectionText
+  return sanitizeText(content)
+}
+
+function userFacingConnectionText(content: string): string | null {
+  const lower = content.toLowerCase()
+  if (!lower.includes('langgraph') || !lower.includes('worker')) return null
+  if (lower.includes('connect')) return '正在连接至道同。'
+  return null
+}
+
+function skillDisplayName(skillId?: string): string {
+  if (!skillId) return '执行步骤'
+  if (skillId === 'system.root') return '开始处理任务'
+  return skillId
+}
+
+function skillFrameProgressText(skillId: string | undefined, phase: 'open' | 'close'): string {
+  if (skillId === 'system.root') return phase === 'open' ? '开始处理任务' : '处理完成'
+  return phase === 'open' ? '正在处理任务...' : '任务处理完成'
+}
+
+function toolDisplayName(input: {
+  toolName: string
+  functionName?: string
+  functionId?: string
+  status: ToolExecutionBlock['status']
+}): string {
+  if (input.toolName === 'submit_skill_result') {
+    if (input.status === 'running') return '正在准备结果'
+    if (input.status === 'success') return '处理完成'
+    if (input.status === 'failed') return '结果准备失败'
+    return '准备结果'
+  }
+  if (input.toolName === 'invoke_business_function') {
+    if (input.status === 'running') return '正在调用业务能力'
+    if (input.status === 'success') return '业务能力调用完成'
+    if (input.status === 'failed') return '业务能力调用失败'
+  }
+  if (input.functionId && input.functionId !== input.toolName) return `${input.functionId} via ${input.toolName}`
+  return input.functionName || input.toolName
 }
 
 

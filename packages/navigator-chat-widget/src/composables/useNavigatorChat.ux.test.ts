@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createApp, defineComponent, h, nextTick, type App } from 'vue'
 import ElementPlus from 'element-plus'
 import NavigatorChat from '../components/NavigatorChat.vue'
+import SkillFrameBlockView from '../components/SkillFrameBlockView.vue'
 import { useNavigatorChat, type UseNavigatorChat } from './useNavigatorChat'
-import type { AgentTask, NavigatorAttachmentResult } from '../types'
+import type { AgentTask, NavigatorAttachmentResult, SkillFrameBlock } from '../types'
 
 let app: App<Element> | undefined
 
@@ -350,9 +351,228 @@ describe('useNavigatorChat business action UX', () => {
     await nextTick()
 
     const frameMessage = chat.messages.value.find((message) => message.skillFrame)
-    expect(frameMessage?.content).toContain('技能 执行步骤')
+    expect(frameMessage?.content).toContain('执行步骤')
     expect(frameMessage?.content).not.toContain('frm_622f67035042')
     expect(frameMessage?.skillFrame?.displayName).toBe('执行步骤')
+  })
+
+  it('renders details mode with friendly skill and tool labels only', async () => {
+    const root = document.createElement('div')
+    const frame: SkillFrameBlock = {
+      frameId: 'frame-root',
+      skillId: 'system.root',
+      displayName: '开始处理任务',
+      status: 'success',
+      openedAt: 1_000,
+      closedAt: 2_000,
+      durationMs: 1_000,
+      openContent: 'Opening frame for skill: system.root',
+      rawOpen: { skillId: 'system.root' },
+      rawClose: { status: 'COMPLETED' },
+      trace: { taskId: 'task-1' },
+      children: [],
+      toolExecutions: [
+        {
+          toolCallId: 'tool-1',
+          toolName: 'submit_skill_result',
+          displayName: '处理完成',
+          status: 'success',
+          durationMs: 200,
+          args: { summary: 'done' },
+          result: { status: 'SUCCESS' },
+          rawCall: { toolName: 'submit_skill_result' },
+          rawResult: { status: 'SUCCESS' },
+          summary: ['SUCCESS'],
+          trace: { toolCallId: 'tool-1' },
+        },
+      ],
+    }
+
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(SkillFrameBlockView, {
+          frame,
+          displayMode: 'details',
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await nextTick()
+
+    const text = root.textContent ?? ''
+    expect(text).toContain('开始处理任务')
+    expect(text).toContain('处理完成')
+    expect(text).toContain('结果已准备完成。')
+    expect(text).not.toContain('system.root')
+    expect(text).not.toContain('submit_skill_result')
+    expect(text).not.toContain('Frame 原始 JSON')
+    expect(text).not.toContain('参数')
+    expect(text).not.toContain('SUCCESS')
+  })
+
+  it('localizes LangGraph worker connection text in non-debug assistant messages', async () => {
+    const task: AgentTask = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'connecting-text',
+          type: 'TEXT',
+          content: 'Connecting to LangGraph worker...',
+          timestamp: 1_000,
+        },
+      ],
+    }
+
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'details',
+          fetch: async () => okResponse(task),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.send('执行一下')
+    await nextTick()
+
+    const assistantText = chat.messages.value.find((message) => message.role === 'assistant')?.content ?? ''
+    expect(assistantText).toBe('正在连接至道同。')
+    expect(assistantText).not.toContain('LangGraph')
+  })
+
+  it('switches display modes in the component without changing the backend protocol', async () => {
+    const root = document.createElement('div')
+    let requests = 0
+    let chatVm: { send: (content: string) => Promise<void> } | undefined
+    const task: AgentTask = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      status: 'COMPLETED',
+      contextId: 'ctx-1',
+      terminal: true,
+      terminalStatus: 'COMPLETED',
+      messages: [
+        {
+          id: 'frame-open',
+          type: 'STATE',
+          content: 'Opening frame for skill: system.root',
+          timestamp: 1_000,
+          metadata: {
+            subtype: 'skill_frame_open',
+            skillFrameId: 'frame-root',
+            skillId: 'system.root',
+          },
+        },
+        {
+          id: 'tool-call',
+          type: 'TOOL_CALL',
+          content: 'Calling tool submit_skill_result',
+          timestamp: 1_100,
+          toolCallId: 'tool-1',
+          metadata: {
+            skillFrameId: 'frame-root',
+            toolName: 'submit_skill_result',
+            args: { summary: 'done' },
+          },
+        },
+        {
+          id: 'tool-result',
+          type: 'TOOL_RESULT',
+          content: 'Tool submit_skill_result returned SUCCESS',
+          timestamp: 1_300,
+          toolCallId: 'tool-1',
+          metadata: {
+            skillFrameId: 'frame-root',
+            toolName: 'submit_skill_result',
+            result: { status: 'SUCCESS' },
+          },
+        },
+        {
+          id: 'frame-close',
+          type: 'STATE',
+          content: 'Closing frame for skill: system.root',
+          timestamp: 1_500,
+          metadata: {
+            subtype: 'skill_frame_close',
+            skillFrameId: 'frame-root',
+            skillId: 'system.root',
+            status: 'COMPLETED',
+          },
+        },
+        {
+          id: 'final-result',
+          type: 'RESULT',
+          content: '已完成操作。',
+          timestamp: 2_000,
+          terminal: true,
+          terminalStatus: 'COMPLETED',
+        },
+      ],
+    }
+
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(NavigatorChat, {
+          ref: (instance: unknown) => {
+            chatVm = instance as typeof chatVm
+          },
+          showHeader: true,
+          config: {
+            baseUrl: 'http://navigator.test',
+            agentId: 'agent-1',
+            mode: 'business',
+            showDisplayModeSwitcher: true,
+            fetch: async () => {
+              requests += 1
+              return okResponse(task)
+            },
+          },
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await nextTick()
+    if (!chatVm) throw new Error('failed to mount navigator chat')
+
+    await chatVm.send('执行一下')
+    await nextTick()
+
+    expect(requests).toBe(1)
+    expect(root.textContent ?? '').toContain('已完成操作。')
+    expect(root.textContent ?? '').not.toContain('开始处理任务')
+    expect(root.textContent ?? '').not.toContain('system.root')
+
+    const modeButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('.nc-mode-button'))
+    modeButtons.find((button) => button.textContent?.trim() === '详情')?.click()
+    await nextTick()
+
+    expect(requests).toBe(1)
+    expect(root.textContent ?? '').toContain('开始处理任务')
+    expect(root.textContent ?? '').toContain('处理完成')
+    expect(root.textContent ?? '').not.toContain('system.root')
+    expect(root.textContent ?? '').not.toContain('submit_skill_result')
+    expect(root.textContent ?? '').not.toContain('Frame 原始 JSON')
+
+    modeButtons.find((button) => button.textContent?.trim() === '调试')?.click()
+    await nextTick()
+
+    expect(requests).toBe(1)
+    expect(root.textContent ?? '').toContain('system.root')
+    expect(root.textContent ?? '').toContain('submit_skill_result')
+    expect(root.textContent ?? '').toContain('Frame 原始 JSON')
   })
 
   it('keeps execution report fields on skill frames', async () => {

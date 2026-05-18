@@ -41,7 +41,7 @@ export interface ChatMessage {
 }
 
 /** Widget 展示模式 */
-export type NavigatorChatMode = 'business' | 'debug'
+export type NavigatorChatMode = 'business' | 'details' | 'debug'
 
 /** 可点击业务动作 */
 export interface NavigatorAction {
@@ -303,6 +303,10 @@ export interface NavigatorChatConfig {
   maxTurns?: number
   /** 展示模式，默认 business */
   mode?: NavigatorChatMode
+  /** 是否在组件头部显示展示模式切换入口；启用后会保留过程消息以支持运行中随时切换 */
+  showDisplayModeSwitcher?: boolean
+  /** 展示模式切换入口可选项，默认 business/details/debug */
+  displayModeOptions?: NavigatorChatMode[]
   /** 等价调试开关；未显式指定 mode 时，true 等价 mode=debug */
   debugMode?: boolean
   /** 是否展示运行时/连接/状态事件 */

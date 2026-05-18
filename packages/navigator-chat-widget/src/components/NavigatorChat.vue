@@ -11,6 +11,17 @@
         <span class="nc-title">{{ title }}</span>
         <div class="nc-header-actions">
           <slot name="header-actions">
+            <div v-if="showDisplayModeSwitcher" class="nc-mode-switcher" role="group" aria-label="展示模式">
+              <button
+                v-for="modeOption in displayModeOptions"
+                :key="modeOption"
+                type="button"
+                :class="['nc-mode-button', { 'is-active': resolvedMode === modeOption }]"
+                @click="setDisplayMode(modeOption)"
+              >
+                {{ displayModeLabel(modeOption) }}
+              </button>
+            </div>
             <el-tag v-if="chat.taskStatus.value" size="small" :type="statusTagType">
               {{ statusLabel }}
             </el-tag>
@@ -27,7 +38,7 @@
         </slot>
       </div>
       <div
-        v-for="msg in chat.messages.value"
+        v-for="msg in visibleMessages"
         :key="msg.id"
         :class="['nc-message', `nc-message--${msg.role}`]"
       >
@@ -85,43 +96,44 @@
             <SkillFrameBlockView
               v-if="msg.skillFrame"
               :frame="msg.skillFrame"
+              :display-mode="resolvedMode"
               :load-markdown="executionReportMarkdownLoader"
             />
             <details v-else-if="msg.toolExecution" class="nc-process nc-tool-execution" open>
               <summary>
                 <span class="nc-tool-title">
                   <el-icon v-if="msg.toolExecution.status === 'running'" class="is-loading"><Loading /></el-icon>
-                  <span>工具调用 {{ msg.toolExecution.displayName }}</span>
+                  <span>{{ toolExecutionTitle(msg.toolExecution) }}</span>
                 </span>
                 <span :class="['nc-tool-status', `nc-tool-status--${msg.toolExecution.status}`]">
                   {{ toolStatusLabel(msg.toolExecution.status) }}
                 </span>
-                <span v-if="msg.toolExecution.durationMs != null" class="nc-tool-duration">
+                <span v-if="showDiagnosticDetails && msg.toolExecution.durationMs != null" class="nc-tool-duration">
                   {{ (msg.toolExecution.durationMs / 1000).toFixed(1) }}s
                 </span>
               </summary>
               <div class="nc-tool-body">
-                <div class="nc-tool-summary">
-                  摘要：{{ msg.toolExecution.summary.join(', ') }}
+                <div v-if="toolExecutionSummary(msg.toolExecution)" class="nc-tool-summary">
+                  摘要：{{ toolExecutionSummary(msg.toolExecution) }}
                 </div>
                 <ExecutionReportInline
                   :report-ref="msg.toolExecution.executionReportRef"
                   :digest="msg.toolExecution.executionReportDigest"
                   :load-markdown="executionReportMarkdownLoader"
                 />
-                <details class="nc-nested">
+                <details v-if="showDebugDetails" class="nc-nested">
                   <summary>参数</summary>
                   <pre>{{ formatJson(msg.toolExecution.args) }}</pre>
                 </details>
-                <details class="nc-nested">
+                <details v-if="showDebugDetails" class="nc-nested">
                   <summary>结果</summary>
                   <pre>{{ formatJson(msg.toolExecution.result ?? msg.toolExecution.error) }}</pre>
                 </details>
-                <details class="nc-nested">
+                <details v-if="showDebugDetails" class="nc-nested">
                   <summary>排障字段</summary>
                   <pre>{{ formatJson(msg.toolExecution.trace) }}</pre>
                 </details>
-                <details class="nc-nested">
+                <details v-if="showDebugDetails" class="nc-nested">
                   <summary>原始 JSON</summary>
                   <pre>{{ formatJson({ call: msg.toolExecution.rawCall, result: msg.toolExecution.rawResult }) }}</pre>
                 </details>
@@ -298,6 +310,10 @@ const props = withDefaults(defineProps<{
   agentId?: string
   /** 展示模式，默认 business */
   mode?: NavigatorChatMode
+  /** 是否显示展示模式切换入口 */
+  showDisplayModeSwitcher?: boolean
+  /** 展示模式切换入口可选项 */
+  displayModeOptions?: NavigatorChatMode[]
   /** 等价调试开关 */
   debugMode?: boolean
   /** 是否展示运行时事件 */
@@ -377,6 +393,8 @@ const emit = defineEmits<{
   suspensionDecision: [payload: BusinessSuspensionDecisionPayload]
   /** 用户点击业务动作按钮或链接 */
   action: [action: NavigatorAction]
+  /** 展示模式切换 */
+  displayModeChange: [mode: NavigatorChatMode]
 }>()
 
 const instance = getCurrentInstance()
@@ -387,6 +405,39 @@ function hasExplicitProp(name: string): boolean {
   return Object.prototype.hasOwnProperty.call(rawProps, name)
     || Object.prototype.hasOwnProperty.call(rawProps, kebabName)
 }
+
+const explicitInitialMode = (): NavigatorChatMode => props.mode ?? props.config?.mode ?? (props.debugMode || props.config?.debugMode ? 'debug' : 'business')
+const activeDisplayMode = ref<NavigatorChatMode>(explicitInitialMode())
+const defaultDisplayModeOptions: NavigatorChatMode[] = ['business', 'details', 'debug']
+
+function isNavigatorChatMode(value: unknown): value is NavigatorChatMode {
+  return value === 'business' || value === 'details' || value === 'debug'
+}
+
+const rawDisplayModeOptions = computed<unknown[]>(() => props.displayModeOptions ?? props.config?.displayModeOptions ?? defaultDisplayModeOptions)
+const displayModeOptions = computed<NavigatorChatMode[]>(() => {
+  const seen = new Set<NavigatorChatMode>()
+  const output: NavigatorChatMode[] = []
+  for (const item of rawDisplayModeOptions.value) {
+    if (!isNavigatorChatMode(item) || seen.has(item)) continue
+    seen.add(item)
+    output.push(item)
+  }
+  return output.length ? output : defaultDisplayModeOptions
+})
+const showDisplayModeSwitcher = computed(() => (
+  hasExplicitProp('showDisplayModeSwitcher')
+    ? props.showDisplayModeSwitcher
+    : props.config?.showDisplayModeSwitcher ?? false
+))
+const collectSwitchableRuntimeEvents = computed(() => showDisplayModeSwitcher.value)
+
+watch(
+  () => [props.mode, props.config?.mode, props.debugMode, props.config?.debugMode] as const,
+  () => {
+    activeDisplayMode.value = explicitInitialMode()
+  }
+)
 
 const resolvedConfig = computed<NavigatorChatConfig>(() => ({
   ...(props.config ?? {
@@ -407,11 +458,13 @@ const resolvedConfig = computed<NavigatorChatConfig>(() => ({
   ...(props.acceptedAttachmentTypes ? { acceptedAttachmentTypes: props.acceptedAttachmentTypes } : {}),
   ...(props.fetch ? { fetch: props.fetch } : {}),
   ...(props.executionReportMarkdownLoader ? { executionReportMarkdownLoader: props.executionReportMarkdownLoader } : {}),
-  mode: props.mode ?? props.config?.mode ?? 'business',
+  mode: activeDisplayMode.value,
+  showDisplayModeSwitcher: showDisplayModeSwitcher.value,
+  displayModeOptions: displayModeOptions.value,
   debugMode: hasExplicitProp('debugMode') ? props.debugMode : props.config?.debugMode,
-  showRuntimeEvents: hasExplicitProp('showRuntimeEvents') ? props.showRuntimeEvents : props.config?.showRuntimeEvents,
-  showToolCalls: hasExplicitProp('showToolCalls') ? props.showToolCalls : props.config?.showToolCalls,
-  showToolResults: hasExplicitProp('showToolResults') ? props.showToolResults : props.config?.showToolResults,
+  showRuntimeEvents: collectSwitchableRuntimeEvents.value ? true : (hasExplicitProp('showRuntimeEvents') ? props.showRuntimeEvents : props.config?.showRuntimeEvents),
+  showToolCalls: collectSwitchableRuntimeEvents.value ? true : (hasExplicitProp('showToolCalls') ? props.showToolCalls : props.config?.showToolCalls),
+  showToolResults: collectSwitchableRuntimeEvents.value ? true : (hasExplicitProp('showToolResults') ? props.showToolResults : props.config?.showToolResults),
 }))
 
 const chat = useNavigatorChat(resolvedConfig.value)
@@ -422,6 +475,13 @@ const pendingAttachments = ref<PendingNavigatorAttachment[]>([])
 const isUploadingAttachments = ref(false)
 const isDragOver = ref(false)
 const executionReportMarkdownLoader = computed(() => resolvedConfig.value.executionReportMarkdownLoader)
+const resolvedMode = computed<NavigatorChatMode>(() => activeDisplayMode.value)
+const showDebugDetails = computed(() => resolvedMode.value === 'debug')
+const showDiagnosticDetails = computed(() => resolvedMode.value !== 'business')
+const visibleMessages = computed(() => chat.messages.value.filter((message) => {
+  if (resolvedMode.value === 'business' && message.process) return false
+  return true
+}))
 
 // 暴露 composable 给父组件
 defineExpose({
@@ -528,6 +588,37 @@ async function handleSend() {
   clearPendingAttachments()
   emit('send', content, uploadedAttachments)
   chat.send(content, uploadedAttachments?.length ? { attachments: uploadedAttachments } : undefined)
+}
+
+function toolExecutionTitle(tool: ToolExecutionBlock): string {
+  if (showDebugDetails.value) return `工具调用 ${tool.toolName}`
+  return tool.displayName
+}
+
+function toolExecutionSummary(tool: ToolExecutionBlock): string {
+  if (showDebugDetails.value) return tool.summary.join(', ')
+  if (tool.toolName === 'submit_skill_result') {
+    if (tool.status === 'running') return '正在整理本次处理结果。'
+    if (tool.status === 'success') return '结果已准备完成。'
+    if (tool.status === 'failed') return '结果准备失败。'
+  }
+  return tool.summary
+    .filter((item) => !/^(SUCCESS|RUNNING|COMPLETED|FAILED)$/i.test(item))
+    .join(', ')
+}
+
+function setDisplayMode(mode: NavigatorChatMode) {
+  if (!displayModeOptions.value.includes(mode) || activeDisplayMode.value === mode) return
+  activeDisplayMode.value = mode
+  emit('displayModeChange', mode)
+}
+
+function displayModeLabel(mode: NavigatorChatMode): string {
+  switch (mode) {
+    case 'business': return '简洁'
+    case 'details': return '详情'
+    case 'debug': return '调试'
+  }
 }
 
 function handleScroll() {
@@ -852,6 +943,41 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.nc-mode-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--el-border-color-light, #e4e7ed);
+  border-radius: 6px;
+  background: var(--el-bg-color, #fff);
+}
+
+.nc-mode-button {
+  min-width: 40px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--el-text-color-regular, #606266);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+.nc-mode-button:hover {
+  color: var(--el-color-primary, #409eff);
+  background: var(--el-fill-color-light, #f5f7fa);
+}
+
+.nc-mode-button.is-active {
+  color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  font-weight: 600;
 }
 
 .nc-messages {
