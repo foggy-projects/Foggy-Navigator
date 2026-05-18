@@ -25,7 +25,9 @@ owner: upstream-integration + biz-worker-runtime
 2. 发送“你可以帮我提个工单吗”。
 3. 检查 Navigator/Worker 任务数据与 skill tool-call 日志。
 
-Current reproduction is partial: the child boundary absence is confirmed, but current日志还不能区分附件是在 TMS BFF ask 前未上传/未转发，还是在 Navigator OpenAPI、Java relay、Python query state、root-to-child handoff 中途丢失。
+Current reproduction was initially partial: the child boundary absence was confirmed, but early logs could not distinguish whether the attachment was lost before TMS BFF ask, in Navigator OpenAPI, Java relay, Python query state, or root-to-child handoff.
+
+2026-05-18 follow-up: Worker-side root-to-child handoff has been fixed and verified. A real TMS BFF ask smoke with top-level `attachments` also passed, proving the BFF-to-Navigator-to-Worker-to-child-skill path can deliver attachment metadata when the ask payload contains attachments. The remaining gap is browser/widget upload observability: confirm that a real user image upload creates the same top-level `attachments` payload before BFF forwards the ask.
 
 ## Evidence
 
@@ -69,7 +71,24 @@ Actual:
 - child skill prompt 从 `runtime_context.attachments` 注入附件摘要，覆盖 `invoke_business_skill` 参数未带附件的场景。
 - 新增 Worker scripted E2E，覆盖带 `image.png` 附件的 query 经 root `invoke_business_skill` 进入 `tms-ticket-agent` 后，child LLM request 可见脱敏附件摘要/ref。
 
-剩余待验证：真实 TMS BFF ask payload 是否包含顶层 `attachments`，以及现场 E2E 中 `tms-ticket-agent` 是否能看到脱敏附件摘要/ref。
+剩余待验证：browser/widget 真实上传图片后，TMS BFF ask payload 是否包含顶层 `attachments`。
+
+## 2026-05-18 TMS BFF Real Smoke Update
+
+已通过真实 TMS BFF 路径执行一次附件透传 smoke：`POST /bff/navigator/agent/api/v1/open/agents/tms-root-router-agent/ask` 携带顶层 `attachments`，真实 Navigator/Worker/LLM 链路执行完成。
+
+Result: PASS.
+
+- Task: `lgt_f0527a861d054b75`
+- Root frame: `frm_5092bf42e6c0`
+- Child frame: `frm_2ce03fa248eb`
+- `system.root` 调用 `invoke_business_skill` 进入 `tms-ticket-agent`
+- `tms-ticket-agent` 调用 `submit_skill_result`
+- Child 输出可见 `att-bug028-tms-bff`、`image.png`、`tms-bff`、`https://tms.example.com/files/image.png`、`traceId=bug028-tms-bff`
+- 未调用 `invoke_business_function`，未创建工单
+- 敏感串扫描未命中 `token=secret`、`accessToken`、`hidden`
+
+同日执行既有 `navigator-ticket-skill.e2e.test.ts` 时，REST adapter 用例通过；真实创建工单链路失败于环境授权配置：`Unauthorized or unconfigured upstream_ref: local-smoke-2026-05-18`。该失败说明工单业务函数授权另有环境缺口，不影响本 BUG 对附件上下文透传的判断。
 
 ## Impact Scope
 
@@ -104,18 +123,21 @@ Automation is required because this issue spans widget、TMS BFF、OpenAPI、Jav
 ## Fix Checklist
 
 - [ ] 为每一跳补充脱敏附件观测：只记录 count、kind、name、size、provider 和 attachment id/ref，不记录完整 signed URL。
-- [ ] 在 TMS BFF / widget observability 页面确认真实 ask body 是否包含顶层 `attachments`。
+- [x] 通过真实 TMS BFF ask smoke 确认顶层 `attachments` 可到达 Navigator/Worker/child skill。
+- [ ] 在 TMS widget / observer 页面确认真实用户上传图片后 ask body 是否包含顶层 `attachments`。
 - [ ] 检查 OpenAPI ask 是否正确合并 top-level `attachments` 与 `metadata.attachments`。
 - [x] 检查 LangGraph Java relay 是否把附件放入 Worker HTTP body。
 - [x] 检查 Python Worker 是否把 `attachments` 写入 root state。
 - [x] 检查 root-to-child `invoke_business_skill` 是否把附件上下文传给 child frame。
 - [ ] 明确 `tms-ticket-agent` 与 `tms-attachment-agent` 的职责边界：附件是由 root 先路由到附件技能，还是由工单技能消费附件上下文。
 - [x] 补齐 Worker scripted E2E 回归测试，防止 Worker 收到附件但 child skill 不可见。
-- [ ] 补齐或执行真实 TMS BFF/widget 到 Navigator 的现场 E2E，防止 UI 显示附件但 ask payload 未携带附件。
+- [x] 执行真实 TMS BFF 到 Navigator/Worker/child skill 的现场 smoke，防止 BFF 后链路再次丢附件。
+- [ ] 补齐 browser/widget 到 TMS BFF 的 E2E，防止 UI 显示附件但 ask payload 未携带附件。
 
 ## Verification
 
-- [ ] TMS 本地发送图片附件后，Navigator ask body 能看到脱敏附件计数。
+- [x] TMS BFF ask 携带顶层图片附件后，`tms-ticket-agent` child result 能看到脱敏附件元数据。
+- [ ] TMS 本地 UI 发送图片附件后，Navigator ask body 能看到脱敏附件计数。
 - [ ] Worker task data 能看到附件数组或 attachment refs。
 - [x] Worker scripted E2E 中，`tms-ticket-agent` child prompt context 能看到脱敏附件摘要/ref。
 - [x] Worker direct real-LLM smoke 中，`system.root` 真实调用 `tms-ticket-agent`，child frame 返回脱敏附件 ref。
@@ -162,6 +184,23 @@ Key evidence:
 - `tms-ticket-agent` child frame `frm_2909a9ed2a81` completed and called `submit_skill_result`.
 - Child structured output contained `att-028-real`, `image.png`, `tms-bff`, `https://tms.example.com/files/image.png`, `trace-real-bug028`, and `safe-note`.
 - Artifact scan found no `token=secret`, `accessToken`, or `hidden` sensitive pattern hits.
+
+- TMS BFF real smoke:
+
+```powershell
+# In D:\workspace\tms-x6-dev\tests, send a real TMS BFF ask with top-level attachments,
+# then poll Navigator task messages through the BFF messages endpoint.
+```
+
+Result: PASS. Task `lgt_f0527a861d054b75` completed; root called `tms-ticket-agent`; child returned attachment id/name/provider/sanitized URL path; no business function was called and no sensitive pattern was observed.
+
+- Existing TMS Navigator ticket E2E:
+
+```powershell
+npx vitest run tests/e2e/navigator-ticket-skill.e2e.test.ts --no-file-parallelism
+```
+
+Result: partial. REST adapter test passed; Navigator-to-ticket creation test reached `tms-ticket-agent` and attempted `tms.ticket.createPlatformFeedback`, then failed with `Unauthorized or unconfigured upstream_ref: local-smoke-2026-05-18`.
 
 ## References
 
