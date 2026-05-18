@@ -26,10 +26,24 @@ public class LanggraphWorkerClient {
     private final String workerId;
 
     public LanggraphWorkerClient(String workerId, String baseUrl, String authToken) {
+        this(workerId, baseUrl, authToken, Duration.ofSeconds(10), Duration.ofMinutes(30));
+    }
+
+    public LanggraphWorkerClient(
+            String workerId,
+            String baseUrl,
+            String authToken,
+            Duration connectTimeout,
+            Duration responseTimeout
+    ) {
         this.workerId = workerId;
+        long rawConnectTimeoutMillis = connectTimeout == null ? 10_000 : connectTimeout.toMillis();
+        int connectTimeoutMillis = (int) Math.min(Integer.MAX_VALUE, Math.max(1, rawConnectTimeoutMillis));
+        long rawResponseTimeoutMillis = responseTimeout == null ? Duration.ofMinutes(30).toMillis() : responseTimeout.toMillis();
+        Duration effectiveResponseTimeout = Duration.ofMillis(Math.max(1, rawResponseTimeoutMillis));
         HttpClient httpClient = HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10_000)
-                .responseTimeout(Duration.ofMinutes(30));
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMillis)
+                .responseTimeout(effectiveResponseTimeout);
         this.webClient = WebClient.builder()
                 .baseUrl(baseUrl)
                 .defaultHeader("Authorization", "Bearer " + (authToken != null ? authToken : ""))

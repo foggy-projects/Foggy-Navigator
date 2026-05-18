@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LanggraphWorkerClientTest {
 
@@ -95,21 +97,78 @@ class LanggraphWorkerClientTest {
         }
     }
 
+    @Test
+    void streamQuery_appliesConfiguredResponseTimeout() throws Exception {
+        try (CaptureServer server = CaptureServer.start(1_000)) {
+            LanggraphWorkerClient client = new LanggraphWorkerClient(
+                    "worker-1",
+                    server.baseUrl(),
+                    "token",
+                    Duration.ofSeconds(1),
+                    Duration.ofMillis(100)
+            );
+
+            RuntimeException error = assertThrows(RuntimeException.class, () -> client.streamQuery(
+                    "slow worker",
+                    Map.of(),
+                    Map.of(),
+                    "model",
+                    null,
+                    Map.of(),
+                    Map.of(),
+                    "task-timeout",
+                    "session-timeout",
+                    "user-1",
+                    "tenant-1",
+                    List.of()
+            ).blockFirst(Duration.ofSeconds(3)));
+
+            assertTrue(hasTimeoutCause(error));
+        }
+    }
+
+    private static boolean hasTimeoutCause(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            String className = current.getClass().getName().toLowerCase();
+            String message = current.getMessage();
+            if (className.contains("timeout")
+                    || (message != null && message.toLowerCase().contains("timeout"))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
     private static class CaptureServer implements AutoCloseable {
         private final HttpServer server;
         private final AtomicReference<String> body = new AtomicReference<>();
         private final AtomicReference<String> path = new AtomicReference<>();
+        private final long queryDelayMillis;
 
-        private CaptureServer(HttpServer server) {
+        private CaptureServer(HttpServer server, long queryDelayMillis) {
             this.server = server;
+            this.queryDelayMillis = queryDelayMillis;
         }
 
         static CaptureServer start() throws Exception {
+            return start(0);
+        }
+
+        static CaptureServer start(long queryDelayMillis) throws Exception {
             HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-            CaptureServer capture = new CaptureServer(server);
+            CaptureServer capture = new CaptureServer(server, queryDelayMillis);
             server.createContext("/api/v1/query", exchange -> {
                 capture.path.set(exchange.getRequestURI().getPath());
                 capture.body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                if (capture.queryDelayMillis > 0) {
+                    try {
+                        Thread.sleep(capture.queryDelayMillis);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
                 byte[] response = "data: {\"type\":\"done\"}\n\n".getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
                 exchange.sendResponseHeaders(200, response.length);

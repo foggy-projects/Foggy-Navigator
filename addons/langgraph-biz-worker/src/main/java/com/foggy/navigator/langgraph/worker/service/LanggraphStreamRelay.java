@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeoutException;
 
 /**
  * SSE relay: consumes Python Worker SSE stream and publishes AgentMessage events
@@ -385,12 +386,50 @@ public class LanggraphStreamRelay {
     }
 
     private void handleStreamError(Throwable error, String taskId, String sessionId) {
-        log.warn("SSE stream error for langgraph task {}: {}", taskId, error.getMessage());
+        String message = streamErrorMessage(error);
+        log.warn("SSE stream error for langgraph task {}: {}", taskId, message);
         activeStreams.remove(taskId);
-        taskService.recordTaskInterruption(taskId, "stream_error", error.getMessage());
-        taskService.failTask(taskId, "Stream error: " + error.getMessage());
+        String reason = streamInterruptionReason(error);
+        taskService.recordTaskInterruption(taskId, reason, message);
+        taskService.failTask(taskId, "Stream error: " + message);
         publishMessage(sessionId, MessageType.ERROR,
-                Map.of("content", "Stream connection lost: " + error.getMessage(), "taskId", taskId));
+                Map.of("content", "Stream connection lost: " + message, "taskId", taskId));
+    }
+
+    private String streamErrorMessage(Throwable error) {
+        if (error == null) {
+            return "Unknown stream error";
+        }
+        if (StringUtils.hasText(error.getMessage())) {
+            return error.getMessage();
+        }
+        return error.getClass().getSimpleName();
+    }
+
+    private String streamInterruptionReason(Throwable error) {
+        if (isTimeout(error)) {
+            return "stream_read_timeout";
+        }
+        return "stream_error";
+    }
+
+    private boolean isTimeout(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof TimeoutException) {
+                return true;
+            }
+            String className = current.getClass().getName().toLowerCase();
+            if (className.contains("timeout")) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null && message.toLowerCase().contains("timeout")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void handleApprovalRequired(JsonNode node, String eventType, String taskId, String sessionId) {

@@ -17,6 +17,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -303,6 +304,22 @@ class LanggraphStreamRelayTest {
         org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(taskService, sessionEventListener);
         inOrder.verify(taskService).recordTaskInterruption(taskId, "stream_error", "connection reset");
         inOrder.verify(taskService).failTask(taskId, "Stream error: connection reset");
+        inOrder.verify(sessionEventListener).handleMessage(org.mockito.ArgumentMatchers.argThat(message ->
+                message.getType() == MessageType.ERROR
+                        && taskId.equals(message.getTaskId())
+        ));
+    }
+
+    @Test
+    void streamReadTimeoutUsesSpecificRecoverableReason() throws Exception {
+        String taskId = "lgt-task-read-timeout";
+        String sessionId = "session-read-timeout";
+
+        invokeHandleStreamError(new TimeoutException("read timeout"), taskId, sessionId);
+
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(taskService, sessionEventListener);
+        inOrder.verify(taskService).recordTaskInterruption(taskId, "stream_read_timeout", "read timeout");
+        inOrder.verify(taskService).failTask(taskId, "Stream error: read timeout");
         inOrder.verify(sessionEventListener).handleMessage(org.mockito.ArgumentMatchers.argThat(message ->
                 message.getType() == MessageType.ERROR
                         && taskId.equals(message.getTaskId())
