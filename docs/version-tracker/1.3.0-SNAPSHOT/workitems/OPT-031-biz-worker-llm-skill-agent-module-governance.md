@@ -3,7 +3,7 @@ type: optimization
 version: 1.3.0-SNAPSHOT
 ticket: OPT-031
 severity: major
-status: open
+status: signed-off
 owner: biz-worker-runtime
 ---
 
@@ -453,6 +453,24 @@ $env:PYTHONPATH='src'
 - Covered: Stage B through Stage E focused, stage safety, Stage C add-on, and full worker pytest evidence; BUG-027 timeout/retry/deadline/fuse; failed child frame user "continue" recovery; business function approval/suspension; attachment/artifact scrub paths.
 - Non-blocking gaps: no dedicated direct module-level tests for `LlmToolDispatcher` and `llm_child_recovery`; no direct audit JSONL field assertion after Stage E; no pre-P1 targeted baseline captured before the first extraction.
 - Acceptance readiness: ready for `foggy-acceptance-signoff` with these gaps acknowledged.
+
+### Acceptance Signoff - 2026-05-18
+
+- Acceptance record: `docs/version-tracker/1.3.0-SNAPSHOT/acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md`
+- Acceptance status: `signed-off`.
+- Acceptance decision: `accepted-with-risks`.
+- Blocking items: none.
+- Follow-up required: yes, only for non-blocking test granularity improvements before future dispatcher/recovery semantic changes.
+
+## Acceptance Status
+
+- acceptance_status: signed-off
+- acceptance_decision: accepted-with-risks
+- signed_off_by: Codex
+- signed_off_at: 2026-05-18
+- acceptance_record: docs/version-tracker/1.3.0-SNAPSHOT/acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md
+- blocking_items: none
+- follow_up_required: yes
 
 ## Related Work
 
