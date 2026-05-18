@@ -446,6 +446,14 @@ $env:PYTHONPATH='src'
 - Findings: no blocking implementation issues found.
 - Follow-up: run `foggy-test-coverage-audit` before formal acceptance; if future work continues splitting `_call_tool` or `_finalize_business_function_call`, add module-level dispatcher/recovery tests first.
 
+### Test Coverage Audit - 2026-05-18
+
+- Coverage record: `docs/version-tracker/1.3.0-SNAPSHOT/coverage/OPT-031-llm-skill-agent-module-governance-coverage-audit.md`
+- Conclusion: `ready-with-gaps`.
+- Covered: Stage B through Stage E focused, stage safety, Stage C add-on, and full worker pytest evidence; BUG-027 timeout/retry/deadline/fuse; failed child frame user "continue" recovery; business function approval/suspension; attachment/artifact scrub paths.
+- Non-blocking gaps: no dedicated direct module-level tests for `LlmToolDispatcher` and `llm_child_recovery`; no direct audit JSONL field assertion after Stage E; no pre-P1 targeted baseline captured before the first extraction.
+- Acceptance readiness: ready for `foggy-acceptance-signoff` with these gaps acknowledged.
+
 ## Related Work
 
 - `docs/version-tracker/1.3.0-SNAPSHOT/workitems/BUG-027-biz-worker-llm-call-timeout-fuse-missing.md`
