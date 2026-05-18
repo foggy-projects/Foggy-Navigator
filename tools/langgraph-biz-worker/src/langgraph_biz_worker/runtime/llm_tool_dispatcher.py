@@ -2,16 +2,279 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
+from pathlib import Path
 from typing import Any
 
 from ..models import QueryEvent
+from ..tools.attachment_analysis import analyze_attachment
+from ..tools.business_function_tools import (
+    BusinessFunctionToolError,
+    get_business_function_schema,
+    invoke_business_function,
+    list_business_functions,
+)
+from ..tools.mock_biz_tools import (
+    mock_get_order,
+    mock_get_vehicle_status,
+    mock_search_incidents,
+)
 from .account_file_tools import AccountFileTools, FileToolError
+from .artifact_store import ArtifactError, ArtifactStore
+from .frame_execution_report import read_frame_execution_report
+from .llm_business_function_adapter import (
+    _looks_like_business_function_id,
+    _split_business_function_tool_name,
+)
+from .llm_tool_call_codec import _execution_report_payload_from_frame
+from .llm_tool_schemas import _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES
 from .public_skill_resource_tools import PublicSkillResourceTools
+from .skill_runtime import SkillRuntime
 
 logger = logging.getLogger(__name__)
 
+_TOOL_UNHANDLED: object = object()
 _PROGRESS_EVENT_SINK_KEY = "_progress_event_sink"
+_FILE_TOOL_NAMES = frozenset({
+    "list_files", "read_file", "write_file", "str_replace", "edit_file", "patch_file",
+})
+_PUBLIC_RESOURCE_TOOL_NAMES = frozenset({
+    "list_skill_resources", "read_skill_resource",
+})
+
+
+@dataclass(frozen=True)
+class LlmToolDispatchContext:
+    frame_id: str
+    task_id: str
+    account_id: str | None = None
+    runtime_context: dict[str, Any] | None = None
+    artifact_store: ArtifactStore | None = None
+    file_tools: AccountFileTools | None = None
+    public_resource_tools: PublicSkillResourceTools | None = None
+    persistent_frame: bool = False
+
+
+class LlmToolDispatcher:
+    """Dispatch side-effecting tool groups behind a narrow runtime adapter."""
+
+    def __init__(
+        self,
+        runtime: SkillRuntime,
+        *,
+        data_root: Path | None = None,
+    ) -> None:
+        self._runtime = runtime
+        self._data_root = data_root
+
+    def dispatch_low_risk(
+        self,
+        name: str,
+        args: dict[str, Any],
+        context: LlmToolDispatchContext,
+    ) -> dict[str, Any] | object:
+        if name == "mock_get_order":
+            frame = self._runtime.get_frame(context.frame_id)
+            order_id = args.get("order_id") or (frame.input.get("order_id") if frame else None)
+            return {"ok": True, "result": mock_get_order(order_id)}
+
+        if name == "mock_get_vehicle_status":
+            return {"ok": True, "result": mock_get_vehicle_status(args["vehicle_id"])}
+
+        if name == "mock_search_incidents":
+            return {"ok": True, "result": mock_search_incidents(args.get("query", ""))}
+
+        if name == "analyze_attachment":
+            return analyze_attachment(args, context.runtime_context)
+
+        if name == "read_frame_execution_report":
+            if self._data_root is None:
+                return {"ok": False, "error": "Frame execution report data root is not configured"}
+            return read_frame_execution_report(
+                self._data_root,
+                report_ref=args.get("report_ref") or args.get("reportRef"),
+                task_id=args.get("task_id") or args.get("taskId"),
+                frame_id=args.get("frame_id") or args.get("frameId"),
+                mode=args.get("mode", "summary"),
+                max_chars=args.get("max_chars") or args.get("maxChars") or 6000,
+            )
+
+        if name == "create_artifact":
+            if not context.artifact_store or not context.account_id:
+                return {"ok": False, "error": "artifact store not configured"}
+            try:
+                return context.artifact_store.create(
+                    account_id=context.account_id,
+                    task_id=context.task_id,
+                    scope=args.get("scope", "task"),
+                    name=args.get("name", "untitled"),
+                    content=args.get("content", ""),
+                    mime_type=args.get("mime_type", "text/plain"),
+                    encoding=args.get("encoding", "utf-8"),
+                    summary=args.get("summary", ""),
+                )
+            except ArtifactError as exc:
+                return {"ok": False, "error": f"{exc.code}: {exc.detail}"}
+
+        if name == "read_artifact":
+            if not context.artifact_store or not context.account_id:
+                return {"ok": False, "error": "artifact store not configured"}
+            try:
+                return context.artifact_store.read(
+                    account_id=context.account_id,
+                    task_id=context.task_id,
+                    artifact_id=args.get("artifact_id", ""),
+                    mode=args.get("mode", "summary"),
+                )
+            except ArtifactError as exc:
+                return {"ok": False, "error": f"{exc.code}: {exc.detail}"}
+
+        if name in _FILE_TOOL_NAMES and context.file_tools:
+            return _dispatch_file_tool(context.file_tools, name, args)
+
+        if name in _PUBLIC_RESOURCE_TOOL_NAMES:
+            if not context.public_resource_tools:
+                return {"ok": False, "error": "ClientApp public skill resources are not configured"}
+            return _dispatch_public_resource_tool(context.public_resource_tools, name, args)
+
+        return _TOOL_UNHANDLED
+
+    def dispatch_business_function(
+        self,
+        name: str,
+        args: dict[str, Any],
+        context: LlmToolDispatchContext,
+        finalize_business_function_call: Any,
+        *,
+        list_business_functions_fn: Any = list_business_functions,
+        get_business_function_schema_fn: Any = get_business_function_schema,
+        invoke_business_function_fn: Any = invoke_business_function,
+    ) -> dict[str, Any] | object:
+        if name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES:
+            return {"ok": False, "error": f"Tool not available: {name}"}
+
+        if name == "list_business_functions":
+            token = _runtime_task_scoped_token(context.runtime_context)
+            if not token:
+                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
+            try:
+                return {
+                    "ok": True,
+                    "result": list_business_functions_fn(
+                        token,
+                        domain=args.get("domain"),
+                        risk_level=args.get("risk_level"),
+                    ),
+                }
+            except BusinessFunctionToolError as exc:
+                return {"ok": False, "error": str(exc)}
+
+        if name == "get_business_function_schema":
+            token = _runtime_task_scoped_token(context.runtime_context)
+            if not token:
+                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
+            try:
+                return {
+                    "ok": True,
+                    "result": get_business_function_schema_fn(
+                        token,
+                        function_id=args.get("function_id", ""),
+                        version=args.get("version"),
+                    ),
+                }
+            except BusinessFunctionToolError as exc:
+                return {"ok": False, "error": str(exc)}
+
+        if name == "invoke_business_function":
+            token = _runtime_task_scoped_token(context.runtime_context)
+            if not token:
+                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
+            function_id = args.get("function_id", "")
+            version = args.get("version")
+            function_frame_id = self._runtime.invoke_function_call(
+                parent_frame_id=context.frame_id,
+                function_id=function_id,
+                version=version,
+                arguments=args.get("input") if isinstance(args.get("input"), dict) else {},
+                idempotency_key=args.get("idempotency_key"),
+                tool_call_id=args.get("tool_call_id"),
+            )
+            try:
+                gateway_result = invoke_business_function_fn(
+                    token,
+                    function_id=function_id,
+                    version=version,
+                    input_data=args.get("input"),
+                    idempotency_key=args.get("idempotency_key"),
+                )
+                result = {"ok": True, "result": gateway_result}
+                return finalize_business_function_call(
+                    task_id=context.task_id,
+                    caller_frame_id=context.frame_id,
+                    function_frame_id=function_frame_id,
+                    function_id=function_id,
+                    version=version,
+                    call_args=args,
+                    result=result,
+                )
+            except BusinessFunctionToolError as exc:
+                self._runtime.fail_frame(function_frame_id, str(exc))
+                function_frame = self._runtime.get_frame(function_frame_id)
+                return {
+                    "ok": False,
+                    "error": str(exc),
+                    "function_frame_id": function_frame_id,
+                    **_execution_report_payload_from_frame(function_frame),
+                }
+
+        if _looks_like_business_function_id(name):
+            token = _runtime_task_scoped_token(context.runtime_context)
+            if not token:
+                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
+            function_id, version = _split_business_function_tool_name(name)
+            input_data = args.get("input") if isinstance(args.get("input"), dict) else {
+                key: value for key, value in args.items()
+                if key not in {"version", "idempotency_key"}
+            }
+            resolved_version = args.get("version") or version
+            function_frame_id = self._runtime.invoke_function_call(
+                parent_frame_id=context.frame_id,
+                function_id=function_id,
+                version=resolved_version,
+                arguments=input_data,
+                idempotency_key=args.get("idempotency_key"),
+                tool_call_id=args.get("tool_call_id"),
+            )
+            try:
+                gateway_result = invoke_business_function_fn(
+                    token,
+                    function_id=function_id,
+                    version=resolved_version,
+                    input_data=input_data,
+                    idempotency_key=args.get("idempotency_key"),
+                )
+                result = {"ok": True, "result": gateway_result}
+                return finalize_business_function_call(
+                    task_id=context.task_id,
+                    caller_frame_id=context.frame_id,
+                    function_frame_id=function_frame_id,
+                    function_id=function_id,
+                    version=resolved_version,
+                    call_args={**args, "input": input_data},
+                    result=result,
+                )
+            except BusinessFunctionToolError as exc:
+                self._runtime.fail_frame(function_frame_id, str(exc))
+                function_frame = self._runtime.get_frame(function_frame_id)
+                return {
+                    "ok": False,
+                    "error": str(exc),
+                    "function_frame_id": function_frame_id,
+                    **_execution_report_payload_from_frame(function_frame),
+                }
+
+        return _TOOL_UNHANDLED
 
 
 def _emit_progress_event(runtime_context: dict[str, Any] | None, event: QueryEvent) -> None:
@@ -100,6 +363,13 @@ def _dispatch_public_resource_tool(
         return {"ok": False, "error": f"Unknown public skill resource tool: {name}"}
     except FileToolError as exc:
         return {"ok": False, "error": f"{exc.code}: {exc.detail}"}
+
+
+def _runtime_task_scoped_token(runtime_context: dict[str, Any] | None) -> str | None:
+    if not runtime_context:
+        return None
+    token = runtime_context.get("task_scoped_token")
+    return token if isinstance(token, str) and token else None
 
 
 def _tool_function_id(

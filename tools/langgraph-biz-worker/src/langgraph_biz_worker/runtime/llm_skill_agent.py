@@ -16,22 +16,14 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from ..models import FrameStatus, QueryEvent, SkillManifest
-from ..tools.mock_biz_tools import (
-    mock_get_order,
-    mock_get_vehicle_status,
-    mock_search_incidents,
-)
 from ..tools.business_function_tools import (
-    BusinessFunctionToolError,
     get_business_function_schema,
     invoke_business_function,
     list_business_functions,
 )
-from ..tools.attachment_analysis import analyze_attachment
 from .account_file_tools import AccountFileTools
 from .account_context_files import build_account_context_prompt
-from .artifact_store import ArtifactError, ArtifactStore
-from .frame_execution_report import read_frame_execution_report
+from .artifact_store import ArtifactStore
 from .llm_call_guard import invoke_chat_model
 from .llm_agent_prompts import (
     _active_plan_context,
@@ -53,7 +45,6 @@ from .llm_agent_prompts import (
 )
 from .llm_tool_call_codec import (
     _SCRUB_TEMPLATE,
-    _child_approval_report_payload,
     _execution_report_payload_from_frame,
     _execution_report_payload_from_result,
     _extract_tool_calls,
@@ -62,6 +53,15 @@ from .llm_tool_call_codec import (
     _safe_content,
     _safe_tool_call_args,
     _scrub_create_artifact_content,
+)
+from .llm_child_recovery import (
+    _context_visibility_for_child_manifest,
+    _invoke_business_skill_tool,
+    _normalize_context_visibility,
+    _record_parent_child_recoverable_interruption,
+    _resume_parent_if_waiting,
+    _resume_recoverable_child_skill_tool,
+    _runtime_context_for_child_skill,
 )
 from .llm_business_function_adapter import (
     _BUSINESS_IDENTIFIER_FIELDS,
@@ -86,14 +86,17 @@ from .llm_business_function_adapter import (
 )
 from .llm_tool_dispatcher import (
     _PROGRESS_EVENT_SINK_KEY,
+    _TOOL_UNHANDLED,
+    LlmToolDispatchContext,
+    LlmToolDispatcher,
     _dispatch_file_tool,
     _dispatch_public_resource_tool,
     _emit_progress_event,
+    _runtime_task_scoped_token,
     _tool_function_id,
 )
 from .llm_tool_schemas import (
     _GLOBAL_TOOL_NAMES,
-    _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES,
     _KNOWN_TOOL_SCHEMAS,
     _dedupe_tool_specs,
     _tool_specs,
@@ -126,6 +129,7 @@ class LlmSkillAgent:
         self._runtime = runtime
         self._max_iterations = max_iterations
         self._data_root = data_root
+        self._tool_dispatcher = LlmToolDispatcher(runtime, data_root=data_root)
 
     def run(
         self,
@@ -382,394 +386,55 @@ class LlmSkillAgent:
         public_resource_tools: PublicSkillResourceTools | None = None,
         persistent_frame: bool = False,
     ) -> dict[str, Any]:
-        # --- Mock biz tools ---
-        if name == "mock_get_order":
-            order_id = args.get("order_id") or self._runtime.get_frame(frame_id).input.get("order_id")
-            return {"ok": True, "result": mock_get_order(order_id)}
+        dispatch_context = LlmToolDispatchContext(
+            frame_id=frame_id,
+            task_id=task_id,
+            account_id=account_id,
+            runtime_context=runtime_context,
+            artifact_store=artifact_store,
+            file_tools=file_tools,
+            public_resource_tools=public_resource_tools,
+            persistent_frame=persistent_frame,
+        )
+        low_risk_result = self._tool_dispatcher.dispatch_low_risk(name, args, dispatch_context)
+        if low_risk_result is not _TOOL_UNHANDLED:
+            return low_risk_result
 
-        if name == "mock_get_vehicle_status":
-            return {"ok": True, "result": mock_get_vehicle_status(args["vehicle_id"])}
-
-        if name == "mock_search_incidents":
-            return {"ok": True, "result": mock_search_incidents(args.get("query", ""))}
-
-        # --- Navigator worker-gateway business function tools ---
-        if name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES:
-            return {"ok": False, "error": f"Tool not available: {name}"}
-
-        if name == "analyze_attachment":
-            return analyze_attachment(args, runtime_context)
-
-        if name == "list_business_functions":
-            token = _runtime_task_scoped_token(runtime_context)
-            if not token:
-                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
-            try:
-                return {
-                    "ok": True,
-                    "result": list_business_functions(
-                        token,
-                        domain=args.get("domain"),
-                        risk_level=args.get("risk_level"),
-                    ),
-                }
-            except BusinessFunctionToolError as exc:
-                return {"ok": False, "error": str(exc)}
-
-        if name == "get_business_function_schema":
-            token = _runtime_task_scoped_token(runtime_context)
-            if not token:
-                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
-            try:
-                return {
-                    "ok": True,
-                    "result": get_business_function_schema(
-                        token,
-                        function_id=args.get("function_id", ""),
-                        version=args.get("version"),
-                    ),
-                }
-            except BusinessFunctionToolError as exc:
-                return {"ok": False, "error": str(exc)}
-
-        if name == "invoke_business_function":
-            token = _runtime_task_scoped_token(runtime_context)
-            if not token:
-                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
-            function_id = args.get("function_id", "")
-            version = args.get("version")
-            function_frame_id = self._runtime.invoke_function_call(
-                parent_frame_id=frame_id,
-                function_id=function_id,
-                version=version,
-                arguments=args.get("input") if isinstance(args.get("input"), dict) else {},
-                idempotency_key=args.get("idempotency_key"),
-                tool_call_id=args.get("tool_call_id"),
-            )
-            try:
-                gateway_result = invoke_business_function(
-                    token,
-                    function_id=function_id,
-                    version=version,
-                    input_data=args.get("input"),
-                    idempotency_key=args.get("idempotency_key"),
-                )
-                result = {"ok": True, "result": gateway_result}
-                return self._finalize_business_function_call(
-                    task_id=task_id,
-                    caller_frame_id=frame_id,
-                    function_frame_id=function_frame_id,
-                    function_id=function_id,
-                    version=version,
-                    call_args=args,
-                    result=result,
-                )
-            except BusinessFunctionToolError as exc:
-                self._runtime.fail_frame(function_frame_id, str(exc))
-                function_frame = self._runtime.get_frame(function_frame_id)
-                return {
-                    "ok": False,
-                    "error": str(exc),
-                    "function_frame_id": function_frame_id,
-                    **_execution_report_payload_from_frame(function_frame),
-                }
-
-        if _looks_like_business_function_id(name):
-            token = _runtime_task_scoped_token(runtime_context)
-            if not token:
-                return {"ok": False, "error": "MISSING_TOKEN: task_scoped_token is required (runtime context)"}
-            function_id, version = _split_business_function_tool_name(name)
-            input_data = args.get("input") if isinstance(args.get("input"), dict) else {
-                key: value for key, value in args.items()
-                if key not in {"version", "idempotency_key"}
-            }
-            resolved_version = args.get("version") or version
-            function_frame_id = self._runtime.invoke_function_call(
-                parent_frame_id=frame_id,
-                function_id=function_id,
-                version=resolved_version,
-                arguments=input_data,
-                idempotency_key=args.get("idempotency_key"),
-                tool_call_id=args.get("tool_call_id"),
-            )
-            try:
-                gateway_result = invoke_business_function(
-                    token,
-                    function_id=function_id,
-                    version=resolved_version,
-                    input_data=input_data,
-                    idempotency_key=args.get("idempotency_key"),
-                )
-                result = {"ok": True, "result": gateway_result}
-                return self._finalize_business_function_call(
-                    task_id=task_id,
-                    caller_frame_id=frame_id,
-                    function_frame_id=function_frame_id,
-                    function_id=function_id,
-                    version=resolved_version,
-                    call_args={**args, "input": input_data},
-                    result=result,
-                )
-            except BusinessFunctionToolError as exc:
-                self._runtime.fail_frame(function_frame_id, str(exc))
-                function_frame = self._runtime.get_frame(function_frame_id)
-                return {
-                    "ok": False,
-                    "error": str(exc),
-                    "function_frame_id": function_frame_id,
-                    **_execution_report_payload_from_frame(function_frame),
-                }
-
-        if name == "read_frame_execution_report":
-            if self._data_root is None:
-                return {"ok": False, "error": "Frame execution report data root is not configured"}
-            return read_frame_execution_report(
-                self._data_root,
-                report_ref=args.get("report_ref") or args.get("reportRef"),
-                task_id=args.get("task_id") or args.get("taskId"),
-                frame_id=args.get("frame_id") or args.get("frameId"),
-                mode=args.get("mode", "summary"),
-                max_chars=args.get("max_chars") or args.get("maxChars") or 6000,
-            )
-
-        # --- Artifact tools ---
-        if name == "create_artifact":
-            if not artifact_store or not account_id:
-                return {"ok": False, "error": "artifact store not configured"}
-            try:
-                return artifact_store.create(
-                    account_id=account_id,
-                    task_id=task_id,
-                    scope=args.get("scope", "task"),
-                    name=args.get("name", "untitled"),
-                    content=args.get("content", ""),
-                    mime_type=args.get("mime_type", "text/plain"),
-                    encoding=args.get("encoding", "utf-8"),
-                    summary=args.get("summary", ""),
-                )
-            except ArtifactError as exc:
-                return {"ok": False, "error": f"{exc.code}: {exc.detail}"}
-
-        if name == "read_artifact":
-            if not artifact_store or not account_id:
-                return {"ok": False, "error": "artifact store not configured"}
-            try:
-                return artifact_store.read(
-                    account_id=account_id,
-                    task_id=task_id,
-                    artifact_id=args.get("artifact_id", ""),
-                    mode=args.get("mode", "summary"),
-                )
-            except ArtifactError as exc:
-                return {"ok": False, "error": f"{exc.code}: {exc.detail}"}
-
-        # --- Account file tools ---
-        if name in _FILE_TOOL_NAMES and file_tools:
-            return _dispatch_file_tool(file_tools, name, args)
-
-        if name in _PUBLIC_RESOURCE_TOOL_NAMES:
-            if not public_resource_tools:
-                return {"ok": False, "error": "ClientApp public skill resources are not configured"}
-            return _dispatch_public_resource_tool(public_resource_tools, name, args)
+        business_result = self._tool_dispatcher.dispatch_business_function(
+            name,
+            args,
+            dispatch_context,
+            self._finalize_business_function_call,
+            list_business_functions_fn=list_business_functions,
+            get_business_function_schema_fn=get_business_function_schema,
+            invoke_business_function_fn=invoke_business_function,
+        )
+        if business_result is not _TOOL_UNHANDLED:
+            return business_result
 
         if name == "invoke_business_skill":
-            child_skill_id = args.get("skill_id") or args.get("skillId")
-            if not child_skill_id:
-                return {"ok": False, "error": "skill_id is required"}
-            if child_skill_id == self._runtime.get_frame(frame_id).skill_id:
-                return {"ok": False, "error": "A skill cannot invoke itself"}
-            child_manifest = self._runtime.registry.get_manifest(child_skill_id)
-            if not child_manifest:
-                return {"ok": False, "error": f"Skill manifest not found: {child_skill_id}"}
-
-            instruction = args.get("instruction") or args.get("prompt") or ""
-            child_input = args.get("input") if isinstance(args.get("input"), dict) else {}
-            child_runtime_context = _runtime_context_for_child_skill(
-                runtime_context,
-                self._runtime.context_summary_for_frame(frame_id),
-                child_manifest,
-            )
-            child_frame_id = self._runtime.invoke_child_skill(
-                parent_frame_id=frame_id,
-                child_skill_id=child_skill_id,
-                child_input=child_input,
-            )
-            child_events = [
-                QueryEvent(
-                    type="skill_frame_open",
-                    task_id=task_id,
-                    skill_frame_id=child_frame_id,
-                    parent_frame_id=frame_id,
-                    skill_id=child_skill_id,
-                    content=f"Opening frame for skill: {child_skill_id}",
-                )
-            ]
-            child_events.extend(self.run(
+            return _invoke_business_skill_tool(
+                self._runtime,
+                frame_id=frame_id,
+                args=args,
                 task_id=task_id,
-                frame_id=child_frame_id,
-                prompt=instruction,
                 account_id=account_id,
-                runtime_context=child_runtime_context,
-            ))
-
-            child = self._runtime.get_frame(child_frame_id)
-            if child and child.status == FrameStatus.AWAITING_APPROVAL:
-                approval_request = child.approval_request
-                if not isinstance(approval_request, dict):
-                    return {
-                        "ok": False,
-                        "error": "Child skill is awaiting approval without approval_request",
-                        "_events": child_events,
-                    }
-                self._runtime.mark_child_awaiting_approval(
-                    frame_id,
-                    child_frame_id,
-                    approval_request,
-                )
-                report_payload = _child_approval_report_payload(child)
-                return {
-                    "ok": True,
-                    "approval_wait": True,
-                    "child_frame_id": child_frame_id,
-                    **report_payload,
-                    "_events": child_events,
-                    "_suspended": True,
-                }
-            if not child or child.status != FrameStatus.COMPLETED:
-                error = f"Child skill ended in {child.status.value if child else 'MISSING'}"
-                if persistent_frame:
-                    _record_parent_child_recoverable_interruption(
-                        self._runtime,
-                        parent_frame_id=frame_id,
-                        child_frame_id=child.frame_id if child else child_frame_id,
-                        reason="child_skill_failed",
-                        error=error,
-                        task_id=task_id,
-                    )
-                    return {
-                        "ok": False,
-                        "error": error,
-                        "_events": child_events,
-                        "_suspended": True,
-                    }
-                _resume_parent_if_waiting(self._runtime, frame_id)
-                self._runtime.fail_frame(frame_id, error)
-                return {
-                    "ok": False,
-                    "error": error,
-                    "_events": child_events,
-                }
-
-            promoted = self._runtime.complete_child_and_resume_parent(child_frame_id)
-            child_events.append(QueryEvent(
-                type="skill_frame_close",
-                task_id=task_id,
-                skill_frame_id=child_frame_id,
-                parent_frame_id=frame_id,
-                skill_id=child_skill_id,
-                content=f"Frame closed: {child_skill_id}",
-                execution_report_ref=promoted.get("execution_report_ref"),
-                execution_report_digest=promoted.get("execution_report_digest"),
-            ))
-            return {"ok": True, "result": promoted, "_events": child_events}
+                runtime_context=runtime_context,
+                persistent_frame=persistent_frame,
+                run_child_frame=self.run,
+            )
 
         if name == "resume_recoverable_child_skill":
-            if not persistent_frame:
-                return {"ok": False, "error": "resume_recoverable_child_skill is only available on persistent frames"}
-            parent = self._runtime.get_frame(frame_id)
-            if not parent:
-                return {"ok": False, "error": f"Frame not found: {frame_id}"}
-            child = self._runtime.prepare_recoverable_child_resume(frame_id)
-            if child is None:
-                return {"ok": False, "error": "No recoverable child skill is pending"}
-            child_manifest = self._runtime.registry.get_manifest(child.skill_id)
-            if not child_manifest:
-                return {"ok": False, "error": f"Skill manifest not found: {child.skill_id}"}
-
-            instruction = args.get("instruction") or args.get("prompt") or ""
-            child_runtime_context = _runtime_context_for_child_skill(
-                runtime_context,
-                self._runtime.context_summary_for_frame(frame_id),
-                child_manifest,
-            )
-            child_events = [
-                QueryEvent(
-                    type="skill_frame_open",
-                    task_id=task_id,
-                    skill_frame_id=child.frame_id,
-                    parent_frame_id=frame_id,
-                    skill_id=child.skill_id,
-                    content=f"Resuming frame for skill: {child.skill_id}",
-                )
-            ]
-            child_events.extend(self.run(
+            return _resume_recoverable_child_skill_tool(
+                self._runtime,
+                frame_id=frame_id,
+                args=args,
                 task_id=task_id,
-                frame_id=child.frame_id,
-                prompt=instruction,
                 account_id=account_id,
-                runtime_context=child_runtime_context,
-            ))
-
-            refreshed_child = self._runtime.get_frame(child.frame_id)
-            if refreshed_child and refreshed_child.status == FrameStatus.AWAITING_APPROVAL:
-                approval_request = refreshed_child.approval_request
-                if not isinstance(approval_request, dict):
-                    _resume_parent_if_waiting(self._runtime, frame_id)
-                    return {
-                        "ok": False,
-                        "error": "Child skill is awaiting approval without approval_request",
-                        "_events": child_events,
-                    }
-                self._runtime.mark_child_awaiting_approval(
-                    frame_id,
-                    child.frame_id,
-                    approval_request,
-                )
-                report_payload = _child_approval_report_payload(refreshed_child)
-                return {
-                    "ok": True,
-                    "approval_wait": True,
-                    "child_frame_id": child.frame_id,
-                    **report_payload,
-                    "_events": child_events,
-                    "_suspended": True,
-                }
-            if not refreshed_child or refreshed_child.status != FrameStatus.COMPLETED:
-                error = f"Child skill ended in {refreshed_child.status.value if refreshed_child else 'MISSING'}"
-                _record_parent_child_recoverable_interruption(
-                    self._runtime,
-                    parent_frame_id=frame_id,
-                    child_frame_id=refreshed_child.frame_id if refreshed_child else child.frame_id,
-                    reason="child_skill_failed",
-                    error=error,
-                    task_id=task_id,
-                )
-                return {
-                    "ok": False,
-                    "error": error,
-                    "child_frame_id": child.frame_id,
-                    "_events": child_events,
-                    "_suspended": True,
-                }
-
-            promoted = self._runtime.complete_child_and_resume_parent(child.frame_id)
-            child_events.append(QueryEvent(
-                type="skill_frame_close",
-                task_id=task_id,
-                skill_frame_id=child.frame_id,
-                parent_frame_id=frame_id,
-                skill_id=child.skill_id,
-                content=f"Frame closed: {child.skill_id}",
-                execution_report_ref=promoted.get("execution_report_ref"),
-                execution_report_digest=promoted.get("execution_report_digest"),
-            ))
-            return {
-                "ok": True,
-                "intent_resolution": "CONTINUE_PREVIOUS",
-                "result": promoted,
-                "child_frame_id": child.frame_id,
-                "_events": child_events,
-            }
+                runtime_context=runtime_context,
+                persistent_frame=persistent_frame,
+                run_child_frame=self.run,
+            )
 
         if name == "shelve_interrupted_frame":
             if not persistent_frame:
@@ -951,96 +616,11 @@ class LlmSkillAgent:
 
 
 
-# ---------------------------------------------------------------------------
-# File tool dispatch
-# ---------------------------------------------------------------------------
-
-_FILE_TOOL_NAMES = frozenset({
-    "list_files", "read_file", "write_file", "str_replace", "edit_file", "patch_file",
-})
-
-_PUBLIC_RESOURCE_TOOL_NAMES = frozenset({
-    "list_skill_resources", "read_skill_resource",
-})
-
-
-def _runtime_task_scoped_token(runtime_context: dict[str, Any] | None) -> str | None:
-    if not runtime_context:
-        return None
-    token = runtime_context.get("task_scoped_token")
-    return token if isinstance(token, str) and token else None
-
-
 def _runtime_client_app_id(runtime_context: dict[str, Any] | None) -> str | None:
     if not runtime_context:
         return None
     value = runtime_context.get("client_app_id") or runtime_context.get("clientAppId")
     return value if isinstance(value, str) and value else None
-
-
-
-
-def _runtime_context_for_child_skill(
-    runtime_context: dict[str, Any] | None,
-    root_context_summary: dict[str, Any] | None,
-    child_manifest: SkillManifest,
-) -> dict[str, Any] | None:
-    child_context = dict(runtime_context or {})
-    visibility = _context_visibility_for_child_manifest(child_manifest)
-    child_context["_context_visibility"] = visibility
-    child_context.pop("_visible_root_context_summary", None)
-    if visibility == "summary" and root_context_summary:
-        child_context["_visible_root_context_summary"] = root_context_summary
-    return child_context
-
-
-def _resume_parent_if_waiting(runtime: SkillRuntime, parent_frame_id: str) -> None:
-    parent = runtime.get_frame(parent_frame_id)
-    if parent and parent.status == FrameStatus.WAITING_CHILD:
-        runtime.resume_from_child(parent_frame_id)
-
-
-def _record_parent_child_recoverable_interruption(
-    runtime: SkillRuntime,
-    *,
-    parent_frame_id: str,
-    child_frame_id: str | None,
-    reason: str,
-    error: str,
-    task_id: str,
-) -> None:
-    if child_frame_id:
-        runtime.record_recoverable_child_interruption(
-            parent_frame_id,
-            reason=reason,
-            error=error,
-            task_id=task_id,
-            child_frame_id=child_frame_id,
-            allow_terminal_child=True,
-        )
-    _resume_parent_if_waiting(runtime, parent_frame_id)
-    runtime.record_recoverable_interruption(
-        parent_frame_id,
-        reason=reason,
-        error=error,
-        task_id=task_id,
-    )
-
-
-def _context_visibility_for_child_manifest(manifest: SkillManifest) -> str:
-    visibility = _normalize_context_visibility(manifest.context_visibility)
-    if visibility != "passthrough":
-        return visibility
-    if manifest.visibility == "builtin" or manifest.id.startswith("system."):
-        return "passthrough"
-    return "isolated"
-
-
-def _normalize_context_visibility(value: str | None) -> str:
-    normalized = (value or "isolated").strip().lower()
-    if normalized in {"isolated", "summary", "passthrough"}:
-        return normalized
-    return "isolated"
 
 # ---------------------------------------------------------------------------
 # Tool schema registry

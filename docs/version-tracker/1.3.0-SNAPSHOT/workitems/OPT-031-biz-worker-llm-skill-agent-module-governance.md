@@ -285,8 +285,16 @@ $env:PYTHONPATH='src'
   - Extracted progress event sink emission, file/public resource dispatch helpers, and tool `function_id` metadata resolution to `runtime/llm_tool_dispatcher.py`.
   - Kept `_execute_tool_call`, `_call_tool`, `_finalize_business_function_call`, child recovery branches, and BUG-027 recovery control flow in `llm_skill_agent.py`.
   - Current local line counts after P2: `llm_skill_agent.py` 1,058 lines; prompt module 295 lines; schema module 463 lines; codec module 160 lines; business adapter 231 lines; dispatcher helper module 117 lines.
-- [ ] Stage C tool dispatch split completed.
-- [ ] Stage D recovery boundary extracted.
+- [x] Stage C/P3-P4 tool dispatch split completed for non-control tool groups.
+  - Introduced `LlmToolDispatcher` and `LlmToolDispatchContext` in `runtime/llm_tool_dispatcher.py`.
+  - Moved mock tools, attachment analysis, execution report reads, artifact tools, file tools, public resource tools, business function discovery, explicit `invoke_business_function`, and direct function-id dispatch behind dispatcher methods.
+  - Kept `_execute_tool_call` in `llm_skill_agent.py` so tool-use/tool-result event creation, audit logging, `_suspended`, persistent turn completion, and artifact scrub placeholders remain in the original control path.
+  - Kept `_finalize_business_function_call` in `llm_skill_agent.py` and invoked it through a dispatcher callback so approval/suspension frame mutations and payload fields stay unchanged.
+- [x] Stage D/P5 recovery boundary extracted.
+  - Added `runtime/llm_child_recovery.py`.
+  - Moved child skill invocation, recoverable child resume, parent resume-if-waiting, child runtime context visibility, and recoverable child interruption recording helpers.
+  - Preserved BUG-027 semantics: failed child frames remain recoverable on user "continue", parent root interruption state is recorded, and approval bubble behavior is unchanged.
+  - Current local line counts after P5: `llm_skill_agent.py` 638 lines; dispatcher 387 lines; child recovery 297 lines; prompt module 295 lines; schema module 463 lines; codec module 160 lines; business adapter 231 lines.
 - [ ] Stage E cleanup completed.
 
 ### Test Progress
@@ -315,6 +323,27 @@ $env:PYTHONPATH='src'
 - [x] Post-P2 full Python worker test suite passed on 2026-05-18:
   - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests -q`
   - Result: 436 passed, 6 skipped, 10 warnings in 19.54s.
+- [x] Pre-P3 stage safety baseline passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py tests/test_llm_call_guard.py tests/test_frame_interruption.py tests/test_frame_lifecycle.py tests/test_artifact_context_governance.py -q`
+  - Result: 73 passed in 2.46s.
+- [x] Post-P3 low-risk dispatcher focused test passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py -q`
+  - Result: 38 passed in 1.64s.
+- [x] Post-P4 business dispatcher focused test passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py -q`
+  - Result: 38 passed in 1.67s after preserving the existing `llm_skill_agent.invoke_business_function` monkeypatch compatibility point.
+- [x] Post-P5 child recovery focused test passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py -q`
+  - Result: 38 passed in 1.69s.
+- [x] Post-P5 stage safety set passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py tests/test_llm_call_guard.py tests/test_frame_interruption.py tests/test_frame_lifecycle.py tests/test_artifact_context_governance.py -q`
+  - Result: 73 passed in 2.43s.
+- [x] Post-P5 Stage C add-on passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests/test_llm_skill_agent.py tests/test_e2e_scripted_tool_call_streaming.py -q`
+  - Result: 49 passed, 3 warnings in 13.40s.
+- [x] Post-P5 full Python worker test suite passed on 2026-05-18:
+  - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python -m pytest tests -q`
+  - Result: 436 passed, 6 skipped, 10 warnings in 19.86s.
 - [ ] Full Python worker test suite passes after final extraction.
 
 ### Experience Progress
@@ -322,6 +351,7 @@ $env:PYTHONPATH='src'
 - [x] N/A for Stage A. This work item is backend Python runtime/module governance only and has no UI workflow change in the characterization stage.
 - [x] N/A for P1. The change is pure Python runtime module extraction with no UI workflow or display change.
 - [x] N/A for P2. The change is Python runtime helper extraction only and has no UI workflow or display change.
+- [x] N/A for P3-P5. The change is Python runtime module extraction only and has no UI workflow or display change.
 
 ### Execution Check-in - 2026-05-18 P1
 
@@ -357,6 +387,25 @@ $env:PYTHONPATH='src'
 - Test status: pass for the pre-P2 baseline, post-P2 focused/stage/add-on commands, and post-P2 full suite listed above.
 - Remaining risks: full `LlmToolDispatcher` extraction and `llm_child_recovery.py` boundary are still pending; these are the high-risk Stage C/D parts.
 - Acceptance readiness: P2 is ready for review as a scoped helper extraction; the overall OPT-031 item remains open.
+
+### Execution Check-in - 2026-05-18 P3-P5
+
+- Completed work: P3-P5 extraction across dispatcher and child recovery boundaries; no feature behavior rewrite was intended.
+- Touched code paths:
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_skill_agent.py`
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_tool_dispatcher.py`
+  - `tools/langgraph-biz-worker/src/langgraph_biz_worker/runtime/llm_child_recovery.py`
+- Self-check:
+  - [x] BUG-027 timeout/retry/deadline/fuse entry point remains in `LlmSkillAgent.run` through `invoke_chat_model`.
+  - [x] `_execute_tool_call` remains in `llm_skill_agent.py`; event creation, progress sink emission, audit logging, `_suspended`, and artifact scrub handling were not reimplemented.
+  - [x] `_finalize_business_function_call` remains in `llm_skill_agent.py`; dispatcher calls it as a callback for unchanged approval/suspension behavior.
+  - [x] Existing test monkeypatch path `llm_skill_agent.invoke_business_function` remains supported by passing the module-level callable into the dispatcher.
+  - [x] Child skill invoke/resume logic moved to `llm_child_recovery.py` with the same event shapes, `child_frame_id`, `_events`, `_suspended`, approval bubble, and failed-child recoverability semantics.
+  - [x] User "continue" recovery remains covered by focused tests for reopening the failed child frame.
+  - [x] No public API payload or SSE event contract was intentionally changed.
+- Test status: pass for the pre-P3 baseline, post-P3/P4/P5 focused tests, post-P5 stage safety set, Stage C add-on, and full suite listed above.
+- Remaining risks: Stage E cleanup is still open; `llm_skill_agent.py` is now close to the target at 638 lines but still contains submit/shelve control handling, audit helpers, and business finalize logic.
+- Acceptance readiness: P3-P5 are ready for review as scoped extraction work; the overall OPT-031 item remains open until Stage E cleanup/closure.
 
 ## Related Work
 
