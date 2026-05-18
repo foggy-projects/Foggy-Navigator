@@ -16,13 +16,6 @@
     <description>应用启动器 - 负责打包和启动所有模块</description>
 
     <dependencies>
-        <!-- Coding Agent - 主应用模块 -->
-        <dependency>
-            <groupId>com.foggy.navigator</groupId>
-            <artifactId>coding-agent</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
         <!-- Session Module - 会话管理模块 -->
         <dependency>
             <groupId>com.foggy.navigator</groupId>

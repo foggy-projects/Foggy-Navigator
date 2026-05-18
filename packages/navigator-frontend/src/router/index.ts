@@ -1,6 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { isLoggedIn } from '@/utils/auth'
-import { getSetupStatus } from '@/api/platform'
 import AppLayout from '@/layouts/AppLayout.vue'
 
 const routes = [
@@ -12,9 +11,7 @@ const routes = [
   },
   {
     path: '/setup',
-    name: 'Setup',
-    component: () => import('@/views/SetupView.vue'),
-    meta: { requireAuth: true, skipSetupCheck: true },
+    redirect: '/',
   },
   {
     path: '/',
@@ -55,7 +52,6 @@ const routes = [
         path: 'files',
         name: 'FileBrowser',
         component: () => import('@/views/FileBrowserView.vue'),
-        meta: { skipSetupCheck: true },
       },
       {
         path: 'users',
@@ -66,7 +62,6 @@ const routes = [
         path: 'settings',
         name: 'Settings',
         component: () => import('@/views/SettingsView.vue'),
-        meta: { skipSetupCheck: true },
       },
     ],
   },
@@ -77,29 +72,9 @@ const router = createRouter({
   routes,
 })
 
-// Setup 状态缓存：避免每次路由切换都请求后端
-let setupComplete: boolean | null = null
-
-export function resetSetupStatus() {
-  setupComplete = null
-}
-
-/** 标记用户主动跳过初始化配置 */
-export function markSetupSkipped() {
-  setupComplete = true
-  localStorage.setItem('navigator_setup_skipped', '1')
-}
-
-/** 清除跳过标记（用于退出登录时重置） */
-export function clearSetupSkipped() {
-  localStorage.removeItem('navigator_setup_skipped')
-}
-
-router.beforeEach(async (to, _from, next) => {
+router.beforeEach((to, _from, next) => {
   // Collect meta from matched route chain (supports nested routes)
   const requireAuth = to.matched.some((r) => r.meta.requireAuth)
-  const isPublic = to.matched.some((r) => r.meta.public)
-  const skipSetupCheck = to.matched.some((r) => r.meta.skipSetupCheck)
 
   // 1. 未登录 → 去登录页
   if (requireAuth && !isLoggedIn()) {
@@ -110,27 +85,6 @@ router.beforeEach(async (to, _from, next) => {
   if (to.path === '/login' && isLoggedIn()) {
     next('/')
     return
-  }
-  // 3. 已登录 + 需要检查 setup 状态的页面
-  if (isLoggedIn() && !skipSetupCheck && !isPublic) {
-    if (setupComplete === null) {
-      // 用户曾主动跳过配置 → 直接放行
-      if (localStorage.getItem('navigator_setup_skipped') === '1') {
-        setupComplete = true
-      } else {
-        try {
-          const status = await getSetupStatus()
-          setupComplete = status.setupComplete
-        } catch {
-          // API 失败时放行，避免阻塞用户
-          setupComplete = true
-        }
-      }
-    }
-    if (!setupComplete) {
-      next('/setup')
-      return
-    }
   }
   next()
 })

@@ -1,7 +1,6 @@
 import client from './client'
 import type {
   RX,
-  SetupStatus,
   GitProviderConfig,
   GitProviderConfigForm,
   LlmModelConfig,
@@ -14,13 +13,6 @@ import type {
 } from '@/types'
 
 const BASE = '/config/platform'
-
-// ===== 初始化状态 =====
-
-export async function getSetupStatus(): Promise<SetupStatus> {
-  const rx = (await client.get(`${BASE}/setup-status`)) as unknown as RX<SetupStatus>
-  return rx.data
-}
 
 // ===== Git 提供者 =====
 

@@ -108,19 +108,19 @@ class DefaultA2aAgentRegistryTest {
     @Test
     void listByProviderType_filtersCorrectly() {
         A2aAgentProvider cwProvider = mock(A2aAgentProvider.class);
-        A2aAgentProvider ohProvider = mock(A2aAgentProvider.class);
+        A2aAgentProvider codexProvider = mock(A2aAgentProvider.class);
         when(cwProvider.getProviderType()).thenReturn("claude-worker");
-        when(ohProvider.getProviderType()).thenReturn("openhands");
+        when(codexProvider.getProviderType()).thenReturn("codex-worker");
         when(cwProvider.listAgentCards("u1")).thenReturn(List.of(card("cw-1"), card("cw-2")));
-        when(ohProvider.listAgentCards("u1")).thenReturn(List.of(card("oh-1")));
+        when(codexProvider.listAgentCards("u1")).thenReturn(List.of(card("codex-1")));
 
-        DefaultA2aAgentRegistry registry = new DefaultA2aAgentRegistry(List.of(cwProvider, ohProvider));
+        DefaultA2aAgentRegistry registry = new DefaultA2aAgentRegistry(List.of(cwProvider, codexProvider));
 
         List<A2aAgentCard> cwCards = registry.listByProviderType("claude-worker", "u1");
         assertEquals(2, cwCards.size());
 
-        List<A2aAgentCard> ohCards = registry.listByProviderType("openhands", "u1");
-        assertEquals(1, ohCards.size());
+        List<A2aAgentCard> codexCards = registry.listByProviderType("codex-worker", "u1");
+        assertEquals(1, codexCards.size());
     }
 
     @Test

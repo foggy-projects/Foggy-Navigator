@@ -71,4 +71,4 @@ cd packages/navigator-frontend && pnpm exec vite build
 ## 配置
 
 - **LLM / 数据库**：`launcher/src/main/resources/application-docker.yml`（gitignore，需手动创建）
-- **平台配置**：首次访问 `http://localhost:5174/#/setup` 配置 Git 和 AI 模型
+- **平台配置**：登录后进入 `http://localhost:5174/#/settings` 配置 Git 和 AI 模型

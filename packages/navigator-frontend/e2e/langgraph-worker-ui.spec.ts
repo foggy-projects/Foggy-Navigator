@@ -130,7 +130,6 @@ async function mockApi(page: Page) {
       'navigator_user',
       JSON.stringify({ userId: 'u-e2e', username: 'root', roles: ['ADMIN'] }),
     )
-    localStorage.setItem('navigator_setup_skipped', '1')
   })
 
   await page.route('**/api/v1/**', async (route) => {
@@ -149,11 +148,6 @@ async function mockApi(page: Page) {
 
     if (path === '/sse/subscribe' || path === '/sse/unsubscribe') {
       await fulfill(route, null)
-      return
-    }
-
-    if (path === '/config/platform/setup-status') {
-      await fulfill(route, { setupComplete: true })
       return
     }
 

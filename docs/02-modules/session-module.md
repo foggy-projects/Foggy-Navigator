@@ -34,7 +34,7 @@
 ### 3.2 它不负责什么
 
 - 不负责远程 Worker 的目录、文件、进程治理
-- 不直接实现 Claude/Codex/OpenHands 具体执行逻辑
+- 不直接实现 Claude/Codex/Gemini 具体执行逻辑
 - 不定义 LLM、Git、凭证等平台配置资源
 
 这些能力分别属于 addon 模块或配置模块。

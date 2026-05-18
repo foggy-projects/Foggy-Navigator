@@ -8,18 +8,15 @@ import com.foggy.navigator.agent.framework.session.SessionManager;
 import com.foggy.navigator.common.annotation.RequireAuth;
 import com.foggy.navigator.common.context.UserContext;
 import com.foggy.navigator.common.dto.CurrentUser;
-import com.foggy.navigator.common.service.CodingConversationLookup;
 import com.foggy.navigator.session.dto.UnifiedSessionDTO;
 import com.foggy.navigator.session.repository.SessionRepository;
 import com.foggyframework.core.ex.RX;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -35,10 +32,6 @@ public class SessionController {
     private final SessionManager sessionManager;
     private final AgentInvoker agentInvoker;
     private final SessionRepository sessionRepository;
-
-    // 可选依赖：coding-agent 模块的会话信息查询服务
-    @Autowired(required = false)
-    private CodingConversationLookup codingConversationLookup;
 
     public SessionController(SessionManager sessionManager, AgentInvoker agentInvoker,
                              SessionRepository sessionRepository) {
@@ -69,7 +62,7 @@ public class SessionController {
 
     /**
      * 查询会话列表
-     * 返回统一会话 DTO，包含 type 字段和 coding-agent 扩展信息
+     * 返回统一会话 DTO。
      */
     @GetMapping
     public RX<List<UnifiedSessionDTO>> listSessions(
@@ -101,34 +94,9 @@ public class SessionController {
                 .filter(s -> !"claude-worker".equals(s.getAgentId()))
                 .collect(Collectors.toList());
 
-        // 转换为 UnifiedSessionDTO 并补充 coding-agent 扩展信息
         List<UnifiedSessionDTO> result = sessions.stream()
                 .map(UnifiedSessionDTO::fromSession)
                 .collect(Collectors.toList());
-
-        // 如果有 coding-agent 会话，批量查询扩展信息
-        if (codingConversationLookup != null) {
-            List<String> codingSessionIds = result.stream()
-                    .filter(s -> "coding".equals(s.getType()))
-                    .map(UnifiedSessionDTO::getId)
-                    .collect(Collectors.toList());
-
-            if (!codingSessionIds.isEmpty()) {
-                Map<String, Map<String, Object>> conversationInfoMap =
-                        codingConversationLookup.getConversationInfoBatch(codingSessionIds);
-
-                result.forEach(session -> {
-                    if ("coding".equals(session.getType())) {
-                        Map<String, Object> info = conversationInfoMap.get(session.getId());
-                        if (info != null) {
-                            session.setConversationId((String) info.get("conversationId"));
-                            session.setSandboxStatus((String) info.get("sandboxStatus"));
-                            session.setGitRepoUrl((String) info.get("gitRepoUrl"));
-                        }
-                    }
-                });
-            }
-        }
 
         return RX.ok(result);
     }
@@ -147,18 +115,11 @@ public class SessionController {
 
     /**
      * 删除会话
-     * 如果是 coding-agent 会话，同时删除关联的 Conversation 和 sandbox
      */
     @DeleteMapping("/{id}")
     public RX<Void> deleteSession(@PathVariable String id) {
         log.info("Delete session: id={}", id);
 
-        // 如果是 coding-agent 会话，先删除关联的 Conversation
-        if (codingConversationLookup != null) {
-            codingConversationLookup.deleteConversationBySessionId(id);
-        }
-
-        // 删除 Session 及其消息
         sessionManager.deleteSession(id);
         return RX.ok();
     }

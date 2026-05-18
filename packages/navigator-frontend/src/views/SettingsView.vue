@@ -1111,7 +1111,6 @@ codex-worker status</pre>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { resetSetupStatus } from '@/router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import {
@@ -1268,7 +1267,6 @@ async function deleteGit(id: string) {
   try {
     await ElMessageBox.confirm('确认删除该 Git 提供者？', '提示', { type: 'warning' })
     await apiDeleteGit(id)
-    resetSetupStatus()
     ElMessage.success('已删除')
     await loadGitProviders()
   } catch { /* cancelled */ }
@@ -1621,7 +1619,6 @@ async function deleteLlm(id: string) {
   try {
     await ElMessageBox.confirm('确认删除该模型配置？', '提示', { type: 'warning' })
     await apiDeleteLlm(id)
-    resetSetupStatus()
     ElMessage.success('已删除')
     await loadLlmModels()
   } catch { /* cancelled */ }
@@ -1992,7 +1989,6 @@ async function deleteCredentialById(id: string) {
   try {
     await ElMessageBox.confirm('确认删除该凭证？', '提示', { type: 'warning' })
     await apiDeleteCredential(id)
-    resetSetupStatus()
     ElMessage.success('已删除')
     await loadCredentials()
   } catch { /* cancelled */ }

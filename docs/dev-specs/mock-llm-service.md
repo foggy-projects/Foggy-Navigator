@@ -1007,12 +1007,11 @@ chmod +x start.sh stop.sh
 
 ```yaml
 # launcher/src/main/resources/application-test.yml
-foggy:
-  coding-agent:
-    openhands:
-      api-base-url: http://localhost:8200/v1
+agent:
+  llm:
+    openai:
+      base-url: http://localhost:8200/v1
       api-key: mock-key  # 任意值
-      model-name: mock-model
 ```
 
 ### 7.3 测试 API

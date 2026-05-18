@@ -5,7 +5,7 @@
 ## 设计目的
 
 - **唯一使用 spring-boot-maven-plugin 的模块**
-- 所有业务模块（coding-agent, user-auth-module 等）都是普通库 JAR
+- 所有业务模块（user-auth-module、session-module、各 Worker addon 等）都是普通库 JAR
 - Launcher 模块负责将所有依赖打包成可执行的 Spring Boot JAR
 
 ## 构建
