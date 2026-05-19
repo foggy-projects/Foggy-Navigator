@@ -10,7 +10,6 @@ import com.foggy.navigator.business.agent.model.entity.BizWorkerPoolMemberEntity
 import com.foggy.navigator.business.agent.model.entity.BusinessAgentTaskEntity;
 import com.foggy.navigator.business.agent.model.entity.BusinessTaskScopedTokenEntity;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
-import com.foggy.navigator.business.agent.model.entity.SkillEntity;
 import com.foggy.navigator.business.agent.model.form.CreateBusinessAgentTaskForm;
 import com.foggy.navigator.business.agent.repository.BusinessAgentTaskRepository;
 import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepository;
@@ -77,6 +76,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
     private static final String WORKER_POOL_ID = "pool_langgraph_e2e";
     private static final String WORKER_ID = "worker_langgraph_e2e";
     private static final String MODEL_CONFIG_ID = "model_e2e_scripted";
+    private static final String WORKDIR = "D:/workspace/world-sim";
 
     @Mock private BusinessAgentTaskRepository businessTaskRepository;
     @Mock private BusinessTaskScopedTokenRepository tokenRepository;
@@ -187,8 +187,9 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(TENANT, event.getTenantId());
         assertEquals(LanggraphTaskService.PROVIDER_TYPE, event.getProviderType());
         assertEquals(MODEL_CONFIG_ID, event.getProviderConfigString("modelConfigId"));
+        assertEquals(SKILL_ID, event.getProviderConfigString("skillName"));
         assertTrue(event.getPrompt().contains(created.getTaskId()));
-        assertTrue(event.getPrompt().contains(SKILL_ID));
+        assertFalse(event.getPrompt().contains(SKILL_ID));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> context = (Map<String, Object>) event.getProviderConfig().get("context");
@@ -201,7 +202,8 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(UPSTREAM_USER_ID, context.get("upstreamUserId"));
         assertEquals(UPSTREAM_USER_ID, context.get("accountId"));
         assertEquals(UPSTREAM_USER_ID, context.get("account_id"));
-        assertEquals(SKILL_ID, context.get("skillId"));
+        assertFalse(context.containsKey("skillId"));
+        assertFalse(context.containsKey("skill_name"));
         assertEquals(WORKER_POOL_ID, context.get("workerPoolId"));
         assertEquals(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND, context.get("workerBackend"));
         assertEquals("# World Sim\nUse deterministic E2E cursor.", context.get("skill_markdown"));
@@ -211,6 +213,12 @@ class BusinessAgentLanggraphLaunchE2ETest {
         Map<String, Object> runtimeContext = (Map<String, Object>) event.getProviderConfig().get("runtimeContext");
         assertNotNull(runtimeContext);
         assertEquals(created.getTaskScopedToken(), runtimeContext.get("task_scoped_token"));
+        assertEquals(SKILL_ID, runtimeContext.get("skill_name"));
+        Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
+        assertNotNull(executionPolicy);
+        assertEquals(WORKDIR, executionPolicy.get("workdir"));
+        assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
+        assertEquals(List.of("read_file", "invoke_business_function"), executionPolicy.get("allowed_tools"));
         assertNotNull(runtimeContext.get("current_time"));
         assertNotNull(runtimeContext.get("timezone"));
         assertNotNull(runtimeContext.get("business_date"));
@@ -287,7 +295,11 @@ class BusinessAgentLanggraphLaunchE2ETest {
         form.setContextId(CONTEXT_ID);
         form.setWorkerPoolId(WORKER_POOL_ID);
         form.setSkillId(SKILL_ID);
+        form.setSkillName(SKILL_ID);
         form.setUpstreamUserId(UPSTREAM_USER_ID);
+        form.setWorkdir(WORKDIR);
+        form.setAllowedDirs(List.of("D:/workspace"));
+        form.setAllowedTools(List.of("read_file", "invoke_business_function"));
         return form;
     }
 
@@ -309,11 +321,8 @@ class BusinessAgentLanggraphLaunchE2ETest {
         doNothing().when(userGrantService).checkUpstreamUserAccess(TENANT, CLIENT_APP_ID, UPSTREAM_USER_ID);
         doNothing().when(skillRegistryService).checkClientAppSkillAccess(TENANT, CLIENT_APP_ID, SKILL_ID);
 
-        SkillEntity skill = new SkillEntity();
-        skill.setTenantId(TENANT);
-        skill.setSkillId(SKILL_ID);
-        skill.setMarkdownBody("# World Sim\nUse deterministic E2E cursor.");
-        when(skillRegistryService.getSkill(TENANT, SKILL_ID)).thenReturn(skill);
+        when(skillRegistryService.buildMaterializedPublicSkillMarkdown(TENANT, SKILL_ID, CLIENT_APP_ID))
+                .thenReturn("# World Sim\nUse deterministic E2E cursor.");
 
         BusinessAgentSessionDTO session = new BusinessAgentSessionDTO();
         session.setContextId(CONTEXT_ID);

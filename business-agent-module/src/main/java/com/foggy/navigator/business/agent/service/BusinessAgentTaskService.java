@@ -21,6 +21,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -374,11 +375,13 @@ public class BusinessAgentTaskService {
     }
 
     private String resolveOptionalVisionModelConfigId(String tenantId, String clientAppId) {
-        try {
-            return grantService.resolveEffectiveModelConfigId(tenantId, clientAppId, null, LlmModelCategory.VISION);
-        } catch (Exception e) {
-            log.debug("Vision model config not resolved for clientAppId={}: {}", clientAppId, e.getMessage());
+        Optional<String> modelConfigId = grantService.tryResolveEffectiveModelConfigId(
+                tenantId, clientAppId, null, LlmModelCategory.VISION);
+        if (modelConfigId == null || modelConfigId.isEmpty()) {
+            log.debug("Vision model config not resolved for clientAppId={}: default VISION model config grant is required",
+                    clientAppId);
             return null;
         }
+        return modelConfigId.get();
     }
 }

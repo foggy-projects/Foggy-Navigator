@@ -12,6 +12,7 @@ import com.foggy.navigator.business.agent.repository.BusinessTaskScopedTokenRepo
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchRequest;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLaunchResult;
 import com.foggy.navigator.business.agent.service.worker.BusinessAgentWorkerTaskLauncher;
+import com.foggy.navigator.common.enums.LlmModelCategory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -76,6 +77,9 @@ class BusinessAgentTaskServiceTest {
                     dto.setContextId("ctx_01");
                     return dto;
                 });
+        lenient().when(grantService.tryResolveEffectiveModelConfigId(
+                anyString(), anyString(), isNull(), eq(LlmModelCategory.VISION)))
+                .thenReturn(Optional.empty());
     }
 
     @Test

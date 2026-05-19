@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -148,6 +149,17 @@ public class ClientAppModelConfigGrantService {
         }
         requireModelConfig(tenantId, grant.getModelConfigId());
         return grant.getModelConfigId();
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<String> tryResolveEffectiveModelConfigId(String tenantId, String clientAppId,
+                                                            String requestedModelConfigId,
+                                                            LlmModelCategory category) {
+        try {
+            return Optional.of(resolveEffectiveModelConfigId(tenantId, clientAppId, requestedModelConfigId, category));
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
     }
 
     private ClientAppModelConfigGrantEntity requireGrant(String clientAppId, Long grantId) {

@@ -282,6 +282,31 @@ class ClientAppModelConfigGrantServiceTest {
                 () -> service.resolveEffectiveModelConfigId("tenant-1", "capp-1", "cfg-general", LlmModelCategory.VISION));
     }
 
+    @Test
+    void tryResolveEffectiveModelConfigId_returns_resolved_value() {
+        when(llmModelManager.getModelConfig("cfg-vision"))
+                .thenReturn(Optional.of(model("cfg-vision", "tenant-1", "LANGGRAPH_BIZ", LlmModelCategory.VISION)));
+        when(grantRepository.findByClientAppIdAndStatusAndIsDefaultTrueOrderByUpdatedAtDesc(
+                "capp-1", ClientAppModelConfigGrantService.STATUS_ENABLED))
+                .thenReturn(List.of(grant("cfg-vision", true, ClientAppModelConfigGrantService.STATUS_ENABLED)));
+
+        Optional<String> result = service.tryResolveEffectiveModelConfigId(
+                "tenant-1", "capp-1", null, LlmModelCategory.VISION);
+
+        assertEquals(Optional.of("cfg-vision"), result);
+    }
+
+    @Test
+    void tryResolveEffectiveModelConfigId_returns_empty_when_default_missing() {
+        when(grantRepository.findByClientAppIdAndStatusAndIsDefaultTrueOrderByUpdatedAtDesc(
+                "capp-1", ClientAppModelConfigGrantService.STATUS_ENABLED)).thenReturn(List.of());
+
+        Optional<String> result = service.tryResolveEffectiveModelConfigId(
+                "tenant-1", "capp-1", null, LlmModelCategory.VISION);
+
+        assertTrue(result.isEmpty());
+    }
+
     private GrantModelConfigForm grantForm(String modelConfigId, boolean isDefault) {
         GrantModelConfigForm form = new GrantModelConfigForm();
         form.setModelConfigId(modelConfigId);
