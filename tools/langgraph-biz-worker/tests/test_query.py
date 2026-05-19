@@ -6,6 +6,7 @@ import threading
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from langgraph_biz_worker.models import QueryEvent, QueryRequest
 from langgraph_biz_worker.graphs.root_graph import _build_attachment_context_prompt
@@ -100,6 +101,26 @@ def test_query_request_accepts_max_turns_aliases():
 
     assert camel.max_turns == 9
     assert snake.max_turns == 10
+
+
+def test_query_request_accepts_message_and_skill_name_aliases():
+    request = QueryRequest.model_validate({
+        "message": "check order",
+        "skillName": "order-assistant",
+        "skill_id": "order-assistant",
+    })
+
+    assert request.prompt == "check order"
+    assert request.skill_name == "order-assistant"
+
+
+def test_query_request_rejects_conflicting_skill_name_aliases():
+    with pytest.raises(ValidationError):
+        QueryRequest.model_validate({
+            "prompt": "check order",
+            "skill_name": "order-assistant",
+            "skillId": "legacy_order",
+        })
 
 
 def test_attachment_context_prompt_sanitizes_url_and_keeps_metadata():
@@ -257,6 +278,7 @@ async def test_query_generator_preserves_model_config_id_and_attachments_in_stat
             "task-attachments",
             QueryRequest(
                 prompt="describe attachment",
+                skill_name="order-assistant",
                 model_config_id="cfg-e2e",
                 vision_llm_config={"provider": "openai", "model": "vision-model"},
                 attachments=attachments,
@@ -267,6 +289,7 @@ async def test_query_generator_preserves_model_config_id_and_attachments_in_stat
             events.append(json.loads(item["data"]))
 
     assert events[-1]["type"] == "result"
+    assert captured_state["skill_name"] == "order-assistant"
     assert captured_state["model_config_id"] == "cfg-e2e"
     assert captured_state["vision_llm_config"] == {"provider": "openai", "model": "vision-model"}
     assert captured_state["attachments"] == attachments

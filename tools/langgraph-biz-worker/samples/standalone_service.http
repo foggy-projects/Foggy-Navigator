@@ -1,0 +1,41 @@
+### Start standalone service from tools/langgraph-biz-worker
+# $env:PYTHONPATH = "src;."
+# $env:BIZ_WORKER_STANDALONE_TOOL_MODULES = "samples.standalone_tools"
+# .\.venv\Scripts\python.exe -m uvicorn langgraph_biz_worker.main:app --host 127.0.0.1 --port 3061
+
+### List standalone skills
+GET http://localhost:3061/api/v1/skills
+
+### Standalone diagnostics
+GET http://localhost:3061/api/v1/standalone/status
+
+### Create standalone skill
+POST http://localhost:3061/api/v1/skills
+Content-Type: application/json
+
+{
+  "skill_name": "order-assistant",
+  "description": "Standalone order helper sample.",
+  "instructions": "Use query_order when order details are needed, then submit a concise result.",
+  "tools": ["query_order"],
+  "overwrite": true
+}
+
+### Validate standalone skill
+POST http://localhost:3061/api/v1/skills/order-assistant/validate
+
+### Ask by skill_name
+POST http://localhost:3061/api/v1/ask
+Content-Type: application/json
+
+{
+  "skill_name": "order-assistant",
+  "message": "Check order O-1001",
+  "context": {
+    "account_id": "demo-account",
+    "order_id": "O-1001"
+  }
+}
+
+### Delete standalone skill
+DELETE http://localhost:3061/api/v1/skills/order-assistant

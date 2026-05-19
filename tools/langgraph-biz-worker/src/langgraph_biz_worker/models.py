@@ -5,7 +5,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
+
+from .runtime.skill_identity import normalize_skill_name
 
 
 # ---------------------------------------------------------------------------
@@ -16,7 +18,8 @@ from pydantic import AliasChoices, BaseModel, Field
 class QueryRequest(BaseModel):
     """Request body for ``POST /api/v1/query``."""
 
-    prompt: str
+    prompt: str = Field(validation_alias=AliasChoices("prompt", "message"))
+    skill_name: str | None = None
     session_id: str | None = None
     foggy_session_id: str | None = None
     model: str | None = None
@@ -48,6 +51,18 @@ class QueryRequest(BaseModel):
         None,
         validation_alias=AliasChoices("maxTurns", "max_turns"),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_skill_name_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = normalize_skill_name(data, required=False)
+        if normalized is None:
+            return data
+        updated = dict(data)
+        updated["skill_name"] = normalized
+        return updated
 
 
 # ---------------------------------------------------------------------------

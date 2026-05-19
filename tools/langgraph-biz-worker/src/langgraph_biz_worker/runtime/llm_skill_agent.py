@@ -99,12 +99,15 @@ from .llm_tool_dispatcher import (
 from .llm_tool_schemas import (
     _GLOBAL_TOOL_NAMES,
     _KNOWN_TOOL_SCHEMAS,
+    _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES,
     _bind_tools,
     _dedupe_tool_specs,
     _tool_specs,
 )
+from .execution_policy import ExecutionPolicy
 from .public_skill_resource_tools import PublicSkillResourceTools
 from .skill_runtime import SkillRuntime
+from .tool_provider import ToolProvider, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -126,11 +129,13 @@ class LlmSkillAgent:
         runtime: SkillRuntime,
         max_iterations: int = 6,
         data_root: Path | None = None,
+        tool_provider: ToolProvider | None = None,
     ) -> None:
         self._model = chat_model
         self._runtime = runtime
         self._max_iterations = max_iterations
         self._data_root = data_root
+        self._tool_provider = tool_provider
         self._tool_dispatcher = LlmToolDispatcher(runtime, data_root=data_root)
 
     def run(
@@ -160,6 +165,17 @@ class LlmSkillAgent:
         if manifest is None:
             self._runtime.fail_frame(frame_id, f"Skill manifest not found: {frame.skill_id}")
             return [QueryEvent(type="error", task_id=task_id, error="Skill manifest not found")]
+        try:
+            execution_policy = ExecutionPolicy.from_context(runtime_context)
+        except ValueError as exc:
+            self._runtime.fail_frame(frame_id, str(exc))
+            return [QueryEvent(
+                type="error",
+                task_id=task_id,
+                skill_frame_id=frame_id,
+                skill_id=frame.skill_id,
+                error=str(exc),
+            )]
 
         # Prepare runtime-injected tool context
         artifact_store: ArtifactStore | None = None
@@ -187,7 +203,24 @@ class LlmSkillAgent:
             )),
         ]
         events: list[QueryEvent] = []
-        model = _bind_tools(self._model, manifest, persistent_frame=persistent_frame)
+        provider_tool_specs = self._provider_tool_specs(
+            manifest,
+            frame.skill_id,
+            runtime_context,
+            execution_policy=execution_policy,
+        )
+        if self._tool_provider:
+            runtime_context["_provider_allowed_tools"] = {
+                spec["function"]["name"] for spec in provider_tool_specs
+            }
+        runtime_context["_skill_name"] = frame.skill_id
+        model = _bind_tools(
+            self._model,
+            manifest,
+            persistent_frame=persistent_frame,
+            extra_tool_specs=provider_tool_specs,
+            enabled_tool_names=execution_policy.allowed_tools,
+        )
 
         for _ in range(self._max_iterations):
             try:
@@ -237,6 +270,7 @@ class LlmSkillAgent:
                     file_tools=file_tools,
                     public_resource_tools=public_resource_tools,
                     persistent_frame=persistent_frame,
+                    execution_policy=execution_policy,
                 )
                 events.extend(event["events"])
                 tool_result = event["tool_result"]
@@ -293,6 +327,7 @@ class LlmSkillAgent:
         file_tools: AccountFileTools | None = None,
         public_resource_tools: PublicSkillResourceTools | None = None,
         persistent_frame: bool = False,
+        execution_policy: ExecutionPolicy | None = None,
     ) -> dict[str, Any]:
         name = call["name"]
         args = call["args"]
@@ -326,6 +361,7 @@ class LlmSkillAgent:
                 file_tools=file_tools,
                 public_resource_tools=public_resource_tools,
                 persistent_frame=persistent_frame,
+                execution_policy=execution_policy,
             )
         except Exception as exc:
             logger.exception("LLM skill tool call failed: %s", name)
@@ -398,7 +434,11 @@ class LlmSkillAgent:
         file_tools: AccountFileTools | None = None,
         public_resource_tools: PublicSkillResourceTools | None = None,
         persistent_frame: bool = False,
+        execution_policy: ExecutionPolicy | None = None,
     ) -> dict[str, Any]:
+        if not _tool_authorized(name, execution_policy):
+            return {"ok": False, "error": _tool_not_authorized_error(name)}
+
         dispatch_context = LlmToolDispatchContext(
             frame_id=frame_id,
             task_id=task_id,
@@ -495,7 +535,68 @@ class LlmSkillAgent:
                 **_execution_report_payload_from_frame(frame),
             }
 
+        provider_result = self._call_provider_tool(name, args, runtime_context, execution_policy)
+        if provider_result is not _TOOL_UNHANDLED:
+            return provider_result
+
         return {"ok": False, "error": f"Unknown tool: {name}"}
+
+    def _provider_tool_specs(
+        self,
+        manifest: SkillManifest,
+        skill_name: str,
+        runtime_context: dict[str, Any],
+        *,
+        execution_policy: ExecutionPolicy,
+    ) -> list[dict[str, Any]]:
+        if not self._tool_provider:
+            return []
+        allowed = set(manifest.allowed_tools or [])
+        specs = []
+        for spec in self._tool_provider.list_tools(skill_name, runtime_context):
+            if allowed and spec.name not in allowed:
+                continue
+            if not execution_policy.allows_tool(spec.name):
+                continue
+            specs.append(spec.to_openai_tool_schema())
+        return specs
+
+    def _call_provider_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        runtime_context: dict[str, Any] | None,
+        execution_policy: ExecutionPolicy | None,
+    ) -> dict[str, Any] | object:
+        if not self._tool_provider:
+            return _TOOL_UNHANDLED
+        context = runtime_context or {}
+        allowed = context.get("_provider_allowed_tools")
+        if isinstance(allowed, set) and name not in allowed:
+            return _TOOL_UNHANDLED
+        if isinstance(allowed, list) and name not in allowed:
+            return _TOOL_UNHANDLED
+        provider_context = {
+            key: value
+            for key, value in context.items()
+            if not key.startswith("_")
+        }
+        skill_name = context.get("_skill_name")
+        if isinstance(skill_name, str) and skill_name:
+            provider_context.setdefault("skill_name", skill_name)
+        if execution_policy is not None:
+            provider_context.update(execution_policy.to_context())
+        try:
+            result = self._tool_provider.call_tool(name, args, provider_context)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        if isinstance(result, ToolResult):
+            return result.to_dict()
+        if isinstance(result, dict):
+            if "ok" in result:
+                return result
+            return {"ok": True, "result": result}
+        return {"ok": True, "result": result}
 
     def _finalize_business_function_call(
         self,
@@ -595,6 +696,16 @@ def _model_exception_interruption_reason(exc: Exception) -> str:
     if "LLM_CIRCUIT_OPEN" in text:
         return "llm_circuit_open"
     return "model_error"
+
+
+def _tool_authorized(name: str, execution_policy: ExecutionPolicy | None) -> bool:
+    if execution_policy is None:
+        return True
+    return execution_policy.allows_tool(name) or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
+
+
+def _tool_not_authorized_error(name: str) -> str:
+    return f"TOOL_NOT_AUTHORIZED: tool '{name}' is not allowed by upstream execution_policy"
 
 
 # ---------------------------------------------------------------------------

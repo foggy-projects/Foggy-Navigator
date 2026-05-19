@@ -24,9 +24,14 @@ def _invoke_business_skill_tool(
     persistent_frame: bool,
     run_child_frame: RunChildFrame,
 ) -> dict[str, Any]:
-    child_skill_id = args.get("skill_id") or args.get("skillId")
+    child_skill_id = (
+        args.get("skill_name")
+        or args.get("skillName")
+        or args.get("skill_id")
+        or args.get("skillId")
+    )
     if not child_skill_id:
-        return {"ok": False, "error": "skill_id is required"}
+        return {"ok": False, "error": "skill_name is required"}
     if child_skill_id == runtime.get_frame(frame_id).skill_id:
         return {"ok": False, "error": "A skill cannot invoke itself"}
     child_manifest = runtime.registry.get_manifest(child_skill_id)

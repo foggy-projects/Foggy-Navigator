@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from langgraph_biz_worker.graphs import root_graph as root_graph_module
+from langgraph_biz_worker.models import SkillManifest
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
@@ -22,6 +23,7 @@ def _state(task_id: str, session_id: str = "sess_root") -> dict[str, Any]:
         "llm_config": None,
         "vision_llm_config": None,
         "context": {"client_app_id": "capp_001"},
+        "skill_name": None,
         "runtime_context": {},
         "attachments": None,
         "user_id": "user_001",
@@ -93,6 +95,25 @@ def test_route_skill_restores_persistent_system_root_frame_from_journal(monkeypa
     assert second["active_frame_id"] == first["active_frame_id"]
     assert second["events"][-1].content == "Reusing frame for skill: system.root"
     assert restored_runtime.get_frame(first["active_frame_id"]) is not None
+
+
+def test_route_skill_explicit_skill_name_uses_named_skill_not_system_root(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    root_graph_module._skill_registry.register(
+        SkillManifest(id="order_internal", name="Order Internal", allowed_tools=[]),
+        aliases=["order-assistant"],
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "load", lambda **kwargs: None)
+
+    state = _state("task_explicit_skill_name_001")
+    state["skill_name"] = "order-assistant"
+
+    routed = root_graph_module.route_skill(state)
+    frame = runtime.get_frame(routed["active_frame_id"])
+
+    assert frame is not None
+    assert frame.skill_id == "order-assistant"
+    assert routed["events"][-1].content == "Opening frame for skill: order-assistant"
 
 
 def test_route_skill_reuses_system_root_frame_across_tasks_in_same_session(monkeypatch, tmp_path):

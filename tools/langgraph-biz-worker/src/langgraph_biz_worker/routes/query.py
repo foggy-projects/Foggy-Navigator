@@ -16,6 +16,7 @@ from ..auth import verify_token
 from ..config import settings
 from ..graphs.root_graph import RootState, root_graph
 from ..models import QueryEvent, QueryRequest
+from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.fsscript_bridge import extract_fsscript_script, get_fsscript_bridge
 from .health import active_tasks
 
@@ -64,7 +65,11 @@ async def _event_generator(
         def enqueue_progress_event(event: QueryEvent) -> None:
             loop.call_soon_threadsafe(queue.put_nowait, event)
 
-        runtime_context = dict(request.runtime_context or {})
+        visible_context = strip_execution_policy_context(request.context or {})
+        runtime_context = copy_execution_policy_from_context(
+            request.runtime_context or {},
+            request.context or {},
+        )
         if request.task_deadline_at:
             runtime_context.setdefault("task_deadline_at", request.task_deadline_at)
         if request.task_timeout_ms is not None:
@@ -81,7 +86,8 @@ async def _event_generator(
             "model_config_id": request.model_config_id,
             "llm_config": request.llm_config,
             "vision_llm_config": request.vision_llm_config,
-            "context": request.context,
+            "context": visible_context,
+            "skill_name": request.skill_name,
             "runtime_context": runtime_context,
             "attachments": request.attachments,
             "user_id": request.user_id,

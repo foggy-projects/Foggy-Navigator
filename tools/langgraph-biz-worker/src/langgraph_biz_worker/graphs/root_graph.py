@@ -18,11 +18,18 @@ from langgraph.graph import END, StateGraph
 from ..config import settings
 from ..models import FrameStatus, QueryEvent, SkillManifest
 from ..runtime.attachment_context import build_attachment_context_prompt as _build_attachment_context_prompt
+from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_frame_journal import FileFrameJournal
 from ..runtime.frame_store import FrameStore
 from ..runtime.account_context_files import build_account_context_prompt
 from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model, create_chat_model_from_config
 from ..runtime.llm_skill_agent import LlmSkillAgent
+from ..runtime.skill_identity import (
+    SKILL_NAME_ALIASES,
+    SkillNameValidationError,
+    normalize_skill_name,
+    validate_skill_name,
+)
 from ..runtime.skill_registry import SkillRegistry
 from ..runtime.skill_runtime import SkillRuntime
 from .skills.exception_triage import (
@@ -115,6 +122,23 @@ def _account_id_from_state(state: RootState) -> str | None:
         or context.get("upstreamUserId")
         or state.get("user_id")
     )
+
+
+def _explicit_skill_name_from_state(state: RootState) -> str | None:
+    context = state.get("context") or {}
+    values: dict[str, Any] = {}
+    if state.get("skill_name") is not None:
+        values["skill_name"] = state.get("skill_name")
+    for alias in SKILL_NAME_ALIASES:
+        if alias in context:
+            values[alias] = context[alias]
+    if values:
+        return normalize_skill_name(values, required=False)
+
+    legacy = context.get("skill")
+    if legacy is None:
+        return None
+    return validate_skill_name(legacy, "skill")
 
 
 def _prompt_with_attachment_context(prompt: str, attachments: list[dict[str, Any]] | None) -> str:
@@ -389,6 +413,7 @@ class RootState(TypedDict):
     llm_config: dict[str, Any] | None
     vision_llm_config: dict[str, Any] | None
     context: dict[str, Any] | None
+    skill_name: str | None
     runtime_context: dict[str, Any] | None
     attachments: list[dict[str, Any]] | None
     user_id: str | None
@@ -410,7 +435,7 @@ class RootState(TypedDict):
 def route_skill(state: RootState) -> dict:
     """Determine which skill to invoke based on the query context."""
     task_id = state["task_id"]
-    context = state.get("context") or {}
+    context = strip_execution_policy_context(state.get("context") or {})
     account_id = _account_id_from_state(state)
     client_app_id = context.get("client_app_id") or context.get("clientAppId")
 
@@ -428,7 +453,13 @@ def route_skill(state: RootState) -> dict:
         ),
     ]
 
-    if _should_use_system_root_skill(state):
+    try:
+        explicit_skill_name = _explicit_skill_name_from_state(state)
+    except SkillNameValidationError as exc:
+        events.append(QueryEvent(type="error", task_id=task_id, error=str(exc)))
+        return {"events": events, "active_frame_id": None}
+
+    if not explicit_skill_name and _should_use_system_root_skill(state):
         frame_id, created = _get_or_create_system_root_frame(task_id, state.get("session_id"), context)
         events.append(QueryEvent(
             type="skill_frame_open",
@@ -457,11 +488,11 @@ def route_skill(state: RootState) -> dict:
 
     # Priority 0: dynamic markdown injection
     markdown_body = context.get("skill_markdown")
-    if markdown_body and context.get("skillId"):
+    if markdown_body and explicit_skill_name:
         # Synthesize a temporary manifest to execute
         manifest = SkillManifest(
-            id=context.get("skillId"),
-            name=context.get("skillId"),
+            id=explicit_skill_name,
+            name=explicit_skill_name,
             markdown_body=markdown_body,
             allowed_tools=[] # Tools can be registered if needed
         )
@@ -469,9 +500,8 @@ def route_skill(state: RootState) -> dict:
         skill_id = manifest.id
 
     # Priority 1: explicit skill in context
-    explicit = context.get("skill") or context.get("skillId")
-    if not skill_id and explicit and _skill_registry.get_manifest(explicit):
-        skill_id = explicit
+    if not skill_id and explicit_skill_name and _skill_registry.get_manifest(explicit_skill_name):
+        skill_id = explicit_skill_name
 
     # Priority 2: rule-based fallback (takes precedence over LLM routing to preserve
     # deterministic test behaviour and backward-compat triggers like order_id → exception_triage)
@@ -547,16 +577,16 @@ def route_skill(state: RootState) -> dict:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "skill_id": {
+                            "skill_name": {
                                 "type": "string",
-                                "description": "The exact ID of the skill to invoke."
+                                "description": "The exact skill folder name to invoke."
                             },
                             "instruction": {
                                 "type": "string",
                                 "description": "Natural language instructions for the skill, summarizing what needs to be done and any extracted entities (e.g. order numbers) from the user's request."
                             }
                         },
-                        "required": ["skill_id", "instruction"]
+                        "required": ["skill_name", "instruction"]
                     }
                 }
             }
@@ -564,7 +594,7 @@ def route_skill(state: RootState) -> dict:
             
             if routable_skills:
                 skills_summary = "\n".join([f"- {s.id}: {s.description}" for s in routable_skills])
-                skills_section = f"Available Skills:\n{skills_summary}\n\nIf the user's request matches a skill, use the `invoke_business_skill` tool to delegate the work.\nProvide the `skill_id` and a detailed `instruction` based on the user's input."
+                skills_section = f"Available Skills:\n{skills_summary}\n\nIf the user's request matches a skill, use the `invoke_business_skill` tool to delegate the work.\nProvide the `skill_name` and a detailed `instruction` based on the user's input."
             else:
                 skills_section = "No business skills are currently registered. Respond naturally to the user."
 
@@ -654,8 +684,17 @@ If no skill matches, respond naturally to the user — you can answer questions,
                     tc = final_msg.tool_calls[0]
                     if tc.get("name") == "invoke_business_skill":
                         args = tc.get("args", {})
-                        if "skill_id" in args:
-                            skill_id = args["skill_id"]
+                        candidate_skill_name = (
+                            args.get("skill_name")
+                            or args.get("skillName")
+                            or args.get("skill_id")
+                            or args.get("skillId")
+                        )
+                        if candidate_skill_name:
+                            try:
+                                skill_id = validate_skill_name(candidate_skill_name)
+                            except SkillNameValidationError:
+                                skill_id = None
                         if "instruction" in args:
                             context["skill_instruction"] = args["instruction"]
                         _append_log({
@@ -739,9 +778,10 @@ def run_skill(state: RootState) -> dict:
         return {"events": []}
 
     task_id = state["task_id"]
-    context = state.get("context") or {}
+    raw_context = state.get("context") or {}
+    context = strip_execution_policy_context(raw_context)
     account_id = _account_id_from_state(state)
-    runtime_context = dict(state.get("runtime_context") or {})
+    runtime_context = copy_execution_policy_from_context(state.get("runtime_context") or {}, raw_context)
     runtime_context["task_id"] = task_id
     runtime_context["frame_id"] = frame_id
     recent_conversation = _recent_conversation_for_runtime(context)

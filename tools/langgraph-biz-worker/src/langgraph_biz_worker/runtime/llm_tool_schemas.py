@@ -9,18 +9,32 @@ from langchain_core.language_models import BaseChatModel
 from ..models import SkillManifest
 
 
-def _tool_specs(manifest: SkillManifest, persistent_frame: bool = False) -> list[dict[str, Any]]:
+def _tool_specs(
+    manifest: SkillManifest,
+    persistent_frame: bool = False,
+    extra_tool_specs: list[dict[str, Any]] | None = None,
+    enabled_tool_names: set[str] | frozenset[str] | None = None,
+) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     for name in [*_GLOBAL_TOOL_NAMES, *manifest.allowed_tools]:
         if name in _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES:
             continue
+        if not _tool_enabled(name, enabled_tool_names):
+            continue
         if name in _KNOWN_TOOL_SCHEMAS:
             specs.append(_KNOWN_TOOL_SCHEMAS[name])
+    specs.extend(
+        spec
+        for spec in (extra_tool_specs or [])
+        if _tool_enabled(spec["function"]["name"], enabled_tool_names)
+    )
     if "submit_skill_result" not in {s["function"]["name"] for s in specs}:
         specs.append(_KNOWN_TOOL_SCHEMAS["submit_skill_result"])
     if persistent_frame and manifest.id == "system.root":
-        specs.append(_KNOWN_TOOL_SCHEMAS["resume_recoverable_child_skill"])
-        specs.append(_KNOWN_TOOL_SCHEMAS["shelve_interrupted_frame"])
+        if _tool_enabled("resume_recoverable_child_skill", enabled_tool_names):
+            specs.append(_KNOWN_TOOL_SCHEMAS["resume_recoverable_child_skill"])
+        if _tool_enabled("shelve_interrupted_frame", enabled_tool_names):
+            specs.append(_KNOWN_TOOL_SCHEMAS["shelve_interrupted_frame"])
     return _dedupe_tool_specs(specs)
 
 
@@ -28,10 +42,17 @@ def _bind_tools(
     model: BaseChatModel,
     manifest: SkillManifest,
     persistent_frame: bool = False,
+    extra_tool_specs: list[dict[str, Any]] | None = None,
+    enabled_tool_names: set[str] | frozenset[str] | None = None,
 ) -> BaseChatModel:
     if not hasattr(model, "bind_tools"):
         return model
-    return model.bind_tools(_tool_specs(manifest, persistent_frame=persistent_frame))
+    return model.bind_tools(_tool_specs(
+        manifest,
+        persistent_frame=persistent_frame,
+        extra_tool_specs=extra_tool_specs,
+        enabled_tool_names=enabled_tool_names,
+    ))
 
 
 _GLOBAL_TOOL_NAMES = [
@@ -45,6 +66,21 @@ _HIDDEN_BUSINESS_DISCOVERY_TOOL_NAMES = {
     "list_business_functions",
     "get_business_function_schema",
 }
+
+_RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES = frozenset({
+    "submit_skill_result",
+    "resume_recoverable_child_skill",
+    "shelve_interrupted_frame",
+})
+
+
+def _tool_enabled(
+    name: str,
+    enabled_tool_names: set[str] | frozenset[str] | None,
+) -> bool:
+    if enabled_tool_names is None:
+        return True
+    return name in enabled_tool_names or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
 
 
 def _dedupe_tool_specs(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -151,11 +187,18 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "skill_id": {"type": "string"},
+                    "skill_name": {
+                        "type": "string",
+                        "description": "The skill folder name to invoke.",
+                    },
+                    "skill_id": {
+                        "type": "string",
+                        "description": "Legacy alias for skill_name.",
+                    },
                     "instruction": {"type": "string"},
                     "input": {"type": "object"},
                 },
-                "required": ["skill_id", "instruction"],
+                "required": ["skill_name", "instruction"],
             },
         },
     },

@@ -53,6 +53,7 @@ class TestSkillMdLoading:
         assert m.allowed_tools == ["tool_a", "tool_b"]
         assert m.output_schema["required"] == ["result"]
         assert m.subgraph == "test_skill"
+        assert registry.get_manifest("test-skill") is m
 
     def test_load_from_public(self, tmp_path):
         _write_skill_md(tmp_path, "public", "pub-skill", MINIMAL_SKILL_MD.replace("test_skill", "pub_skill"))
@@ -126,6 +127,23 @@ class TestSkillMdLoading:
         m = registry.get_manifest("test_skill")
         assert m is not None
         assert m.allowed_tools == ["tool_x", "tool_y"]
+
+    def test_tools_alias_and_standalone_skill_root(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "order-assistant"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            MINIMAL_SKILL_MD.replace("name: test_skill", "name: order_internal")
+            .replace("allowed-tools: tool_a tool_b", "tools: query_order"),
+            encoding="utf-8",
+        )
+
+        registry = SkillRegistry(skills_root=tmp_path / "skills", manifests_dir=tmp_path / "empty")
+        registry.load(include_standalone=True)
+
+        m = registry.get_manifest("order-assistant")
+        assert m is not None
+        assert m.id == "order_internal"
+        assert m.allowed_tools == ["query_order"]
 
     def test_markdown_body_and_metadata_visibility(self, tmp_path):
         md = """---

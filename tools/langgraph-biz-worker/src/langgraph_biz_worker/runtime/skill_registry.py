@@ -83,8 +83,13 @@ def _frontmatter_to_manifest(
     metadata = data.get("metadata", {})
 
     # Parse allowed-tools: space-separated string → list
-    raw_tools = data.get("allowed-tools", "")
-    allowed_tools = raw_tools.split() if isinstance(raw_tools, str) else list(raw_tools)
+    raw_tools = data.get("allowed-tools", data.get("tools", ""))
+    if raw_tools is None:
+        allowed_tools = []
+    elif isinstance(raw_tools, str):
+        allowed_tools = raw_tools.split()
+    else:
+        allowed_tools = list(raw_tools)
 
     return SkillManifest(
         id=name,
@@ -121,11 +126,17 @@ class SkillRegistry:
         data_root: Path | None = None,
     ) -> None:
         self._manifests: dict[str, SkillManifest] = {}
+        self._aliases: dict[str, str] = {}
         self._skills_root = skills_root or _DEFAULT_SKILLS_ROOT
         self._legacy_dir = manifests_dir or _LEGACY_MANIFESTS_DIR
         self._data_root = data_root or self._skills_root.parent / "data"
 
-    def load(self, account_id: str | None = None, client_app_id: str | None = None) -> None:
+    def load(
+        self,
+        account_id: str | None = None,
+        client_app_id: str | None = None,
+        include_standalone: bool = False,
+    ) -> None:
         """Load skills from all sources.
 
         Priority (later overwrites earlier): legacy < builtin < public < app-public < account.
@@ -133,9 +144,13 @@ class SkillRegistry:
         If ``account_id`` is provided, also loads account-private skills.
         """
         self._manifests.clear()
+        self._aliases.clear()
 
         # 1. Load legacy YAML manifests (lowest priority)
         self._load_legacy_yaml()
+
+        if include_standalone:
+            self._load_skill_md_dir(self._skills_root, "standalone")
 
         # 2. Load SKILL.md from skills/builtin/
         builtin_dir = self._skills_root / "builtin"
@@ -187,7 +202,7 @@ class SkillRegistry:
             if manifest is None:
                 continue
 
-            self._manifests[manifest.id] = manifest
+            self.register(manifest, aliases=[skill_dir.name])
             logger.info("Loaded skill [%s] %s from %s", scope, manifest.id, skill_md)
 
     def _load_legacy_yaml(self) -> None:
@@ -200,20 +215,29 @@ class SkillRegistry:
                 with open(path, encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                 manifest = SkillManifest(**data)
-                self._manifests[manifest.id] = manifest
+                self.register(manifest)
                 logger.info("Loaded legacy manifest: %s (%s)", manifest.id, path.name)
             except Exception:
                 logger.exception("Failed to load legacy manifest: %s", path)
 
     def get_manifest(self, skill_id: str) -> SkillManifest | None:
-        return self._manifests.get(skill_id)
+        manifest = self._manifests.get(skill_id)
+        if manifest is not None:
+            return manifest
+        canonical = self._aliases.get(skill_id)
+        if canonical:
+            return self._manifests.get(canonical)
+        return None
 
     def list_skills(self) -> list[SkillManifest]:
         return list(self._manifests.values())
 
-    def register(self, manifest: SkillManifest) -> None:
+    def register(self, manifest: SkillManifest, aliases: list[str] | None = None) -> None:
         """Programmatically register a manifest (useful for tests)."""
         self._manifests[manifest.id] = manifest
+        for alias in aliases or []:
+            if alias and alias != manifest.id:
+                self._aliases[alias] = manifest.id
 
 
 def _validate_account_id(account_id: str) -> str:

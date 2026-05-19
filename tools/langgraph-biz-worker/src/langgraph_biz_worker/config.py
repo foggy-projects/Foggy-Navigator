@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     # Defaults to <project-root>/data
     data_root: str = ""
 
+    # Standalone SkillAgent service configuration. Empty roots preserve the
+    # existing worker-local skills/data defaults.
+    standalone_skills_root: str = ""
+    standalone_data_root: str = ""
+    standalone_tool_modules: str = ""
+    standalone_model_provider: str = ""
+
     # LLM Skill Routing — leave llm_provider empty to disable (use rule-based fallback)
     llm_provider: str = ""          # "anthropic" or "openai"
     llm_api_key: str = ""
