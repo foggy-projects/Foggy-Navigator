@@ -51,15 +51,14 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         String skillName = resolveSkillName(request);
         form.setAgentId(request.getSkillId());
-        form.setSkillName(skillName);
         form.setWorkerId(member.getWorkerId());
         form.setSessionId(request.getSessionId());
         form.setContextId(request.getContextId());
         form.setModelConfigId(request.getModelConfigId());
         form.setPrompt("Business Agent task " + request.getBusinessTaskId()
                 + ". Use the business function tools when user intent requires controlled business execution.");
-        form.setContext(buildContext(request));
-        form.setRuntimeContext(buildRuntimeContext(request));
+        form.setContext(buildContext(request, skillName));
+        form.setRuntimeContext(buildRuntimeContext(request, skillName));
 
         LanggraphTaskDTO workerTask = taskService.createTask(request.getActorUserId(), request.getTenantId(), form);
         return BusinessAgentWorkerTaskLaunchResult.builder()
@@ -70,18 +69,21 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
                 .build();
     }
 
-    private Map<String, Object> buildContext(BusinessAgentWorkerTaskLaunchRequest request) {
+    private Map<String, Object> buildContext(BusinessAgentWorkerTaskLaunchRequest request, String skillName) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("businessTaskId", request.getBusinessTaskId());
         putText(context, "contextId", request.getContextId());
         putText(context, "context_id", request.getContextId());
         putText(context, "session_id", request.getSessionId());
         context.put("clientAppId", request.getClientAppId());
+        putText(context, "businessSkillId", request.getSkillId());
+        putText(context, "businessSkillName", skillName);
         context.put("upstreamUserId", request.getUpstreamUserId());
         context.put("accountId", request.getUpstreamUserId());
         context.put("account_id", request.getUpstreamUserId());
         context.put("workerPoolId", request.getWorkerPoolId());
         context.put("workerBackend", request.getWorkerBackend());
+        context.put("auto_inject_app_public_skills", true);
         if (request.getMarkdownBody() != null && !request.getMarkdownBody().isBlank()) {
             context.put("skill_markdown", request.getMarkdownBody());
         }
@@ -94,14 +96,14 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         }
     }
 
-    private Map<String, Object> buildRuntimeContext(BusinessAgentWorkerTaskLaunchRequest request) {
+    private Map<String, Object> buildRuntimeContext(BusinessAgentWorkerTaskLaunchRequest request, String skillName) {
         ZoneId zoneId = ZoneId.systemDefault();
         ZonedDateTime now = ZonedDateTime.now(zoneId);
         Map<String, Object> runtimeContext = new LinkedHashMap<>();
         if (StringUtils.hasText(request.getTaskScopedToken())) {
             runtimeContext.put("task_scoped_token", request.getTaskScopedToken());
         }
-        putText(runtimeContext, "skill_name", resolveSkillName(request));
+        putText(runtimeContext, "skill_name", skillName);
         if (StringUtils.hasText(request.getVisionModelConfigId())) {
             runtimeContext.put("vision_model_config_id", request.getVisionModelConfigId());
         }

@@ -112,7 +112,8 @@ public class LanggraphStreamRelay {
             taskService.failTask(taskId, e.getMessage());
             publishMessage(sessionId, MessageType.ERROR,
                     Map.of("content", "Failed to connect to LangGraph worker: " + e.getMessage(),
-                            "taskId", taskId));
+                            "taskId", taskId,
+                            "status", "FAILED"));
         }
     }
 
@@ -219,10 +220,8 @@ public class LanggraphStreamRelay {
 
             // Map Python Worker event → AgentMessage (using existing MessageType enum)
             switch (type) {
-                case "system" -> publishMessage(sessionId, MessageType.STATE_SYNC,
-                        Map.of("content", node.path("content").asText(""),
-                                "subtype", "system",
-                                "taskId", taskId));
+                case "system" -> log.debug("LangGraph system event for task {}: {}",
+                        taskId, node.path("content").asText(""));
 
                 case "assistant_text" -> publishMessage(sessionId, MessageType.TEXT_COMPLETE,
                         buildSkillScopedPayload(node, taskId, null));
@@ -251,6 +250,7 @@ public class LanggraphStreamRelay {
                     Map<String, Object> payload = new LinkedHashMap<>();
                     payload.put("content", content);
                     payload.put("taskId", taskId);
+                    payload.put("status", "COMPLETED");
                     copyExecutionReportFields(payload, node);
                     publishMessage(sessionId, MessageType.TASK_COMPLETED,
                             payload);
@@ -267,8 +267,11 @@ public class LanggraphStreamRelay {
                     if (StringUtils.hasText(reason)) {
                         taskService.recordTaskInterruptionProjection(taskId, reason, error);
                     }
-                    publishMessage(sessionId, MessageType.ERROR,
-                            Map.of("content", error, "taskId", taskId));
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("content", error);
+                    payload.put("taskId", taskId);
+                    payload.put("status", "FAILED");
+                    publishMessage(sessionId, MessageType.ERROR, payload);
                     taskService.failTask(taskId, error);
                 }
 
@@ -291,6 +294,11 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
         copyExecutionReportFields(payload, node);
+        if ("skill_frame_open".equals(subtype)) {
+            payload.put("status", "RUNNING");
+        } else if ("skill_frame_close".equals(subtype)) {
+            payload.put("status", statusFromExecutionReportDigest(node, "COMPLETED"));
+        }
         return payload;
     }
 
@@ -343,6 +351,7 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
         copyExecutionReportFields(payload, node);
+        payload.put("status", "RUNNING");
         publishMessage(sessionId, MessageType.TOOL_CALL_START, payload);
     }
 
@@ -374,6 +383,7 @@ public class LanggraphStreamRelay {
         putTextIfPresent(payload, "parentFrameId", node, "parent_frame_id");
         putTextIfPresent(payload, "skillId", node, "skill_id");
         copyExecutionReportFields(payload, node);
+        payload.put("status", success ? statusFromExecutionReportDigest(node, "COMPLETED") : "FAILED");
         payload.put("data", parseJsonOrText(content));
         payload.put("success", success);
         String error = node.path("error").asText("");
@@ -431,7 +441,9 @@ public class LanggraphStreamRelay {
         taskService.recordTaskInterruption(taskId, reason, message);
         taskService.failTask(taskId, "Stream error: " + message);
         publishMessage(sessionId, MessageType.ERROR,
-                Map.of("content", "Stream connection lost: " + message, "taskId", taskId));
+                Map.of("content", "Stream connection lost: " + message,
+                        "taskId", taskId,
+                        "status", "FAILED"));
     }
 
     private String streamErrorMessage(Throwable error) {
@@ -500,6 +512,7 @@ public class LanggraphStreamRelay {
         payload.put("reason", node.path("reason").asText(""));
         payload.put("timeoutAt", node.path("timeout_at").asText(""));
         copyExecutionReportFields(payload, node);
+        payload.put("status", statusFromExecutionReportDigest(node, "AWAITING_APPROVAL"));
 
         publishMessage(sessionId, MessageType.STATE_SYNC, payload);
     }
@@ -527,6 +540,17 @@ public class LanggraphStreamRelay {
         if (reportDigest != null && reportDigest.isObject()) {
             payload.put("execution_report_digest", toObject(reportDigest));
         }
+    }
+
+    private String statusFromExecutionReportDigest(JsonNode node, String fallback) {
+        JsonNode reportDigest = firstPresent(node, "execution_report_digest", "executionReportDigest");
+        if (reportDigest != null && reportDigest.isObject()) {
+            JsonNode status = reportDigest.get("status");
+            if (status != null && status.isTextual() && StringUtils.hasText(status.asText())) {
+                return status.asText();
+            }
+        }
+        return fallback;
     }
 
     private JsonNode firstPresent(JsonNode node, String... keys) {

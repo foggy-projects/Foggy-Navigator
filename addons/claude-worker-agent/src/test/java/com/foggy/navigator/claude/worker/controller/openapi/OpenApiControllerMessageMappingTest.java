@@ -283,6 +283,7 @@ class OpenApiControllerMessageMappingTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> runtimeContext = (Map<String, Object>) captor.getValue().getMetadata().get("runtimeContext");
         assertEquals("btt_open_api_1", runtimeContext.get("task_scoped_token"));
+        assertEquals("agent-1", runtimeContext.get("skill_name"));
         verify(taskService).bindOpenApiTaskScopedTokenToWorkerTask(
                 "tenant-1",
                 "btt_open_api_1",
@@ -345,12 +346,17 @@ class OpenApiControllerMessageMappingTest {
         Map<String, Object> context = (Map<String, Object>) captor.getValue().getMetadata().get("context");
         assertEquals("root-agent", context.get("rootAgentId"));
         assertEquals("tms.navigator.agent", context.get("businessSkillId"));
+        assertEquals("tms.navigator.agent", context.get("businessSkillName"));
+        assertNull(captor.getValue().getMetadata().get("skill_name"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> runtimeContext = (Map<String, Object>) captor.getValue().getMetadata().get("runtimeContext");
+        assertEquals("tms.navigator.agent", runtimeContext.get("skill_name"));
         verify(credentialResolver, never()).resolveAccessTokenForSkill(
                 nullable(String.class), nullable(String.class), eq("root-agent"));
     }
 
     @Test
-    void askAgent_forwardsTopLevelExecutionPolicyAndSkillName() {
+    void askAgent_forwardsTopLevelExecutionPolicyWithoutDirectSkillName() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
         A2aAgent agent = mock(A2aAgent.class);
@@ -378,10 +384,12 @@ class OpenApiControllerMessageMappingTest {
         var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
         verify(agent).sendTask(captor.capture());
         Map<String, Object> metadata = captor.getValue().getMetadata();
-        assertEquals("agent-1", metadata.get("skill_name"));
+        assertNull(metadata.get("skill_name"));
         @SuppressWarnings("unchecked")
         Map<String, Object> context = (Map<String, Object>) metadata.get("context");
         assertEquals("trace-1", context.get("traceId"));
+        assertEquals("agent-1", context.get("businessSkillId"));
+        assertEquals("agent-1", context.get("businessSkillName"));
         @SuppressWarnings("unchecked")
         Map<String, Object> executionPolicy = (Map<String, Object>) context.get("execution_policy");
         assertEquals("D:/workspace/app", executionPolicy.get("workdir"));

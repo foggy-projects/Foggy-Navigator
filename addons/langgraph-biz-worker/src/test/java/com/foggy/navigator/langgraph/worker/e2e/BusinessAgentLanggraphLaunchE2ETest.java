@@ -187,8 +187,8 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(TENANT, event.getTenantId());
         assertEquals(LanggraphTaskService.PROVIDER_TYPE, event.getProviderType());
         assertEquals(MODEL_CONFIG_ID, event.getProviderConfigString("modelConfigId"));
-        assertEquals(SKILL_ID, event.getProviderConfigString("skill_name"));
-        assertEquals(SKILL_ID, event.getProviderConfigString("skillName"));
+        assertNull(event.getProviderConfigString("skill_name"));
+        assertNull(event.getProviderConfigString("skillName"));
         assertTrue(event.getPrompt().contains(created.getTaskId()));
         assertFalse(event.getPrompt().contains(SKILL_ID));
 
@@ -200,11 +200,15 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(CONTEXT_ID, context.get("context_id"));
         assertEquals(SESSION_ID, context.get("session_id"));
         assertEquals(CLIENT_APP_ID, context.get("clientAppId"));
+        assertEquals(SKILL_ID, context.get("businessSkillId"));
+        assertEquals(SKILL_ID, context.get("businessSkillName"));
         assertEquals(UPSTREAM_USER_ID, context.get("upstreamUserId"));
         assertEquals(UPSTREAM_USER_ID, context.get("accountId"));
         assertEquals(UPSTREAM_USER_ID, context.get("account_id"));
         assertFalse(context.containsKey("skillId"));
         assertFalse(context.containsKey("skill_name"));
+        assertFalse(context.containsKey("skillName"));
+        assertEquals(true, context.get("auto_inject_app_public_skills"));
         assertEquals(WORKER_POOL_ID, context.get("workerPoolId"));
         assertEquals(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND, context.get("workerBackend"));
         assertEquals("# World Sim\nUse deterministic E2E cursor.", context.get("skill_markdown"));

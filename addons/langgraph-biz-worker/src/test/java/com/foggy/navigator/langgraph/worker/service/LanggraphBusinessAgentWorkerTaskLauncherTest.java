@@ -74,7 +74,7 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
         CreateLanggraphTaskForm form = formCaptor.getValue();
         assertEquals("skill_01", form.getAgentId());
-        assertEquals("skill_01", form.getSkillName());
+        assertNull(form.getSkillName());
         assertEquals("worker_01", form.getWorkerId());
         assertEquals("session_01", form.getSessionId());
         assertEquals("ctx_01", form.getContextId());
@@ -85,12 +85,16 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("ctx_01", form.getContext().get("context_id"));
         assertEquals("session_01", form.getContext().get("session_id"));
         assertEquals("app_01", form.getContext().get("clientAppId"));
+        assertEquals("skill_01", form.getContext().get("businessSkillId"));
+        assertEquals("skill_01", form.getContext().get("businessSkillName"));
         assertEquals("user_01", form.getContext().get("upstreamUserId"));
         assertEquals("user_01", form.getContext().get("accountId"));
         assertEquals("user_01", form.getContext().get("account_id"));
+        assertEquals(true, form.getContext().get("auto_inject_app_public_skills"));
         assertFalse(form.getContext().containsKey("task_scoped_token"));
         assertFalse(form.getContext().containsKey("skillId"));
         assertFalse(form.getContext().containsKey("skill_name"));
+        assertFalse(form.getContext().containsKey("skillName"));
         Map<String, Object> runtimeContext = form.getRuntimeContext();
         assertEquals("rt_token", runtimeContext.get("task_scoped_token"));
         assertEquals("skill_01", runtimeContext.get("skill_name"));

@@ -869,9 +869,9 @@ public class OpenApiController {
         context.putIfAbsent("clientAppId", clientAppCredential.getClientAppId());
         context.putIfAbsent("rootAgentId", rootAgentId);
         context.putIfAbsent("businessSkillId", skillId);
+        context.putIfAbsent("businessSkillName", skillId);
         context.putIfAbsent("credentialId", clientAppCredential.getCredentialId());
         context.putIfAbsent("auto_inject_app_public_skills", true);
-        metadata.putIfAbsent("skill_name", skillId);
 
         String upstreamUserId = firstHeader(request,
                 "X-Upstream-User-Id",
@@ -980,6 +980,7 @@ public class OpenApiController {
             });
         }
         runtimeContext.put("task_scoped_token", token);
+        runtimeContext.put("skill_name", skillId);
         metadata.put("runtimeContext", runtimeContext);
         return token;
     }

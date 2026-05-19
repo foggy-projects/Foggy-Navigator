@@ -104,8 +104,25 @@ class LanggraphStreamRelayTest {
         assertEquals("sp_001", payload.get("suspendId"));
         assertEquals("order.close_apply.submit", payload.get("reason"));
         assertEquals("2026-05-01T10:00:00Z", payload.get("timeoutAt"));
+        assertEquals("AWAITING_APPROVAL", payload.get("status"));
         assertEquals("frame-report://lgt-task-1/fn-1", payload.get("execution_report_ref"));
         assertEquals("AWAITING_APPROVAL", ((Map<?, ?>) payload.get("execution_report_digest")).get("status"));
+    }
+
+    @Test
+    void systemEventIsInternalAndNotPublished() throws Exception {
+        String taskId = "lgt-system";
+        String sessionId = "session-system";
+        String data = """
+                {
+                  "type": "system",
+                  "content": "LangGraph Biz Worker processing query"
+                }
+                """;
+
+        invokeHandleEvent(ServerSentEvent.<String>builder().data(data).build(), taskId, sessionId);
+
+        verify(sessionEventListener, times(0)).handleMessage(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -183,6 +200,7 @@ class LanggraphStreamRelayTest {
         assertEquals("frm-1", startPayload.get("skillFrameId"));
         assertEquals("frm-parent", startPayload.get("parentFrameId"));
         assertEquals("foggy-query-agent", startPayload.get("skillId"));
+        assertEquals("RUNNING", startPayload.get("status"));
 
         AgentMessage result = events.get(1);
         assertEquals(MessageType.TOOL_CALL_RESULT, result.getType());
@@ -193,6 +211,7 @@ class LanggraphStreamRelayTest {
         assertEquals("frm-1", resultPayload.get("skillFrameId"));
         assertEquals("frm-parent", resultPayload.get("parentFrameId"));
         assertEquals("frame-report://lgt-task-3/frm-1", resultPayload.get("execution_report_ref"));
+        assertEquals("COMPLETED", resultPayload.get("status"));
         assertEquals("COMPLETED", ((Map<?, ?>) resultPayload.get("execution_report_digest")).get("status"));
     }
 
@@ -220,6 +239,7 @@ class LanggraphStreamRelayTest {
         Map<String, Object> payload = (Map<String, Object>) captor.getValue().getPayload();
         assertEquals("skill_frame_close", payload.get("subtype"));
         assertEquals("frame-report://lgt-task-close/frm-child", payload.get("execution_report_ref"));
+        assertEquals("COMPLETED", payload.get("status"));
         assertEquals("COMPLETED", ((Map<?, ?>) payload.get("execution_report_digest")).get("status"));
     }
 
@@ -285,6 +305,7 @@ class LanggraphStreamRelayTest {
                         && taskId.equals(message.getTaskId())
                         && message.getPayload() instanceof Map<?, ?> payload
                         && "frame-report://lgt-task-4/root".equals(payload.get("execution_report_ref"))
+                        && "COMPLETED".equals(payload.get("status"))
         ));
         inOrder.verify(taskService).completeTask(
                 taskId,
@@ -307,6 +328,8 @@ class LanggraphStreamRelayTest {
         inOrder.verify(sessionEventListener).handleMessage(org.mockito.ArgumentMatchers.argThat(message ->
                 message.getType() == MessageType.ERROR
                         && taskId.equals(message.getTaskId())
+                        && message.getPayload() instanceof Map<?, ?> payload
+                        && "FAILED".equals(payload.get("status"))
         ));
     }
 
@@ -323,6 +346,8 @@ class LanggraphStreamRelayTest {
         inOrder.verify(sessionEventListener).handleMessage(org.mockito.ArgumentMatchers.argThat(message ->
                 message.getType() == MessageType.ERROR
                         && taskId.equals(message.getTaskId())
+                        && message.getPayload() instanceof Map<?, ?> payload
+                        && "FAILED".equals(payload.get("status"))
         ));
     }
 
@@ -349,6 +374,8 @@ class LanggraphStreamRelayTest {
         inOrder.verify(sessionEventListener).handleMessage(org.mockito.ArgumentMatchers.argThat(message ->
                 message.getType() == MessageType.ERROR
                         && taskId.equals(message.getTaskId())
+                        && message.getPayload() instanceof Map<?, ?> payload
+                        && "FAILED".equals(payload.get("status"))
         ));
         inOrder.verify(taskService).failTask(taskId, "LLM request timed out");
     }
