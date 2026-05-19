@@ -14,9 +14,12 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -60,6 +63,32 @@ class LanggraphWorkerInnerA2aAgentTest {
         assertEquals("sonnet", captor.getValue().getModel());
         assertEquals("worker_01", captor.getValue().getWorkerId());
         assertEquals("tms.navigator.agent", captor.getValue().getSkillName());
+    }
+
+    @Test
+    void sendTask_rejectsConflictingSkillAliases() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId("agent_01");
+        entity.setName("Agent");
+        entity.setUserId("admin_01");
+        entity.setTenantId("tenant_01");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
+        A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
+        message.setMetadata(Map.of(
+                "skill_name", "canonical.skill",
+                "skill_id", "legacy.skill"));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                agent.sendTask(A2aContext.builder()
+                        .message(message)
+                        .contextId("ctx_01")
+                        .navigatorSessionId("session_01")
+                        .build()));
+
+        assertEquals("skill_name aliases must resolve to the same value", error.getMessage());
+        verify(taskService, never()).createTask(anyString(), anyString(), any(CreateLanggraphTaskForm.class));
     }
 
     @Test

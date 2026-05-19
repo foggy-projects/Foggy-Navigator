@@ -21,6 +21,7 @@ import com.foggy.navigator.langgraph.worker.model.form.ApproveTaskForm;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphApprovalRepository;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphTaskRepository;
+import com.foggy.navigator.langgraph.worker.support.LanggraphSkillNameContract;
 import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import lombok.RequiredArgsConstructor;
@@ -97,7 +98,7 @@ public class LanggraphTaskService implements TaskQueryProvider {
     public DispatchTaskDTO createTaskDirect(Map<String, Object> params, String userId, String tenantId) {
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         form.setAgentId((String) params.get("agentId"));
-        form.setSkillName(textValue(firstPresent(params, "skill_name", "skillName", "skill_id", "skillId")));
+        form.setSkillName(resolveSkillName(params, "direct task params"));
         form.setWorkerId((String) params.get("workerId"));
         form.setPrompt((String) params.get("prompt"));
         form.setDirectoryId((String) params.get("directoryId"));
@@ -246,7 +247,8 @@ public class LanggraphTaskService implements TaskQueryProvider {
         if (form.getMaxTurns() != null && form.getMaxTurns() > 0) {
             providerConfig.put("maxTurns", form.getMaxTurns());
         }
-        putIfNotBlank(providerConfig, "skillName", form.getSkillName());
+        putIfNotBlank(providerConfig, LanggraphSkillNameContract.CANONICAL_KEY, form.getSkillName());
+        putIfNotBlank(providerConfig, LanggraphSkillNameContract.JAVA_ALIAS_KEY, form.getSkillName());
 
         eventPublisher.publishEvent(WorkerTaskStartEvent.builder()
                 .taskId(taskId)
@@ -281,6 +283,11 @@ public class LanggraphTaskService implements TaskQueryProvider {
             context.put("recentConversation", recentConversation);
         }
         return context;
+    }
+
+    private static String resolveSkillName(Map<String, Object> values, String source) {
+        return LanggraphSkillNameContract.resolve(values, (key, ignored) ->
+                log.warn("Deprecated LangGraph skill alias '{}' received from {}; use 'skill_name'", key, source));
     }
 
     private List<Map<String, Object>> recentConversation(String sessionId) {
@@ -775,13 +782,6 @@ public class LanggraphTaskService implements TaskQueryProvider {
             if (values.containsKey(key)) {
                 return values.get(key);
             }
-        }
-        return null;
-    }
-
-    private static String textValue(Object value) {
-        if (value instanceof String text && !text.isBlank()) {
-            return text.trim();
         }
         return null;
     }

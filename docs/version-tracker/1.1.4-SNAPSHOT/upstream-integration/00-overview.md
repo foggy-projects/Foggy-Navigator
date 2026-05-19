@@ -35,6 +35,7 @@
 | [14-bizworker-upstream-execution-policy-phase3d-plan.md](./14-bizworker-upstream-execution-policy-phase3d-plan.md) | Phase 3D 上游执行策略约束计划 | BizWorker implementer / Navigator reviewer / Python integration developer |
 | [15-bizworker-upstream-execution-policy-phase3d-progress.md](./15-bizworker-upstream-execution-policy-phase3d-progress.md) | Phase 3D 上游执行策略约束进展与测试证据 | BizWorker implementer / Navigator reviewer |
 | [16-navigator-java-adapter-skill-name-execution-policy-progress.md](./16-navigator-java-adapter-skill-name-execution-policy-progress.md) | Navigator Java adapter 衔接 `skill_name` 与上游执行策略 | Navigator implementer / BizWorker reviewer |
+| [17-navigator-skill-name-compatibility-narrowing-progress.md](./17-navigator-skill-name-compatibility-narrowing-progress.md) | Navigator Java adapter 收窄 legacy skill alias 兼容层 | Navigator implementer / BizWorker reviewer |
 
 ## 当前状态
 
@@ -50,5 +51,6 @@
 | Phase 3C integration | implemented | 已补 standalone status、使用手册、外部项目 sample 与测试 |
 | Phase 3D execution policy | implemented | 已支持上游 `workdir`、`allowed_dirs`、`allowed_tools` 归一化、工具暴露过滤、tool call 二次校验与 provider context 注入 |
 | Java adapter contract | implemented | Navigator Java 已向 BizWorker 发送 top-level `skill_name`，并通过 hidden `runtimeContext.execution_policy` 透传上游 `workdir`、`allowed_dirs`、`allowed_tools` |
-| Coding | implemented | Phase 1/Phase 2 facade、Phase 3A service route、Phase 3B provider config、Phase 3C integration docs/sample/status、Phase 3D execution policy、Java adapter contract 已完成 |
-| Testing | passed | Phase 3D targeted suite: 18 passed；BizWorker full suite: 513 passed, 6 skipped；Java adapter targeted suite: 87 passed |
+| Java skill alias narrowing | implemented | providerConfig canonical `skill_name`，legacy inbound `skill_id` / `skillId` 仅作为 deprecated fallback 且冲突即拒绝 |
+| Coding | implemented | Phase 1/Phase 2 facade、Phase 3A service route、Phase 3B provider config、Phase 3C integration docs/sample/status、Phase 3D execution policy、Java adapter contract、skill alias narrowing 已完成 |
+| Testing | passed | Phase 3D targeted suite: 18 passed；BizWorker full suite: 513 passed, 6 skipped；Java adapter targeted suite: 87 passed；skill alias narrowing targeted suite: 29 passed |

@@ -7,6 +7,7 @@ import com.foggy.navigator.agent.framework.protocol.AgentMessage;
 import com.foggy.navigator.agent.framework.protocol.MessageType;
 import com.foggy.navigator.common.dto.LlmModelConfigDTO;
 import com.foggy.navigator.langgraph.worker.model.entity.LanggraphWorkerEntity;
+import com.foggy.navigator.langgraph.worker.support.LanggraphSkillNameContract;
 import com.foggy.navigator.session.event.SessionEventListener;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import lombok.RequiredArgsConstructor;
@@ -78,7 +79,7 @@ public class LanggraphStreamRelay {
                     workerId
             );
             Integer maxTurns = positiveInteger(firstPresent(event.getProviderConfig(), "maxTurns", "max_turns"));
-            String skillName = textValue(firstPresent(event.getProviderConfig(), "skill_name", "skillName", "skill_id", "skillId"));
+            String skillName = resolveSkillName(event.getProviderConfig(), "worker start event providerConfig");
 
             Disposable subscription = client.streamQuery(
                     event.getPrompt(),
@@ -156,11 +157,9 @@ public class LanggraphStreamRelay {
         return null;
     }
 
-    private String textValue(Object value) {
-        if (value instanceof String text && StringUtils.hasText(text)) {
-            return text.trim();
-        }
-        return null;
+    private String resolveSkillName(Map<String, Object> values, String source) {
+        return LanggraphSkillNameContract.resolve(values, (key, ignored) ->
+                log.warn("Deprecated LangGraph skill alias '{}' received from {}; use 'skill_name'", key, source));
     }
 
     private Object firstPresent(Map<String, Object> values, String... keys) {

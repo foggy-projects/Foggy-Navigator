@@ -5,7 +5,9 @@ import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.langgraph.worker.model.dto.LanggraphTaskDTO;
 import com.foggy.navigator.langgraph.worker.model.form.CreateLanggraphTaskForm;
 import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
+import com.foggy.navigator.langgraph.worker.support.LanggraphSkillNameContract;
 import com.foggy.navigator.spi.agent.InnerA2aAgent;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -18,6 +20,7 @@ import java.util.Optional;
  * <p>
  * Phase 1: simplified — no dedup, no session-busy check.
  */
+@Slf4j
 class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
     private final CodingAgentEntity entity;
@@ -47,7 +50,7 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         form.setAgentId(entity.getAgentId());
-        form.setSkillName(firstText(firstPresent(meta, "skill_name", "skillName", "skill_id", "skillId"), null));
+        form.setSkillName(resolveSkillName(meta, "A2A metadata"));
         form.setWorkerId(workerId);
         form.setPrompt(prompt);
         form.setDirectoryId(entity.getDefaultDirectoryId());
@@ -148,6 +151,11 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
             return value;
         }
         return fallback;
+    }
+
+    private String resolveSkillName(Map<String, Object> values, String source) {
+        return LanggraphSkillNameContract.resolve(values, (key, ignored) ->
+                log.warn("Deprecated LangGraph skill alias '{}' received from {}; use 'skill_name'", key, source));
     }
 
     private Object firstPresent(Map<String, Object> meta, String... keys) {

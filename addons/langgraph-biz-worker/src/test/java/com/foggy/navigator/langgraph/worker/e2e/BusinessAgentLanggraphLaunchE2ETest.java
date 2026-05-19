@@ -187,6 +187,7 @@ class BusinessAgentLanggraphLaunchE2ETest {
         assertEquals(TENANT, event.getTenantId());
         assertEquals(LanggraphTaskService.PROVIDER_TYPE, event.getProviderType());
         assertEquals(MODEL_CONFIG_ID, event.getProviderConfigString("modelConfigId"));
+        assertEquals(SKILL_ID, event.getProviderConfigString("skill_name"));
         assertEquals(SKILL_ID, event.getProviderConfigString("skillName"));
         assertTrue(event.getPrompt().contains(created.getTaskId()));
         assertFalse(event.getPrompt().contains(SKILL_ID));

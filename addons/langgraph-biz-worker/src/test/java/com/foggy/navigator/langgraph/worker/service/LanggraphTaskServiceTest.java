@@ -22,6 +22,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -142,7 +143,51 @@ class LanggraphTaskServiceTest {
             assertEquals("claude-sonnet", event.getModel());
             assertEquals("cfg-langgraph", event.getProviderConfigString("modelConfigId"));
             assertEquals(Integer.valueOf(12), event.getProviderConfigValue("maxTurns"));
+            assertEquals("tms.navigator.agent", event.getProviderConfigString("skill_name"));
             assertEquals("tms.navigator.agent", event.getProviderConfigString("skillName"));
+        }
+
+        @Test
+        void createTaskDirect_accepts_legacy_skill_alias_and_publishes_canonical_skillName() {
+            var savedTask = new java.util.concurrent.atomic.AtomicReference<LanggraphTaskEntity>();
+            when(taskRepository.save(any(LanggraphTaskEntity.class))).thenAnswer(inv -> {
+                LanggraphTaskEntity entity = inv.getArgument(0);
+                savedTask.set(entity);
+                return entity;
+            });
+            when(taskRepository.findByTaskId(anyString())).thenAnswer(invocation -> {
+                LanggraphTaskEntity entity = savedTask.get();
+                return entity != null && invocation.getArgument(0).equals(entity.getTaskId())
+                        ? Optional.of(entity)
+                        : Optional.empty();
+            });
+
+            Map<String, Object> params = directTaskParams();
+            params.put("skill_id", "legacy.skill");
+
+            service.createTaskDirect(params, USER_ID, TENANT_ID);
+
+            ArgumentCaptor<WorkerTaskStartEvent> captor =
+                    ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
+            verify(eventPublisher).publishEvent(captor.capture());
+
+            WorkerTaskStartEvent event = captor.getValue();
+            assertEquals("legacy.skill", event.getProviderConfigString("skill_name"));
+            assertEquals("legacy.skill", event.getProviderConfigString("skillName"));
+        }
+
+        @Test
+        void createTaskDirect_rejects_conflicting_skill_aliases() {
+            Map<String, Object> params = directTaskParams();
+            params.put("skill_name", "canonical.skill");
+            params.put("skill_id", "legacy.skill");
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> service.createTaskDirect(params, USER_ID, TENANT_ID));
+
+            assertEquals("skill_name aliases must resolve to the same value", error.getMessage());
+            verify(eventPublisher, never()).publishEvent(any());
+            verify(taskRepository, never()).save(any());
         }
 
         @Test
@@ -230,6 +275,17 @@ class LanggraphTaskServiceTest {
                             && eventCaptor.getValue().getTaskId().equals(message.getTaskId())
             ));
         }
+    }
+
+    private Map<String, Object> directTaskParams() {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("agentId", AGENT_ID);
+        params.put("workerId", WORKER_ID);
+        params.put("prompt", "分析异常订单");
+        params.put("sessionId", SESSION_ID);
+        params.put("model", "claude-sonnet");
+        params.put("modelConfigId", "cfg-langgraph");
+        return params;
     }
 
     // -- Status transitions --------------------------------------------------
