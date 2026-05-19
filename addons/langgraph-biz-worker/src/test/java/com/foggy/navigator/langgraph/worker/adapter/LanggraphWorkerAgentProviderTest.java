@@ -3,6 +3,7 @@ package com.foggy.navigator.langgraph.worker.adapter;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.langgraph.worker.repository.LanggraphCodingAgentRepository;
 import com.foggy.navigator.langgraph.worker.service.LanggraphTaskService;
+import com.foggy.navigator.langgraph.worker.service.LanggraphWorkerService;
 import com.foggy.navigator.spi.agent.AgentResolveContext;
 import com.foggy.navigator.spi.config.LlmModelManager;
 import org.junit.jupiter.api.Test;
@@ -12,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
@@ -22,6 +24,8 @@ class LanggraphWorkerAgentProviderTest {
     private LanggraphCodingAgentRepository agentRepository;
     @Mock
     private LanggraphTaskService taskService;
+    @Mock
+    private LanggraphWorkerService workerService;
     @Mock
     private LlmModelManager llmModelManager;
 
@@ -36,10 +40,12 @@ class LanggraphWorkerAgentProviderTest {
 
         when(agentRepository.findByAgentIdAndTenantId("tms-x3-agent-v305", "tenant-tms"))
                 .thenReturn(Optional.of(entity));
+        when(workerService.resolveTaskWorkerId(null)).thenReturn("worker_01");
 
         LanggraphWorkerAgentProvider provider = new LanggraphWorkerAgentProvider(
                 agentRepository,
                 taskService,
+                workerService,
                 llmModelManager,
                 null);
 
@@ -51,6 +57,38 @@ class LanggraphWorkerAgentProviderTest {
 
         assertTrue(result.isPresent());
         verify(agentRepository).findByAgentIdAndTenantId("tms-x3-agent-v305", "tenant-tms");
+        verify(workerService).resolveTaskWorkerId(null);
         verify(agentRepository, never()).findByAgentId("tms-x3-agent-v305");
+    }
+
+    @Test
+    void resolveOpenApiAgentReportsMissingDefaultWorker() {
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId("tms-x3-agent-v305");
+        entity.setTenantId("tenant-tms");
+        entity.setUserId("control-user");
+        entity.setName("TMS Agent");
+        entity.setAgentType("LOCAL_LANGGRAPH_WORKER");
+
+        when(agentRepository.findByAgentIdAndTenantId("tms-x3-agent-v305", "tenant-tms"))
+                .thenReturn(Optional.of(entity));
+        when(workerService.resolveTaskWorkerId(null))
+                .thenThrow(new IllegalStateException("No LangGraph BizWorker is registered"));
+
+        LanggraphWorkerAgentProvider provider = new LanggraphWorkerAgentProvider(
+                agentRepository,
+                taskService,
+                workerService,
+                llmModelManager,
+                null);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class, () ->
+                provider.resolveAgent("tms-x3-agent-v305", AgentResolveContext.builder()
+                        .tenantId("tenant-tms")
+                        .userId("upstream-user")
+                        .requestSource("OPEN_API")
+                        .build()));
+
+        assertTrue(error.getMessage().contains("No LangGraph BizWorker"));
     }
 }

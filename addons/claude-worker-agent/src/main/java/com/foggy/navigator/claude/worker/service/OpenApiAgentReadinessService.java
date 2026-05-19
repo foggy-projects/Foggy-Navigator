@@ -36,6 +36,7 @@ public class OpenApiAgentReadinessService {
     private final ClientAppUserGrantService userGrantService;
     private final ClientAppModelConfigGrantService modelConfigGrantService;
     private final ClientAppUpstreamRouteService upstreamRouteService;
+    private final OpenApiAgentRouteService agentRouteService;
     private final Environment environment;
 
     public AgentReadinessDTO verify(
@@ -50,7 +51,6 @@ public class OpenApiAgentReadinessService {
             throw new IllegalArgumentException("client app access token is required");
         }
         AgentReadinessPreflightForm safeForm = form == null ? new AgentReadinessPreflightForm() : form;
-        String requestedSkillId = resolveSkillId(agentId, safeForm.getContext());
 
         AgentReadinessDTO result = new AgentReadinessDTO();
         result.setBaseUrl(baseUrl);
@@ -63,18 +63,24 @@ public class OpenApiAgentReadinessService {
                 credential.getTenantId(), credential.getClientAppId());
         result.setClientAppName(app.getName());
 
-        if (!agentId.equals(requestedSkillId)) {
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route;
+        try {
+            route = agentRouteService.resolve(agentId, credential);
+            result.getChecks().add(AgentReadinessCheckDTO.ok(
+                    "ROOT_AGENT_BINDING",
+                    route.legacySkillRoute() ? "legacy skill route resolved" : "root agent binding resolved"));
+        } catch (Exception e) {
             result.getChecks().add(AgentReadinessCheckDTO.fail(
-                    "ROUTE_SKILL_MISMATCH",
-                    "URL agentId must match context.skillId"));
+                    "ROOT_AGENT_BINDING",
+                    sanitize(e.getMessage())));
             result.refreshOverallStatus();
             return result;
         }
 
         addCheck(result, "AGENT_REGISTERED", () -> requireAgent(
-                agentId, credential.getTenantId(), safeForm.getModelConfigId()));
+                route.agentId(), credential.getTenantId(), safeForm.getModelConfigId()));
         addCheck(result, "CLIENT_APP_SKILL_GRANT", () -> skillRegistryService.checkClientAppSkillAccess(
-                credential.getTenantId(), credential.getClientAppId(), agentId));
+                credential.getTenantId(), credential.getClientAppId(), route.skillId()));
         if (StringUtils.hasText(safeForm.getUpstreamUserId())) {
             addCheck(result, "UPSTREAM_USER_GRANT", () -> userGrantService.checkUpstreamUserAccess(
                     credential.getTenantId(), credential.getClientAppId(), safeForm.getUpstreamUserId()));
@@ -93,8 +99,8 @@ public class OpenApiAgentReadinessService {
         if (isCheckOk(result, "CLIENT_APP_SKILL_GRANT")) {
             SkillArtifactLinkDTO link = new SkillArtifactLinkDTO();
             link.setAvailable(true);
-            link.setTreeUrl("/api/v1/open/skills/" + agentId + "/files/tree");
-            link.setSliceUrlTemplate("/api/v1/open/skills/" + agentId
+            link.setTreeUrl("/api/v1/open/skills/" + route.skillId() + "/files/tree");
+            link.setSliceUrlTemplate("/api/v1/open/skills/" + route.skillId()
                     + "/files/slice?path={path}&startLine={startLine}&startColumn={startColumn}&maxChars={maxChars}");
             result.setSkillArtifact(link);
         }
@@ -216,18 +222,6 @@ public class OpenApiAgentReadinessService {
                 refs.add(part.trim());
             }
         }
-    }
-
-    private String resolveSkillId(String agentId, Map<String, Object> context) {
-        if (context == null) {
-            return agentId;
-        }
-        Object value = context.get("skillId");
-        if (value == null) {
-            return agentId;
-        }
-        String skillId = String.valueOf(value);
-        return StringUtils.hasText(skillId) ? skillId : agentId;
     }
 
     private void requireAgent(String agentId, String tenantId, String modelConfigId) {

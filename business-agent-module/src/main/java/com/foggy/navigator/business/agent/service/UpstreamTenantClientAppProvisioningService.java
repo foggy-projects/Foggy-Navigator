@@ -216,16 +216,16 @@ public class UpstreamTenantClientAppProvisioningService {
         entity.setName(defaultText(form.getTenantName(), clientApp.getName() + " root agent"));
         entity.setDescription("Upstream tenant root agent for ClientApp " + clientApp.getClientAppId());
         entity.setAgentType(BusinessAgentBundleService.AGENT_TYPE_LANGGRAPH);
-        entity.setWorkerId(trimToNull(form.getWorkerPoolId(), 64));
+        String explicitWorkerId = trimToNull(form.getWorkerPoolId(), 64);
+        if (StringUtils.hasText(explicitWorkerId)) {
+            entity.setWorkerId(explicitWorkerId);
+        }
         entity.setDefaultModelConfigId(modelConfigId);
         entity.setSkills(buildSkillSummary(skillId, entity.getName(), entity.getDescription()));
         entity.setAgentProfile(buildAgentProfile(clientApp.getClientAppId(), skillId, form));
         agentRepository.save(entity);
         if (!StringUtils.hasText(modelConfigId)) {
             blockers.add("root agent was ensured without defaultModelConfigId; readiness will fail until a model grant is configured");
-        }
-        if (!StringUtils.hasText(form.getWorkerPoolId())) {
-            blockers.add("workerPoolId is missing; local LangGraph worker routing may be unavailable");
         }
         return rootAgentId;
     }

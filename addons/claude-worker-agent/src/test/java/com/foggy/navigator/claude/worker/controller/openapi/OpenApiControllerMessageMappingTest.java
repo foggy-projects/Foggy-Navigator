@@ -160,8 +160,8 @@ class OpenApiControllerMessageMappingTest {
                 "cfg-1"));
         form.setAttachments(topLevelAttachments);
 
-        when(credentialResolver.resolveAccessTokenForSkill(
-                nullable(String.class), nullable(String.class), eq("agent-1")))
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
         when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
         when(agent.sendTask(any())).thenReturn(A2aTask.builder()
@@ -196,8 +196,8 @@ class OpenApiControllerMessageMappingTest {
         form.setMessage("结合附件分析表单");
         form.setMetadata(Map.of("attachments", metadataAttachments));
 
-        when(credentialResolver.resolveAccessTokenForSkill(
-                nullable(String.class), nullable(String.class), eq("agent-1")))
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
         when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
         when(agent.sendTask(any())).thenReturn(A2aTask.builder()
@@ -225,8 +225,8 @@ class OpenApiControllerMessageMappingTest {
         form.setModelConfigId("cfg-top-level");
         form.setMetadata(Map.of("modelConfigId", "cfg-metadata"));
 
-        when(credentialResolver.resolveAccessTokenForSkill(
-                nullable(String.class), nullable(String.class), eq("agent-1")))
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
         when(agentResolver.resolveAgent(eq("agent-1"), argThat(ctx ->
                 "cfg-top-level".equals(ctx.getModelConfigId())))).thenReturn(Optional.of(agent));
@@ -256,8 +256,8 @@ class OpenApiControllerMessageMappingTest {
         form.setMessage("创建车辆并走审批");
 
         when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
-        when(credentialResolver.resolveAccessTokenForSkill(
-                nullable(String.class), nullable(String.class), eq("agent-1")))
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
         when(taskService.issueOpenApiTaskScopedToken(
                 eq("tenant-1"),
@@ -291,6 +291,65 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void askAgent_usesRootAgentRouteAndDerivedSkillForBusinessRuntime() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        BusinessAgentTaskService taskService = mock(BusinessAgentTaskService.class);
+        OpenApiAgentRouteService routeService = mock(OpenApiAgentRouteService.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(
+                agentResolver,
+                credentialResolver,
+                null,
+                taskService,
+                mock(CodingAgentRepository.class),
+                mock(OpenApiSessionQueryService.class),
+                routeService);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("查询派车状态");
+
+        when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(routeService.resolve(eq("root-agent"), any(ResolvedClientAppCredentialDTO.class)))
+                .thenReturn(new OpenApiAgentRouteService.ResolvedOpenApiAgentRoute(
+                        "root-agent",
+                        "tms.navigator.agent",
+                        "app-1",
+                        true,
+                        false));
+        when(taskService.issueOpenApiTaskScopedToken(
+                eq("tenant-1"),
+                eq("app-1"),
+                eq("app-1"),
+                eq("upstream-a"),
+                eq("tms.navigator.agent"),
+                any(),
+                nullable(String.class)))
+                .thenReturn("btt_open_api_1");
+        when(agentResolver.resolveAgent(eq("root-agent"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("root-agent", form, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> context = (Map<String, Object>) captor.getValue().getMetadata().get("context");
+        assertEquals("root-agent", context.get("rootAgentId"));
+        assertEquals("tms.navigator.agent", context.get("businessSkillId"));
+        verify(credentialResolver, never()).resolveAccessTokenForSkill(
+                nullable(String.class), nullable(String.class), eq("root-agent"));
+    }
+
+    @Test
     void askAgent_rejectsContextIdWithoutUpstreamUserId() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
@@ -300,8 +359,8 @@ class OpenApiControllerMessageMappingTest {
         form.setMessage("继续处理");
         form.setContextId("ctx-1");
 
-        when(credentialResolver.resolveAccessTokenForSkill(
-                nullable(String.class), nullable(String.class), eq("agent-1")))
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
 
         RuntimeException error = assertThrows(
@@ -333,8 +392,8 @@ class OpenApiControllerMessageMappingTest {
         form.setContextId("ctx-1");
 
         when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-b");
-        when(credentialResolver.resolveAccessTokenForSkill(
-                nullable(String.class), nullable(String.class), eq("agent-1")))
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
         when(sessionService.getSession("tenant-1", "app-1", "upstream-b", "ctx-1"))
                 .thenThrow(new IllegalArgumentException("business agent session not found: ctx-1"));
@@ -369,8 +428,8 @@ class OpenApiControllerMessageMappingTest {
         form.setContextId("ctx-1");
 
         when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
-        when(credentialResolver.resolveAccessTokenForSkill(
-                nullable(String.class), nullable(String.class), eq("agent-1")))
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
         when(sessionService.getSession("tenant-1", "app-1", "upstream-a", "ctx-1"))
                 .thenReturn(new BusinessAgentSessionDTO());
@@ -472,6 +531,37 @@ class OpenApiControllerMessageMappingTest {
             BusinessAgentTaskService taskService,
             CodingAgentRepository codingAgentRepository,
             OpenApiSessionQueryService sessionQueryService) {
+        OpenApiAgentRouteService routeService = mock(OpenApiAgentRouteService.class);
+        when(routeService.resolve(any(String.class), any(ResolvedClientAppCredentialDTO.class)))
+                .thenAnswer(invocation -> {
+                    String routeAgentId = invocation.getArgument(0);
+                    ResolvedClientAppCredentialDTO credential = invocation.getArgument(1);
+                    return new OpenApiAgentRouteService.ResolvedOpenApiAgentRoute(
+                            routeAgentId,
+                            routeAgentId,
+                            credential.getClientAppId(),
+                            false,
+                            true);
+                });
+        return newController(
+                agentResolver,
+                credentialResolver,
+                sessionService,
+                taskService,
+                codingAgentRepository,
+                sessionQueryService,
+                routeService);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private OpenApiController newController(
+            UnifiedAgentResolver agentResolver,
+            ClientAppRuntimeCredentialResolver credentialResolver,
+            BusinessAgentSessionService sessionService,
+            BusinessAgentTaskService taskService,
+            CodingAgentRepository codingAgentRepository,
+            OpenApiSessionQueryService sessionQueryService,
+            OpenApiAgentRouteService routeService) {
         ObjectProvider<ClientAppRuntimeCredentialResolver> credentialProvider = mock(ObjectProvider.class);
         when(credentialProvider.getIfAvailable()).thenReturn(credentialResolver);
         ObjectProvider<BusinessAgentTaskService> taskProvider = mock(ObjectProvider.class);
@@ -492,6 +582,7 @@ class OpenApiControllerMessageMappingTest {
                 mock(TaskStateReconciler.class),
                 sessionQueryService,
                 new ObjectMapper(),
+                routeService,
                 credentialProvider,
                 taskProvider,
                 mock(ObjectProvider.class),

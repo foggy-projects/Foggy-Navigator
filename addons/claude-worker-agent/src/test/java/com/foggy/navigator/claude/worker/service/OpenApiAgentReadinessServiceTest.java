@@ -31,6 +31,7 @@ class OpenApiAgentReadinessServiceTest {
     private ClientAppUserGrantService userGrantService;
     private ClientAppModelConfigGrantService modelConfigGrantService;
     private ClientAppUpstreamRouteService upstreamRouteService;
+    private OpenApiAgentRouteService agentRouteService;
     private Environment environment;
     private OpenApiAgentReadinessService service;
 
@@ -42,6 +43,7 @@ class OpenApiAgentReadinessServiceTest {
         userGrantService = mock(ClientAppUserGrantService.class);
         modelConfigGrantService = mock(ClientAppModelConfigGrantService.class);
         upstreamRouteService = mock(ClientAppUpstreamRouteService.class);
+        agentRouteService = mock(OpenApiAgentRouteService.class);
         environment = mock(Environment.class);
         service = new OpenApiAgentReadinessService(
                 agentResolver,
@@ -50,6 +52,7 @@ class OpenApiAgentReadinessServiceTest {
                 userGrantService,
                 modelConfigGrantService,
                 upstreamRouteService,
+                agentRouteService,
                 environment);
 
         ClientAppEntity app = new ClientAppEntity();
@@ -60,6 +63,13 @@ class OpenApiAgentReadinessServiceTest {
                 .thenReturn(Optional.of(mock(A2aAgent.class)));
         when(modelConfigGrantService.resolveEffectiveModelConfigId("tenant_1", "capp_1", "model_1"))
                 .thenReturn("model_1");
+        when(agentRouteService.resolve(eq("world-sim.bug-coordinator.decision.v1"), any()))
+                .thenReturn(new OpenApiAgentRouteService.ResolvedOpenApiAgentRoute(
+                        "world-sim.bug-coordinator.decision.v1",
+                        "world-sim.bug-coordinator.decision.v1",
+                        "capp_1",
+                        true,
+                        false));
     }
 
     @Test
@@ -78,7 +88,7 @@ class OpenApiAgentReadinessServiceTest {
         assertEquals("OK", result.getOverallStatus());
         assertEquals("model_1", result.getEffectiveModelConfigId());
         assertNotNull(result.getSkillArtifact());
-        assertEquals(4, result.getChecks().size());
+        assertEquals(5, result.getChecks().size());
         assertTrue(result.getChecks().stream().allMatch(check -> "OK".equals(check.getStatus())));
         verify(skillRegistryService).checkClientAppSkillAccess(
                 "tenant_1", "capp_1", "world-sim.bug-coordinator.decision.v1");
@@ -86,7 +96,56 @@ class OpenApiAgentReadinessServiceTest {
     }
 
     @Test
-    void verify_failsClosedWhenRouteSkillMismatch() {
+    void verify_usesRootAgentRouteAndDerivedSkillGrant() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_1");
+        form.setContext(Map.of("skillId", "tms.navigator.agent"));
+
+        when(agentRouteService.resolve(eq("root-agent"), any()))
+                .thenReturn(new OpenApiAgentRouteService.ResolvedOpenApiAgentRoute(
+                        "root-agent",
+                        "tms.navigator.agent",
+                        "capp_1",
+                        true,
+                        false));
+        when(agentResolver.resolveAgent(eq("root-agent"), any(AgentResolveContext.class)))
+                .thenReturn(Optional.of(mock(A2aAgent.class)));
+
+        AgentReadinessDTO result = service.verify(
+                "root-agent",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("OK", result.getOverallStatus());
+        assertEquals("/api/v1/open/skills/tms.navigator.agent/files/tree",
+                result.getSkillArtifact().getTreeUrl());
+        verify(skillRegistryService).checkClientAppSkillAccess(
+                "tenant_1", "capp_1", "tms.navigator.agent");
+        verify(agentResolver).resolveAgent(eq("root-agent"), any(AgentResolveContext.class));
+    }
+
+    @Test
+    void verify_reportsRootAgentBindingFailure() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        when(agentRouteService.resolve(eq("root-agent"), any()))
+                .thenThrow(new IllegalArgumentException("Agent is not bound to this ClientApp: root-agent"));
+
+        AgentReadinessDTO result = service.verify(
+                "root-agent",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        assertEquals("ROOT_AGENT_BINDING", result.getChecks().get(0).getCode());
+        assertTrue(result.getChecks().get(0).getMessage().contains("not bound"));
+        verifyNoInteractions(agentResolver, skillRegistryService, userGrantService, modelConfigGrantService);
+    }
+
+    @Test
+    void verify_acceptsContextSkillIdAsDiagnosticOnly() {
         AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
         form.setContext(Map.of("skillId", "other-skill"));
 
@@ -96,9 +155,10 @@ class OpenApiAgentReadinessServiceTest {
                 credential(),
                 "http://localhost:8112");
 
-        assertEquals("FAIL", result.getOverallStatus());
-        assertEquals("ROUTE_SKILL_MISMATCH", result.getChecks().get(0).getCode());
-        verifyNoInteractions(agentResolver, skillRegistryService, userGrantService, modelConfigGrantService);
+        assertTrue(result.getChecks().stream().noneMatch(check ->
+                "ROUTE_SKILL_MISMATCH".equals(check.getCode())));
+        verify(skillRegistryService).checkClientAppSkillAccess(
+                "tenant_1", "capp_1", "world-sim.bug-coordinator.decision.v1");
     }
 
     @Test

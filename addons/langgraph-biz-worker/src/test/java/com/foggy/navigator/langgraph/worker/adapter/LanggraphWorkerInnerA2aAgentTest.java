@@ -41,7 +41,7 @@ class LanggraphWorkerInnerA2aAgentTest {
         entity.setDefaultModelConfigId("model_default");
         entity.setDefaultModel("sonnet");
 
-        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService);
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
         message.setContextId("ctx_01");
         message.setMetadata(Map.of("runtimeContext", Map.of("task_scoped_token", "btt_01")));
@@ -74,7 +74,7 @@ class LanggraphWorkerInnerA2aAgentTest {
         entity.setDefaultModelConfigId("model_default");
         entity.setDefaultModel("sonnet");
 
-        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService);
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
         message.setMetadata(Map.of("modelConfigId", "model_override", "model", "opus", "maxTurns", 12));
 
@@ -89,5 +89,33 @@ class LanggraphWorkerInnerA2aAgentTest {
         assertEquals("model_override", captor.getValue().getModelConfigId());
         assertEquals("opus", captor.getValue().getModel());
         assertEquals(12, captor.getValue().getMaxTurns());
+    }
+
+    @Test
+    void sendTask_usesResolvedWorkerIdInsteadOfAgentStoredWorkerId() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        when(taskService.createTask(eq("admin_01"), eq("tenant_01"), any(CreateLanggraphTaskForm.class)))
+                .thenReturn(LanggraphTaskDTO.builder()
+                        .taskId("lgt_01")
+                        .sessionId("session_01")
+                        .workerId("worker_default")
+                        .build());
+
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setAgentId("agent_01");
+        entity.setName("Agent");
+        entity.setUserId("admin_01");
+        entity.setTenantId("tenant_01");
+        entity.setWorkerId("old_pool_id");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_default");
+        agent.sendTask(A2aContext.builder()
+                .message(A2aMessage.user(List.of(A2aPart.text("hello"))))
+                .contextId("ctx_01")
+                .build());
+
+        ArgumentCaptor<CreateLanggraphTaskForm> captor = ArgumentCaptor.forClass(CreateLanggraphTaskForm.class);
+        verify(taskService).createTask(eq("admin_01"), eq("tenant_01"), captor.capture());
+        assertEquals("worker_default", captor.getValue().getWorkerId());
     }
 }

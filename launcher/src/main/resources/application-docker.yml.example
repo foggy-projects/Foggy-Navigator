@@ -17,6 +17,12 @@ spring:
         dialect: org.hibernate.dialect.MySQLDialect
         format_sql: true
 
+navigator:
+  langgraph:
+    worker:
+      # Set when multiple LangGraph BizWorkers are registered in one Navigator instance.
+      default-worker-id: ${NAVIGATOR_LANGGRAPH_WORKER_DEFAULT_WORKER_ID:}
+
 # 日志配置
 logging:
   level:

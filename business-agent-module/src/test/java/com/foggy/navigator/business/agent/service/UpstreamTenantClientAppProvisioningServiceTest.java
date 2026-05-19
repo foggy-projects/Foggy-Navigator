@@ -131,6 +131,32 @@ class UpstreamTenantClientAppProvisioningServiceTest {
     }
 
     @Test
+    void ensureWithoutWorkerPoolDoesNotBlockSingleBizWorkerMvpRouting() {
+        EnsureUpstreamTenantClientAppForm form = form(false);
+        form.setWorkerPoolId(null);
+
+        var result = service.ensure(form, "operator-1");
+        CodingAgentEntity rootAgent = agentsByKey.get(agentKey("tms-root-agent", "nav_tms_3"));
+
+        assertNull(result.getWorkerPoolId());
+        assertNotNull(rootAgent);
+        assertNull(rootAgent.getWorkerId());
+        assertTrue(result.getBlockers().isEmpty());
+    }
+
+    @Test
+    void ensureWithoutWorkerPoolDoesNotClearExistingRootAgentWorker() {
+        service.ensure(form(false), "operator-1");
+        EnsureUpstreamTenantClientAppForm withoutWorkerPool = form(false);
+        withoutWorkerPool.setWorkerPoolId(null);
+
+        service.ensure(withoutWorkerPool, "operator-1");
+
+        CodingAgentEntity rootAgent = agentsByKey.get(agentKey("tms-root-agent", "nav_tms_3"));
+        assertEquals("biz-worker", rootAgent.getWorkerId());
+    }
+
+    @Test
     void ensureReturnsBlockerWhenDefaultModelGrantIsMissing() {
         when(modelConfigGrantService.resolveEffectiveModelConfigId(anyString(), anyString(), isNull()))
                 .thenThrow(new IllegalArgumentException("default model config grant is required"));

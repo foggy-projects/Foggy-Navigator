@@ -83,6 +83,7 @@ public class OpenApiController {
     private final TaskStateReconciler reconciler;
     private final OpenApiSessionQueryService sessionQueryService;
     private final ObjectMapper objectMapper;
+    private final OpenApiAgentRouteService agentRouteService;
     private final ObjectProvider<ClientAppRuntimeCredentialResolver> clientAppCredentialResolver;
     private final ObjectProvider<BusinessAgentTaskService> businessAgentTaskService;
     private final ObjectProvider<OpenApiAgentReadinessService> agentReadinessService;
@@ -467,7 +468,9 @@ public class OpenApiController {
             @PathVariable String agentId,
             @RequestBody OpenApiQueryForm form,
             HttpServletRequest request) {
-        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                requireOpenApiAgentRoute(agentId, clientAppCredential);
         String tenantId = clientAppCredential.getTenantId();
         String upstreamUserId = firstHeader(request,
                 "X-Upstream-User-Id",
@@ -495,8 +498,8 @@ public class OpenApiController {
                 .modelConfigId(modelConfigId)
                 .requestSource("OPEN_API")
                 .build();
-        A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
-                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+        A2aAgent agent = agentResolver.resolveAgent(route.agentId(), ctx)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + route.agentId()));
 
         String clientContextJson = serializeClientContext(form.getClientContext());
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text(messageContent)));
@@ -527,7 +530,8 @@ public class OpenApiController {
         if (form.getFirstMsg() != null && !form.getFirstMsg().isBlank()) {
             metadata.put("firstMsg", form.getFirstMsg());
         }
-        String businessRuntimeToken = enrichBusinessRuntimeContext(tenantId, metadata, agentId, clientAppCredential, request, contextId);
+        String businessRuntimeToken = enrichBusinessRuntimeContext(
+                tenantId, metadata, route.agentId(), route.skillId(), clientAppCredential, request, contextId);
         if (!metadata.isEmpty()) {
             message.setMetadata(metadata);
         }
@@ -536,22 +540,23 @@ public class OpenApiController {
         bindBusinessRuntimeTokenToWorkerTaskIfPossible(tenantId, businessRuntimeToken, task);
         String agentOwnerUserId = null;
         if (clientContextJson != null) {
-            agentOwnerUserId = resolveAgentOwnerUserId(agentId, tenantId);
-            sessionQueryService.updateClientContextJson(contextId, agentOwnerUserId, agentId, clientContextJson);
+            agentOwnerUserId = resolveAgentOwnerUserId(route.agentId(), tenantId);
+            sessionQueryService.updateClientContextJson(contextId, agentOwnerUserId, route.agentId(), clientContextJson);
         }
         bindBusinessAgentSessionIfPossible(
                 tenantId,
                 clientAppCredential.getClientAppId(),
                 upstreamUserId,
-                agentId,
+                route.agentId(),
                 contextId,
                 task,
                 clientContextJson,
                 agentOwnerUserId);
 
-        log.info("Open API askAgent: agentId={}, taskId={}, tenantId={}", agentId, task.getId(), tenantId);
+        log.info("Open API askAgent: agentId={}, skillId={}, taskId={}, tenantId={}",
+                route.agentId(), route.skillId(), task.getId(), tenantId);
 
-        return RX.ok(toOpenApiTaskDTO(task, agentId));
+        return RX.ok(toOpenApiTaskDTO(task, route.agentId()));
     }
 
     private String resolveModelConfigId(OpenApiQueryForm form) {
@@ -782,6 +787,32 @@ public class OpenApiController {
         return resolved;
     }
 
+    private OpenApiAgentRouteService.ResolvedOpenApiAgentRoute requireOpenApiAgentRoute(
+            String routeAgentId,
+            ResolvedClientAppCredentialDTO credential) {
+        try {
+            OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                    agentRouteService.resolve(routeAgentId, credential);
+            validateClientAppSkillAccess(credential, route.skillId());
+            return route;
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw RX.throwB(e.getMessage());
+        }
+    }
+
+    private void validateClientAppSkillAccess(
+            ResolvedClientAppCredentialDTO credential,
+            String skillId) {
+        SkillRegistryService service = skillRegistryService.getIfAvailable();
+        if (service == null || credential == null || !StringUtils.hasText(skillId)) {
+            return;
+        }
+        service.checkClientAppSkillAccess(
+                credential.getTenantId(),
+                credential.getClientAppId(),
+                skillId);
+    }
+
     private String requireUpstreamUserId(HttpServletRequest request) {
         String upstreamUserId = firstHeader(request,
                 "X-Upstream-User-Id",
@@ -815,6 +846,7 @@ public class OpenApiController {
     private String enrichBusinessRuntimeContext(
             String tenantId,
             Map<String, Object> metadata,
+            String rootAgentId,
             String skillId,
             ResolvedClientAppCredentialDTO clientAppCredential,
             HttpServletRequest request,
@@ -834,6 +866,7 @@ public class OpenApiController {
         }
 
         context.putIfAbsent("clientAppId", clientAppCredential.getClientAppId());
+        context.putIfAbsent("rootAgentId", rootAgentId);
         context.putIfAbsent("businessSkillId", skillId);
         context.putIfAbsent("credentialId", clientAppCredential.getCredentialId());
         context.putIfAbsent("auto_inject_app_public_skills", true);
@@ -1002,16 +1035,18 @@ public class OpenApiController {
             @PathVariable String agentId,
             @PathVariable String taskId,
             HttpServletRequest request) {
-        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                requireOpenApiAgentRoute(agentId, clientAppCredential);
         String tenantId = clientAppCredential.getTenantId();
         AgentResolveContext ctx = AgentResolveContext.builder()
                 .tenantId(tenantId).requestSource("OPEN_API").build();
-        A2aAgent agent = agentResolver.resolveAgent(agentId, ctx)
-                .orElseThrow(() -> RX.throwB("Agent not found: " + agentId));
+        A2aAgent agent = agentResolver.resolveAgent(route.agentId(), ctx)
+                .orElseThrow(() -> RX.throwB("Agent not found: " + route.agentId()));
 
         A2aTask task = agent.getTask(taskId)
                 .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
-        return RX.ok(toOpenApiTaskDTO(task, agentId));
+        return RX.ok(toOpenApiTaskDTO(task, route.agentId()));
     }
 
     /**
@@ -1081,14 +1116,16 @@ public class OpenApiController {
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "50") int limit,
             HttpServletRequest request) {
-        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                requireOpenApiAgentRoute(agentId, clientAppCredential);
         String tenantId = clientAppCredential.getTenantId();
-        resolveOpenApiAgent(agentId, tenantId);
+        resolveOpenApiAgent(route.agentId(), tenantId);
 
         // 验证 task 存在并获取 contextId
         SessionTaskEntity taskEntity = sessionQueryService.findTask(taskId)
                 .orElseThrow(() -> RX.throwB("Task not found: " + taskId));
-        if (!tenantId.equals(taskEntity.getTenantId()) || !agentId.equals(taskEntity.getAgentId())) {
+        if (!tenantId.equals(taskEntity.getTenantId()) || !route.agentId().equals(taskEntity.getAgentId())) {
             throw RX.throwB("Task not found: " + taskId);
         }
 
@@ -1133,14 +1170,16 @@ public class OpenApiController {
             @RequestParam(defaultValue = "20") int limit,
             @RequestParam(required = false) String cursor,
             HttpServletRequest request) {
-        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                requireOpenApiAgentRoute(agentId, clientAppCredential);
         String tenantId = clientAppCredential.getTenantId();
-        String userId = resolveAgentOwnerUserId(agentId, tenantId);
-        resolveOpenApiAgent(agentId, tenantId);
+        String userId = resolveAgentOwnerUserId(route.agentId(), tenantId);
+        resolveOpenApiAgent(route.agentId(), tenantId);
 
         int safeLimit = Math.min(Math.max(limit, 1), 100);
         List<AgentConversationContextEntity> contexts = sessionQueryService.listSessions(
-                userId, agentId, cursor, safeLimit);
+                userId, route.agentId(), cursor, safeLimit);
 
         boolean hasMore = contexts.size() > safeLimit;
         List<AgentConversationContextEntity> page = hasMore ? contexts.subList(0, safeLimit) : contexts;
@@ -1153,7 +1192,7 @@ public class OpenApiController {
         Map<String, String> latestTaskMap = sessionQueryService.batchFindLatestTaskIds(sessionIds);
 
         List<OpenSessionSummaryDTO> dtos = page.stream()
-                .map(ctx -> toSessionSummary(ctx, agentId, latestTaskMap))
+                .map(ctx -> toSessionSummary(ctx, route.agentId(), latestTaskMap))
                 .toList();
 
         String nextCursor = page.isEmpty() ? null : page.get(page.size() - 1).getContextId();
@@ -1175,10 +1214,12 @@ public class OpenApiController {
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "50") int limit,
             HttpServletRequest request) {
-        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppAccess(agentId, request);
+        ResolvedClientAppCredentialDTO clientAppCredential = requireClientAppRuntimeToken(request);
+        OpenApiAgentRouteService.ResolvedOpenApiAgentRoute route =
+                requireOpenApiAgentRoute(agentId, clientAppCredential);
         String tenantId = clientAppCredential.getTenantId();
-        String userId = resolveAgentOwnerUserId(agentId, tenantId);
-        resolveOpenApiAgent(agentId, tenantId);
+        String userId = resolveAgentOwnerUserId(route.agentId(), tenantId);
+        resolveOpenApiAgent(route.agentId(), tenantId);
 
         // 解析 contextId → sessionId
         String sessionId = sessionQueryService.resolveSessionId(contextId, userId)

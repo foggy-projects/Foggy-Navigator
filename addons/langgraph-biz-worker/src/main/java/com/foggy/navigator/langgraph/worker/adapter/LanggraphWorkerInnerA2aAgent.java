@@ -22,10 +22,12 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
     private final CodingAgentEntity entity;
     private final LanggraphTaskService taskService;
+    private final String workerId;
 
-    LanggraphWorkerInnerA2aAgent(CodingAgentEntity entity, LanggraphTaskService taskService) {
+    LanggraphWorkerInnerA2aAgent(CodingAgentEntity entity, LanggraphTaskService taskService, String workerId) {
         this.entity = entity;
         this.taskService = taskService;
+        this.workerId = workerId;
     }
 
     @Override
@@ -45,7 +47,7 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
         form.setAgentId(entity.getAgentId());
-        form.setWorkerId(entity.getWorkerId());
+        form.setWorkerId(workerId);
         form.setPrompt(prompt);
         form.setDirectoryId(entity.getDefaultDirectoryId());
         form.setModel(firstText(meta.get("model"), entity.getDefaultModel()));
