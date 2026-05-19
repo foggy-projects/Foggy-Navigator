@@ -126,6 +126,7 @@ class LanggraphTaskServiceTest {
         @Test
         void publishes_worker_task_start_event() {
             CreateLanggraphTaskForm form = makeForm();
+            form.setSkillName("tms.navigator.agent");
             form.setMaxTurns(12);
             service.createTask(USER_ID, TENANT_ID, form);
 
@@ -141,6 +142,7 @@ class LanggraphTaskServiceTest {
             assertEquals("claude-sonnet", event.getModel());
             assertEquals("cfg-langgraph", event.getProviderConfigString("modelConfigId"));
             assertEquals(Integer.valueOf(12), event.getProviderConfigValue("maxTurns"));
+            assertEquals("tms.navigator.agent", event.getProviderConfigString("skillName"));
         }
 
         @Test

@@ -514,6 +514,7 @@ public class OpenApiController {
         }
         metadata.remove("runtimeContext");
         metadata.remove("runtime_context");
+        mergeTopLevelExecutionPolicy(metadata, form);
         Object metadataAttachments = metadata.remove("attachments");
         List<Map<String, Object>> normalizedAttachments = OpenApiAttachmentNormalizer.normalize(
                 metadataAttachments,
@@ -870,6 +871,7 @@ public class OpenApiController {
         context.putIfAbsent("businessSkillId", skillId);
         context.putIfAbsent("credentialId", clientAppCredential.getCredentialId());
         context.putIfAbsent("auto_inject_app_public_skills", true);
+        metadata.putIfAbsent("skill_name", skillId);
 
         String upstreamUserId = firstHeader(request,
                 "X-Upstream-User-Id",
@@ -892,6 +894,58 @@ public class OpenApiController {
 
         metadata.put("context", context);
         return null;
+    }
+
+    private void mergeTopLevelExecutionPolicy(Map<String, Object> metadata, OpenApiQueryForm form) {
+        Map<String, Object> policy = new LinkedHashMap<>();
+        putText(policy, "workdir", form.getWorkdir());
+        putStringList(policy, "allowed_dirs", form.getAllowedDirs());
+        putStringList(policy, "allowed_tools", form.getAllowedTools());
+        if (policy.isEmpty()) {
+            return;
+        }
+
+        Map<String, Object> context = new LinkedHashMap<>();
+        Object rawContext = metadata.get("context");
+        if (rawContext instanceof Map<?, ?> existingContext) {
+            existingContext.forEach((key, value) -> {
+                if (key instanceof String stringKey) {
+                    context.put(stringKey, value);
+                }
+            });
+        }
+
+        Map<String, Object> executionPolicy = new LinkedHashMap<>();
+        Object rawPolicy = context.get("execution_policy");
+        if (rawPolicy instanceof Map<?, ?> existingPolicy) {
+            existingPolicy.forEach((key, value) -> {
+                if (key instanceof String stringKey) {
+                    executionPolicy.put(stringKey, value);
+                }
+            });
+        }
+        executionPolicy.putAll(policy);
+        context.put("execution_policy", executionPolicy);
+        metadata.put("context", context);
+    }
+
+    private void putText(Map<String, Object> target, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            target.put(key, value.trim());
+        }
+    }
+
+    private void putStringList(Map<String, Object> target, String key, List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return;
+        }
+        List<String> cleaned = values.stream()
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .toList();
+        if (!cleaned.isEmpty()) {
+            target.put(key, cleaned);
+        }
     }
 
     private String issueBusinessRuntimeToken(

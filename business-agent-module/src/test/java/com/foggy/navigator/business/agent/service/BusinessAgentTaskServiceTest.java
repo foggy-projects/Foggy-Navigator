@@ -121,6 +121,10 @@ class BusinessAgentTaskServiceTest {
 
     @Test
     void createTask_withWorkerTaskLauncher_bindsWorkerTaskAndRuntimeTokenAlias() {
+        form.setWorkdir("D:/workspace/app");
+        form.setAllowedDirs(List.of("D:/workspace"));
+        form.setAllowedTools(List.of("read_file", "invoke_business_function"));
+
         BusinessAgentTaskService serviceWithLauncher = new BusinessAgentTaskService(
                 taskRepository,
                 tokenRepository,
@@ -170,6 +174,10 @@ class BusinessAgentTaskServiceTest {
         assertEquals(result.getTaskScopedToken(), requestCaptor.getValue().getTaskScopedToken());
         assertEquals("ctx_01", requestCaptor.getValue().getContextId());
         assertEquals("materialized skill body", requestCaptor.getValue().getMarkdownBody());
+        assertEquals("skill_01", requestCaptor.getValue().getSkillName());
+        assertEquals("D:/workspace/app", requestCaptor.getValue().getWorkdir());
+        assertEquals(List.of("D:/workspace"), requestCaptor.getValue().getAllowedDirs());
+        assertEquals(List.of("read_file", "invoke_business_function"), requestCaptor.getValue().getAllowedTools());
 
         ArgumentCaptor<BusinessTaskScopedTokenEntity> tokenCaptor = ArgumentCaptor.forClass(BusinessTaskScopedTokenEntity.class);
         verify(tokenRepository, atLeastOnce()).save(tokenCaptor.capture());
@@ -307,6 +315,15 @@ class BusinessAgentTaskServiceTest {
     void createTask_rejects_blank_skillId() {
         form.setSkillId(null);
         assertThrows(IllegalArgumentException.class, () -> taskService.createTask("tenant_01", "actor_01", form));
+    }
+
+    @Test
+    void createTask_rejectsConflictingSkillAliasDuringCompatibilityPhase() {
+        form.setSkillName("other_skill");
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> taskService.createTask("tenant_01", "actor_01", form));
+        assertTrue(error.getMessage().contains("skillName must match skillId"));
     }
 
     @Test

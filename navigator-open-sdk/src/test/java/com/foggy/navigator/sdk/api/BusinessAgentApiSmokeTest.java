@@ -622,6 +622,10 @@ public class BusinessAgentApiSmokeTest {
         form.setClientAppId("app-456");
         form.setWorkerPoolId("pool-789");
         form.setSkillId("skill-001");
+        form.setSkillName("skill-001");
+        form.setWorkdir("D:/workspace/app");
+        form.setAllowedDirs(List.of("D:/workspace"));
+        form.setAllowedTools(List.of("read_file", "invoke_business_function"));
 
         responseOverride = "{\"taskId\":\"task-123\", \"taskScopedToken\":\"token-xyz\"}"; // naked object
         CreatedBusinessAgentTaskDTO task = client.businessAgent().createBusinessAgentTask(form);
@@ -632,6 +636,10 @@ public class BusinessAgentApiSmokeTest {
         assertEquals("POST", lastMethod);
         assertTrue(lastBody.contains("\"clientAppId\":\"app-456\""));
         assertTrue(lastBody.contains("\"skillId\":\"skill-001\""));
+        assertTrue(lastBody.contains("\"skill_name\":\"skill-001\""));
+        assertTrue(lastBody.contains("\"workdir\":\"D:/workspace/app\""));
+        assertTrue(lastBody.contains("\"allowed_dirs\":[\"D:/workspace\"]"));
+        assertTrue(lastBody.contains("\"allowed_tools\":[\"read_file\",\"invoke_business_function\"]"));
         assertCommon();
     }
 

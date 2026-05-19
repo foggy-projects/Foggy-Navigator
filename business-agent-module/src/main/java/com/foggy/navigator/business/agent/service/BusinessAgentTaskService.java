@@ -54,6 +54,7 @@ public class BusinessAgentTaskService {
         requireText(form.getWorkerPoolId(), "workerPoolId is required");
         requireText(form.getUpstreamUserId(), "upstreamUserId is required");
         requireText(form.getSkillId(), "skillId is required");
+        String skillName = resolveSkillName(form.getSkillId(), form.getSkillName());
 
         // 2. 校验 clientAppId 存在、属于当前 tenant、状态可用
         clientAppService.requireActiveClientApp(tenantId, form.getClientAppId());
@@ -131,7 +132,7 @@ public class BusinessAgentTaskService {
                 .getContextId();
 
         BusinessAgentWorkerTaskLaunchResult launchResult = launchWorkerTaskIfAvailable(
-                tenantId, actorUserId, task, workerPool, plainToken, finalVisionModelConfigId, contextId);
+                tenantId, actorUserId, task, workerPool, plainToken, finalVisionModelConfigId, contextId, skillName, form);
         if (launchResult != null && StringUtils.hasText(launchResult.getWorkerTaskId())) {
             task.setWorkerTaskId(launchResult.getWorkerTaskId());
             task.setWorkerSessionId(launchResult.getWorkerSessionId());
@@ -296,6 +297,18 @@ public class BusinessAgentTaskService {
         }
     }
 
+    private String resolveSkillName(String skillId, String skillName) {
+        String normalizedSkillId = skillId != null ? skillId.trim() : null;
+        if (!StringUtils.hasText(skillName)) {
+            return normalizedSkillId;
+        }
+        String normalizedSkillName = skillName.trim();
+        if (StringUtils.hasText(normalizedSkillId) && !normalizedSkillId.equals(normalizedSkillName)) {
+            throw new IllegalArgumentException("skillName must match skillId during compatibility phase");
+        }
+        return normalizedSkillName;
+    }
+
     private BusinessAgentWorkerTaskLaunchResult launchWorkerTaskIfAvailable(
             String tenantId,
             String actorUserId,
@@ -303,7 +316,9 @@ public class BusinessAgentTaskService {
             BizWorkerPoolEntity workerPool,
             String taskScopedToken,
             String visionModelConfigId,
-            String contextId) {
+            String contextId,
+            String skillName,
+            CreateBusinessAgentTaskForm form) {
         if (workerTaskLaunchers == null || workerTaskLaunchers.isEmpty()) {
             return null;
         }
@@ -326,14 +341,36 @@ public class BusinessAgentTaskService {
                         .clientAppId(task.getClientAppId())
                         .upstreamUserId(task.getUpstreamUserId())
                         .skillId(task.getSkillId())
+                        .skillName(skillName)
                         .workerPoolId(task.getWorkerPoolId())
                         .workerBackend(workerPool.getWorkerBackend())
                         .modelConfigId(task.getModelConfigId())
                         .visionModelConfigId(visionModelConfigId)
                         .markdownBody(markdownBody)
                         .taskScopedToken(taskScopedToken)
+                        .workdir(trimToNull(form.getWorkdir()))
+                        .allowedDirs(cleanStringList(form.getAllowedDirs()))
+                        .allowedTools(cleanStringList(form.getAllowedTools()))
                         .build()))
                 .orElse(null);
+    }
+
+    private String trimToNull(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private List<String> cleanStringList(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        List<String> cleaned = values.stream()
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .toList();
+        return cleaned.isEmpty() ? null : cleaned;
     }
 
     private String resolveOptionalVisionModelConfigId(String tenantId, String clientAppId) {

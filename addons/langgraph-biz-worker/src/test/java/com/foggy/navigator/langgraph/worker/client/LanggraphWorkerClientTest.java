@@ -32,6 +32,7 @@ class LanggraphWorkerClientTest {
 
             client.streamQuery(
                     "describe",
+                    "tms.navigator.agent",
                     Map.of("source", "test"),
                     Map.of("formId", "tms-1"),
                     "gemini-2.5-pro",
@@ -58,6 +59,7 @@ class LanggraphWorkerClientTest {
 
             Map<String, Object> body = objectMapper.readValue(server.body(),
                     new TypeReference<>() {});
+            assertEquals("tms.navigator.agent", body.get("skill_name"));
             assertEquals(8, body.get("max_turns"));
             assertEquals(attachments, body.get("attachments"));
             @SuppressWarnings("unchecked")

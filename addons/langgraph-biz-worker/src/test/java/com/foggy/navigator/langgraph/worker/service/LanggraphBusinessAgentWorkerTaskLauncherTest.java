@@ -74,10 +74,12 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         verify(taskService).createTask(eq("actor_01"), eq("tenant_01"), formCaptor.capture());
         CreateLanggraphTaskForm form = formCaptor.getValue();
         assertEquals("skill_01", form.getAgentId());
+        assertEquals("skill_01", form.getSkillName());
         assertEquals("worker_01", form.getWorkerId());
         assertEquals("session_01", form.getSessionId());
         assertEquals("ctx_01", form.getContextId());
         assertEquals("model_01", form.getModelConfigId());
+        assertFalse(form.getPrompt().contains("skill_01"));
         assertEquals("bt_01", form.getContext().get("businessTaskId"));
         assertEquals("ctx_01", form.getContext().get("contextId"));
         assertEquals("ctx_01", form.getContext().get("context_id"));
@@ -87,9 +89,17 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
         assertEquals("user_01", form.getContext().get("accountId"));
         assertEquals("user_01", form.getContext().get("account_id"));
         assertFalse(form.getContext().containsKey("task_scoped_token"));
+        assertFalse(form.getContext().containsKey("skillId"));
+        assertFalse(form.getContext().containsKey("skill_name"));
         Map<String, Object> runtimeContext = form.getRuntimeContext();
         assertEquals("rt_token", runtimeContext.get("task_scoped_token"));
+        assertEquals("skill_01", runtimeContext.get("skill_name"));
         assertEquals("vision_model_01", runtimeContext.get("vision_model_config_id"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> executionPolicy = (Map<String, Object>) runtimeContext.get("execution_policy");
+        assertEquals("D:/workspace/app", executionPolicy.get("workdir"));
+        assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
+        assertEquals(List.of("read_file", "invoke_business_function"), executionPolicy.get("allowed_tools"));
         assertDoesNotThrow(() -> OffsetDateTime.parse((String) runtimeContext.get("current_time")));
         assertDoesNotThrow(() -> LocalDate.parse((String) runtimeContext.get("business_date")));
         assertTrue(((String) runtimeContext.get("timezone")).length() > 0);
@@ -132,11 +142,15 @@ class LanggraphBusinessAgentWorkerTaskLauncherTest {
                 .clientAppId("app_01")
                 .upstreamUserId("user_01")
                 .skillId("skill_01")
+                .skillName("skill_01")
                 .workerPoolId("pool_01")
                 .workerBackend("LANGGRAPH_BIZ")
                 .modelConfigId("model_01")
                 .visionModelConfigId("vision_model_01")
                 .taskScopedToken("rt_token")
+                .workdir("D:/workspace/app")
+                .allowedDirs(List.of("D:/workspace"))
+                .allowedTools(List.of("read_file", "invoke_business_function"))
                 .build();
     }
 }

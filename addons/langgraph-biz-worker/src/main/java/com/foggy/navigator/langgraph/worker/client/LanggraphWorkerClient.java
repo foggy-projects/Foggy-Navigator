@@ -81,8 +81,46 @@ public class LanggraphWorkerClient {
             Integer maxTurns,
             List<Map<String, Object>> attachments
     ) {
+        return streamQuery(
+                prompt,
+                null,
+                context,
+                runtimeContext,
+                model,
+                modelConfigId,
+                llmConfig,
+                visionLlmConfig,
+                taskId,
+                sessionId,
+                userId,
+                tenantId,
+                maxTurns,
+                attachments
+        );
+    }
+
+    /**
+     * Stream a query to the Python Worker and return the SSE event flux.
+     */
+    public Flux<ServerSentEvent<String>> streamQuery(
+            String prompt,
+            String skillName,
+            Map<String, Object> context,
+            Map<String, Object> runtimeContext,
+            String model,
+            String modelConfigId,
+            Map<String, Object> llmConfig,
+            Map<String, Object> visionLlmConfig,
+            String taskId,
+            String sessionId,
+            String userId,
+            String tenantId,
+            Integer maxTurns,
+            List<Map<String, Object>> attachments
+    ) {
         Map<String, Object> body = new HashMap<>();
         body.put("prompt", prompt);
+        if (skillName != null && !skillName.isBlank()) body.put("skill_name", skillName.trim());
         if (context != null) body.put("context", context);
         if (runtimeContext != null) body.put("runtime_context", runtimeContext);
         if (model != null) body.put("model", model);

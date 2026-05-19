@@ -18,6 +18,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -48,13 +49,14 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         }
 
         CreateLanggraphTaskForm form = new CreateLanggraphTaskForm();
+        String skillName = resolveSkillName(request);
         form.setAgentId(request.getSkillId());
+        form.setSkillName(skillName);
         form.setWorkerId(member.getWorkerId());
         form.setSessionId(request.getSessionId());
         form.setContextId(request.getContextId());
         form.setModelConfigId(request.getModelConfigId());
         form.setPrompt("Business Agent task " + request.getBusinessTaskId()
-                + " for skill " + request.getSkillId()
                 + ". Use the business function tools when user intent requires controlled business execution.");
         form.setContext(buildContext(request));
         form.setRuntimeContext(buildRuntimeContext(request));
@@ -78,7 +80,6 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         context.put("upstreamUserId", request.getUpstreamUserId());
         context.put("accountId", request.getUpstreamUserId());
         context.put("account_id", request.getUpstreamUserId());
-        context.put("skillId", request.getSkillId());
         context.put("workerPoolId", request.getWorkerPoolId());
         context.put("workerBackend", request.getWorkerBackend());
         if (request.getMarkdownBody() != null && !request.getMarkdownBody().isBlank()) {
@@ -100,12 +101,45 @@ public class LanggraphBusinessAgentWorkerTaskLauncher implements BusinessAgentWo
         if (StringUtils.hasText(request.getTaskScopedToken())) {
             runtimeContext.put("task_scoped_token", request.getTaskScopedToken());
         }
+        putText(runtimeContext, "skill_name", resolveSkillName(request));
         if (StringUtils.hasText(request.getVisionModelConfigId())) {
             runtimeContext.put("vision_model_config_id", request.getVisionModelConfigId());
+        }
+        Map<String, Object> executionPolicy = buildExecutionPolicy(request);
+        if (!executionPolicy.isEmpty()) {
+            runtimeContext.put("execution_policy", executionPolicy);
         }
         runtimeContext.put("current_time", now.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
         runtimeContext.put("timezone", zoneId.getId());
         runtimeContext.put("business_date", now.toLocalDate().toString());
         return runtimeContext;
+    }
+
+    private String resolveSkillName(BusinessAgentWorkerTaskLaunchRequest request) {
+        if (StringUtils.hasText(request.getSkillName())) {
+            return request.getSkillName().trim();
+        }
+        return request.getSkillId();
+    }
+
+    private Map<String, Object> buildExecutionPolicy(BusinessAgentWorkerTaskLaunchRequest request) {
+        Map<String, Object> policy = new LinkedHashMap<>();
+        putText(policy, "workdir", request.getWorkdir());
+        putStringList(policy, "allowed_dirs", request.getAllowedDirs());
+        putStringList(policy, "allowed_tools", request.getAllowedTools());
+        return policy;
+    }
+
+    private void putStringList(Map<String, Object> target, String key, List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return;
+        }
+        List<String> cleaned = values.stream()
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .toList();
+        if (!cleaned.isEmpty()) {
+            target.put(key, cleaned);
+        }
     }
 }

@@ -350,6 +350,46 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void askAgent_forwardsTopLevelExecutionPolicyAndSkillName() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("分析仓库");
+        form.setWorkdir("D:/workspace/app");
+        form.setAllowedDirs(List.of("D:/workspace"));
+        form.setAllowedTools(List.of("read_file", "invoke_business_function"));
+        form.setMetadata(Map.of("context", Map.of("traceId", "trace-1")));
+
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .contextId("ctx-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        controller.askAgent("agent-1", form, mock(HttpServletRequest.class));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        Map<String, Object> metadata = captor.getValue().getMetadata();
+        assertEquals("agent-1", metadata.get("skill_name"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> context = (Map<String, Object>) metadata.get("context");
+        assertEquals("trace-1", context.get("traceId"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> executionPolicy = (Map<String, Object>) context.get("execution_policy");
+        assertEquals("D:/workspace/app", executionPolicy.get("workdir"));
+        assertEquals(List.of("D:/workspace"), executionPolicy.get("allowed_dirs"));
+        assertEquals(List.of("read_file", "invoke_business_function"), executionPolicy.get("allowed_tools"));
+    }
+
+    @Test
     void askAgent_rejectsContextIdWithoutUpstreamUserId() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);

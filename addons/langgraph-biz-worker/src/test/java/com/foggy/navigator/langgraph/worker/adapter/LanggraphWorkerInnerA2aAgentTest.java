@@ -44,7 +44,9 @@ class LanggraphWorkerInnerA2aAgentTest {
         LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
         A2aMessage message = A2aMessage.user(List.of(A2aPart.text("hello")));
         message.setContextId("ctx_01");
-        message.setMetadata(Map.of("runtimeContext", Map.of("task_scoped_token", "btt_01")));
+        message.setMetadata(Map.of(
+                "skill_name", "tms.navigator.agent",
+                "runtimeContext", Map.of("task_scoped_token", "btt_01")));
 
         agent.sendTask(A2aContext.builder()
                 .message(message)
@@ -57,6 +59,7 @@ class LanggraphWorkerInnerA2aAgentTest {
         assertEquals("model_default", captor.getValue().getModelConfigId());
         assertEquals("sonnet", captor.getValue().getModel());
         assertEquals("worker_01", captor.getValue().getWorkerId());
+        assertEquals("tms.navigator.agent", captor.getValue().getSkillName());
     }
 
     @Test

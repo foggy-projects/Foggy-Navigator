@@ -78,9 +78,11 @@ public class LanggraphStreamRelay {
                     workerId
             );
             Integer maxTurns = positiveInteger(firstPresent(event.getProviderConfig(), "maxTurns", "max_turns"));
+            String skillName = textValue(firstPresent(event.getProviderConfig(), "skill_name", "skillName", "skill_id", "skillId"));
 
             Disposable subscription = client.streamQuery(
                     event.getPrompt(),
+                    skillName,
                     context,
                     runtimeContext,
                     event.getModel(),
@@ -150,6 +152,13 @@ public class LanggraphStreamRelay {
             if (value instanceof String text && StringUtils.hasText(text)) {
                 return text.trim();
             }
+        }
+        return null;
+    }
+
+    private String textValue(Object value) {
+        if (value instanceof String text && StringUtils.hasText(text)) {
+            return text.trim();
         }
         return null;
     }
