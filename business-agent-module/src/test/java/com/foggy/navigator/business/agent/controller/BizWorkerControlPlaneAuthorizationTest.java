@@ -23,8 +23,8 @@ class BizWorkerControlPlaneAuthorizationTest {
     }
 
     @Test
-    void adminUpstreamTenantClientAppProvisioningController_requires_tenant_admin() {
-        assertClassRole(AdminUpstreamTenantClientAppProvisioningController.class, "TENANT_ADMIN");
+    void adminUpstreamTenantClientAppProvisioningController_uses_upstream_admin_key_guard() {
+        assertNull(AdminUpstreamTenantClientAppProvisioningController.class.getAnnotation(RequireAuth.class));
     }
 
     @Test

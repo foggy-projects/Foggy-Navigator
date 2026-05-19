@@ -44,9 +44,12 @@ public class ClientAppModelConfigGrantService {
         clientAppService.requireClientApp(tenantId, clientAppId);
         LlmModelConfigDTO model = requireModelConfig(tenantId, form.getModelConfigId());
 
-        grantRepository.findByClientAppIdAndModelConfigId(clientAppId, form.getModelConfigId()).ifPresent(existing -> {
-            throw new IllegalArgumentException("model config already granted: " + form.getModelConfigId());
-        });
+        ClientAppModelConfigGrantEntity existing = grantRepository
+                .findByClientAppIdAndModelConfigId(clientAppId, form.getModelConfigId())
+                .orElse(null);
+        if (existing != null) {
+            return ensureExistingGrant(tenantId, clientAppId, existing, model, form);
+        }
         if (Boolean.TRUE.equals(form.getIsDefault())) {
             clearDefaults(clientAppId, model.getCategory());
         }
@@ -60,6 +63,27 @@ public class ClientAppModelConfigGrantService {
         entity.setGrantScope(StringUtils.hasText(form.getGrantScope()) ? form.getGrantScope() : "APP");
         entity.setCreatedBy(actorUserId);
         return toDTO(grantRepository.save(entity));
+    }
+
+    private ClientAppModelConfigGrantDTO ensureExistingGrant(String tenantId,
+                                                             String clientAppId,
+                                                             ClientAppModelConfigGrantEntity existing,
+                                                             LlmModelConfigDTO model,
+                                                             GrantModelConfigForm form) {
+        if (!tenantId.equals(existing.getTenantId())) {
+            throw new IllegalArgumentException("grant tenant mismatch");
+        }
+        boolean changed = false;
+        if (!STATUS_ENABLED.equals(existing.getStatus())) {
+            existing.setStatus(STATUS_ENABLED);
+            changed = true;
+        }
+        if (Boolean.TRUE.equals(form.getIsDefault()) && !Boolean.TRUE.equals(existing.getIsDefault())) {
+            clearDefaults(clientAppId, model.getCategory());
+            existing.setIsDefault(true);
+            changed = true;
+        }
+        return toDTO(changed ? grantRepository.save(existing) : existing);
     }
 
     @Transactional

@@ -3,6 +3,7 @@ import { TEST_CONFIG } from './config.js';
 import type {
   BizWorkerPool,
   ClientApp,
+  ClientAppModelConfigGrant,
   ClientAppSkillGrant,
   ClientAppUpstreamUserGrant,
   CreateBusinessAgentTaskRequest,
@@ -12,6 +13,8 @@ import type {
   LoginResultDTO,
   RXResponse,
   Skill,
+  UpstreamAdminCredentialClaim,
+  UpstreamBootstrapRequestCreated,
   UpstreamTenantClientAppProvisioning
 } from './types.js';
 
@@ -97,6 +100,40 @@ export class BusinessAgentClient {
     return unwrapData<IssuedCredential>(response.data);
   }
 
+  setUpstreamAdminApiKey(apiKey: string): void {
+    this.client.defaults.headers.common['X-Navi-Admin-Key'] = apiKey;
+    delete this.client.defaults.headers.common.Authorization;
+  }
+
+  setClientAppControlKey(controlKey: string): void {
+    this.client.defaults.headers.common['X-Client-App-Control-Key'] = controlKey;
+    delete this.client.defaults.headers.common.Authorization;
+    delete this.client.defaults.headers.common['X-Navi-Admin-Key'];
+  }
+
+  async requestUpstreamAdminKey(body: RequestBody): Promise<UpstreamBootstrapRequestCreated> {
+    const response = await this.client.post(
+      '/api/v1/upstream-bootstrap/admin-key-requests',
+      body
+    );
+    return unwrapData<UpstreamBootstrapRequestCreated>(response.data);
+  }
+
+  async approveUpstreamAdminKeyRequest(requestCode: string, body: RequestBody): Promise<void> {
+    await this.client.post(
+      `/api/v1/admin/upstream-bootstrap-requests/${encodeURIComponent(requestCode)}/approve`,
+      body
+    );
+  }
+
+  async claimUpstreamAdminKey(requestCode: string, body: RequestBody): Promise<UpstreamAdminCredentialClaim> {
+    const response = await this.client.post(
+      `/api/v1/upstream-bootstrap/admin-key-requests/${encodeURIComponent(requestCode)}/claim`,
+      body
+    );
+    return unwrapData<UpstreamAdminCredentialClaim>(response.data);
+  }
+
   async ensureUpstreamTenantClientApp(body: RequestBody): Promise<UpstreamTenantClientAppProvisioning> {
     const response = await this.client.post(
       '/api/v1/admin/upstream-tenants/client-apps/ensure',
@@ -142,6 +179,22 @@ export class BusinessAgentClient {
       body
     );
     return unwrapData<E2eModelConfigEnsureResult>(response.data);
+  }
+
+  async createClientAppModelConfig(clientAppId: string, body: RequestBody): Promise<ClientAppModelConfigGrant> {
+    const response = await this.client.post(
+      `/api/v1/client-apps/${encodeURIComponent(clientAppId)}/model-configs`,
+      body
+    );
+    return unwrapData<ClientAppModelConfigGrant>(response.data);
+  }
+
+  async grantClientAppModelConfig(clientAppId: string, body: RequestBody): Promise<ClientAppModelConfigGrant> {
+    const response = await this.client.post(
+      `/api/v1/client-apps/${encodeURIComponent(clientAppId)}/model-config-grants`,
+      body
+    );
+    return unwrapData<ClientAppModelConfigGrant>(response.data);
   }
 
   async createTask(body: CreateBusinessAgentTaskRequest): Promise<CreatedBusinessAgentTask> {

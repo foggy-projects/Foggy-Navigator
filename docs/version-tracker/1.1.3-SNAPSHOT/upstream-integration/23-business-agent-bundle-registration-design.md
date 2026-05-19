@@ -62,7 +62,7 @@ POST /api/v1/business-agent/agent-bundles/sync
 
 - `agentId` 是上游 `.navigator/upstream.env` 中的 `NAVI_AGENT_CODE`。
 - `agentId` 的数据库唯一边界为 `tenantId + agentId`。不同租户可注册同名逻辑 Agent；同一租户内仍应使用项目级命名空间，如 `tms-x3-agent-v305`、`world-sim.bug-coordinator.decision.v1`。
-- `skillId` 默认等于 `agentId`，让 readiness、skill file API 与 ask route 使用同一个标识。
+- 手工同步业务 Agent Bundle 时，`skillId` 默认等于 `agentId`。上游租户初始化的 root agent 场景允许 `rootAgentId` 与内部 `skillId` 分离，由 Navigator 在 OpenAPI ask/preflight 时从 agent profile 派生 effective skill。
 - `contextVisibility` 是同步给该 Agent 默认 public Skill Bundle 的上下文可见性策略；不传时默认为 `isolated`，普通业务 skill 首版可使用 `isolated` 或 `summary`。
 - Agent 运行时复用现有 `CodingAgentEntity + LanggraphWorkerAgentProvider`，`agentType=LOCAL_LANGGRAPH_WORKER`。`CodingAgentEntity` 是历史类名，当前按通用 Agent 注册行使用；业务 Agent 会写入 `agent_profile` JSON，例如 `domain=BUSINESS_AGENT`、`kind=CLIENT_APP_RUNTIME_AGENT`、`clientAppId` 与 `skillId`。
 - Skill 交付复用 `SkillRegistryService.syncSkillBundle(... CLIENT_APP_PUBLIC ...)`，不新增第二套 Skill/Grant 权限模型。

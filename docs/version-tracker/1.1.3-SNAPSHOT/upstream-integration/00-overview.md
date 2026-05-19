@@ -134,3 +134,6 @@ graph TB
 | [30-tms-e2e-agent-tenant-scope-bug.md](./30-tms-e2e-agent-tenant-scope-bug.md) | TMS E2E Agent tenant scope 与 CLI body missing 缺陷复现与修复 | Navigator / worker / 上游 E2E |
 | [31-openapi-model-config-and-attachment-e2e-bug.md](./31-openapi-model-config-and-attachment-e2e-bug.md) | OpenAPI ask modelConfigId 合同与附件 E2E 透传缺陷复现与修复 | Navigator / worker / 上游 E2E |
 | [32-e2e-scripted-tool-call-streaming-bug.md](./32-e2e-scripted-tool-call-streaming-bug.md) | E2E scripted tool-call streaming 归一化缺陷复现与修复 | Navigator / mock LLM / 上游 E2E |
+| [33-upstream-client-app-admin-key-request.md](./33-upstream-client-app-admin-key-request.md) | 上游 ClientApp admin key 请求与冷启动契约 | Navigator / TMS / 上游后端 |
+| [34-upstream-client-app-admin-key-implementation-plan.md](./34-upstream-client-app-admin-key-implementation-plan.md) | 上游 ClientApp admin key 实施计划 | Navigator / TMS / reviewer |
+| [35-navigator-chat-observer-bff-real-mode.md](./35-navigator-chat-observer-bff-real-mode.md) | Navigator Chat Observer BFF real mode | Navigator / 上游前端 / 上游后端 |

@@ -76,12 +76,39 @@ class ClientAppModelConfigGrantServiceTest {
     }
 
     @Test
-    void grantModelConfig_rejects_duplicate_grant() {
+    void grantModelConfig_returns_existing_grant_when_already_granted() {
+        ClientAppModelConfigGrantEntity existing =
+                grant("cfg-1", true, ClientAppModelConfigGrantService.STATUS_ENABLED);
         when(grantRepository.findByClientAppIdAndModelConfigId("capp-1", "cfg-1"))
-                .thenReturn(Optional.of(grant("cfg-1", true, ClientAppModelConfigGrantService.STATUS_ENABLED)));
+                .thenReturn(Optional.of(existing));
 
-        assertThrows(IllegalArgumentException.class,
-                () -> service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-1", false)));
+        var result = service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-1", false));
+
+        assertEquals("cfg-1", result.getModelConfigId());
+        assertTrue(result.getIsDefault());
+        assertEquals(ClientAppModelConfigGrantService.STATUS_ENABLED, result.getStatus());
+        verify(grantRepository, never()).save(any(ClientAppModelConfigGrantEntity.class));
+    }
+
+    @Test
+    void grantModelConfig_reenables_existing_grant_and_sets_default() {
+        ClientAppModelConfigGrantEntity existing =
+                grant("cfg-1", false, ClientAppModelConfigGrantService.STATUS_DISABLED);
+        ClientAppModelConfigGrantEntity oldDefault =
+                grant("cfg-2", true, ClientAppModelConfigGrantService.STATUS_ENABLED);
+        when(grantRepository.findByClientAppIdAndModelConfigId("capp-1", "cfg-1"))
+                .thenReturn(Optional.of(existing));
+        when(grantRepository.findByClientAppIdAndStatusAndIsDefaultTrueOrderByUpdatedAtDesc(
+                "capp-1", ClientAppModelConfigGrantService.STATUS_ENABLED)).thenReturn(List.of(oldDefault));
+
+        var result = service.grantModelConfig("tenant-1", "admin-1", "capp-1", grantForm("cfg-1", true));
+
+        assertEquals("cfg-1", result.getModelConfigId());
+        assertEquals(ClientAppModelConfigGrantService.STATUS_ENABLED, existing.getStatus());
+        assertTrue(existing.getIsDefault());
+        assertFalse(oldDefault.getIsDefault());
+        verify(grantRepository).saveAll(List.of(oldDefault));
+        verify(grantRepository).save(existing);
     }
 
     @Test

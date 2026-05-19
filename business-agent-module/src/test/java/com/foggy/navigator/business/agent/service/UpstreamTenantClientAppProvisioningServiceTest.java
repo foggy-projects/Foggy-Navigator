@@ -1,7 +1,9 @@
 package com.foggy.navigator.business.agent.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foggy.navigator.business.agent.model.dto.ClientAppModelConfigGrantDTO;
 import com.foggy.navigator.business.agent.model.dto.IssuedCredentialDTO;
+import com.foggy.navigator.business.agent.model.dto.UpstreamClientAppAdminPrincipal;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.EnsureUpstreamTenantClientAppForm;
 import com.foggy.navigator.business.agent.repository.BusinessCodingAgentRepository;
@@ -11,8 +13,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -53,8 +57,8 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         clientAppService = mock(ClientAppService.class);
         modelConfigGrantService = mock(ClientAppModelConfigGrantService.class);
         skillRegistryService = mock(SkillRegistryService.class);
-        when(modelConfigGrantService.resolveEffectiveModelConfigId(anyString(), anyString(), isNull()))
-                .thenReturn("model-1");
+        when(modelConfigGrantService.listGrants(anyString(), anyString()))
+                .thenReturn(List.of(defaultModelGrant()));
         when(clientAppService.issueRuntimeCredential(anyString(), anyString(), any())).thenAnswer(inv -> {
             IssuedCredentialDTO dto = new IssuedCredentialDTO();
             dto.setTenantId(inv.getArgument(0));
@@ -82,10 +86,13 @@ class UpstreamTenantClientAppProvisioningServiceTest {
 
     @Test
     void ensureCreatesClientAppAndReturnsInitialCredentials() {
-        var result = service.ensure(form(false), "operator-1");
+        var result = service.ensure(form(false), principal("nav_tms_3"));
 
         assertTrue(result.isCreated());
         assertFalse(result.isRotated());
+        assertTrue(result.isCredentialsReplayable());
+        assertEquals(UpstreamTenantClientAppProvisioningService.STATUS_READY, result.getStatus());
+        assertNull(result.getErrorCode());
         assertEquals("nav_tms_3", result.getNavigatorTenantId());
         assertNotNull(result.getClientAppId());
         assertEquals("tms-tenant-3", result.getClientAppName());
@@ -97,16 +104,20 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         assertEquals("tms-root-agent", result.getRootAgentId());
         assertEquals("tms.navigator.agent", result.getSkillId());
         assertTrue(result.getBlockers().isEmpty());
-        verify(skillRegistryService).syncSkillBundle(eq("nav_tms_3"), eq("operator-1"), any());
+        verify(skillRegistryService).syncSkillBundle(eq("nav_tms_3"), eq("upstream-admin:ucaac-1"), any());
     }
 
     @Test
     void ensureExistingClientAppDoesNotExposeSecretsUnlessRotating() {
-        var first = service.ensure(form(false), "operator-1");
-        var second = service.ensure(form(false), "operator-1");
+        var first = service.ensure(form(false), principal("nav_tms_3"));
+        var second = service.ensure(form(false), principal("nav_tms_3"));
 
         assertFalse(second.isCreated());
         assertFalse(second.isRotated());
+        assertFalse(second.isCredentialsReplayable());
+        assertEquals(UpstreamTenantClientAppProvisioningService.STATUS_CREDENTIALS_NOT_REPLAYABLE, second.getStatus());
+        assertEquals(UpstreamTenantClientAppProvisioningService.STATUS_CREDENTIALS_NOT_REPLAYABLE, second.getErrorCode());
+        assertTrue(second.getMessage().contains("rotateCredentials=true"));
         assertEquals(first.getClientAppId(), second.getClientAppId());
         assertNull(second.getClientAppKey());
         assertNull(second.getClientAppSecret());
@@ -117,12 +128,15 @@ class UpstreamTenantClientAppProvisioningServiceTest {
 
     @Test
     void ensureExistingClientAppRotatesCredentialsWhenRequested() {
-        service.ensure(form(false), "operator-1");
+        service.ensure(form(false), principal("nav_tms_3"));
 
-        var rotated = service.ensure(form(true), "operator-1");
+        var rotated = service.ensure(form(true), principal("nav_tms_3"));
 
         assertFalse(rotated.isCreated());
         assertTrue(rotated.isRotated());
+        assertTrue(rotated.isCredentialsReplayable());
+        assertEquals(UpstreamTenantClientAppProvisioningService.STATUS_READY, rotated.getStatus());
+        assertNull(rotated.getErrorCode());
         assertEquals("cak-secret", rotated.getClientAppKey());
         assertEquals("cas-secret", rotated.getClientAppSecret());
         assertEquals("cac-secret", rotated.getControlApiKey());
@@ -135,7 +149,7 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         EnsureUpstreamTenantClientAppForm form = form(false);
         form.setWorkerPoolId(null);
 
-        var result = service.ensure(form, "operator-1");
+        var result = service.ensure(form, principal("nav_tms_3"));
         CodingAgentEntity rootAgent = agentsByKey.get(agentKey("tms-root-agent", "nav_tms_3"));
 
         assertNull(result.getWorkerPoolId());
@@ -146,11 +160,11 @@ class UpstreamTenantClientAppProvisioningServiceTest {
 
     @Test
     void ensureWithoutWorkerPoolDoesNotClearExistingRootAgentWorker() {
-        service.ensure(form(false), "operator-1");
+        service.ensure(form(false), principal("nav_tms_3"));
         EnsureUpstreamTenantClientAppForm withoutWorkerPool = form(false);
         withoutWorkerPool.setWorkerPoolId(null);
 
-        service.ensure(withoutWorkerPool, "operator-1");
+        service.ensure(withoutWorkerPool, principal("nav_tms_3"));
 
         CodingAgentEntity rootAgent = agentsByKey.get(agentKey("tms-root-agent", "nav_tms_3"));
         assertEquals("biz-worker", rootAgent.getWorkerId());
@@ -158,14 +172,31 @@ class UpstreamTenantClientAppProvisioningServiceTest {
 
     @Test
     void ensureReturnsBlockerWhenDefaultModelGrantIsMissing() {
-        when(modelConfigGrantService.resolveEffectiveModelConfigId(anyString(), anyString(), isNull()))
-                .thenThrow(new IllegalArgumentException("default model config grant is required"));
+        when(modelConfigGrantService.listGrants(anyString(), anyString()))
+                .thenReturn(List.of());
 
-        var result = service.ensure(form(false), "operator-1");
+        var result = service.ensure(form(false), principal("nav_tms_3"));
 
         assertNull(result.getModelConfigId());
         assertTrue(result.getBlockers().stream().anyMatch(item -> item.contains("modelConfigId is missing")));
         assertTrue(result.getBlockers().stream().anyMatch(item -> item.contains("defaultModelConfigId")));
+        verify(modelConfigGrantService, never()).resolveEffectiveModelConfigId(anyString(), anyString(), any());
+    }
+
+    @Test
+    void ensureRejectsMismatchedSourceSystemForAdminCredential() {
+        assertThrows(SecurityException.class, () -> service.ensure(form(false), UpstreamClientAppAdminPrincipal.builder()
+                .credentialId("ucaac-1")
+                .upstreamSystemId("ERP")
+                .authorizedClientAppNamespace("TMS")
+                .authorizedTenantIds(Set.of("nav_tms_3"))
+                .scopes(Set.of())
+                .build()));
+    }
+
+    @Test
+    void ensureRejectsUnauthorizedDerivedNavigatorTenant() {
+        assertThrows(SecurityException.class, () -> service.ensure(form(false), principal("nav_tms_4")));
     }
 
     private EnsureUpstreamTenantClientAppForm form(boolean rotateCredentials) {
@@ -179,6 +210,30 @@ class UpstreamTenantClientAppProvisioningServiceTest {
         form.setWorkerPoolId("biz-worker");
         form.setRotateCredentials(rotateCredentials);
         return form;
+    }
+
+    private UpstreamClientAppAdminPrincipal principal(String... tenantIds) {
+        return UpstreamClientAppAdminPrincipal.builder()
+                .credentialId("ucaac-1")
+                .upstreamSystemId("TMS")
+                .authorizedClientAppNamespace("TMS")
+                .authorizedTenantIds(Set.of(tenantIds))
+                .scopes(Set.of(
+                        UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_MANAGE,
+                        UpstreamBootstrapRequestService.SCOPE_CLIENT_APP_CONTROL_KEY_ISSUE))
+                .build();
+    }
+
+    private ClientAppModelConfigGrantDTO defaultModelGrant() {
+        ClientAppModelConfigGrantDTO grant = new ClientAppModelConfigGrantDTO();
+        grant.setId(1L);
+        grant.setTenantId("nav_tms_3");
+        grant.setClientAppId("capp-1");
+        grant.setModelConfigId("model-1");
+        grant.setStatus(ClientAppModelConfigGrantService.STATUS_ENABLED);
+        grant.setIsDefault(true);
+        grant.setWorkerBackend(ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND);
+        return grant;
     }
 
     private static String upstreamKey(String tenantId,

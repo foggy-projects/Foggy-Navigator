@@ -55,8 +55,14 @@ public class BusinessAgentApi {
 
     public UpstreamTenantClientAppProvisioningDTO ensureUpstreamTenantClientApp(
             EnsureUpstreamTenantClientAppForm form) {
-        return http.post("/api/v1/admin/upstream-tenants/client-apps/ensure",
-                form, new TypeReference<>() {});
+        return ensureUpstreamTenantClientApp(form, null);
+    }
+
+    public UpstreamTenantClientAppProvisioningDTO ensureUpstreamTenantClientApp(
+            EnsureUpstreamTenantClientAppForm form,
+            String upstreamAdminApiKey) {
+        return http.postWithUpstreamAdminAuth("/api/v1/admin/upstream-tenants/client-apps/ensure",
+                form, upstreamAdminApiKey, new TypeReference<>() {});
     }
 
     // ===== Upstream Admin ClientApp Management =====

@@ -8,6 +8,7 @@ import com.foggy.navigator.business.agent.model.entity.UpstreamClientAppAdminCre
 import com.foggy.navigator.business.agent.repository.UpstreamClientAppAdminCredentialRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -19,6 +20,7 @@ import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class UpstreamClientAppAdminCredentialService {
 
     public static final String HEADER_ADMIN_KEY = "X-Navi-Admin-Key";
@@ -33,18 +35,42 @@ public class UpstreamClientAppAdminCredentialService {
 
     @Transactional
     public UpstreamClientAppAdminPrincipal requireAccess(HttpServletRequest request, String requiredScope) {
-        String adminApiKey = resolveAdminApiKey(request);
+        String primaryHeaderValue = request == null ? null : request.getHeader(HEADER_ADMIN_KEY);
+        String fallbackHeaderValue = request == null ? null : request.getHeader(HEADER_ADMIN_API_KEY);
+        boolean primaryHeaderPresent = StringUtils.hasText(primaryHeaderValue);
+        boolean fallbackHeaderPresent = StringUtils.hasText(fallbackHeaderValue);
+        String adminApiKey = primaryHeaderPresent ? primaryHeaderValue : fallbackHeaderValue;
+        String headerName = primaryHeaderPresent ? HEADER_ADMIN_KEY : fallbackHeaderPresent ? HEADER_ADMIN_API_KEY : null;
         if (!StringUtils.hasText(adminApiKey)) {
+            log.warn("Upstream admin credential missing: method={}, path={}, remoteAddr={}, requiredScope={}, {}Present={}, {}Present={}",
+                    requestMethod(request), requestUri(request), remoteAddr(request), requiredScope,
+                    HEADER_ADMIN_KEY, primaryHeaderPresent, HEADER_ADMIN_API_KEY, fallbackHeaderPresent);
             throw new SecurityException("upstream admin credential is required");
         }
 
+        String credentialKeyHash = SecretTokenSupport.sha256(adminApiKey);
         UpstreamClientAppAdminCredentialEntity credential = adminCredentialRepository
-                .findByCredentialKeyHash(SecretTokenSupport.sha256(adminApiKey))
-                .orElseThrow(() -> new SecurityException("invalid upstream admin credential"));
-        validateCredential(credential);
+                .findByCredentialKeyHash(credentialKeyHash)
+                .orElseThrow(() -> {
+                    log.warn("Upstream admin credential not found: method={}, path={}, remoteAddr={}, requiredScope={}, header={}, keyHashPrefix={}",
+                            requestMethod(request), requestUri(request), remoteAddr(request), requiredScope,
+                            headerName, hashPrefix(credentialKeyHash));
+                    return new SecurityException("invalid upstream admin credential");
+                });
+        String invalidMessage = invalidCredentialMessage(credential);
+        if (invalidMessage != null) {
+            log.warn("Upstream admin credential rejected: method={}, path={}, remoteAddr={}, requiredScope={}, credentialId={}, upstreamSystemId={}, status={}, revokedAt={}, expiresAt={}, reason={}",
+                    requestMethod(request), requestUri(request), remoteAddr(request), requiredScope,
+                    credential.getCredentialId(), credential.getUpstreamSystemId(), credential.getStatus(),
+                    credential.getRevokedAt(), credential.getExpiresAt(), invalidMessage);
+            throw new SecurityException(invalidMessage);
+        }
 
         Set<String> scopes = parseScopeSet(credential.getScopesJson());
         if (StringUtils.hasText(requiredScope) && !hasScope(scopes, requiredScope)) {
+            log.warn("Upstream admin credential lacks scope: method={}, path={}, remoteAddr={}, requiredScope={}, credentialId={}, upstreamSystemId={}, scopes={}",
+                    requestMethod(request), requestUri(request), remoteAddr(request), requiredScope,
+                    credential.getCredentialId(), credential.getUpstreamSystemId(), scopes);
             throw new SecurityException("upstream admin credential lacks scope: " + requiredScope);
         }
 
@@ -68,27 +94,47 @@ public class UpstreamClientAppAdminCredentialService {
         }
     }
 
-    private String resolveAdminApiKey(HttpServletRequest request) {
-        if (request == null) {
-            return null;
+    public void requireScope(UpstreamClientAppAdminPrincipal principal, String requiredScope) {
+        if (principal == null || !StringUtils.hasText(requiredScope)) {
+            throw new SecurityException("upstream admin credential is required");
         }
-        String value = request.getHeader(HEADER_ADMIN_KEY);
-        if (StringUtils.hasText(value)) {
-            return value;
+        String canonical = UpstreamBootstrapRequestService.canonicalizeScope(requiredScope);
+        Set<String> scopes = canonicalScopeSet(principal.getScopes());
+        if (!StringUtils.hasText(canonical) || !hasScope(scopes, canonical)) {
+            throw new SecurityException("upstream admin credential lacks scope: " + requiredScope);
         }
-        return request.getHeader(HEADER_ADMIN_API_KEY);
     }
 
-    private void validateCredential(UpstreamClientAppAdminCredentialEntity credential) {
+    private String invalidCredentialMessage(UpstreamClientAppAdminCredentialEntity credential) {
         if (!UpstreamBootstrapRequestService.CREDENTIAL_STATUS_ACTIVE.equals(credential.getStatus())) {
-            throw new SecurityException("upstream admin credential is not active");
+            return "upstream admin credential is not active";
         }
         if (credential.getRevokedAt() != null) {
-            throw new SecurityException("upstream admin credential revoked");
+            return "upstream admin credential revoked";
         }
         if (credential.getExpiresAt() != null && !credential.getExpiresAt().isAfter(LocalDateTime.now())) {
-            throw new SecurityException("upstream admin credential expired");
+            return "upstream admin credential expired";
         }
+        return null;
+    }
+
+    private String requestMethod(HttpServletRequest request) {
+        return request == null ? null : request.getMethod();
+    }
+
+    private String requestUri(HttpServletRequest request) {
+        return request == null ? null : request.getRequestURI();
+    }
+
+    private String remoteAddr(HttpServletRequest request) {
+        return request == null ? null : request.getRemoteAddr();
+    }
+
+    private String hashPrefix(String hash) {
+        if (!StringUtils.hasText(hash)) {
+            return null;
+        }
+        return hash.length() <= 12 ? hash : hash.substring(0, 12);
     }
 
     private boolean hasScope(Set<String> scopes, String requiredScope) {
@@ -114,6 +160,13 @@ public class UpstreamClientAppAdminCredentialService {
 
     private Set<String> parseScopeSet(String json) {
         Set<String> values = parseStringSet(json);
+        return canonicalScopeSet(values);
+    }
+
+    private Set<String> canonicalScopeSet(Set<String> values) {
+        if (values == null || values.isEmpty()) {
+            return Set.of();
+        }
         Set<String> result = new LinkedHashSet<>();
         for (String value : values) {
             String canonical = UpstreamBootstrapRequestService.canonicalizeScope(value);

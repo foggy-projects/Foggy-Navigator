@@ -19,6 +19,10 @@ public class UpstreamTenantClientAppProvisioningDTO {
     private String skillId;
     private String workerPoolId;
     private String bindingVersion;
+    private String status;
+    private String errorCode;
+    private String message;
+    private boolean credentialsReplayable;
     private boolean created;
     private boolean rotated;
     private List<String> blockers = new ArrayList<>();

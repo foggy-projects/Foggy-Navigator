@@ -39,9 +39,31 @@ export interface UpstreamTenantClientAppProvisioning {
   skillId?: string;
   workerPoolId?: string;
   bindingVersion: string;
+  status?: string;
+  errorCode?: string;
+  message?: string;
+  credentialsReplayable?: boolean;
   created: boolean;
   rotated: boolean;
   blockers: string[];
+}
+
+export interface UpstreamBootstrapRequestCreated {
+  requestCode: string;
+  requestCodeSuffix: string;
+  claimToken: string;
+  status: string;
+  requestExpiresAt?: string;
+}
+
+export interface UpstreamAdminCredentialClaim {
+  credentialId: string;
+  naviAdminApiKey: string;
+  upstreamSystemId: string;
+  authorizedTenantIds: string[];
+  authorizedClientAppNamespace: string;
+  scopes: string[];
+  expiresAt?: string;
 }
 
 export interface ClientApp {
@@ -93,6 +115,18 @@ export interface E2eModelConfigEnsureResult {
   grantCreated: boolean;
   grantStatus: string;
   isDefault: boolean;
+}
+
+export interface ClientAppModelConfigGrant {
+  id: number;
+  clientAppId: string;
+  tenantId: string;
+  modelConfigId: string;
+  modelConfigName?: string;
+  workerBackend?: string;
+  status: string;
+  isDefault: boolean;
+  grantScope?: string;
 }
 
 export interface CreateBusinessAgentTaskRequest {

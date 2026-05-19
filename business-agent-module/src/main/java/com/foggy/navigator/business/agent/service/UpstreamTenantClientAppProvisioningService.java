@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.ClientAppDTO;
 import com.foggy.navigator.business.agent.model.dto.ClientAppModelConfigGrantDTO;
 import com.foggy.navigator.business.agent.model.dto.IssuedCredentialDTO;
+import com.foggy.navigator.business.agent.model.dto.UpstreamClientAppAdminPrincipal;
 import com.foggy.navigator.business.agent.model.dto.UpstreamTenantClientAppProvisioningDTO;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.EnsureUpstreamTenantClientAppForm;
@@ -16,6 +17,7 @@ import com.foggy.navigator.business.agent.repository.BusinessCodingAgentReposito
 import com.foggy.navigator.business.agent.repository.ClientAppRepository;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -24,12 +26,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class UpstreamTenantClientAppProvisioningService {
+
+    public static final String STATUS_READY = "READY";
+    public static final String STATUS_CREDENTIALS_NOT_REPLAYABLE = "CREDENTIALS_NOT_REPLAYABLE";
 
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
     private static final String DEFAULT_SKILL_ID = "tms.navigator.agent";
@@ -43,14 +50,21 @@ public class UpstreamTenantClientAppProvisioningService {
     private final ObjectMapper objectMapper;
 
     @Transactional
-    public UpstreamTenantClientAppProvisioningDTO ensure(EnsureUpstreamTenantClientAppForm form, String actorUserId) {
+    public UpstreamTenantClientAppProvisioningDTO ensure(EnsureUpstreamTenantClientAppForm form,
+                                                         UpstreamClientAppAdminPrincipal principal) {
         if (form == null) {
             throw new IllegalArgumentException("form is required");
         }
         String sourceSystem = requireIdentifier(form.getSourceSystem(), "sourceSystem");
         String sourceTenantId = requireIdentifier(form.getSourceTenantId(), "sourceTenantId");
         String navigatorTenantId = deriveNavigatorTenantId(sourceSystem, sourceTenantId);
-        String upstreamNamespace = normalizeIdentifier(sourceSystem, 128);
+        log.info("Upstream tenant ClientApp provisioning started: sourceSystem={}, sourceTenantId={}, navigatorTenantId={}, rotateCredentials={}, credentialId={}, principalUpstreamSystemId={}, authorizedNamespace={}, authorizedTenantCount={}",
+                sourceSystem, sourceTenantId, navigatorTenantId, form.getRotateCredentials(),
+                credentialId(principal), upstreamSystemId(principal), authorizedNamespace(principal),
+                authorizedTenantCount(principal));
+        requirePrincipal(principal, sourceSystem, navigatorTenantId);
+        String upstreamNamespace = requireIdentifier(principal.getAuthorizedClientAppNamespace(), "authorizedClientAppNamespace");
+        String actorUserId = actorUserId(principal);
 
         boolean appExists = clientAppRepository
                 .findByTenantIdAndUpstreamSystemIdAndUpstreamClientAppNamespaceAndUpstreamRef(
@@ -77,6 +91,15 @@ public class UpstreamTenantClientAppProvisioningService {
         result.setControlApiKey(controlCredential == null ? null : controlCredential.getControlApiKey());
         result.setCreated(created);
         result.setRotated(!created && Boolean.TRUE.equals(form.getRotateCredentials()));
+        result.setCredentialsReplayable(shouldIssueCredentials);
+        result.setStatus(shouldIssueCredentials ? STATUS_READY : STATUS_CREDENTIALS_NOT_REPLAYABLE);
+        if (!shouldIssueCredentials) {
+            result.setErrorCode(STATUS_CREDENTIALS_NOT_REPLAYABLE);
+            result.setMessage("binding secrets are one-time credentials; call again with rotateCredentials=true to issue new credentials");
+            log.info("Upstream tenant ClientApp credentials are not replayable: sourceSystem={}, sourceTenantId={}, navigatorTenantId={}, clientAppId={}, credentialId={}",
+                    sourceSystem, sourceTenantId, clientApp.getTenantId(), clientApp.getClientAppId(),
+                    principal.getCredentialId());
+        }
         result.setWorkerPoolId(trimToNull(form.getWorkerPoolId(), 64));
         result.setBindingVersion(UUID.randomUUID().toString());
 
@@ -88,7 +111,57 @@ public class UpstreamTenantClientAppProvisioningService {
         result.setRootAgentId(rootAgentId);
         result.setSkillId(skillId);
         ensureRootSkillBundle(clientApp, actorUserId, skillId, rootAgentId, form);
+        log.info("Upstream tenant ClientApp provisioning finished: sourceSystem={}, sourceTenantId={}, navigatorTenantId={}, clientAppId={}, created={}, rotated={}, status={}, credentialsReplayable={}, modelConfigId={}, rootAgentId={}, skillId={}, blockers={}",
+                sourceSystem, sourceTenantId, result.getNavigatorTenantId(), result.getClientAppId(),
+                result.isCreated(), result.isRotated(), result.getStatus(), result.isCredentialsReplayable(),
+                result.getModelConfigId(), result.getRootAgentId(), result.getSkillId(), result.getBlockers());
         return result;
+    }
+
+    private void requirePrincipal(UpstreamClientAppAdminPrincipal principal,
+                                  String sourceSystem,
+                                  String navigatorTenantId) {
+        if (principal == null
+                || !StringUtils.hasText(principal.getCredentialId())
+                || !StringUtils.hasText(principal.getUpstreamSystemId())
+                || !StringUtils.hasText(principal.getAuthorizedClientAppNamespace())) {
+            log.warn("Upstream tenant ClientApp provisioning rejected: reason=admin credential principal missing, sourceSystem={}, navigatorTenantId={}, credentialId={}, principalUpstreamSystemId={}, authorizedNamespace={}, authorizedTenantCount={}",
+                    sourceSystem, navigatorTenantId, credentialId(principal), upstreamSystemId(principal),
+                    authorizedNamespace(principal), authorizedTenantCount(principal));
+            throw new SecurityException("upstream admin credential is required");
+        }
+        if (!sourceSystem.equals(principal.getUpstreamSystemId())) {
+            log.warn("Upstream tenant ClientApp provisioning rejected: reason=sourceSystem mismatch, sourceSystem={}, principalUpstreamSystemId={}, navigatorTenantId={}, credentialId={}",
+                    sourceSystem, principal.getUpstreamSystemId(), navigatorTenantId, principal.getCredentialId());
+            throw new SecurityException("upstream admin credential sourceSystem mismatch");
+        }
+        if (principal.getAuthorizedTenantIds() == null
+                || !principal.getAuthorizedTenantIds().contains(navigatorTenantId)) {
+            log.warn("Upstream tenant ClientApp provisioning rejected: reason=tenant mismatch, sourceSystem={}, navigatorTenantId={}, credentialId={}, authorizedTenantCount={}",
+                    sourceSystem, navigatorTenantId, principal.getCredentialId(), authorizedTenantCount(principal));
+            throw new SecurityException("upstream admin credential tenant mismatch");
+        }
+    }
+
+    private String credentialId(UpstreamClientAppAdminPrincipal principal) {
+        return principal == null ? null : principal.getCredentialId();
+    }
+
+    private String upstreamSystemId(UpstreamClientAppAdminPrincipal principal) {
+        return principal == null ? null : principal.getUpstreamSystemId();
+    }
+
+    private String authorizedNamespace(UpstreamClientAppAdminPrincipal principal) {
+        return principal == null ? null : principal.getAuthorizedClientAppNamespace();
+    }
+
+    private int authorizedTenantCount(UpstreamClientAppAdminPrincipal principal) {
+        Set<String> tenantIds = principal == null ? null : principal.getAuthorizedTenantIds();
+        return tenantIds == null ? 0 : tenantIds.size();
+    }
+
+    private String actorUserId(UpstreamClientAppAdminPrincipal principal) {
+        return "upstream-admin:" + principal.getCredentialId();
     }
 
     private ClientAppDTO ensureClientApp(EnsureUpstreamTenantClientAppForm form,
@@ -192,13 +265,18 @@ public class UpstreamTenantClientAppProvisioningService {
             return modelConfigId;
         }
 
-        try {
-            return modelConfigGrantService.resolveEffectiveModelConfigId(tenantId, clientAppId, null);
-        } catch (RuntimeException e) {
-            String profile = StringUtils.hasText(form.getModelProfileCode()) ? form.getModelProfileCode().trim() : "default";
-            blockers.add("modelConfigId is missing and no default ClientApp model grant exists for profile: " + profile);
-            return null;
+        Optional<ClientAppModelConfigGrantDTO> defaultGrant = modelConfigGrantService.listGrants(tenantId, clientAppId).stream()
+                .filter(grant -> ClientAppModelConfigGrantService.STATUS_ENABLED.equals(grant.getStatus()))
+                .filter(grant -> Boolean.TRUE.equals(grant.getIsDefault()))
+                .filter(grant -> ClientAppModelConfigGrantService.LANGGRAPH_BIZ_BACKEND.equals(grant.getWorkerBackend()))
+                .findFirst();
+        if (defaultGrant.isPresent()) {
+            return defaultGrant.get().getModelConfigId();
         }
+
+        String profile = StringUtils.hasText(form.getModelProfileCode()) ? form.getModelProfileCode().trim() : "default";
+        blockers.add("modelConfigId is missing and no default ClientApp model grant exists for profile: " + profile);
+        return null;
     }
 
     private String ensureRootAgent(ClientAppDTO clientApp,

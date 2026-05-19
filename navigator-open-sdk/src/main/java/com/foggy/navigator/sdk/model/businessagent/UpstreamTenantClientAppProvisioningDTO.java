@@ -18,6 +18,10 @@ public class UpstreamTenantClientAppProvisioningDTO {
     private String skillId;
     private String workerPoolId;
     private String bindingVersion;
+    private String status;
+    private String errorCode;
+    private String message;
+    private Boolean credentialsReplayable;
     private Boolean created;
     private Boolean rotated;
     private List<String> blockers;
@@ -46,6 +50,14 @@ public class UpstreamTenantClientAppProvisioningDTO {
     public void setWorkerPoolId(String workerPoolId) { this.workerPoolId = workerPoolId; }
     public String getBindingVersion() { return bindingVersion; }
     public void setBindingVersion(String bindingVersion) { this.bindingVersion = bindingVersion; }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
+    public String getErrorCode() { return errorCode; }
+    public void setErrorCode(String errorCode) { this.errorCode = errorCode; }
+    public String getMessage() { return message; }
+    public void setMessage(String message) { this.message = message; }
+    public Boolean getCredentialsReplayable() { return credentialsReplayable; }
+    public void setCredentialsReplayable(Boolean credentialsReplayable) { this.credentialsReplayable = credentialsReplayable; }
     public Boolean getCreated() { return created; }
     public void setCreated(Boolean created) { this.created = created; }
     public Boolean getRotated() { return rotated; }

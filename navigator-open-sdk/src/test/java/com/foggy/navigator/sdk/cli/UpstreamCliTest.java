@@ -583,14 +583,14 @@ class UpstreamCliTest {
     }
 
     @Test
-    void clientAppEnsureTenantUsesTenantAdminTokenAndStoresOneShotCredentials() throws Exception {
+    void clientAppEnsureTenantUsesUpstreamAdminKeyAndStoresOneShotCredentials() throws Exception {
         Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
         Path profileDir = tempDir.resolve(".navigator");
         Files.createDirectories(profileDir);
         Path upstreamProfile = profileDir.resolve("upstream.env");
         Files.writeString(upstreamProfile, """
                 NAVI_BASE_URL=%s
-                NAVI_ADMIN_TOKEN=tenant-admin-token-secret
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
                 NAVI_UPSTREAM_SYSTEM_ID=TMS
                 """.formatted(baseUrl()), StandardCharsets.UTF_8);
 
@@ -608,6 +608,8 @@ class UpstreamCliTest {
                   "skillId":"tms.navigator.agent",
                   "workerPoolId":"pool-1",
                   "bindingVersion":"bind-v1",
+                  "status":"READY",
+                  "credentialsReplayable":true,
                   "created":true,
                   "rotated":true,
                   "blockers":["worker route should be verified"]
@@ -633,8 +635,8 @@ class UpstreamCliTest {
         assertEquals("/api/v1/admin/upstream-tenants/client-apps/ensure", lastPath);
         assertEquals("POST", lastMethod);
         assertNull(lastApiKeyHeader);
-        assertEquals("Bearer tenant-admin-token-secret", lastAuthorizationHeader);
-        assertNull(lastUpstreamAdminKeyHeader);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
         assertTrue(lastBody.contains("\"sourceSystem\":\"TMS\""));
         assertTrue(lastBody.contains("\"sourceTenantId\":\"3\""));
         assertTrue(lastBody.contains("\"clientAppName\":\"TMS 3\""));
@@ -655,11 +657,57 @@ class UpstreamCliTest {
         assertTrue(output.contains("stored=NAVI_BASE_URL"));
         assertTrue(output.contains("created=true"));
         assertTrue(output.contains("rotated=true"));
+        assertTrue(output.contains("status=READY"));
+        assertTrue(output.contains("credentialsReplayable=true"));
         assertTrue(output.contains("blocker=worker route should be verified"));
-        assertFalse(output.contains("tenant-admin-token-secret"));
+        assertFalse(output.contains("naa-secret-admin-key"));
         assertFalse(output.contains("cak-secret-key"));
         assertFalse(output.contains("cas-secret-value"));
         assertFalse(output.contains("cac-secret-control-key"));
+    }
+
+    @Test
+    void clientAppEnsureTenantRejectsCredentialsNotReplayableWithoutWritingProfile() throws Exception {
+        Files.writeString(tempDir.resolve(".gitignore"), ".navigator/\n", StandardCharsets.UTF_8);
+        Path profileDir = tempDir.resolve(".navigator");
+        Files.createDirectories(profileDir);
+        Path upstreamProfile = profileDir.resolve("upstream.env");
+        Files.writeString(upstreamProfile, """
+                NAVI_BASE_URL=%s
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
+                NAVI_UPSTREAM_SYSTEM_ID=TMS
+                """.formatted(baseUrl()), StandardCharsets.UTF_8);
+
+        responseOverride = """
+                {"code":0,"data":{
+                  "navigatorTenantId":"nav_tms_3",
+                  "clientAppId":"capp-tms-3",
+                  "clientAppName":"TMS 3",
+                  "capabilityDomain":"tms.ops",
+                  "rootAgentId":"tms-root-agent",
+                  "bindingVersion":"bind-v1",
+                  "status":"CREDENTIALS_NOT_REPLAYABLE",
+                  "errorCode":"CREDENTIALS_NOT_REPLAYABLE",
+                  "message":"binding secrets are one-time credentials; call again with rotateCredentials=true to issue new credentials",
+                  "credentialsReplayable":false,
+                  "created":false,
+                  "rotated":false,
+                  "blockers":[]
+                }}
+                """;
+
+        int code = run(new String[]{"upstream", "client-app", "ensure-tenant",
+                "--profile", ".navigator/upstream.env",
+                "--source-tenant-id", "3",
+                "--tenant-profile", ".navigator/tenants/tms-3.env",
+                "--write-profile"}, Map.of());
+
+        assertEquals(2, code);
+        assertEquals("/api/v1/admin/upstream-tenants/client-apps/ensure", lastPath);
+        assertNull(lastAuthorizationHeader);
+        assertEquals("naa-secret-admin-key", lastUpstreamAdminKeyHeader);
+        assertTrue(stderr.toString(StandardCharsets.UTF_8).contains("CREDENTIALS_NOT_REPLAYABLE"));
+        assertFalse(Files.exists(profileDir.resolve("tenants").resolve("tms-3.env")));
     }
 
     @Test
@@ -667,7 +715,7 @@ class UpstreamCliTest {
         Path upstreamProfile = tempDir.resolve("upstream.env");
         Files.writeString(upstreamProfile, """
                 NAVI_BASE_URL=%s
-                NAVI_ADMIN_TOKEN=tenant-admin-token-secret
+                NAVI_ADMIN_API_KEY=naa-secret-admin-key
                 """.formatted(baseUrl()), StandardCharsets.UTF_8);
 
         int code = run(new String[]{"upstream", "client-app", "ensure-tenant",

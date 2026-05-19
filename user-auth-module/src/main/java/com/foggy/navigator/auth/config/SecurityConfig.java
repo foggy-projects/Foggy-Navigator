@@ -114,6 +114,8 @@ public class SecurityConfig {
                                 "/api/v1/admin/upstream-bootstrap-requests/**").permitAll()
                         .requestMatchers("/api/v1/admin/upstream-admin-credentials",
                                 "/api/v1/admin/upstream-admin-credentials/**").permitAll()
+                        .requestMatchers("/api/v1/admin/upstream-tenants",
+                                "/api/v1/admin/upstream-tenants/**").permitAll()
                         .requestMatchers("/api/v1/admin/client-apps", "/api/v1/admin/client-apps/**").permitAll()
                         .requestMatchers("/api/v1/client-apps", "/api/v1/client-apps/**").permitAll()
                         .requestMatchers("/api/v1/business-agent", "/api/v1/business-agent/**").permitAll()

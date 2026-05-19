@@ -69,6 +69,8 @@ import java.util.List;
 import java.util.Map;
 
 public class UpstreamCli {
+    private static final String CREDENTIALS_NOT_REPLAYABLE = "CREDENTIALS_NOT_REPLAYABLE";
+
     private final PrintStream out;
     private final PrintStream err;
     private final Path cwd;
@@ -475,9 +477,15 @@ public class UpstreamCli {
         form.setWorkerPoolId(optionalOptionOrConfig(args, "worker-pool-id", "NAVI_WORKER_POOL_ID"));
         form.setRotateCredentials(args.flag("rotate-credentials"));
 
-        UpstreamTenantClientAppProvisioningDTO dto = tenantAdminApi().ensureUpstreamTenantClientApp(form);
+        UpstreamTenantClientAppProvisioningDTO dto = upstreamAdminApi().ensureUpstreamTenantClientApp(form);
         if (dto == null || !hasText(dto.getClientAppId())) {
             throw new UpstreamCliException("client-app ensure-tenant response did not include clientAppId");
+        }
+        if (isCredentialsNotReplayable(dto)) {
+            throw new UpstreamCliException("client-app ensure-tenant returned CREDENTIALS_NOT_REPLAYABLE; rerun with --rotate-credentials to issue new one-time credentials");
+        }
+        if (!hasText(dto.getClientAppKey()) || !hasText(dto.getClientAppSecret()) || !hasText(dto.getControlApiKey())) {
+            throw new UpstreamCliException("client-app ensure-tenant response did not include full binding secrets; rerun with --rotate-credentials to issue new one-time credentials");
         }
 
         writeProvisionedTenantProfile(targetProfile, dto, sourceSystem, sourceTenantId);
@@ -1149,20 +1157,6 @@ public class UpstreamCli {
                 Duration.ofSeconds(30)));
     }
 
-    private BusinessAgentApi tenantAdminApi() {
-        String adminToken = config.get("NAVI_ADMIN_TOKEN");
-        String userApiKey = config.get("NAVI_USER_API_KEY");
-        if (!hasText(adminToken) && !hasText(userApiKey)) {
-            throw new UpstreamCliException("tenant admin credential is required (NAVI_ADMIN_TOKEN or NAVI_USER_API_KEY)");
-        }
-        return new BusinessAgentApi(new HttpHelper(
-                config.required("NAVI_BASE_URL", "Navigator base URL"),
-                userApiKey,
-                adminToken,
-                config.get("NAVI_TENANT_ID"),
-                Duration.ofSeconds(30)));
-    }
-
     private BusinessAgentApi businessAgentControlApi() {
         String controlApiKey = config.get("NAVI_CONTROL_API_KEY");
         String adminToken = config.get("NAVI_ADMIN_TOKEN");
@@ -1495,6 +1489,12 @@ public class UpstreamCli {
         return String.join(",", keys);
     }
 
+    private boolean isCredentialsNotReplayable(UpstreamTenantClientAppProvisioningDTO dto) {
+        return dto != null
+                && (CREDENTIALS_NOT_REPLAYABLE.equals(dto.getStatus())
+                || CREDENTIALS_NOT_REPLAYABLE.equals(dto.getErrorCode()));
+    }
+
     private void printUpstreamTenantClientAppProvisioning(UpstreamTenantClientAppProvisioningDTO dto) {
         out.println("navigatorTenantId=" + valueOrEmpty(dto != null ? dto.getNavigatorTenantId() : null));
         out.println("clientAppId=" + valueOrEmpty(dto != null ? dto.getClientAppId() : null));
@@ -1508,6 +1508,12 @@ public class UpstreamCli {
         out.println("skillId=" + valueOrEmpty(dto != null ? dto.getSkillId() : null));
         out.println("workerPoolId=" + valueOrEmpty(dto != null ? dto.getWorkerPoolId() : null));
         out.println("bindingVersion=" + valueOrEmpty(dto != null ? dto.getBindingVersion() : null));
+        out.println("status=" + valueOrEmpty(dto != null ? dto.getStatus() : null));
+        out.println("errorCode=" + valueOrEmpty(dto != null ? dto.getErrorCode() : null));
+        out.println("credentialsReplayable=" + (dto != null && Boolean.TRUE.equals(dto.getCredentialsReplayable())));
+        if (dto != null && hasText(dto.getMessage())) {
+            out.println("message=" + redact(dto.getMessage()));
+        }
         out.println("created=" + (dto != null && Boolean.TRUE.equals(dto.getCreated())));
         out.println("rotated=" + (dto != null && Boolean.TRUE.equals(dto.getRotated())));
         if (dto != null && dto.getBlockers() != null) {
