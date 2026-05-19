@@ -46,6 +46,8 @@ export interface UseNavigatorChat {
   getSessionMessages: (contextId: string, options?: PaginationOptions) => Promise<SessionMessagesPage>
   /** 加载历史会话并切换当前 contextId */
   loadSession: (contextId: string, options?: PaginationOptions) => Promise<SessionMessagesPage>
+  /** 删除历史会话 */
+  deleteSession: (contextId: string) => Promise<void>
   /** 取消当前任务 */
   cancel: () => Promise<void>
   /** 清空对话（重新开始新会话） */
@@ -250,6 +252,13 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       throw e
     } finally {
       isLoading.value = false
+    }
+  }
+
+  async function deleteSession(targetContextId: string): Promise<void> {
+    await api.deleteSession(targetContextId)
+    if (contextId.value === targetContextId) {
+      resetConversationState(true)
     }
   }
 
@@ -550,6 +559,7 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
     listSessions,
     getSessionMessages,
     loadSession,
+    deleteSession,
     cancel,
     clear,
   }

@@ -246,6 +246,10 @@ export interface SessionSummary {
   title?: string | null
   status?: string
   latestTaskId?: string | null
+  /** C 端历史列表展示用：该会话的用户/助手交互轮数 */
+  turnCount?: number
+  /** C 端历史列表展示用：最后一条可读消息摘要 */
+  lastMessagePreview?: string | null
   clientContext?: Record<string, unknown> | null
   createdAt?: string
   updatedAt?: string

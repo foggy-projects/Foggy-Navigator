@@ -1,6 +1,6 @@
 <template>
   <div
-    class="navigator-chat"
+    :class="['navigator-chat', { 'navigator-chat--with-history': showHistory }]"
     :style="containerStyle"
     :data-attachments-enabled="attachmentsEnabled ? 'true' : 'false'"
     :data-upload-hook="resolvedConfig.uploadAttachment ? 'present' : 'missing'"
@@ -30,227 +30,319 @@
       </slot>
     </div>
 
-    <!-- Messages -->
-    <div ref="messagesRef" class="nc-messages" @scroll="handleScroll">
-      <div v-if="chat.messages.value.length === 0" class="nc-empty">
-        <slot name="empty">
-          <el-empty :description="emptyText" :image-size="80" />
-        </slot>
-      </div>
-      <div
-        v-for="msg in visibleMessages"
-        :key="msg.id"
-        :class="['nc-message', `nc-message--${msg.role}`]"
-      >
-        <div class="nc-bubble">
-          <div v-if="msg.role === 'user'" class="nc-content nc-content--user">
-            <div v-if="msg.content" class="nc-message-text">{{ msg.content }}</div>
-            <div v-if="msg.attachments?.length" class="nc-message-attachments">
-              <component
-                :is="attachment.url ? 'a' : 'div'"
-                v-for="attachment in msg.attachments"
-                :key="attachmentKey(attachment)"
-                class="nc-message-attachment"
-                :href="attachment.url || undefined"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <img
-                  v-if="isAttachmentImage(attachment) && attachmentPreviewUrl(attachment)"
-                  :src="attachmentPreviewUrl(attachment)"
-                  :alt="attachmentName(attachment)"
-                  class="nc-message-attachment-thumb"
-                />
-                <el-icon v-else class="nc-message-attachment-icon"><Document /></el-icon>
-                <span class="nc-message-attachment-name">{{ attachmentName(attachment) }}</span>
-                <span v-if="attachment.size" class="nc-message-attachment-size">{{ formatFileSize(attachment.size) }}</span>
-              </component>
-            </div>
-          </div>
-          <div v-else-if="msg.role === 'assistant'" class="nc-content nc-content--assistant">
-            <!-- eslint-disable-next-line vue/no-v-html -->
-            <div v-if="msg.content" v-html="renderMarkdown(msg.content)" />
-            <div v-if="msg.actions?.length" class="nc-actions">
+    <div class="nc-body">
+      <aside v-if="showHistory" class="nc-history" aria-label="历史会话">
+        <div class="nc-history-header">
+          <div class="nc-history-title">{{ historyTitle }}</div>
+          <div class="nc-history-actions">
+            <el-tooltip v-if="showHistoryNewSession" content="新会话" placement="bottom">
               <el-button
-                v-for="action in msg.actions"
-                :key="action.id"
+                class="nc-history-action"
+                :icon="Plus"
+                circle
                 size="small"
-                type="primary"
-                plain
-                @click="handleAction(action)"
-              >
-                {{ action.label }}
-              </el-button>
-            </div>
-            <ExecutionReportInline
-              :report-ref="msg.executionReportRef"
-              :digest="msg.executionReportDigest"
-              :load-markdown="executionReportMarkdownLoader"
+                title="新会话"
+                @click="handleNewSession"
+              />
+            </el-tooltip>
+            <el-button
+              class="nc-history-action"
+              :icon="Refresh"
+              circle
+              size="small"
+              :loading="historyLoading"
+              title="刷新会话列表"
+              @click="loadHistorySessions"
             />
-            <div v-if="msg.durationMs || msg.costUsd" class="nc-meta">
-              <span v-if="msg.durationMs">{{ (msg.durationMs / 1000).toFixed(1) }}s</span>
-              <span v-if="msg.costUsd"> · ${{ msg.costUsd.toFixed(4) }}</span>
-            </div>
           </div>
-          <div v-else class="nc-content nc-content--system">
-            <SkillFrameBlockView
-              v-if="msg.skillFrame"
-              :frame="msg.skillFrame"
-              :display-mode="resolvedMode"
-              :load-markdown="executionReportMarkdownLoader"
-            />
-            <details v-else-if="msg.toolExecution" class="nc-process nc-tool-execution" open>
-              <summary>
-                <span class="nc-tool-title">
-                  <el-icon v-if="msg.toolExecution.status === 'running'" class="is-loading"><Loading /></el-icon>
-                  <span>{{ toolExecutionTitle(msg.toolExecution) }}</span>
+        </div>
+        <el-input
+          v-if="showHistorySearch"
+          v-model="historyKeyword"
+          class="nc-history-search"
+          size="small"
+          clearable
+          :placeholder="historySearchPlaceholder"
+        />
+        <div v-if="historyError" class="nc-history-error">
+          <span>{{ historyLoadErrorText }}</span>
+          <button type="button" @click="loadHistorySessions">重试</button>
+        </div>
+        <div v-else-if="historyLoading && historySessions.length === 0" class="nc-history-loading">
+          <el-icon class="is-loading"><Loading /></el-icon>
+        </div>
+        <div v-else-if="filteredHistorySessions.length === 0" class="nc-history-empty">
+          {{ historyKeyword ? historyNoResultText : historyEmptyText }}
+        </div>
+        <div v-else class="nc-history-list">
+          <div
+            v-for="session in filteredHistorySessions"
+            :key="session.contextId"
+            :class="['nc-history-item', {
+              'is-active': session.contextId === chat.contextId.value,
+              'nc-history-item--deletable': showHistoryDelete,
+            }]"
+          >
+            <button
+              type="button"
+              class="nc-history-item-content"
+              :disabled="loadingHistoryContextId === session.contextId || deletingHistoryContextId === session.contextId"
+              @click="handleHistorySessionClick(session)"
+            >
+              <span class="nc-history-item-main">
+                <span class="nc-history-item-title">{{ sessionDisplayTitle(session) }}</span>
+                <span :class="['nc-history-status', `nc-history-status--${sessionStatusKind(session)}`]">
+                  {{ sessionStatusLabel(session) }}
                 </span>
-                <span :class="['nc-tool-status', `nc-tool-status--${msg.toolExecution.status}`]">
-                  {{ toolStatusLabel(msg.toolExecution.status) }}
-                </span>
-                <span v-if="showDiagnosticDetails && msg.toolExecution.durationMs != null" class="nc-tool-duration">
-                  {{ (msg.toolExecution.durationMs / 1000).toFixed(1) }}s
-                </span>
-              </summary>
-              <div class="nc-tool-body">
-                <div v-if="toolExecutionSummary(msg.toolExecution)" class="nc-tool-summary">
-                  摘要：{{ toolExecutionSummary(msg.toolExecution) }}
+              </span>
+              <span v-if="sessionDisplayPreview(session)" class="nc-history-preview">
+                {{ sessionDisplayPreview(session) }}
+              </span>
+              <span class="nc-history-item-meta">
+                <span>{{ formatSessionTime(session.updatedAt || session.createdAt) }}</span>
+                <span v-if="sessionTurnCount(session) != null">{{ sessionTurnCount(session) }}轮</span>
+              </span>
+            </button>
+            <el-tooltip v-if="showHistoryDelete" content="删除会话" placement="left">
+              <button
+                type="button"
+                class="nc-history-delete"
+                :disabled="deletingHistoryContextId === session.contextId"
+                aria-label="删除会话"
+                @click="handleHistorySessionDelete(session)"
+              >
+                <el-icon v-if="deletingHistoryContextId === session.contextId" class="is-loading"><Loading /></el-icon>
+                <el-icon v-else><Delete /></el-icon>
+              </button>
+            </el-tooltip>
+          </div>
+        </div>
+      </aside>
+
+      <main class="nc-chat-pane">
+        <!-- Messages -->
+        <div ref="messagesRef" class="nc-messages" @scroll="handleScroll">
+          <div v-if="chat.messages.value.length === 0" class="nc-empty">
+            <slot name="empty">
+              <el-empty :description="emptyText" :image-size="80" />
+            </slot>
+          </div>
+          <div
+            v-for="msg in visibleMessages"
+            :key="msg.id"
+            :class="['nc-message', `nc-message--${msg.role}`]"
+          >
+            <div class="nc-bubble">
+              <div v-if="msg.role === 'user'" class="nc-content nc-content--user">
+                <div v-if="msg.content" class="nc-message-text">{{ msg.content }}</div>
+                <div v-if="msg.attachments?.length" class="nc-message-attachments">
+                  <component
+                    :is="attachment.url ? 'a' : 'div'"
+                    v-for="attachment in msg.attachments"
+                    :key="attachmentKey(attachment)"
+                    class="nc-message-attachment"
+                    :href="attachment.url || undefined"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <img
+                      v-if="isAttachmentImage(attachment) && attachmentPreviewUrl(attachment)"
+                      :src="attachmentPreviewUrl(attachment)"
+                      :alt="attachmentName(attachment)"
+                      class="nc-message-attachment-thumb"
+                    />
+                    <el-icon v-else class="nc-message-attachment-icon"><Document /></el-icon>
+                    <span class="nc-message-attachment-name">{{ attachmentName(attachment) }}</span>
+                    <span v-if="attachment.size" class="nc-message-attachment-size">{{ formatFileSize(attachment.size) }}</span>
+                  </component>
+                </div>
+              </div>
+              <div v-else-if="msg.role === 'assistant'" class="nc-content nc-content--assistant">
+                <!-- eslint-disable-next-line vue/no-v-html -->
+                <div v-if="msg.content" v-html="renderMarkdown(msg.content)" />
+                <div v-if="msg.actions?.length" class="nc-actions">
+                  <el-button
+                    v-for="action in msg.actions"
+                    :key="action.id"
+                    size="small"
+                    type="primary"
+                    plain
+                    @click="handleAction(action)"
+                  >
+                    {{ action.label }}
+                  </el-button>
                 </div>
                 <ExecutionReportInline
-                  :report-ref="msg.toolExecution.executionReportRef"
-                  :digest="msg.toolExecution.executionReportDigest"
+                  :report-ref="msg.executionReportRef"
+                  :digest="msg.executionReportDigest"
                   :load-markdown="executionReportMarkdownLoader"
                 />
-                <details v-if="showDebugDetails" class="nc-nested">
-                  <summary>参数</summary>
-                  <pre>{{ formatJson(msg.toolExecution.args) }}</pre>
-                </details>
-                <details v-if="showDebugDetails" class="nc-nested">
-                  <summary>结果</summary>
-                  <pre>{{ formatJson(msg.toolExecution.result ?? msg.toolExecution.error) }}</pre>
-                </details>
-                <details v-if="showDebugDetails" class="nc-nested">
-                  <summary>排障字段</summary>
-                  <pre>{{ formatJson(msg.toolExecution.trace) }}</pre>
-                </details>
-                <details v-if="showDebugDetails" class="nc-nested">
-                  <summary>原始 JSON</summary>
-                  <pre>{{ formatJson({ call: msg.toolExecution.rawCall, result: msg.toolExecution.rawResult }) }}</pre>
-                </details>
+                <div v-if="msg.durationMs || msg.costUsd" class="nc-meta">
+                  <span v-if="msg.durationMs">{{ (msg.durationMs / 1000).toFixed(1) }}s</span>
+                  <span v-if="msg.costUsd"> · ${{ msg.costUsd.toFixed(4) }}</span>
+                </div>
               </div>
-            </details>
-            <details v-else-if="msg.process" class="nc-process">
-              <summary>{{ processLabel(msg) }}</summary>
-              <pre>{{ msg.content }}</pre>
-            </details>
-            <el-alert v-else :title="msg.content" :type="msg.error ? 'error' : 'info'" :closable="false" show-icon />
+              <div v-else class="nc-content nc-content--system">
+                <SkillFrameBlockView
+                  v-if="msg.skillFrame"
+                  :frame="msg.skillFrame"
+                  :display-mode="resolvedMode"
+                  :load-markdown="executionReportMarkdownLoader"
+                />
+                <details v-else-if="msg.toolExecution" class="nc-process nc-tool-execution" open>
+                  <summary>
+                    <span class="nc-tool-title">
+                      <el-icon v-if="msg.toolExecution.status === 'running'" class="is-loading"><Loading /></el-icon>
+                      <span>{{ toolExecutionTitle(msg.toolExecution) }}</span>
+                    </span>
+                    <span :class="['nc-tool-status', `nc-tool-status--${msg.toolExecution.status}`]">
+                      {{ toolStatusLabel(msg.toolExecution.status) }}
+                    </span>
+                    <span v-if="showDiagnosticDetails && msg.toolExecution.durationMs != null" class="nc-tool-duration">
+                      {{ (msg.toolExecution.durationMs / 1000).toFixed(1) }}s
+                    </span>
+                  </summary>
+                  <div class="nc-tool-body">
+                    <div v-if="toolExecutionSummary(msg.toolExecution)" class="nc-tool-summary">
+                      摘要：{{ toolExecutionSummary(msg.toolExecution) }}
+                    </div>
+                    <ExecutionReportInline
+                      :report-ref="msg.toolExecution.executionReportRef"
+                      :digest="msg.toolExecution.executionReportDigest"
+                      :load-markdown="executionReportMarkdownLoader"
+                    />
+                    <details v-if="showDebugDetails" class="nc-nested">
+                      <summary>参数</summary>
+                      <pre>{{ formatJson(msg.toolExecution.args) }}</pre>
+                    </details>
+                    <details v-if="showDebugDetails" class="nc-nested">
+                      <summary>结果</summary>
+                      <pre>{{ formatJson(msg.toolExecution.result ?? msg.toolExecution.error) }}</pre>
+                    </details>
+                    <details v-if="showDebugDetails" class="nc-nested">
+                      <summary>排障字段</summary>
+                      <pre>{{ formatJson(msg.toolExecution.trace) }}</pre>
+                    </details>
+                    <details v-if="showDebugDetails" class="nc-nested">
+                      <summary>原始 JSON</summary>
+                      <pre>{{ formatJson({ call: msg.toolExecution.rawCall, result: msg.toolExecution.rawResult }) }}</pre>
+                    </details>
+                  </div>
+                </details>
+                <details v-else-if="msg.process" class="nc-process">
+                  <summary>{{ processLabel(msg) }}</summary>
+                  <pre>{{ msg.content }}</pre>
+                </details>
+                <el-alert v-else :title="msg.content" :type="msg.error ? 'error' : 'info'" :closable="false" show-icon />
+              </div>
+            </div>
+          </div>
+
+          <!-- Loading indicator -->
+          <div v-if="chat.isLoading.value" class="nc-message nc-message--assistant">
+            <div class="nc-bubble">
+              <div class="nc-thinking">
+                <el-icon class="is-loading"><Loading /></el-icon>
+                <span>{{ chat.progressText.value || thinkingText }}</span>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
 
-      <!-- Loading indicator -->
-      <div v-if="chat.isLoading.value" class="nc-message nc-message--assistant">
-        <div class="nc-bubble">
-          <div class="nc-thinking">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span>{{ chat.progressText.value || thinkingText }}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Input -->
-    <div
-      v-if="showInput"
-      :class="['nc-input-area', { 'is-drag-over': isDragOver }]"
-      @paste="handlePaste"
-      @dragover.prevent="handleDragOver"
-      @dragleave="handleDragLeave"
-      @drop.prevent="handleDrop"
-    >
-      <div v-if="pendingAttachments.length" class="nc-pending-attachments">
+        <!-- Input -->
         <div
-          v-for="attachment in pendingAttachments"
-          :key="attachment.id"
-          :class="['nc-pending-attachment', `nc-pending-attachment--${attachment.status}`]"
+          v-if="showInput"
+          :class="['nc-input-area', { 'is-drag-over': isDragOver }]"
+          @paste="handlePaste"
+          @dragover.prevent="handleDragOver"
+          @dragleave="handleDragLeave"
+          @drop.prevent="handleDrop"
         >
-          <img
-            v-if="attachment.isImage && attachment.previewUrl"
-            :src="attachment.previewUrl"
-            :alt="attachment.name"
-            class="nc-pending-thumb"
-          />
-          <el-icon v-else class="nc-pending-file-icon"><Document /></el-icon>
-          <div class="nc-pending-info">
-            <span class="nc-pending-name" :title="attachment.name">{{ attachment.name }}</span>
-            <span class="nc-pending-meta">
-              {{ attachmentKindLabel(attachment.kind) }} · {{ formatFileSize(attachment.size) }}
-            </span>
-            <span v-if="attachment.error" class="nc-pending-error">{{ attachment.error }}</span>
+          <div v-if="pendingAttachments.length" class="nc-pending-attachments">
+            <div
+              v-for="attachment in pendingAttachments"
+              :key="attachment.id"
+              :class="['nc-pending-attachment', `nc-pending-attachment--${attachment.status}`]"
+            >
+              <img
+                v-if="attachment.isImage && attachment.previewUrl"
+                :src="attachment.previewUrl"
+                :alt="attachment.name"
+                class="nc-pending-thumb"
+              />
+              <el-icon v-else class="nc-pending-file-icon"><Document /></el-icon>
+              <div class="nc-pending-info">
+                <span class="nc-pending-name" :title="attachment.name">{{ attachment.name }}</span>
+                <span class="nc-pending-meta">
+                  {{ attachmentKindLabel(attachment.kind) }} · {{ formatFileSize(attachment.size) }}
+                </span>
+                <span v-if="attachment.error" class="nc-pending-error">{{ attachment.error }}</span>
+              </div>
+              <el-icon v-if="attachment.status === 'uploading'" class="nc-pending-status is-loading"><Loading /></el-icon>
+              <button
+                v-else
+                type="button"
+                class="nc-pending-remove"
+                :disabled="isUploadingAttachments"
+                aria-label="移除附件"
+                @click="removePendingAttachment(attachment.id)"
+              >
+                <el-icon><Close /></el-icon>
+              </button>
+            </div>
           </div>
-          <el-icon v-if="attachment.status === 'uploading'" class="nc-pending-status is-loading"><Loading /></el-icon>
-          <button
-            v-else
-            type="button"
-            class="nc-pending-remove"
-            :disabled="isUploadingAttachments"
-            aria-label="移除附件"
-            @click="removePendingAttachment(attachment.id)"
-          >
-            <el-icon><Close /></el-icon>
-          </button>
+          <div class="nc-input-row">
+            <input
+              ref="fileInputRef"
+              class="nc-file-input"
+              type="file"
+              :accept="attachmentAcceptAttr"
+              multiple
+              @change="handleFileInputChange"
+            />
+            <el-tooltip v-if="attachmentsEnabled" content="添加附件" placement="top">
+              <el-button
+                class="nc-attachment-button"
+                size="small"
+                :disabled="chat.isLoading.value || isUploadingAttachments"
+                @click="openFileDialog"
+              >
+                <el-icon><Paperclip /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-input
+              v-model="inputText"
+              type="textarea"
+              :autosize="{ minRows: 1, maxRows: 4 }"
+              :placeholder="placeholder"
+              :disabled="chat.isLoading.value || isUploadingAttachments"
+              resize="none"
+              @keydown.enter.exact.prevent="handleSend"
+            />
+            <div class="nc-input-actions">
+              <el-button
+                v-if="chat.isLoading.value"
+                type="danger"
+                size="small"
+                plain
+                @click="chat.cancel()"
+              >
+                取消
+              </el-button>
+              <el-button
+                v-else
+                type="primary"
+                size="small"
+                :loading="isUploadingAttachments"
+                :disabled="!canSend"
+                @click="handleSend"
+              >
+                发送
+              </el-button>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="nc-input-row">
-        <input
-          ref="fileInputRef"
-          class="nc-file-input"
-          type="file"
-          :accept="attachmentAcceptAttr"
-          multiple
-          @change="handleFileInputChange"
-        />
-        <el-tooltip v-if="attachmentsEnabled" content="添加附件" placement="top">
-          <el-button
-            class="nc-attachment-button"
-            size="small"
-            :disabled="chat.isLoading.value || isUploadingAttachments"
-            @click="openFileDialog"
-          >
-            <el-icon><Paperclip /></el-icon>
-          </el-button>
-        </el-tooltip>
-        <el-input
-          v-model="inputText"
-          type="textarea"
-          :autosize="{ minRows: 1, maxRows: 4 }"
-          :placeholder="placeholder"
-          :disabled="chat.isLoading.value || isUploadingAttachments"
-          resize="none"
-          @keydown.enter.exact.prevent="handleSend"
-        />
-        <div class="nc-input-actions">
-          <el-button
-            v-if="chat.isLoading.value"
-            type="danger"
-            size="small"
-            plain
-            @click="chat.cancel()"
-          >
-            取消
-          </el-button>
-          <el-button
-            v-else
-            type="primary"
-            size="small"
-            :loading="isUploadingAttachments"
-            :disabled="!canSend"
-            @click="handleSend"
-          >
-            发送
-          </el-button>
-        </div>
-      </div>
+      </main>
     </div>
 
     <slot
@@ -274,9 +366,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onBeforeUnmount, getCurrentInstance, type CSSProperties } from 'vue'
-import { ElInput, ElButton, ElTag, ElEmpty, ElAlert, ElIcon, ElTooltip, ElMessage } from 'element-plus'
-import { Close, Document, Loading, Paperclip } from '@element-plus/icons-vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, getCurrentInstance, type CSSProperties } from 'vue'
+import { ElInput, ElButton, ElTag, ElEmpty, ElAlert, ElIcon, ElTooltip, ElMessage, ElMessageBox } from 'element-plus'
+import { Close, Delete, Document, Loading, Paperclip, Plus, Refresh } from '@element-plus/icons-vue'
 import { BusinessSuspensionDialog, ExecutionReportInline } from '@foggy/chat'
 import { useNavigatorChat } from '../composables/useNavigatorChat'
 import SkillFrameBlockView from './SkillFrameBlockView.vue'
@@ -291,6 +383,7 @@ import type {
   NavigatorChatConfig,
   NavigatorChatMode,
   PendingNavigatorAttachment,
+  SessionSummary,
   TaskStatus,
   ToolExecutionBlock,
   UploadAttachmentHook,
@@ -356,6 +449,30 @@ const props = withDefaults(defineProps<{
   showHeader?: boolean
   /** 是否显示输入框 */
   showInput?: boolean
+  /** 是否显示内置历史会话栏 */
+  showHistory?: boolean
+  /** 历史会话标题 */
+  historyTitle?: string
+  /** 历史会话首屏数量 */
+  historyLimit?: number
+  /** 是否显示历史会话本地搜索 */
+  showHistorySearch?: boolean
+  /** 是否显示历史栏新会话入口 */
+  showHistoryNewSession?: boolean
+  /** 是否显示历史会话删除入口；需要后端或 BFF 支持 DELETE 会话接口 */
+  showHistoryDelete?: boolean
+  /** 历史会话搜索占位文本 */
+  historySearchPlaceholder?: string
+  /** 历史会话为空时的提示 */
+  historyEmptyText?: string
+  /** 历史会话搜索无结果提示 */
+  historyNoResultText?: string
+  /** 历史会话加载失败提示 */
+  historyLoadErrorText?: string
+  /** 会话标题缺失时的兜底标题 */
+  defaultHistorySessionTitle?: string
+  /** 删除历史会话确认文案 */
+  historyDeleteConfirmText?: string
   /** 是否启用默认 suspension 弹窗 */
   showSuspensionDialog?: boolean
   /** suspension 弹窗是否可见 */
@@ -373,6 +490,18 @@ const props = withDefaults(defineProps<{
   placeholder: '输入消息...',
   showHeader: true,
   showInput: true,
+  showHistory: false,
+  historyTitle: '历史会话',
+  historyLimit: 30,
+  showHistorySearch: true,
+  showHistoryNewSession: true,
+  showHistoryDelete: false,
+  historySearchPlaceholder: '搜索会话',
+  historyEmptyText: '暂无历史会话',
+  historyNoResultText: '未找到相关会话',
+  historyLoadErrorText: '历史会话加载失败，请稍后重试',
+  defaultHistorySessionTitle: '未命名会话',
+  historyDeleteConfirmText: '删除后将无法在历史会话中恢复该对话。',
   showSuspensionDialog: true,
   suspensionDialogVisible: false,
   suspension: null,
@@ -395,6 +524,12 @@ const emit = defineEmits<{
   action: [action: NavigatorAction]
   /** 展示模式切换 */
   displayModeChange: [mode: NavigatorChatMode]
+  /** 用户加载历史会话后触发 */
+  sessionLoad: [session: SessionSummary]
+  /** 用户点击新会话后触发 */
+  newSession: []
+  /** 用户删除历史会话后触发 */
+  sessionDelete: [session: SessionSummary]
 }>()
 
 const instance = getCurrentInstance()
@@ -474,6 +609,12 @@ const fileInputRef = ref<HTMLInputElement>()
 const pendingAttachments = ref<PendingNavigatorAttachment[]>([])
 const isUploadingAttachments = ref(false)
 const isDragOver = ref(false)
+const historySessions = ref<SessionSummary[]>([])
+const historyKeyword = ref('')
+const historyLoading = ref(false)
+const historyError = ref<string | null>(null)
+const loadingHistoryContextId = ref<string | null>(null)
+const deletingHistoryContextId = ref<string | null>(null)
 const executionReportMarkdownLoader = computed(() => resolvedConfig.value.executionReportMarkdownLoader)
 const resolvedMode = computed<NavigatorChatMode>(() => activeDisplayMode.value)
 const showDebugDetails = computed(() => resolvedMode.value === 'debug')
@@ -482,6 +623,19 @@ const visibleMessages = computed(() => chat.messages.value.filter((message) => {
   if (resolvedMode.value === 'business' && message.process) return false
   return true
 }))
+const filteredHistorySessions = computed(() => {
+  const keyword = historyKeyword.value.trim().toLowerCase()
+  if (!keyword) return historySessions.value
+  return historySessions.value.filter((session) => {
+    const haystack = [
+      sessionDisplayTitle(session),
+      sessionDisplayPreview(session),
+      sessionStatusLabel(session),
+      session.contextId,
+    ].join(' ').toLowerCase()
+    return haystack.includes(keyword)
+  })
+})
 
 // 暴露 composable 给父组件
 defineExpose({
@@ -495,6 +649,10 @@ defineExpose({
   getSessionMessages: chat.getSessionMessages,
   /** 加载历史会话并继续 contextId */
   loadSession: chat.loadSession,
+  /** 删除历史会话 */
+  deleteSession: chat.deleteSession,
+  /** 刷新内置历史会话列表 */
+  loadHistorySessions,
   /** 取消当前任务 */
   cancel: chat.cancel,
   /** 清空对话 */
@@ -503,9 +661,10 @@ defineExpose({
   contextId: chat.contextId,
 })
 
-const containerStyle = computed<CSSProperties>(() => ({
-  height: props.height,
-}))
+const containerStyle = computed<CSSProperties>(() => {
+  const height = props.showHistory && !hasExplicitProp('height') ? '100%' : props.height
+  return { height }
+})
 
 const statusTagType = computed<'success' | 'danger' | 'info' | 'warning' | 'primary'>(() => {
   switch (chat.taskStatus.value) {
@@ -623,6 +782,169 @@ function displayModeLabel(mode: NavigatorChatMode): string {
 
 function handleScroll() {
   // Reserved for future load-more
+}
+
+async function loadHistorySessions() {
+  if (!props.showHistory || historyLoading.value) return
+  historyLoading.value = true
+  historyError.value = null
+  try {
+    const page = await chat.listSessions({ limit: props.historyLimit })
+    historySessions.value = page.sessions ?? []
+  } catch (e: unknown) {
+    historyError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+async function handleHistorySessionClick(session: SessionSummary) {
+  if (!session.contextId || loadingHistoryContextId.value) return
+  loadingHistoryContextId.value = session.contextId
+  historyError.value = null
+  try {
+    await chat.loadSession(session.contextId)
+    emit('sessionLoad', session)
+  } catch (e: unknown) {
+    historyError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    loadingHistoryContextId.value = null
+  }
+}
+
+function handleNewSession() {
+  chat.clear()
+  historyError.value = null
+  loadingHistoryContextId.value = null
+  emit('newSession')
+}
+
+async function handleHistorySessionDelete(session: SessionSummary) {
+  if (!session.contextId || deletingHistoryContextId.value) return
+  try {
+    await ElMessageBox.confirm(
+      props.historyDeleteConfirmText,
+      '删除会话',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        distinguishCancelAndClose: true,
+      }
+    )
+  } catch {
+    return
+  }
+
+  deletingHistoryContextId.value = session.contextId
+  historyError.value = null
+  try {
+    await chat.deleteSession(session.contextId)
+    historySessions.value = historySessions.value.filter((item) => item.contextId !== session.contextId)
+    emit('sessionDelete', session)
+    ElMessage.success('会话已删除')
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    historyError.value = msg
+    ElMessage.error('删除会话失败，请稍后重试')
+  } finally {
+    deletingHistoryContextId.value = null
+  }
+}
+
+function sessionDisplayTitle(session: SessionSummary): string {
+  const title = session.title?.trim()
+  if (title) return title
+  const preview = sessionDisplayPreview(session)
+  if (preview) return preview
+  return props.defaultHistorySessionTitle
+}
+
+function sessionDisplayPreview(session: SessionSummary): string {
+  const preview = firstString(
+    session.lastMessagePreview,
+    session.clientContext?.lastMessagePreview,
+    session.clientContext?.last_message_preview,
+    session.clientContext?.preview
+  )
+  return preview ? truncateText(preview, 48) : ''
+}
+
+function sessionTurnCount(session: SessionSummary): number | null {
+  const value = firstNumber(
+    session.turnCount,
+    session.clientContext?.turnCount,
+    session.clientContext?.turn_count,
+    session.clientContext?.roundCount,
+    session.clientContext?.round_count
+  )
+  return value != null && value >= 0 ? Math.floor(value) : null
+}
+
+function sessionStatusKind(session: SessionSummary): 'working' | 'input' | 'completed' | 'failed' | 'idle' {
+  const status = String(session.status ?? '').toUpperCase()
+  if (['SUBMITTED', 'WORKING', 'RUNNING', 'PROCESSING', 'ACTIVE'].includes(status)) return 'working'
+  if (['INPUT_REQUIRED', 'WAITING_USER', 'NEED_REPLY', 'PENDING_USER'].includes(status)) return 'input'
+  if (['COMPLETED', 'SUCCESS', 'DONE'].includes(status)) return 'completed'
+  if (['FAILED', 'ERROR', 'CANCELED', 'CANCELLED'].includes(status)) return 'failed'
+  return 'idle'
+}
+
+function sessionStatusLabel(session: SessionSummary): string {
+  switch (sessionStatusKind(session)) {
+    case 'working': return '进行中'
+    case 'input': return '需回复'
+    case 'completed': return '已完成'
+    case 'failed': return '失败'
+    default: return '会话'
+  }
+}
+
+function formatSessionTime(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+
+  const now = new Date()
+  const sameYear = date.getFullYear() === now.getFullYear()
+  const sameDay = sameYear
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate()
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  const isYesterday = date.getFullYear() === yesterday.getFullYear()
+    && date.getMonth() === yesterday.getMonth()
+    && date.getDate() === yesterday.getDate()
+  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+  if (sameDay) return `今天 ${time}`
+  if (isYesterday) return `昨天 ${time}`
+  if (sameYear) return `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())} ${time}`
+  return `${date.getFullYear()}/${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}`
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
+      return Number(value)
+    }
+  }
+  return null
+}
+
+function truncateText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value
 }
 
 function openFileDialog() {
@@ -880,9 +1202,24 @@ function formatFileSize(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
+onMounted(() => {
+  if (props.showHistory) {
+    loadHistorySessions()
+  }
+})
+
 onBeforeUnmount(() => {
   clearPendingAttachments()
 })
+
+watch(
+  () => props.showHistory,
+  (visible) => {
+    if (visible && historySessions.value.length === 0) {
+      loadHistorySessions()
+    }
+  }
+)
 
 // Auto-scroll to bottom when new messages arrive
 watch(
@@ -899,6 +1236,9 @@ watch(
 // Emit status changes
 watch(chat.taskStatus, (status) => {
   emit('statusChange', status)
+  if (props.showHistory && ['COMPLETED', 'FAILED', 'CANCELED', 'INPUT_REQUIRED'].includes(status ?? '')) {
+    loadHistorySessions()
+  }
 })
 
 // Emit replies
@@ -916,12 +1256,21 @@ watch(
 
 <style scoped>
 .navigator-chat {
+  width: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--el-border-color-light, #e4e7ed);
   border-radius: 8px;
   overflow: hidden;
   background: var(--el-bg-color, #fff);
+  box-sizing: border-box;
+}
+
+.navigator-chat--with-history {
+  border-color: var(--el-border-color-lighter, #ebeef5);
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .nc-header {
@@ -980,8 +1329,257 @@ watch(
   font-weight: 600;
 }
 
+.nc-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--el-bg-color, #fff);
+}
+
+.nc-history {
+  width: 264px;
+  flex: 0 0 264px;
+  min-width: 0;
+  border-right: 1px solid var(--el-border-color-lighter, #ebeef5);
+  background: var(--el-bg-color, #fff);
+  display: flex;
+  flex-direction: column;
+}
+
+.nc-history-header {
+  height: 46px;
+  flex: 0 0 46px;
+  padding: 0 10px 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--el-border-color-extra-light, #f2f6fc);
+}
+
+.nc-history-title {
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--el-text-color-primary, #303133);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-history-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nc-history-action {
+  flex: 0 0 auto;
+}
+
+.nc-history-search {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--el-border-color-extra-light, #f2f6fc);
+}
+
+.nc-history-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nc-history-item {
+  position: relative;
+  width: 100%;
+  min-height: 76px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  display: flex;
+  align-items: stretch;
+}
+
+.nc-history-item:hover {
+  background: var(--el-fill-color-light, #f4f4f5);
+}
+
+.nc-history-item.is-active {
+  border-color: var(--el-color-primary-light-5, #a0cfff);
+  background: var(--el-color-primary-light-9, #ecf5ff);
+}
+
+.nc-history-item-content {
+  min-width: 0;
+  flex: 1;
+  padding: 9px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.nc-history-item--deletable .nc-history-item-content {
+  padding-right: 34px;
+}
+
+.nc-history-item-content:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.nc-history-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--el-text-color-secondary, #909399);
+  cursor: pointer;
+  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nc-history-item:hover .nc-history-delete,
+.nc-history-delete:focus-visible {
+  opacity: 1;
+}
+
+.nc-history-delete:hover {
+  color: var(--el-color-danger, #f56c6c);
+  background: var(--el-color-danger-light-9, #fef0f0);
+}
+
+.nc-history-delete:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.nc-history-item-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nc-history-item-title,
+.nc-history-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-history-item-title {
+  color: var(--el-text-color-primary, #303133);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.nc-history-preview {
+  color: var(--el-text-color-regular, #606266);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.nc-history-status {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--el-text-color-secondary, #909399);
+  background: var(--el-fill-color-light, #f4f4f5);
+}
+
+.nc-history-status--working {
+  color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary-light-9, #ecf5ff);
+}
+
+.nc-history-status--input {
+  color: var(--el-color-warning, #e6a23c);
+  background: var(--el-color-warning-light-9, #fdf6ec);
+}
+
+.nc-history-status--completed {
+  color: var(--el-color-success, #67c23a);
+  background: var(--el-color-success-light-9, #f0f9eb);
+}
+
+.nc-history-status--failed {
+  color: var(--el-color-danger, #f56c6c);
+  background: var(--el-color-danger-light-9, #fef0f0);
+}
+
+.nc-history-item-meta {
+  min-height: 16px;
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 11px;
+  line-height: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nc-history-error,
+.nc-history-empty,
+.nc-history-loading {
+  padding: 18px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary, #909399);
+}
+
+.nc-history-error {
+  color: var(--el-color-danger, #f56c6c);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nc-history-error button {
+  width: fit-content;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--el-color-primary, #409eff);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.nc-history-loading {
+  display: flex;
+  justify-content: center;
+}
+
+.nc-chat-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--el-bg-color, #fff);
+}
+
 .nc-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
   display: flex;
@@ -1369,5 +1967,29 @@ watch(
 .nc-input-actions {
   flex-shrink: 0;
   padding-bottom: 2px;
+}
+
+@media (max-width: 640px) {
+  .nc-body {
+    flex-direction: row;
+  }
+
+  .nc-history {
+    width: 188px;
+    flex: 0 0 188px;
+    border-right: 1px solid var(--el-border-color-lighter, #ebeef5);
+    border-bottom: 0;
+  }
+
+  .nc-history-list {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .nc-history-item {
+    width: 100%;
+    flex: 0 0 auto;
+  }
 }
 </style>

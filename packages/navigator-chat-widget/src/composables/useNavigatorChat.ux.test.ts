@@ -21,7 +21,112 @@ function okResponse(data: unknown): Response {
   })
 }
 
+async function flushPromises() {
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await nextTick()
+}
+
 describe('useNavigatorChat business action UX', () => {
+  it('renders built-in history sidebar with consumer-facing session summary', async () => {
+    const root = document.createElement('div')
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(NavigatorChat, {
+          showHistory: true,
+          config: {
+            baseUrl: 'http://navigator.test',
+            agentId: 'agent-1',
+            mode: 'business',
+            fetch: async (url) => {
+              if (String(url).includes('/sessions?')) {
+                return okResponse({
+                  sessions: [
+                    {
+                      contextId: 'ctx-1',
+                      title: '上海明辉发货下单',
+                      status: 'WORKING',
+                      turnCount: 3,
+                      lastMessagePreview: '电子配件 5 件，重量 120KG',
+                      updatedAt: '2026-05-13T12:54:00',
+                      clientContext: {
+                        costUsd: 29,
+                        milestone: '1.1.3-SNAPSHOT',
+                      },
+                    },
+                  ],
+                  hasMore: false,
+                })
+              }
+              return okResponse({
+                taskId: 'task-1',
+                agentId: 'agent-1',
+                status: 'COMPLETED',
+                contextId: 'ctx-1',
+                terminal: true,
+                terminalStatus: 'COMPLETED',
+                messages: [],
+              })
+            },
+          },
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await flushPromises()
+
+    expect(root.querySelector('.nc-history')).not.toBeNull()
+    expect(root.querySelector('.nc-history-action[title="新会话"]')).not.toBeNull()
+    expect(root.querySelector('.nc-history-delete')).toBeNull()
+    expect(root.querySelector('.nc-history-item-title')?.textContent).toContain('上海明辉发货下单')
+    expect(root.querySelector('.nc-history-preview')?.textContent).toContain('电子配件')
+    expect(root.querySelector('.nc-history-status')?.textContent).toContain('进行中')
+    expect(root.querySelector('.nc-history-item-meta')?.textContent).toContain('3轮')
+    expect(root.querySelector('.nc-history-item-meta')?.textContent).toContain('05/13')
+    expect(root.textContent).not.toContain('$29')
+    expect(root.textContent).not.toContain('1.1.3-SNAPSHOT')
+  })
+
+  it('can render delete affordance for hosts that enable session deletion', async () => {
+    const root = document.createElement('div')
+    app = createApp(defineComponent({
+      setup() {
+        return () => h(NavigatorChat, {
+          showHistory: true,
+          showHistoryDelete: true,
+          config: {
+            baseUrl: 'http://navigator.test',
+            agentId: 'agent-1',
+            mode: 'business',
+            fetch: async (url) => {
+              if (String(url).includes('/sessions?')) {
+                return okResponse({
+                  sessions: [
+                    {
+                      contextId: 'ctx-delete',
+                      title: '待删除会话',
+                      status: 'COMPLETED',
+                      updatedAt: '2026-05-13T12:54:00',
+                    },
+                  ],
+                  hasMore: false,
+                })
+              }
+              return okResponse({})
+            },
+          },
+        })
+      },
+    }))
+    app.use(ElementPlus)
+    app.mount(root)
+    await flushPromises()
+
+    expect(root.querySelector('.nc-history-delete')).not.toBeNull()
+  })
+
   it('keeps config enableAttachments when the direct boolean prop is absent', async () => {
     const root = document.createElement('div')
     app = createApp(defineComponent({
@@ -148,6 +253,44 @@ describe('useNavigatorChat business action UX', () => {
       contextId: 'ctx-1',
       clientContext: { upstreamConversationId: 'tms-1' },
     })
+  })
+
+  it('deletes a historical session through the Open API and clears the active context', async () => {
+    const requests: Array<{ url: string; method?: string }> = []
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async (url, init) => {
+            requests.push({ url: String(url), method: init.method })
+            if (init.method === 'DELETE') return okResponse({})
+            if (String(url).includes('/sessions/ctx-1/messages')) {
+              return okResponse({
+                contextId: 'ctx-1',
+                messages: [],
+                hasMore: false,
+              })
+            }
+            return okResponse({})
+          },
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-1')
+    await chat.deleteSession('ctx-1')
+
+    expect(chat.contextId.value).toBeNull()
+    expect(requests.some((request) =>
+      request.method === 'DELETE'
+      && request.url === 'http://navigator.test/api/v1/open/agents/agent-1/sessions/ctx-1'
+    )).toBe(true)
   })
 
   it('sends uploaded attachments as top-level ask payload', async () => {
