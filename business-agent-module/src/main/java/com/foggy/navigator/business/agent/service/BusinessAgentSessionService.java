@@ -19,9 +19,12 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -117,10 +120,14 @@ public class BusinessAgentSessionService {
         }
         boolean hasMore = sessions.size() > safeLimit;
         List<BusinessAgentSessionEntity> page = hasMore ? sessions.subList(0, safeLimit) : sessions;
+        Map<String, String> firstUserMessageMap = batchFindFirstUserMessageContents(
+                page.stream()
+                        .map(BusinessAgentSessionEntity::getSessionId)
+                        .toList());
 
         BusinessAgentSessionListDTO dto = new BusinessAgentSessionListDTO();
         dto.setSessions(page.stream()
-                .map(BusinessAgentSessionDTO::fromEntity)
+                .map(session -> toSessionDTO(session, firstUserMessageMap))
                 .toList());
         dto.setNextCursor(page.isEmpty() ? null : page.get(page.size() - 1).getContextId());
         dto.setHasMore(hasMore);
@@ -233,6 +240,39 @@ public class BusinessAgentSessionService {
         }
         entity.setLastAccessedAt(LocalDateTime.now());
         return BusinessAgentSessionDTO.fromEntity(sessionRepository.save(entity));
+    }
+
+    private BusinessAgentSessionDTO toSessionDTO(
+            BusinessAgentSessionEntity entity,
+            Map<String, String> firstUserMessageMap) {
+        BusinessAgentSessionDTO dto = BusinessAgentSessionDTO.fromEntity(entity);
+        if (dto != null && entity != null) {
+            dto.setTitle(truncate(firstUserMessageMap.get(entity.getSessionId()), 120));
+        }
+        return dto;
+    }
+
+    private Map<String, String> batchFindFirstUserMessageContents(Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        List<SessionMessageEntity> messages = messageRepository
+                .findBySessionIdInAndRoleOrderBySessionIdAscCreatedAtAsc(sessionIds, "USER");
+        return messages.stream()
+                .filter(message -> StringUtils.hasText(message.getContent()))
+                .collect(Collectors.toMap(
+                        SessionMessageEntity::getSessionId,
+                        SessionMessageEntity::getContent,
+                        (first, second) -> first
+                ));
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.length() <= maxLength ? trimmed : trimmed.substring(0, maxLength);
     }
 
     private void validateGrant(String tenantId, String clientAppId, String upstreamUserId) {

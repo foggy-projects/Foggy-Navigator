@@ -337,6 +337,9 @@ export function useNavigatorChat(config: NavigatorChatConfig): UseNavigatorChat 
       if ((message.type === 'TEXT' || message.type === 'RESULT') && content) {
         const messageActions = mergeActions(pendingBusinessActions, actions)
         pendingBusinessActions = []
+        if (display.mode === 'business' && isRuntimeArtifactContent(content, payload)) {
+          continue
+        }
         const businessContent = display.mode === 'business'
           ? userFacingMessageContent(stripRawJsonArtifact(content, messageActions), display.mode)
           : userFacingMessageContent(content, display.mode)
@@ -1298,6 +1301,31 @@ function userFacingMessageContent(content: string, mode: DisplayOptions['mode'])
   const connectionText = userFacingConnectionText(content)
   if (connectionText) return connectionText
   return sanitizeText(content)
+}
+
+function isRuntimeArtifactContent(content: string, payload: Record<string, unknown>): boolean {
+  const trimmed = content.trim()
+  if (!trimmed) return false
+  const subtype = firstString(payload.subtype, payload.stateType, payload.state_type)
+  if (subtype === 'skill_frame_open' || subtype === 'skill_frame_close') return true
+  const toolName = firstString(payload.toolName, payload.tool_name, payload.name)
+  if (toolName && isInternalToolName(toolName)) return true
+  return isRuntimeArtifactText(trimmed)
+}
+
+function isInternalToolName(toolName: string): boolean {
+  return toolName === 'invoke_business_skill'
+    || toolName === 'invoke_business_function'
+    || toolName === 'submit_skill_result'
+}
+
+function isRuntimeArtifactText(content: string): boolean {
+  if (/^(Opening|Reusing|Resuming|Closing) frame for skill:\s*[\w.-]+$/i.test(content)) return true
+  if (/^Frame closed:\s*[\w.-]+$/i.test(content)) return true
+  if (/^(Calling tool|Tool)\s+(invoke_business_skill|invoke_business_function|submit_skill_result)\b/i.test(content)) {
+    return true
+  }
+  return isInternalToolName(content)
 }
 
 function userFacingConnectionText(content: string): string | null {

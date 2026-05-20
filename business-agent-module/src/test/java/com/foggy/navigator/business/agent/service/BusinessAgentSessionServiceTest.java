@@ -96,6 +96,26 @@ class BusinessAgentSessionServiceTest {
     }
 
     @Test
+    void listSessions_usesFirstUserMessageAsDefaultTitle() {
+        when(sessionRepository.findByTenantIdAndClientAppIdAndUpstreamUserIdOrderByLastAccessedAtDesc(
+                eq("tenant_01"), eq("app_01"), eq("upstream_01"), any(Pageable.class)))
+                .thenReturn(List.of(session("ctx_1", "session_1"), session("ctx_2", "session_2")));
+        when(messageRepository.findBySessionIdInAndRoleOrderBySessionIdAscCreatedAtAsc(anyCollection(), eq("USER")))
+                .thenReturn(List.of(
+                        userMessage("msg_1", "session_1", "帮我生成一个工单", LocalDateTime.now().minusMinutes(2)),
+                        userMessage("msg_2", "session_1", "这条不应作为标题", LocalDateTime.now().minusMinutes(1)),
+                        userMessage("msg_3", "session_2", "查询今天的任务", LocalDateTime.now())
+                ));
+
+        BusinessAgentSessionListDTO result = service.listSessions(
+                "tenant_01", "app_01", "upstream_01", null, 10);
+
+        assertEquals(2, result.getSessions().size());
+        assertEquals("帮我生成一个工单", result.getSessions().get(0).getTitle());
+        assertEquals("查询今天的任务", result.getSessions().get(1).getTitle());
+    }
+
+    @Test
     void getMessages_resolvesSessionByScopedContext() {
         BusinessAgentSessionEntity session = session("ctx_1", "session_1");
         when(sessionRepository.findByTenantIdAndClientAppIdAndUpstreamUserIdAndContextId(
@@ -148,6 +168,17 @@ class BusinessAgentSessionServiceTest {
         entity.setRole("assistant");
         entity.setContent("ok");
         entity.setCreatedAt(LocalDateTime.now());
+        return entity;
+    }
+
+    private SessionMessageEntity userMessage(String id, String sessionId, String content, LocalDateTime createdAt) {
+        SessionMessageEntity entity = new SessionMessageEntity();
+        entity.setId(id);
+        entity.setSessionId(sessionId);
+        entity.setTaskId("task_01");
+        entity.setRole("USER");
+        entity.setContent(content);
+        entity.setCreatedAt(createdAt);
         return entity;
     }
 }

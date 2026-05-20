@@ -89,6 +89,73 @@ describe('useNavigatorChat business action UX', () => {
     expect(root.textContent).not.toContain('1.1.3-SNAPSHOT')
   })
 
+  it('hides runtime artifacts when loading history in business mode', async () => {
+    let chat: UseNavigatorChat | undefined
+    app = createApp(defineComponent({
+      setup() {
+        chat = useNavigatorChat({
+          baseUrl: 'http://navigator.test',
+          agentId: 'agent-1',
+          mode: 'business',
+          fetch: async () => okResponse({
+            contextId: 'ctx-1',
+            messages: [
+              {
+                messageId: 'user-1',
+                role: 'USER',
+                type: 'USER',
+                content: '帮我生成一个工单',
+                createdAt: '2026-05-20T15:40:00',
+              },
+              {
+                messageId: 'artifact-1',
+                role: 'ASSISTANT',
+                type: 'TEXT',
+                content: 'invoke_business_skill',
+                createdAt: '2026-05-20T15:40:01',
+              },
+              {
+                messageId: 'artifact-2',
+                role: 'ASSISTANT',
+                type: 'RESULT',
+                content: 'Opening frame for skill: system.root',
+                createdAt: '2026-05-20T15:40:02',
+              },
+              {
+                messageId: 'artifact-3',
+                role: 'ASSISTANT',
+                type: 'TEXT',
+                content: 'submit_skill_result',
+                createdAt: '2026-05-20T15:40:03',
+              },
+              {
+                messageId: 'assistant-1',
+                role: 'ASSISTANT',
+                type: 'RESULT',
+                content: '收到，为了帮您准确创建工单，请补充以下信息。',
+                createdAt: '2026-05-20T15:40:04',
+              },
+            ],
+            hasMore: false,
+          }),
+        })
+        return () => h('div')
+      },
+    }))
+    app.mount(document.createElement('div'))
+    if (!chat) throw new Error('failed to create chat composable')
+
+    await chat.loadSession('ctx-1')
+    await nextTick()
+
+    const text = chat.messages.value.map((message) => message.content).join('\n')
+    expect(text).toContain('帮我生成一个工单')
+    expect(text).toContain('收到，为了帮您准确创建工单')
+    expect(text).not.toContain('invoke_business_skill')
+    expect(text).not.toContain('submit_skill_result')
+    expect(text).not.toContain('Opening frame for skill')
+  })
+
   it('can render delete affordance for hosts that enable session deletion', async () => {
     const root = document.createElement('div')
     app = createApp(defineComponent({
