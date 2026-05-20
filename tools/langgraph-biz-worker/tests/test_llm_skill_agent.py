@@ -807,6 +807,16 @@ def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_con
         error="upstream model timed out",
         task_id="task_root_continue_001",
     )
+    frame = runtime.get_frame(frame_id)
+    frame.private_working_state.setdefault("root_context_summary", {})["latest_child_result_summary"] = {
+        "frame_id": "frm_child_waiting",
+        "skill_id": "ticket_skill",
+        "frame_status": "COMPLETED",
+        "status": "WAITING_USER",
+        "next_step": "请回复工单类型、标题及详细描述。",
+        "missing_fields": ["ticket_type", "title", "description"],
+    }
+    runtime.store.save(frame)
     model = FakeToolCallModel([
         AIMessage(content="", tool_calls=[{
             "id": "call_submit",
@@ -829,6 +839,9 @@ def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_con
     assert "Previous execution was interrupted." in user_prompt
     assert "Reason: model_error" in user_prompt
     assert "upstream model timed out" in user_prompt
+    assert "Continuation summary from promoted child result:" in user_prompt
+    assert "WAITING_USER" in user_prompt
+    assert "请回复工单类型、标题及详细描述。" in user_prompt
     assert "User's new instruction: 继续" in user_prompt
     assert "recoverable candidate, not a mandatory continuation" in user_prompt
     assert "Recoverable focus:" in user_prompt
@@ -839,6 +852,38 @@ def test_llm_agent_persistent_frame_prompt_includes_recoverable_interruption_con
     assert "intent_resolution" in user_prompt
     assert "abandoned_interruption" in user_prompt
     assert "shelve_interrupted_frame" in user_prompt
+
+
+def test_llm_agent_prompt_includes_frame_result_contract():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_contract_001",
+        skill_id="system.root",
+        conversation_id="sess_root_contract",
+        session_id="sess_root_contract",
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Done.",
+                "structured_output": {"ok": True},
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_root_contract_001",
+        frame_id=frame_id,
+        prompt="继续",
+        persistent_frame=True,
+    )
+
+    user_prompt = model.seen_messages[0][1].content
+    assert "Frame result contract:" in user_prompt
+    assert "primary business-decision context" in user_prompt
+    assert "Do not call read_frame_execution_report after a normal child completion" in user_prompt
 
 
 def test_llm_agent_persistent_frame_prompt_includes_pending_recoverable_child():
@@ -1254,7 +1299,7 @@ def test_llm_agent_root_skill_can_invoke_business_function_directly(monkeypatch)
     assert any(event.tool_name == "invoke_business_function" for event in events)
 
 
-def test_llm_agent_does_not_turn_tms_draft_or_frame_id_into_order_number(monkeypatch):
+def test_llm_agent_records_submitted_summary_without_backend_rewrite(monkeypatch):
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
         task_id="task_tms_draft_001",
@@ -1310,10 +1355,7 @@ def test_llm_agent_does_not_turn_tms_draft_or_frame_id_into_order_number(monkeyp
     )
 
     frame = runtime.get_frame(frame_id)
-    assert frame.result_summary == "已生成开单草稿，可点击打开补齐并确认。"
-    assert "订单创建成功" not in frame.result_summary
-    assert "订单号" not in frame.result_summary
-    assert "frm_622f67035042" not in frame.result_summary
+    assert frame.result_summary == "订单创建成功！订单号：frm_622f67035042"
     assert draft_id not in frame.result_summary
     assert frame.output == structured_output
 
@@ -1350,7 +1392,262 @@ def test_llm_agent_allows_explicit_order_number_field_in_final_summary():
     assert frame.result_summary == "订单号 EO202605160001，当前状态：待揽收。"
 
 
-def test_llm_agent_page_action_without_business_id_does_not_generate_order_number():
+def test_llm_agent_keeps_pending_info_summary_that_requests_order_number():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_ticket_pending_info_001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    expected_summary = (
+        "已收到您的工单提交请求。为了帮您准确创建工单，请补充以下信息：\n"
+        "1. **工单类型**：请选择“运单异常件”或“平台反馈”。\n"
+        "2. **工单标题**：请简要概括问题。\n"
+        "3. **问题描述**：请详细说明具体情况。\n"
+        "4. **运单号**：如果是运单异常件，请提供对应的运单号。"
+    )
+    model = FakeToolCallModel([
+        AIMessage(content="我可以帮您提交工单，请提供工单类型、标题、问题描述和运单号。"),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": expected_summary,
+                "structured_output": {
+                    "next_step": "WAITING_FOR_USER_INPUT",
+                    "required_fields": [
+                        "ticket_type",
+                        "title",
+                        "summary",
+                        "orderIdentifier (if order exception)",
+                    ],
+                    "status": "PENDING_INFO",
+                },
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_ticket_pending_info_001",
+        frame_id=frame_id,
+        prompt="你可以帮我提交工单吗",
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert [event.type for event in events] == ["tool_use", "skill_result_submit"]
+    assert model.calls == 2
+    assert frame.result_summary == expected_summary
+    assert frame.private_working_state["turn_results"][-1]["summary"] == expected_summary
+
+
+def test_llm_agent_child_waiting_for_user_input_keeps_frame_open():
+    runtime = _root_with_child_runtime()
+    root_id = runtime.invoke_skill(
+        task_id="task_child_waiting_user_001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    child_id = runtime.invoke_child_skill(root_id, "child_skill")
+    prompt = "请选择工单类型。"
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit_wait",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": prompt,
+                "structured_output": {
+                    "turn_status": "WAITING_FOR_USER_INPUT",
+                    "user_message": prompt,
+                    "required_fields": ["ticket_type"],
+                },
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_child_waiting_user_001",
+        frame_id=child_id,
+        prompt="创建工单",
+    )
+
+    child = runtime.get_frame(child_id)
+    assert [event.type for event in events] == ["tool_use", "skill_result_submit"]
+    assert child.status == FrameStatus.AWAITING_USER
+    assert child.result_summary == prompt
+    assert child.private_working_state["turn_status"] == "WAITING_FOR_USER_INPUT"
+    assert child.private_working_state["awaiting_user_input"]["user_message"] == prompt
+    assert any(
+        message.get("synthetic") is True and message.get("content") == prompt
+        for message in child.private_messages
+    )
+
+
+def test_llm_agent_invoke_business_skill_bubbles_waiting_user_focus():
+    runtime = _root_with_child_runtime()
+    root_id = runtime.invoke_skill(
+        task_id="task_child_waiting_user_002",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    prompt = "请回复 1 或 2 选择工单类型。"
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child",
+            "name": "invoke_business_skill",
+            "args": {
+                "skill_id": "child_skill",
+                "instruction": "引导用户选择工单类型。",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_wait",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": prompt,
+                "structured_output": {
+                    "turn_status": "WAITING_FOR_USER_INPUT",
+                    "user_message": prompt,
+                    "required_fields": ["ticket_type"],
+                },
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_child_waiting_user_002",
+        frame_id=root_id,
+        prompt="你可以帮我提交工单吗",
+        persistent_frame=True,
+    )
+
+    root = runtime.get_frame(root_id)
+    child_id = root.child_frame_ids[-1]
+    child = runtime.get_frame(child_id)
+    assert model.calls == 2
+    assert any(event.tool_name == "invoke_business_skill" for event in events)
+    assert root.status == FrameStatus.WAITING_CHILD
+    assert root.result_summary == prompt
+    assert root.private_working_state["pending_awaiting_user_child_frame_id"] == child_id
+    assert root.private_working_state["active_focus_frame_id"] == child_id
+    assert root.private_working_state["active_focus_status"] == "AWAITING_USER"
+    assert child.status == FrameStatus.AWAITING_USER
+
+
+def test_llm_agent_invoke_business_skill_direct_returns_final_for_user():
+    runtime = _root_with_child_runtime()
+    root_id = runtime.invoke_skill(
+        task_id="task_child_final_direct_001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    final_summary = "工单已创建成功，编号 TKT-DIRECT-001。"
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child",
+            "name": "invoke_business_skill",
+            "args": {
+                "skill_id": "child_skill",
+                "instruction": "创建工单。",
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_done",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": final_summary,
+                "structured_output": {
+                    "turn_status": "FINAL_FOR_USER",
+                    "requires_parent_synthesis": False,
+                    "remaining_work": [],
+                    "ticket_id": "TKT-DIRECT-001",
+                },
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_child_final_direct_001",
+        frame_id=root_id,
+        prompt="帮我创建工单",
+        persistent_frame=True,
+    )
+
+    root = runtime.get_frame(root_id)
+    child = runtime.get_frame(root.child_frame_ids[-1])
+    assert model.calls == 2
+    assert root.status == FrameStatus.RUNNING
+    assert root.result_summary == final_summary
+    assert root.output["turn_status"] == "FINAL_FOR_USER"
+    assert child.status == FrameStatus.COMPLETED
+    assert any(
+        event.tool_name == "invoke_business_skill" and event.type == "tool_result"
+        for event in events
+    )
+    assert not any(
+        event.tool_name == "submit_skill_result" and event.skill_id == "system.root"
+        for event in events
+    )
+
+
+def test_llm_agent_resumed_awaiting_user_child_prompt_includes_prior_prompt_and_reply():
+    runtime = _root_with_child_runtime()
+    root_id = runtime.invoke_skill(
+        task_id="task_child_waiting_user_003",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    child_id = runtime.invoke_child_skill(root_id, "child_skill")
+    prior_prompt = "请回复 1 或 2 选择工单类型。"
+    runtime.submit_user_input_request(
+        child_id,
+        prior_prompt,
+        {
+            "turn_status": "WAITING_FOR_USER_INPUT",
+            "user_message": prior_prompt,
+            "required_fields": ["ticket_type"],
+        },
+    )
+    runtime.mark_child_awaiting_user(root_id, child_id)
+
+    focus = runtime.prepare_active_focus_resume(root_id, task_id="task_child_waiting_user_003b")
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_child_wait_again",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "请继续补充工单标题。",
+                "structured_output": {
+                    "turn_status": "WAITING_FOR_USER_INPUT",
+                    "user_message": "请继续补充工单标题。",
+                    "required_fields": ["title"],
+                },
+            },
+        }]),
+    ])
+
+    LlmSkillAgent(model, runtime).run(
+        task_id="task_child_waiting_user_003b",
+        frame_id=focus.frame_id,
+        prompt="1",
+        runtime_context={
+            "_awaiting_user_input": {
+                "frame_id": child_id,
+                "skill_id": "child_skill",
+                "status": "RUNNING",
+                "awaiting_user_input": focus.private_working_state["awaiting_user_input"],
+            },
+        },
+    )
+
+    user_prompt = model.seen_messages[0][1].content
+    assert "Previous child skill turn is waiting for user input." in user_prompt
+    assert prior_prompt in user_prompt
+    assert "Current user reply: 1" in user_prompt
+    assert runtime.get_frame(child_id).status == FrameStatus.AWAITING_USER
+
+
+def test_llm_agent_keeps_page_action_summary_without_backend_rewrite():
     runtime = _root_runtime()
     frame_id = runtime.invoke_skill(
         task_id="task_page_action_001",
@@ -1382,10 +1679,7 @@ def test_llm_agent_page_action_without_business_id_does_not_generate_order_numbe
     )
 
     frame = runtime.get_frame(frame_id)
-    assert "订单创建成功" not in frame.result_summary
-    assert "订单号" not in frame.result_summary
-    assert "OrderWorkbench" not in frame.result_summary
-    assert frame.result_summary == "去下单"
+    assert frame.result_summary == "订单创建成功！订单号：OrderWorkbench"
 
 
 def test_llm_agent_child_skill_summary_visibility_receives_root_context_summary():

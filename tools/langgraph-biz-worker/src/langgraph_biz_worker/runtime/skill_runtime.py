@@ -11,6 +11,7 @@ import logging
 import uuid
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -66,6 +67,31 @@ PERSISTENT_FRAME_MAX_RECENT_SUMMARIES = 10
 PERSISTENT_FRAME_MAX_PRIVATE_MESSAGES = 40
 PERSISTENT_FRAME_MAX_INTERRUPTION_HISTORY = 10
 PERSISTENT_FRAME_MAX_PLAN_HISTORY = 10
+PERSISTENT_FRAME_MAX_CHILD_RESULT_SUMMARIES = 10
+PERSISTENT_FRAME_MAX_CONTINUATION_STRING_CHARS = 500
+CONTINUATION_REDACTED = "<redacted>"
+CONTINUATION_REDACTED_URL = "<redacted-url>"
+CONTINUATION_SENSITIVE_KEY_FRAGMENTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "credential",
+    "password",
+    "private_message",
+    "provider_response",
+    "raw_prompt",
+    "secret",
+    "signed",
+    "signature",
+    "stack_trace",
+    "system_prompt",
+    "token",
+    "traceback",
+)
+CONTINUATION_URL_KEY_FRAGMENTS = ("download", "href", "link", "uri", "url")
+HTTP_URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+OPENAI_KEY_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]{6,}\b")
 RECOVERABLE_FOCUS_KEYS = (
     "recoverable_focus_frame_id",
     "recoverable_focus_kind",
@@ -73,6 +99,18 @@ RECOVERABLE_FOCUS_KEYS = (
     "recoverable_focus_interrupted_at",
     "recoverable_focus_summary",
     "recoverable_focus_stack",
+)
+ACTIVE_FOCUS_KEYS = (
+    "active_focus_frame_id",
+    "active_focus_kind",
+    "active_focus_status",
+    "active_focus_updated_at",
+    "active_focus_summary",
+    "active_focus_stack",
+)
+AWAITING_USER_KEYS = (
+    "pending_awaiting_user_child_frame_id",
+    "pending_awaiting_user_child",
 )
 INTENT_RESOLUTIONS = frozenset({
     "CONTINUE_PREVIOUS",
@@ -176,6 +214,28 @@ class SkillRuntime:
         self._transition(frame, FrameStatus.RUNNING)
         self._save(frame)
 
+    def resume_from_user_input(self, frame_id: str, task_id: str | None = None) -> SkillFrameState:
+        """AWAITING_USER → RUNNING after the next user message arrives."""
+        frame = self._get_frame(frame_id)
+        if frame.status != FrameStatus.AWAITING_USER:
+            raise IllegalStateTransition(
+                f"resume_from_user_input requires AWAITING_USER, got {frame.status.value}"
+            )
+        self._transition(frame, FrameStatus.RUNNING)
+        now = datetime.now(timezone.utc).isoformat()
+        frame.private_working_state["awaiting_user_resumed_at"] = now
+        if task_id:
+            frame.private_working_state["awaiting_user_resumed_task_id"] = task_id
+            frame.task_id = task_id
+            frame.current_task_id = task_id
+            if not frame.last_task_ids:
+                frame.last_task_ids.append(frame.origin_task_id or task_id)
+            if frame.last_task_ids[-1] != task_id:
+                frame.last_task_ids.append(task_id)
+        self._save(frame)
+        self._generate_frame_report(frame)
+        return frame
+
     def mark_awaiting_approval(
         self,
         frame_id: str,
@@ -223,6 +283,78 @@ class SkillRuntime:
         self._generate_frame_report(parent)
         logger.info(
             "Frame %s awaiting approval from child frame %s",
+            parent_frame_id,
+            child_frame_id,
+        )
+
+    def mark_child_awaiting_user(
+        self,
+        parent_frame_id: str,
+        child_frame_id: str,
+        awaiting_user_input: dict[str, Any] | None = None,
+    ) -> None:
+        """Bubble a child user-input wait to its parent frame.
+
+        The child frame stays open in ``AWAITING_USER``.  The parent remains
+        ``WAITING_CHILD`` so the next user turn deterministically resumes the
+        same child frame before the root LLM loop.
+        """
+        parent = self._get_frame(parent_frame_id)
+        child = self._get_frame(child_frame_id)
+        if child.parent_frame_id != parent_frame_id:
+            raise IllegalStateTransition("child frame does not belong to parent")
+        if child.status != FrameStatus.AWAITING_USER:
+            raise IllegalStateTransition(
+                f"mark_child_awaiting_user requires child AWAITING_USER, got {child.status.value}"
+            )
+        if parent.status == FrameStatus.RUNNING:
+            self._transition(parent, FrameStatus.WAITING_CHILD)
+        elif parent.status != FrameStatus.WAITING_CHILD:
+            raise IllegalStateTransition(
+                f"mark_child_awaiting_user requires parent RUNNING/WAITING_CHILD, got {parent.status.value}"
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        wait_payload = _awaiting_user_input_payload(
+            summary=child.result_summary or "",
+            structured_output=child.output or {},
+            artifact_refs=child.artifact_refs,
+            evidence_refs=child.evidence_refs,
+            submitted_at=now,
+        )
+        if awaiting_user_input:
+            wait_payload.update(_safe_json_copy(awaiting_user_input))
+        focus_stack = self._active_descendant_stack(parent)
+        if len(focus_stack) < 2 or focus_stack[1].frame_id != child.frame_id:
+            focus_stack = [parent, child]
+        focus = focus_stack[-1]
+        parent.private_working_state["pending_awaiting_user_child_frame_id"] = child.frame_id
+        parent.private_working_state["pending_awaiting_user_child"] = {
+            "frame_id": child.frame_id,
+            "skill_id": child.skill_id,
+            "status": child.status.value,
+            "input": _safe_json_copy(child.input),
+            "awaiting_user_input": _safe_json_copy(wait_payload),
+            "updated_at": now,
+        }
+        parent.result_summary = wait_payload.get("user_message") or child.result_summary
+        parent.output = _safe_json_copy(child.output or {})
+        self._set_active_focus(
+            owner=parent,
+            focus=focus,
+            kind=_recoverable_focus_kind(parent, focus, focus_stack),
+            status="AWAITING_USER",
+            reason="waiting_for_user_input",
+            error="",
+            last_task_id=parent.current_task_id or parent.task_id,
+            updated_at=now,
+            stack=focus_stack,
+            extra_summary={"awaiting_user_input": _safe_json_copy(wait_payload)},
+        )
+        self._save(parent)
+        self._generate_frame_report(parent)
+        logger.info(
+            "Frame %s awaiting user input from child frame %s",
             parent_frame_id,
             child_frame_id,
         )
@@ -384,6 +516,52 @@ class SkillRuntime:
                 self._save(frame)
 
             return result
+
+    def submit_user_input_request(
+        self,
+        frame_id: str,
+        summary: str,
+        structured_output: dict[str, Any],
+        artifact_refs: list[str] | None = None,
+        evidence_refs: list[str] | None = None,
+    ) -> ValidationResult:
+        """Pause a non-persistent skill frame until the next user message.
+
+        This is the child-frame variant of ``submit_skill_result`` for
+        ``turn_status=WAITING_FOR_USER_INPUT``.  It records the user-facing
+        prompt but deliberately does not close the child frame.
+        """
+        frame = self._get_frame(frame_id)
+        if frame.status != FrameStatus.RUNNING:
+            raise IllegalStateTransition(
+                f"submit_user_input_request requires RUNNING, got {frame.status.value}"
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        frame.result_summary = summary
+        frame.output = structured_output
+        if artifact_refs:
+            frame.artifact_refs = artifact_refs
+        if evidence_refs:
+            frame.evidence_refs = evidence_refs
+        frame.submit_attempts += 1
+
+        wait_payload = _awaiting_user_input_payload(
+            summary=summary,
+            structured_output=structured_output,
+            artifact_refs=artifact_refs,
+            evidence_refs=evidence_refs,
+            submitted_at=now,
+        )
+        frame.private_working_state["turn_status"] = "WAITING_FOR_USER_INPUT"
+        frame.private_working_state["awaiting_user_input"] = wait_payload
+        frame.private_working_state["awaiting_user_input_at"] = now
+        _append_synthetic_private_assistant_message(frame, wait_payload.get("user_message"))
+        self._transition(frame, FrameStatus.AWAITING_USER)
+        self._save(frame)
+        self._generate_frame_report(frame)
+        logger.info("Frame %s awaiting user input", frame_id)
+        return ValidationResult(ok=True)
 
     def submit_persistent_turn_result(
         self,
@@ -591,6 +769,7 @@ class SkillRuntime:
         parent = self._get_frame(parent_frame_id)
         child_results = parent.private_working_state.setdefault("child_results", {})
         child_results[child_frame_id] = child_promoted
+        _record_child_continuation_summary_on_parent(parent, child_promoted)
         self._link_execution_report_to_parent_context(parent, child_promoted)
         self._save(parent)
         self._generate_frame_report(parent)
@@ -1173,6 +1352,155 @@ class SkillRuntime:
         refreshed_child = self.get_frame(child.frame_id)
         return refreshed_child or child
 
+    def prepare_recoverable_focus_resume(
+        self,
+        parent_frame_id: str,
+        task_id: str | None = None,
+    ) -> SkillFrameState | None:
+        """Return the recoverable focus child and put its parent back in WAITING_CHILD.
+
+        This is the deterministic continuation path used before the root LLM
+        loop runs.  It intentionally handles the common immediate-child focus
+        case; deeper focus stacks can continue to use the legacy root fallback
+        until their unwind semantics are implemented explicitly.
+        """
+        parent = self._get_frame(parent_frame_id)
+        if parent.status != FrameStatus.RUNNING:
+            raise IllegalStateTransition(
+                f"prepare_recoverable_focus_resume requires parent RUNNING, got {parent.status.value}"
+            )
+
+        state = parent.private_working_state
+        if state.get("continuation_state") != "INTERRUPTED" and not state.get("recoverable"):
+            return None
+
+        focus_frame_id = state.get("recoverable_focus_frame_id")
+        if not isinstance(focus_frame_id, str) or not focus_frame_id:
+            return None
+        if focus_frame_id == parent.frame_id:
+            return None
+
+        focus = self._load_related_child_frame(parent, focus_frame_id)
+        if focus is None:
+            self._clear_recoverable_child_reference(parent.frame_id)
+            return None
+        if focus.parent_frame_id != parent.frame_id:
+            return None
+
+        current_task_id = task_id or parent.current_task_id or parent.task_id
+        if current_task_id:
+            focus = self.rebind_frame_to_task(
+                focus.frame_id,
+                current_task_id,
+                session_id=parent.session_id,
+                conversation_id=parent.conversation_id,
+            )
+
+        if focus.status in TERMINAL_STATES:
+            if (
+                focus.private_working_state.get("continuation_state") != "INTERRUPTED"
+                or not focus.private_working_state.get("recoverable")
+            ):
+                self._clear_recoverable_child_reference(parent.frame_id, focus_frame_id)
+                return None
+            focus = self.reopen_recoverable_frame(
+                focus.frame_id,
+                task_id=current_task_id,
+            )
+            if current_task_id:
+                focus = self.rebind_frame_to_task(
+                    focus.frame_id,
+                    current_task_id,
+                    session_id=parent.session_id,
+                    conversation_id=parent.conversation_id,
+                )
+
+        if focus.status == FrameStatus.WAITING_CHILD:
+            self.resume_from_child(focus.frame_id)
+            refreshed_focus = self.get_frame(focus.frame_id)
+            if refreshed_focus is not None:
+                focus = refreshed_focus
+        elif focus.status == FrameStatus.AWAITING_APPROVAL:
+            return focus
+
+        self.mark_waiting_child(parent.frame_id)
+        refreshed_focus = self.get_frame(focus.frame_id)
+        return refreshed_focus or focus
+
+    def prepare_active_focus_resume(
+        self,
+        parent_frame_id: str,
+        task_id: str | None = None,
+    ) -> SkillFrameState | None:
+        """Return the active child focus for deterministic pre-root resume.
+
+        This covers both recoverable interruptions and direct child waits such
+        as ``AWAITING_USER``.  The parent can be either RUNNING (interrupted
+        focus) or WAITING_CHILD (open child awaiting user input).
+        """
+        parent = self._get_frame(parent_frame_id)
+        if parent.status not in {FrameStatus.RUNNING, FrameStatus.WAITING_CHILD}:
+            raise IllegalStateTransition(
+                f"prepare_active_focus_resume requires parent RUNNING/WAITING_CHILD, got {parent.status.value}"
+            )
+
+        state = parent.private_working_state
+        focus_frame_id = state.get("active_focus_frame_id") or state.get("recoverable_focus_frame_id")
+        if not isinstance(focus_frame_id, str) or not focus_frame_id:
+            return None
+        if focus_frame_id == parent.frame_id:
+            return None
+
+        focus = self._load_related_child_frame(parent, focus_frame_id)
+        if focus is None:
+            self._clear_recoverable_child_reference(parent.frame_id)
+            return None
+        if focus.parent_frame_id != parent.frame_id:
+            return None
+
+        current_task_id = task_id or parent.current_task_id or parent.task_id
+        if current_task_id:
+            focus = self.rebind_frame_to_task(
+                focus.frame_id,
+                current_task_id,
+                session_id=parent.session_id,
+                conversation_id=parent.conversation_id,
+            )
+
+        if focus.status == FrameStatus.AWAITING_USER:
+            focus = self.resume_from_user_input(focus.frame_id, task_id=current_task_id)
+        elif focus.status in TERMINAL_STATES:
+            if (
+                focus.private_working_state.get("continuation_state") != "INTERRUPTED"
+                or not focus.private_working_state.get("recoverable")
+            ):
+                self._clear_recoverable_child_reference(parent.frame_id, focus_frame_id)
+                return None
+            focus = self.reopen_recoverable_frame(
+                focus.frame_id,
+                task_id=current_task_id,
+            )
+            if current_task_id:
+                focus = self.rebind_frame_to_task(
+                    focus.frame_id,
+                    current_task_id,
+                    session_id=parent.session_id,
+                    conversation_id=parent.conversation_id,
+                )
+
+        if focus.status == FrameStatus.WAITING_CHILD:
+            self.resume_from_child(focus.frame_id)
+            refreshed_focus = self.get_frame(focus.frame_id)
+            if refreshed_focus is not None:
+                focus = refreshed_focus
+        elif focus.status == FrameStatus.AWAITING_APPROVAL:
+            return focus
+
+        if parent.status == FrameStatus.RUNNING:
+            self.mark_waiting_child(parent.frame_id)
+        refreshed_focus = self.get_frame(focus.frame_id)
+        return refreshed_focus or focus
+
     def clear_recoverable_child_focus(
         self,
         parent_frame_id: str,
@@ -1343,6 +1671,7 @@ class SkillRuntime:
         }
         promoted.update(self._execution_report_payload_for_frame(child))
         child_results[child.frame_id] = promoted
+        _record_child_continuation_summary_on_parent(parent, promoted)
         self._link_execution_report_to_parent_context(parent, promoted)
 
     def _clear_business_function_wait_state(
@@ -1532,6 +1861,41 @@ class SkillRuntime:
             current = child
         return stack
 
+    def _set_active_focus(
+        self,
+        *,
+        owner: SkillFrameState,
+        focus: SkillFrameState,
+        kind: str,
+        status: str,
+        reason: str,
+        error: str,
+        last_task_id: str,
+        updated_at: str,
+        stack: list[SkillFrameState],
+        extra_summary: dict[str, Any] | None = None,
+    ) -> None:
+        summary = {
+            "frame_id": focus.frame_id,
+            "skill_id": focus.skill_id,
+            "frame_kind": focus.frame_kind.value,
+            "focus_kind": kind,
+            "status": focus.status.value,
+            "input": _safe_json_copy(focus.input),
+            "reason": reason,
+            "last_error": error,
+            "last_task_id": last_task_id,
+            "updated_at": updated_at,
+        }
+        if extra_summary:
+            summary.update(_safe_json_copy(extra_summary))
+        owner.private_working_state["active_focus_frame_id"] = focus.frame_id
+        owner.private_working_state["active_focus_kind"] = kind
+        owner.private_working_state["active_focus_status"] = status
+        owner.private_working_state["active_focus_updated_at"] = updated_at
+        owner.private_working_state["active_focus_summary"] = summary
+        owner.private_working_state["active_focus_stack"] = _frame_stack_snapshot(stack)
+
     def _set_recoverable_focus(
         self,
         *,
@@ -1563,6 +1927,17 @@ class SkillRuntime:
         owner.private_working_state["recoverable_focus_interrupted_at"] = interrupted_at
         owner.private_working_state["recoverable_focus_summary"] = summary
         owner.private_working_state["recoverable_focus_stack"] = _frame_stack_snapshot(stack)
+        self._set_active_focus(
+            owner=owner,
+            focus=focus,
+            kind=kind,
+            status=status,
+            reason=reason,
+            error=error,
+            last_task_id=last_task_id,
+            updated_at=interrupted_at,
+            stack=stack,
+        )
 
     def _load_related_child_frame(
         self,
@@ -1871,6 +2246,187 @@ def _compact_structured_output(output: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _record_child_continuation_summary_on_parent(
+    parent: SkillFrameState,
+    child_promoted: dict[str, Any],
+) -> None:
+    summary = _child_continuation_summary_from_promoted(child_promoted)
+    if not summary:
+        return
+
+    parent.private_working_state["latest_child_result_summary"] = summary
+    root_summary = parent.private_working_state.setdefault("root_context_summary", {})
+    root_summary["latest_child_result_summary"] = summary
+
+    summaries = root_summary.setdefault("child_result_summaries", [])
+    if not isinstance(summaries, list):
+        summaries = []
+        root_summary["child_result_summaries"] = summaries
+    frame_id = summary.get("frame_id")
+    report_ref = summary.get("execution_report_ref")
+    summaries[:] = [
+        item for item in summaries
+        if not (
+            isinstance(item, dict)
+            and (
+                (frame_id and item.get("frame_id") == frame_id)
+                or (report_ref and item.get("execution_report_ref") == report_ref)
+            )
+        )
+    ]
+    summaries.append(summary)
+    del summaries[:-PERSISTENT_FRAME_MAX_CHILD_RESULT_SUMMARIES]
+
+
+def _child_continuation_summary_from_promoted(
+    child_promoted: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(child_promoted, dict):
+        return {}
+    structured = child_promoted.get("structured_output")
+    structured_output = structured if isinstance(structured, dict) else {}
+
+    summary: dict[str, Any] = {}
+    for key in ("frame_id", "skill_id", "result_summary", "execution_report_ref"):
+        value = child_promoted.get(key)
+        if value not in (None, "", [], {}):
+            summary[key] = _safe_continuation_value_copy(value, key)
+
+    frame_status = child_promoted.get("status")
+    if frame_status not in (None, "", [], {}):
+        summary["frame_status"] = _safe_continuation_value_copy(frame_status, "frame_status")
+
+    if structured_output:
+        summary["structured_output"] = _compact_structured_output(
+            _safe_continuation_value_copy(structured_output, "structured_output")
+        )
+
+    _copy_promoted_business_field(
+        summary,
+        child_promoted,
+        structured_output,
+        "status",
+        "business_status",
+        "businessStatus",
+        "status",
+        "state",
+    )
+    _copy_promoted_business_field(
+        summary,
+        child_promoted,
+        structured_output,
+        "intent_resolution",
+        "intent_resolution",
+        "intentResolution",
+        "continuation_decision",
+        "continuationDecision",
+    )
+    _copy_promoted_business_field(
+        summary,
+        child_promoted,
+        structured_output,
+        "next_step",
+        "next_step",
+        "nextStep",
+        "next_steps",
+        "nextSteps",
+        "recommended_action",
+        "recommendedAction",
+    )
+    _copy_promoted_business_field(
+        summary,
+        child_promoted,
+        structured_output,
+        "missing_fields",
+        "missing_fields",
+        "missingFields",
+        "required_fields",
+        "requiredFields",
+    )
+    _copy_promoted_business_field(
+        summary,
+        child_promoted,
+        structured_output,
+        "awaiting_user_input",
+        "awaiting_user_input",
+        "awaitingUserInput",
+        "needs_clarification",
+        "needsClarification",
+    )
+    _copy_promoted_business_field(
+        summary,
+        child_promoted,
+        structured_output,
+        "active_plan",
+        "active_plan",
+        "activePlan",
+        "plan",
+    )
+
+    for key in ("artifact_refs", "evidence_refs", "execution_report_digest"):
+        value = child_promoted.get(key)
+        if value not in (None, "", [], {}):
+            summary[key] = _safe_continuation_value_copy(value, key)
+    return summary
+
+
+def _copy_promoted_business_field(
+    target: dict[str, Any],
+    promoted: dict[str, Any],
+    structured_output: dict[str, Any],
+    target_key: str,
+    *source_keys: str,
+) -> None:
+    value = _extract_value(structured_output, *source_keys)
+    if value is None and target_key != "status":
+        value = _extract_value(promoted, *source_keys)
+    if value not in (None, "", [], {}):
+        target[target_key] = _safe_continuation_value_copy(value, target_key)
+
+
+def _safe_continuation_value_copy(value: Any, key_hint: str | None = None) -> Any:
+    return _sanitize_continuation_value(_safe_json_value_copy(value), key_hint)
+
+
+def _sanitize_continuation_value(value: Any, key_hint: str | None = None) -> Any:
+    if key_hint and _is_sensitive_continuation_key(key_hint):
+        return CONTINUATION_REDACTED
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _is_sensitive_continuation_key(key_text):
+                sanitized[key_text] = CONTINUATION_REDACTED
+            else:
+                sanitized[key_text] = _sanitize_continuation_value(item, key_text)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_continuation_value(item, key_hint) for item in value]
+    if isinstance(value, str):
+        return _sanitize_continuation_string(value, key_hint)
+    return value
+
+
+def _sanitize_continuation_string(value: str, key_hint: str | None = None) -> str:
+    if key_hint and _is_url_like_continuation_key(key_hint) and value.lower().startswith(("http://", "https://")):
+        return CONTINUATION_REDACTED_URL
+    text = HTTP_URL_PATTERN.sub(CONTINUATION_REDACTED_URL, value)
+    text = OPENAI_KEY_PATTERN.sub(CONTINUATION_REDACTED, text)
+    if len(text) > PERSISTENT_FRAME_MAX_CONTINUATION_STRING_CHARS:
+        text = text[:PERSISTENT_FRAME_MAX_CONTINUATION_STRING_CHARS] + "...[truncated]"
+    return text
+
+
+def _is_sensitive_continuation_key(key: str) -> bool:
+    normalized = key.replace("-", "_").lower()
+    return any(fragment in normalized for fragment in CONTINUATION_SENSITIVE_KEY_FRAGMENTS)
+
+
+def _is_url_like_continuation_key(key: str) -> bool:
+    normalized = key.replace("-", "_").lower()
+    return any(fragment in normalized for fragment in CONTINUATION_URL_KEY_FRAGMENTS)
+
+
 def _append_unique_capped(existing: Any, incoming: list[str], limit: int) -> list[str]:
     values: list[str] = []
     if isinstance(existing, list):
@@ -1901,6 +2457,75 @@ def _recoverable_focus_kind(
     return "CHILD_SKILL"
 
 
+def _awaiting_user_input_payload(
+    *,
+    summary: str,
+    structured_output: dict[str, Any],
+    artifact_refs: list[str] | None,
+    evidence_refs: list[str] | None,
+    submitted_at: str,
+) -> dict[str, Any]:
+    output = structured_output if isinstance(structured_output, dict) else {}
+    user_message = _first_non_empty_string(
+        output.get("user_message"),
+        output.get("message"),
+        output.get("prompt"),
+        output.get("next_step"),
+        output.get("nextStep"),
+        summary,
+    )
+    payload: dict[str, Any] = {
+        "turn_status": "WAITING_FOR_USER_INPUT",
+        "user_message": user_message,
+        "summary": summary,
+        "structured_output": _safe_json_copy(output),
+        "artifact_refs": list(artifact_refs or []),
+        "evidence_refs": list(evidence_refs or []),
+        "submitted_at": submitted_at,
+    }
+    for key in (
+        "required_fields",
+        "missing_fields",
+        "next_step",
+        "status",
+        "business_object",
+        "current_step",
+    ):
+        if key in output:
+            payload[key] = _safe_json_copy(output[key])
+    return payload
+
+
+def _append_synthetic_private_assistant_message(
+    frame: SkillFrameState,
+    content: Any,
+) -> None:
+    if not isinstance(content, str) or not content.strip():
+        return
+    text = content.strip()
+    for message in reversed(frame.private_messages[-4:]):
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "assistant":
+            continue
+        existing = message.get("content")
+        if isinstance(existing, str) and existing.strip() == text:
+            return
+    frame.private_messages.append({
+        "role": "assistant",
+        "content": text,
+        "synthetic": True,
+        "source": "submit_skill_result.structured_output",
+    })
+
+
+def _first_non_empty_string(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _frame_stack_snapshot(stack: list[SkillFrameState]) -> list[dict[str, Any]]:
     return [
         {
@@ -1918,13 +2543,21 @@ def _frame_stack_snapshot(stack: list[SkillFrameState]) -> list[dict[str, Any]]:
 def _clear_recoverable_focus_fields(working_state: dict[str, Any]) -> None:
     for key in RECOVERABLE_FOCUS_KEYS:
         working_state.pop(key, None)
+    _clear_active_focus_fields(working_state)
+
+
+def _clear_active_focus_fields(working_state: dict[str, Any]) -> None:
+    for key in ACTIVE_FOCUS_KEYS:
+        working_state.pop(key, None)
+    for key in AWAITING_USER_KEYS:
+        working_state.pop(key, None)
 
 
 def _recoverable_focus_frame_ids(
     working_state: dict[str, Any],
     owner_frame_id: str,
 ) -> list[str]:
-    stack = working_state.get("recoverable_focus_stack")
+    stack = working_state.get("active_focus_stack") or working_state.get("recoverable_focus_stack")
     frame_ids: list[str] = []
     if isinstance(stack, list):
         for entry in stack:
@@ -1933,7 +2566,7 @@ def _recoverable_focus_frame_ids(
             frame_id = entry.get("frame_id")
             if isinstance(frame_id, str) and frame_id and frame_id != owner_frame_id:
                 frame_ids.append(frame_id)
-    focus_frame_id = working_state.get("recoverable_focus_frame_id")
+    focus_frame_id = working_state.get("active_focus_frame_id") or working_state.get("recoverable_focus_frame_id")
     if isinstance(focus_frame_id, str) and focus_frame_id and focus_frame_id != owner_frame_id:
         frame_ids.append(focus_frame_id)
 
@@ -1965,12 +2598,29 @@ def _is_active_recoverable_root(frame: SkillFrameState, root_skill_id: str) -> b
         return False
     recoverable = state.get("recoverable") is True and continuation_state == "INTERRUPTED"
     focus_frame_id = state.get("recoverable_focus_frame_id")
+    active_focus_frame_id = state.get("active_focus_frame_id")
     pending_child_frame_id = state.get("pending_recoverable_child_frame_id")
+    awaiting_user_child_frame_id = state.get("pending_awaiting_user_child_frame_id")
     has_focus = isinstance(focus_frame_id, str) and bool(focus_frame_id)
+    has_active_focus = (
+        isinstance(active_focus_frame_id, str)
+        and bool(active_focus_frame_id)
+        and active_focus_frame_id != frame.frame_id
+    )
     has_pending_child = isinstance(pending_child_frame_id, str) and bool(pending_child_frame_id)
-    if frame.status == FrameStatus.COMPLETED and not (recoverable or has_focus or has_pending_child):
+    has_awaiting_user_child = (
+        isinstance(awaiting_user_child_frame_id, str)
+        and bool(awaiting_user_child_frame_id)
+    )
+    if frame.status == FrameStatus.COMPLETED and not (
+        recoverable
+        or has_focus
+        or has_active_focus
+        or has_pending_child
+        or has_awaiting_user_child
+    ):
         return False
-    return recoverable or has_focus or has_pending_child
+    return recoverable or has_focus or has_active_focus or has_pending_child or has_awaiting_user_child
 
 
 def _recoverable_root_sort_key(frame: SkillFrameState) -> tuple[int, str, str, str]:
@@ -1978,6 +2628,8 @@ def _recoverable_root_sort_key(frame: SkillFrameState) -> tuple[int, str, str, s
     state = frame.private_working_state
     timestamp = (
         str(state.get("interrupted_at") or "")
+        or str(state.get("active_focus_updated_at") or "")
+        or str(state.get("awaiting_user_input_at") or "")
         or str(state.get("recoverable_focus_interrupted_at") or "")
         or frame.journal_updated_at
         or frame.ended_at

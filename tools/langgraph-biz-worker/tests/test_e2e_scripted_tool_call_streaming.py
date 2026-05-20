@@ -23,6 +23,7 @@ from langgraph_biz_worker.graphs import root_graph as root_graph_module
 from langgraph_biz_worker.main import app as worker_app
 from langgraph_biz_worker.models import FrameStatus, QueryEvent
 from langgraph_biz_worker.routes import frame_interruption as frame_interruption_module
+from langgraph_biz_worker.runtime.frame_execution_report import read_frame_execution_report
 from mock_llm.main import app as mock_llm_app
 
 LLM_SCRIPT_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "llm_scripts"
@@ -244,6 +245,429 @@ async def test_scripted_tool_call_streaming_reaches_second_turn(monkeypatch, moc
     assert first_turn["responseSummary"]["toolCalls"] == ["invoke_business_skill"]
     assert second_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
     assert third_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
+
+
+@pytest.mark.anyio
+async def test_scripted_child_waiting_user_input_resumes_same_frame(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+):
+    """A child WAITING_FOR_USER_INPUT turn should resume the same child frame next turn."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-child-await-user-{run_id}"
+    session_id = f"sess-e2e-child-await-{run_id}"
+    context_id = f"ctx-e2e-child-await-{run_id}"
+    first_task_id = f"task_e2e_child_await_001_{run_id}"
+    second_task_id = f"task_e2e_child_await_002_{run_id}"
+    first_prompt = "请回复 1 或 2 选择工单类型。"
+    second_prompt = "请继续补充工单标题。"
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "tms-ticket-agent.yaml").write_text(
+        """
+id: tms-ticket-agent
+name: TMS Ticket Agent
+description: Collect ticket fields and submit a TMS work order.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-child-await-user",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_skill",
+                                    "args": {
+                                        "skill_id": "tms-ticket-agent",
+                                        "instruction": f"引导用户选择工单类型 next:{trace_id}:002",
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": first_prompt,
+                                        "structured_output": {
+                                            "turn_status": "WAITING_FOR_USER_INPUT",
+                                            "user_message": first_prompt,
+                                            "required_fields": ["ticket_type"],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": second_prompt,
+                                        "structured_output": {
+                                            "turn_status": "WAITING_FOR_USER_INPUT",
+                                            "user_message": second_prompt,
+                                            "required_fields": ["title"],
+                                            "ticket_type": "运单异常件",
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"你可以帮我提交工单吗 next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {
+                    "contextId": context_id,
+                    "allowed_skills": [
+                        {
+                            "id": "tms-ticket-agent",
+                            "description": "Collect ticket fields and submit a TMS work order.",
+                        }
+                    ],
+                },
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"1 next:{trace_id}:003",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert continued_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+
+    first_root_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    first_child_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    continued_root_open = next(
+        event for event in continued_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    continued_child_open = next(
+        event for event in continued_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    assert continued_root_open.skill_frame_id == first_root_open.skill_frame_id
+    assert continued_child_open.skill_frame_id == first_child_open.skill_frame_id
+    assert any(event.tool_name == "invoke_business_skill" for event in first_events)
+    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert not any(event.tool_name == "resume_recoverable_child_skill" for event in continued_events)
+
+    first_result = next(event for event in first_events if event.type == "result")
+    continued_result = next(event for event in continued_events if event.type == "result")
+    assert first_result.content == first_prompt
+    assert continued_result.content == second_prompt
+    assert continued_result.structured_output["required_fields"] == ["title"]
+
+    runtime = root_graph_module.get_runtime()
+    root = runtime.get_frame(first_root_open.skill_frame_id)
+    child = runtime.get_frame(first_child_open.skill_frame_id)
+    assert root is not None
+    assert child is not None
+    assert root.status == FrameStatus.WAITING_CHILD
+    assert child.status == FrameStatus.AWAITING_USER
+    assert root.current_task_id == second_task_id
+    assert child.current_task_id == second_task_id
+    assert root.private_working_state["active_focus_frame_id"] == child.frame_id
+    assert root.private_working_state["active_focus_status"] == "AWAITING_USER"
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+    ]
+    resumed_turn = records[-1]
+    assert resumed_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]
+    resumed_user_messages = [
+        message["content"]
+        for message in resumed_turn["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("Previous child skill turn is waiting for user input." in content for content in resumed_user_messages)
+    assert any(first_prompt in content for content in resumed_user_messages)
+    assert any(f"Current user reply: 1 next:{trace_id}:003" in content for content in resumed_user_messages)
+
+
+@pytest.mark.anyio
+async def test_scripted_awaiting_child_completed_result_returns_directly(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+):
+    """A resumed awaiting-user child that completes should not re-enter root synthesis."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-child-final-direct-{run_id}"
+    session_id = f"sess-e2e-child-final-direct-{run_id}"
+    context_id = f"ctx-e2e-child-final-direct-{run_id}"
+    first_task_id = f"task_e2e_child_final_direct_001_{run_id}"
+    second_task_id = f"task_e2e_child_final_direct_002_{run_id}"
+    first_prompt = "请补充工单类型、标题和详细描述。"
+    final_summary = f"工单已创建成功，编号 TKT-E2E-DIRECT。 next:{trace_id}:004"
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "tms-ticket-agent.yaml").write_text(
+        """
+id: tms-ticket-agent
+name: TMS Ticket Agent
+description: Collect ticket fields and submit a TMS work order.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-child-final-direct",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_skill",
+                                    "args": {
+                                        "skill_id": "tms-ticket-agent",
+                                        "instruction": f"引导用户补充工单字段 next:{trace_id}:002",
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": first_prompt,
+                                        "structured_output": {
+                                            "turn_status": "WAITING_FOR_USER_INPUT",
+                                            "user_message": first_prompt,
+                                            "required_fields": [
+                                                "ticket_type",
+                                                "title",
+                                                "description",
+                                            ],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": final_summary,
+                                        "structured_output": {
+                                            "status": "COMPLETED",
+                                            "ticket_id": "TKT-E2E-DIRECT",
+                                            "ticket_status": "SUBMITTED",
+                                            "remaining_work": [],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:004",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "已完成操作。",
+                                        "structured_output": {"status": "COMPLETED"},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"帮我生成一个工单 next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {
+                    "contextId": context_id,
+                    "allowed_skills": [
+                        {
+                            "id": "tms-ticket-agent",
+                            "description": "Collect ticket fields and submit a TMS work order.",
+                        }
+                    ],
+                },
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"平台反馈，标题是历史会话标题优化，描述是不要再显示未命名会话 next:{trace_id}:003",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert continued_response.status_code == 200
+    first_events = _parse_worker_sse(first_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+
+    first_result = next(event for event in first_events if event.type == "result")
+    continued_result = next(event for event in continued_events if event.type == "result")
+    assert first_result.content == first_prompt
+    assert continued_result.content == final_summary
+    assert continued_result.structured_output == {
+        "status": "COMPLETED",
+        "ticket_id": "TKT-E2E-DIRECT",
+        "ticket_status": "SUBMITTED",
+        "remaining_work": [],
+    }
+
+    assert not any(
+        event.tool_name == "invoke_business_skill"
+        for event in continued_events
+    )
+    assert sum(
+        1 for event in continued_events
+        if event.type == "skill_result_submit"
+    ) == 1
+
+    first_root_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    first_child_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    runtime = root_graph_module.get_runtime()
+    root = runtime.get_frame(first_root_open.skill_frame_id)
+    child = runtime.get_frame(first_child_open.skill_frame_id)
+    assert root is not None
+    assert child is not None
+    assert root.status == FrameStatus.RUNNING
+    assert child.status == FrameStatus.COMPLETED
+    assert "active_focus_frame_id" not in root.private_working_state
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+    ]
 
 
 @pytest.mark.anyio
@@ -1665,6 +2089,508 @@ async def test_scripted_root_skill_continues_after_recoverable_model_loop_failur
 
 
 @pytest.mark.anyio
+async def test_scripted_continue_prompt_resumes_child_waiting_user_input(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+):
+    """If a child returns WAITING_USER, continue should resume that unfinished child frame."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-root-child-summary-continue-{run_id}"
+    session_id = f"sess-e2e-child-summary-continue-{run_id}"
+    context_id = f"ctx-e2e-child-summary-continue-{run_id}"
+    first_task_id = f"task_e2e_child_summary_continue_001_{run_id}"
+    second_task_id = f"task_e2e_child_summary_continue_002_{run_id}"
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "tms-ticket-agent.yaml").write_text(
+        """
+id: tms-ticket-agent
+name: TMS Ticket Agent
+description: Collect ticket fields and submit a TMS work order.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-root-child-summary-continue",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_skill",
+                                    "args": {
+                                        "skill_id": "tms-ticket-agent",
+                                        "instruction": f"提交工单，先确认必要字段 next:{trace_id}:002",
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "Need ticket fields",
+                                        "structured_output": {
+                                            "status": "WAITING_USER",
+                                            "next_step": "请回复工单类型、运单号（如适用）、标题及详细描述。",
+                                            "missing_fields": [
+                                                "ticket_type",
+                                                "title",
+                                                "description",
+                                            ],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:004",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "继续上一轮工单字段收集。",
+                                        "structured_output": {
+                                            "intent_resolution": "CONTINUE_PREVIOUS",
+                                            "status": "WAITING_USER",
+                                            "next_step": "请回复工单类型、运单号（如适用）、标题及详细描述。",
+                                            "missing_fields": [
+                                                "ticket_type",
+                                                "title",
+                                                "description",
+                                            ],
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_skill_max_iterations", 1)
+
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        failed_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"你可以帮我提交工单吗 next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {
+                    "contextId": context_id,
+                    "allowed_skills": [
+                        {
+                            "id": "tms-ticket-agent",
+                            "description": "Collect ticket fields and submit a TMS work order.",
+                        }
+                    ],
+                },
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"继续 next:{trace_id}:004",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": {
+                    "provider": "openai",
+                    "api_key": "sk-test",
+                    "base_url": f"{mock_llm_server}/v1",
+                    "model": "navigator-e2e-scripted",
+                    "temperature": 0,
+                },
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert failed_response.status_code == 200
+    assert continued_response.status_code == 200
+    failed_events = _parse_worker_sse(failed_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+
+    root_open = next(event for event in failed_events if event.type == "skill_frame_open" and event.skill_id == "system.root")
+    child_open_candidates = [
+        event for event in failed_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    ]
+    assert child_open_candidates, [
+        {
+            "type": event.type,
+            "skill_id": event.skill_id,
+            "tool_name": event.tool_name,
+            "content": event.content,
+            "error": event.error,
+        }
+        for event in failed_events
+    ]
+    child_open = child_open_candidates[0]
+    continued_open = next(event for event in continued_events if event.type == "skill_frame_open" and event.skill_id == "system.root")
+    assert continued_open.skill_frame_id == root_open.skill_frame_id
+    assert continued_open.content == "Reusing frame for skill: system.root"
+    continued_child_open = next(
+        event for event in continued_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    assert continued_child_open.skill_frame_id == child_open.skill_frame_id
+    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert not any(event.tool_name == "resume_recoverable_child_skill" for event in continued_events)
+    assert not any(
+        event.type == "error"
+        and event.error == "LLM skill agent reached max iterations without valid submit"
+        for event in failed_events + continued_events
+    )
+
+    result_events = [event for event in continued_events if event.type == "result"]
+    assert result_events, [
+        {
+            "type": event.type,
+            "skill_id": event.skill_id,
+            "tool_name": event.tool_name,
+            "content": event.content,
+            "error": event.error,
+        }
+        for event in continued_events
+    ]
+    result = result_events[0]
+    assert result.structured_output["intent_resolution"] == "CONTINUE_PREVIOUS"
+    assert result.structured_output["status"] == "WAITING_USER"
+    assert result.structured_output["missing_fields"] == [
+        "ticket_type",
+        "title",
+        "description",
+    ]
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:004",
+    ]
+    continue_user_messages = [
+        message["content"]
+        for message in records[-1]["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any(
+        "Previous child skill turn is waiting for user input." in content
+        for content in continue_user_messages
+    ), continue_user_messages
+    assert any(child_open.skill_frame_id in content for content in continue_user_messages)
+    assert any("tms-ticket-agent" in content for content in continue_user_messages)
+    assert any("WAITING_USER" in content for content in continue_user_messages)
+    assert any("Current user reply:" in content and f"next:{trace_id}:004" in content for content in continue_user_messages)
+    assert any(
+        "请回复工单类型、运单号（如适用）、标题及详细描述。" in content
+        for content in continue_user_messages
+    )
+    assert any("missing_fields" in content for content in continue_user_messages)
+    assert not any("read_frame_execution_report" in (event.tool_name or "") for event in continued_events)
+
+
+@pytest.mark.anyio
+async def test_scripted_tms_continue_after_cancel_uses_root_state_without_child_reinvoke(
+    monkeypatch,
+    mock_llm_server,
+    tmp_path,
+):
+    """Replay the observed TMS cancel+continue shape with deterministic LLM turns."""
+    run_id = uuid.uuid4().hex[:8]
+    trace_id = f"worker-tms-cancel-continue-{run_id}"
+    session_id = f"sess-e2e-tms-cancel-{run_id}"
+    context_id = f"ctx-e2e-tms-cancel-{run_id}"
+    first_task_id = f"task_e2e_tms_cancel_001_{run_id}"
+    second_task_id = f"task_e2e_tms_cancel_002_{run_id}"
+    child_summary = (
+        "您好！我是 TMS 工单助手。请问您想创建哪种类型的工单？\n\n"
+        "1. **运单异常件**：针对具体运单出现的异常情况（如破损、丢失、延误等）。\n"
+        "2. **平台反馈**：针对系统使用、流程配置或其他非运单类问题。\n\n"
+        "请回复数字 1 或 2。"
+    )
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "tms-ticket-agent.yaml").write_text(
+        """
+id: tms-ticket-agent
+name: TMS Ticket Agent
+description: Collect ticket fields and submit a TMS work order.
+input_schema:
+  type: object
+output_schema:
+  type: object
+  additionalProperties: true
+promote_to_parent:
+  - result_summary
+  - structured_output
+  - artifact_refs
+  - evidence_refs
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(root_graph_module._skill_registry, "_legacy_dir", manifest_dir)
+
+    active_plan = {
+        "current_step": "waiting_for_user_input",
+        "pending_info": "ticket_type",
+    }
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        await mock_client.delete(f"/__e2e/scripts/{trace_id}")
+        register = await mock_client.post(
+            "/__e2e/scripts",
+            json={
+                "traceId": trace_id,
+                "scenarioId": "worker-tms-cancel-continue",
+                "turns": [
+                    {
+                        "cursor": f"next:{trace_id}:001",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "invoke_business_skill",
+                                    "args": {
+                                        "skill_id": "tms-ticket-agent",
+                                        "instruction": f"引导用户选择工单类型 next:{trace_id}:002",
+                                    },
+                                },
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "已引导用户选择工单类型（运单异常件或平台反馈），等待用户进一步指示。",
+                                        "structured_output": {
+                                            "status": "WAITING_USER",
+                                            "active_plan": active_plan,
+                                        },
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:002",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": child_summary,
+                                        "structured_output": {},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "cursor": f"next:{trace_id}:003",
+                        "response": {
+                            "tool_calls": [
+                                {
+                                    "name": "submit_skill_result",
+                                    "args": {
+                                        "summary": "等待用户选择工单类型（运单异常件或平台反馈）以继续处理。",
+                                        "structured_output": {
+                                            "intent_resolution": "CONTINUE_PREVIOUS",
+                                            "status": "WAITING_USER",
+                                            "active_plan": active_plan,
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        assert register.status_code == 200
+
+    monkeypatch.setattr(root_graph_module.settings, "llm_execute_skills", True)
+    monkeypatch.setattr(root_graph_module.settings, "llm_skill_max_iterations", 3)
+    frame_interruption_module.configure(
+        root_graph_module.get_runtime(),
+        root_graph_module.get_journal(),
+    )
+
+    llm_config = {
+        "provider": "openai",
+        "api_key": "sk-test",
+        "base_url": f"{mock_llm_server}/v1",
+        "model": "navigator-e2e-scripted",
+        "temperature": 0,
+    }
+    transport = ASGITransport(app=worker_app)
+    async with AsyncClient(transport=transport, base_url="http://worker") as worker_client:
+        first_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"你可以帮我提交工单吗 next:{trace_id}:001",
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {
+                    "contextId": context_id,
+                    "allowed_skills": [
+                        {
+                            "id": "tms-ticket-agent",
+                            "description": "Collect ticket fields and submit a TMS work order.",
+                        }
+                    ],
+                },
+            },
+        )
+        interruption_response = await worker_client.post(
+            "/api/v1/frames/interruption",
+            json={
+                "taskId": first_task_id,
+                "session_id": session_id,
+                "context_id": context_id,
+                "reason": "user_cancelled",
+                "error": "Cancelled by user after the ticket type prompt.",
+            },
+        )
+        continued_response = await worker_client.post(
+            "/api/v1/query",
+            json={
+                "prompt": f"继续 next:{trace_id}:003",
+                "taskId": second_task_id,
+                "session_id": session_id,
+                "model": "navigator-e2e-scripted",
+                "llm_config": llm_config,
+                "context": {"contextId": context_id},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert interruption_response.status_code == 200
+    assert interruption_response.json()["status"] == "recorded"
+    assert continued_response.status_code == 200
+
+    first_events = _parse_worker_sse(first_response.text)
+    continued_events = _parse_worker_sse(continued_response.text)
+    root_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    child_open = next(
+        event for event in first_events
+        if event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+    )
+    continued_root_open = next(
+        event for event in continued_events
+        if event.type == "skill_frame_open" and event.skill_id == "system.root"
+    )
+    assert continued_root_open.skill_frame_id == root_open.skill_frame_id
+    assert continued_root_open.content == "Reusing frame for skill: system.root"
+    assert any(event.tool_name == "invoke_business_skill" for event in first_events)
+    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert not any(event.tool_name == "read_frame_execution_report" for event in continued_events)
+    assert not any(
+        event.type == "skill_frame_open" and event.skill_id == "tms-ticket-agent"
+        for event in continued_events
+    )
+
+    result = next(event for event in continued_events if event.type == "result")
+    assert result.content == "等待用户选择工单类型（运单异常件或平台反馈）以继续处理。"
+    assert result.structured_output == {
+        "intent_resolution": "CONTINUE_PREVIOUS",
+        "status": "WAITING_USER",
+        "active_plan": active_plan,
+    }
+
+    runtime = root_graph_module.get_runtime()
+    root = runtime.get_frame(root_open.skill_frame_id)
+    child = runtime.get_frame(child_open.skill_frame_id)
+    assert root is not None
+    assert child is not None
+    assert root.current_task_id == second_task_id
+    assert root.origin_task_id == first_task_id
+    assert child.task_id == first_task_id
+    assert root.private_working_state["active_plan"] == active_plan
+    latest_child = root.private_working_state["latest_child_result_summary"]
+    assert latest_child["frame_id"] == child_open.skill_frame_id
+    assert latest_child["skill_id"] == "tms-ticket-agent"
+    assert latest_child["result_summary"] == child_summary
+    assert latest_child["execution_report_ref"] == (
+        f"frame-report://{first_task_id}/{child_open.skill_frame_id}"
+    )
+
+    continued_report = read_frame_execution_report(
+        root_graph_module._data_root,
+        task_id=second_task_id,
+        frame_id=root_open.skill_frame_id,
+        mode="summary",
+    )
+    assert continued_report["ok"] is True
+    child_reports = continued_report["summary"]["child_reports"]
+    assert child_reports[0]["status"] == "COMPLETED"
+    assert child_reports[0]["report_ref"] == f"frame-report://{first_task_id}/{child_open.skill_frame_id}"
+    assert child_reports[0]["summary"] == child_summary
+
+    async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
+        debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
+    assert debug.status_code == 200
+    records = debug.json()
+    assert [record["cursor"] for record in records] == [
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+    ]
+    continue_user_messages = [
+        message["content"]
+        for message in records[-1]["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("Previous execution was interrupted." in content for content in continue_user_messages)
+    assert any("Reason: user_cancelled" in content for content in continue_user_messages)
+    assert any("Continuation summary from promoted child result:" in content for content in continue_user_messages)
+    assert any("TMS 工单助手" in content for content in continue_user_messages)
+    assert any("运单异常件" in content and "平台反馈" in content for content in continue_user_messages)
+    assert any("Active task plan:" in content for content in continue_user_messages)
+    assert any("pending_info" in content and "ticket_type" in content for content in continue_user_messages)
+
+
+@pytest.mark.anyio
 async def test_scripted_root_skill_continues_after_user_cancelled_interruption(
     monkeypatch,
     mock_llm_server,
@@ -1973,7 +2899,7 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
     monkeypatch,
     mock_llm_server,
 ):
-    """A "continue" request should resume the exact child frame interrupted earlier."""
+    """A "continue" request should resume the child focus before the root loop."""
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-resume-child-{run_id}"
     session_id = f"sess-e2e-root-resume-child-{run_id}"
@@ -1993,22 +2919,9 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
                         "response": {
                             "tool_calls": [
                                 {
-                                    "name": "resume_recoverable_child_skill",
-                                    "args": {
-                                        "instruction": f"继续子技能 next:{trace_id}:002",
-                                    },
-                                }
-                            ],
-                        },
-                    },
-                    {
-                        "cursor": f"next:{trace_id}:002",
-                        "response": {
-                            "tool_calls": [
-                                {
                                     "name": "submit_skill_result",
                                     "args": {
-                                        "summary": f"Child resumed successfully next:{trace_id}:003",
+                                        "summary": f"Child resumed successfully next:{trace_id}:002",
                                         "structured_output": {
                                             "classification": "vehicle_delay",
                                             "recommended_action": "manual_dispatch",
@@ -2021,7 +2934,7 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
                         },
                     },
                     {
-                        "cursor": f"next:{trace_id}:003",
+                        "cursor": f"next:{trace_id}:002",
                         "response": {
                             "tool_calls": [
                                 {
@@ -2117,6 +3030,9 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
         "recommended_action": "manual_dispatch",
         "confidence": 0.91,
     }
+    assert not any(event.tool_name == "resume_recoverable_child_skill" for event in events)
+    assert not any(event.tool_name == "invoke_business_skill" for event in events)
+    assert not any(event.tool_name == "read_frame_execution_report" for event in events)
 
     async with httpx.AsyncClient(base_url=mock_llm_server) as mock_client:
         debug = await mock_client.get("/__debug/requests", params={"traceId": trace_id})
@@ -2125,24 +3041,27 @@ async def test_scripted_root_skill_resumes_interrupted_child_frame(
     assert [record["cursor"] for record in records] == [
         f"next:{trace_id}:001",
         f"next:{trace_id}:002",
-        f"next:{trace_id}:003",
     ]
-    root_user_messages = [
+    child_user_messages = [
         message["content"]
         for message in records[0]["request"]["messages"]
         if message["role"] == "user"
     ]
-    assert any("Pending child skill:" in content for content in root_user_messages)
-    assert any("Recoverable focus:" in content for content in root_user_messages)
-    assert any("Recoverable focus stack:" in content for content in root_user_messages)
-    assert any("CONTINUE_PREVIOUS" in content for content in root_user_messages)
-    assert any("ASK_CLARIFICATION" in content for content in root_user_messages)
-    assert any("resume_recoverable_child_skill" in content for content in root_user_messages)
+    assert any("User request: 继续" in content for content in child_user_messages)
+    assert any("Skill input:" in content and "ORD-1" in content for content in child_user_messages)
+    root_user_messages = [
+        message["content"]
+        for message in records[1]["request"]["messages"]
+        if message["role"] == "user"
+    ]
+    assert any("Continuation summary from promoted child result:" in content for content in root_user_messages)
+    assert any(child_frame_id in content for content in root_user_messages)
+    assert not any("Pending child skill:" in content for content in root_user_messages)
 
 
 @pytest.mark.anyio
 async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_server):
-    """Replay the accepted real-LLM smoke trace through the mock LLM service."""
+    """Replay the accepted smoke trace and avoid duplicate child work on continue."""
     run_id = uuid.uuid4().hex[:8]
     trace_id = f"worker-root-real-smoke-{run_id}"
     session_id = f"sess-e2e-real-smoke-{run_id}"
@@ -2282,11 +3201,15 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
     assert "lgt_" not in (first_result.content or "")
 
     continued_result = next(event for event in continued_events if event.type == "result")
-    assert continued_result.structured_output["confidence"] == 0.95
+    assert continued_result.structured_output["confidence"] == 0.9
+    assert continued_result.structured_output["continued_from_existing_child_result"] is True
     assert any(
-        event.type == "tool_result" and "\"ok\": true" in (event.content or "")
+        event.type == "skill_result_submit" and "\"ok\": true" in (event.content or "")
         for event in continued_events
     )
+    assert not any(event.tool_name == "resume_recoverable_child_skill" for event in continued_events)
+    assert not any(event.tool_name == "invoke_business_skill" for event in continued_events)
+    assert not any(event.tool_name == "read_frame_execution_report" for event in continued_events)
 
     unrelated_result = next(event for event in unrelated_events if event.type == "result")
     assert unrelated_result.structured_output["intent_resolution"] == "START_UNRELATED_NEW_TASK"
@@ -2306,6 +3229,13 @@ async def test_scripted_root_skill_real_smoke_fixture(monkeypatch, mock_llm_serv
     assert debug.status_code == 200
     records = debug.json()
     assert [record["cursor"] for record in records] == [
-        f"next:{trace_id}:{index:03d}"
-        for index in range(1, 13)
+        f"next:{trace_id}:001",
+        f"next:{trace_id}:002",
+        f"next:{trace_id}:003",
+        f"next:{trace_id}:004",
+        f"next:{trace_id}:005",
+        f"next:{trace_id}:006",
+        f"next:{trace_id}:012",
     ]
+    continued_turn = next(record for record in records if record["cursor"] == f"next:{trace_id}:006")
+    assert continued_turn["responseSummary"]["toolCalls"] == ["submit_skill_result"]

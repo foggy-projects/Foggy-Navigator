@@ -91,6 +91,28 @@ def _invoke_business_skill_tool(
             "_events": child_events,
             "_suspended": True,
         }
+    if child and child.status == FrameStatus.AWAITING_USER:
+        runtime.mark_child_awaiting_user(
+            frame_id,
+            child_frame_id,
+            _awaiting_user_input_from_child(child),
+        )
+        return {
+            "ok": True,
+            "awaiting_user": True,
+            "turn_status": "WAITING_FOR_USER_INPUT",
+            "child_frame_id": child_frame_id,
+            "result": {
+                "frame_id": child.frame_id,
+                "skill_id": child.skill_id,
+                "result_summary": child.result_summary,
+                "structured_output": child.output or {},
+                "artifact_refs": list(child.artifact_refs),
+                "evidence_refs": list(child.evidence_refs),
+            },
+            "_events": child_events,
+            "_suspended": True,
+        }
     if not child or child.status != FrameStatus.COMPLETED:
         error = f"Child skill ended in {child.status.value if child else 'MISSING'}"
         if persistent_frame:
@@ -127,6 +149,25 @@ def _invoke_business_skill_tool(
         execution_report_ref=promoted.get("execution_report_ref"),
         execution_report_digest=promoted.get("execution_report_digest"),
     ))
+    direct_result = _direct_child_result_for_user(promoted)
+    if persistent_frame and direct_result is not None:
+        validation = runtime.submit_persistent_turn_result(
+            frame_id=frame_id,
+            summary=direct_result["summary"],
+            structured_output=direct_result["structured_output"],
+            artifact_refs=direct_result.get("artifact_refs"),
+            evidence_refs=direct_result.get("evidence_refs"),
+        )
+        response = {
+            "ok": validation.ok,
+            "direct_result": True,
+            "errors": validation.errors,
+            "result": promoted,
+            "_events": child_events,
+        }
+        if validation.ok:
+            response["_suspended"] = True
+        return response
     return {"ok": True, "result": promoted, "_events": child_events}
 
 
@@ -201,6 +242,28 @@ def _resume_recoverable_child_skill_tool(
             "_events": child_events,
             "_suspended": True,
         }
+    if refreshed_child and refreshed_child.status == FrameStatus.AWAITING_USER:
+        runtime.mark_child_awaiting_user(
+            frame_id,
+            refreshed_child.frame_id,
+            _awaiting_user_input_from_child(refreshed_child),
+        )
+        return {
+            "ok": True,
+            "awaiting_user": True,
+            "turn_status": "WAITING_FOR_USER_INPUT",
+            "child_frame_id": refreshed_child.frame_id,
+            "result": {
+                "frame_id": refreshed_child.frame_id,
+                "skill_id": refreshed_child.skill_id,
+                "result_summary": refreshed_child.result_summary,
+                "structured_output": refreshed_child.output or {},
+                "artifact_refs": list(refreshed_child.artifact_refs),
+                "evidence_refs": list(refreshed_child.evidence_refs),
+            },
+            "_events": child_events,
+            "_suspended": True,
+        }
     if not refreshed_child or refreshed_child.status != FrameStatus.COMPLETED:
         error = f"Child skill ended in {refreshed_child.status.value if refreshed_child else 'MISSING'}"
         _record_parent_child_recoverable_interruption(
@@ -230,6 +293,27 @@ def _resume_recoverable_child_skill_tool(
         execution_report_ref=promoted.get("execution_report_ref"),
         execution_report_digest=promoted.get("execution_report_digest"),
     ))
+    direct_result = _direct_child_result_for_user(promoted)
+    if direct_result is not None:
+        validation = runtime.submit_persistent_turn_result(
+            frame_id=frame_id,
+            summary=direct_result["summary"],
+            structured_output=direct_result["structured_output"],
+            artifact_refs=direct_result.get("artifact_refs"),
+            evidence_refs=direct_result.get("evidence_refs"),
+        )
+        response = {
+            "ok": validation.ok,
+            "intent_resolution": "CONTINUE_PREVIOUS",
+            "direct_result": True,
+            "errors": validation.errors,
+            "result": promoted,
+            "child_frame_id": child.frame_id,
+            "_events": child_events,
+        }
+        if validation.ok:
+            response["_suspended"] = True
+        return response
     return {
         "ok": True,
         "intent_resolution": "CONTINUE_PREVIOUS",
@@ -237,6 +321,140 @@ def _resume_recoverable_child_skill_tool(
         "child_frame_id": child.frame_id,
         "_events": child_events,
     }
+
+
+def _direct_child_result_for_user(
+    promoted: dict[str, Any],
+    *,
+    allow_legacy_completed: bool = False,
+) -> dict[str, Any] | None:
+    """Return normalized direct-turn payload when a child result is user-final."""
+    if not isinstance(promoted, dict):
+        return None
+
+    structured_output = promoted.get("structured_output")
+    if not isinstance(structured_output, dict):
+        structured_output = {}
+
+    requires_parent_synthesis = _optional_bool(
+        promoted.get("requires_parent_synthesis"),
+        promoted.get("requiresParentSynthesis"),
+        structured_output.get("requires_parent_synthesis"),
+        structured_output.get("requiresParentSynthesis"),
+    )
+    if requires_parent_synthesis is True:
+        return None
+
+    remaining_work = (
+        promoted.get("remaining_work")
+        if "remaining_work" in promoted
+        else promoted.get("remainingWork")
+    )
+    if remaining_work is None:
+        remaining_work = (
+            structured_output.get("remaining_work")
+            if "remaining_work" in structured_output
+            else structured_output.get("remainingWork")
+        )
+    if _has_remaining_work(remaining_work):
+        return None
+
+    statuses = _normalized_statuses(promoted, structured_output)
+    terminal_statuses = {
+        "FINAL_FOR_USER",
+        "COMPLETED",
+        "COMPLETE",
+        "DONE",
+        "SUCCESS",
+        "SUCCEEDED",
+        "SUBMITTED",
+    }
+    direct = False
+    if "FINAL_FOR_USER" in statuses:
+        direct = True
+    elif requires_parent_synthesis is False:
+        direct = True
+    elif allow_legacy_completed and statuses & terminal_statuses:
+        direct = True
+    if not direct:
+        return None
+
+    summary = _first_non_empty_string(
+        structured_output.get("user_message"),
+        structured_output.get("userMessage"),
+        structured_output.get("message"),
+        promoted.get("user_message"),
+        promoted.get("userMessage"),
+        promoted.get("result_summary"),
+        promoted.get("summary"),
+    )
+    if not summary:
+        return None
+
+    return {
+        "summary": summary,
+        "structured_output": structured_output,
+        "artifact_refs": _list_or_none(promoted.get("artifact_refs")),
+        "evidence_refs": _list_or_none(promoted.get("evidence_refs")),
+    }
+
+
+def _normalized_statuses(
+    promoted: dict[str, Any],
+    structured_output: dict[str, Any],
+) -> set[str]:
+    candidates = [
+        promoted.get("turn_status"),
+        promoted.get("turnStatus"),
+        promoted.get("next_step"),
+        promoted.get("nextStep"),
+        promoted.get("status"),
+        structured_output.get("turn_status"),
+        structured_output.get("turnStatus"),
+        structured_output.get("next_step"),
+        structured_output.get("nextStep"),
+        structured_output.get("status"),
+    ]
+    return {
+        str(value).strip().upper()
+        for value in candidates
+        if value is not None and str(value).strip()
+    }
+
+
+def _optional_bool(*values: Any) -> bool | None:
+    for value in values:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "y"}:
+                return True
+            if normalized in {"false", "0", "no", "n"}:
+                return False
+    return None
+
+
+def _has_remaining_work(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized not in {"", "none", "null", "false", "no", "[]"}
+    return bool(value)
+
+
+def _first_non_empty_string(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _list_or_none(value: Any) -> list[Any] | None:
+    return value if isinstance(value, list) else None
 
 
 def _runtime_context_for_child_skill(
@@ -284,6 +502,21 @@ def _record_parent_child_recoverable_interruption(
         error=error,
         task_id=task_id,
     )
+
+
+def _awaiting_user_input_from_child(child: Any) -> dict[str, Any]:
+    state = getattr(child, "private_working_state", {}) or {}
+    payload = state.get("awaiting_user_input")
+    if isinstance(payload, dict):
+        return payload
+    return {
+        "turn_status": "WAITING_FOR_USER_INPUT",
+        "user_message": child.result_summary or "",
+        "summary": child.result_summary or "",
+        "structured_output": child.output or {},
+        "artifact_refs": list(child.artifact_refs),
+        "evidence_refs": list(child.evidence_refs),
+    }
 
 
 def _context_visibility_for_child_manifest(manifest: SkillManifest) -> str:

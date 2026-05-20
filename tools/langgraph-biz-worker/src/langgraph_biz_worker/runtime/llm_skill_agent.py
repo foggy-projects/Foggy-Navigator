@@ -63,24 +63,11 @@ from .llm_child_recovery import (
     _runtime_context_for_child_skill,
 )
 from .llm_business_function_adapter import (
-    _BUSINESS_IDENTIFIER_FIELDS,
-    _BUSINESS_ID_CLAIM_PATTERN,
-    _FORMAL_ORDER_SUCCESS_PATTERN,
-    _NAVIGATOR_RUNTIME_IDENTIFIER_FIELDS,
-    _NAVIGATOR_RUNTIME_IDENTIFIER_PATTERN,
     _business_function_approval_summary,
     _business_function_result_is_suspended,
     _business_function_suspend_id,
     _business_function_timeout_at,
-    _collect_action_like_outputs,
-    _collect_business_identifier_values,
-    _contains_runtime_identifier_claim,
-    _extract_safe_summary,
-    _guard_final_summary,
-    _is_page_action_without_business_identifier,
     _looks_like_business_function_id,
-    _parse_maybe_json,
-    _safe_summary_from_context,
     _split_business_function_tool_name,
 )
 from .llm_tool_dispatcher import (
@@ -511,11 +498,28 @@ class LlmSkillAgent:
 
         if name == "submit_skill_result":
             structured_output = args.get("structured_output") or {}
-            summary = _guard_final_summary(
-                args.get("summary", ""),
-                structured_output,
-                self._runtime.get_frame(frame_id),
-            )
+            summary = args.get("summary", "")
+            if not isinstance(summary, str):
+                summary = str(summary or "")
+            summary = summary.strip()
+            if not persistent_frame and _is_waiting_for_user_input_output(structured_output):
+                validation = self._runtime.submit_user_input_request(
+                    frame_id=frame_id,
+                    summary=summary,
+                    structured_output=structured_output,
+                    artifact_refs=args.get("artifact_refs"),
+                    evidence_refs=args.get("evidence_refs"),
+                )
+                frame = self._runtime.get_frame(frame_id)
+                return {
+                    "ok": validation.ok,
+                    "errors": validation.errors,
+                    "turn_status": "WAITING_FOR_USER_INPUT",
+                    "paused": True,
+                    "structured_output": frame.output if frame else structured_output,
+                    **_execution_report_payload_from_frame(frame),
+                    "_suspended": True,
+                }
             submit = (
                 self._runtime.submit_persistent_turn_result
                 if persistent_frame
@@ -702,6 +706,30 @@ def _tool_authorized(name: str, execution_policy: ExecutionPolicy | None) -> boo
     if execution_policy is None:
         return True
     return execution_policy.allows_tool(name) or name in _RUNTIME_ALWAYS_ALLOWED_TOOL_NAMES
+
+
+def _is_waiting_for_user_input_output(structured_output: Any) -> bool:
+    if not isinstance(structured_output, dict):
+        return False
+    candidates = [
+        structured_output.get("turn_status"),
+        structured_output.get("turnStatus"),
+        structured_output.get("next_step"),
+        structured_output.get("nextStep"),
+        structured_output.get("status"),
+    ]
+    normalized = {
+        str(value).strip().upper()
+        for value in candidates
+        if value is not None
+    }
+    return bool(normalized & {
+        "WAITING_FOR_USER_INPUT",
+        "AWAITING_USER_INPUT",
+        "WAITING_USER",
+        "AWAITING_USER",
+        "PENDING_INFO",
+    })
 
 
 def _tool_not_authorized_error(name: str) -> str:

@@ -183,7 +183,17 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "invoke_business_skill",
-            "description": "Invoke a child business skill and return its promoted result.",
+            "description": (
+                "Invoke a child business skill and return its promoted result. "
+                "The promoted result is the parent agent's primary "
+                "business-decision context for that child frame; use it directly "
+                "for status, next_step, missing_fields, structured_output, "
+                "artifact_refs, and evidence_refs. Do not call "
+                "read_frame_execution_report after normal completion just to "
+                "recover these business fields. If the child asks for user "
+                "input, the runtime keeps that child frame open and resumes it "
+                "on the next user message; do not reopen the same skill yourself."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -195,8 +205,23 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "type": "string",
                         "description": "Legacy alias for skill_name.",
                     },
-                    "instruction": {"type": "string"},
-                    "input": {"type": "object"},
+                    "instruction": {
+                        "type": "string",
+                        "description": (
+                            "Natural-language work order for the child skill. "
+                            "Include the user's business goal, known fields, and "
+                            "constraints so the child can return a complete "
+                            "promoted result without requiring report inspection."
+                        ),
+                    },
+                    "input": {
+                        "type": "object",
+                        "description": (
+                            "Optional structured business inputs for the child "
+                            "skill, such as document numbers, type hints, "
+                            "attachments, or pre-extracted fields."
+                        ),
+                    },
                 },
                 "required": ["skill_name", "instruction"],
             },
@@ -274,22 +299,34 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "read_frame_execution_report",
             "description": (
                 "Read a persisted Frame execution report by report_ref or by "
-                "task_id/frame_id. Use this for debugging or reviewing prior "
-                "frame work instead of re-reading raw frame JSON."
+                "task_id/frame_id. Use this for user-requested explanations, "
+                "debugging, audit, or fallback recovery when the promoted child "
+                "result/continuation summary is missing a field required for the "
+                "next business decision. Do not call it by default after "
+                "invoke_business_skill or resume_recoverable_child_skill "
+                "completes normally."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "report_ref": {
                         "type": "string",
-                        "description": "Frame report reference, e.g. frame-report://task_id/frame_id.",
+                        "description": (
+                            "Frame report reference, e.g. "
+                            "frame-report://task_id/frame_id. Prefer this when "
+                            "the user asks to inspect execution details."
+                        ),
                     },
                     "task_id": {"type": "string"},
                     "frame_id": {"type": "string"},
                     "mode": {
                         "type": "string",
                         "enum": ["summary", "metadata", "markdown"],
-                        "description": "summary is compact; markdown returns capped human-readable report text.",
+                        "description": (
+                            "summary is compact; metadata returns report identity "
+                            "and digest metadata; markdown returns capped "
+                            "human-readable execution details."
+                        ),
                     },
                     "max_chars": {"type": "integer"},
                 },
@@ -301,7 +338,14 @@ _KNOWN_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "submit_skill_result",
-            "description": "Submit final skill result to the runtime.",
+            "description": (
+                "Submit a skill result to the runtime. For ordinary child "
+                "completion, return the final business result. If this child "
+                "needs more user input, set structured_output.turn_status or "
+                "next_step to WAITING_FOR_USER_INPUT and include a user-facing "
+                "summary/message; the runtime will pause this same frame instead "
+                "of closing it."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

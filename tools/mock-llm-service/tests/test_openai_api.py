@@ -432,6 +432,46 @@ async def test_scripted_cursor_advances_from_latest_tool_message_content(client)
 
 
 @pytest.mark.anyio
+async def test_scripted_cursor_uses_last_cursor_inside_message(client):
+    """同一条消息内有旧摘要和当前指令时，应选择靠后的当前 cursor。"""
+    trace_id = "e2e-script-current-cursor"
+    await client.delete(f"/__e2e/scripts/{trace_id}")
+    await client.post(
+        "/__e2e/scripts",
+        json={
+            "traceId": trace_id,
+            "turns": [
+                {
+                    "cursor": f"next:{trace_id}:002",
+                    "response": {
+                        "content": "{\"summary\":\"current-cursor\"}",
+                    },
+                }
+            ],
+        },
+    )
+
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "navigator-e2e-biz-worker-v1",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Previous summary next:{trace_id}:001\n"
+                        f"User request: continue next:{trace_id}:002"
+                    ),
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "{\"summary\":\"current-cursor\"}"
+
+
+@pytest.mark.anyio
 async def test_scripted_cursor_idempotent_for_duplicate_request(client):
     """测试相同 trace/cursor/request 重复调用返回稳定 completion/tool_call id。"""
     trace_id = "e2e-script-003"

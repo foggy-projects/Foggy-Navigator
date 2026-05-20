@@ -106,16 +106,20 @@
       "response": {
         "tool_calls": [
           {
-            "name": "invoke_business_skill",
+            "name": "submit_skill_result",
             "args": {
-              "instruction": "分析异常订单 ORD-REAL-SMOKE-001，使用模拟订单和车辆证据进行异常诊断 next:__TRACE_ID__:007",
-              "skill_id": "exception_triage",
-              "input": {
+              "summary": "继续处理异常订单 ORD-REAL-SMOKE-001：沿用上一轮已完成的 exception_triage 结果，无需重复调用子技能或重新取证。车辆 V09 电机过热且电量过低导致订单延迟，建议人工调度替换车辆。",
+              "structured_output": {
                 "order_id": "ORD-REAL-SMOKE-001",
-                "contextId": "ctx-real-llm-smoke-fixture",
-                "smokeRunId": "real-llm-smoke-fixture"
+                "classification": "vehicle_delay",
+                "confidence": 0.9,
+                "recommended_action": "manual_dispatch",
+                "continued_from_existing_child_result": true
               },
-              "next": "next:__TRACE_ID__:007"
+              "evidence_refs": [
+                "mock_get_order:ORD-REAL-SMOKE-001",
+                "mock_get_vehicle_status:V09"
+              ]
             }
           }
         ]

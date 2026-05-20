@@ -1245,9 +1245,10 @@ public class OpenApiController {
                 .filter(s -> s != null && !s.isBlank())
                 .toList();
         Map<String, String> latestTaskMap = sessionQueryService.batchFindLatestTaskIds(sessionIds);
+        Map<String, String> firstUserMessageMap = sessionQueryService.batchFindFirstUserMessageContents(sessionIds);
 
         List<OpenSessionSummaryDTO> dtos = page.stream()
-                .map(ctx -> toSessionSummary(ctx, route.agentId(), latestTaskMap))
+                .map(ctx -> toSessionSummary(ctx, route.agentId(), latestTaskMap, firstUserMessageMap))
                 .toList();
 
         String nextCursor = page.isEmpty() ? null : page.get(page.size() - 1).getContextId();
@@ -1590,7 +1591,8 @@ public class OpenApiController {
      */
     private OpenSessionSummaryDTO toSessionSummary(AgentConversationContextEntity ctx,
                                                     String agentId,
-                                                    Map<String, String> latestTaskMap) {
+                                                    Map<String, String> latestTaskMap,
+                                                    Map<String, String> firstUserMessageMap) {
         String latestTaskId = ctx.getNavigatorSessionId() != null
                 ? latestTaskMap.get(ctx.getNavigatorSessionId())
                 : null;
@@ -1598,13 +1600,35 @@ public class OpenApiController {
         return OpenSessionSummaryDTO.builder()
                 .contextId(ctx.getContextId())
                 .agentId(agentId)
-                .title(ctx.getContextAlias())
+                .title(resolveSessionTitle(ctx, firstUserMessageMap))
                 .status("ACTIVE")
                 .latestTaskId(latestTaskId)
                 .clientContext(parseClientContext(ctx.getClientContextJson()))
                 .createdAt(ctx.getCreatedAt())
                 .updatedAt(ctx.getLastAccessedAt())
                 .build();
+    }
+
+    private String resolveSessionTitle(AgentConversationContextEntity ctx,
+                                       Map<String, String> firstUserMessageMap) {
+        if (StringUtils.hasText(ctx.getContextAlias())) {
+            return ctx.getContextAlias().trim();
+        }
+        if (ctx.getNavigatorSessionId() == null || firstUserMessageMap == null) {
+            return null;
+        }
+        String firstUserMessage = firstUserMessageMap.get(ctx.getNavigatorSessionId());
+        if (!StringUtils.hasText(firstUserMessage)) {
+            return null;
+        }
+        return truncate(firstUserMessage.trim(), 120);
+    }
+
+    private String truncate(String text, int maxLength) {
+        if (text == null || text.length() <= maxLength) {
+            return text;
+        }
+        return text.substring(0, maxLength);
     }
 
     private String serializeClientContext(Map<String, Object> clientContext) {

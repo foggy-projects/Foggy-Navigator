@@ -197,6 +197,27 @@ class OpenApiSessionQueryServiceTest {
         assertEquals("Second", messages.get(0).getContent());
     }
 
+    @Test
+    void batchFindFirstUserMessageContents_shouldReturnFirstUserMessagePerSession() {
+        String otherSessionId = sessionManager.createSession(SessionCreateRequest.builder()
+                .userId(USER_ID)
+                .tenantId(TENANT_ID)
+                .agentId(AGENT_ID)
+                .taskName("Other")
+                .build());
+
+        addMessage(sessionId, null, MessageRole.ASSISTANT, "Assistant first");
+        addMessage(sessionId, null, MessageRole.USER, "First user prompt");
+        addMessage(sessionId, null, MessageRole.USER, "Second user prompt");
+        addMessage(otherSessionId, null, MessageRole.USER, "Other first prompt");
+
+        Map<String, String> result = queryService.batchFindFirstUserMessageContents(
+                List.of(sessionId, otherSessionId));
+
+        assertEquals("First user prompt", result.get(sessionId));
+        assertEquals("Other first prompt", result.get(otherSessionId));
+    }
+
     // ── taskId + cursor 增量消息查询 ──
 
     @Test

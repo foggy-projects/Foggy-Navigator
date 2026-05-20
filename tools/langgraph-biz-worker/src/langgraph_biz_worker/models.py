@@ -140,6 +140,7 @@ class FrameStatus(str, Enum):
     RUNNING = "RUNNING"
     WAITING_CHILD = "WAITING_CHILD"
     AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    AWAITING_USER = "AWAITING_USER"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
@@ -165,6 +166,7 @@ VALID_TRANSITIONS: dict[FrameStatus, frozenset[FrameStatus]] = {
     FrameStatus.RUNNING: frozenset({
         FrameStatus.WAITING_CHILD,
         FrameStatus.AWAITING_APPROVAL,
+        FrameStatus.AWAITING_USER,
         FrameStatus.COMPLETED,
         FrameStatus.FAILED,
         FrameStatus.CANCELLED,
@@ -176,6 +178,11 @@ VALID_TRANSITIONS: dict[FrameStatus, frozenset[FrameStatus]] = {
         FrameStatus.CANCELLED,
     }),
     FrameStatus.AWAITING_APPROVAL: frozenset({
+        FrameStatus.RUNNING,
+        FrameStatus.FAILED,
+        FrameStatus.CANCELLED,
+    }),
+    FrameStatus.AWAITING_USER: frozenset({
         FrameStatus.RUNNING,
         FrameStatus.FAILED,
         FrameStatus.CANCELLED,

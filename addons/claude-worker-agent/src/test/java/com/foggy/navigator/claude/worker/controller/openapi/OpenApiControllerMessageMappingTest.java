@@ -115,15 +115,44 @@ class OpenApiControllerMessageMappingTest {
                 "toSessionSummary",
                 AgentConversationContextEntity.class,
                 String.class,
+                Map.class,
                 Map.class
         );
         method.setAccessible(true);
         OpenSessionSummaryDTO dto = (OpenSessionSummaryDTO) method.invoke(
-                controller, entity, "agent-1", Map.of("session-1", "task-1"));
+                controller, entity, "agent-1", Map.of("session-1", "task-1"), Map.of("session-1", "first prompt"));
 
         assertEquals("ctx-1", dto.getContextId());
+        assertEquals("alias-1", dto.getTitle());
         assertEquals("task-1", dto.getLatestTaskId());
         assertEquals("tms-1", dto.getClientContext().get("upstreamConversationId"));
+    }
+
+    @Test
+    void sessionSummaryUsesFirstUserMessageAsDefaultTitle() throws Exception {
+        OpenApiController controller = newController();
+        AgentConversationContextEntity entity = new AgentConversationContextEntity();
+        entity.setContextId("ctx-1");
+        entity.setNavigatorSessionId("session-1");
+        entity.setCreatedAt(LocalDateTime.now());
+        entity.setLastAccessedAt(LocalDateTime.now());
+
+        Method method = OpenApiController.class.getDeclaredMethod(
+                "toSessionSummary",
+                AgentConversationContextEntity.class,
+                String.class,
+                Map.class,
+                Map.class
+        );
+        method.setAccessible(true);
+        OpenSessionSummaryDTO dto = (OpenSessionSummaryDTO) method.invoke(
+                controller,
+                entity,
+                "agent-1",
+                Map.of(),
+                Map.of("session-1", "你可以帮我提交工单吗"));
+
+        assertEquals("你可以帮我提交工单吗", dto.getTitle());
     }
 
     @Test

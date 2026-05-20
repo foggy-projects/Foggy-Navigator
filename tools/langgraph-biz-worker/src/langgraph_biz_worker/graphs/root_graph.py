@@ -24,6 +24,11 @@ from ..runtime.frame_store import FrameStore
 from ..runtime.account_context_files import build_account_context_prompt
 from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model, create_chat_model_from_config
 from ..runtime.llm_skill_agent import LlmSkillAgent
+from ..runtime.llm_child_recovery import (
+    _direct_child_result_for_user,
+    _record_parent_child_recoverable_interruption,
+    _runtime_context_for_child_skill,
+)
 from ..runtime.skill_identity import (
     SKILL_NAME_ALIASES,
     SkillNameValidationError,
@@ -573,7 +578,16 @@ def route_skill(state: RootState) -> dict:
                 "type": "function",
                 "function": {
                     "name": "invoke_business_skill",
-                    "description": "Delegate the user's request to a specialized business skill. Use this when the user asks to perform an action that matches one of the available skills.",
+                    "description": (
+                        "Delegate the user's request to a specialized business skill. "
+                        "Use this when the user asks to perform an action that matches "
+                        "one of the available skills. The returned promoted result is "
+                        "the primary business-decision context from that child skill; "
+                        "do not inspect execution reports after normal completion just "
+                        "to recover status, next_step, or structured_output fields. "
+                        "If the child asks for user input, the runtime keeps that child "
+                        "frame open and resumes it on the next user message."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -583,7 +597,13 @@ def route_skill(state: RootState) -> dict:
                             },
                             "instruction": {
                                 "type": "string",
-                                "description": "Natural language instructions for the skill, summarizing what needs to be done and any extracted entities (e.g. order numbers) from the user's request."
+                                "description": (
+                                    "Natural language instructions for the skill, "
+                                    "summarizing what needs to be done and any "
+                                    "extracted entities (e.g. order numbers) from "
+                                    "the user's request so the child can return a "
+                                    "complete promoted result."
+                                )
                             }
                         },
                         "required": ["skill_name", "instruction"]
@@ -594,7 +614,7 @@ def route_skill(state: RootState) -> dict:
             
             if routable_skills:
                 skills_summary = "\n".join([f"- {s.id}: {s.description}" for s in routable_skills])
-                skills_section = f"Available Skills:\n{skills_summary}\n\nIf the user's request matches a skill, use the `invoke_business_skill` tool to delegate the work.\nProvide the `skill_name` and a detailed `instruction` based on the user's input."
+                skills_section = f"Available Skills:\n{skills_summary}\n\nIf the user's request matches a skill, use the `invoke_business_skill` tool to delegate the work.\nProvide the `skill_name` and a detailed `instruction` based on the user's input. Treat the returned promoted result as the primary child-skill business context."
             else:
                 skills_section = "No business skills are currently registered. Respond naturally to the user."
 
@@ -800,6 +820,17 @@ def run_skill(state: RootState) -> dict:
     llm_skill_agent = _llm_skill_agent_for_state(state)
     if llm_skill_agent:
         skill_prompt = _skill_agent_prompt(state["prompt"], context)
+        if frame.skill_id == ROOT_SKILL_ID:
+            recovered_focus_events = _run_active_focus_before_root(
+                state,
+                root_frame_id=frame_id,
+                prompt=skill_prompt,
+                account_id=account_id,
+                runtime_context=runtime_context,
+                llm_skill_agent=llm_skill_agent,
+            )
+            if recovered_focus_events is not None:
+                return {"events": recovered_focus_events}
         return {
             "events": llm_skill_agent.run(
                 task_id=task_id,
@@ -841,6 +872,201 @@ def run_skill(state: RootState) -> dict:
     all_events.extend(result4.get("events", []))
 
     return {"events": all_events}
+
+
+def _run_active_focus_before_root(
+    state: RootState,
+    *,
+    root_frame_id: str,
+    prompt: str,
+    account_id: str | None,
+    runtime_context: dict[str, Any],
+    llm_skill_agent: LlmSkillAgent,
+) -> list[QueryEvent] | None:
+    """Resume the active child focus before giving the turn to root."""
+    task_id = state["task_id"]
+    root = _runtime.get_frame(root_frame_id)
+    if root is None or root.skill_id != ROOT_SKILL_ID:
+        return None
+
+    focus_frame_id = (
+        root.private_working_state.get("active_focus_frame_id")
+        or root.private_working_state.get("recoverable_focus_frame_id")
+    )
+    if not isinstance(focus_frame_id, str) or not focus_frame_id or focus_frame_id == root_frame_id:
+        return None
+
+    focus = _runtime.prepare_active_focus_resume(root_frame_id, task_id=task_id)
+    if focus is None:
+        return None
+
+    focus_manifest = _skill_registry.get_manifest(focus.skill_id)
+    if focus_manifest is None:
+        _resume_root_if_waiting_for_focus(root_frame_id)
+        return [QueryEvent(
+            type="error",
+            task_id=task_id,
+            skill_frame_id=focus.frame_id,
+            parent_frame_id=root_frame_id,
+            skill_id=focus.skill_id,
+            error=f"Skill manifest not found: {focus.skill_id}",
+        )]
+
+    events: list[QueryEvent] = [
+        QueryEvent(
+            type="skill_frame_open",
+            task_id=task_id,
+            skill_frame_id=focus.frame_id,
+            parent_frame_id=root_frame_id,
+            skill_id=focus.skill_id,
+            content=f"Resuming frame for skill: {focus.skill_id}",
+        )
+    ]
+
+    if focus.status == FrameStatus.AWAITING_APPROVAL:
+        approval_request = focus.approval_request
+        if isinstance(approval_request, dict):
+            _runtime.mark_child_awaiting_approval(
+                root_frame_id,
+                focus.frame_id,
+                approval_request,
+            )
+        else:
+            events.append(QueryEvent(
+                type="error",
+                task_id=task_id,
+                skill_frame_id=focus.frame_id,
+                parent_frame_id=root_frame_id,
+                skill_id=focus.skill_id,
+                error="Child skill is awaiting approval without approval_request",
+            ))
+        return events
+
+    child_runtime_context = _runtime_context_for_child_skill(
+        runtime_context,
+        _runtime.context_summary_for_frame(root_frame_id),
+        focus_manifest,
+    )
+    awaiting_user_context = _awaiting_user_context_for_focus(focus)
+    if awaiting_user_context:
+        child_runtime_context = dict(child_runtime_context or {})
+        child_runtime_context["_awaiting_user_input"] = awaiting_user_context
+    events.extend(llm_skill_agent.run(
+        task_id=task_id,
+        frame_id=focus.frame_id,
+        prompt=prompt,
+        account_id=account_id,
+        runtime_context=child_runtime_context,
+    ))
+
+    refreshed_focus = _runtime.get_frame(focus.frame_id)
+    if refreshed_focus and refreshed_focus.status == FrameStatus.AWAITING_APPROVAL:
+        approval_request = refreshed_focus.approval_request
+        if isinstance(approval_request, dict):
+            _runtime.mark_child_awaiting_approval(
+                root_frame_id,
+                refreshed_focus.frame_id,
+                approval_request,
+            )
+        else:
+            _resume_root_if_waiting_for_focus(root_frame_id)
+            events.append(QueryEvent(
+                type="error",
+                task_id=task_id,
+                skill_frame_id=refreshed_focus.frame_id,
+                parent_frame_id=root_frame_id,
+                skill_id=refreshed_focus.skill_id,
+                error="Child skill is awaiting approval without approval_request",
+            ))
+        return events
+
+    if refreshed_focus and refreshed_focus.status == FrameStatus.AWAITING_USER:
+        _runtime.mark_child_awaiting_user(
+            root_frame_id,
+            refreshed_focus.frame_id,
+            _awaiting_user_context_for_focus(refreshed_focus),
+        )
+        return events
+
+    if not refreshed_focus or refreshed_focus.status != FrameStatus.COMPLETED:
+        error = f"Child skill ended in {refreshed_focus.status.value if refreshed_focus else 'MISSING'}"
+        _record_parent_child_recoverable_interruption(
+            _runtime,
+            parent_frame_id=root_frame_id,
+            child_frame_id=refreshed_focus.frame_id if refreshed_focus else focus.frame_id,
+            reason="child_skill_failed",
+            error=error,
+            task_id=task_id,
+        )
+        return events
+
+    promoted = _runtime.complete_child_and_resume_parent(refreshed_focus.frame_id)
+    events.append(QueryEvent(
+        type="skill_frame_close",
+        task_id=task_id,
+        skill_frame_id=refreshed_focus.frame_id,
+        parent_frame_id=root_frame_id,
+        skill_id=refreshed_focus.skill_id,
+        content=f"Frame closed: {refreshed_focus.skill_id}",
+        execution_report_ref=promoted.get("execution_report_ref"),
+        execution_report_digest=promoted.get("execution_report_digest"),
+    ))
+
+    direct_result = _direct_child_result_for_user(
+        promoted,
+        allow_legacy_completed=True,
+    )
+    if direct_result is not None:
+        validation = _runtime.submit_persistent_turn_result(
+            frame_id=root_frame_id,
+            summary=direct_result["summary"],
+            structured_output=direct_result["structured_output"],
+            artifact_refs=direct_result.get("artifact_refs"),
+            evidence_refs=direct_result.get("evidence_refs"),
+        )
+        if not validation.ok:
+            events.append(QueryEvent(
+                type="error",
+                task_id=task_id,
+                skill_frame_id=root_frame_id,
+                skill_id=ROOT_SKILL_ID,
+                error="Failed to submit direct child result: " + "; ".join(validation.errors),
+            ))
+        return events
+
+    root_runtime_context = dict(runtime_context)
+    root_context_summary = _runtime.context_summary_for_frame(root_frame_id)
+    if root_context_summary:
+        root_runtime_context["_visible_root_context_summary"] = root_context_summary
+
+    events.extend(llm_skill_agent.run(
+        task_id=task_id,
+        frame_id=root_frame_id,
+        prompt=prompt,
+        account_id=account_id,
+        runtime_context=root_runtime_context,
+        persistent_frame=True,
+    ))
+    return events
+
+
+def _awaiting_user_context_for_focus(frame: Any) -> dict[str, Any] | None:
+    state = getattr(frame, "private_working_state", {}) or {}
+    payload = state.get("awaiting_user_input")
+    if not isinstance(payload, dict):
+        return None
+    return {
+        "frame_id": getattr(frame, "frame_id", ""),
+        "skill_id": getattr(frame, "skill_id", ""),
+        "status": getattr(getattr(frame, "status", None), "value", ""),
+        "awaiting_user_input": payload,
+    }
+
+
+def _resume_root_if_waiting_for_focus(root_frame_id: str) -> None:
+    root = _runtime.get_frame(root_frame_id)
+    if root and root.status == FrameStatus.WAITING_CHILD:
+        _runtime.resume_from_child(root_frame_id)
 
 
 def _is_current_turn_interrupted(frame: Any, task_id: str) -> bool:
@@ -907,6 +1133,22 @@ def close_skill_frame(state: RootState) -> dict:
         events.append(QueryEvent(
             type="result",
             content=frame.result_summary,
+            task_id=task_id,
+            model=state.get("model"),
+            structured_output=frame.output,
+            duration_ms=int((time.time() - state["started_at"]) * 1000),
+            execution_report_ref=_execution_report_ref_from_frame(frame),
+            execution_report_digest=_execution_report_digest_from_frame(frame),
+        ))
+    elif (
+        frame
+        and frame.skill_id == ROOT_SKILL_ID
+        and frame.status == FrameStatus.WAITING_CHILD
+        and frame.private_working_state.get("active_focus_status") == "AWAITING_USER"
+    ):
+        events.append(QueryEvent(
+            type="result",
+            content=frame.result_summary or "等待用户补充信息。",
             task_id=task_id,
             model=state.get("model"),
             structured_output=frame.output,

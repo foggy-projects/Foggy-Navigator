@@ -150,4 +150,32 @@ class LanggraphWorkerInnerA2aAgentTest {
         verify(taskService).createTask(eq("admin_01"), eq("tenant_01"), captor.capture());
         assertEquals("worker_default", captor.getValue().getWorkerId());
     }
+
+    @Test
+    void cancelTask_recordsRecoverableInterruptionThroughTaskService() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setUserId("admin_01");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
+
+        agent.cancelTask("lgt_01");
+
+        verify(taskService).cancelTask("lgt_01", "admin_01");
+        verify(taskService, never()).failTask(anyString(), anyString());
+    }
+
+    @Test
+    void abortWorkerTask_recordsRecoverableInterruptionThroughTaskService() {
+        LanggraphTaskService taskService = mock(LanggraphTaskService.class);
+        CodingAgentEntity entity = new CodingAgentEntity();
+        entity.setUserId("admin_01");
+
+        LanggraphWorkerInnerA2aAgent agent = new LanggraphWorkerInnerA2aAgent(entity, taskService, "worker_01");
+
+        agent.abortWorkerTask("lgt_01", "remote_01");
+
+        verify(taskService).cancelTask("lgt_01", "admin_01");
+        verify(taskService, never()).failTask(anyString(), anyString());
+    }
 }

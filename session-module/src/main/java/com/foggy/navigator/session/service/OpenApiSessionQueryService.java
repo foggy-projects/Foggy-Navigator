@@ -197,4 +197,24 @@ public class OpenApiSessionQueryService {
                         (first, second) -> first  // 已按降序排，取第一个即最新
                 ));
     }
+
+    /**
+     * 批量查找每个 sessionId 的首条用户消息，用作无显式别名时的默认会话标题。
+     *
+     * @return sessionId → first USER message content
+     */
+    public Map<String, String> batchFindFirstUserMessageContents(Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        List<SessionMessageEntity> messages = messageRepository
+                .findBySessionIdInAndRoleOrderBySessionIdAscCreatedAtAsc(sessionIds, "USER");
+        return messages.stream()
+                .filter(message -> message.getContent() != null && !message.getContent().isBlank())
+                .collect(Collectors.toMap(
+                        SessionMessageEntity::getSessionId,
+                        SessionMessageEntity::getContent,
+                        (first, second) -> first
+                ));
+    }
 }

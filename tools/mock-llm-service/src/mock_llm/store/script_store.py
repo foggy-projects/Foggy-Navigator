@@ -208,8 +208,8 @@ def _find_cursor(value: Any) -> Optional[str]:
         return None
     if not isinstance(value, str):
         value = str(value)
-    match = CURSOR_PATTERN.search(value)
-    return match.group(0) if match else None
+    matches = list(CURSOR_PATTERN.finditer(value))
+    return matches[-1].group(0) if matches else None
 
 
 def _messages_to_data(messages: List[ChatMessage]) -> List[Dict[str, Any]]:

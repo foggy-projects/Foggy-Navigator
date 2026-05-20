@@ -64,7 +64,7 @@ class FrameExecutionReportGenerator:
         frame = self._journal.load(task_id, frame_id)
         if frame is None:
             raise FileNotFoundError(f"Frame not found: task_id={task_id}, frame_id={frame_id}")
-        related_frames = {item.frame_id: item for item in self._journal.load_by_task(task_id)}
+        related_frames = self._load_related_frames_for_snapshot(frame, task_id=task_id)
         return self._generate(frame, related_frames, visited=set())
 
     def generate_from_path(self, frame_path: str | Path) -> FrameExecutionReport:
@@ -120,9 +120,9 @@ class FrameExecutionReportGenerator:
         frame: SkillFrameState,
         frame_path: Path,
     ) -> dict[str, SkillFrameState]:
-        frames = self._journal.load_by_task(frame.task_id)
-        if frames:
-            return {item.frame_id: item for item in frames}
+        related = self._load_related_frames_for_snapshot(frame, task_id=frame.task_id)
+        if related:
+            return related
 
         task_dir = frame_path.parent
         related: dict[str, SkillFrameState] = {}
@@ -134,6 +134,19 @@ class FrameExecutionReportGenerator:
                     continue
                 if item.task_id == frame.task_id:
                     related[item.frame_id] = item
+        related.setdefault(frame.frame_id, frame)
+        return related
+
+    def _load_related_frames_for_snapshot(
+        self,
+        frame: SkillFrameState,
+        *,
+        task_id: str,
+    ) -> dict[str, SkillFrameState]:
+        related = {item.frame_id: item for item in self._journal.load_by_task(task_id)}
+        if frame.conversation_id:
+            for item in self._journal.load_by_conversation(frame.conversation_id):
+                related.setdefault(item.frame_id, item)
         related.setdefault(frame.frame_id, frame)
         return related
 

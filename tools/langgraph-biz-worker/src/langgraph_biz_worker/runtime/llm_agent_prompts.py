@@ -58,8 +58,10 @@ def _build_user_prompt(
         f"SKILL_AGENT_START {skill_id}",
         _build_runtime_time_context_prompt(runtime_context),
         _build_recoverable_interruption_prompt(runtime_context, prompt),
+        _build_awaiting_user_input_prompt(runtime_context, prompt),
         _build_active_plan_prompt(runtime_context),
         _build_root_planning_policy_prompt(runtime_context, skill_id),
+        _build_frame_result_contract_prompt(runtime_context),
         _build_visible_recent_conversation_prompt(runtime_context),
         f"User request: {prompt}",
         f"Skill input: {json.dumps(skill_input, ensure_ascii=False)}",
@@ -117,7 +119,28 @@ def _recoverable_interruption_context(working_state: dict[str, Any]) -> dict[str
     recoverable_focus_stack = working_state.get("recoverable_focus_stack")
     if isinstance(recoverable_focus_stack, list):
         context["recoverable_focus_stack"] = _safe_content(recoverable_focus_stack)
+    continuation_summary = _continuation_summary_context(working_state)
+    if isinstance(continuation_summary, dict):
+        context["continuation_summary"] = _safe_content(continuation_summary)
     return context
+
+
+def _continuation_summary_context(working_state: dict[str, Any]) -> dict[str, Any] | None:
+    summary = working_state.get("latest_child_result_summary")
+    if isinstance(summary, dict):
+        return summary
+    root_summary = working_state.get("root_context_summary")
+    if not isinstance(root_summary, dict):
+        return None
+    summary = root_summary.get("latest_child_result_summary")
+    if isinstance(summary, dict):
+        return summary
+    summaries = root_summary.get("child_result_summaries")
+    if isinstance(summaries, list):
+        for item in reversed(summaries):
+            if isinstance(item, dict):
+                return item
+    return None
 
 
 def _active_plan_context(working_state: dict[str, Any]) -> Any | None:
@@ -164,6 +187,12 @@ def _build_recoverable_interruption_prompt(
             "Recoverable focus stack: "
             f"{json.dumps(recoverable_focus_stack, ensure_ascii=False, sort_keys=True)}"
         )
+    continuation_summary = interruption.get("continuation_summary")
+    if isinstance(continuation_summary, dict):
+        parts.append(
+            "Continuation summary from promoted child result: "
+            f"{json.dumps(continuation_summary, ensure_ascii=False, sort_keys=True)}"
+        )
     parts.append(f"User's new instruction: {prompt}")
     parts.append(
         "The interrupted work is a recoverable candidate, not a mandatory "
@@ -184,6 +213,46 @@ def _build_recoverable_interruption_prompt(
         "clarification via submit_skill_result."
     )
     return "\n".join(parts)
+
+
+def _build_awaiting_user_input_prompt(
+    runtime_context: dict[str, Any] | None,
+    prompt: str,
+) -> str:
+    if not runtime_context:
+        return ""
+    awaiting = runtime_context.get("_awaiting_user_input")
+    if not isinstance(awaiting, dict):
+        return ""
+    parts = [
+        "Previous child skill turn is waiting for user input.",
+        "Awaiting-user context:",
+        json.dumps(awaiting, ensure_ascii=False, sort_keys=True),
+        f"Current user reply: {prompt}",
+        (
+            "Rule: Continue this same unfinished frame. Treat the current user "
+            "reply as the answer to the previous user-facing prompt unless the "
+            "reply explicitly cancels or changes the request."
+        ),
+    ]
+    return "\n".join(parts)
+
+
+def _build_frame_result_contract_prompt(runtime_context: dict[str, Any] | None) -> str:
+    return (
+        "Frame result contract: Treat the result returned by invoke_business_skill "
+        "or resume_recoverable_child_skill as the primary business-decision "
+        "context from that child frame, including status, next_step, "
+        "missing_fields, structured_output, artifact_refs, and evidence_refs. "
+        "A continuation summary injected after interruption is derived from the "
+        "same promoted child result and should be interpreted consistently with "
+        "the normal tool result. Do not call read_frame_execution_report after "
+        "a normal child completion just to recover those fields. Use "
+        "read_frame_execution_report only when the user asks how the frame ran, "
+        "when debugging/auditing execution, or as a fallback if the promoted "
+        "result/continuation summary lacks a field required for the next "
+        "business decision."
+    )
 
 
 def _build_active_plan_prompt(runtime_context: dict[str, Any] | None) -> str:

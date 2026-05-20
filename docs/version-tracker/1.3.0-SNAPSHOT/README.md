@@ -35,6 +35,10 @@
 - [workitems/REQ-030-biz-worker-on-demand-attachment-analysis-and-vision-model-config.md](./workitems/REQ-030-biz-worker-on-demand-attachment-analysis-and-vision-model-config.md) - BizWorker on-demand attachment image analysis and VISION model configuration
 - [workitems/OPT-031-biz-worker-llm-skill-agent-module-governance.md](./workitems/OPT-031-biz-worker-llm-skill-agent-module-governance.md) - BizWorker LlmSkillAgent module boundary and refactor governance plan
 - [workitems/OPT-032-attachment-preprocessing-governance-follow-up.md](./workitems/OPT-032-attachment-preprocessing-governance-follow-up.md) - BUG-028 attachment direct-handoff, preprocessing evidence, and OpenAPI compatibility governance
+- [workitems/BUG-033-biz-worker-continue-context-injection-gap.md](./workitems/BUG-033-biz-worker-continue-context-injection-gap.md) - recoverable continuation context parity for child promoted result / WAITING_USER digest
+- [workitems/BUG-034-biz-worker-child-result-parent-synthesis-degradation.md](./workitems/BUG-034-biz-worker-child-result-parent-synthesis-degradation.md) - child result direct return envelope for WAITING_FOR_USER_INPUT / FINAL_FOR_USER without parent synthesis degradation
+- [workitems/BUG-034-waiting-user-input-context-walkthrough.md](./workitems/BUG-034-waiting-user-input-context-walkthrough.md) - target runtime/LLM context walkthrough for WAITING_FOR_USER_INPUT pause and same-context user reply resume
+- [workitems/BUG-036-tms-ticket-agent-attachment-missing-after-awaiting-user-resume.md](./workitems/BUG-036-tms-ticket-agent-attachment-missing-after-awaiting-user-resume.md) - TMS ticket attachment follow-up false negative after detail query failure
 - [workitems/BUG-issue-115-world-sim-route-smoke-blocked.md](./workitems/BUG-issue-115-world-sim-route-smoke-blocked.md) - issue #115 live smoke is blocked by CLI release and control credential scope
 - [acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md](./acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md)
 - [acceptance/OPT-029-upstream-timeout-governance-acceptance.md](./acceptance/OPT-029-upstream-timeout-governance-acceptance.md)

@@ -99,7 +99,12 @@ class LanggraphWorkerInnerA2aAgent implements InnerA2aAgent {
 
     @Override
     public void cancelTask(String taskId) {
-        taskService.failTask(taskId, "Cancelled by user");
+        taskService.cancelTask(taskId, entity.getUserId());
+    }
+
+    @Override
+    public void abortWorkerTask(String taskId, String remoteTaskId) {
+        taskService.cancelTask(taskId, entity.getUserId());
     }
 
     private A2aTask toA2aTask(LanggraphTaskDTO dto) {
