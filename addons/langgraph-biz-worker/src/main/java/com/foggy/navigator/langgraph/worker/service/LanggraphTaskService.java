@@ -26,6 +26,7 @@ import com.foggy.navigator.session.repository.SessionMessageRepository;
 import com.foggy.navigator.spi.agent.TaskQueryProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -61,6 +62,9 @@ public class LanggraphTaskService implements TaskQueryProvider {
     private final SessionTaskRepository sessionTaskRepository;
     private final SessionEntityRepository sessionEntityRepository;
     private final SessionMessageRepository sessionMessageRepository;
+
+    @Value("${foggy.navigator.langgraph.worker.include-recent-conversation:false}")
+    private boolean includeRecentConversation;
 
     // ── TaskQueryProvider SPI ──────────────────────────────────────────────
 
@@ -278,9 +282,11 @@ public class LanggraphTaskService implements TaskQueryProvider {
         putIfNotBlank(context, "context_id", form.getContextId());
         putIfNotBlank(context, "session_id", sessionId);
 
-        List<Map<String, Object>> recentConversation = recentConversation(sessionId);
-        if (!recentConversation.isEmpty()) {
-            context.put("recentConversation", recentConversation);
+        if (includeRecentConversation) {
+            List<Map<String, Object>> recentConversation = recentConversation(sessionId);
+            if (!recentConversation.isEmpty()) {
+                context.put("recentConversation", recentConversation);
+            }
         }
         return context;
     }

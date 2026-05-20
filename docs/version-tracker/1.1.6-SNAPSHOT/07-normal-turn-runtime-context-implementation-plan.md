@@ -12,10 +12,10 @@
 
 ## 状态
 
-- status: phase-1-completed
+- status: phase-2-5-completed
 - date: 2026-05-21
-- coding_status: phase-1-implemented
-- test_status: phase-1-passed
+- coding_status: phase-2-5-implemented
+- test_status: phase-2-5-passed
 
 ## 关联设计
 
@@ -362,26 +362,39 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 - Root turn 成功完成、`AWAITING_USER` 可见追问、interruption / approval / error abandon 均已接入 runtime memory 的 Phase 1 提交或清理路径。
 - API `/api/v1/query` 已增加进程内 `contextId` 互斥锁；Phase 1 中同会话并发请求返回 `CONTEXT_RUNTIME_BUSY` / `retryable=true`，不静默启动第二条 Root loop。
 - 附带闭环 [05-business-function-upstream-ref-error-feedback-bug.md](./05-business-function-upstream-ref-error-feedback-bug.md)：BusinessFunction 配置类 gateway 错误会被标记为 non-recoverable configuration error，OpenAPI readiness 会前置校验可见函数 adapter `upstream_ref`。
+- 2026-05-21: 已完成 Phase 2 Skill / error projection。正常 child Skill 结果以 `skill_result` metadata 投影到 runtime visible conversation；BusinessFunction non-recoverable configuration error 会提交可见错误投影，不再折叠为 max iterations。
+- 2026-05-21: 已完成 Phase 3 `pendingUserInputs` 队列与 checkpoint。执行锁被占用时，仍处于 RUNNING 的同 `contextId` 请求进入队列；LLM loop 在 model 前、tool 后等 checkpoint 消费并插入当前 active frame。若执行流已 closing / memory 非 RUNNING，则返回 retryable busy，避免消息入队后无人消费。
+- 2026-05-21: 已完成 Phase 4 lazy head-tail compaction。未超预算不调用 summarizer；超预算后保留 pinned head、compacted summary、tail recent messages；summarizer 失败时使用 deterministic fallback，并对 token / bearer / secret 等敏感片段脱敏。
+- 2026-05-21: 已完成 Phase 5 Java `recentConversation` 退场。`LanggraphTaskService` 默认不再读取 `SessionMessageRepository` 注入 `recentConversation`；仅保留 `foggy.navigator.langgraph.worker.include-recent-conversation=true` 兼容开关。
 
 ### Testing
 
 - status: passed
+- `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_context_memory.py tests/test_root_graph.py tests/test_llm_skill_agent.py tests/test_query.py -q`
+  - result: `94 passed`
 - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests -q`
-  - result: `556 passed, 6 skipped`
+  - result: `569 passed, 6 skipped`
 - `cd tools/langgraph-biz-worker; $env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest tests/test_e2e_scripted_tool_call_streaming.py -q`
   - result: `18 passed`
 - `mvn -pl addons/langgraph-biz-worker -am -Dtest=InvokeBusinessFunctionToolTest "-Dsurefire.failIfNoSpecifiedTests=false" test`
   - result: `10 tests, 0 failures, 0 errors`
 - `mvn -pl addons/claude-worker-agent -am -Dtest=OpenApiAgentReadinessServiceTest "-Dsurefire.failIfNoSpecifiedTests=false" test`
   - result: `11 tests, 0 failures, 0 errors`
+- `mvn -pl addons/langgraph-biz-worker -am "-Dtest=LanggraphTaskServiceTest,BusinessAgentLanggraphLaunchE2ETest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
+  - result: `23 tests, 0 failures, 0 errors`
+- `mvn -pl addons/langgraph-biz-worker -am test`
+  - result: `BUILD SUCCESS`，surefire report 汇总 `1017 tests, 0 failures, 0 errors`
 
 ### Experience
 
-- status: partially-verified-by-e2e
+- status: verified-by-tests
 - 已通过 scripted E2E 验证第二轮 Root LLM prompt 使用 `Runtime-visible conversation before this turn:`，并包含上一轮 BizWorker memory 中的 `user -> assistant` 语义消息。
-- Phase 2/3 仍需继续验证 Skill 续接、用户取消 escape hatch、执行中追加消息进入 pending queue 的真实体验。
+- 已通过单元/边界测试验证 Skill 投影、non-recoverable error projection、执行中追加消息入队、checkpoint 插入、idle / closing 阶段 retryable busy、lazy compaction、Java recentConversation 默认退场。
+- 真实前端长会话与 TMS 工单链路仍建议在修复上游 `upstream_ref` 后做一次联调验收。
 
 ## Implementation Quality / Acceptance
 
 - quality_record: [quality/runtime-context-phase1-implementation-quality.md](./quality/runtime-context-phase1-implementation-quality.md)
 - acceptance_record: [acceptance/runtime-context-phase1-acceptance.md](./acceptance/runtime-context-phase1-acceptance.md)
+- quality_record_phase2_5: [quality/runtime-context-phase2-5-implementation-quality.md](./quality/runtime-context-phase2-5-implementation-quality.md)
+- acceptance_record_phase2_5: [acceptance/runtime-context-phase2-5-acceptance.md](./acceptance/runtime-context-phase2-5-acceptance.md)

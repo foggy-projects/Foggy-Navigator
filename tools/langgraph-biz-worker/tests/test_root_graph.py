@@ -268,6 +268,101 @@ def test_root_prompt_uses_bizworker_memory_without_recent_conversation(monkeypat
     ]
 
 
+def test_runtime_memory_projection_metadata_uses_direct_child_skill(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    root_graph_module._skill_registry.register(
+        SkillManifest(id="ticket_skill", name="Ticket Skill", allowed_tools=[]),
+    )
+    state = _state("task_root_child_projection_001")
+    state["context"]["contextId"] = "bctx_20260521_ab_ctx-child-projection"
+    routed = root_graph_module.route_skill(state)
+    root_id = routed["active_frame_id"]
+    root = runtime.get_frame(root_id)
+    assert root is not None
+
+    memory = ContextRuntimeMemory(context_id=root.conversation_id)
+    memory.begin_turn(
+        task_id=state["task_id"],
+        root_frame_id=root.frame_id,
+        user_message="U1 create ticket",
+    )
+    save_to_root_frame(root, memory)
+    runtime.save_frame(root)
+
+    child_id = runtime.invoke_child_skill(root_id, "ticket_skill", {"title": "bug"})
+    runtime.submit_result(
+        child_id,
+        "Ticket created.",
+        {"status": "FINAL_FOR_USER", "message": "Ticket created."},
+    )
+    promoted = runtime.complete_child_and_resume_parent(child_id)
+    direct_result = root_graph_module._direct_child_result_for_user(promoted)
+    assert direct_result is not None
+
+    root = runtime.get_frame(root_id)
+    assert root is not None
+    runtime.submit_persistent_turn_result(
+        root_id,
+        direct_result["summary"],
+        direct_result["structured_output"],
+    )
+    root = runtime.get_frame(root_id)
+    root_graph_module._commit_root_runtime_memory_turn(
+        root,
+        state=state,
+        assistant_message="Ticket created.",
+        structured_output=direct_result["structured_output"],
+    )
+
+    restored = ContextRuntimeMemory.load_from_root_frame(runtime.get_frame(root_id))
+    assistant = restored.visible_messages[-1]
+    assert assistant["content"] == "Ticket created."
+    assert assistant["metadata"]["source"] == "skill_result"
+    assert assistant["metadata"]["skillId"] == "ticket_skill"
+    assert assistant["metadata"]["skillFrameId"] == child_id
+
+
+def test_runtime_memory_projection_records_non_recoverable_error(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    state = _state("task_root_error_projection_001")
+    state["context"]["contextId"] = "bctx_20260521_cd_ctx-error-projection"
+    routed = root_graph_module.route_skill(state)
+    root = runtime.get_frame(routed["active_frame_id"])
+    assert root is not None
+
+    memory = ContextRuntimeMemory(context_id=root.conversation_id)
+    memory.begin_turn(
+        task_id=state["task_id"],
+        root_frame_id=root.frame_id,
+        user_message="U1 create ticket",
+    )
+    save_to_root_frame(root, memory)
+    runtime.save_frame(root)
+
+    output = {
+        "status": "ERROR",
+        "message": "业务函数配置错误：adapter upstream_ref 不合法。",
+        "error_category": "CONFIGURATION",
+        "recoverable": False,
+        "llm_retry_allowed": False,
+    }
+    runtime.submit_persistent_turn_result(root.frame_id, output["message"], output)
+    root = runtime.get_frame(root.frame_id)
+    root_graph_module._commit_root_runtime_memory_turn(
+        root,
+        state=state,
+        assistant_message=output["message"],
+        structured_output=output,
+    )
+
+    restored = ContextRuntimeMemory.load_from_root_frame(runtime.get_frame(root.frame_id))
+    assistant = restored.visible_messages[-1]
+    assert assistant["content"] == output["message"]
+    assert assistant["metadata"]["source"] == "error"
+    assert assistant["metadata"]["errorCategory"] == "CONFIGURATION"
+    assert assistant["metadata"]["recoverable"] is False
+
+
 def test_recent_conversation_bootstrap_ignored_after_memory_revision(monkeypatch, tmp_path):
     runtime = _install_isolated_runtime(monkeypatch, tmp_path)
     context_id = "bctx_20260521_cd_ctx-bootstrap-root"
@@ -320,7 +415,7 @@ def test_recent_conversation_bootstrap_ignored_after_memory_revision(monkeypatch
     ]
 
 
-def test_same_context_running_loop_returns_busy_before_queue_phase(monkeypatch, tmp_path):
+def test_direct_run_skill_running_loop_returns_busy(monkeypatch, tmp_path):
     runtime = _install_isolated_runtime(monkeypatch, tmp_path)
     state = _state("task_root_busy_001")
     state["context"]["contextId"] = "bctx_20260521_ef_ctx-busy-root"
@@ -348,6 +443,62 @@ def test_same_context_running_loop_returns_busy_before_queue_phase(monkeypatch, 
 
     assert result["events"][0].type == "error"
     assert result["events"][0].payload["code"] == "CONTEXT_RUNTIME_BUSY"
+
+
+def test_enqueue_pending_user_input_for_context_queues_running_root(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    context_id = "bctx_20260521_ef_ctx-queued-root"
+    state = _state("task_root_queue_001")
+    state["context"]["contextId"] = context_id
+    routed = root_graph_module.route_skill(state)
+    frame = runtime.get_frame(routed["active_frame_id"])
+    assert frame is not None
+
+    memory = ContextRuntimeMemory(context_id=frame.conversation_id)
+    memory.begin_turn(
+        task_id="task_root_queue_001",
+        root_frame_id=frame.frame_id,
+        user_message="U1",
+    )
+    save_to_root_frame(frame, memory)
+    runtime.save_frame(frame)
+
+    event = root_graph_module.enqueue_pending_user_input_for_context(
+        context_id,
+        task_id="task_root_queue_002",
+        prompt="U2 while running",
+    )
+
+    restored = ContextRuntimeMemory.load_from_root_frame(runtime.get_frame(frame.frame_id))
+    assert event.type == "system"
+    assert event.payload["code"] == "CONTEXT_RUNTIME_QUEUED"
+    assert [item["content"] for item in restored.pending_user_inputs] == ["U2 while running"]
+
+
+def test_enqueue_pending_user_input_rejects_idle_memory(monkeypatch, tmp_path):
+    runtime = _install_isolated_runtime(monkeypatch, tmp_path)
+    context_id = "bctx_20260521_ef_ctx-idle-root"
+    state = _state("task_root_queue_idle_001")
+    state["context"]["contextId"] = context_id
+    routed = root_graph_module.route_skill(state)
+    frame = runtime.get_frame(routed["active_frame_id"])
+    assert frame is not None
+
+    memory = ContextRuntimeMemory(context_id=frame.conversation_id)
+    save_to_root_frame(frame, memory)
+    runtime.save_frame(frame)
+
+    event = root_graph_module.enqueue_pending_user_input_for_context(
+        context_id,
+        task_id="task_root_queue_idle_002",
+        prompt="U2 after loop closed",
+    )
+
+    restored = ContextRuntimeMemory.load_from_root_frame(runtime.get_frame(frame.frame_id))
+    assert event.type == "error"
+    assert event.payload["code"] == "CONTEXT_RUNTIME_BUSY"
+    assert event.payload["retryable"] is True
+    assert restored.pending_user_inputs == []
 
 
 def test_agentic_routing_prompt_includes_recent_conversation(monkeypatch, tmp_path):

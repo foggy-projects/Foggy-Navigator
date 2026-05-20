@@ -44,6 +44,41 @@ def test_context_memory_begin_commit_turn():
     ]
 
 
+def test_context_memory_drains_queued_user_input_into_committed_turn():
+    memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-queue")
+    memory.begin_turn(
+        task_id="task_001",
+        root_frame_id="frm_root",
+        user_message="U1",
+        now="2026-05-21T00:00:00Z",
+    )
+    queued = memory.enqueue_user_input(
+        task_id="task_002",
+        root_frame_id="frm_root",
+        user_message="U2",
+        now="2026-05-21T00:00:01Z",
+    )
+
+    assert queued is not None
+    assert [item["content"] for item in memory.pending_user_inputs] == ["U2"]
+
+    drained = memory.drain_pending_user_inputs(now="2026-05-21T00:00:02Z")
+    committed = memory.commit_turn(
+        assistant_message="A after queued input",
+        now="2026-05-21T00:00:03Z",
+    )
+
+    assert [item["content"] for item in drained] == ["U2"]
+    assert committed is True
+    assert memory.pending_user_inputs == []
+    assert [(item["role"], item["content"]) for item in memory.visible_messages] == [
+        ("user", "U1"),
+        ("user", "U2"),
+        ("assistant", "A after queued input"),
+    ]
+    assert memory.visible_messages[1]["metadata"]["queueStatus"] == "IN_FLIGHT"
+
+
 def test_recent_conversation_bootstrap_only_when_memory_empty():
     memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-bootstrap")
 
@@ -119,7 +154,137 @@ def test_context_memory_persists_in_root_frame():
     assert [item["content"] for item in restored.visible_messages] == ["hello", "hi"]
 
 
-def test_same_context_running_loop_raises_busy_before_queue_phase():
+def test_context_memory_lazy_compaction_does_not_call_summarizer_under_budget():
+    memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-lazy")
+    memory.limits.update({
+        "maxVisibleMessages": 10,
+        "maxVisibleChars": 10000,
+    })
+
+    memory.begin_turn(
+        task_id="task_001",
+        root_frame_id="frm_root",
+        user_message="U1",
+    )
+
+    def fail_summarizer(_payload: dict[str, object]) -> dict[str, object]:
+        raise AssertionError("summarizer should not run under budget")
+
+    assert memory.commit_turn(
+        assistant_message="A1",
+        summarizer=fail_summarizer,
+    )
+    assert memory.compacted_summary is None
+    assert [item["content"] for item in memory.visible_messages] == ["U1", "A1"]
+
+
+def test_context_memory_compaction_keeps_head_summary_and_tail():
+    memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-compact")
+    memory.limits.update({
+        "maxVisibleMessages": 6,
+        "maxVisibleChars": 10000,
+        "headTurnCount": 1,
+        "tailTurnCount": 1,
+        "maxPromptMessages": 3,
+    })
+
+    for index in range(1, 5):
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_root",
+            user_message=f"U{index}",
+        )
+        assert memory.commit_turn(assistant_message=f"A{index}")
+
+    prompt = memory.build_prompt_view()
+
+    assert [item["content"] for item in memory.pinned_head_messages] == ["U1", "A1"]
+    assert [item["content"] for item in memory.visible_messages] == ["U4", "A4"]
+    assert memory.compacted_summary is not None
+    assert [item["content"] for item in prompt[:2]] == ["U1", "A1"]
+    assert prompt[2]["messageId"] == "rtm_compacted_summary"
+    assert [item["content"] for item in prompt[-2:]] == ["U4", "A4"]
+    assert {item.get("taskId") for item in prompt if item.get("taskId")} == {
+        "task_001",
+        "task_004",
+    }
+
+
+def test_context_memory_compaction_fallback_redacts_sensitive_text():
+    memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-redact")
+    memory.limits.update({
+        "maxVisibleMessages": 6,
+        "maxVisibleChars": 10000,
+        "headTurnCount": 1,
+        "tailTurnCount": 1,
+    })
+
+    def fail_summarizer(_payload: dict[str, object]) -> dict[str, object]:
+        raise RuntimeError("llm unavailable")
+
+    for index in range(1, 5):
+        user_message = (
+            "retry with token=topsecret and Bearer abc123"
+            if index == 2
+            else f"U{index}"
+        )
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_root",
+            user_message=user_message,
+        )
+        summarizer = fail_summarizer if index == 4 else None
+        assert memory.commit_turn(assistant_message=f"A{index}", summarizer=summarizer)
+
+    assert memory.compacted_summary is not None
+    assert memory.compacted_summary["summaryQuality"] == "fallback"
+    prompt_text = "\n".join(item["content"] for item in memory.build_prompt_view())
+    assert "topsecret" not in prompt_text
+    assert "abc123" not in prompt_text
+    assert "[REDACTED]" in prompt_text
+
+
+def test_context_memory_compaction_uses_summarizer_output_when_available():
+    memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-llm-summary")
+    memory.limits.update({
+        "maxVisibleMessages": 6,
+        "maxVisibleChars": 10000,
+        "headTurnCount": 1,
+        "tailTurnCount": 1,
+    })
+    summarizer_payloads: list[dict[str, object]] = []
+
+    for index in range(1, 5):
+        memory.begin_turn(
+            task_id=f"task_{index:03d}",
+            root_frame_id="frm_root",
+            user_message="U2 token=secret123" if index == 2 else f"U{index}",
+        )
+
+        def summarizer(payload: dict[str, object]) -> dict[str, object]:
+            summarizer_payloads.append(payload)
+            return {
+                "durableUserIntent": "LLM summary: user wants a TMS ticket",
+                "pendingActions": ["collect missing ticket title"],
+            }
+
+        assert memory.commit_turn(
+            assistant_message=f"A{index}",
+            summarizer=summarizer if index == 4 else None,
+        )
+
+    assert memory.compacted_summary is not None
+    assert memory.compacted_summary["summaryQuality"] == "llm"
+    assert summarizer_payloads
+    summarizer_input = str(summarizer_payloads[0]["messages"])
+    assert "secret123" not in summarizer_input
+    assert "token=[REDACTED]" in summarizer_input
+    prompt_text = "\n".join(item["content"] for item in memory.build_prompt_view())
+    assert "LLM summary: user wants a TMS ticket" in prompt_text
+    assert "collect missing ticket title" in prompt_text
+
+
+def test_begin_turn_still_rejects_second_physical_loop_for_same_context():
     memory = ContextRuntimeMemory(context_id="bctx_20260521_ab_ctx-busy")
     memory.begin_turn(
         task_id="task_running",

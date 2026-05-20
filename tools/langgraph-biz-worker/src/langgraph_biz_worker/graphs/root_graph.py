@@ -22,6 +22,7 @@ from ..runtime.context_memory import (
     RUNTIME_VISIBLE_CONVERSATION_KEY,
     ContextRuntimeBusy,
     assistant_visible_content,
+    context_state_lock,
     load_from_root_frame,
     save_to_root_frame,
 )
@@ -900,41 +901,51 @@ def _prepare_root_runtime_memory_for_turn(
     context: dict[str, Any],
     prompt: str,
     runtime_context: dict[str, Any],
+    inject_prompt_view: bool = True,
 ) -> QueryEvent | None:
-    memory = load_from_root_frame(frame)
-    memory.bootstrap_from_external_recent_conversation(
-        _recent_conversation_for_runtime(context),
-        task_id=task_id,
-        root_frame_id=frame.frame_id,
-    )
-    prompt_view = memory.build_prompt_view()
-    if prompt_view:
-        runtime_context[RUNTIME_VISIBLE_CONVERSATION_KEY] = prompt_view
-    else:
-        runtime_context.pop(RUNTIME_VISIBLE_CONVERSATION_KEY, None)
-    runtime_context["_runtime_context_revision"] = memory.revision
-
-    try:
-        memory.begin_turn(
+    context_id = _context_id_for_frame(frame)
+    with context_state_lock(context_id):
+        memory = load_from_root_frame(frame)
+        memory.bootstrap_from_external_recent_conversation(
+            _recent_conversation_for_runtime(context),
             task_id=task_id,
             root_frame_id=frame.frame_id,
-            user_message=prompt,
         )
-    except ContextRuntimeBusy as exc:
-        return QueryEvent(
-            type="error",
-            task_id=task_id,
-            skill_frame_id=frame.frame_id,
-            skill_id=ROOT_SKILL_ID,
-            error=str(exc),
-            payload={
-                "code": "CONTEXT_RUNTIME_BUSY",
-                "retryable": True,
-            },
-        )
+        if inject_prompt_view:
+            prompt_view = memory.build_prompt_view()
+            if prompt_view:
+                runtime_context[RUNTIME_VISIBLE_CONVERSATION_KEY] = prompt_view
+            else:
+                runtime_context.pop(RUNTIME_VISIBLE_CONVERSATION_KEY, None)
+        else:
+            runtime_context.pop(RUNTIME_VISIBLE_CONVERSATION_KEY, None)
+        runtime_context["_runtime_context_revision"] = memory.revision
 
-    save_to_root_frame(frame, memory)
-    _runtime.save_frame(frame)
+        try:
+            memory.begin_turn(
+                task_id=task_id,
+                root_frame_id=frame.frame_id,
+                user_message=prompt,
+            )
+        except ContextRuntimeBusy as exc:
+            return QueryEvent(
+                type="error",
+                task_id=task_id,
+                skill_frame_id=frame.frame_id,
+                skill_id=ROOT_SKILL_ID,
+                error=str(exc),
+                payload={
+                    "code": "CONTEXT_RUNTIME_BUSY",
+                    "retryable": True,
+                },
+            )
+
+        save_to_root_frame(frame, memory)
+        _runtime.save_frame(frame)
+    _install_runtime_memory_checkpoint(
+        runtime_context,
+        root_frame_id=frame.frame_id,
+    )
     return None
 
 
@@ -945,39 +956,244 @@ def _commit_root_runtime_memory_turn(
     assistant_message: str,
     structured_output: dict[str, Any] | None,
 ) -> None:
-    memory = load_from_root_frame(frame)
-    if memory.pending_turn is None:
-        try:
-            memory.begin_turn(
-                task_id=state["task_id"],
-                root_frame_id=frame.frame_id,
-                user_message=_skill_agent_prompt(
-                    state["prompt"],
-                    strip_execution_policy_context(state.get("context") or {}),
-                ),
-            )
-        except ContextRuntimeBusy:
-            return
-    metadata = {
-        "source": "root_result",
-        "structuredOutputKeys": sorted(structured_output.keys()) if isinstance(structured_output, dict) else [],
-        "reportRef": _execution_report_ref_from_frame(frame),
-    }
-    memory.commit_turn(
-        assistant_message=assistant_message,
-        metadata=metadata,
-    )
-    save_to_root_frame(frame, memory)
-    _runtime.save_frame(frame)
+    context_id = _context_id_for_frame(frame)
+    with context_state_lock(context_id):
+        memory = load_from_root_frame(frame)
+        if memory.pending_turn is None:
+            try:
+                memory.begin_turn(
+                    task_id=state["task_id"],
+                    root_frame_id=frame.frame_id,
+                    user_message=_skill_agent_prompt(
+                        state["prompt"],
+                        strip_execution_policy_context(state.get("context") or {}),
+                    ),
+                )
+            except ContextRuntimeBusy:
+                return
+        metadata = _runtime_memory_projection_metadata(frame, structured_output)
+        memory.commit_turn(
+            assistant_message=assistant_message,
+            metadata=metadata,
+        )
+        save_to_root_frame(frame, memory)
+        _runtime.save_frame(frame)
 
 
 def _abandon_root_runtime_memory_turn(frame: Any, *, status: str) -> None:
-    memory = load_from_root_frame(frame)
-    if memory.pending_turn is None and memory.loop_status != "RUNNING":
-        return
-    memory.abandon_turn(status=status)
-    save_to_root_frame(frame, memory)
-    _runtime.save_frame(frame)
+    context_id = _context_id_for_frame(frame)
+    with context_state_lock(context_id):
+        memory = load_from_root_frame(frame)
+        if memory.pending_turn is None and memory.loop_status != "RUNNING":
+            return
+        memory.abandon_turn(status=status)
+        save_to_root_frame(frame, memory)
+        _runtime.save_frame(frame)
+
+
+def enqueue_pending_user_input_for_context(
+    context_id: str,
+    *,
+    task_id: str,
+    prompt: str,
+) -> QueryEvent:
+    """Queue a user message for an already running root loop."""
+    with context_state_lock(context_id):
+        frame = _select_active_root_frame_for_context(context_id)
+        if frame is None:
+            return QueryEvent(
+                type="error",
+                task_id=task_id,
+                session_id=context_id,
+                error="context runtime is busy but no active root frame was found",
+                payload={
+                    "code": "CONTEXT_RUNTIME_BUSY",
+                    "retryable": True,
+                },
+            )
+        memory = load_from_root_frame(frame)
+        if memory.loop_status != "RUNNING" or memory.pending_turn is None:
+            return QueryEvent(
+                type="error",
+                task_id=task_id,
+                session_id=context_id,
+                skill_frame_id=frame.frame_id,
+                skill_id=ROOT_SKILL_ID,
+                error="context execution stream is closing; retry as a new turn",
+                payload={
+                    "code": "CONTEXT_RUNTIME_BUSY",
+                    "retryable": True,
+                },
+            )
+        queued = memory.enqueue_user_input(
+            task_id=task_id,
+            root_frame_id=frame.frame_id,
+            user_message=prompt,
+        )
+        if queued is None:
+            return QueryEvent(
+                type="error",
+                task_id=task_id,
+                session_id=context_id,
+                skill_frame_id=frame.frame_id,
+                skill_id=ROOT_SKILL_ID,
+                error="queued user input is empty",
+                payload={
+                    "code": "CONTEXT_RUNTIME_QUEUE_REJECTED",
+                    "retryable": False,
+                },
+            )
+        save_to_root_frame(frame, memory)
+        _runtime.save_frame(frame)
+        return QueryEvent(
+            type="system",
+            task_id=task_id,
+            session_id=context_id,
+            skill_frame_id=frame.frame_id,
+            skill_id=ROOT_SKILL_ID,
+            content="User input queued for the running context loop.",
+            payload={
+                "code": "CONTEXT_RUNTIME_QUEUED",
+                "contextId": context_id,
+                "queuedMessageId": queued.get("messageId"),
+                "runningTaskId": memory.running_task_id,
+                "runningFrameId": memory.running_frame_id or frame.frame_id,
+            },
+        )
+
+
+def _install_runtime_memory_checkpoint(
+    runtime_context: dict[str, Any],
+    *,
+    root_frame_id: str,
+) -> None:
+    def checkpoint() -> list[dict[str, Any]]:
+        frame = _runtime.get_frame(root_frame_id)
+        if frame is None:
+            return []
+        context_id = _context_id_for_frame(frame)
+        with context_state_lock(context_id):
+            refreshed = _runtime.get_frame(root_frame_id)
+            if refreshed is None:
+                return []
+            memory = load_from_root_frame(refreshed)
+            if memory.loop_status != "RUNNING" or memory.pending_turn is None:
+                return []
+            drained = memory.drain_pending_user_inputs()
+            if not drained:
+                return []
+            save_to_root_frame(refreshed, memory)
+            _runtime.save_frame(refreshed)
+            return drained
+
+    runtime_context["_runtime_memory_checkpoint"] = checkpoint
+
+
+def _select_active_root_frame_for_context(context_id: str) -> Any | None:
+    candidates = list(_runtime.get_frames_by_conversation(context_id))
+    candidates.extend(_journal.load_by_conversation(context_id))
+    active_statuses = {
+        FrameStatus.RUNNING,
+        FrameStatus.WAITING_CHILD,
+        FrameStatus.AWAITING_APPROVAL,
+    }
+    roots = [
+        frame for frame in candidates
+        if frame.skill_id == ROOT_SKILL_ID
+        and not frame.parent_frame_id
+        and frame.status in active_statuses
+    ]
+    if not roots:
+        return None
+    roots.sort(key=lambda item: (
+        item.journal_seq if isinstance(item.journal_seq, int) else -1,
+        item.journal_updated_at or item.started_at or "",
+        item.current_task_id or item.task_id or "",
+    ))
+    latest = roots[-1]
+    if _runtime.get_frame(latest.frame_id) is None:
+        _runtime.restore_frame(latest)
+    return _runtime.get_frame(latest.frame_id) or latest
+
+
+def _context_id_for_frame(frame: Any) -> str:
+    return (
+        getattr(frame, "conversation_id", None)
+        or getattr(frame, "session_id", None)
+        or getattr(frame, "frame_id", None)
+        or "unknown"
+    )
+
+
+def _runtime_memory_projection_metadata(
+    frame: Any,
+    structured_output: dict[str, Any] | None,
+) -> dict[str, Any]:
+    output = structured_output if isinstance(structured_output, dict) else {}
+    child_summary = _matching_latest_child_summary(frame, output)
+    report_ref = _execution_report_ref_from_frame(frame)
+    report_digest = _execution_report_digest_from_frame(frame)
+    metadata: dict[str, Any] = {
+        "source": "root_result",
+        "skillId": getattr(frame, "skill_id", ROOT_SKILL_ID),
+        "skillFrameId": getattr(frame, "frame_id", ""),
+        "rootSkillId": getattr(frame, "skill_id", ROOT_SKILL_ID),
+        "rootFrameId": getattr(frame, "frame_id", ""),
+        "structuredOutputKeys": sorted(output.keys()),
+        "reportRef": report_ref,
+    }
+    if report_digest:
+        metadata["reportDigest"] = report_digest
+    if child_summary:
+        child_report_ref = child_summary.get("execution_report_ref")
+        child_report_digest = child_summary.get("execution_report_digest")
+        metadata.update({
+            "source": "skill_result",
+            "skillId": child_summary.get("skill_id"),
+            "skillFrameId": child_summary.get("frame_id"),
+            "childSkillId": child_summary.get("skill_id"),
+            "childSkillFrameId": child_summary.get("frame_id"),
+            "reportRef": child_report_ref or report_ref,
+            "promotedResultDigest": child_report_digest,
+        })
+    if _is_non_recoverable_projection(output):
+        metadata.update({
+            "source": "error",
+            "errorCategory": output.get("error_category") or "NON_RECOVERABLE_TOOL_ERROR",
+            "recoverable": False,
+        })
+    return {key: value for key, value in metadata.items() if value not in (None, "", [], {})}
+
+
+def _matching_latest_child_summary(frame: Any, output: dict[str, Any]) -> dict[str, Any] | None:
+    state = getattr(frame, "private_working_state", {}) or {}
+    summary = state.get("latest_child_result_summary")
+    if not isinstance(summary, dict):
+        root_summary = state.get("root_context_summary")
+        if isinstance(root_summary, dict):
+            candidate = root_summary.get("latest_child_result_summary")
+            summary = candidate if isinstance(candidate, dict) else None
+    if not isinstance(summary, dict):
+        return None
+    if output and output == summary.get("structured_output"):
+        return summary
+    frame_summary = getattr(frame, "result_summary", None)
+    if frame_summary and frame_summary == summary.get("result_summary"):
+        return summary
+    return None
+
+
+def _is_non_recoverable_projection(output: dict[str, Any]) -> bool:
+    if not output:
+        return False
+    status = str(output.get("status") or "").strip().upper()
+    return (
+        status == "ERROR"
+        and (
+            output.get("recoverable") is False
+            or output.get("llm_retry_allowed") is False
+        )
+    )
 
 
 def _run_active_focus_before_root(
@@ -1053,9 +1269,20 @@ def _run_active_focus_before_root(
         _runtime.context_summary_for_frame(root_frame_id),
         focus_manifest,
     )
+    child_runtime_context = dict(child_runtime_context or {})
+    busy_event = _prepare_root_runtime_memory_for_turn(
+        root,
+        task_id=task_id,
+        context=strip_execution_policy_context(state.get("context") or {}),
+        prompt=prompt,
+        runtime_context=child_runtime_context,
+        inject_prompt_view=False,
+    )
+    if busy_event is not None:
+        events.append(busy_event)
+        return events
     awaiting_user_context = _awaiting_user_context_for_focus(focus)
     if awaiting_user_context:
-        child_runtime_context = dict(child_runtime_context or {})
         child_runtime_context["_awaiting_user_input"] = awaiting_user_context
     events.extend(llm_skill_agent.run(
         task_id=task_id,

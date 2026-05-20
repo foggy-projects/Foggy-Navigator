@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 
 from ..models import SkillFrameState
 
@@ -22,10 +22,16 @@ DEFAULT_LIMITS = {
     "maxVisibleMessages": 24,
     "maxPromptMessages": 12,
     "maxMessageChars": 1200,
+    "maxVisibleChars": 12000,
+    "headTurnCount": 2,
+    "tailTurnCount": 6,
+    "maxSummaryChars": 2400,
 }
 
 _CONTEXT_LOCKS_GUARD = Lock()
 _CONTEXT_LOCKS: dict[str, Lock] = {}
+_CONTEXT_STATE_LOCKS_GUARD = Lock()
+_CONTEXT_STATE_LOCKS: dict[str, Lock] = {}
 
 
 class ContextRuntimeBusy(RuntimeError):
@@ -135,7 +141,16 @@ class ContextRuntimeMemory:
             self.limits.get("maxPromptMessages"),
             DEFAULT_LIMITS["maxPromptMessages"],
         )
-        messages = self.pinned_head_messages + self.visible_messages
+        messages = [
+            *self.pinned_head_messages,
+            *self._compacted_summary_prompt_messages(),
+            *self.visible_messages,
+        ]
+        prompt_source = (
+            messages
+            if self.compacted_summary or self.pinned_head_messages
+            else messages[-max_prompt_messages:]
+        )
         return [
             {
                 "role": item["role"],
@@ -144,7 +159,7 @@ class ContextRuntimeMemory:
                 "taskId": item.get("taskId"),
                 "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
             }
-            for item in messages[-max_prompt_messages:]
+            for item in prompt_source
             if item.get("role") in {"user", "assistant"} and item.get("content")
         ]
 
@@ -186,11 +201,71 @@ class ContextRuntimeMemory:
                 created_at=timestamp,
                 source="user",
             ),
+            "queuedUserMessages": [],
         }
         self.loop_status = "RUNNING"
         self.running_task_id = task_id
         self.running_frame_id = root_frame_id
         self.updated_at = timestamp
+
+    def enqueue_user_input(
+        self,
+        *,
+        task_id: str,
+        root_frame_id: str,
+        user_message: str,
+        now: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Queue a user message for the currently running loop."""
+        content = _clean_content(user_message, self._max_message_chars())
+        if not content:
+            return None
+        timestamp = now or _now()
+        queued = _new_message(
+            role="user",
+            content=content,
+            task_id=task_id,
+            root_frame_id=root_frame_id,
+            created_at=timestamp,
+            source="queued_user_input",
+            metadata={
+                "queuedTaskId": task_id,
+                "queueStatus": "QUEUED",
+            },
+            suffix=f"queued_{len(self.pending_user_inputs) + 1}_{_safe_id_part(timestamp)}",
+        )
+        self.pending_user_inputs.append(queued)
+        self.updated_at = timestamp
+        return queued
+
+    def drain_pending_user_inputs(
+        self,
+        *,
+        limit: int = 8,
+        now: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Move queued user messages into the in-flight turn in FIFO order."""
+        if not self.pending_user_inputs:
+            return []
+        count = max(0, limit)
+        if count == 0:
+            return []
+        drained = self.pending_user_inputs[:count]
+        del self.pending_user_inputs[:count]
+        timestamp = now or _now()
+        if isinstance(self.pending_turn, dict):
+            queued_messages = self.pending_turn.setdefault("queuedUserMessages", [])
+            if not isinstance(queued_messages, list):
+                queued_messages = []
+                self.pending_turn["queuedUserMessages"] = queued_messages
+            for item in drained:
+                metadata = item.setdefault("metadata", {})
+                if isinstance(metadata, dict):
+                    metadata["queueStatus"] = "IN_FLIGHT"
+                    metadata["inFlightAt"] = timestamp
+                queued_messages.append(item)
+        self.updated_at = timestamp
+        return drained
 
     def commit_turn(
         self,
@@ -198,6 +273,7 @@ class ContextRuntimeMemory:
         assistant_message: str,
         metadata: dict[str, Any] | None = None,
         now: str | None = None,
+        summarizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> bool:
         """Commit pending user message plus final assistant projection."""
         if not self.pending_turn:
@@ -207,6 +283,10 @@ class ContextRuntimeMemory:
         if not isinstance(user_message, dict):
             self._clear_running(now=now)
             return False
+        queued_user_messages = [
+            item for item in self.pending_turn.get("queuedUserMessages", [])
+            if isinstance(item, dict) and item.get("role") == "user" and item.get("content")
+        ]
         content = _clean_content(assistant_message, self._max_message_chars())
         if not content:
             self._clear_running(now=now)
@@ -223,8 +303,8 @@ class ContextRuntimeMemory:
             source="root_result",
             metadata=metadata,
         )
-        self.visible_messages.extend([user_message, assistant])
-        self._compact_visible_messages()
+        self.visible_messages.extend([user_message, *queued_user_messages, assistant])
+        self._compact_visible_messages(summarizer=summarizer)
         self.pending_turn = None
         self.revision += 1
         self._clear_running(now=timestamp)
@@ -243,19 +323,123 @@ class ContextRuntimeMemory:
         self.running_frame_id = None
         self.updated_at = now or _now()
 
-    def _compact_visible_messages(self) -> None:
+    def _compact_visible_messages(
+        self,
+        *,
+        summarizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> None:
         max_visible = _int_or_default(
             self.limits.get("maxVisibleMessages"),
             DEFAULT_LIMITS["maxVisibleMessages"],
         )
-        if len(self.visible_messages) > max_visible:
-            del self.visible_messages[:-max_visible]
+        max_visible_chars = _int_or_default(
+            self.limits.get("maxVisibleChars"),
+            DEFAULT_LIMITS["maxVisibleChars"],
+        )
+        if (
+            len(self.visible_messages) <= max_visible
+            and _messages_total_chars(self.visible_messages) <= max_visible_chars
+        ):
+            return
+
+        head_count = max(0, _int_or_default(
+            self.limits.get("headTurnCount"),
+            DEFAULT_LIMITS["headTurnCount"],
+        )) * 2
+        tail_count = max(1, _int_or_default(
+            self.limits.get("tailTurnCount"),
+            DEFAULT_LIMITS["tailTurnCount"],
+        )) * 2
+        max_summary_chars = _int_or_default(
+            self.limits.get("maxSummaryChars"),
+            DEFAULT_LIMITS["maxSummaryChars"],
+        )
+
+        messages = list(self.visible_messages)
+        if self.pinned_head_messages:
+            head: list[dict[str, Any]] = []
+            middle = messages[:-tail_count] if len(messages) > tail_count else []
+        else:
+            head = messages[:head_count]
+            middle_end = max(head_count, len(messages) - tail_count)
+            middle = messages[head_count:middle_end]
+        tail = messages[-tail_count:] if len(messages) > tail_count else list(messages)
+
+        if not middle:
+            if len(messages) <= max_visible:
+                return
+            middle = messages[:-tail_count]
+            head = []
+            tail = messages[-tail_count:]
+        if not middle:
+            return
+
+        previous_summary = self.compacted_summary if isinstance(self.compacted_summary, dict) else None
+        summarizer_messages = _summary_input_messages(
+            middle,
+            max_chars=self._max_message_chars(),
+        )
+        summary_input = {
+            "previousSummary": previous_summary,
+            "messages": summarizer_messages,
+            "limits": dict(self.limits),
+        }
+        summary = None
+        if summarizer is not None:
+            try:
+                candidate = summarizer(summary_input)
+                if isinstance(candidate, dict):
+                    summary = _normalize_compacted_summary(
+                        candidate,
+                        covered_messages=summarizer_messages,
+                        previous_summary=previous_summary,
+                        max_chars=max_summary_chars,
+                        quality="llm",
+                    )
+            except Exception:
+                summary = None
+        if summary is None:
+            summary = _deterministic_compacted_summary(
+                previous_summary,
+                middle,
+                max_chars=max_summary_chars,
+            )
+
+        if head:
+            self.pinned_head_messages.extend(head)
+        self.compacted_summary = summary
+        self.visible_messages = tail
 
     def _max_message_chars(self) -> int:
         return _int_or_default(
             self.limits.get("maxMessageChars"),
             DEFAULT_LIMITS["maxMessageChars"],
         )
+
+    def _compacted_summary_prompt_messages(self) -> list[dict[str, Any]]:
+        if not isinstance(self.compacted_summary, dict):
+            return []
+        content = _compacted_summary_prompt_content(
+            self.compacted_summary,
+            max_chars=_int_or_default(
+                self.limits.get("maxSummaryChars"),
+                DEFAULT_LIMITS["maxSummaryChars"],
+            ),
+        )
+        if not content:
+            return []
+        return [{
+            "messageId": "rtm_compacted_summary",
+            "role": "assistant",
+            "content": content,
+            "taskId": "",
+            "rootFrameId": "",
+            "createdAt": self.compacted_summary.get("compactedAt") or self.updated_at,
+            "metadata": {
+                "source": "compaction",
+                "summaryQuality": self.compacted_summary.get("summaryQuality") or "unknown",
+            },
+        }]
 
 
 def context_execution_lock(context_id: str) -> Lock:
@@ -265,6 +449,16 @@ def context_execution_lock(context_id: str) -> Lock:
         if lock is None:
             lock = Lock()
             _CONTEXT_LOCKS[context_id] = lock
+        return lock
+
+
+def context_state_lock(context_id: str) -> Lock:
+    """Return the short critical-section lock for context memory state writes."""
+    with _CONTEXT_STATE_LOCKS_GUARD:
+        lock = _CONTEXT_STATE_LOCKS.get(context_id)
+        if lock is None:
+            lock = Lock()
+            _CONTEXT_STATE_LOCKS[context_id] = lock
         return lock
 
 
@@ -294,6 +488,201 @@ def assistant_visible_content(
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return (summary or "").strip()
+
+
+def _messages_total_chars(messages: list[dict[str, Any]]) -> int:
+    return sum(len(item.get("content") or "") for item in messages if isinstance(item, dict))
+
+
+def _normalize_compacted_summary(
+    candidate: dict[str, Any],
+    *,
+    covered_messages: list[dict[str, Any]],
+    previous_summary: dict[str, Any] | None,
+    max_chars: int,
+    quality: str,
+) -> dict[str, Any]:
+    summary = _deterministic_compacted_summary(
+        previous_summary,
+        covered_messages,
+        max_chars=max_chars,
+    )
+    for key in (
+        "durableUserIntent",
+        "decisionsAndConstraints",
+        "businessEntities",
+        "completedWork",
+        "openQuestions",
+        "pendingActions",
+        "errorsAndRecovery",
+    ):
+        value = candidate.get(key)
+        if isinstance(value, str):
+            summary[key] = _truncate_text(_redact_sensitive_text(value), max_chars)
+        elif isinstance(value, list):
+            summary[key] = _normalize_summary_list(value, max_chars=max_chars)
+    summary["summaryQuality"] = _str_or_default(candidate.get("summaryQuality"), quality) or quality
+    summary["coveredMessageIds"] = _merged_strings(
+        _summary_list(previous_summary, "coveredMessageIds"),
+        _summary_list(candidate, "coveredMessageIds"),
+        _message_ids(covered_messages),
+    )
+    summary["reportRefs"] = _merged_strings(
+        _summary_list(previous_summary, "reportRefs"),
+        _summary_list(candidate, "reportRefs"),
+        _report_refs_from_messages(covered_messages),
+    )
+    summary["compactedAt"] = _str_or_default(candidate.get("compactedAt"), _now())
+    return summary
+
+
+def _summary_input_messages(messages: list[dict[str, Any]], *, max_chars: int) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        copy = dict(item)
+        content = _str_or_default(copy.get("content"))
+        if content:
+            copy["content"] = _truncate_text(_redact_sensitive_text(content), max_chars)
+        sanitized.append(copy)
+    return sanitized
+
+
+def _deterministic_compacted_summary(
+    previous_summary: dict[str, Any] | None,
+    messages: list[dict[str, Any]],
+    *,
+    max_chars: int,
+) -> dict[str, Any]:
+    previous_intent = ""
+    if isinstance(previous_summary, dict):
+        previous_intent = _str_or_default(previous_summary.get("durableUserIntent"))
+    message_summary = _summary_text_from_messages(messages, max_chars=max_chars)
+    durable_parts = [item for item in (previous_intent, message_summary) if item]
+    return {
+        "summaryQuality": "fallback",
+        "durableUserIntent": _truncate_text("\n".join(durable_parts), max_chars),
+        "decisionsAndConstraints": _summary_list(previous_summary, "decisionsAndConstraints"),
+        "businessEntities": _summary_list(previous_summary, "businessEntities"),
+        "completedWork": _summary_list(previous_summary, "completedWork"),
+        "openQuestions": _summary_list(previous_summary, "openQuestions"),
+        "pendingActions": _summary_list(previous_summary, "pendingActions"),
+        "errorsAndRecovery": _summary_list(previous_summary, "errorsAndRecovery"),
+        "reportRefs": _merged_strings(
+            _summary_list(previous_summary, "reportRefs"),
+            _report_refs_from_messages(messages),
+        ),
+        "coveredMessageIds": _merged_strings(
+            _summary_list(previous_summary, "coveredMessageIds"),
+            _message_ids(messages),
+        ),
+        "compactedAt": _now(),
+    }
+
+
+def _compacted_summary_prompt_content(summary: dict[str, Any], *, max_chars: int) -> str:
+    sections: list[str] = ["Runtime compacted conversation summary:"]
+    durable_intent = _str_or_default(summary.get("durableUserIntent"))
+    if durable_intent:
+        sections.append(f"Durable intent: {durable_intent}")
+    for label, key in (
+        ("Decisions/constraints", "decisionsAndConstraints"),
+        ("Business entities", "businessEntities"),
+        ("Completed work", "completedWork"),
+        ("Open questions", "openQuestions"),
+        ("Pending actions", "pendingActions"),
+        ("Errors/recovery", "errorsAndRecovery"),
+        ("Report refs", "reportRefs"),
+    ):
+        values = _summary_list(summary, key)
+        if values:
+            sections.append(f"{label}: " + "; ".join(values))
+    return _truncate_text(_redact_sensitive_text("\n".join(sections)), max_chars)
+
+
+def _summary_text_from_messages(messages: list[dict[str, Any]], *, max_chars: int) -> str:
+    lines: list[str] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        role = _str_or_default(item.get("role"), "message")
+        content = _str_or_default(item.get("content"))
+        if not content:
+            continue
+        lines.append(f"{role}: {_redact_sensitive_text(content)}")
+    return _truncate_text("\n".join(lines), max_chars)
+
+
+def _normalize_summary_list(values: list[Any], *, max_chars: int) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        text = _truncate_text(_redact_sensitive_text(value.strip()), max_chars)
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _summary_list(summary: dict[str, Any] | None, key: str) -> list[str]:
+    if not isinstance(summary, dict):
+        return []
+    value = summary.get(key)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def _message_ids(messages: list[dict[str, Any]]) -> list[str]:
+    return [
+        item["messageId"]
+        for item in messages
+        if isinstance(item, dict) and isinstance(item.get("messageId"), str) and item["messageId"]
+    ]
+
+
+def _report_refs_from_messages(messages: list[dict[str, Any]]) -> list[str]:
+    refs: list[str] = []
+    for item in messages:
+        metadata = item.get("metadata") if isinstance(item, dict) else None
+        if not isinstance(metadata, dict):
+            continue
+        value = metadata.get("reportRef")
+        if isinstance(value, str) and value and value not in refs:
+            refs.append(value)
+    return refs
+
+
+def _merged_strings(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for item in group:
+            if isinstance(item, str) and item and item not in merged:
+                merged.append(item)
+    return merged
+
+
+def _redact_sensitive_text(text: str) -> str:
+    redacted = re.sub(
+        r"(?i)\b(token|access_token|password|secret|signature)=([^\s&]+)",
+        lambda match: f"{match.group(1)}=[REDACTED]",
+        text,
+    )
+    redacted = re.sub(
+        r"(?i)\b(api[_-]?key|accessToken|secret)\s*[:=]\s*([^\s,;]+)",
+        lambda match: f"{match.group(1)}=[REDACTED]",
+        redacted,
+    )
+    return re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", redacted)
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip()
 
 
 def _external_recent_to_messages(

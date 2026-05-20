@@ -35,3 +35,5 @@
 
 - [quality/runtime-context-phase1-implementation-quality.md](./quality/runtime-context-phase1-implementation-quality.md) - BizWorker Runtime Context Phase 1 实现质量检查
 - [acceptance/runtime-context-phase1-acceptance.md](./acceptance/runtime-context-phase1-acceptance.md) - BizWorker Runtime Context Phase 1 功能验收签收
+- [quality/runtime-context-phase2-5-implementation-quality.md](./quality/runtime-context-phase2-5-implementation-quality.md) - BizWorker Runtime Context Phase 2-5 实现质量检查
+- [acceptance/runtime-context-phase2-5-acceptance.md](./acceptance/runtime-context-phase2-5-acceptance.md) - BizWorker Runtime Context Phase 2-5 功能验收签收

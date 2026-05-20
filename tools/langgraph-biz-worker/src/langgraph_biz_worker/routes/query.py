@@ -14,7 +14,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from ..auth import verify_token
 from ..config import settings
-from ..graphs.root_graph import RootState, root_graph
+from ..graphs.root_graph import RootState, enqueue_pending_user_input_for_context, root_graph
 from ..models import QueryEvent, QueryRequest
 from ..runtime.context_memory import context_execution_lock
 from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
@@ -101,15 +101,14 @@ async def _event_generator(
 
         context_lock = context_execution_lock(context_id)
         if not context_lock.acquire(blocking=False):
-            busy_event = _event_with_context_id(QueryEvent(
-                type="error",
-                task_id=task_id,
-                error="context runtime is busy",
-                payload={
-                    "code": "CONTEXT_RUNTIME_BUSY",
-                    "retryable": True,
-                },
-            ), context_id)
+            busy_event = _event_with_context_id(
+                enqueue_pending_user_input_for_context(
+                    context_id,
+                    task_id=task_id,
+                    prompt=request.prompt,
+                ),
+                context_id,
+            )
             yield {
                 "event": "message",
                 "data": busy_event.model_dump_json(),

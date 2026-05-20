@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
@@ -241,7 +242,32 @@ class LanggraphTaskServiceTest {
         }
 
         @Test
-        void forwards_recent_conversation_and_persists_current_user_prompt() {
+        void omits_recent_conversation_by_default_and_persists_current_user_prompt() {
+            service.createTask(USER_ID, TENANT_ID, makeForm());
+
+            ArgumentCaptor<WorkerTaskStartEvent> eventCaptor =
+                    ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> context =
+                    (Map<String, Object>) eventCaptor.getValue().getProviderConfig().get("context");
+            assertNotNull(context);
+            assertFalse(context.containsKey("recentConversation"));
+
+            verify(sessionMessageRepository, never()).findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any());
+            verify(sessionManager).addMessage(eq(SESSION_ID), argThat(message ->
+                    message.getRole() != null
+                            && "USER".equals(message.getRole().name())
+                            && "分析异常订单".equals(message.getContent())
+                            && eventCaptor.getValue().getTaskId().equals(message.getTaskId())
+            ));
+        }
+
+        @Test
+        @SuppressWarnings("unchecked")
+        void can_forward_recent_conversation_when_compatibility_switch_enabled() {
+            ReflectionTestUtils.setField(service, "includeRecentConversation", true);
             when(sessionMessageRepository.findBySessionIdOrderByCreatedAtDesc(eq(SESSION_ID), any()))
                     .thenReturn(List.of(
                             sessionMessage("m3", "assistant", "Opening frame", LocalDateTime.of(2026, 4, 1, 10, 2),
@@ -258,10 +284,9 @@ class LanggraphTaskServiceTest {
                     ArgumentCaptor.forClass(WorkerTaskStartEvent.class);
             verify(eventPublisher).publishEvent(eventCaptor.capture());
 
-            @SuppressWarnings("unchecked")
             Map<String, Object> context =
                     (Map<String, Object>) eventCaptor.getValue().getProviderConfig().get("context");
-            @SuppressWarnings("unchecked")
+            assertNotNull(context);
             List<Map<String, Object>> recentConversation =
                     (List<Map<String, Object>>) context.get("recentConversation");
             assertEquals(2, recentConversation.size());

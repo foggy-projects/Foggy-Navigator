@@ -210,6 +210,9 @@ class LlmSkillAgent:
         )
 
         for _ in range(self._max_iterations):
+            for queued_message in _runtime_memory_checkpoint_messages(runtime_context):
+                messages.append(queued_message)
+                self._append_private_message(frame_id, "user", queued_message.content)
             try:
                 response = invoke_chat_model(
                     model,
@@ -284,11 +287,17 @@ class LlmSkillAgent:
                 if _is_non_recoverable_tool_error(tool_result):
                     error = tool_result.get("user_message") or tool_result.get("error") or "Non-recoverable tool error"
                     if persistent_frame:
-                        self._runtime.record_recoverable_interruption(
-                            frame_id,
-                            reason="non_recoverable_tool_error",
-                            error=error,
-                            task_id=task_id,
+                        self._runtime.submit_persistent_turn_result(
+                            frame_id=frame_id,
+                            summary=error,
+                            structured_output={
+                                "status": "ERROR",
+                                "message": error,
+                                "error_category": tool_result.get("error_category") or "NON_RECOVERABLE_TOOL_ERROR",
+                                "recoverable": False,
+                                "llm_retry_allowed": False,
+                                "function_frame_id": tool_result.get("function_frame_id"),
+                            },
                         )
                     else:
                         self._runtime.fail_frame(frame_id, error)
@@ -301,6 +310,9 @@ class LlmSkillAgent:
                         error=error,
                     ))
                     return events
+                for queued_message in _runtime_memory_checkpoint_messages(runtime_context):
+                    messages.append(queued_message)
+                    self._append_private_message(frame_id, "user", queued_message.content)
 
         error = "LLM skill agent reached max iterations without valid submit"
         if persistent_frame:
@@ -770,6 +782,30 @@ def _is_non_recoverable_tool_error(result: Any) -> bool:
         result.get("llm_retry_allowed") is False
         or result.get("recoverable") is False
     )
+
+
+def _runtime_memory_checkpoint_messages(runtime_context: dict[str, Any] | None) -> list[HumanMessage]:
+    if not runtime_context:
+        return []
+    checkpoint = runtime_context.get("_runtime_memory_checkpoint")
+    if not callable(checkpoint):
+        return []
+    try:
+        queued_inputs = checkpoint()
+    except Exception:
+        logger.warning("Runtime memory checkpoint failed", exc_info=True)
+        return []
+    messages: list[HumanMessage] = []
+    for item in queued_inputs:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if isinstance(content, str) and content.strip():
+            messages.append(HumanMessage(content=(
+                "Additional user message received while this turn was running:\n"
+                f"{content.strip()}"
+            )))
+    return messages
 
 
 def _tool_not_authorized_error(name: str) -> str:

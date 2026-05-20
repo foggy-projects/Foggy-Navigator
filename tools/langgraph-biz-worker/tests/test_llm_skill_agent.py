@@ -1354,6 +1354,9 @@ def test_llm_agent_stops_on_non_recoverable_business_function_configuration_erro
     frame = runtime.get_frame(frame_id)
     assert model.calls == 1
     assert frame.status == FrameStatus.RUNNING
+    assert frame.result_summary == "业务函数配置错误：adapter upstream_ref 不合法。"
+    assert frame.output["error_category"] == "CONFIGURATION"
+    assert "continuation_state" not in frame.private_working_state
     assert any(
         event.type == "error"
         and event.reason == "non_recoverable_tool_error"
@@ -1365,6 +1368,55 @@ def test_llm_agent_stops_on_non_recoverable_business_function_configuration_erro
         and event.error == "LLM skill agent reached max iterations without valid submit"
         for event in events
     )
+
+
+def test_llm_agent_inserts_queued_user_input_at_checkpoint():
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_queue_checkpoint_001",
+        skill_id="system.root",
+        skill_input={"request": "start"},
+    )
+    checkpoint_calls = 0
+
+    def checkpoint():
+        nonlocal checkpoint_calls
+        checkpoint_calls += 1
+        if checkpoint_calls == 2:
+            return [{
+                "role": "user",
+                "content": "U2 while root loop is still running",
+            }]
+        return []
+
+    model = FakeToolCallModel([
+        AIMessage(content=""),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Handled queued input.",
+                "structured_output": {"message": "Handled queued input."},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime, max_iterations=3).run(
+        task_id="task_root_queue_checkpoint_001",
+        frame_id=frame_id,
+        prompt="U1",
+        runtime_context={"_runtime_memory_checkpoint": checkpoint},
+        persistent_frame=True,
+    )
+
+    assert model.calls == 2
+    assert any(event.type == "skill_result_submit" for event in events)
+    second_prompt = "\n".join(
+        getattr(message, "content", "")
+        for message in model.seen_messages[1]
+    )
+    assert "Additional user message received while this turn was running" in second_prompt
+    assert "U2 while root loop is still running" in second_prompt
 
 
 def test_llm_agent_records_submitted_summary_without_backend_rewrite(monkeypatch):
