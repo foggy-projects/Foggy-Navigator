@@ -408,6 +408,8 @@ async function onSuspensionDecision(payload: BusinessSuspensionDecisionPayload) 
 - suspension sheet 只展示 `BusinessSuspensionDialogModel` 中的清洗字段，并只发出 approve/reject 决策事件。
 - 样式可通过 `--nmc-*` CSS variables 覆盖，不需要 fork 组件。
 
+给上游 IDE Agent / LLM coding agent 的移动端接入提示词见 [36-mobile-chat-widget-bff-handoff-prompt.md](./36-mobile-chat-widget-bff-handoff-prompt.md)。
+
 ### 1.2 BFF ask 前置动作
 
 上游 BFF 在代理 `ask` 前必须基于当前登录态执行服务端前置动作：

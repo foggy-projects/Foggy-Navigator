@@ -143,6 +143,7 @@ async function handleSuspensionDecision(payload: BusinessSuspensionDecisionPaylo
 - `packages/navigator-chat-widget/src/index.ts`
 - `packages/navigator-chat-widget/src/types.ts`
 - `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/02-frontend-component-quickstart.md`
+- `docs/version-tracker/1.1.3-SNAPSHOT/upstream-integration/36-mobile-chat-widget-bff-handoff-prompt.md`
 
 ## Acceptance Criteria
 
@@ -165,6 +166,7 @@ async function handleSuspensionDecision(payload: BusinessSuspensionDecisionPaylo
 - [x] Mobile component unit tests added.
 - [x] Mobile Playwright viewport spec added.
 - [x] Upstream integration documentation updated.
+- [x] Upstream BFF handoff prompt documented.
 
 ## Test Evidence
 
