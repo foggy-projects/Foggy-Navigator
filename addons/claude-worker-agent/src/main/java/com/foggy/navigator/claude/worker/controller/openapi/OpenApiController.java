@@ -36,7 +36,6 @@ import com.foggy.navigator.common.entity.AgentConversationContextEntity;
 import com.foggy.navigator.common.entity.CodingAgentEntity;
 import com.foggy.navigator.common.entity.SessionMessageEntity;
 import com.foggy.navigator.common.entity.SessionTaskEntity;
-import com.foggy.navigator.common.util.IdGenerator;
 import com.foggy.navigator.session.registry.UnifiedAgentResolver;
 import com.foggy.navigator.session.service.OpenApiSessionQueryService;
 import com.foggy.navigator.session.service.TaskDispatchFacade;
@@ -484,7 +483,9 @@ public class OpenApiController {
 
         // 构建 A2aMessage
         boolean requestedContextId = form.getContextId() != null && !form.getContextId().isBlank();
-        String contextId = requestedContextId ? form.getContextId() : IdGenerator.shortId();
+        String contextId = requestedContextId
+                ? form.getContextId().trim()
+                : BusinessAgentSessionService.generateContextId();
         validateBusinessAgentContextOwnershipIfNeeded(
                 tenantId,
                 clientAppCredential.getClientAppId(),
@@ -538,6 +539,9 @@ public class OpenApiController {
         }
 
         A2aTask task = agent.sendTask(message);
+        if (task != null && !StringUtils.hasText(task.getContextId())) {
+            task.setContextId(contextId);
+        }
         bindBusinessRuntimeTokenToWorkerTaskIfPossible(tenantId, businessRuntimeToken, task);
         String agentOwnerUserId = null;
         if (clientContextJson != null) {

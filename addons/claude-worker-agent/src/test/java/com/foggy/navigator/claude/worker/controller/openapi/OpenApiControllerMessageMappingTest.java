@@ -52,6 +52,8 @@ import static org.mockito.Mockito.when;
 
 class OpenApiControllerMessageMappingTest {
 
+    private static final String STANDARD_CONTEXT_ID = "bctx_20260520_ab_ctx_1";
+
     @Test
     void taskCompletedMessageIsMarkedAsTerminalResult() throws Exception {
         OpenApiController controller = newController();
@@ -273,6 +275,34 @@ class OpenApiControllerMessageMappingTest {
     }
 
     @Test
+    void askAgent_generatesStandardBusinessContextIdWhenContextIdIsOmitted() {
+        UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
+        ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
+        A2aAgent agent = mock(A2aAgent.class);
+        OpenApiController controller = newController(agentResolver, credentialResolver);
+
+        OpenApiQueryForm form = new OpenApiQueryForm();
+        form.setMessage("创建一个新会话");
+
+        when(credentialResolver.resolveAccessToken(
+                nullable(String.class), nullable(String.class)))
+                .thenReturn(Optional.of(credential()));
+        when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
+        when(agent.sendTask(any())).thenReturn(A2aTask.builder()
+                .id("task-1")
+                .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
+                .build());
+
+        var result = controller.askAgent("agent-1", form, mock(HttpServletRequest.class));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(A2aMessage.class);
+        verify(agent).sendTask(captor.capture());
+        String generatedContextId = captor.getValue().getContextId();
+        assertTrue(generatedContextId.matches("^bctx_\\d{8}_[0-9a-f]{2}_[A-Za-z0-9._-]+$"));
+        assertEquals(generatedContextId, result.getData().getContextId());
+    }
+
+    @Test
     void askAgent_bindsOpenApiBusinessRuntimeTokenToVisibleWorkerTask() {
         UnifiedAgentResolver agentResolver = mock(UnifiedAgentResolver.class);
         ClientAppRuntimeCredentialResolver credentialResolver = mock(ClientAppRuntimeCredentialResolver.class);
@@ -466,14 +496,14 @@ class OpenApiControllerMessageMappingTest {
 
         OpenApiQueryForm form = new OpenApiQueryForm();
         form.setMessage("继续处理");
-        form.setContextId("ctx-1");
+        form.setContextId(STANDARD_CONTEXT_ID);
 
         when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-b");
         when(credentialResolver.resolveAccessToken(
                 nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
-        when(sessionService.getSession("tenant-1", "app-1", "upstream-b", "ctx-1"))
-                .thenThrow(new IllegalArgumentException("business agent session not found: ctx-1"));
+        when(sessionService.getSession("tenant-1", "app-1", "upstream-b", STANDARD_CONTEXT_ID))
+                .thenThrow(new IllegalArgumentException("business agent session not found: " + STANDARD_CONTEXT_ID));
 
         RuntimeException error = assertThrows(
                 RuntimeException.class,
@@ -502,13 +532,13 @@ class OpenApiControllerMessageMappingTest {
 
         OpenApiQueryForm form = new OpenApiQueryForm();
         form.setMessage("继续处理");
-        form.setContextId("ctx-1");
+        form.setContextId(STANDARD_CONTEXT_ID);
 
         when(request.getHeader("X-Upstream-User-Id")).thenReturn("upstream-a");
         when(credentialResolver.resolveAccessToken(
                 nullable(String.class), nullable(String.class)))
                 .thenReturn(Optional.of(credential()));
-        when(sessionService.getSession("tenant-1", "app-1", "upstream-a", "ctx-1"))
+        when(sessionService.getSession("tenant-1", "app-1", "upstream-a", STANDARD_CONTEXT_ID))
                 .thenReturn(new BusinessAgentSessionDTO());
         when(agentResolver.resolveAgent(eq("agent-1"), any())).thenReturn(Optional.of(agent));
         CodingAgentEntity agentEntity = new CodingAgentEntity();
@@ -516,10 +546,10 @@ class OpenApiControllerMessageMappingTest {
         agentEntity.setTenantId("tenant-1");
         agentEntity.setUserId("owner-1");
         when(codingAgentRepository.findByAgentIdAndTenantId("agent-1", "tenant-1")).thenReturn(Optional.of(agentEntity));
-        when(sessionQueryService.resolveSessionId("ctx-1", "owner-1")).thenReturn(Optional.empty());
+        when(sessionQueryService.resolveSessionId(STANDARD_CONTEXT_ID, "owner-1")).thenReturn(Optional.empty());
         when(agent.sendTask(any())).thenReturn(A2aTask.builder()
                 .id("task-1")
-                .contextId("ctx-1")
+                .contextId(STANDARD_CONTEXT_ID)
                 .status(A2aTaskStatus.builder().state(A2aTaskState.SUBMITTED).build())
                 .build());
 
@@ -529,7 +559,7 @@ class OpenApiControllerMessageMappingTest {
         verify(agent).sendTask(captor.capture());
         verify(codingAgentRepository).findByAgentIdAndTenantId("agent-1", "tenant-1");
         verify(codingAgentRepository, never()).findByAgentId("agent-1");
-        assertEquals("ctx-1", captor.getValue().getContextId());
+        assertEquals(STANDARD_CONTEXT_ID, captor.getValue().getContextId());
     }
 
     private OpenSessionMessageDTO mapMessage(OpenApiController controller, SessionMessageEntity entity)

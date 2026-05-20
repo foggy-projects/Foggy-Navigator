@@ -287,7 +287,7 @@ public class BusinessAgentSessionService {
         userGrantService.checkUpstreamUserAccess(tenantId, clientAppId, upstreamUserId);
     }
 
-    private String generateContextId() {
+    public static String generateContextId() {
         String entropy = UUID.randomUUID().toString().replace("-", "").toLowerCase(Locale.ROOT);
         String shard = entropy.substring(0, 2);
         return "bctx_" + LocalDate.now().format(CONTEXT_ID_DATE_FORMATTER) + "_" + shard + "_" + entropy;

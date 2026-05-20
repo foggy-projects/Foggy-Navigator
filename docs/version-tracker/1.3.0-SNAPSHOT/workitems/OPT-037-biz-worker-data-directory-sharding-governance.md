@@ -126,6 +126,7 @@ data/
   - 移除 frame task/conversation locator 写入、report locator 写入和 `.journal-seq` 文件写入；新写入不再创建 `runtime/frames` 或 `reports/frame-execution`。
   - `POST /api/v1/resume` 强制要求 `contextId`，Java LangGraph Worker 调用链从任务实体传入 `sessionId/contextId`。
   - Java 业务会话默认生成 `bctx_yyyyMMdd_<hash>_<uuid32>`，Worker 对业务 context 只接受 `bctx_yyyyMMdd_<hash>_<id>`，目录分片直接取 ID 内嵌 `<hash>`。
+  - OpenAPI 新会话未传 `contextId` 时同步生成标准 `bctx_yyyyMMdd_<hash>_<uuid32>`，避免首轮请求生成旧短 ID 后被业务会话格式校验拒绝。
   - frame report GET 和 LLM 工具读取支持携带 `contextId/sessionId`，优先从同一 session 目录定位报告。
   - 增加 frame 日期分片 cleanup dry-run 规划，跳过 active/recoverable frame。
 - compatibility:
@@ -151,10 +152,15 @@ data/
   - `addons/langgraph-biz-worker/src/test/java/com/foggy/navigator/langgraph/worker/service/LanggraphWorkerResumeEventListenerTest.java`
   - `addons/langgraph-biz-worker/src/test/java/com/foggy/navigator/langgraph/worker/service/LanggraphTaskServiceApprovalTest.java`
   - `addons/langgraph-biz-worker/src/test/java/com/foggy/navigator/langgraph/worker/e2e/BusinessFunctionApprovalResumeFlowTest.java`
+  - `business-agent-module/src/main/java/com/foggy/navigator/business/agent/service/BusinessAgentSessionService.java`
+  - `addons/claude-worker-agent/src/main/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiController.java`
+  - `addons/claude-worker-agent/src/test/java/com/foggy/navigator/claude/worker/controller/openapi/OpenApiControllerMessageMappingTest.java`
 - test_status:
   - `PYTHONPATH=src .\.venv\Scripts\python.exe -m pytest tests/test_file_frame_journal.py tests/test_frame_execution_report.py tests/test_frame_report_route.py tests/test_resume.py tests/test_account_skill_routing.py -q` passed: 68 passed.
   - `mvn -pl business-agent-module -am "-Dtest=BusinessAgentSessionServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test` passed: 5 tests.
   - `mvn -pl addons/langgraph-biz-worker -am "-Dtest=LanggraphWorkerResumeEventListenerTest,LanggraphTaskServiceApprovalTest,BusinessFunctionApprovalResumeFlowTest" "-Dsurefire.failIfNoSpecifiedTests=false" test` passed: 20 tests.
+  - `mvn -pl addons/claude-worker-agent,business-agent-module -am "-Dtest=OpenApiControllerMessageMappingTest,BusinessAgentSessionServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test` passed: 21 tests.
+  - `mvn -pl addons/claude-worker-agent,business-agent-module -am test` passed: 261 tests.
 - acceptance_readiness: ready-for-review
 
 ## Implementation Quality Self-Check
