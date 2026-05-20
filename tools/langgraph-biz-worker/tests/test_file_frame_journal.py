@@ -8,6 +8,7 @@ import pytest
 
 from langgraph_biz_worker.models import FrameKind, FrameStatus, SkillFrameState
 from langgraph_biz_worker.runtime.file_frame_journal import FileFrameJournal
+from langgraph_biz_worker.runtime.file_layout import session_data_dir
 
 
 def _make_frame(
@@ -35,6 +36,11 @@ class TestSaveAndLoad:
 
         assert path.exists()
         assert path.suffix == ".json"
+        session_dir = session_data_dir(tmp_path, ("2026", "01", "01"), "task_aaa")
+        assert path == session_dir / "frames" / "frm_001.json"
+        assert not (tmp_path / "frames" / "task_aaa").exists()
+        assert not (tmp_path / "runtime" / "frames").exists()
+        assert not (tmp_path / "reports" / "frame-execution").exists()
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data["frame_id"] == "frm_001"
         assert data["task_id"] == "task_aaa"
@@ -78,11 +84,42 @@ class TestSaveAndLoad:
         journal.save(first)
         journal.save(second)
 
-        assert first.journal_seq == 1
-        assert second.journal_seq == 2
+        assert first.journal_seq is not None
+        assert second.journal_seq is not None
+        assert second.journal_seq > first.journal_seq
         assert first.journal_updated_at
         frames = journal.load_by_conversation("conv-1")
         assert [frame.frame_id for frame in frames] == ["frm_001", "frm_002"]
+        assert [frame.frame_id for frame in journal.load_by_task("task_aaa", conversation_id="conv-1")] == [
+            "frm_001",
+            "frm_002",
+        ]
+        assert journal.load_by_task("task_aaa", conversation_id="wrong-context") == []
+        session_dir = session_data_dir(tmp_path, ("2026", "01", "01"), "conv-1")
+        assert (session_dir / "frames" / "frm_001.json").exists()
+        assert (session_dir / "frames" / "frm_002.json").exists()
+        assert not (tmp_path / "runtime" / "frames").exists()
+
+    def test_same_conversation_tasks_share_session_directory(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        first_path = journal.save(_make_frame(frame_id="frm_001", task_id="task_1", conversation_id="conv-1"))
+        second_path = journal.save(_make_frame(frame_id="frm_002", task_id="task_2", conversation_id="conv-1"))
+
+        assert first_path.parent == second_path.parent
+        assert first_path.parent == session_data_dir(tmp_path, ("2026", "01", "01"), "conv-1") / "frames"
+        assert [frame.frame_id for frame in journal.load_by_task("task_1")] == ["frm_001"]
+        assert [frame.frame_id for frame in journal.load_by_conversation("conv-1")] == ["frm_001", "frm_002"]
+
+    def test_context_id_embedded_hash_selects_session_shard(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        context_id = "bctx_20260520_ab_1234567890abcdef"
+        path = journal.save(_make_frame(conversation_id=context_id))
+
+        assert path == (
+            tmp_path / "runtime" / "sessions" / "by-date" / "2026" / "01" / "01"
+            / "ab" / context_id / "frames" / "frm_001.json"
+        )
+        assert [frame.frame_id for frame in journal.load_by_conversation(context_id)] == ["frm_001"]
 
 
 class TestLoadByTask:
@@ -177,20 +214,36 @@ class TestDeleteAndCleanup:
         journal.save(_make_frame(frame_id="frm_001"))
         journal.save(_make_frame(frame_id="frm_002"))
 
-        task_dir = tmp_path / "frames" / "task_aaa"
+        task_dir = session_data_dir(tmp_path, ("2026", "01", "01"), "task_aaa") / "frames"
         assert task_dir.is_dir()
 
         journal.cleanup_task("task_aaa")
         assert not task_dir.exists()
+        assert journal.load_by_task("task_aaa") == []
+
+    def test_dry_run_cleanup_skips_recoverable_date_shards(self, tmp_path):
+        journal = FileFrameJournal(tmp_path)
+        completed = _make_frame(frame_id="frm_done", status=FrameStatus.COMPLETED)
+        active = _make_frame(frame_id="frm_active", task_id="task_active", status=FrameStatus.AWAITING_USER)
+        active.started_at = "2026-01-02T00:00:00Z"
+
+        journal.save(completed)
+        journal.save(active)
+
+        plans = journal.dry_run_cleanup_before("2026-01-03")
+
+        by_date = {plan["date"]: plan for plan in plans}
+        assert by_date["2026-01-01"]["action"] == "delete"
+        assert by_date["2026-01-02"]["action"] == "skip"
+        assert by_date["2026-01-02"]["reason"] == "active_or_recoverable_frames"
 
 
 class TestCorruptFileHandling:
     def test_corrupt_json_returns_none(self, tmp_path):
         journal = FileFrameJournal(tmp_path)
         # Write a valid frame first to create the directory
-        journal.save(_make_frame())
+        file_path = journal.save(_make_frame())
         # Corrupt the file
-        file_path = tmp_path / "frames" / "task_aaa" / "frm_001.json"
         file_path.write_text("not valid json {{{", encoding="utf-8")
 
         loaded = journal.load("task_aaa", "frm_001")
@@ -202,7 +255,8 @@ class TestCorruptFileHandling:
         journal.save(_make_frame(frame_id="frm_002"))
 
         # Corrupt one file
-        file_path = tmp_path / "frames" / "task_aaa" / "frm_001.json"
+        file_path = journal.path_for_frame("task_aaa", "frm_001")
+        assert file_path is not None
         file_path.write_text("broken", encoding="utf-8")
 
         frames = journal.load_by_task("task_aaa")

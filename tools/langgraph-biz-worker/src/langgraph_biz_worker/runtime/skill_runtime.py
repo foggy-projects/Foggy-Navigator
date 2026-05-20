@@ -2073,11 +2073,8 @@ def _report_generator_from_journal(
 ) -> FrameExecutionReportGenerator | None:
     if journal is None:
         return None
-    root = getattr(journal, "_root", None)
-    if root is None:
-        return None
     try:
-        return FrameExecutionReportGenerator(root.parent)
+        return FrameExecutionReportGenerator(journal.data_root)
     except Exception:
         logger.warning("Failed to initialize frame execution report generator", exc_info=True)
         return None

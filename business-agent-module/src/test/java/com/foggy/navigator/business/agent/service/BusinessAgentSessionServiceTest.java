@@ -53,7 +53,7 @@ class BusinessAgentSessionServiceTest {
         BusinessAgentSessionDTO result = service.bindTask(task, null, "{\"screen\":\"orders\"}");
 
         assertNotNull(result.getContextId());
-        assertTrue(result.getContextId().startsWith("bctx_"));
+        assertTrue(result.getContextId().matches("bctx_\\d{8}_[0-9a-f]{2}_[0-9a-f]{32}"));
         assertEquals("tenant_01", result.getTenantId());
         assertEquals("app_01", result.getClientAppId());
         assertEquals("upstream_01", result.getUpstreamUserId());

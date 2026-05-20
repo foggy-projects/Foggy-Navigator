@@ -41,7 +41,12 @@ class TestBusinessFunctionResultReportRoute:
         assert "/api/v1/frame-reports" in app.openapi()["paths"]
 
     async def test_endpoint_reads_markdown_report_by_ref(self, client):
-        frame_id = self.runtime.invoke_skill("task_report_route_read", "system.root")
+        frame_id = self.runtime.invoke_skill(
+            "task_report_route_read",
+            "system.root",
+            conversation_id="ctx_report_route_read",
+            session_id="sess_report_route_read",
+        )
         frame = self.runtime.get_frame(frame_id)
         frame.status = FrameStatus.COMPLETED
         frame.result_summary = "Route report completed."
@@ -53,6 +58,8 @@ class TestBusinessFunctionResultReportRoute:
             "/api/v1/frame-reports",
             params={
                 "reportRef": f"frame-report://task_report_route_read/{frame_id}",
+                "contextId": "ctx_report_route_read",
+                "sessionId": "sess_report_route_read",
                 "mode": "markdown",
                 "maxChars": "4000",
             },

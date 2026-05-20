@@ -236,11 +236,18 @@ class TestResumeEndpoint:
 
     async def test_resume_success(self, client):
         # Create a frame in AWAITING_APPROVAL
-        fid = self.runtime.invoke_skill("task_resume", "skill_a")
+        fid = self.runtime.invoke_skill(
+            "task_resume",
+            "skill_a",
+            conversation_id="ctx_resume",
+            session_id="sess_resume",
+        )
         self.runtime.mark_awaiting_approval(fid, {"approval_type": "test"})
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_resume",
+            "contextId": "ctx_resume",
+            "sessionId": "sess_resume",
             "approvalResult": "approved",
             "comment": "lgtm",
         })
@@ -255,7 +262,12 @@ class TestResumeEndpoint:
         assert frame.status == FrameStatus.RUNNING
 
     async def test_resume_returns_call_time_post_approval_message(self, client):
-        caller_frame_id = self.runtime.invoke_skill("task_resume_msg", "system.root")
+        caller_frame_id = self.runtime.invoke_skill(
+            "task_resume_msg",
+            "system.root",
+            conversation_id="ctx_resume_msg",
+            session_id="sess_resume_msg",
+        )
         function_frame_id = self.runtime.invoke_function_call(
             parent_frame_id=caller_frame_id,
             function_id="tms.order.close",
@@ -285,6 +297,8 @@ class TestResumeEndpoint:
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_resume_msg",
+            "contextId": "ctx_resume_msg",
+            "sessionId": "sess_resume_msg",
             "approvalResult": "approved",
             "comment": "同意",
         })
@@ -304,7 +318,12 @@ class TestResumeEndpoint:
         assert data["resume_message"]["execution_report_digest"]["status"] == "COMPLETED"
 
     async def test_resume_restores_function_frame_before_report_enrichment(self, client):
-        caller_frame_id = self.runtime.invoke_skill("task_resume_report_restore", "system.root")
+        caller_frame_id = self.runtime.invoke_skill(
+            "task_resume_report_restore",
+            "system.root",
+            conversation_id="ctx_resume_report_restore",
+            session_id="sess_resume_report_restore",
+        )
         function_frame_id = self.runtime.invoke_function_call(
             parent_frame_id=caller_frame_id,
             function_id="tms.vehicle.create",
@@ -337,6 +356,8 @@ class TestResumeEndpoint:
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_resume_report_restore",
+            "contextId": "ctx_resume_report_restore",
+            "sessionId": "sess_resume_report_restore",
             "approvalResult": "approved",
             "comment": "同意",
         })
@@ -356,9 +377,18 @@ class TestResumeEndpoint:
     async def test_resume_not_found(self, client):
         resp = await client.post("/api/v1/resume", json={
             "taskId": "nonexistent_task",
+            "contextId": "ctx_missing",
             "approvalResult": "approved",
         })
         assert resp.status_code == 404
+
+    async def test_resume_requires_context_id(self, client):
+        resp = await client.post("/api/v1/resume", json={
+            "taskId": "task_missing_context",
+            "approvalResult": "approved",
+        })
+
+        assert resp.status_code == 422
 
     async def test_resume_returns_fsscript_summary_post_approval_message(self, client):
         class FakeFsscriptBridge:
@@ -383,6 +413,7 @@ class TestResumeEndpoint:
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_fsscript_msg",
+            "contextId": "ctx_fsscript_msg",
             "approvalResult": "approved",
             "comment": "同意",
         })
@@ -397,17 +428,29 @@ class TestResumeEndpoint:
 
     async def test_resume_no_awaiting_frame(self, client):
         # Frame is RUNNING, not AWAITING_APPROVAL
-        self.runtime.invoke_skill("task_running", "skill_a")
+        self.runtime.invoke_skill(
+            "task_running",
+            "skill_a",
+            conversation_id="ctx_running",
+            session_id="sess_running",
+        )
 
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_running",
+            "contextId": "ctx_running",
+            "sessionId": "sess_running",
             "approvalResult": "approved",
         })
         assert resp.status_code == 404
 
     async def test_resume_restores_from_file_after_memory_clear(self, client):
         # Create and suspend a frame
-        fid = self.runtime.invoke_skill("task_restore", "skill_a")
+        fid = self.runtime.invoke_skill(
+            "task_restore",
+            "skill_a",
+            conversation_id="ctx_restore",
+            session_id="sess_restore",
+        )
         self.runtime.mark_awaiting_approval(fid, {"approval_type": "test"})
 
         # Clear in-memory store (simulate restart)
@@ -417,6 +460,8 @@ class TestResumeEndpoint:
         # Resume should restore from file
         resp = await client.post("/api/v1/resume", json={
             "taskId": "task_restore",
+            "contextId": "ctx_restore",
+            "sessionId": "sess_restore",
             "approvalResult": "approved",
         })
         assert resp.status_code == 200

@@ -144,11 +144,24 @@ public class LanggraphWorkerClient {
 
     /**
      * Resume a suspended task on the Python Worker.
-     * Only taskId is passed — frameId is Worker's internal concern (Doc 31 §16.5).
+     * contextId is required by the Worker to locate the session-sharded frame.
      */
+    @Deprecated(forRemoval = false)
     public Mono<Map<String, Object>> resumeTask(String taskId, String approvalResult, String comment) {
+        return Mono.error(new IllegalArgumentException("contextId is required for LangGraph worker resume"));
+    }
+
+    public Mono<Map<String, Object>> resumeTask(
+            String taskId,
+            String sessionId,
+            String contextId,
+            String approvalResult,
+            String comment
+    ) {
         Map<String, Object> body = new HashMap<>();
         body.put("taskId", taskId);
+        if (sessionId != null) body.put("sessionId", sessionId);
+        if (contextId != null) body.put("contextId", contextId);
         body.put("approvalResult", approvalResult);
         if (comment != null) body.put("comment", comment);
 

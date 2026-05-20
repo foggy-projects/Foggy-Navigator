@@ -321,6 +321,7 @@ class LlmSkillAgent:
         safe_args = _safe_tool_call_args(args)
         frame = self._runtime.get_frame(frame_id)
         parent_frame_id = frame.parent_frame_id if frame else None
+        session_key = (frame.conversation_id or frame.session_id) if frame else None
         tool_use_event = QueryEvent(
             type="tool_use",
             task_id=task_id,
@@ -336,7 +337,16 @@ class LlmSkillAgent:
         events: list[QueryEvent] = [tool_use_event]
         _emit_progress_event(runtime_context, tool_use_event)
         self._append_tool_call_message(frame_id, name, safe_args)
-        _append_tool_audit(self._data_root, task_id, frame_id, manifest.id, name, safe_args, phase="request")
+        _append_tool_audit(
+            self._data_root,
+            task_id,
+            frame_id,
+            manifest.id,
+            name,
+            safe_args,
+            phase="request",
+            session_id=session_key,
+        )
 
         try:
             result = self._call_tool(
@@ -363,6 +373,7 @@ class LlmSkillAgent:
             name,
             safe_args,
             phase="response",
+            session_id=session_key,
             result=result,
         )
 

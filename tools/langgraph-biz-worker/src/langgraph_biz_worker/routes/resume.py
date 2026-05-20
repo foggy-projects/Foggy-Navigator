@@ -1,7 +1,8 @@
-"""Resume endpoint — external trigger to resume a suspended Frame.
+"""Resume endpoint - external trigger to resume a suspended Frame.
 
-Java side calls ``POST /api/v1/resume`` with only ``taskId`` (no frameId).
-Worker finds the AWAITING_APPROVAL Frame internally and resumes execution.
+Java side calls ``POST /api/v1/resume`` with ``taskId`` and the upstream
+``contextId``. Worker finds the AWAITING_APPROVAL Frame inside that persisted
+session directory and resumes execution.
 
 Design reference: Doc 31 §16.5
 """
@@ -12,7 +13,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from ..auth import verify_token
 from ..runtime.file_frame_journal import FileFrameJournal
@@ -31,8 +32,12 @@ router = APIRouter(prefix="/api/v1", tags=["resume"], dependencies=[Depends(veri
 class ResumeRequest(BaseModel):
     """Request body for ``POST /api/v1/resume``."""
 
-    task_id: str = Field(..., alias="taskId")
-    approval_result: str = Field(..., alias="approvalResult")
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_id: str = Field(..., validation_alias=AliasChoices("taskId", "task_id"))
+    context_id: str | None = Field(None, validation_alias=AliasChoices("contextId", "context_id"))
+    session_id: str | None = Field(None, validation_alias=AliasChoices("sessionId", "session_id"))
+    approval_result: str = Field(..., validation_alias=AliasChoices("approvalResult", "approval_result"))
     comment: str = ""
 
 
@@ -71,17 +76,17 @@ def configure(
 async def resume(request: ResumeRequest) -> ResumeResponse:
     """Resume a task whose Frame is in AWAITING_APPROVAL state.
 
-    Java side passes only ``taskId``.  Worker locates the suspended Frame
-    internally via the file journal.
+    ``contextId`` is required. Missing context is an upstream contract bug.
     """
     if _runtime is None or _journal is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Resume service not configured",
         )
+    context_id = _required_context_id(request)
 
     # 1. Find the suspended frame from file journal
-    frame = _journal.find_awaiting_approval(request.task_id)
+    frame = _journal.find_awaiting_approval(request.task_id, conversation_id=context_id)
     if frame is None:
         if _fsscript_bridge is not None:
             try:
@@ -115,8 +120,8 @@ async def resume(request: ResumeRequest) -> ResumeResponse:
     if _runtime.get_frame(frame.frame_id) is None:
         _runtime.restore_frame(frame)
         logger.info(
-            "Restored frame=%s from file journal for task=%s",
-            frame.frame_id, request.task_id,
+            "Restored frame=%s from file journal for task=%s context=%s",
+            frame.frame_id, request.task_id, context_id,
         )
 
     # 3. Resume the frame
@@ -144,6 +149,15 @@ async def resume(request: ResumeRequest) -> ResumeResponse:
         status="RUNNING",
         message=f"Frame {frame.frame_id} resumed with result: {request.approval_result}",
         resume_message=resume_message,
+    )
+
+
+def _required_context_id(request: ResumeRequest) -> str:
+    if isinstance(request.context_id, str) and request.context_id.strip():
+        return request.context_id.strip()
+    raise HTTPException(
+        status_code=422,
+        detail="contextId is required for resume",
     )
 
 

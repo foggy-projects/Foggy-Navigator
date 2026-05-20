@@ -315,7 +315,14 @@ def test_route_skill_injects_account_context_for_agentic_routing(tmp_path, monke
     assert "routing agent" in system_prompt
     assert "routing memory" in system_prompt
 
-    log_file = data_root / "logs" / "llm-conversations" / "session-account-context" / "0001_task-account-context-routing.jsonl"
+    log_files = sorted(
+        (data_root / "runtime" / "sessions" / "by-date").glob(
+            "*/*/*/*/session-account-context/logs/llm-conversations/"
+            "0001_task-account-context-routing.jsonl",
+        )
+    )
+    assert len(log_files) == 1
+    log_file = log_files[0]
     request_entry = json.loads(log_file.read_text(encoding="utf-8").splitlines()[0])
     logged_system_prompt = request_entry["messages"][0]["content"]
     assert "[account_context_files: omitted from conversation log]" in logged_system_prompt
@@ -361,11 +368,14 @@ def test_llm_conversation_log_groups_tasks_by_session_directory(tmp_path, monkey
             "skill_results": [],
         })
 
-    session_dir = data_root / "logs" / "llm-conversations" / "session-123"
+    session_dirs = sorted((data_root / "runtime" / "sessions" / "by-date").glob("*/*/*/*/session-123"))
+    assert len(session_dirs) == 1
+    session_dir = session_dirs[0] / "logs" / "llm-conversations"
     files = sorted(session_dir.glob("*.jsonl"))
 
     assert [p.name for p in files] == ["0001_task-1.jsonl", "0002_task-2.jsonl"]
     assert not (data_root / "logs" / "llm-conversations" / "session-123.jsonl").exists()
+    assert not (data_root / "logs" / "llm-conversations" / "session-123").exists()
 
     first_entries = [json.loads(line) for line in files[0].read_text(encoding="utf-8").splitlines()]
     second_entries = [json.loads(line) for line in files[1].read_text(encoding="utf-8").splitlines()]

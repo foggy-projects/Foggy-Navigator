@@ -40,6 +40,7 @@
 - [workitems/BUG-034-waiting-user-input-context-walkthrough.md](./workitems/BUG-034-waiting-user-input-context-walkthrough.md) - target runtime/LLM context walkthrough for WAITING_FOR_USER_INPUT pause and same-context user reply resume
 - [workitems/REQ-035-biz-worker-spreadsheet-attachment-tool.md](./workitems/REQ-035-biz-worker-spreadsheet-attachment-tool.md) - BizWorker spreadsheet attachment tool with one operation-based tool entry, tool-first and skill-deferred
 - [workitems/BUG-036-tms-ticket-agent-attachment-missing-after-awaiting-user-resume.md](./workitems/BUG-036-tms-ticket-agent-attachment-missing-after-awaiting-user-resume.md) - TMS ticket attachment follow-up false negative after detail query failure
+- [workitems/OPT-037-biz-worker-data-directory-sharding-governance.md](./workitems/OPT-037-biz-worker-data-directory-sharding-governance.md) - BizWorker data directory sharding governance to avoid unbounded per-directory file growth
 - [workitems/BUG-issue-115-world-sim-route-smoke-blocked.md](./workitems/BUG-issue-115-world-sim-route-smoke-blocked.md) - issue #115 live smoke is blocked by CLI release and control credential scope
 - [acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md](./acceptance/OPT-031-llm-skill-agent-module-governance-acceptance.md)
 - [acceptance/OPT-029-upstream-timeout-governance-acceptance.md](./acceptance/OPT-029-upstream-timeout-governance-acceptance.md)

@@ -16,8 +16,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -25,6 +28,7 @@ import java.util.UUID;
 public class BusinessAgentSessionService {
 
     public static final String STATUS_ACTIVE = "ACTIVE";
+    private static final DateTimeFormatter CONTEXT_ID_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
     private final BusinessAgentSessionRepository sessionRepository;
     private final BusinessAgentSessionMessageRepository messageRepository;
@@ -239,7 +243,9 @@ public class BusinessAgentSessionService {
     }
 
     private String generateContextId() {
-        return "bctx_" + UUID.randomUUID().toString().replace("-", "");
+        String entropy = UUID.randomUUID().toString().replace("-", "").toLowerCase(Locale.ROOT);
+        String shard = entropy.substring(0, 2);
+        return "bctx_" + LocalDate.now().format(CONTEXT_ID_DATE_FORMATTER) + "_" + shard + "_" + entropy;
     }
 
     private void requireText(String value, String message) {

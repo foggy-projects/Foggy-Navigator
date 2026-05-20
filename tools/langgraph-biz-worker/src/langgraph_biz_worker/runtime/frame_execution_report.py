@@ -12,6 +12,12 @@ from urllib.parse import urlsplit
 
 from ..models import SkillFrameState
 from .file_frame_journal import FileFrameJournal
+from .file_layout import (
+    date_parts_for_frame,
+    safe_path_segment,
+    session_data_dir,
+    session_key_for_frame,
+)
 
 GENERATOR_VERSION = "frame-execution-report-v1"
 DEFAULT_MAX_FIELD_CHARS = 1200
@@ -44,8 +50,8 @@ class FrameExecutionReportGenerator:
     """Generate human-readable reports from ``FileFrameJournal`` snapshots.
 
     The generator is intentionally offline and deterministic. It reads frame
-    JSON snapshots and writes report artifacts under ``frame-reports/`` without
-    mutating runtime frame state.
+    JSON snapshots and writes report artifacts into the same date-sharded
+    session directory as frame snapshots.
     """
 
     def __init__(
@@ -55,13 +61,18 @@ class FrameExecutionReportGenerator:
         max_field_chars: int = DEFAULT_MAX_FIELD_CHARS,
     ) -> None:
         self.data_root = Path(data_root)
-        self.report_root = self.data_root / "frame-reports"
         self.max_field_chars = max_field_chars
         self._journal = FileFrameJournal(self.data_root)
 
-    def generate_for_frame(self, task_id: str, frame_id: str) -> FrameExecutionReport:
+    def generate_for_frame(
+        self,
+        task_id: str,
+        frame_id: str,
+        *,
+        conversation_id: str | None = None,
+    ) -> FrameExecutionReport:
         """Generate a report for ``frame_id`` in ``task_id``."""
-        frame = self._journal.load(task_id, frame_id)
+        frame = self._journal.load(task_id, frame_id, conversation_id=conversation_id)
         if frame is None:
             raise FileNotFoundError(f"Frame not found: task_id={task_id}, frame_id={frame_id}")
         related_frames = self._load_related_frames_for_snapshot(frame, task_id=task_id)
@@ -143,10 +154,18 @@ class FrameExecutionReportGenerator:
         *,
         task_id: str,
     ) -> dict[str, SkillFrameState]:
-        related = {item.frame_id: item for item in self._journal.load_by_task(task_id)}
         if frame.conversation_id:
+            related = {
+                item.frame_id: item
+                for item in self._journal.load_by_task(
+                    task_id,
+                    conversation_id=frame.conversation_id,
+                )
+            }
             for item in self._journal.load_by_conversation(frame.conversation_id):
                 related.setdefault(item.frame_id, item)
+        else:
+            related = {item.frame_id: item for item in self._journal.load_by_task(task_id)}
         related.setdefault(frame.frame_id, frame)
         return related
 
@@ -261,36 +280,55 @@ class FrameExecutionReportGenerator:
         markdown: str,
         digest: dict[str, Any],
     ) -> dict[str, Path]:
-        task_dir = self.report_root / _safe_path_segment(frame.task_id)
-        task_dir.mkdir(parents=True, exist_ok=True)
-        markdown_path = task_dir / f"{_safe_path_segment(frame.frame_id)}.md"
-        digest_path = task_dir / f"{_safe_path_segment(frame.frame_id)}.digest.json"
+        paths = self._report_paths_for_frame(frame)
+        markdown_path = paths["markdown_path"]
+        digest_path = paths["digest_path"]
+        markdown_path.parent.mkdir(parents=True, exist_ok=True)
         markdown_path.write_text(markdown, encoding="utf-8")
         digest_path.write_text(
             json.dumps(digest, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
 
-        paths = {
-            "markdown_path": markdown_path,
-            "digest_path": digest_path,
-        }
         if frame.conversation_id:
-            conversation_dir = self.report_root / "by-conversation" / _safe_path_segment(frame.conversation_id)
-            conversation_dir.mkdir(parents=True, exist_ok=True)
-            conversation_markdown_path = conversation_dir / f"{_safe_path_segment(frame.frame_id)}.md"
-            conversation_digest_path = conversation_dir / f"{_safe_path_segment(frame.frame_id)}.digest.json"
-            conversation_markdown_path.write_text(markdown, encoding="utf-8")
-            conversation_digest_path.write_text(
-                json.dumps(digest, ensure_ascii=False, indent=2, default=str),
-                encoding="utf-8",
-            )
-            paths["conversation_markdown_path"] = conversation_markdown_path
-            paths["conversation_digest_path"] = conversation_digest_path
+            conversation_markdown_path = paths["conversation_markdown_path"]
+            conversation_digest_path = paths["conversation_digest_path"]
+            if conversation_markdown_path != markdown_path:
+                conversation_markdown_path.parent.mkdir(parents=True, exist_ok=True)
+                conversation_markdown_path.write_text(markdown, encoding="utf-8")
+            if conversation_digest_path != digest_path:
+                conversation_digest_path.write_text(
+                    json.dumps(digest, ensure_ascii=False, indent=2, default=str),
+                    encoding="utf-8",
+                )
         return paths
 
     def _frame_source_path(self, frame: SkillFrameState) -> Path:
-        return self.data_root / "frames" / frame.task_id / f"{frame.frame_id}.json"
+        return (
+            self._journal.path_for_frame(
+                frame.task_id,
+                frame.frame_id,
+                conversation_id=frame.conversation_id,
+            )
+            or self.data_root / "runtime" / "sessions" / "_unresolved" / f"{frame.frame_id}.json"
+        )
+
+    def _report_paths_for_frame(self, frame: SkillFrameState) -> dict[str, Path]:
+        date_parts = date_parts_for_frame(frame)
+        frame_stem = _safe_path_segment(frame.frame_id)
+        report_dir = session_data_dir(
+            self.data_root,
+            date_parts,
+            session_key_for_frame(frame),
+        ) / "reports"
+        paths = {
+            "markdown_path": report_dir / f"{frame_stem}.md",
+            "digest_path": report_dir / f"{frame_stem}.digest.json",
+        }
+        if frame.conversation_id:
+            paths["conversation_markdown_path"] = paths["markdown_path"]
+            paths["conversation_digest_path"] = paths["digest_path"]
+        return paths
 
 
 def frame_report_ref(task_id: str, frame_id: str) -> str:
@@ -316,6 +354,8 @@ def read_frame_execution_report(
     report_ref: str | None = None,
     task_id: str | None = None,
     frame_id: str | None = None,
+    conversation_id: str | None = None,
+    session_id: str | None = None,
     mode: str = "summary",
     max_chars: int = 6000,
 ) -> dict[str, Any]:
@@ -339,10 +379,20 @@ def read_frame_execution_report(
 
     safe_max_chars = _normalize_max_chars(max_chars)
     root = Path(data_root)
-    markdown_path, digest_path = _report_paths(root, resolved_task_id, resolved_frame_id)
+    locator_ids = _locator_ids(conversation_id, session_id)
+    markdown_path, digest_path = _report_paths(
+        root,
+        resolved_task_id,
+        resolved_frame_id,
+        locator_ids=locator_ids,
+    )
     if not markdown_path.exists() or not digest_path.exists():
         try:
-            FrameExecutionReportGenerator(root).generate_for_frame(resolved_task_id, resolved_frame_id)
+            FrameExecutionReportGenerator(root).generate_for_frame(
+                resolved_task_id,
+                resolved_frame_id,
+                conversation_id=locator_ids[0] if locator_ids else None,
+            )
         except FileNotFoundError:
             return {
                 "ok": False,
@@ -354,6 +404,14 @@ def read_frame_execution_report(
             }
         except Exception as exc:
             return {"ok": False, "error": f"Failed to generate frame report: {exc}"}
+        markdown_path, digest_path = _report_paths(
+            root,
+            resolved_task_id,
+            resolved_frame_id,
+            locator_ids=locator_ids,
+        )
+        if not markdown_path.exists() or not digest_path.exists():
+            return {"ok": False, "error": "Frame report generation did not produce readable files"}
 
     try:
         digest = json.loads(digest_path.read_text(encoding="utf-8"))
@@ -425,10 +483,31 @@ def _resolve_report_identity(
     return task_id, frame_id
 
 
-def _report_paths(data_root: Path, task_id: str, frame_id: str) -> tuple[Path, Path]:
-    task_dir = data_root / "frame-reports" / _safe_path_segment(task_id)
+def _report_paths(
+    data_root: Path,
+    task_id: str,
+    frame_id: str,
+    *,
+    locator_ids: list[str] | None = None,
+) -> tuple[Path, Path]:
     frame_stem = _safe_path_segment(frame_id)
-    return task_dir / f"{frame_stem}.md", task_dir / f"{frame_stem}.digest.json"
+    journal = FileFrameJournal(data_root)
+    for locator_id in locator_ids or [None]:
+        frame_path = journal.path_for_frame(task_id, frame_id, conversation_id=locator_id)
+        if frame_path is not None:
+            report_dir = frame_path.parent.parent / "reports"
+            return report_dir / f"{frame_stem}.md", report_dir / f"{frame_stem}.digest.json"
+
+    unresolved_dir = data_root / "runtime" / "sessions" / "_unresolved" / _safe_path_segment(task_id) / "reports"
+    return unresolved_dir / f"{frame_stem}.md", unresolved_dir / f"{frame_stem}.digest.json"
+
+
+def _locator_ids(conversation_id: str | None, session_id: str | None) -> list[str]:
+    values: list[str] = []
+    for value in (conversation_id, session_id):
+        if isinstance(value, str) and value.strip() and value.strip() not in values:
+            values.append(value.strip())
+    return values
 
 
 def _normalize_max_chars(value: Any) -> int:
@@ -701,13 +780,13 @@ def _escape_code_fence(text: str) -> str:
 
 
 def _safe_path_segment(value: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value) or "_"
+    return safe_path_segment(value)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate a Frame execution Markdown report.")
-    parser.add_argument("--data-root", required=True, help="Worker data root containing frames/.")
-    parser.add_argument("--task-id", help="Task id under frames/<task-id>.")
+    parser.add_argument("--data-root", required=True, help="Worker data root containing runtime/sessions/.")
+    parser.add_argument("--task-id", help="Task id for a persisted frame snapshot.")
     parser.add_argument("--frame-id", help="Frame id JSON file name without suffix.")
     parser.add_argument("--frame-path", help="Direct path to a frame JSON snapshot.")
     args = parser.parse_args(argv)

@@ -26,6 +26,7 @@ from ..tools.mock_biz_tools import (
 )
 from .account_file_tools import AccountFileTools, FileToolError
 from .artifact_store import ArtifactError, ArtifactStore
+from .file_layout import date_parts_for_now, safe_path_segment, session_data_dir
 from .frame_execution_report import read_frame_execution_report
 from .llm_business_function_adapter import (
     _looks_like_business_function_id,
@@ -104,11 +105,19 @@ class LlmToolDispatcher:
         if name == "read_frame_execution_report":
             if self._data_root is None:
                 return {"ok": False, "error": "Frame execution report data root is not configured"}
+            frame = self._runtime.get_frame(context.frame_id)
+            conversation_id = args.get("context_id") or args.get("contextId")
+            session_id = args.get("session_id") or args.get("sessionId")
+            if frame is not None:
+                conversation_id = conversation_id or frame.conversation_id
+                session_id = session_id or frame.session_id
             return read_frame_execution_report(
                 self._data_root,
                 report_ref=args.get("report_ref") or args.get("reportRef"),
                 task_id=args.get("task_id") or args.get("taskId"),
                 frame_id=args.get("frame_id") or args.get("frameId"),
+                conversation_id=conversation_id,
+                session_id=session_id,
                 mode=args.get("mode", "summary"),
                 max_chars=args.get("max_chars") or args.get("maxChars") or 6000,
             )
@@ -322,25 +331,31 @@ def _append_tool_audit(
     args: dict[str, Any],
     *,
     phase: str,
+    session_id: str | None = None,
     result: dict[str, Any] | None = None,
 ) -> None:
     if data_root is None:
         return
     try:
-        log_dir = Path(data_root) / "logs" / "skill-tool-calls"
+        task_stem = safe_path_segment(task_id)
+        log_dir = (
+            session_data_dir(Path(data_root), date_parts_for_now(), session_id or task_id)
+            / "logs" / "skill-tool-calls"
+        )
         log_dir.mkdir(parents=True, exist_ok=True)
         entry = {
             "ts": datetime.datetime.now().isoformat(),
             "task_id": task_id,
             "frame_id": frame_id,
             "skill_id": skill_id,
+            "session_id": session_id,
             "tool": name,
             "phase": phase,
             "args": args,
         }
         if result is not None:
             entry["result"] = _safe_content(result)
-        with open(log_dir / f"{task_id}.jsonl", "a", encoding="utf-8") as f:
+        with open(log_dir / f"{task_stem}.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
         logger.debug("Failed to write skill tool audit log", exc_info=True)

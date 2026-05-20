@@ -641,13 +641,16 @@ public class LanggraphTaskService implements TaskQueryProvider {
         approval.setReviewedAt(java.time.LocalDateTime.now());
         approvalRepository.save(approval);
 
-        // Call Worker resume API (Doc 31 §16.5: only pass taskId)
+        // Call Worker resume API with the persisted context locator.
         LanggraphTaskEntity task = taskRepository.findByTaskId(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
+        if (!StringUtils.hasText(task.getContextId())) {
+            throw new IllegalStateException("Task contextId is required for LangGraph worker resume: " + taskId);
+        }
         LanggraphWorkerEntity worker = workerService.getWorkerEntity(task.getWorkerId());
         var client = workerService.createClient(worker);
 
-        client.resumeTask(taskId, form.getApprovalResult(), form.getComment())
+        client.resumeTask(taskId, task.getSessionId(), task.getContextId(), form.getApprovalResult(), form.getComment())
                 .doOnSuccess(resp -> log.info("Worker resume success: taskId={}", taskId))
                 .doOnError(e -> log.error("Worker resume failed: taskId={}", taskId, e))
                 .subscribe();

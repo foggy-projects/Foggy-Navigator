@@ -12,6 +12,7 @@ from langgraph_biz_worker.runtime.frame_execution_report import (
     FrameExecutionReportGenerator,
     read_frame_execution_report,
 )
+from langgraph_biz_worker.runtime.file_layout import session_data_dir
 from langgraph_biz_worker.runtime.frame_store import FrameStore
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
@@ -86,6 +87,7 @@ def test_generate_report_from_completed_skill_frame(tmp_path):
     assert report.digest["report_ref"] == "frame-report://task_001/frm_parent"
     assert report.digest["status"] == "COMPLETED"
     assert report.digest["summary"] == "Collected evidence for order 501."
+    assert not (tmp_path / "reports" / "frame-execution").exists()
 
 
 def test_generate_report_includes_child_frame_digest(tmp_path):
@@ -102,7 +104,10 @@ def test_generate_report_includes_child_frame_digest(tmp_path):
 
     report = FrameExecutionReportGenerator(tmp_path).generate_for_frame("task_001", "frm_parent")
 
-    child_report_path = tmp_path / "frame-reports" / "task_001" / "frm_child.md"
+    child_report_path = (
+        session_data_dir(tmp_path, ("2026", "05", "17"), "conv_001")
+        / "reports" / "frm_child.md"
+    )
     assert child_report_path.exists()
     assert "| frm_child | address_verify | SKILL | COMPLETED | Address verified." in report.markdown
     assert report.digest["child_reports"][0]["report_ref"] == "frame-report://task_001/frm_child"
@@ -210,7 +215,11 @@ def test_read_frame_execution_report_generates_missing_report(tmp_path):
     assert result["ok"] is True
     assert result["summary"]["status"] == "COMPLETED"
     assert result["summary"]["summary"] == "Collected evidence for order 501."
-    assert (tmp_path / "frame-reports" / "task_001" / "frm_parent.md").exists()
+    assert (
+        session_data_dir(tmp_path, ("2026", "05", "17"), "conv_001")
+        / "reports" / "frm_parent.md"
+    ).exists()
+    assert not (tmp_path / "reports" / "frame-execution").exists()
 
 
 def test_runtime_generates_report_and_promotes_ref_on_close(tmp_path):
@@ -233,16 +242,21 @@ def test_runtime_generates_report_and_promotes_ref_on_close(tmp_path):
     assert frame.private_working_state["execution_report_ref"] == (
         f"frame-report://task_runtime_report/{frame_id}"
     )
-    assert (tmp_path / "frame-reports" / "task_runtime_report" / f"{frame_id}.md").exists()
+    report_payload = read_frame_execution_report(
+        tmp_path,
+        task_id="task_runtime_report",
+        frame_id=frame_id,
+        mode="markdown",
+    )
+    assert report_payload["ok"] is True
+    assert "runtime/sessions/by-date/" in report_payload["markdown_path"].replace("\\", "/")
 
     promoted = runtime.close_frame(frame_id)
     assert promoted["execution_report_ref"] == f"frame-report://task_runtime_report/{frame_id}"
     assert promoted["execution_report_digest"]["status"] == "COMPLETED"
     assert runtime.get_frame(frame_id).private_working_state == {}
 
-    report_text = (tmp_path / "frame-reports" / "task_runtime_report" / f"{frame_id}.md").read_text(
-        encoding="utf-8",
-    )
+    report_text = report_payload["markdown"]
     assert "invoke_business_function" in report_text
     assert "must-redact" not in report_text
 
@@ -423,3 +437,39 @@ def test_llm_tool_reads_frame_execution_report(tmp_path):
     assert result["ok"] is True
     assert result["digest"]["status"] == "COMPLETED"
     assert result["digest"]["summary"] == "tool readable"
+
+
+def test_llm_tool_audit_log_uses_session_directory(tmp_path):
+    runtime = _runtime_with_journal(tmp_path)
+    frame_id = runtime.invoke_skill(
+        "task_tool_audit",
+        "test_skill",
+        conversation_id="conv_audit",
+        session_id="session_audit",
+    )
+    manifest = runtime.registry.get_manifest("test_skill")
+    assert manifest is not None
+    agent = LlmSkillAgent(_NoopModel(), runtime, data_root=tmp_path)
+
+    agent._execute_tool_call(
+        "task_tool_audit",
+        frame_id,
+        manifest,
+        {
+            "id": "call_submit",
+            "name": "submit_skill_result",
+            "args": {
+                "summary": "Audit complete.",
+                "structured_output": {"result": "success"},
+            },
+        },
+    )
+
+    session_dirs = sorted(
+        (tmp_path / "runtime" / "sessions" / "by-date").glob("*/*/*/*/conv_audit")
+    )
+    assert len(session_dirs) == 1
+    log_file = session_dirs[0] / "logs" / "skill-tool-calls" / "task_tool_audit.jsonl"
+    entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+    assert [entry["phase"] for entry in entries] == ["request", "response"]
+    assert {entry["session_id"] for entry in entries} == {"conv_audit"}

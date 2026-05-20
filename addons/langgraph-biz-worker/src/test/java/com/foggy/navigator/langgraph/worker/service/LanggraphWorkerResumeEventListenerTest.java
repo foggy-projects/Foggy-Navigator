@@ -55,6 +55,7 @@ class LanggraphWorkerResumeEventListenerTest {
         task.setSessionId(sessionId);
         task.setWorkerId(workerId);
         task.setTenantId(tenantId);
+        task.setContextId("ctx_" + taskId);
         return task;
     }
 
@@ -78,11 +79,11 @@ class LanggraphWorkerResumeEventListenerTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
         when(workerService.createClient(worker)).thenReturn(workerClient);
-        when(workerClient.resumeTask("t_1", "approved", "OK")).thenReturn(Mono.empty());
+        when(workerClient.resumeTask("t_1", "s_1", "ctx_t_1", "approved", "OK")).thenReturn(Mono.empty());
 
         listener.handleWorkerGatewayResumeEvent(event);
 
-        verify(workerClient).resumeTask("t_1", "approved", "OK");
+        verify(workerClient).resumeTask("t_1", "s_1", "ctx_t_1", "approved", "OK");
     }
 
     @Test
@@ -104,11 +105,11 @@ class LanggraphWorkerResumeEventListenerTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
         when(workerService.createClient(worker)).thenReturn(workerClient);
-        when(workerClient.resumeTask("lgt_1", "approved", "OK")).thenReturn(Mono.empty());
+        when(workerClient.resumeTask("lgt_1", "worker_session_1", "ctx_lgt_1", "approved", "OK")).thenReturn(Mono.empty());
 
         listener.handleWorkerGatewayResumeEvent(event);
 
-        verify(workerClient).resumeTask("lgt_1", "approved", "OK");
+        verify(workerClient).resumeTask("lgt_1", "worker_session_1", "ctx_lgt_1", "approved", "OK");
     }
 
     @Test
@@ -130,7 +131,7 @@ class LanggraphWorkerResumeEventListenerTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
         when(workerService.createClient(worker)).thenReturn(workerClient);
-        when(workerClient.resumeTask("lgt_1", "approved", "OK"))
+        when(workerClient.resumeTask("lgt_1", "worker_session_1", "ctx_lgt_1", "approved", "OK"))
                 .thenReturn(Mono.error(WebClientResponseException.create(
                         404,
                         "Not Found",
@@ -141,7 +142,7 @@ class LanggraphWorkerResumeEventListenerTest {
 
         listener.handleWorkerGatewayResumeEvent(event);
 
-        verify(workerClient).resumeTask("lgt_1", "approved", "OK");
+        verify(workerClient).resumeTask("lgt_1", "worker_session_1", "ctx_lgt_1", "approved", "OK");
     }
 
     @Test
@@ -163,7 +164,7 @@ class LanggraphWorkerResumeEventListenerTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
         when(workerService.createClient(worker)).thenReturn(workerClient);
-        when(workerClient.resumeTask("lgt_1", "approved", "OK"))
+        when(workerClient.resumeTask("lgt_1", "worker_session_1", "ctx_lgt_1", "approved", "OK"))
                 .thenReturn(Mono.error(WebClientResponseException.create(
                         500,
                         "Internal Server Error",
@@ -174,7 +175,7 @@ class LanggraphWorkerResumeEventListenerTest {
 
         listener.handleWorkerGatewayResumeEvent(event);
 
-        verify(workerClient).resumeTask("lgt_1", "approved", "OK");
+        verify(workerClient).resumeTask("lgt_1", "worker_session_1", "ctx_lgt_1", "approved", "OK");
     }
 
     @Test
@@ -195,11 +196,11 @@ class LanggraphWorkerResumeEventListenerTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
         when(workerService.createClient(worker)).thenReturn(workerClient);
-        when(workerClient.resumeTask("t_1", "approved", "OK")).thenReturn(Mono.empty());
+        when(workerClient.resumeTask("t_1", "s_1", "ctx_t_1", "approved", "OK")).thenReturn(Mono.empty());
 
         listener.handleWorkerGatewayResumeEvent(event);
 
-        verify(workerClient).resumeTask("t_1", "approved", "OK");
+        verify(workerClient).resumeTask("t_1", "s_1", "ctx_t_1", "approved", "OK");
     }
 
     @Test
@@ -221,7 +222,7 @@ class LanggraphWorkerResumeEventListenerTest {
         LanggraphWorkerEntity worker = new LanggraphWorkerEntity();
         when(workerService.getWorkerEntity("w_1")).thenReturn(worker);
         when(workerService.createClient(worker)).thenReturn(workerClient);
-        when(workerClient.resumeTask("lgt_1", "approved", "OK"))
+        when(workerClient.resumeTask("lgt_1", "worker_session_1", "ctx_lgt_1", "approved", "OK"))
                 .thenReturn(Mono.just(Map.of(
                         "resume_message", Map.of(
                                 "content", "审批已通过，已继续提交关单申请。",
@@ -296,6 +297,25 @@ class LanggraphWorkerResumeEventListenerTest {
                 .build();
 
         LanggraphTaskEntity task = buildTask("t_1", "s_1", null, "tenant_1");
+        when(taskRepository.findByTaskId("t_1")).thenReturn(Optional.of(task));
+
+        listener.handleWorkerGatewayResumeEvent(event);
+
+        verifyNoInteractions(workerService);
+    }
+
+    @Test
+    void handleWorkerGatewayResumeEvent_rejects_missing_contextId() {
+        WorkerGatewayResumeEvent event = WorkerGatewayResumeEvent.builder()
+                .source(this)
+                .taskId("t_1")
+                .sessionId("s_1")
+                .tenantId("tenant_1")
+                .approvalResult("approved")
+                .build();
+
+        LanggraphTaskEntity task = buildTask("t_1", "s_1", "w_1", "tenant_1");
+        task.setContextId(null);
         when(taskRepository.findByTaskId("t_1")).thenReturn(Optional.of(task));
 
         listener.handleWorkerGatewayResumeEvent(event);

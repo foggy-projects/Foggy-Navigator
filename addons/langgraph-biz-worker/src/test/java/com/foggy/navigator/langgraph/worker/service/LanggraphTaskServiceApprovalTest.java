@@ -38,6 +38,7 @@ class LanggraphTaskServiceApprovalTest {
 
     private static final String TASK_ID = "lgt_test001";
     private static final String SESSION_ID = "session-001";
+    private static final String CONTEXT_ID = "ctx-001";
     private static final String USER_ID = "user-1";
     private static final String WORKER_ID = "worker-1";
 
@@ -71,6 +72,7 @@ class LanggraphTaskServiceApprovalTest {
         LanggraphTaskEntity entity = new LanggraphTaskEntity();
         entity.setTaskId(TASK_ID);
         entity.setSessionId(SESSION_ID);
+        entity.setContextId(CONTEXT_ID);
         entity.setWorkerId(WORKER_ID);
         entity.setUserId(USER_ID);
         entity.setPrompt("test prompt");
@@ -137,7 +139,7 @@ class LanggraphTaskServiceApprovalTest {
                     .thenReturn(Optional.of(makePendingApproval()));
             when(taskRepository.findByTaskId(TASK_ID))
                     .thenReturn(Optional.of(makeTaskEntity()));
-            when(workerClient.resumeTask(anyString(), anyString(), anyString()))
+            when(workerClient.resumeTask(anyString(), anyString(), anyString(), anyString(), anyString()))
                     .thenReturn(Mono.just(Map.of("status", "RUNNING")));
         }
 
@@ -184,7 +186,7 @@ class LanggraphTaskServiceApprovalTest {
 
             service.approveTask(TASK_ID, form);
 
-            verify(workerClient).resumeTask(TASK_ID, "approved", "ok");
+            verify(workerClient).resumeTask(TASK_ID, SESSION_ID, CONTEXT_ID, "approved", "ok");
         }
 
         @Test
@@ -197,7 +199,7 @@ class LanggraphTaskServiceApprovalTest {
 
             assertThrows(IllegalArgumentException.class, () ->
                     service.approveTask(TASK_ID, form));
-            verify(workerClient, never()).resumeTask(any(), any(), any());
+            verify(workerClient, never()).resumeTask(any(), any(), any(), any(), any());
         }
 
         @Test

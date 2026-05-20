@@ -20,6 +20,7 @@ from ..models import FrameStatus, QueryEvent, SkillManifest
 from ..runtime.attachment_context import build_attachment_context_prompt as _build_attachment_context_prompt
 from ..runtime.execution_policy import copy_execution_policy_from_context, strip_execution_policy_context
 from ..runtime.file_frame_journal import FileFrameJournal
+from ..runtime.file_layout import date_parts_for_now, session_data_dir
 from ..runtime.frame_store import FrameStore
 from ..runtime.account_context_files import build_account_context_prompt
 from ..runtime.llm_skill_router import LlmSkillRouter, create_chat_model, create_chat_model_from_config
@@ -84,13 +85,12 @@ def _conversation_log_file(data_root: str | Path, task_id: str, session_id: str 
     keeps a multi-turn session ordered without making each task look like it
     reused earlier system prompts.
     """
-    session_stem = _safe_log_stem(session_id or "_no-session")
     task_stem = _safe_log_stem(task_id)
-    log_dir = Path(data_root) / "logs" / "llm-conversations" / session_stem
 
-    for existing in sorted(log_dir.glob(f"*_{task_stem}.jsonl")):
-        return existing
-
+    log_dir = (
+        session_data_dir(Path(data_root), date_parts_for_now(), session_id or "_no-session")
+        / "logs" / "llm-conversations"
+    )
     max_index = 0
     if log_dir.exists():
         for existing in log_dir.glob("*.jsonl"):
