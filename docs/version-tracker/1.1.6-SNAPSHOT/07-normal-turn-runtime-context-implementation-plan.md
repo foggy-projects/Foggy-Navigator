@@ -34,6 +34,8 @@
 5. 压缩目标采用 head-tail + LLM summarizer，并提供 deterministic fallback。
 6. Java `recentConversation` 只作为空 memory bootstrap，不允许每轮覆盖 BizWorker runtime memory。
 7. Phase 1 尚未实现 pending queue 前，同一 `contextId` 的执行中追加消息只能由上游串行保护，或由 BizWorker 返回明确 busy / conflict / retryable 状态，不能启动第二条 LLM loop。
+8. BizWorker API 入口必须按 `contextId` 提供物理排他保护，不能只依赖 prompt 逻辑或上游串行约定。
+9. UI transcript rollback / regenerate 不属于 Phase 1-4 默认能力；后续必须通过显式 revision / turnId / fork 契约支持。
 
 ## 总体阶段
 
@@ -91,6 +93,17 @@ runtime_context_memory
    - 调用 `ContextRuntimeMemory.commit_turn(...)`。
 7. frame report 继续完整保留，不改变 report/log/journal 结构。
 
+### Phase 1 入口锁要求
+
+Phase 1 虽然不实现 `pendingUserInputs`，但必须避免同一 `contextId` 同时进入两条 Root loop。
+
+开发要求：
+
+1. 在请求进入 Root graph 前按 `contextId` 建立互斥保护。
+2. 锁内完成 Root frame 选择、runtime memory load、running marker 检查和 begin turn 写入。
+3. 如果发现同一 `contextId` 已有 running loop，返回 busy / conflict / retryable，不创建新 Root loop。
+4. 单进程可先使用进程内 lock；多进程/共享磁盘部署需要文件锁或外部锁服务，不能把上游串行作为长期边界。
+
 ### `assistantVisibleContent` 提取规则
 
 Phase 1 需要先固定 assistant 可见内容来源，避免 runtime memory 与前端用户可见回复出现语义分裂。
@@ -116,6 +129,7 @@ Phase 1 需要先固定 assistant 可见内容来源，避免 runtime memory 与
 3. 不移除 Java `recentConversation` 注入。
 4. 不改 Skill child context 规则。
 5. 不迁移到独立 `runtime-memory.json`。
+6. 不支持 UI transcript rollback / regenerate 自动回滚 BizWorker memory。
 
 ### Phase 1 临时并发契约
 
@@ -145,6 +159,9 @@ Python 自动化测试：
 5. `test_assistant_visible_content_prefers_user_facing_output`
    - assistant visible message 优先取用户可见 final message。
    - 不把 raw tool result 或内部 summary 写入 prompt view。
+6. `test_same_context_running_loop_returns_busy_before_queue_phase`
+   - 同一 `contextId` 已有 running loop 时，不进入第二条 Root loop。
+   - 返回明确 busy / conflict / retryable。
 
 Java 测试暂不改断言，只要现有测试继续通过。
 
@@ -154,6 +171,7 @@ Java 测试暂不改断言，只要现有测试继续通过。
 2. `ContextRuntimeMemory` 写入 Root frame，frame report/log 不受影响。
 3. 新逻辑对旧 `recentConversation` 调用方兼容。
 4. Phase 1 对同一 `contextId` 执行中追加消息有明确临时行为，不会静默并发运行。
+5. API 入口具备 `contextId` 级别互斥保护，避免 Root frame / runtime memory 并发写入。
 
 ## Phase 2：Skill 与状态投影
 
@@ -169,6 +187,7 @@ Java 测试暂不改断言，只要现有测试继续通过。
 2. `AWAITING_USER`：
    - Skill 的用户可见追问写为 assistant visible message。
    - 下一条用户消息仍通过 active focus resume 进入 child frame。
+   - child Skill 必须识别用户取消、停止、换题等 escape hatch，并通过受控结果把 active focus 交还 Parent。
 3. Recoverable interruption：
    - 不写 fake assistant message。
    - `pendingTurn` 标记为 interrupted，Root frame 继续维护 `_recoverable_interruption`。
@@ -181,8 +200,9 @@ Java 测试暂不改断言，只要现有测试继续通过。
 1. Skill 完成后下一轮 prompt 是 `U1 -> A1 -> U2`。
 2. prompt 不包含 raw `tool_call` / `tool_result`。
 3. `AWAITING_USER` 后 `U2` 直接恢复 child frame。
-4. recoverable interruption 不产生普通 assistant message。
-5. non-recoverable visible error 进入 assistant projection。
+4. `AWAITING_USER` 后用户明确取消/换题时，child 不继续原任务，Parent active focus 被清理。
+5. recoverable interruption 不产生普通 assistant message。
+6. non-recoverable visible error 进入 assistant projection。
 
 ## Phase 3：pendingUserInputs 队列与 checkpoint
 
@@ -201,6 +221,7 @@ Java 测试暂不改断言，只要现有测试继续通过。
 3. 请求进入时：
    - 如果同一 `contextId` 无 running loop，正常开始。
    - 如果已有 running loop，将消息写入 `pendingUserInputs`，返回 queued / accepted 状态。
+   - queue 写入必须在 `contextId` 互斥锁内完成，避免多个请求同时覆盖队列。
 4. 在 `llm_skill_agent` loop 中增加 checkpoint：
    - model call 返回后。
    - 同步 tool call 完成后。
@@ -238,7 +259,7 @@ current user message
    - `tailTurnCount`
    - `maxMessageChars`
    - `maxSummaryChars`
-2. commit turn 后执行 compaction。
+2. commit turn 后先做预算检查；只有超过窗口/字符/token 阈值时才执行 compaction。
 3. summarizer 输入只包含语义 turns、旧 summary、refs/digests。
 4. summarizer 输出结构化 `compactedSummary`：
    - `durableUserIntent`
@@ -258,6 +279,18 @@ current user message
 2. 中间 raw messages 不再进入 prompt。
 3. summarizer 失败不阻断 turn commit。
 4. summary 不包含 raw tool call、token、signed URL 等敏感信息。
+5. 未超过预算时不调用 LLM summarizer，只追加 visible turn。
+
+## Rollback / Regenerate 非目标与后续契约
+
+Phase 1-4 默认不处理上游 UI transcript 的删除、重新生成或回滚。
+
+如果上游要支持这类能力，必须另起契约设计：
+
+1. 请求携带 `baseRuntimeRevision` / `turnId`，让 BizWorker 判断是否基于当前 runtime memory。
+2. 支持 `forkContextId` 或 `rollbackToTurnId`，避免静默覆盖当前 `ContextRuntimeMemory`。
+3. 明确 Root frame checkpoint / journal replay 是否包含 runtime memory 回滚。
+4. 增加冲突处理：当上游 transcript 旧于 BizWorker revision 时，拒绝、fork 或进入显式 repair，不允许自动覆盖。
 
 ## Phase 5：Java recentConversation 退场
 
@@ -292,6 +325,9 @@ Java 不再默认从 `SessionMessageRepository` 读取最近消息注入 `recent
 | summarizer 失败阻断用户回合 | Phase 4 必须实现 deterministic fallback |
 | 伪并发插入破坏副作用工具一致性 | 只在 checkpoint 插入，不在不可中断工具调用中插入 |
 | prompt token 失控 | Phase 4 引入 head-tail 和 summary 预算 |
+| 同一 `contextId` 并发请求覆盖 Root frame | API 入口必须加 `contextId` 互斥锁；Phase 1 busy，Phase 3 queue |
+| `AWAITING_USER` 把用户困在 child frame | child Skill contract 必须支持取消/换题 escape hatch，并清理 active focus |
+| UI regenerate 导致 transcript 与 memory 不一致 | Phase 1-4 声明为非目标，后续通过 revision / turnId / fork 契约处理 |
 
 ## 建议提交顺序
 

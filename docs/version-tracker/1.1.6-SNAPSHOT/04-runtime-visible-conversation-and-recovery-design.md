@@ -310,6 +310,8 @@ A1 = Parent 基于 S1.promoted_result 生成的最终回复
 3. 当前 child frame state
 4. 按 `context_visibility` 允许的 root summary
 
+确定性恢复仍必须保留 escape hatch：如果 `U2` 明确表示取消、停止、换题或放弃，child Skill 应识别该意图并返回受控终止/交还 Parent 的结果，而不是继续要求用户补齐原任务参数。
+
 不应默认看到：
 
 1. Java `recentConversation`
@@ -388,7 +390,7 @@ Root 必须先判断：
 
 | 场景 | 是否确定接回 child | 是否需要 Root 判断意图 | 进入 prompt 的形态 |
 | --- | --- | --- | --- |
-| `AWAITING_USER` | 是 | 否，除非用户明确取消/改题由 child 内部处理 | `_awaiting_user_input` + 当前用户回复 |
+| `AWAITING_USER` | 是 | 否，除非用户明确取消/改题由 child 识别后交还 Parent | `_awaiting_user_input` + 当前用户回复 |
 | recoverable child interruption | 否 | 是 | `_recoverable_interruption` + continuation summary |
 | normal Skill completion | 否 | 不需要恢复 | visible turns + promoted metadata |
 

@@ -8,7 +8,8 @@
 2. 普通多轮对话、Skill 完成、`AWAITING_USER` 续接、中断恢复都统一进入 `ContextRuntimeMemory` / control state 规则。
 3. `recentConversation` 降级为 deprecated external compatibility input，只允许空 memory bootstrap，不允许覆盖 BizWorker memory。
 4. Tool call、Skill private messages、report/log/journal 作为 execution evidence 保留，但不默认进入下一轮 semantic conversation。
-5. 上下文压缩采用 head-tail + LLM summarizer，并提供 deterministic fallback，避免 runtime context 无界增长。
+5. 上下文压缩采用 head-tail + lazy LLM summarizer，并提供 deterministic fallback，避免 runtime context 无界增长。
+6. 同一 `contextId` 的 Root frame / runtime memory 写入必须由 BizWorker 自身提供排他保护。
 
 ## 版本验收基线
 
@@ -17,6 +18,8 @@
 3. `AWAITING_USER` 的下一条用户消息确定性接回原 child frame。
 4. recoverable interruption 通过 control state 恢复或搁置，不伪造成普通 assistant turn。
 5. 同一 `contextId` 不允许真正并发 LLM loop；Phase 1 未实现 queue 前必须有明确 busy / conflict / 上游串行契约，Phase 3 起进入 pending queue + checkpoint。
+6. `AWAITING_USER` 支持用户取消/换题 escape hatch，不能把用户困在 child frame。
+7. UI transcript rollback / regenerate 不作为 Phase 1-4 默认能力；后续必须通过 revision / turnId / fork 契约单独设计。
 
 ## 当前条目
 
