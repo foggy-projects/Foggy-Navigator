@@ -11,6 +11,7 @@ from langgraph_biz_worker.runtime.llm_tool_dispatcher import (
 )
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
+from langgraph_biz_worker.tools.business_function_tools import BusinessFunctionToolError
 
 
 def test_business_function_auto_idempotency_key_is_stable_for_same_call() -> None:
@@ -95,3 +96,45 @@ def test_business_function_auto_idempotency_key_is_stable_for_same_call() -> Non
         gateway_idempotency_keys[0],
         gateway_idempotency_keys[0],
     ]
+
+
+def test_business_function_configuration_error_result_is_non_recoverable() -> None:
+    runtime = SkillRuntime(frame_store=FrameStore(), skill_registry=SkillRegistry())
+    root_frame_id = runtime.invoke_skill(
+        task_id="task-config-error-001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+    dispatcher = LlmToolDispatcher(runtime)
+    context = LlmToolDispatchContext(
+        frame_id=root_frame_id,
+        task_id="task-config-error-001",
+        runtime_context={"task_scoped_token": "runtime-token"},
+    )
+
+    def fake_invoke(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise BusinessFunctionToolError(
+            'HTTP 400: {"msg":"upstreamRef must match [A-Za-z0-9._-]{1,128}"}',
+            error_category="CONFIGURATION",
+            recoverable=False,
+            llm_retry_allowed=False,
+            user_message="业务函数配置错误：adapter upstream_ref 不合法。",
+        )
+
+    result = dispatcher.dispatch_business_function(
+        "invoke_business_function",
+        {
+            "function_id": "tms.ticket.createPlatformFeedback",
+            "version": "v1",
+            "input": {"title": "bug"},
+        },
+        context,
+        lambda **kwargs: kwargs["result"],
+        invoke_business_function_fn=fake_invoke,
+    )
+
+    assert result["ok"] is False
+    assert result["error_category"] == "CONFIGURATION"
+    assert result["recoverable"] is False
+    assert result["llm_retry_allowed"] is False
+    assert result["user_message"].startswith("业务函数配置错误")

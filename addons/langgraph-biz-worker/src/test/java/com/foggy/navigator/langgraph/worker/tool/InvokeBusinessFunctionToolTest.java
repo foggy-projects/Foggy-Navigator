@@ -8,11 +8,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -232,5 +236,38 @@ class InvokeBusinessFunctionToolTest {
             assertEquals("ERROR", body.get("status"));
             return true;
         }));
+    }
+
+    @Test
+    void execute_gatewayConfigurationError_returnsNonRecoverableDetails() {
+        WebClientResponseException gatewayException = WebClientResponseException.create(
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                HttpHeaders.EMPTY,
+                """
+                {"code":600,"exCode":"B600","msg":"upstreamRef must match [A-Za-z0-9._-]{1,128}"}
+                """.getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8);
+        when(workerGatewayClient.invokeBusinessFunction(eq("rt_token"), eq("f1"), any()))
+                .thenThrow(new RuntimeException("Worker Gateway invokeBusinessFunction failed: 400 BAD_REQUEST", gatewayException));
+        when(workerGatewayClient.reportToolMessage(eq("rt_token"), any()))
+                .thenReturn(Map.of("accepted", true));
+
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .parameters(Map.of("function_id", "f1", "version", "v1", "input", Map.of("key", "value")))
+                .runtimeContext(Map.of(TaskScopedTokenResolver.TOKEN_KEY, "rt_token"))
+                .build();
+
+        ToolExecutionResult result = tool.execute(request);
+
+        assertFalse(result.isSuccess());
+        assertEquals("CONFIGURATION_ERROR", result.getErrorCode());
+        assertTrue(result.getErrorMessage().contains("业务函数配置错误"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.getData();
+        assertEquals("CONFIGURATION", data.get("error_category"));
+        assertEquals(false, data.get("recoverable"));
+        assertEquals(false, data.get("llm_retry_allowed"));
+        assertTrue(String.valueOf(data.get("gateway_error")).contains("upstreamRef must match"));
     }
 }

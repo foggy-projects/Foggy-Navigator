@@ -15,8 +15,8 @@
 - status: recorded
 - date: 2026-05-21
 - priority: P1
-- coding_status: not-started
-- test_status: not-run
+- coding_status: implemented
+- test_status: targeted-passed
 
 ## 复现信息
 
@@ -210,6 +210,38 @@ BusinessFunction tms.ticket.createPlatformFeedback upstream_ref "TMS-3" is not c
 3. Java `InvokeBusinessFunctionToolTest`：断言 gateway 配置错误不会只返回泛化 `GATEWAY_ERROR`。
 4. Java `OpenApiAgentReadinessServiceTest`：补非法 adapter `upstream_ref`、未解析 route、合法 route 三类用例。
 5. 前端或 BFF 展示层：确认用户可见错误不会泄露完整 adapter config JSON，但会展示可操作配置原因。
+
+## 实现记录
+
+- date: 2026-05-21
+- implementation_status: Navigator side completed
+- upstream_status: TMS side completed, pending integrated smoke verification
+
+已完成 Navigator 侧调整：
+
+1. Python BizWorker `business_function_tools` 将 upstream route / adapter 配置类 400 错误分类为 `CONFIGURATION`，并返回 `recoverable=false`、`llm_retry_allowed=false` 与用户可见中文提示。
+2. Python `llm_tool_dispatcher` 透传结构化 BusinessFunction 错误结果，避免降级成普通工具异常。
+3. Python `llm_skill_agent` 识别 non-recoverable 工具错误后停止 LLM 继续补参重试，避免最终折叠为 `max iterations without valid submit`。
+4. Java `InvokeBusinessFunctionTool` 将 gateway 配置类错误返回为 `CONFIGURATION_ERROR`，并在 `data` 中携带 `error_category`、`recoverable`、`llm_retry_allowed`、`gateway_error`。
+5. Java `OpenApiAgentReadinessService` 扫描当前 ClientApp 可见 BusinessFunction 的 REST adapter `upstream_ref`，校验格式并校验是否存在 enabled upstream route / JVM allowlist。
+
+自动化验证：
+
+```text
+tools/langgraph-biz-worker/.venv/Scripts/python.exe -m pytest tests/test_business_function_tools.py tests/test_llm_tool_dispatcher.py tests/test_llm_skill_agent.py -q
+51 passed
+
+mvn -pl addons/langgraph-biz-worker,addons/claude-worker-agent -am "-Dtest=InvokeBusinessFunctionToolTest,OpenApiAgentReadinessServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+OpenApiAgentReadinessServiceTest: 11 passed
+InvokeBusinessFunctionToolTest: 10 passed
+BUILD SUCCESS
+```
+
+剩余验证：
+
+1. TMS 修复完成后，用真实 `tms.ticket.createPlatformFeedback` 再跑一次端到端提交。
+2. 确认 readiness / preflight 对新的合法 `upstream_ref` 返回通过。
+3. 如再次构造非法 `upstream_ref`，确认用户侧看到配置错误，不再看到 max-iterations。
 
 ## 体验验证
 

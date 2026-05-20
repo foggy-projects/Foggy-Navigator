@@ -1,9 +1,13 @@
 package com.foggy.navigator.claude.worker.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessFunctionSummaryDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
+import com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
@@ -16,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -31,6 +36,7 @@ class OpenApiAgentReadinessServiceTest {
     private ClientAppUserGrantService userGrantService;
     private ClientAppModelConfigGrantService modelConfigGrantService;
     private ClientAppUpstreamRouteService upstreamRouteService;
+    private BusinessFunctionRegistryService functionRegistryService;
     private OpenApiAgentRouteService agentRouteService;
     private Environment environment;
     private OpenApiAgentReadinessService service;
@@ -43,6 +49,7 @@ class OpenApiAgentReadinessServiceTest {
         userGrantService = mock(ClientAppUserGrantService.class);
         modelConfigGrantService = mock(ClientAppModelConfigGrantService.class);
         upstreamRouteService = mock(ClientAppUpstreamRouteService.class);
+        functionRegistryService = mock(BusinessFunctionRegistryService.class);
         agentRouteService = mock(OpenApiAgentRouteService.class);
         environment = mock(Environment.class);
         service = new OpenApiAgentReadinessService(
@@ -52,8 +59,10 @@ class OpenApiAgentReadinessServiceTest {
                 userGrantService,
                 modelConfigGrantService,
                 upstreamRouteService,
+                functionRegistryService,
                 agentRouteService,
-                environment);
+                environment,
+                new ObjectMapper());
 
         ClientAppEntity app = new ClientAppEntity();
         app.setClientAppId("capp_1");
@@ -70,6 +79,8 @@ class OpenApiAgentReadinessServiceTest {
                         "capp_1",
                         true,
                         false));
+        when(functionRegistryService.listClientAppVisibleFunctionSummaries("tenant_1", "capp_1"))
+                .thenReturn(List.of());
     }
 
     @Test
@@ -263,11 +274,133 @@ class OpenApiAgentReadinessServiceTest {
                         && check.getMessage().contains("token is not configured")));
     }
 
+    @Test
+    void verify_reportsInvalidBusinessFunctionAdapterUpstreamRef() {
+        AgentReadinessPreflightForm form = baselineForm();
+        BusinessFunctionSummaryDTO summary = functionSummary("tms.ticket.createPlatformFeedback", "v1");
+        BusinessFunctionRuntimeContextDTO context = functionContext(
+                "tms.ticket.createPlatformFeedback",
+                "v1",
+                """
+                {"type":"rest","method":"POST","upstream_ref":"TMS:3","path":"/x3-agent/tms/ticket/platform-feedback"}
+                """);
+        when(functionRegistryService.listClientAppVisibleFunctionSummaries("tenant_1", "capp_1"))
+                .thenReturn(List.of(summary));
+        when(functionRegistryService.resolveClientAppFunction(
+                "tenant_1", "capp_1", "tms.ticket.createPlatformFeedback", "v1"))
+                .thenReturn(context);
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "BUSINESS_FUNCTION_ADAPTER:tms.ticket.createPlatformFeedback".equals(check.getCode())
+                        && "FAIL".equals(check.getStatus())
+                        && check.getMessage().contains("TMS:3")
+                        && check.getMessage().contains("[A-Za-z0-9._-]{1,128}")));
+        verify(upstreamRouteService, never()).resolveEnabledRoute("tenant_1", "capp_1", "TMS:3");
+    }
+
+    @Test
+    void verify_reportsMissingBusinessFunctionUpstreamRoute() {
+        AgentReadinessPreflightForm form = baselineForm();
+        BusinessFunctionSummaryDTO summary = functionSummary("tms.ticket.createPlatformFeedback", "v1");
+        BusinessFunctionRuntimeContextDTO context = functionContext(
+                "tms.ticket.createPlatformFeedback",
+                "v1",
+                """
+                {"type":"rest","method":"POST","upstream_ref":"TMS-3","path":"/x3-agent/tms/ticket/platform-feedback"}
+                """);
+        when(functionRegistryService.listClientAppVisibleFunctionSummaries("tenant_1", "capp_1"))
+                .thenReturn(List.of(summary));
+        when(functionRegistryService.resolveClientAppFunction(
+                "tenant_1", "capp_1", "tms.ticket.createPlatformFeedback", "v1"))
+                .thenReturn(context);
+        when(upstreamRouteService.resolveEnabledRoute("tenant_1", "capp_1", "TMS-3"))
+                .thenReturn(Optional.empty());
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("FAIL", result.getOverallStatus());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "BUSINESS_FUNCTION_ADAPTER:tms.ticket.createPlatformFeedback".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "BUSINESS_FUNCTION_UPSTREAM_ROUTE:TMS-3".equals(check.getCode())
+                        && "FAIL".equals(check.getStatus())
+                        && check.getMessage().contains("not configured")));
+    }
+
+    @Test
+    void verify_acceptsResolvableBusinessFunctionUpstreamRoute() {
+        AgentReadinessPreflightForm form = baselineForm();
+        BusinessFunctionSummaryDTO summary = functionSummary("tms.ticket.createPlatformFeedback", "v1");
+        BusinessFunctionRuntimeContextDTO context = functionContext(
+                "tms.ticket.createPlatformFeedback",
+                "v1",
+                """
+                {"type":"rest","method":"POST","upstream_ref":"TMS-3","path":"/x3-agent/tms/ticket/platform-feedback"}
+                """);
+        when(functionRegistryService.listClientAppVisibleFunctionSummaries("tenant_1", "capp_1"))
+                .thenReturn(List.of(summary));
+        when(functionRegistryService.resolveClientAppFunction(
+                "tenant_1", "capp_1", "tms.ticket.createPlatformFeedback", "v1"))
+                .thenReturn(context);
+        when(upstreamRouteService.resolveEnabledRoute("tenant_1", "capp_1", "TMS-3"))
+                .thenReturn(Optional.of(new ClientAppUpstreamRouteService.ResolvedUpstreamRoute(
+                        "http://tms-local", null)));
+
+        AgentReadinessDTO result = service.verify(
+                "world-sim.bug-coordinator.decision.v1",
+                form,
+                credential(),
+                "http://localhost:8112");
+
+        assertEquals("OK", result.getOverallStatus());
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "BUSINESS_FUNCTION_ADAPTER:tms.ticket.createPlatformFeedback".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+        assertTrue(result.getChecks().stream().anyMatch(check ->
+                "BUSINESS_FUNCTION_UPSTREAM_ROUTE:TMS-3".equals(check.getCode())
+                        && "OK".equals(check.getStatus())));
+    }
+
     private ResolvedClientAppCredentialDTO credential() {
         return ResolvedClientAppCredentialDTO.builder()
                 .tenantId("tenant_1")
                 .clientAppId("capp_1")
                 .credentialId("cred_1")
                 .build();
+    }
+
+    private AgentReadinessPreflightForm baselineForm() {
+        AgentReadinessPreflightForm form = new AgentReadinessPreflightForm();
+        form.setUpstreamUserId("private_1");
+        form.setModelConfigId("model_1");
+        form.setContext(Map.of("skillId", "world-sim.bug-coordinator.decision.v1"));
+        return form;
+    }
+
+    private BusinessFunctionSummaryDTO functionSummary(String functionId, String version) {
+        BusinessFunctionSummaryDTO summary = new BusinessFunctionSummaryDTO();
+        summary.setFunctionId(functionId);
+        summary.setVersion(version);
+        return summary;
+    }
+
+    private BusinessFunctionRuntimeContextDTO functionContext(String functionId, String version, String adapterConfigJson) {
+        BusinessFunctionRuntimeContextDTO context = new BusinessFunctionRuntimeContextDTO();
+        context.setFunctionId(functionId);
+        context.setVersion(version);
+        context.setAdapterConfigJson(adapterConfigJson);
+        return context;
     }
 }

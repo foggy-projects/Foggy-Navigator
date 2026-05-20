@@ -190,7 +190,7 @@ class LlmToolDispatcher:
                     ),
                 }
             except BusinessFunctionToolError as exc:
-                return {"ok": False, "error": str(exc)}
+                return exc.to_tool_result()
 
         if name == "get_business_function_schema":
             token = _runtime_task_scoped_token(context.runtime_context)
@@ -206,7 +206,7 @@ class LlmToolDispatcher:
                     ),
                 }
             except BusinessFunctionToolError as exc:
-                return {"ok": False, "error": str(exc)}
+                return exc.to_tool_result()
 
         if name == "invoke_business_function":
             token = _runtime_task_scoped_token(context.runtime_context)
@@ -250,8 +250,7 @@ class LlmToolDispatcher:
                 self._runtime.fail_frame(function_frame_id, str(exc))
                 function_frame = self._runtime.get_frame(function_frame_id)
                 return {
-                    "ok": False,
-                    "error": str(exc),
+                    **exc.to_tool_result(),
                     "function_frame_id": function_frame_id,
                     **_execution_report_payload_from_frame(function_frame),
                 }
@@ -301,8 +300,7 @@ class LlmToolDispatcher:
                 self._runtime.fail_frame(function_frame_id, str(exc))
                 function_frame = self._runtime.get_frame(function_frame_id)
                 return {
-                    "ok": False,
-                    "error": str(exc),
+                    **exc.to_tool_result(),
                     "function_frame_id": function_frame_id,
                     **_execution_report_payload_from_frame(function_frame),
                 }

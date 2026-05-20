@@ -7,6 +7,7 @@ import com.foggy.navigator.langgraph.worker.client.WorkerGatewayClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -138,8 +139,51 @@ public class InvokeBusinessFunctionTool implements BuiltInTool {
         } catch (Exception e) {
             log.error("invoke_business_function failed for functionId={}", functionId, e);
             reportToolMessageSafely(token, functionId, "ERROR", null);
-            return ToolExecutionResult.error("GATEWAY_ERROR", "Failed to invoke business function: " + e.getMessage());
+            String detail = exceptionDetail(e);
+            if (isConfigurationError(detail)) {
+                return ToolExecutionResult.builder()
+                        .success(false)
+                        .errorCode("CONFIGURATION_ERROR")
+                        .errorMessage("业务函数配置错误：adapter upstream_ref 不合法或未配置，需检查 ClientApp upstream route / function adapter config。")
+                        .data(Map.of(
+                                "error_category", "CONFIGURATION",
+                                "recoverable", false,
+                                "llm_retry_allowed", false,
+                                "gateway_error", detail
+                        ))
+                        .build();
+            }
+            return ToolExecutionResult.error("GATEWAY_ERROR", "Failed to invoke business function: " + detail);
         }
+    }
+
+    private boolean isConfigurationError(String detail) {
+        if (detail == null) {
+            return false;
+        }
+        return detail.contains("upstreamRef must match [A-Za-z0-9._-]{1,128}")
+                || detail.contains("Unauthorized or unconfigured upstream_ref")
+                || detail.contains("Rest adapter requires 'upstream_ref'")
+                || detail.contains("Adapter config is missing or blank");
+    }
+
+    private String exceptionDetail(Throwable throwable) {
+        StringBuilder builder = new StringBuilder();
+        Throwable current = throwable;
+        while (current != null) {
+            if (builder.length() > 0) {
+                builder.append(" | ");
+            }
+            builder.append(current.getMessage());
+            if (current instanceof WebClientResponseException webException) {
+                String responseBody = webException.getResponseBodyAsString();
+                if (responseBody != null && !responseBody.isBlank()) {
+                    builder.append(" | ").append(responseBody);
+                }
+            }
+            current = current.getCause();
+        }
+        return builder.toString();
     }
 
     private void reportToolMessageSafely(String token, String functionId, String status, String suspendId) {

@@ -1,11 +1,16 @@
 package com.foggy.navigator.claude.worker.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foggy.navigator.business.agent.model.dto.AgentReadinessCheckDTO;
 import com.foggy.navigator.business.agent.model.dto.AgentReadinessDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessFunctionRuntimeContextDTO;
+import com.foggy.navigator.business.agent.model.dto.BusinessFunctionSummaryDTO;
 import com.foggy.navigator.business.agent.model.dto.ResolvedClientAppCredentialDTO;
 import com.foggy.navigator.business.agent.model.dto.SkillArtifactLinkDTO;
 import com.foggy.navigator.business.agent.model.entity.ClientAppEntity;
 import com.foggy.navigator.business.agent.model.form.AgentReadinessPreflightForm;
+import com.foggy.navigator.business.agent.service.BusinessFunctionRegistryService;
 import com.foggy.navigator.business.agent.service.ClientAppModelConfigGrantService;
 import com.foggy.navigator.business.agent.service.ClientAppService;
 import com.foggy.navigator.business.agent.service.ClientAppUpstreamRouteService;
@@ -19,16 +24,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.lang.reflect.Array;
+import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
 public class OpenApiAgentReadinessService {
 
     private static final String UPSTREAM_PROPERTY_PREFIX = "foggy.navigator.business.agent.upstreams.";
+    private static final Pattern UPSTREAM_REF_PATTERN = Pattern.compile("[A-Za-z0-9._-]{1,128}");
 
     private final UnifiedAgentResolver agentResolver;
     private final ClientAppService clientAppService;
@@ -36,8 +44,10 @@ public class OpenApiAgentReadinessService {
     private final ClientAppUserGrantService userGrantService;
     private final ClientAppModelConfigGrantService modelConfigGrantService;
     private final ClientAppUpstreamRouteService upstreamRouteService;
+    private final BusinessFunctionRegistryService functionRegistryService;
     private final OpenApiAgentRouteService agentRouteService;
     private final Environment environment;
+    private final ObjectMapper objectMapper;
 
     public AgentReadinessDTO verify(
             String agentId,
@@ -95,6 +105,7 @@ public class OpenApiAgentReadinessService {
             result.setEffectiveModelConfigId(effective);
         });
         addRequiredUpstreamRouteChecks(result, credential, safeForm);
+        addBusinessFunctionAdapterChecks(result, credential);
 
         if (isCheckOk(result, "CLIENT_APP_SKILL_GRANT")) {
             SkillArtifactLinkDTO link = new SkillArtifactLinkDTO();
@@ -118,6 +129,100 @@ public class OpenApiAgentReadinessService {
             if (route != null && StringUtils.hasText(route.userTokenHeader())) {
                 addRequiredUpstreamUserTokenCheck(result, credential, form.getUpstreamUserId(), upstreamRef);
             }
+        }
+    }
+
+    private void addBusinessFunctionAdapterChecks(
+            AgentReadinessDTO result,
+            ResolvedClientAppCredentialDTO credential) {
+        List<BusinessFunctionSummaryDTO> summaries;
+        try {
+            summaries = functionRegistryService.listClientAppVisibleFunctionSummaries(
+                    credential.getTenantId(), credential.getClientAppId());
+        } catch (Exception e) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    "BUSINESS_FUNCTION_ADAPTER_SCAN",
+                    sanitize(e.getMessage())));
+            return;
+        }
+        if (summaries == null) {
+            return;
+        }
+        for (BusinessFunctionSummaryDTO summary : summaries) {
+            if (summary == null || !StringUtils.hasText(summary.getFunctionId())
+                    || !StringUtils.hasText(summary.getVersion())) {
+                continue;
+            }
+            addBusinessFunctionAdapterCheck(result, credential, summary);
+        }
+    }
+
+    private void addBusinessFunctionAdapterCheck(
+            AgentReadinessDTO result,
+            ResolvedClientAppCredentialDTO credential,
+            BusinessFunctionSummaryDTO summary) {
+        String functionId = summary.getFunctionId();
+        String adapterCheckCode = "BUSINESS_FUNCTION_ADAPTER:" + functionId;
+        try {
+            BusinessFunctionRuntimeContextDTO context = functionRegistryService.resolveClientAppFunction(
+                    credential.getTenantId(), credential.getClientAppId(), functionId, summary.getVersion());
+            String upstreamRef = extractRestAdapterUpstreamRef(context.getAdapterConfigJson(), functionId);
+            if (!StringUtils.hasText(upstreamRef)) {
+                return;
+            }
+            if (!UPSTREAM_REF_PATTERN.matcher(upstreamRef).matches()) {
+                result.getChecks().add(AgentReadinessCheckDTO.fail(
+                        adapterCheckCode,
+                        "BusinessFunction " + functionId + " adapter upstream_ref \"" + upstreamRef
+                                + "\" is invalid; expected [A-Za-z0-9._-]{1,128}"));
+                return;
+            }
+            result.getChecks().add(AgentReadinessCheckDTO.ok(
+                    adapterCheckCode,
+                    "REST adapter upstream_ref \"" + upstreamRef + "\" is valid"));
+            addBusinessFunctionUpstreamRouteCheck(result, credential, functionId, upstreamRef);
+        } catch (Exception e) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    adapterCheckCode,
+                    sanitize(e.getMessage())));
+        }
+    }
+
+    private String extractRestAdapterUpstreamRef(String adapterConfigJson, String functionId) throws Exception {
+        if (!StringUtils.hasText(adapterConfigJson)) {
+            return null;
+        }
+        JsonNode root = objectMapper.readTree(adapterConfigJson);
+        String type = root.path("type").asText(null);
+        boolean restAdapter = "rest".equalsIgnoreCase(type) || root.has("upstream_ref");
+        if (!restAdapter) {
+            return null;
+        }
+        String upstreamRef = root.path("upstream_ref").asText(null);
+        if (!StringUtils.hasText(upstreamRef)) {
+            throw new IllegalArgumentException("BusinessFunction " + functionId + " REST adapter requires upstream_ref");
+        }
+        return upstreamRef.trim();
+    }
+
+    private void addBusinessFunctionUpstreamRouteCheck(
+            AgentReadinessDTO result,
+            ResolvedClientAppCredentialDTO credential,
+            String functionId,
+            String upstreamRef) {
+        String checkCode = "BUSINESS_FUNCTION_UPSTREAM_ROUTE:" + upstreamRef;
+        try {
+            RequiredUpstreamRoute route = resolveRequiredUpstreamRoute(
+                    credential.getTenantId(), credential.getClientAppId(), upstreamRef);
+            result.getChecks().add(AgentReadinessCheckDTO.ok(
+                    checkCode,
+                    "BusinessFunction " + functionId + " " + route.source() + " upstream route resolved"));
+        } catch (Exception e) {
+            result.getChecks().add(AgentReadinessCheckDTO.fail(
+                    checkCode,
+                    "BusinessFunction " + functionId + " upstream_ref \"" + upstreamRef
+                            + "\" is not configured as enabled ClientApp route or JVM allowlist property: "
+                            + sanitize(e.getMessage())));
         }
     }
 

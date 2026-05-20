@@ -13,6 +13,31 @@ from ..config import settings
 class BusinessFunctionToolError(RuntimeError):
     """Raised when Navigator worker-gateway rejects a business function call."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_category: str = "GATEWAY",
+        recoverable: bool = True,
+        llm_retry_allowed: bool = True,
+        user_message: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_category = error_category
+        self.recoverable = recoverable
+        self.llm_retry_allowed = llm_retry_allowed
+        self.user_message = user_message or message
+
+    def to_tool_result(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error": str(self),
+            "error_category": self.error_category,
+            "recoverable": self.recoverable,
+            "llm_retry_allowed": self.llm_retry_allowed,
+            "user_message": self.user_message,
+        }
+
 
 def list_business_functions(
     task_scoped_token: str,
@@ -102,6 +127,32 @@ def _request_json(
             return json.loads(raw) if raw else {}
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise BusinessFunctionToolError(f"HTTP {exc.code}: {detail}") from exc
+        message = f"HTTP {exc.code}: {detail}"
+        raise _classified_gateway_error(message) from exc
     except URLError as exc:
         raise BusinessFunctionToolError(str(exc.reason)) from exc
+
+
+def _classified_gateway_error(message: str) -> BusinessFunctionToolError:
+    if _is_configuration_error(message):
+        return BusinessFunctionToolError(
+            message,
+            error_category="CONFIGURATION",
+            recoverable=False,
+            llm_retry_allowed=False,
+            user_message=(
+                "业务函数配置错误：adapter upstream_ref 不合法或未配置，"
+                "需检查 ClientApp upstream route / function adapter config。"
+            ),
+        )
+    return BusinessFunctionToolError(message)
+
+
+def _is_configuration_error(message: str) -> bool:
+    text = message or ""
+    return any(marker in text for marker in (
+        "upstreamRef must match [A-Za-z0-9._-]{1,128}",
+        "Unauthorized or unconfigured upstream_ref",
+        "Rest adapter requires 'upstream_ref'",
+        "Adapter config is missing or blank",
+    ))

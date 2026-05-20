@@ -14,6 +14,7 @@ from langgraph_biz_worker.runtime.llm_call_guard import reset_llm_call_guard_sta
 from langgraph_biz_worker.runtime.llm_skill_agent import LlmSkillAgent
 from langgraph_biz_worker.runtime.skill_registry import SkillRegistry
 from langgraph_biz_worker.runtime.skill_runtime import SkillRuntime
+from langgraph_biz_worker.tools.business_function_tools import BusinessFunctionToolError
 
 
 class FakeToolCallModel:
@@ -1297,6 +1298,73 @@ def test_llm_agent_root_skill_can_invoke_business_function_directly(monkeypatch)
     assert function_frames[0].parent_frame_id == frame_id
     assert function_frames[0].output["functionId"] == "tms.order.close"
     assert any(event.tool_name == "invoke_business_function" for event in events)
+
+
+def test_llm_agent_stops_on_non_recoverable_business_function_configuration_error(monkeypatch):
+    runtime = _root_runtime()
+    frame_id = runtime.invoke_skill(
+        task_id="task_root_function_config_error_001",
+        skill_id="system.root",
+        skill_input={"request": "create ticket"},
+    )
+
+    def fake_invoke(task_scoped_token, function_id=None, version=None, input_data=None, idempotency_key=None):
+        raise BusinessFunctionToolError(
+            'HTTP 400: {"msg":"upstreamRef must match [A-Za-z0-9._-]{1,128}"}',
+            error_category="CONFIGURATION",
+            recoverable=False,
+            llm_retry_allowed=False,
+            user_message="业务函数配置错误：adapter upstream_ref 不合法。",
+        )
+
+    monkeypatch.setattr(
+        "langgraph_biz_worker.runtime.llm_skill_agent.invoke_business_function",
+        fake_invoke,
+    )
+
+    model = FakeToolCallModel([
+        AIMessage(content="", tool_calls=[{
+            "id": "call_function",
+            "name": "invoke_business_function",
+            "args": {
+                "function_id": "tms.ticket.createPlatformFeedback",
+                "version": "v1",
+                "input": {"title": "bug"},
+            },
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "id": "call_retry",
+            "name": "invoke_business_function",
+            "args": {
+                "function_id": "tms.ticket.createPlatformFeedback",
+                "version": "v1",
+                "input": {"title": "bug", "upstreamRef": "TMS-3"},
+            },
+        }]),
+    ])
+
+    events = LlmSkillAgent(model, runtime).run(
+        task_id="task_root_function_config_error_001",
+        frame_id=frame_id,
+        prompt="create ticket",
+        runtime_context={"task_scoped_token": "runtime-token"},
+        persistent_frame=True,
+    )
+
+    frame = runtime.get_frame(frame_id)
+    assert model.calls == 1
+    assert frame.status == FrameStatus.RUNNING
+    assert any(
+        event.type == "error"
+        and event.reason == "non_recoverable_tool_error"
+        and "业务函数配置错误" in event.error
+        for event in events
+    )
+    assert not any(
+        event.type == "error"
+        and event.error == "LLM skill agent reached max iterations without valid submit"
+        for event in events
+    )
 
 
 def test_llm_agent_records_submitted_summary_without_backend_rewrite(monkeypatch):

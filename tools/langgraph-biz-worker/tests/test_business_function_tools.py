@@ -64,3 +64,17 @@ def test_invoke_business_function_splits_inline_version(monkeypatch):
         "version": "v1",
         "input": {"keyword": "order"},
     }
+
+
+def test_classifies_upstream_ref_pattern_error_as_non_recoverable_configuration():
+    error = tools._classified_gateway_error(
+        'HTTP 400: {"code":600,"exCode":"B600","msg":"upstreamRef must match [A-Za-z0-9._-]{1,128}"}'
+    )
+
+    result = error.to_tool_result()
+
+    assert result["ok"] is False
+    assert result["error_category"] == "CONFIGURATION"
+    assert result["recoverable"] is False
+    assert result["llm_retry_allowed"] is False
+    assert "业务函数配置错误" in result["user_message"]

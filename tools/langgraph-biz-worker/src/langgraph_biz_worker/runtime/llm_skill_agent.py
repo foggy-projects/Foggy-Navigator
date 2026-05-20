@@ -281,6 +281,26 @@ class LlmSkillAgent:
                     return events
                 if event.get("suspended"):
                     return events
+                if _is_non_recoverable_tool_error(tool_result):
+                    error = tool_result.get("user_message") or tool_result.get("error") or "Non-recoverable tool error"
+                    if persistent_frame:
+                        self._runtime.record_recoverable_interruption(
+                            frame_id,
+                            reason="non_recoverable_tool_error",
+                            error=error,
+                            task_id=task_id,
+                        )
+                    else:
+                        self._runtime.fail_frame(frame_id, error)
+                    events.append(QueryEvent(
+                        type="error",
+                        task_id=task_id,
+                        skill_frame_id=frame_id,
+                        skill_id=manifest.id,
+                        reason="non_recoverable_tool_error",
+                        error=error,
+                    ))
+                    return events
 
         error = "LLM skill agent reached max iterations without valid submit"
         if persistent_frame:
@@ -741,6 +761,15 @@ def _is_waiting_for_user_input_output(structured_output: Any) -> bool:
         "AWAITING_USER",
         "PENDING_INFO",
     })
+
+
+def _is_non_recoverable_tool_error(result: Any) -> bool:
+    if not isinstance(result, dict) or result.get("ok") is not False:
+        return False
+    return (
+        result.get("llm_retry_allowed") is False
+        or result.get("recoverable") is False
+    )
 
 
 def _tool_not_authorized_error(name: str) -> str:
